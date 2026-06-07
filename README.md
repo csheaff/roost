@@ -18,8 +18,8 @@ merges & retires it, `e` re-steers it.*
 
 ## What it does
 
-- **`roost-status`** — a dashboard of every agent: status, elapsed, diffstat,
-  branch, task. From it: `RET` jump · `r` review · `m` merge & retire · `e`
+- **`roost-status`** — a dashboard of every agent: status, elapsed, idle,
+  diffstat, branch, task (idle flags an agent that has gone quiet). From it: `RET` jump · `r` review · `m` merge & retire · `e`
   send/steer · `k` kill · `d` dispatch · `g` refresh.
 - **`roost-next-waiting`** — jump the live view to the next agent that wants your
   attention (finished its turn, failed, or crashed), cycling in tab order.

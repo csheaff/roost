@@ -229,14 +229,23 @@ Pure, for testing."
           ((< s 3600) (format "%dm" (/ s 60)))
           (t (format "%dh%02dm" (/ s 3600) (/ (% s 3600) 60))))))
 
+(defun roost--since (iso)
+  "Return the human time elapsed since ISO 8601 timestamp ISO, or \"?\"."
+  (or (and iso
+           (ignore-errors
+             (roost--format-duration
+              (- (float-time) (float-time (encode-time (iso8601-parse iso)))))))
+      "?"))
+
 (defun roost--elapsed (agent)
   "Return the human elapsed time since AGENT started, or \"?\"."
-  (let ((start (roost-agent-started agent)))
-    (or (and start
-             (ignore-errors
-               (roost--format-duration
-                (- (float-time) (float-time (encode-time (iso8601-parse start)))))))
-        "?")))
+  (roost--since (roost-agent-started agent)))
+
+(defun roost--idle (agent)
+  "Return how long since AGENT's status last changed, or \"?\".
+For a waiting agent this is how long it has wanted you; for a running agent,
+a large value hints it may be stuck."
+  (roost--since (roost-agent-updated agent)))
 
 (defun roost--status-face (agent)
   "Return a face symbol for AGENT's status."
@@ -493,6 +502,7 @@ kills the tmux window."
               (roost-agent-id a)
               (propertize (or (roost-agent-status a) "?") 'face face)
               (roost--elapsed a)
+              (roost--idle a)
               (format "%s" (or (roost-agent-window-index a) "?"))
               (or (roost--diffstat a) "—")
               (or (roost-agent-branch a) "")
@@ -513,8 +523,8 @@ kills the tmux window."
   "Major mode for the roost agent dashboard.
 \\{roost-dashboard-mode-map}"
   (setq tabulated-list-format
-        [(" " 2 t) ("Agent" 18 t) ("Status" 13 t) ("Elapsed" 8 t)
-         ("W" 3 t) ("Diff" 11 t) ("Branch" 24 t) ("Task" 0 nil)])
+        [(" " 2 t) ("Agent" 18 t) ("Status" 13 t) ("Elapsed" 8 t) ("Idle" 7 t)
+         ("W" 3 t) ("Diff" 11 t) ("Branch" 22 t) ("Task" 0 nil)])
   (setq tabulated-list-entries #'roost--dashboard-entries)
   (setq tabulated-list-sort-key (cons "W" nil))
   (tabulated-list-init-header))
