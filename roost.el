@@ -151,15 +151,22 @@ Sorted by tmux window index ascending.  Pure: no I/O, for testing."
                        :updated (alist-get 'updatedAt rec)))
      #'< :key (lambda (a) (or (roost-agent-window-index a) most-positive-fixnum)))))
 
+(defvar roost--retired (make-hash-table :test 'equal)
+  "Set of agent ids roost has retired or killed this session.
+Filtered out of `roost-agents' so a retired agent does not linger as a ghost
+\"crashed\" row once the framework's poll notices its window is gone.")
+
 (defun roost-agents (&optional dir)
   "Return the agents in DIR's repository registry as `roost-agent' structs.
-DIR defaults to `roost-directory', then `default-directory'."
+DIR defaults to `roost-directory', then `default-directory'.  Agents roost
+has retired this session are excluded."
   (let ((path (roost-registry-path (or dir roost-directory))))
     (when (and path (file-readable-p path))
       (let ((json-object-type 'alist)
             (json-array-type 'list)
             (json-key-type 'symbol))
-        (roost--parse-registry (ignore-errors (json-read-file path)))))))
+        (seq-remove (lambda (a) (gethash (roost-agent-id a) roost--retired))
+                    (roost--parse-registry (ignore-errors (json-read-file path))))))))
 
 (defun roost-waiting-agents (agents)
   "Return the subset of AGENTS whose status is in `roost-wait-statuses'."
@@ -405,6 +412,7 @@ With no AGENT, use the one in the active window, else prompt."
                                         (roost-agent-id agent))))
       (with-current-buffer cockpit
         (tmux-control--send-command (format "kill-window -t %s:%s" session idx)))
+      (puthash (roost-agent-id agent) t roost--retired)
       (message "Killed %s" (roost-agent-id agent)))))
 
 ;;;###autoload
@@ -433,6 +441,20 @@ kills the tmux window."
     (unless (yes-or-no-p (format "Merge %s into %s and retire %s? "
                                  branch base (roost-agent-id agent)))
       (user-error "Aborted"))
+    ;; Agents (pi-side-agents) leave their work *uncommitted* in the worktree.
+    ;; Commit it on the agent's branch first -- staging everything except the
+    ;; framework's own .pi/ runtime dir -- so the merge has something to bring
+    ;; over and `git worktree remove' can never discard real work.
+    (let ((wt (roost-agent-worktree agent)))
+      (when (and wt (file-directory-p wt))
+        (roost--git wt "add" "-A" "--" ":!.pi" ":!.pi/")
+        (unless (roost--git wt "diff" "--cached" "--quiet") ; non-nil = nothing staged
+          (roost--git wt "commit" "-m"
+                      (format "agent %s: %s" (roost-agent-id agent)
+                              (truncate-string-to-width (or (roost-agent-task agent) "") 60))))))
+    (let ((ahead (roost--git repo "rev-list" "--count" (format "%s..%s" base branch))))
+      (when (or (null ahead) (equal ahead "0"))
+        (user-error "%s has no commits to merge into %s — nothing to do" branch base)))
     (roost--git repo "merge" "--no-ff" "-m"
                 (format "Merge agent %s" (roost-agent-id agent)) branch)
     (cond
@@ -452,6 +474,7 @@ kills the tmux window."
         (when (and cockpit session idx)
           (with-current-buffer cockpit
             (tmux-control--send-command (format "kill-window -t %s:%s" session idx))))
+        (puthash (roost-agent-id agent) t roost--retired)
         (message "Merged %s into %s and retired %s"
                  branch base (roost-agent-id agent))))
      (t (user-error "Merge did not complete; inspect %s" repo)))))
