@@ -10,25 +10,38 @@ into *acting*: it reads the registry and, leaning entirely on tmux-control to do
 the rendering, lets you jump to the agent that wants you, review its branch, and
 see who-is-doing-what at a glance.
 
-![A fleet of agents in tmux-control's tab bar, each window named by roost with a status glyph](docs/images/roost-fleet.png)
+![The roost dashboard: every agent with status, elapsed time, diffstat, branch, and task](docs/images/roost-dashboard.png)
 
-*The window tab bar, fed by roost: `◆ fix-auth` is waiting for you, `▸ add-retry`
-is running, `☠ broke` crashed — glyphs reflected from each agent's status into
-its tmux window name, which tmux-control simply renders.*
+*`roost-status` — every agent at a glance: status (color-coded), how long it has
+run, its diffstat, branch, and task. `RET` jumps to it, `r` reviews it, `m`
+merges & retires it, `e` re-steers it.*
 
 ## What it does
 
+- **`roost-status`** — a dashboard of every agent: status, elapsed, diffstat,
+  branch, task. From it: `RET` jump · `r` review · `m` merge & retire · `e`
+  send/steer · `k` kill · `d` dispatch · `g` refresh.
 - **`roost-next-waiting`** — jump the live view to the next agent that wants your
   attention (finished its turn, failed, or crashed), cycling in tab order.
 - **`roost-review`** — open **magit** on the agent's git worktree, so you review
   and merge its branch with your normal tools, in the same Emacs as its live TUI.
-- **`roost-list`** — pick any agent by status/task and jump to it.
-- **`roost-dispatch`** — kick off a new agent from Emacs (sends `/agent <task>`
-  to the orchestrator pane).
-- **`roost-glyph-mode`** — a global mode that reflects each agent's status into
-  its tmux window name (a leading glyph), so tmux-control's **tab bar and flock
-  view light up** with who is running / waiting / failed — *no change to
-  tmux-control, which just renders the names.*
+- **`roost-merge-retire`** — merge the agent's branch into the base and tear it
+  down (worktree, branch, window). Guarded: a conflict aborts and sends you to
+  magit instead of leaving a half-merged tree.
+- **`roost-send`** — re-steer an agent by sending it a prompt, without leaving
+  Emacs.
+- **`roost-dispatch`** — kick off a new agent (sends `/agent <task>` to the
+  orchestrator pane).
+- **`roost-watch-mode`** — a global mode that reflects each agent's status into
+  its tmux window name (a leading glyph) so tmux-control's **tab bar and flock
+  view light up** (*no change to tmux-control*), **notifies** you when an agent
+  starts waiting, and keeps the dashboard live.
+
+![A fleet in tmux-control's tab bar, each window named by roost with a status glyph](docs/images/roost-fleet.png)
+
+*The window tab bar, fed by `roost-watch-mode`: `◆ fix-auth` is waiting, `▸
+add-retry` is running, `☠ broke` crashed — glyphs reflected into each agent's
+tmux window name, which tmux-control simply renders.*
 
 ## The loop
 
@@ -71,10 +84,11 @@ reimplementing either:
 
 ## Status
 
-Experimental. Validated end-to-end against a real `pi-side-agents` fleet
-rendered through tmux-control: status glyphs in the tab bar, jump-to-waiting,
-and magit review of an agent's worktree. Single-host / single agents-session for
-now.
+Experimental (v0.2). Validated against a `pi-side-agents` fleet rendered
+through tmux-control — including a real qwen agent — across the dashboard,
+status glyphs in the tab bar, notify-on-waiting, jump-to-waiting, magit review,
+merge-and-retire, and re-steering an agent. Single-host / single agents-session
+for now; remote worktrees would need TRAMP.
 
 ## License
 

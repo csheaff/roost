@@ -20,7 +20,8 @@
      (fix-auth
       (status . "waiting_user") (task . "fix the auth leak")
       (worktreePath . "/tmp/repo-agent-worktree-0002") (branch . "side-agent/fix-auth")
-      (tmuxWindowId . "@5") (tmuxWindowIndex . 3) (updatedAt . "2026-06-06T10:05:00Z"))
+      (tmuxWindowId . "@5") (tmuxWindowIndex . 3)
+      (startedAt . "2026-06-06T09:55:00Z") (updatedAt . "2026-06-06T10:05:00Z"))
      (broke
       (status . "crashed") (task . "rewrite the parser")
       (worktreePath . "/tmp/repo-agent-worktree-0003") (branch . "side-agent/broke")
@@ -70,6 +71,36 @@
   (should (null (roost--parse-registry '((version . 1) (agents)))))
   (should (null (roost-waiting-agents nil)))
   (should (null (roost--next-after nil nil))))
+
+(ert-deftest roost-test-parse-includes-started ()
+  (should (equal (roost-agent-started (nth 1 (roost-test--agents)))
+                 "2026-06-06T09:55:00Z")))
+
+(ert-deftest roost-test-format-duration ()
+  (should (equal (roost--format-duration 9) "9s"))
+  (should (equal (roost--format-duration 59) "59s"))
+  (should (equal (roost--format-duration 60) "1m"))
+  (should (equal (roost--format-duration 245) "4m"))
+  (should (equal (roost--format-duration 3600) "1h00m"))
+  (should (equal (roost--format-duration 4920) "1h22m"))
+  (should (equal (roost--format-duration -5) "0s")))
+
+(ert-deftest roost-test-parse-shortstat ()
+  (should (equal (roost--parse-shortstat
+                  " 3 files changed, 12 insertions(+), 4 deletions(-)")
+                 "3f +12 -4"))
+  (should (equal (roost--parse-shortstat " 1 file changed, 2 insertions(+)")
+                 "1f +2"))
+  (should (equal (roost--parse-shortstat " 1 file changed, 5 deletions(-)")
+                 "1f -5"))
+  (should (null (roost--parse-shortstat "")))
+  (should (null (roost--parse-shortstat nil))))
+
+(ert-deftest roost-test-status-face ()
+  (let ((agents (roost-test--agents)))
+    (should (eq (roost--status-face (nth 0 agents)) 'font-lock-keyword-face)) ; running
+    (should (eq (roost--status-face (nth 1 agents)) 'warning))                ; waiting_user
+    (should (eq (roost--status-face (nth 2 agents)) 'error))))                ; crashed
 
 (provide 'roost-test)
 ;;; roost-test.el ends here
