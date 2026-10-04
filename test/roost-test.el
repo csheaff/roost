@@ -746,7 +746,11 @@
                   (lambda (task) (setq opened (roost--field task 'name) roost--current-task (roost--key task)))))
          (roost-next-waiting) (should (equal opened "stuck"))
          (roost-next-waiting) (should (equal opened "idle"))
-         (roost-next-waiting) (should (equal opened "stuck")))))))
+         (roost-next-waiting) (should (equal opened "stuck"))
+         ;; From the dashboard, the blocked task you last opened comes first.
+         (with-temp-buffer
+           (roost-dashboard-mode)
+           (roost-next-waiting) (should (equal opened "stuck"))))))))
 
 (ert-deftest roost-send-region-drafts-the-last-selected-line ()
   (roost-test--isolated

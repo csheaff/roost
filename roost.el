@@ -1752,13 +1752,18 @@ since they block their agent; then tasks ready for a prompt, in turn."
                                     (roost-tasks))
                         (lambda (a b) (< (roost--attention-rank a) (roost--attention-rank b)))))
          (keys (mapcar #'roost--key waiting))
+         ;; The task you are looking at, which is never the dashboard's row:
+         ;; a blocked task you just created or left must still come first.
+         (viewing (unless (derived-mode-p 'roost-dashboard-mode)
+                    (when-let* ((task (ignore-errors (roost--task-at-point))))
+                      (roost--key task))))
          (blocked (seq-find (lambda (task)
                               (and (member (roost--attention-status task) '("permission" "prompt"))
-                                   (not (equal (roost--key task) roost--current-task))))
+                                   (not (equal (roost--key task) viewing))))
                             waiting))
          (key (if blocked
                   (roost--key blocked)
-                (or (cadr (member roost--current-task keys)) (car keys)))))
+                (or (cadr (member (or viewing roost--current-task) keys)) (car keys)))))
     (unless key (user-error "No tasks are waiting for you"))
     (roost-open-task (gethash key roost--tasks))))
 
