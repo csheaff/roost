@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -54,6 +55,34 @@ def execute(argv, cwd=None, check=True, input=None):
 
 def git(repo, *args, check=True):
     return execute(["git", "-C", str(repo), *args], check=check)
+
+
+REMOTE_GIT_TIMEOUT = 120
+CREDENTIAL_FAILURES = ("Permission denied (publickey)", "could not read Username",
+                       "Authentication failed", "terminal prompts disabled")
+
+
+def remote_git(repo, *args, check=True):
+    """Run Git where it talks to the remote, so it can never prompt on the
+    helper's RPC pipe or hang forever. Explains credential failures."""
+    try:
+        result = subprocess.run(["git", "-C", str(repo), *args], text=True,
+                                stdin=subprocess.DEVNULL, timeout=REMOTE_GIT_TIMEOUT,
+                                start_new_session=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                env=dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="",
+                                         SSH_ASKPASS_REQUIRE="never", GCM_INTERACTIVE="never"))
+    except subprocess.TimeoutExpired:
+        raise RoostError("git %s timed out after %d seconds" % (args[0], REMOTE_GIT_TIMEOUT))
+    if check and result.returncode:
+        message = (result.stderr.strip() or result.stdout.strip()
+                   or "Command failed: " + shlex.join(["git", *args]))
+        if any(failure in message for failure in CREDENTIAL_FAILURES):
+            message += ("\nRoost pushes with the Git credentials on this host (%s): run "
+                        "`gh auth setup-git` there for HTTPS, or add an SSH key that GitHub accepts."
+                        % socket.gethostname())
+        raise RoostError(message)
+    return result
 
 
 def gh(cwd, *args, timeout=60):
@@ -900,10 +929,10 @@ def retire(store, task, merge=False, merged_head=None):
 
 def delete_remote_branch(repo, branch):
     """Best effort: GitHub may already have deleted the merged branch."""
-    with contextlib.suppress(OSError):
-        if git(repo, "ls-remote", "--exit-code", "--heads", "origin", branch,
-               check=False).returncode == 0:
-            git(repo, "push", "origin", "--delete", branch, check=False)
+    with contextlib.suppress(OSError, RoostError):
+        if remote_git(repo, "ls-remote", "--exit-code", "--heads", "origin", branch,
+                      check=False).returncode == 0:
+            remote_git(repo, "push", "origin", "--delete", branch, check=False)
 
 
 def push_pull_request(store, task):
@@ -919,7 +948,7 @@ def push_pull_request(store, task):
                  check=False)
     since = remote.stdout.strip() if remote.returncode == 0 else task["baseCommit"]
     pushed = int(git(worktree, "rev-list", "--count", since + "..HEAD").stdout.strip())
-    git(worktree, "push", "-u", "origin", branch)
+    remote_git(worktree, "push", "-u", "origin", branch)
     return pushed
 
 
@@ -940,7 +969,7 @@ def pull_request(store, task, request):
     if git(worktree, "rev-list", "--count", "--no-merges", fork_point(worktree, task) + "..HEAD").stdout.strip() == "0":
         raise RoostError("The task branch has no commits beyond where it started; there is nothing to propose")
     branch = task["branch"]
-    git(worktree, "push", "-u", "origin", branch)
+    remote_git(worktree, "push", "-u", "origin", branch)
     existing = json.loads(gh(worktree, "pr", "list", "--head", branch, "--state", "open",
                              "--json", "number,url"))
     if existing:

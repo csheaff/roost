@@ -1,5 +1,6 @@
 """Real Git/tmux lifecycle tests. Isolated sockets; no API calls or user config."""
 import concurrent.futures
+import http.server
 import importlib.util
 import json
 import os
@@ -9,6 +10,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import uuid
@@ -896,6 +898,85 @@ elif args[:2] == ["auth", "status"]:
         self.assertTrue(response["ok"])
         self.wait(response["result"], "failed")
         self.assertEqual(self.git("status", "--porcelain"), "")
+
+
+class RemoteGit(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.temp.name)
+        roost.git(self.repo, "init", "-b", "main")
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def completed(self, returncode, stderr):
+        return subprocess.CompletedProcess([], returncode, "", stderr)
+
+    def test_runs_without_stdin_or_prompts_under_a_timeout(self):
+        with patch.object(roost.subprocess, "run", return_value=self.completed(0, "")) as run:
+            roost.remote_git(self.repo, "push", "origin", "main")
+        kwargs = run.call_args.kwargs
+        self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
+        self.assertTrue(kwargs["start_new_session"])
+        for name, value in (("GIT_TERMINAL_PROMPT", "0"), ("GIT_ASKPASS", ""),
+                            ("SSH_ASKPASS_REQUIRE", "never"), ("GCM_INTERACTIVE", "never")):
+            self.assertEqual(kwargs["env"][name], value)
+        self.assertEqual(kwargs["timeout"], 120)
+
+    def test_a_timeout_is_a_roost_error(self):
+        with patch.object(roost.subprocess, "run",
+                          side_effect=subprocess.TimeoutExpired("git", 120)):
+            with self.assertRaisesRegex(roost.RoostError, "git push timed out"):
+                roost.remote_git(self.repo, "push", "origin", "main")
+
+    def test_credential_failures_keep_gits_message_and_add_advice(self):
+        for message in ("git@github.com: Permission denied (publickey).",
+                        "fatal: could not read Username for 'https://github.com'",
+                        "remote: Authentication failed",
+                        "fatal: terminal prompts disabled"):
+            with patch.object(roost.subprocess, "run", return_value=self.completed(128, message)):
+                with self.assertRaises(roost.RoostError) as caught:
+                    roost.remote_git(self.repo, "push", "origin", "main")
+            self.assertIn(message, str(caught.exception))
+            self.assertIn("the Git credentials on this host (%s)" % roost.socket.gethostname(),
+                          str(caught.exception))
+            self.assertIn("gh auth setup-git", str(caught.exception))
+
+    def test_other_failures_get_no_advice(self):
+        with patch.object(roost.subprocess, "run", return_value=self.completed(1, "rejected")):
+            with self.assertRaises(roost.RoostError) as caught:
+                roost.remote_git(self.repo, "push", "origin", "main")
+        self.assertEqual(str(caught.exception), "rejected")
+
+    def test_a_push_needing_credentials_fails_quickly_with_advice(self):
+        class Demand(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(401)
+                self.send_header("WWW-Authenticate", 'Basic realm="x"')
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+            do_POST = do_GET
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Demand)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        roost.git(self.repo, "config", "user.name", "Roost Test")
+        roost.git(self.repo, "config", "user.email", "roost@example.invalid")
+        roost.git(self.repo, "config", "commit.gpgsign", "false")
+        roost.git(self.repo, "commit", "--allow-empty", "-m", "base")
+        roost.git(self.repo, "remote", "add", "origin",
+                  "http://127.0.0.1:%d/x/y.git" % server.server_port)
+        started = time.monotonic()
+        with patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}):
+            with self.assertRaises(roost.RoostError) as caught:
+                roost.remote_git(self.repo, "push", "-u", "origin", "main")
+        self.assertLess(time.monotonic() - started, 30)
+        self.assertIn("gh auth setup-git", str(caught.exception))
+        self.assertIn("on this host (%s)" % roost.socket.gethostname(), str(caught.exception))
 
 
 class LastMessage(unittest.TestCase):
