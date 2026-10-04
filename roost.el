@@ -2632,7 +2632,12 @@ The changes column shrinks first, then the agent column is dropped."
   "Explain how to start when there are no tasks."
   (insert (propertize "No tasks yet." 'face 'roost-title) "\n\n"
           (substitute-command-keys
-           "  \\<roost-dashboard-mode-map>\\[roost-new-task]  Start a task: choose a project (local, or remote over TRAMP), an agent, and a prompt.\n")
+           (concat
+            "  \\<roost-dashboard-mode-map>\\[roost-new-task]  Start a task: choose a project (local, or remote over TRAMP), an agent, and a prompt.\n"
+            "     Run \\<global-map>\\[roost-new-task] on an Org heading or with a region selected to start from it;\n"
+            "     in the draft, \\<roost-compose-mode-map>\\[roost-compose-set-issue] picks a GitHub issue.\n"
+            "  \\<roost-dashboard-mode-map>\\[roost-dispatch]  Every command.\n"
+            "  \\[roost-doctor]  Check this machine and each host.\n"))
           (format "\n  Watching %s.\n"
                   (string-join (mapcar #'roost--host-label (roost--hosts)) ", "))))
 
