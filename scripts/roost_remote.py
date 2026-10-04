@@ -26,7 +26,8 @@ ACTIVE = ("starting", "running", "permission", "background")
 # States in which the agent process is known to have ended.
 ENDED = ("stopped", "exited", "failed", "crashed")
 # Computed per request and never persisted in a task record.
-TRANSIENT = ("live", "diff", "dirty", "ahead", "behind", "update", "worktreeMissing")
+TRANSIENT = ("live", "diff", "dirty", "ahead", "behind", "update", "worktreeMissing",
+             "prStatus")
 DEFAULT_BRANCH_PREFIX = "roost/"
 
 
@@ -51,6 +52,24 @@ def execute(argv, cwd=None, check=True, input=None):
 
 def git(repo, *args, check=True):
     return execute(["git", "-C", str(repo), *args], check=check)
+
+
+def gh(cwd, *args, timeout=60):
+    """Run the GitHub CLI, finding it on the same PATH agents get."""
+    path = agent_path(os.environ.get("PATH", ""))
+    executable = shutil.which("gh", path=path)
+    if not executable:
+        raise RoostError("The GitHub CLI (gh) is not installed on this host; install it and run `gh auth login`")
+    try:
+        result = subprocess.run([executable, *args], cwd=cwd, text=True, timeout=timeout,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                env=dict(os.environ, PATH=path))
+    except subprocess.TimeoutExpired:
+        raise RoostError("gh timed out: " + shlex.join(args[:2]))
+    if result.returncode:
+        raise RoostError(result.stderr.strip() or result.stdout.strip()
+                         or "Command failed: " + shlex.join(["gh", *args]))
+    return result.stdout
 
 
 def tmux(socket, *args, check=True, input=None):
@@ -506,10 +525,45 @@ def list_tasks(store, request):
     return tasks
 
 
+def summarize_checks(rollup):
+    """Count a statusCheckRollup's check runs and commit statuses."""
+    counts = dict(passing=0, failing=0, pending=0)
+    for check in rollup or []:
+        if check.get("status") not in (None, "COMPLETED"):
+            counts["pending"] += 1
+        elif (check.get("conclusion") or check.get("state")) in ("SUCCESS", "NEUTRAL", "SKIPPED"):
+            counts["passing"] += 1
+        elif (check.get("conclusion") or check.get("state")) in ("PENDING", "EXPECTED", None, ""):
+            counts["pending"] += 1
+        else:
+            counts["failing"] += 1
+    return counts
+
+
+def pr_status(task):
+    """A pull request's state, review and checks, or None when gh cannot say."""
+    try:
+        view = json.loads(gh(task["repo"] if Path(task["repo"]).is_dir() else None,
+                             "pr", "view", str(task["pr"]["number"]), "--json",
+                             "state,isDraft,reviewDecision,statusCheckRollup,headRefOid,mergedAt",
+                             timeout=15))
+        return dict(state=view["state"], draft=bool(view.get("isDraft")),
+                    review=view.get("reviewDecision") or None,
+                    checks=summarize_checks(view.get("statusCheckRollup")),
+                    head=view.get("headRefOid"))
+    except (RoostError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
 def add_git_stats(tasks):
-    """Diffstat, dirtiness and divergence from the integration branch.
-    Runs outside the registry lock: in a large repository these take seconds."""
+    """Diffstat, dirtiness and divergence from the integration branch, and
+    pull request status. Runs outside the registry lock: in a large
+    repository, or over the network, these take seconds."""
     for task in tasks:
+        if isinstance(task.get("pr"), dict) and task["pr"].get("number"):
+            status = pr_status(task)
+            if status:
+                task["prStatus"] = status
         worktree = Path(task["worktree"])
         task["worktreeMissing"] = not worktree.is_dir()
         if task["worktreeMissing"]:
@@ -638,8 +692,25 @@ def integration_branch(task):
     return branch
 
 
-def safe_to_delete(task, commit):
-    """True when deleting the task branch at COMMIT loses no commits."""
+def merged_pull_request_head(task):
+    """The branch tip GitHub merged for the task's pull request, or None when
+    there is no recorded pull request, it is not MERGED, or gh cannot say.
+    Slow: call it without the registry lock and pass the answer to `retire`."""
+    if not isinstance(task.get("pr"), dict) or not task["pr"].get("number"):
+        return None
+    try:
+        view = json.loads(gh(task["repo"], "pr", "view", str(task["pr"]["number"]),
+                             "--json", "state,headRefOid", timeout=15))
+        return view["headRefOid"] if view["state"] == "MERGED" else None
+    except (RoostError, ValueError, KeyError, TypeError):
+        return None
+
+
+def safe_to_delete(task, commit, merged_head=None):
+    """True when deleting the task branch at COMMIT loses no commits.
+    MERGED_HEAD is the tip GitHub merged for the task's pull request. A squash
+    merge leaves the branch's commits unmerged to Git, so a branch still at
+    that tip, with nothing committed after the merge, is also safe."""
     if commit == task.get("baseCommit"):
         # The task never committed. Its starting point (perhaps a forked
         # task's commits, or a detached HEAD) must survive elsewhere.
@@ -650,12 +721,14 @@ def safe_to_delete(task, commit):
         if git(task["repo"], "merge-base", "--is-ancestor", commit, "HEAD", check=False).returncode == 0:
             return True
     integration = task.get("integrationBranch")
-    return ref_exists(task["repo"], integration) and git(
-        task["repo"], "merge-base", "--is-ancestor", commit, "refs/heads/" + integration,
-        check=False).returncode == 0
+    if ref_exists(task["repo"], integration) and git(
+            task["repo"], "merge-base", "--is-ancestor", commit, "refs/heads/" + integration,
+            check=False).returncode == 0:
+        return True
+    return merged_head is not None and merged_head == commit
 
 
-def retire(store, task, merge=False):
+def retire(store, task, merge=False, merged_head=None):
     """Remove a finished task's worktree, branch, window and record.
     Never discards uncommitted files or unmerged commits."""
     inventory = inventory_for(task)
@@ -688,7 +761,7 @@ def retire(store, task, merge=False):
     commit = None
     if branch_exists:
         commit = git(repo, "rev-parse", "refs/heads/" + branch + "^{commit}").stdout.strip()
-        if not safe_to_delete(task, commit):
+        if not safe_to_delete(task, commit, merged_head):
             raise RoostError("Task branch has unmerged commits; merge it (m) before retiring, "
                              "or forget the task to keep its branch")
         # A durable checkpoint permits retry after a disconnect or partial cleanup.
@@ -702,7 +775,50 @@ def retire(store, task, merge=False):
         delete_branch(repo, branch, commit)
     store.remove(task["id"])
     task.update(status="retired", updatedAt=now())
+    if commit and merged_head == commit:
+        task["remoteCleanup"] = True
     return task
+
+
+def delete_remote_branch(repo, branch):
+    """Best effort: GitHub may already have deleted the merged branch."""
+    with contextlib.suppress(OSError):
+        if git(repo, "ls-remote", "--exit-code", "--heads", "origin", branch,
+               check=False).returncode == 0:
+            git(repo, "push", "origin", "--delete", branch, check=False)
+
+
+def pull_request(store, task, request):
+    """Push the task branch and open a pull request. Runs without the registry
+    lock, because pushing and talking to GitHub are slow."""
+    integration = task.get("integrationBranch")
+    if not integration:
+        raise RoostError("The task has no integration branch (it was created from a detached HEAD) to open a pull request against")
+    title = text(request.get("title"))
+    if not title:
+        raise RoostError("Give the pull request a title")
+    worktree = check_worktree(store, task)
+    if not worktree.is_dir():
+        raise RoostError("Task worktree is gone")
+    if git(worktree, "status", "--porcelain", "--untracked-files=no").stdout.strip():
+        raise RoostError("Commit the task's changes before opening a pull request")
+    if git(worktree, "rev-list", "--count", task["baseCommit"] + "..HEAD").stdout.strip() == "0":
+        raise RoostError("The task branch has no commits beyond where it started; there is nothing to propose")
+    branch = task["branch"]
+    git(worktree, "push", "-u", "origin", branch)
+    existing = json.loads(gh(worktree, "pr", "list", "--head", branch, "--state", "open",
+                             "--json", "number,url"))
+    if existing:
+        return dict(number=existing[0]["number"], url=existing[0]["url"])
+    argv = ["pr", "create", "--base", integration, "--head", branch, "--title", title,
+            "--body", request.get("body") if isinstance(request.get("body"), str) else ""]
+    if request.get("draft") is True:
+        argv.append("--draft")
+    url = gh(worktree, *argv).strip().splitlines()[-1]
+    match = re.search(r"/pull/(\d+)", url)
+    if not match:
+        raise RoostError("Unexpected output from gh pr create: " + url)
+    return dict(number=int(match.group(1)), url=url)
 
 
 def conflicted_files(repo):
@@ -765,8 +881,8 @@ def doctor(store, request):
     """Check what tasks need on this host, with a fix for each problem."""
     checks = []
 
-    def check(name, ok, detail, hint=None, path=None):
-        checks.append(dict(name=name, ok=ok, detail=detail, hint=hint, path=path))
+    def check(name, ok, detail, hint=None, path=None, optional=False):
+        checks.append(dict(name=name, ok=ok, detail=detail, hint=hint, path=path, optional=optional))
 
     check("Python", sys.version_info >= (3, 9), sys.version.split()[0],
           None if sys.version_info >= (3, 9) else "Install Python 3.9 or newer")
@@ -821,6 +937,21 @@ def doctor(store, request):
                 check(label, False, detail, "Run `codex login` on this host", executable)
                 continue
         check(label, True, detail, None, executable)
+    executable = shutil.which("gh", path=path)
+    if not executable:
+        check("GitHub CLI", False, "not found",
+              "Optional: install gh (https://cli.github.com) to open pull requests",
+              optional=True)
+    else:
+        code, out = run([executable, "auth", "status"])
+        account = re.search(r"account (\S+)", out)
+        if code == 0:
+            check("GitHub CLI", True, "signed in as " + account.group(1) if account else "signed in",
+                  None, executable, optional=True)
+        else:
+            check("GitHub CLI", False, "not signed in",
+                  "Optional: run `gh auth login` on this host to open pull requests", executable,
+                  optional=True)
     return checks
 
 
@@ -900,8 +1031,8 @@ TASK_ACTIONS = {
     "send": lambda store, task, request: send(task, request["text"], request.get("force") is True),
     "shell": lambda store, task, request: shell(store, task),
     "inspect": lambda store, task, request: inspect(store, task),
-    "retire": lambda store, task, request: retire(store, task),
-    "merge": lambda store, task, request: retire(store, task, merge=True),
+    "retire": lambda store, task, request: retire(store, task, merged_head=request.get("mergedHead")),
+    "merge": lambda store, task, request: retire(store, task, merge=True, merged_head=request.get("mergedHead")),
     "forget": lambda store, task, request: forget(store, task),
     "update": lambda store, task, request: update(store, task),
 }
@@ -915,6 +1046,23 @@ def rpc(request):
             return {"ok": True, "result": create(store, request)}
         if action == "doctor":
             return {"ok": True, "result": doctor(store, request)}
+        if action == "pr":
+            with store.locked():
+                task = store.read(request["id"])
+                if task["status"] == "retired":
+                    raise RoostError("Task is retired")
+            pr = pull_request(store, task, request)
+            with store.locked():
+                task = store.read(request["id"])
+                task["pr"] = pr
+                store.save(task)
+            return {"ok": True, "result": task}
+        if action in ("retire", "merge"):
+            # Ask GitHub without the lock; retire then trusts only this answer.
+            with store.locked():
+                task = store.read(request["id"])
+            merged = merged_pull_request_head(task) if task.get("pr") else None
+            request = dict(request, mergedHead=merged)
         with store.locked():
             if action == "list":
                 result = list_tasks(store, request)
@@ -927,6 +1075,8 @@ def rpc(request):
                 raise RoostError("Unknown action: " + str(action))
         if action == "list" and request.get("full"):
             add_git_stats(result)
+        elif action in ("retire", "merge") and result.pop("remoteCleanup", None):
+            delete_remote_branch(result["repo"], result["branch"])
         return {"ok": True, "result": result}
     except (RoostError, OSError, ValueError) as exc:
         return {"ok": False, "error": str(exc)}
