@@ -278,8 +278,8 @@ aliases `roost-list`, `roost-kill` and `roost-dispatch` still work.
 Git and isolated tmux sockets (fixture agents drive the actual hook commands,
 without model calls), and a warning-free byte-compile. See
 [validation](docs/validation.md) for the live runs with Claude Code and Codex on
-local and remote hosts, and [the demo notes](docs/demo.md) for how the
-screenshots were made.
+local and remote hosts, [the demo notes](docs/demo.md) for how the screenshots
+were made, and [MELPA](docs/melpa.md) for the package recipes.
 
 [Orca](https://www.onorca.dev/) shaped the workflow: a worktree per task, a
 terminal nearby, review before finishing. See the
