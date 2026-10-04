@@ -56,7 +56,6 @@ closer to Orca's surfaces where that helped:
 | Delete, with an explicit force waiver | Retire for finished work; forget drops only Roost's record and never touches Git |
 | Branch prefix setting | `roost-branch-prefix` |
 | Pull requests from a workspace | `P` drafts one from the agent's commit message and creates it with `gh` on the task's host; `P` again pushes review fixes; `x` retires after a squash merge and deletes the branch |
-| The agent's last message in the sidebar | The dashboard's last column and the task panel show the agent's latest reply |
 | Issue imports | `roost-new-task` on an Org heading, an agenda line, or a region starts the prompt |
 
 Mobile access, embedded browsers, issue-tracker imports, workflow boards and
