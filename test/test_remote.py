@@ -613,6 +613,201 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(roost.version_of("tmux 3.7c"), (3, 7, 0))
         self.assertEqual(roost.version_of("codex-cli 0.160.0"), (0, 160, 0))
 
+    def github(self):
+        """A local bare origin and a fake gh first on PATH, recording its arguments."""
+        self.origin = self.root / "origin.git"
+        self.git("init", "--bare", "-b", "main", str(self.origin))
+        self.git("remote", "add", "origin", str(self.origin))
+        self.git("push", "-q", "origin", "main")
+        self.gh_dir = self.root / "gh"
+        self.gh_dir.mkdir()
+        script = self.gh_dir / "gh"
+        script.write_text("#!%s\n" % sys.executable + """import json, os, sys
+directory = os.path.dirname(os.path.abspath(__file__))
+args = sys.argv[1:]
+with open(os.path.join(directory, "log"), "a") as log:
+    log.write(json.dumps(args) + "\\n")
+def canned(name, default=None):
+    path = os.path.join(directory, name)
+    if os.path.exists(path):
+        sys.stdout.write(open(path).read())
+        sys.exit(0)
+    if default is None:
+        sys.stderr.write("canned " + name + " missing\\n")
+        sys.exit(1)
+    print(default)
+if args[:2] == ["pr", "list"]:
+    canned("list.json", "[]")
+elif args[:2] == ["pr", "create"]:
+    print("https://github.com/octo/repo/pull/7")
+elif args[:2] == ["pr", "view"]:
+    canned("view.json")
+elif args[:2] == ["auth", "status"]:
+    if os.path.exists(os.path.join(directory, "signed-out")):
+        sys.stderr.write("You are not logged into any GitHub hosts.\\n")
+        sys.exit(1)
+    print("github.com\\n  Logged in to github.com account octocat (keyring)")
+""")
+        script.chmod(0o755)
+        patcher = patch.dict(os.environ, PATH=str(self.gh_dir) + os.pathsep + os.environ["PATH"])
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def gh_calls(self):
+        log = self.gh_dir / "log"
+        return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+    def commit_in(self, task, name="work"):
+        wt = Path(task["worktree"])
+        (wt / name).write_text(name + "\n")
+        self.git("add", ".", cwd=wt)
+        self.git("commit", "-qm", name, cwd=wt)
+        return self.git("rev-parse", "HEAD", cwd=wt)
+
+    def test_pr_pushes_the_branch_creates_a_pull_request_and_records_it(self):
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        observed = []
+        original = roost.pull_request
+        def probe(*args):
+            import fcntl
+            with (self.state / "registry.lock").open("a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)  # Raises if held.
+                observed.append(True)
+            return original(*args)
+        with patch.object(roost, "pull_request", probe):
+            reply = self.request("pr", id=task["id"], title="Fix it", body="Because.\n", draft=True)
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(observed, [True])
+        pr = dict(number=7, url="https://github.com/octo/repo/pull/7")
+        self.assertEqual(reply["result"]["pr"], pr)
+        self.assertEqual(roost.Store(str(self.state)).read(task["id"])["pr"], pr)
+        self.assertEqual(self.git("rev-parse", "refs/heads/" + task["branch"], cwd=self.origin), tip)
+        self.assertEqual(self.git("config", "branch.%s.remote" % task["branch"]), "origin")
+        self.assertEqual(self.gh_calls()[-1],
+                         ["pr", "create", "--base", "main", "--head", task["branch"],
+                          "--title", "Fix it", "--body", "Because.\n", "--draft"])
+        # A pull request that already exists is returned, not duplicated.
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(number=3, url="https://github.com/octo/repo/pull/3")]))
+        before = len(self.gh_calls())
+        again = self.request("pr", id=task["id"], title="Again")
+        self.assertEqual(again["result"]["pr"]["number"], 3)
+        self.assertFalse([call for call in self.gh_calls()[before:] if call[:2] == ["pr", "create"]])
+
+    def test_pr_without_draft_and_refusals(self):
+        self.github()
+        task = self.create()
+        reply = self.request("pr", id=task["id"], title="Nothing")
+        self.assertIn("no commits beyond", reply["error"])
+        self.commit_in(task)
+        (Path(task["worktree"]) / "hello").write_text("uncommitted\n")
+        reply = self.request("pr", id=task["id"], title="Dirty")
+        self.assertIn("Commit the task's changes", reply["error"])
+        self.assertEqual(self.gh_calls(), [])
+        self.assertEqual(self.git("branch", "--list", task["branch"], cwd=self.origin), "")
+        self.git("checkout", "hello", cwd=Path(task["worktree"]))
+        (Path(task["worktree"]) / "untracked").write_text("ignored\n")
+        self.assertIn("title", self.request("pr", id=task["id"])["error"])
+        reply = self.request("pr", id=task["id"], title="Ok", body=None)
+        self.assertTrue(reply["ok"], reply)
+        self.assertNotIn("--draft", self.gh_calls()[-1])
+        self.assertEqual(self.gh_calls()[-1][self.gh_calls()[-1].index("--body") + 1], "")
+        store = roost.Store(str(self.state))
+        record = store.read(task["id"])
+        record["integrationBranch"] = None
+        store.save(record)
+        self.assertIn("no integration branch", self.request("pr", id=task["id"], title="Detached")["error"])
+
+    def test_pr_reports_a_missing_gh(self):
+        self.github()
+        task = self.create()
+        self.commit_in(task)
+        (self.gh_dir / "gh").unlink()
+        # agent_path also searches Homebrew; hide any real gh installed there.
+        with patch.object(roost, "agent_path", lambda inherited: str(self.gh_dir)):
+            reply = self.request("pr", id=task["id"], title="No gh")
+        self.assertIn("GitHub CLI (gh) is not installed", reply["error"])
+
+    def test_list_adds_transient_pr_status_from_gh(self):
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        store = roost.Store(str(self.state))
+        record = store.read(task["id"])
+        record["pr"] = dict(number=7, url="https://github.com/octo/repo/pull/7")
+        store.save(record)
+        (self.gh_dir / "view.json").write_text(json.dumps(dict(
+            state="OPEN", isDraft=True, reviewDecision="APPROVED", headRefOid=tip, mergedAt=None,
+            statusCheckRollup=[
+                dict(__typename="CheckRun", status="COMPLETED", conclusion="SUCCESS"),
+                dict(__typename="CheckRun", status="COMPLETED", conclusion="SKIPPED"),
+                dict(__typename="CheckRun", status="COMPLETED", conclusion="FAILURE"),
+                dict(__typename="CheckRun", status="IN_PROGRESS", conclusion=""),
+                dict(__typename="StatusContext", state="PENDING"),
+                dict(__typename="StatusContext", state="SUCCESS")])))
+        listed = self.request("list", full=True)["result"][0]
+        self.assertEqual(listed["prStatus"], dict(
+            state="OPEN", draft=True, review="APPROVED", head=tip,
+            checks=dict(passing=3, failing=1, pending=2)))
+        self.assertEqual(self.gh_calls()[-1],
+                         ["pr", "view", "7", "--json",
+                          "state,isDraft,reviewDecision,statusCheckRollup,headRefOid,mergedAt"])
+        self.assertNotIn("prStatus", store.read(task["id"]))
+        self.assertNotIn("prStatus", self.request("list")["result"][0])
+        (self.gh_dir / "view.json").unlink()
+        self.assertNotIn("prStatus", self.request("list", full=True)["result"][0])
+
+    def test_retire_accepts_a_squash_merged_pull_request_and_deletes_the_remote_branch(self):
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.assertTrue(self.request("pr", id=task["id"], title="Squash")["ok"])
+        self.git("merge", "--squash", task["branch"])
+        self.git("commit", "-qm", "Squash (#7)")
+        view = self.gh_dir / "view.json"
+        # The task committed again after the merge: its branch must be kept.
+        view.write_text(json.dumps(dict(state="MERGED", headRefOid="0" * 40)))
+        reply = self.request("retire", id=task["id"])
+        self.assertIn("unmerged commits", reply["error"])
+        self.assertTrue(Path(task["worktree"]).exists())
+        view.write_text(json.dumps(dict(state="OPEN", headRefOid=tip)))
+        self.assertFalse(self.request("retire", id=task["id"])["ok"])
+        view.write_text(json.dumps(dict(state="MERGED", headRefOid=tip)))
+        reply = self.request("retire", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertNotIn("remoteCleanup", reply["result"])
+        self.assertFalse(Path(task["worktree"]).exists())
+        self.assertEqual(self.git("branch", "--list", task["branch"]), "")
+        self.assertEqual(self.git("branch", "--list", task["branch"], cwd=self.origin), "")
+
+    def test_retire_tolerates_a_remote_branch_that_is_already_gone(self):
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.assertTrue(self.request("pr", id=task["id"], title="Squash")["ok"])
+        self.git("branch", "-D", task["branch"], cwd=self.origin)
+        self.git("merge", "--squash", task["branch"])
+        self.git("commit", "-qm", "Squash (#7)")
+        (self.gh_dir / "view.json").write_text(json.dumps(dict(state="MERGED", headRefOid=tip)))
+        self.assertTrue(self.request("retire", id=task["id"])["ok"])
+
+    def test_doctor_checks_the_github_cli(self):
+        self.github()
+        checks = {check["name"]: check for check in self.request("doctor")["result"]}
+        self.assertTrue(checks["GitHub CLI"]["ok"], checks["GitHub CLI"])
+        self.assertIn("octocat", checks["GitHub CLI"]["detail"])
+        (self.gh_dir / "signed-out").write_text("")
+        checks = {check["name"]: check for check in self.request("doctor")["result"]}
+        self.assertFalse(checks["GitHub CLI"]["ok"])
+        self.assertIn("gh auth login", checks["GitHub CLI"]["hint"])
+        (self.gh_dir / "gh").unlink()
+        with patch.object(roost, "agent_path", lambda inherited: str(self.gh_dir)):
+            checks = {check["name"]: check for check in self.request("doctor")["result"]}
+        self.assertFalse(checks["GitHub CLI"]["ok"])
+        self.assertEqual(checks["GitHub CLI"]["detail"], "not found")
+        self.assertIn("install gh", checks["GitHub CLI"]["hint"])
+
     def test_bad_base_and_missing_executable_report_errors_without_touching_repo(self):
         response = self.request("create", directory=str(self.repo), name="bad", base="missing-ref", socket=self.socket)
         self.assertFalse(response["ok"])
