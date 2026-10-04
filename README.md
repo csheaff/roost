@@ -268,6 +268,13 @@ Things to know:
 
 ## Upgrading
 
+0.8 adds GitHub issues as a starting point (`C-c C-t` in the draft), the
+command menu (`h`, or `roost-dispatch` from anywhere), the mode-line count of
+waiting agents, links between Org entries and their tasks, and one shared SSH
+connection per host. It needs transient, which Emacs 29 includes.
+`roost-dispatch` used to be an alias for `roost-new-task`; it now opens the
+menu, where `c` starts a task.
+
 0.7 needs tmux-control 0.7.0, which adds the public API Roost now uses. Update
 tmux-control first: with straight.el or a Git checkout, pull it before Roost;
 with `package-vc`, run `package-vc-upgrade` on tmux-control, then Roost. Then
@@ -288,8 +295,7 @@ directly. Retired task records are now deleted. Codex tasks started after
 upgrading ask for one final hook review.
 
 0.4 added Codex and Pi. 0.3 replaced the 0.2 Pi orchestrator registry; old
-aliases `roost-list` and `roost-kill` still work. `roost-dispatch`, once an
-alias for `roost-new-task`, now opens the command menu, which includes it.
+aliases `roost-list` and `roost-kill` still work.
 
 ## Development
 
