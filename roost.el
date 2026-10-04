@@ -995,7 +995,8 @@ worktree; explicit HEAD uses DIRECTORY.  Nil AGENT uses
 (defun roost--compose-seed ()
   "Prompt text from the current buffer, or nil.
 The active region, with its file and lines when it is code, or else the
-Org entry at point: its heading and text without planning or drawers.
+Org entry at point or on the agenda line: its heading and text without
+planning or drawers.
 The cdr is non-nil when the writer should start above the text."
   (cond
    ((use-region-p)
@@ -1015,13 +1016,27 @@ The cdr is non-nil when the writer should start above the text."
                 t)
         (cons (string-trim text) nil))))
    ((and (derived-mode-p 'org-mode) (not (org-before-first-heading-p)))
-    (save-excursion
-      (org-back-to-heading t)
-      (let* ((title (org-get-heading t t t t))
-             (end (org-entry-end-position))
-             (start (progn (org-end-of-meta-data t) (point)))
-             (body (if (< start end) (string-trim (buffer-substring-no-properties start end)) "")))
-        (cons (if (string-empty-p body) title (concat title "\n\n" body)) nil))))))
+    (cons (roost--org-entry-text) nil))
+   ((and (derived-mode-p 'org-agenda-mode)
+         (markerp (get-text-property (line-beginning-position) 'org-hd-marker)))
+    (let ((marker (get-text-property (line-beginning-position) 'org-hd-marker)))
+      (with-current-buffer (marker-buffer marker)
+        (save-excursion
+          (save-restriction
+            (widen)
+            (goto-char marker)
+            (cons (roost--org-entry-text) nil))))))))
+
+(defun roost--org-entry-text ()
+  "The Org entry at point: its heading, then its text without planning
+lines or drawers."
+  (save-excursion
+    (org-back-to-heading t)
+    (let* ((title (org-get-heading t t t t))
+           (end (org-entry-end-position))
+           (start (progn (org-end-of-meta-data t) (point)))
+           (body (if (< start end) (string-trim (buffer-substring-no-properties start end)) "")))
+      (if (string-empty-p body) title (concat title "\n\n" body)))))
 
 (defun roost--compose (&optional fork)
   "Open the new task buffer.  FORK defaults to the current task's HEAD."

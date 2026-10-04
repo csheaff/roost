@@ -32,7 +32,8 @@ projects you've used. Click a field or use its key to change it, write the promp
 starts the agent in tmux, and opens its terminal.
 
 Your task list can live where it already does: run `M-x roost-new-task` on an
-Org heading and the heading and its notes become the prompt. With a region
+Org heading, or on its line in the agenda, and the heading and its notes become
+the prompt. With a region
 selected, the selection does; code is quoted with its file and lines, ready
 for you to say what to do with it.
 

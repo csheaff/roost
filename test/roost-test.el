@@ -319,6 +319,23 @@
                (should (equal (roost--compose-prompt) "Speed up the importer\n\nIt reads the file twice."))
                (should (= (point) (point-max))))
              (kill-buffer roost--compose-buffer)
+             ;; An agenda line stands for its entry.
+             (let ((notes (generate-new-buffer "notes.org")))
+               (unwind-protect
+                   (let ((marker (with-current-buffer notes
+                                   (org-mode)
+                                   (insert "* TODO Cache the parse\nKeep it per file.\n")
+                                   (copy-marker (point-min)))))
+                     (require 'org-agenda)
+                     (with-temp-buffer
+                       (org-agenda-mode)
+                       (insert (propertize "  TODO Cache the parse\n" 'org-hd-marker marker))
+                       (goto-char (point-min))
+                       (roost--compose)))
+                 (kill-buffer notes)))
+             (with-current-buffer roost--compose-buffer
+               (should (equal (roost--compose-prompt) "Cache the parse\n\nKeep it per file.")))
+             (kill-buffer roost--compose-buffer)
              (with-temp-buffer
                (emacs-lisp-mode)
                (insert "(defun a ()\n  1)\n(defun b ()\n  2)\n")
