@@ -33,9 +33,10 @@ starts the agent in tmux, and opens its terminal.
 
 Your task list can live where it already does: run `M-x roost-new-task` on an
 Org heading, or on its line in the agenda, and the heading and its notes become
-the prompt. With a region
-selected, the selection does; code is quoted with its file and lines, ready
-for you to say what to do with it.
+the prompt. With a region selected, the selection does; code is quoted with
+its file and lines, ready for you to say what to do with it. Or press `C-c C-t`
+in the draft to pick one of the project's open GitHub issues: its title and
+text become the prompt, and the task's pull request will close it.
 
 ![Drafting a new task beside the dashboard](docs/images/roost-new-task.jpg)
 
@@ -172,7 +173,8 @@ with its file and lines), and `roost-watch-mode` (background polling).
 
 In the new task draft: `C-c C-c` creates, `C-c C-k` cancels, and `C-c C-p`,
 `C-c C-a`, `C-c C-b` and `C-c C-n` change the project, agent, starting ref and
-name. An empty name is derived from the prompt.
+name. `C-c C-t` starts from a GitHub issue (with `gh` on the project's host). An
+empty name is derived from the prompt.
 
 In the pull request draft: `C-c C-c` creates the pull request (`C-u` as a draft)
 and `C-c C-k` cancels. A failed creation keeps the draft.
