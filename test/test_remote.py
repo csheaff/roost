@@ -662,6 +662,8 @@ elif args[:2] == ["pr", "create"]:
     print("https://github.com/octo/repo/pull/7")
 elif args[:2] == ["pr", "view"]:
     canned("view.json")
+elif args[:2] == ["issue", "list"]:
+    canned("issues.json", "[]")
 elif args[:2] == ["auth", "status"]:
     if os.path.exists(os.path.join(directory, "signed-out")):
         sys.stderr.write("You are not logged into any GitHub hosts.\\n")
@@ -766,6 +768,26 @@ elif args[:2] == ["auth", "status"]:
         (Path(task["worktree"]) / "one").write_text("dirty\n")
         reply = self.request("pr", id=task["id"])
         self.assertIn("Commit the task's changes", reply["error"])
+
+    def test_issues_lists_open_issues_and_create_records_the_chosen_one(self):
+        self.github()
+        (self.gh_dir / "issues.json").write_text(json.dumps([
+            dict(number=12, title="CSV import crashes", body="x" * 7000, url="https://github.com/o/r/issues/12",
+                 labels=[dict(name="bug"), dict(name="import")]),
+            dict(number=9, title="Docs", body=None, url="https://github.com/o/r/issues/9", labels=[])]))
+        sub = self.repo / "sub"
+        sub.mkdir()
+        reply = self.request("issues", directory=str(sub))
+        self.assertTrue(reply["ok"], reply)
+        first, second = reply["result"]
+        self.assertEqual((first["number"], first["title"], first["labels"]), (12, "CSV import crashes", ["bug", "import"]))
+        self.assertTrue(first["body"].endswith("…"))
+        self.assertLess(len(first["body"]), 6100)
+        self.assertEqual((second["body"], second["labels"]), ("", []))
+        self.assertEqual(self.gh_calls()[-1][:4], ["issue", "list", "--state", "open"])
+        task = self.create(issue=dict(number=12, title="CSV import crashes", url=first["url"], body="ignored"))
+        self.assertEqual(task["issue"], dict(number=12, title="CSV import crashes", url=first["url"]))
+        self.assertNotIn("issue", self.create(name="plain", issue=dict(number="12")))
 
     def test_pr_reports_a_missing_gh(self):
         self.github()

@@ -407,6 +407,19 @@ Call SUCCESS with the result or FAILURE with an error message."
        (when (buffer-live-p errors) (kill-buffer errors))
        (funcall failure (error-message-string err))))))
 
+(defun roost--request-wait (host action parameters &optional timeout)
+  "Run ACTION with PARAMETERS on HOST and return its result.
+For interactive commands that need the answer before prompting.  Signal
+a `user-error' with the host's message on failure, or after TIMEOUT
+seconds (default 60)."
+  (let (done result failure)
+    (roost--request host action parameters
+                    (lambda (value) (setq result value done t))
+                    (lambda (err) (setq failure err done t)))
+    (with-timeout ((or timeout 60) (user-error "Roost: %s on %s timed out" action (roost--host-label host)))
+      (while (not done) (accept-process-output nil 0.05)))
+    (if failure (user-error "%s" failure) result)))
+
 (defun roost--request (host action parameters success &optional failure)
   "Run ACTION with PARAMETERS on HOST, installing the versioned helper as needed.
 Call SUCCESS with the result, or FAILURE with an error message."
@@ -922,9 +935,10 @@ The owner is HOST's SSH user, or the local user."
       (and (equal agent "claude") roost-claude-command)
       (list agent)))
 
-(defun roost--create-task (directory name base prompt agent &optional on-success on-failure)
+(defun roost--create-task (directory name base prompt agent &optional on-success on-failure extra)
   "Create an AGENT task NAME in DIRECTORY from BASE with PROMPT.
-Call ON-SUCCESS with the task before it opens, or ON-FAILURE with an error."
+Call ON-SUCCESS with the task before it opens, or ON-FAILURE with an error.
+EXTRA is an alist of further request fields, such as the GitHub issue."
   (setq agent (or agent roost-default-agent))
   (unless (member agent roost--agents)
     (user-error "Unsupported Roost agent: %s" agent))
@@ -935,18 +949,19 @@ Call ON-SUCCESS with the task before it opens, or ON-FAILURE with an error."
                  roost-setup-command)))
     (roost--request
      host "create"
-     (list (cons 'directory (file-local-name directory))
-           (cons 'name name)
-           (cons 'base base)
-           (cons 'agent agent)
-           (cons 'prompt (unless (string-empty-p (string-trim (or prompt ""))) prompt))
-           (cons 'command (vconcat (roost--agent-command agent)))
-           (cons 'setup setup)
-           (cons 'branchPrefix roost-branch-prefix)
-           (cons 'socket (or roost-socket-name
-                             (bound-and-true-p tmux-control-default-socket-name)
-                             "main"))
-           (cons 'session roost-session-name))
+     `(,(cons 'directory (file-local-name directory))
+           ,(cons 'name name)
+           ,(cons 'base base)
+           ,(cons 'agent agent)
+           ,(cons 'prompt (unless (string-empty-p (string-trim (or prompt ""))) prompt))
+           ,(cons 'command (vconcat (roost--agent-command agent)))
+           ,(cons 'setup setup)
+           ,(cons 'branchPrefix roost-branch-prefix)
+           ,(cons 'socket (or roost-socket-name
+                              (bound-and-true-p tmux-control-default-socket-name)
+                              "main"))
+           ,(cons 'session roost-session-name)
+           . ,extra)
      (lambda (task)
        (cl-incf (gethash host roost--revisions 0))
        (roost--remember-host host)
@@ -1003,7 +1018,8 @@ worktree; explicit HEAD uses DIRECTORY.  Nil AGENT uses
   "C-c C-p" #'roost-compose-set-project
   "C-c C-a" #'roost-compose-set-agent
   "C-c C-b" #'roost-compose-set-base
-  "C-c C-n" #'roost-compose-set-name)
+  "C-c C-n" #'roost-compose-set-name
+  "C-c C-t" #'roost-compose-set-issue)
 
 (define-derived-mode roost-compose-mode text-mode "Roost New Task"
   "Draft a coding agent task.  Write the prompt below the line.
@@ -1142,6 +1158,12 @@ Planning lines and drawers are left out."
                                            (t "primary checkout's current branch"))
                               #'roost-compose-set-base
                               (when (plist-get fields :source) "fork: includes its commits"))
+        (roost--compose-field "Issue" (if-let* ((issue (plist-get fields :issue)))
+                                          (format "#%s %s" (alist-get 'number issue)
+                                                  (or (alist-get 'title issue) ""))
+                                        "none")
+                              #'roost-compose-set-issue
+                              (when (plist-get fields :issue) "the pull request will close it"))
         (roost--compose-field "Name" (cond (name)
                                           ((string-empty-p derived) "from the prompt")
                                           (t derived))
@@ -1227,6 +1249,63 @@ A mouse click shows a menu at the pointer; the keyboard uses the minibuffer."
           (plist-put roost--compose-fields :name (unless (string-empty-p name) name)))
     (roost--compose-render)))
 
+(defun roost--issue-prompt (issue)
+  "Prompt text for GitHub ISSUE: its title, its text, then where it is."
+  (let ((body (string-trim (or (alist-get 'body issue) ""))))
+    (concat (alist-get 'title issue) "\n\n"
+            (if (string-empty-p body) "" (concat body "\n\n"))
+            (format "This is GitHub issue #%s: %s" (alist-get 'number issue)
+                    (alist-get 'url issue)))))
+
+(defun roost-compose-set-issue ()
+  "Start the draft from one of the project's open GitHub issues.
+The issue's title and text become the prompt, unless one is already
+written, and the task's pull request will close the issue.  Issues are
+listed with gh on the project's host."
+  (interactive)
+  (let* ((directory (or (plist-get roost--compose-fields :directory)
+                        (user-error "Choose a project first (%s)"
+                                    (substitute-command-keys "\\[roost-compose-set-project]"))))
+         (host (roost--directory-host directory))
+         (issues (progn (message "Roost: listing open issues on %s…" (roost--host-label host))
+                        (roost--request-wait host "issues"
+                                             (list (cons 'directory (file-local-name directory))))))
+         (none "No issue")
+         (choices (mapcar (lambda (issue)
+                            (cons (format "#%s %s" (alist-get 'number issue) (alist-get 'title issue))
+                                  issue))
+                          issues))
+         (choices (if (plist-get roost--compose-fields :issue) (cons (cons none nil) choices) choices))
+         (completion-extra-properties
+          (list :annotation-function
+                (lambda (choice)
+                  (when-let* ((labels (alist-get 'labels (cdr (assoc choice choices))))
+                              ((> (length labels) 0)))
+                    (concat "  " (propertize (string-join (append labels nil) ", ")
+                                             'face 'roost-dim)))))))
+    (unless issues
+      (user-error "%s has no open issues" (roost--project-label directory)))
+    (let* ((issue (cdr (assoc (completing-read "Issue: " choices nil t) choices)))
+           (previous (plist-get roost--compose-fields :issue))
+           (prompt (roost--compose-prompt)))
+      (setq roost--compose-fields (plist-put roost--compose-fields :issue
+                                             (when issue
+                                               (list (assq 'number issue) (assq 'title issue)
+                                                     (assq 'url issue)))))
+      ;; An untouched prompt follows the issue; a written one gains it below.
+      (when issue
+        (let ((inhibit-read-only t)
+              (untouched (or (string-empty-p prompt)
+                             (and previous (equal prompt (string-trim (roost--issue-prompt previous)))))))
+          (save-excursion
+            (if untouched
+                (delete-region roost--compose-body (point-max))
+              (goto-char (point-max))
+              (insert "\n\n"))
+            (goto-char (point-max))
+            (insert (roost--issue-prompt issue)))))
+      (roost--compose-render))))
+
 (defun roost-compose-cancel ()
   "Discard the draft."
   (interactive)
@@ -1261,7 +1340,9 @@ A mouse click shows a menu at the pointer; the keyboard uses the minibuffer."
                               (setq roost--compose-submitting nil)
                               (message "Roost could not create the task: %s" err)
                               (roost--draft-error "Could not create the task" err
-                                                  'roost-compose-submit)))))))
+                                                  'roost-compose-submit))))
+                        (when-let* ((issue (plist-get fields :issue)))
+                          (list (cons 'issue issue))))))
 
 ;;;; Task commands
 
@@ -1586,7 +1667,8 @@ Trailers have hyphenated keys, such as Co-Authored-By and Signed-off-by."
 COMMITS are the task's commit messages, oldest first.  The first commit
 gives the title and body, and later ones, often review fixes, are listed
 by subject.  Without commits the title is the task name, and without a
-message body the prompt stands in."
+message body the prompt stands in.  A task started from a GitHub issue
+closes it."
   (let* ((subjects (mapcar (lambda (message) (car (split-string message "\n"))) commits))
          (title (or (car subjects) (roost--readable-name (roost--field task 'name))))
          (first-body (and commits (string-trim (substring (car commits) (length (car subjects))))))
@@ -1594,7 +1676,11 @@ message body the prompt stands in."
                                    first-body
                                  (when-let* ((prompt (roost--prompt-text task))) (string-trim prompt)))
                                (when (cdr subjects)
-                                 (mapconcat (lambda (subject) (concat "- " subject)) (cdr subjects) "\n"))))))
+                                 (mapconcat (lambda (subject) (concat "- " subject)) (cdr subjects) "\n")))))
+         (issue (alist-get 'number (roost--field task 'issue))))
+    ;; Let GitHub close the task's issue when this merges.
+    (when (and issue (not (string-match-p (format "#%s\\b" issue) (string-join body "\n"))))
+      (setq body (append body (list (format "Closes #%s" issue)))))
     (concat title "\n\n" (string-join body "\n\n") (if body "\n" ""))))
 
 (defun roost--pr-header (task)
@@ -1730,6 +1816,18 @@ Without a status from GitHub yet, a recorded pull request counts as open."
                                   (propertize (symbol-name state) 'face (roost--pr-face state)))))))
         (string-join parts " "))
     ""))
+
+(defun roost--insert-issue (task)
+  "Insert TASK's \"Issue\" section when it was started from a GitHub issue."
+  (when-let* ((issue (roost--field task 'issue))
+              (number (alist-get 'number issue)))
+    (roost--insert-heading "Issue")
+    (insert "  ")
+    (insert-text-button (format "#%s" number)
+                        'follow-link t 'face 'roost-field
+                        'help-echo (alist-get 'url issue)
+                        'action (lambda (_) (browse-url (alist-get 'url issue))))
+    (insert (format "  %s\n" (or (alist-get 'title issue) "")))))
 
 (defun roost--insert-pull-request (task)
   "Insert TASK's \"Pull request\" section when it has a pull request."
@@ -2157,6 +2255,7 @@ prompt is returned whole."
                    'roost-status-permission)))))
         (when-let* ((error (roost--field task 'error)))
           (roost--insert-indented (concat "Last error: " error) 'roost-status-failed))
+        (roost--insert-issue task)
         (roost--insert-pull-request task)
         (when-let* ((prompt (roost--prompt-text task)))
           (roost--insert-heading "Prompt")

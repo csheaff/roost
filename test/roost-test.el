@@ -399,7 +399,7 @@
      (save-window-excursion
        (unwind-protect
            (cl-letf (((symbol-function 'roost--create-task)
-                      (lambda (directory name base prompt agent on-success on-failure)
+                      (lambda (directory name base prompt agent on-success on-failure &optional _extra)
                         (setq created (list directory name base prompt agent) failure on-failure)
                         (ignore on-success))))
              (roost--compose)
@@ -482,6 +482,72 @@
              (with-current-buffer roost--compose-buffer
                (should (string-prefix-p "Make b return 3." (roost--compose-prompt)))))
          (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-compose-starts-from-a-github-issue ()
+  (roost-test--isolated
+   (let ((default-directory "/tmp/") created asked)
+     (save-window-excursion
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--request)
+                      (lambda (host action params success &optional _failure)
+                        (setq asked (list host action (alist-get 'directory params)))
+                        (funcall success
+                                 (vector '((number . 12) (title . "CSV import crashes")
+                                           (body . "Quoted commas split fields.")
+                                           (url . "https://github.com/o/r/issues/12")
+                                           (labels . ["bug"]))
+                                         '((number . 9) (title . "Docs") (body . "")
+                                           (url . "https://github.com/o/r/issues/9") (labels . []))))))
+                     ((symbol-function 'completing-read)
+                      (lambda (_prompt choices &rest _) (car (nth (if created 1 0) choices))))
+                     ((symbol-function 'roost--create-task)
+                      (lambda (directory name base prompt agent _success _failure &optional extra)
+                        (setq created (list directory name base prompt agent extra)))))
+             (roost--compose)
+             (with-current-buffer roost--compose-buffer
+               (should-error (roost-compose-set-issue) :type 'user-error)
+               (setq roost--compose-fields (plist-put roost--compose-fields :directory "/ssh:dev:/repo/"))
+               (roost-compose-set-issue)
+               (should (equal asked '("dev" "issues" "/repo/")))
+               (should (equal (roost--compose-prompt)
+                              "CSV import crashes\n\nQuoted commas split fields.\n\nThis is GitHub issue #12: https://github.com/o/r/issues/12"))
+               (should (string-match-p "Issue    #12 CSV import crashes  C-c C-t · the pull request will close it"
+                                       (buffer-string)))
+               (should (string-match-p "Name     csv-import-crashes" (buffer-string)))
+               (roost-compose-submit)
+               (should (equal (nth 5 created)
+                              '((issue (number . 12) (title . "CSV import crashes")
+                                       (url . "https://github.com/o/r/issues/12")))))
+               ;; A written prompt keeps its text and gains the issue below.
+               (goto-char (point-max))
+               (insert "\nAlso handle tabs.")
+               (setq roost--compose-submitting nil)
+               (roost-compose-set-issue)
+               (should (string-match-p "Also handle tabs\\.\n\nCSV import crashes" (roost--compose-prompt)))))
+         (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-issue-tasks-show-the-issue-and-close-it ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (append '((issue (number . 12) (title . "CSV import crashes")
+                                                         (url . "https://github.com/o/r/issues/12")))
+                                                (roost-test--task)))))
+     (should (string-suffix-p "\n\nCloses #12\n" (roost--pr-initial-text task '("Fix CSV quoting"))))
+     (should-not (string-match-p "Closes" (roost--pr-initial-text task '("Fix CSV quoting\n\nFixes #12."))))
+     (with-temp-buffer
+       (setq roost--buffer-task-key (roost--key task))
+       (roost--render-task-info)
+       (should (string-match-p "^Issue\n  #12  CSV import crashes$" (buffer-string)))))))
+
+(ert-deftest roost-request-wait-returns-results-and-signals-failures ()
+  (cl-letf (((symbol-function 'roost--request)
+             (lambda (_host _action _params success &optional _failure)
+               (run-at-time 0 nil success '(1 2)))))
+    (should (equal (roost--request-wait "dev" "issues" nil 5) '(1 2))))
+  (cl-letf (((symbol-function 'roost--request)
+             (lambda (_host _action _params _success &optional failure)
+               (funcall failure "gh is not installed"))))
+    (should (equal (cadr (should-error (roost--request-wait "dev" "issues" nil 5) :type 'user-error))
+                   "gh is not installed"))))
 
 (ert-deftest roost-compose-requires-a-project-and-a-prompt-or-name ()
   (roost-test--isolated

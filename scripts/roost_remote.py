@@ -617,6 +617,10 @@ def create(store, request):
                 session=text(request.get("session")) or "roost-" + repo_hash,
                 agent=agent_name, command=command, setup=setup, prompt=prompt,
                 status="starting", startedAt=now(), updatedAt=now(), claudeSession=None)
+    issue = request.get("issue")
+    if isinstance(issue, dict) and isinstance(issue.get("number"), int) and not isinstance(issue["number"], bool):
+        task["issue"] = dict(number=issue["number"], title=text(issue.get("title")),
+                             url=text(issue.get("url")))
     if setup:
         task["setupComplete"] = False
     git(repo, "-c", "branch.autoSetupMerge=false", "worktree", "add", "-b", branch,
@@ -640,6 +644,28 @@ def create(store, request):
                 store.remove(task_id)
             raise
     return task
+
+
+ISSUE_BODY_LIMIT = 6000
+
+
+def issues(request):
+    """Open GitHub issues for the repository holding DIRECTORY, newest first,
+    as gh on this host sees them."""
+    directory = str(Path(text(request.get("directory")) or ".").expanduser())
+    checkout = git(directory, "rev-parse", "--show-toplevel").stdout.strip()
+    listed = json.loads(gh(checkout, "issue", "list", "--state", "open", "--limit", "100",
+                           "--json", "number,title,body,labels,url", timeout=30) or "[]")
+    result = []
+    for issue in listed:
+        body = text(issue.get("body")) or ""
+        if len(body) > ISSUE_BODY_LIMIT:
+            body = body[:ISSUE_BODY_LIMIT].rstrip() + "\n…"
+        result.append(dict(number=issue["number"], title=text(issue.get("title")) or "", body=body,
+                           url=text(issue.get("url")),
+                           labels=[label.get("name") for label in issue.get("labels") or []
+                                   if isinstance(label, dict) and label.get("name")]))
+    return result
 
 
 def list_tasks(store, request):
@@ -1250,6 +1276,8 @@ def rpc(request):
             return {"ok": True, "result": create(store, request)}
         if action == "doctor":
             return {"ok": True, "result": doctor(store, request)}
+        if action == "issues":
+            return {"ok": True, "result": issues(request)}
         if action == "pr":
             with store.locked():
                 task = store.read(request["id"])
