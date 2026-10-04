@@ -44,7 +44,8 @@ text become the prompt, and the task's pull request will close it.
 agents' own lifecycle hooks and notifies you when one finishes or asks for
 permission, with the first line of its reply, so you can tell from the
 notification whether it needs you now. The dashboard shows each agent's latest
-reply too. `n` jumps to the next agent waiting for you, permission requests
+reply too, and while Roost watches, the mode line counts the agents waiting
+(`Roost:2`; click it for the next one). `n` jumps to the next agent waiting for you, permission requests
 first. Answer it in the terminal, then `n` again.
 
 **Check the work yourself.** `t` opens a shell beside the agent, in the same
@@ -200,8 +201,9 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
 - `roost-workspace`, `roost-compact-mode-line`: how tasks get their own windows
   (see above); with perspective.el, task perspectives share one
   `Roost: host/task +N` entry in the perspective bar.
-- `roost-notify`, `roost-notify-function`, `roost-watch-interval` (3 s),
-  `roost-request-timeout` (60 s).
+- `roost-notify`, `roost-notify-function`, `roost-mode-line-count`,
+  `roost-watch-interval` (3 s), `roost-request-timeout` (60 s),
+  `roost-ssh-share-connections`.
 
 Each poll is one SSH command per host. Roost shares one connection per host
 across them (OpenSSH `ControlMaster`, with its socket in the state directory and

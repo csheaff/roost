@@ -579,6 +579,32 @@
    (should (eq (lookup-key roost-dashboard-mode-map "h") 'roost-dispatch))
    (should (eq (lookup-key roost-task-info-mode-map "h") 'roost-dispatch))))
 
+(ert-deftest roost-mode-line-counts-agents-waiting ()
+  (roost-test--isolated
+   (should-not (roost--mode-line-count))
+   (roost--cache-task "dev" (roost-test--task "1111111111111111" "running"))
+   (should-not (roost--mode-line-count))
+   (roost--cache-task "dev" (roost-test--task "2222222222222222" "ready"))
+   (let ((count (roost--mode-line-count)))
+     (should (equal (substring-no-properties count) " Roost:1 "))
+     (should (eq (get-text-property 1 'face count) 'roost-status-ready)))
+   (roost--cache-task "dev" (roost-test--task "3333333333333333" "permission"))
+   (let ((count (roost--mode-line-count)))
+     (should (equal (substring-no-properties count) " Roost:2 "))
+     (should (eq (get-text-property 1 'face count) 'roost-status-permission)))
+   (let ((global-mode-string '("" display-time-string)) (roost-watch-interval 3600))
+     (unwind-protect
+         (progn
+           (roost-watch-mode 1)
+           (roost-watch-mode 1)
+           (should (equal global-mode-string (list "" 'display-time-string roost--mode-line-entry)))
+           ;; Shown only while `roost-mode-line-count' is on.
+           (should (eq (car roost--mode-line-entry) 'roost-mode-line-count))
+           (should (equal (substring-no-properties (eval (cadr (cadr roost--mode-line-entry)) t))
+                          " Roost:2 ")))
+       (roost-watch-mode -1))
+     (should (equal global-mode-string '("" display-time-string))))))
+
 (ert-deftest roost-request-wait-returns-results-and-signals-failures ()
   (cl-letf (((symbol-function 'roost--request)
              (lambda (_host _action _params success &optional _failure)

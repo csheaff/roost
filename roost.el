@@ -2840,13 +2840,44 @@ With a prefix argument, read a HOST to check (empty for this machine)."
            (roost--render-doctor)))))))
 
 ;;;###autoload
+(defcustom roost-mode-line-count t
+  "Whether `roost-watch-mode' shows waiting agents in the mode line.
+The count appears in `global-mode-string', which mode lines keep even
+when they hide minor modes, and only while some agent waits."
+  :type 'boolean)
+
+(defun roost--mode-line-count ()
+  "\"Roost:N\" for the agents waiting for you, or nil when none are.
+Agents asking permission or stuck at a startup prompt color the count."
+  (let ((blocked 0) (ready 0))
+    (maphash (lambda (_key task)
+               (pcase (roost--attention-status task)
+                 ((or "permission" "prompt") (cl-incf blocked))
+                 ("ready" (cl-incf ready))))
+             roost--tasks)
+    (when (> (+ blocked ready) 0)
+      (concat (propertize (format " Roost:%d" (+ blocked ready))
+                          'face (if (> blocked 0) 'roost-status-permission 'roost-status-ready)
+                          'help-echo "Agents waiting for you; mouse-1 opens the next"
+                          'mouse-face 'mode-line-highlight
+                          'local-map (make-mode-line-mouse-map 'mouse-1 #'roost-next-waiting))
+              " "))))
+
+(defconst roost--mode-line-entry '(roost-mode-line-count (:eval (roost--mode-line-count)))
+  "The `global-mode-string' entry for `roost-watch-mode'.")
+
 (define-minor-mode roost-watch-mode
-  "Watch tasks asynchronously, retaining cached records during disconnects."
+  "Watch tasks asynchronously, retaining cached records during disconnects.
+While watching, the mode line counts the agents waiting for you; see
+`roost-mode-line-count'."
   :global t
   :lighter " Roost"
   (when roost--watch-timer
     (cancel-timer roost--watch-timer)
     (setq roost--watch-timer nil))
+  (setq global-mode-string (delete roost--mode-line-entry (ensure-list global-mode-string)))
+  (when roost-watch-mode
+    (setq global-mode-string (append global-mode-string (list roost--mode-line-entry))))
   (when roost-watch-mode
     (setq roost--watch-timer
           (run-with-timer roost-watch-interval roost-watch-interval
