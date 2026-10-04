@@ -1507,12 +1507,14 @@ An existing draft for TASK is reused, and kept as written unless it is empty."
 Write the title on the first line and the body below it;
 \\<roost-pr-mode-map>\\[roost-pr-submit] pushes the branch and creates it.
 For a task with a pull request, push its new commits and open it in the
-browser; with prefix argument SKIP-PUSH, only open it."
+browser; with prefix argument SKIP-PUSH, or once it is merged or closed,
+only open it."
   (interactive (list nil current-prefix-arg))
   (setq task (roost--choose task))
   (if-let* ((pr (roost--field task 'pr))
             (url (alist-get 'url pr)))
-      (if skip-push
+      (if (or skip-push
+              (member (alist-get 'state (roost--field task 'prStatus)) '("MERGED" "CLOSED")))
           (browse-url url)
         (roost--act
          task "pr" nil

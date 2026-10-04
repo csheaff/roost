@@ -963,6 +963,17 @@
        (roost-pr task t)
        (should (equal opened "https://github.com/o/r/pull/12"))))))
 
+(ert-deftest roost-pr-does-not-push-to-a-merged-pull-request ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (append '((prStatus (state . "MERGED")))
+                                                (roost-test--pr-task))))
+         opened)
+     (cl-letf (((symbol-function 'browse-url) (lambda (url &rest _) (setq opened url)))
+               ((symbol-function 'roost--request)
+                (lambda (&rest _) (ert-fail "should not push"))))
+       (roost-pr task)
+       (should (equal opened "https://github.com/o/r/pull/12"))))))
+
 (ert-deftest roost-pr-markers-show-state-checks-and-review ()
   (let ((marker (lambda (&rest fields)
                   (let ((m (roost--pr-marker (apply #'roost-test--pr-task fields))))
