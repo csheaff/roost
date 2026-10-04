@@ -33,12 +33,13 @@ Both recipes were built with MELPA's `package-build`. The Roost archive holds
 | --- | --- | --- |
 | `package-lint` | Clean since 0.7.1 ([tmux-control#153](https://github.com/csheaff/tmux-control/pull/153) moved `C-c x`, a key reserved for users, to `C-c C-x`) | Only "tmux-control is not installable", which clears once tmux-control is on MELPA |
 | Byte compilation | No warnings | No warnings |
-| `checkdoc` | 73 advisory notes, mostly messages starting with "tmux-control:" and keys written into docstrings | 3, all false positives |
+| `checkdoc` | 42 advisory notes since [tmux-control#154](https://github.com/csheaff/tmux-control/pull/154): messages starting with "tmux-control:", keys written into docstrings, and wording-mood suggestions | 3, all false positives |
+| melpazoid | Top-level `advice-add` on Eat (5 sites) and hooks added at load (2), which are how tmux-control integrates with Eat; expect a question about `unload-feature` | Clean apart from the dependency note |
 | Tests | 303 ERT, source and compiled, in CI | 88 ERT and 66 Python lifecycle tests |
 
-MELPA's reviewers also run [melpazoid](https://github.com/riscy/melpazoid);
-run it on each package before submitting, and expect requests about the
-checkdoc notes.
+MELPA's reviewers run [melpazoid](https://github.com/riscy/melpazoid); its
+Emacs Lisp checks were run locally for the table above. Run it again before
+submitting.
 
 ## Before submitting Roost
 
