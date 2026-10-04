@@ -17,13 +17,18 @@
 (require 'tabulated-list)
 (require 'tramp)
 (require 'parse-time)
+(require 'button)
 (declare-function tmux-control--connect-or-switch "tmux-control" (host socket session))
 (declare-function tmux-control--send-command "tmux-control" (command &optional kind))
 (declare-function tmux-control-select-pane "tmux-control" (&optional pane))
+(declare-function tmux-control-tile "tmux-control" ())
+(declare-function tmux-control--tiled-mode-p "tmux-control" ())
+(declare-function tmux-control--query "tmux-control" (command callback))
 (declare-function magit-status "magit-status" (&optional directory cache))
 (declare-function magit-diff-working-tree "magit-diff" (&optional rev args files))
 (declare-function persp-switch "perspective" (name))
 (declare-function persp-kill "perspective" (name))
+(declare-function persp-current-name "perspective" ())
 (defvar tmux-control-default-socket-name)
 (defvar tmux-control--host)
 (defvar tmux-control--socket-name)
@@ -32,6 +37,7 @@
 (defvar tmux-control-remote-tmux-socket-setup)
 (defvar tmux-control-ssh-options)
 (defvar persp-autokill-buffer-on-remove)
+(defvar persp-mode nil)
 (defgroup roost nil "Claude tasks in persistent local or remote tmux." :group 'tools)
 (defcustom roost-hosts '(nil)
   "SSH hosts to monitor. Nil means local. Task hosts are also remembered."
@@ -73,6 +79,7 @@ May be set directory-locally. Not rerun on resume."
 (defvar roost--watch-timer nil)
 (defvar roost--requests nil)
 (defvar roost--open-generation 0)
+(defvar-local roost--buffer-task-key nil)
 
 (defun roost--host-label (host) "Display label for HOST." (or host "local"))
 
@@ -257,21 +264,40 @@ May be set directory-locally. Not rerun on resume."
 (defun roost--read-task (prompt)
   "Choose a cached task with PROMPT."
   (let* ((tasks (roost-tasks))
-         (choices (mapcar (lambda (task) (cons (format "%s / %s [%s] %s" (roost--host-label (roost--field task 'host))
-                                                      (roost--field task 'name) (roost--field task 'status) (roost--field task 'id)) task)) tasks)))
+         (choices (mapcar (lambda (task) (cons (format "%s / %s / %s [%s] %s" (roost--host-label (roost--field task 'host))
+                                                      (roost--project-name task) (roost--field task 'name)
+                                                      (roost--field task 'status) (roost--field task 'id)) task)) tasks)))
     (unless tasks (user-error "No cached tasks; open Roost and refresh, or create one"))
     (cdr (assoc (completing-read prompt choices nil t) choices))))
 
 (defun roost--task-at-point ()
   "Task selected in the dashboard, terminal, or current workspace."
-  (if (derived-mode-p 'roost-dashboard-mode)
-      (gethash (tabulated-list-get-id) roost--tasks)
-    (or
-      (and (boundp 'tmux-control--active-pane) tmux-control--active-pane
-           (seq-find (lambda (task) (and (equal (roost--field task 'host) tmux-control--host)
+  (cond
+   ((derived-mode-p 'roost-dashboard-mode) (gethash (tabulated-list-get-id) roost--tasks))
+   (roost--buffer-task-key
+    (or (gethash roost--buffer-task-key roost--tasks) (user-error "This task has been retired or is unavailable")))
+   (t
+    (let ((tasks (roost-tasks))
+          (perspective-active (and roost-use-perspectives (bound-and-true-p persp-mode)
+                                   (fboundp 'persp-current-name))))
+      (or
+       (and (bound-and-true-p tmux-control--active-pane)
+            (seq-find (lambda (task) (and (equal (roost--field task 'host) tmux-control--host)
                                          (equal (roost--field task 'socket) tmux-control--socket-name)
-                                         (equal (roost--field task 'paneId) tmux-control--active-pane))) (roost-tasks)))
-      (gethash roost--current-task roost--tasks))))
+                                         (member tmux-control--active-pane
+                                                 (list (roost--field task 'paneId) (roost--field task 'shellPaneId))))) tasks))
+       ;; String comparisons avoid opening a remote connection just to infer context.
+       (condition-case nil
+           (let* ((directory (file-name-as-directory (expand-file-name default-directory)))
+                  (host (roost--directory-host directory)) (local (file-local-name directory)))
+             (seq-find (lambda (task) (and (equal host (roost--field task 'host))
+                                          (string-prefix-p (file-name-as-directory (roost--field task 'worktree)) local))) tasks))
+         (user-error nil))
+       (and perspective-active
+            (seq-find (lambda (task) (equal (persp-current-name) (roost--perspective-name task))) tasks))
+       ;; An unrelated perspective or file must not silently target the last task.
+       (and (not perspective-active) (not buffer-file-name)
+            (gethash roost--current-task roost--tasks)))))))
 
 (defun roost--choose (&optional task)
   "Choose TASK or infer it from context." (or task (roost--task-at-point) (roost--read-task "Task: ")))
@@ -287,8 +313,8 @@ May be set directory-locally. Not rerun on resume."
     (persp-switch (roost--perspective-name task)))
   (setq roost--current-task (roost--key task)))
 
-(defun roost--display-task (task)
-  "Display TASK after its pane ownership has been checked on its host."
+(defun roost--display-task (task &optional target-pane)
+  "Display TASK after ownership validation, selecting TARGET-PANE if supplied."
   (require 'tmux-control)
   (roost--activate-workspace task)
   ;; Reuse the saved terminal window instead of replacing its neighboring
@@ -304,10 +330,11 @@ May be set directory-locally. Not rerun on resume."
     (select-window window))
   (tmux-control--connect-or-switch (roost--field task 'host) (roost--field task 'socket) (roost--field task 'session))
   ;; Explicit window hop also works before the pane map arrives on connect.
-  (let ((window (roost--field task 'windowId)) (pane (roost--field task 'paneId)))
+  (let ((window (roost--field task 'windowId)) (pane (or target-pane (roost--field task 'paneId))))
     (unless (and (stringp window) (string-match-p "\\`@[0-9]+\\'" window)
                  (stringp pane) (string-match-p "\\`%[0-9]+\\'" pane)) (user-error "Invalid tmux target"))
-    (tmux-control--send-command (format "select-window -t %s" window)) (tmux-control-select-pane pane)))
+    (with-current-buffer (window-buffer (selected-window))
+      (tmux-control--send-command (format "select-window -t %s" window)) (tmux-control-select-pane pane))))
 
 ;;;###autoload
 (defun roost-open-task (&optional task)
@@ -327,16 +354,32 @@ May be set directory-locally. Not rerun on resume."
   "Choose a task across hosts and restore its workspace."
   (interactive) (roost-open-task (roost--read-task "Switch task: ")))
 
+(defun roost--read-new-task ()
+  "Read creation arguments with an independent task as the default.
+A prefix argument instead defaults to forking the current task's committed HEAD."
+  (let* ((task (roost--task-at-point))
+         (source (if task
+                     (if current-prefix-arg (roost--remote-directory task)
+                       (roost--remote-directory (cons (cons 'worktree (roost--field task 'repo)) task)))
+                   default-directory))
+         (directory (read-directory-name "Project checkout (local or TRAMP): " source nil t)))
+    (list directory (read-string "Task name: ")
+          (let ((ref (read-string "Start from ref (empty = primary checkout branch): " nil nil
+                                  (when current-prefix-arg "HEAD"))))
+            (unless (string-empty-p (string-trim ref)) (string-trim ref)))
+          (read-string "Initial prompt (optional): "))))
+
 ;;;###autoload
 (defun roost-new-task (directory name &optional base prompt)
   "Create a Claude task NAME in DIRECTORY from BASE, with optional PROMPT.
-DIRECTORY may be a TRAMP path."
-  (interactive (list (read-directory-name "Repository (local or TRAMP): " default-directory nil t)
-                     (read-string "Task name: ") (read-string "Start from ref: " nil nil "HEAD") (read-string "Initial prompt (optional): ")))
+DIRECTORY may be a TRAMP path. Nil BASE uses the primary checkout's current
+branch, even when DIRECTORY is a task worktree. Explicit HEAD uses DIRECTORY.
+Interactively, a prefix argument defaults to forking the current task."
+  (interactive (roost--read-new-task))
   (let ((host (roost--directory-host directory))
         (setup (with-temp-buffer (setq default-directory directory) (hack-dir-local-variables-non-file-buffer) roost-setup-command)))
     (roost--request host "create"
-                   (list (cons 'directory (file-local-name directory)) (cons 'name name) (cons 'base (or base "HEAD"))
+                   (list (cons 'directory (file-local-name directory)) (cons 'name name) (cons 'base base) (cons 'agent "claude")
                          (cons 'prompt (unless (string-empty-p (or prompt "")) prompt)) (cons 'command (vconcat roost-claude-command)) (cons 'setup setup)
                          (cons 'socket (or roost-socket-name (bound-and-true-p tmux-control-default-socket-name) "main"))
                          (cons 'session roost-session-name))
@@ -344,7 +387,8 @@ DIRECTORY may be a TRAMP path."
                      (cl-incf (gethash host roost--revisions 0)) (roost--remember-host host)
                      (setq task (roost--cache-task host task))
                      (roost-watch-mode 1) (roost--redraw) (roost-open-task task)
-                     (message "Roost created %s on %s" name (roost--host-label host))))
+                     (message "Roost created %s on %s from %s; integrates into %s" name (roost--host-label host)
+                              (roost--field task 'baseRef) (roost--field task 'integrationBranch))))
     (message "Roost: creating %s…" name)))
 
 (defun roost--act (task action &optional parameters callback)
@@ -380,6 +424,55 @@ DIRECTORY may be a TRAMP path."
   "Open Magit on TASK's worktree, through TRAMP for remote tasks."
   (interactive) (setq task (roost--choose task)) (roost--activate-workspace task)
   (if (require 'magit nil t) (magit-status (roost--remote-directory task)) (dired (roost--remote-directory task))))
+
+;;;###autoload
+(defun roost-files (&optional task)
+  "Browse TASK's worktree with Dired."
+  (interactive) (setq task (roost--choose task)) (roost--activate-workspace task)
+  (dired (roost--remote-directory task)))
+
+;;;###autoload
+(defun roost-shell (&optional task)
+  "Open or reuse a shell beside the agent, in TASK's worktree."
+  (interactive) (setq task (roost--choose task))
+  (let ((generation (cl-incf roost--open-generation)))
+    (roost--act task "shell" nil
+                (lambda (updated)
+                  (when (= generation roost--open-generation)
+                    (roost--display-task updated (roost--field updated 'shellPaneId))
+                    (with-current-buffer (window-buffer (selected-window))
+                      (unless (tmux-control--tiled-mode-p) (tmux-control-tile))
+                      (roost--focus-shell updated generation)))))))
+
+(defun roost--focus-shell (task generation)
+  "Focus TASK's shell after queued tiling replies, unless navigation changed."
+  (let ((frame (selected-frame)))
+    (tmux-control--query
+     "display-message -p '#{window_id}'"
+     (lambda (_reply)
+       ;; Select outside the process filter, after its buffer/focus restoration.
+       (run-at-time
+        0.1 nil
+        (lambda ()
+          (when (and (= generation roost--open-generation) (eq frame (selected-frame))
+                     (equal roost--current-task (roost--key task))
+                     ;; Opening a file or review while tiling settles cancels
+                     ;; the pending terminal focus, even within the same task.
+                     (with-current-buffer (window-buffer (selected-window))
+                       (and (equal (bound-and-true-p tmux-control--host) (roost--field task 'host))
+                            (equal (bound-and-true-p tmux-control--socket-name) (roost--field task 'socket))
+                            (member (bound-and-true-p tmux-control--active-pane)
+                                    (list (roost--field task 'paneId) (roost--field task 'shellPaneId)))))
+                     (or (not (and roost-use-perspectives (bound-and-true-p persp-mode)))
+                         (equal (persp-current-name) (roost--perspective-name task))))
+            (when-let* ((window
+                         (seq-find (lambda (window)
+                                     (with-current-buffer (window-buffer window)
+                                       (and (equal (bound-and-true-p tmux-control--host) (roost--field task 'host))
+                                            (equal (bound-and-true-p tmux-control--socket-name) (roost--field task 'socket))
+                                            (equal (bound-and-true-p tmux-control--active-pane) (roost--field task 'shellPaneId)))))
+                                   (window-list frame))))
+              (select-window window)))))))))
 
 ;;;###autoload
 (defun roost-diff (&optional task)
@@ -423,6 +516,60 @@ Dirty worktrees are refused; review and commit in Magit first."
          (keys (mapcar #'roost--key waiting)) (tail (member roost--current-task keys)) (key (or (cadr tail) (car keys))))
     (unless key (user-error "No live tasks need attention")) (roost-open-task (gethash key roost--tasks))))
 
+(defun roost--project-name (task)
+  "Short primary repository name for TASK."
+  (file-name-nondirectory (directory-file-name (or (roost--field task 'repo) "unknown"))))
+
+(defvar-keymap roost-task-info-mode-map
+  :doc "Actions on the task shown in this buffer."
+  "RET" #'roost-open-task "r" #'roost-review "D" #'roost-diff "f" #'roost-files "t" #'roost-shell
+  "e" #'roost-send "s" #'roost-resume "k" #'roost-stop "x" #'roost-retire "m" #'roost-merge-retire "g" #'roost-refresh)
+
+(define-derived-mode roost-task-info-mode special-mode "Roost Task"
+  "Task details and lifecycle commands. Status is the last cached observation.")
+
+(defun roost--render-task-info ()
+  "Update the current task panel from the cache, without changing focus."
+  (let ((task (gethash roost--buffer-task-key roost--tasks)) (inhibit-read-only t) (position (point)))
+    (erase-buffer)
+    (if (not task) (insert "This task has been retired or is unavailable.\n")
+      (insert (format "%s / %s / %s\n\n" (roost--host-label (roost--field task 'host))
+                      (roost--project-name task) (roost--field task 'name)))
+      (dolist (entry `(("Agent" . ,(or (roost--field task 'agent) "claude"))
+                       ("Status (cached)" . ,(if (gethash (roost--field task 'host) roost--errors) "offline" (roost--field task 'status)))
+                       ("Project" . ,(roost--field task 'repo)) ("Worktree" . ,(roost--field task 'worktree))
+                       ("Task branch" . ,(roost--field task 'branch)) ("Started from" . ,(roost--field task 'baseRef))
+                       ("Integrates into" . ,(roost--field task 'integrationBranch))
+                       ("Tmux session" . ,(roost--field task 'session))))
+        (insert (format "%-18s %s\n" (car entry) (or (cdr entry) "unknown"))))
+      (when-let* ((error (roost--field task 'error))) (insert "\nLast error: " error "\n"))
+      (insert "\n")
+      (dolist (action '(("RET  Agent" . roost-open-task) ("t  Shell beside agent" . roost-shell)
+                        ("f  Files" . roost-files) ("r  Review / commit in Magit" . roost-review)
+                        ("D  Diff since creation" . roost-diff) ("e  Send prompt" . roost-send)
+                        ("k  Stop; keep work" . roost-stop) ("s  Resume conversation" . roost-resume)
+                        ("m  Merge committed work and retire" . roost-merge-retire)
+                        ("x  Retire after a manual merge" . roost-retire)))
+        (insert-text-button (car action) 'follow-link t 'roost-command (cdr action)
+                            'action (lambda (button) (call-interactively (button-get button 'roost-command))))
+        (insert "\n"))
+      (insert "\nFinished? Review and commit with r, then merge and retire with m.\n"
+              "Both checkouts must be clean. Stop active work first with k.\n"
+              "Ready means the agent awaits input; it does not mean reviewed or complete.\n\n"
+              "g refreshes status; q closes this panel.\n"))
+    (goto-char (min position (point-max)))))
+
+;;;###autoload
+(defun roost-task-info (&optional task)
+  "Show TASK's project, starting branch, integration target and actions."
+  (interactive) (setq task (roost--choose task))
+  (let ((buffer (get-buffer-create (format "*roost task %s:%s*" (roost--host-label (roost--field task 'host))
+                                          (roost--field task 'id)))))
+    (with-current-buffer buffer
+      (unless (derived-mode-p 'roost-task-info-mode) (roost-task-info-mode))
+      (setq roost--buffer-task-key (roost--key task)) (roost--render-task-info))
+    (pop-to-buffer buffer)))
+
 (defun roost--status-face (status)
   "Face for STATUS."
   (pcase status ((or "permission" "ready") 'warning) ((or "failed" "crashed" "offline") 'error)
@@ -442,10 +589,12 @@ Dirty worktrees are refused; review and commit in Magit first."
             (let* ((host (roost--field task 'host)) (status (if (gethash host roost--errors) "offline" (roost--field task 'status))))
               (list (roost--key task) (vector (roost--host-label host) (roost--field task 'name)
                                              (propertize status 'face (roost--status-face status)) (roost--elapsed (roost--field task 'updatedAt))
-                                             (or (roost--field task 'diff) "") (roost--field task 'branch) (or (roost--field task 'task) ""))))) (roost-tasks)))
+                                             (roost--project-name task) (or (roost--field task 'diff) "")
+                                             (roost--field task 'branch) (or (roost--field task 'task) ""))))) (roost-tasks)))
 (defvar-keymap roost-dashboard-mode-map
   :doc "Task dashboard commands."
   "RET" #'roost-open-task "c" #'roost-new-task "d" #'roost-new-task "r" #'roost-review "D" #'roost-diff
+  "?" #'roost-task-info "i" #'roost-task-info "f" #'roost-files "t" #'roost-shell
   "e" #'roost-send "s" #'roost-resume "k" #'roost-stop "x" #'roost-retire "m" #'roost-merge-retire "n" #'roost-next-waiting "g" #'roost-refresh)
 (defun roost--dashboard-display-settings ()
   "Keep table columns intact after global minor modes enable themselves."
@@ -457,7 +606,7 @@ Dirty worktrees are refused; review and commit in Magit first."
 (define-derived-mode roost-dashboard-mode tabulated-list-mode "Roost"
   "Tasks across hosts. All refreshes are asynchronous."
   (setq tabulated-list-format [("Host" 14 t) ("Task" 24 t) ("Status" 12 t) ("Since" 8 t)
-                               ("Changes" 30 t) ("Branch" 36 t) ("Prompt" 0 nil)]
+                               ("Project" 20 t) ("Changes" 30 t) ("Branch" 36 t) ("Prompt" 0 nil)]
         tabulated-list-use-header-line nil
         truncate-lines t
         display-line-numbers nil
@@ -470,9 +619,12 @@ Dirty worktrees are refused; review and commit in Magit first."
   (when-let* ((buffer (get-buffer "*roost*")))
     (with-current-buffer buffer
       (when (derived-mode-p 'roost-dashboard-mode)
-        (setq header-line-format (concat " RET open · c new · r Magit · D diff · e send · s resume · k stop · x retire · g refresh"
+        (setq header-line-format (concat " RET open · c new · ? task/actions · t shell · r Magit · m merge/retire · g refresh"
                                          (when (> (hash-table-count roost--errors) 0) "  — host unavailable; last state retained")))
-        (tabulated-list-print t)))))
+        (tabulated-list-print t))))
+  (dolist (buffer (buffer-list))
+    (with-current-buffer buffer
+      (when (derived-mode-p 'roost-task-info-mode) (roost--render-task-info)))))
 
 ;;;###autoload
 (defun roost-status ()

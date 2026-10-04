@@ -128,7 +128,7 @@ def check_worktree(store, task):
     return worktree
 
 
-def hook_settings(store, task):
+def claude_hook_settings(store, task):
     script = str(Path(__file__).resolve())
     command = shlex.join([sys.executable, script, "hook", str(store.root), task["id"], task["runId"]])
     events = ["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse",
@@ -140,6 +140,58 @@ def hook_settings(store, task):
     return str(path)
 
 
+class ClaudeAgent:
+    """Agent-specific CLI and events; Git/tmux lifecycle stays outside this adapter."""
+
+    default_command = ["claude"]
+
+    def validate(self, command):
+        if not isinstance(command, list) or not command or not all(isinstance(x, str) and x for x in command):
+            raise RoostError("Claude command must be a nonempty argument list")
+        reserved = {"--worktree", "-w", "--tmux", "--background", "--bg", "--resume", "-r",
+                    "--continue", "-c", "--settings", "--bare", "--safe-mode", "--session-id"}
+        if any(arg.split("=", 1)[0] in reserved for arg in command[1:]):
+            raise RoostError("Roost owns worktrees, conversation resume, and hook settings; remove conflicting Claude flags")
+
+    def launch(self, store, task, resume_conversation):
+        argv = task["command"] + ["--settings", claude_hook_settings(store, task)]
+        session = task.get("agentSession") or task.get("claudeSession")
+        if resume_conversation and session:
+            argv += ["--resume", session]
+        elif task.get("prompt"):
+            argv.append(task["prompt"])
+        return argv
+
+    def observe(self, payload):
+        event = payload.get("hook_event_name")
+        status = {
+            "SessionStart": "ready", "UserPromptSubmit": "running",
+            "PreToolUse": "running", "PostToolUse": "running",
+            "PermissionRequest": "permission", "SessionEnd": "exited", "StopFailure": "failed",
+        }.get(event)
+        if event == "Stop":
+            status = "background" if payload.get("background_tasks") or payload.get("session_crons") else "ready"
+        if event == "Notification":
+            status = {"permission_prompt": "permission", "idle_prompt": "ready"}.get(payload.get("notification_type"))
+        if not status:
+            return None
+        updates = dict(status=status, updatedAt=now(), lastEvent=event)
+        if payload.get("session_id"):
+            # Keep the old field for tasks whose original helper is still running.
+            updates.update(agentSession=payload["session_id"], claudeSession=payload["session_id"])
+        return updates
+
+
+AGENTS = {"claude": ClaudeAgent()}
+
+
+def agent_for(task):
+    name = task.get("agent", "claude")  # Existing 0.3 records remain usable.
+    if not isinstance(name, str) or name not in AGENTS:
+        raise RoostError("Unsupported agent: " + str(name))
+    return AGENTS[name]
+
+
 def spawn(store, task, resume=False):
     socket = task["socket"]
     session = task["session"]
@@ -147,6 +199,7 @@ def spawn(store, task, resume=False):
         tmux(socket, "new-session", "-d", "-s", session, "-n", "shell", "-c", task["repo"])
     script = str(Path(__file__).resolve())
     task["runId"] = uuid.uuid4().hex
+    task.pop("shellPaneId", None)
     argv = [sys.executable, script, "run", str(store.root), task["id"], task["runId"]]
     if resume:
         argv.append("resume")
@@ -177,16 +230,15 @@ def create(store, request):
     slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", name).strip("-")[:50]
     if not slug or any(ord(c) < 32 or ord(c) == 127 for c in name):
         raise RoostError("Give the task a printable name containing letters or numbers")
-    command = request.get("command", ["claude"])
-    if not isinstance(command, list) or not command or not all(isinstance(x, str) and x for x in command):
-        raise RoostError("Claude command must be a nonempty argument list")
-    reserved = {"--worktree", "-w", "--tmux", "--background", "--bg", "--resume", "-r",
-                "--continue", "-c", "--settings", "--bare", "--safe-mode", "--session-id"}
-    if any(arg.split("=", 1)[0] in reserved for arg in command[1:]):
-        raise RoostError("Roost owns worktrees, conversation resume, and hook settings; remove conflicting Claude flags")
-    base = request.get("base") or "HEAD"
-    commit = git(directory, "rev-parse", "--verify", base + "^{commit}").stdout.strip()
+    agent = agent_for(request)
+    command = request.get("command", agent.default_command)
+    agent.validate(command)
     integration = git(repo, "symbolic-ref", "--short", "HEAD", check=False).stdout.strip()
+    # Independent tasks start at the primary checkout. HEAD only forks the
+    # source worktree when explicitly requested, rather than accidentally.
+    explicit_base = request.get("base")
+    base = explicit_base or integration or "HEAD"
+    commit = git(directory if explicit_base else repo, "rev-parse", "--verify", base + "^{commit}").stdout.strip()
     task_id = uuid.uuid4().hex[:16]
     repo_hash = hashlib.sha256(repo.encode()).hexdigest()[:10]
     branch = "codex/roost/" + slug + "-" + task_id[:6]
@@ -196,7 +248,7 @@ def create(store, request):
     task = dict(id=task_id, name=name, task=request.get("prompt") or name, repo=repo,
                 worktree=str(worktree), branch=branch, baseRef=base, baseCommit=commit,
                 integrationBranch=integration, socket=socket, session=request.get("session") or "roost-" + repo_hash,
-                command=command, setup=request.get("setup"), prompt=request.get("prompt"),
+                agent=request.get("agent", "claude"), command=command, setup=request.get("setup"), prompt=request.get("prompt"),
                 status="starting", startedAt=now(), updatedAt=now(), claudeSession=None)
     git(repo, "-c", "branch.autoSetupMerge=false", "worktree", "add", "-b", branch,
         str(worktree), commit)
@@ -283,6 +335,31 @@ def send(task, text):
     return task
 
 
+def shell(store, task):
+    """Reuse one supporting shell in the task's tmux window and worktree."""
+    inventory = pane_inventory(task["socket"])
+    if not owned_pane(task, inventory):
+        raise RoostError("Task's tmux window is gone; resume the task before opening its shell")
+    pane = inventory.get(task.get("shellPaneId"))
+    if pane and (pane["task"] != task["id"] or pane["window"] != task["windowId"]):
+        raise RoostError("Task's shell ownership changed; inspect the window in tmux")
+    if not pane or pane["dead"]:
+        check_worktree(store, task)
+        if not Path(task["worktree"]).is_dir():
+            raise RoostError("Task worktree is gone")
+        if pane:
+            tmux(task["socket"], "kill-pane", "-t", task["shellPaneId"])
+        pane_id = tmux(task["socket"], "split-window", "-h", "-d", "-P", "-F", "#{pane_id}",
+                       "-t", task["paneId"], "-c", task["worktree"]).stdout.strip()
+        tmux(task["socket"], "set-option", "-p", "-t", pane_id, "@roost_task_id", task["id"])
+        task["shellPaneId"] = pane_id
+    owner = inventory[task["paneId"]]
+    task["session"] = owner["session_name"]
+    task["windowIndex"] = owner["index"]
+    store.save(task)
+    return task
+
+
 def require_finished(task):
     if task["status"] in ("starting", "running", "permission", "background"):
         raise RoostError("Claude is active; stop it or wait before retiring this task")
@@ -346,21 +423,9 @@ def update_hook(store, task_id, payload, run_id=None):
             return
         if task["status"] in ("stopped", "retired"):
             return
-        event = payload.get("hook_event_name")
-        status = {
-            "SessionStart": "ready", "UserPromptSubmit": "running",
-            "PreToolUse": "running", "PostToolUse": "running",
-            "PermissionRequest": "permission", "SessionEnd": "exited",
-            "StopFailure": "failed",
-        }.get(event)
-        if event == "Stop":
-            status = "background" if payload.get("background_tasks") or payload.get("session_crons") else "ready"
-        if event == "Notification":
-            status = {"permission_prompt": "permission", "idle_prompt": "ready"}.get(payload.get("notification_type"))
-        if status:
-            task.update(status=status, updatedAt=now(), lastEvent=event)
-            if payload.get("session_id"):
-                task["claudeSession"] = payload["session_id"]
+        updates = agent_for(task).observe(payload)
+        if updates:
+            task.update(updates)
             store.save(task)
 
 
@@ -370,16 +435,11 @@ def runner(root, task_id, run_id, resume_conversation=False):
         task = store.read(task_id)
         if task.get("runId") != run_id:
             return 0
-        settings = hook_settings(store, task)
+        argv = agent_for(task).launch(store, task, resume_conversation)
     env = os.environ.copy()
     env["ROOST_TASK_ID"] = task_id
     env["PATH"] = os.pathsep.join([str(Path.home() / ".local/bin"), str(Path.home() / "bin"),
                                    "/opt/homebrew/bin", "/usr/local/bin", env.get("PATH", "")])
-    argv = task["command"] + ["--settings", settings]
-    if resume_conversation and task.get("claudeSession"):
-        argv += ["--resume", task["claudeSession"]]
-    elif task.get("prompt"):
-        argv.append(task["prompt"])
     code = 1
     error = None
     try:
@@ -418,6 +478,8 @@ def rpc(request):
                     result = stop(store, task)
                 elif action == "send":
                     result = send(task, request["text"])
+                elif action == "shell":
+                    result = shell(store, task)
                 elif action == "inspect":
                     pane = owned_pane(task)
                     if not pane or pane["dead"]:

@@ -2,9 +2,9 @@
 
 ## Automated checks
 
-- `make test compile` on macOS: **18 ERT tests and 14 Python lifecycle tests pass**;
+- `make test compile` on macOS: **27 ERT tests and 17 Python lifecycle tests pass**;
   `roost.el` byte-compiles without warnings.
-- The same 14 Python tests pass on **`claylien`** over SSH, with Python 3.13.7 and
+- The same 17 Python tests pass on **`claylien`** over SSH, with Python 3.13.7 and
   tmux 3.7c. Local tests use an isolated socket and real Git/tmux too.
 - A fresh `emacs -Q --batch` check of the default profile's new Roost configuration
   verifies balanced init syntax, deferred loading, `SPC r` bindings, configured
@@ -14,13 +14,20 @@ ERT covers asynchronous helper installation, request root capture, host-qualifie
 identity, host persistence, stale navigation/refresh responses, host propagation
 through create/resume, retained Git statistics, offline state, TRAMP method/user
 handling, SSH quoting/socket setup/options, notifications (including turns that
-finish between polls), and refresh without focus changes.
+finish between polls), and refresh without focus changes. It also covers manual
+perspective switches, host-qualified worktree context, shell context, independent
+creation versus explicit forks, task-panel identity, and stale shell callbacks.
+Shell display tests check idempotent tiling, the callback's terminal buffer, and
+deferred focus that respects later file/workspace navigation.
 
 Python tests exercise create, hook commands, literal prompt delivery, permissions,
 stop, conversation resume, stable tmux IDs, existing/renamed sessions, creating from linked worktrees, ownership
 loss, generation guards, concurrent record writes, dirty/untracked work,
 unmerged commits, guarded merge/retire, conflict abort, retry after partial
-retirement, invalid refs/CLI flags, and missing executables. The fixture CLI uses
+retirement, invalid refs/CLI flags, and missing executables. New checks cover
+independent creation from a linked worktree, shell reuse/cwd/ownership and
+stop/resume, and agent adapters preserving legacy conversations while rejecting
+unknown providers. The fixture CLI uses
 real per-task hook commands, without model API calls.
 
 ## Actual Claude and native Emacs
@@ -63,6 +70,47 @@ The package had already downloaded and verified the official Linux binary; it
 was transferred over SSH with a SHA256 check and atomic installation at the
 package's expected cache path. Remote Magit then worked normally. No TRAMP
 method or global connection settings were changed.
+
+## Developer workflow after the Orca comparison
+
+Used a fresh disposable remote project with `greet.py` and a unittest baseline.
+This run used the normal Roost registry and socket alongside the existing user
+task, so it also checked coexistence without clearing caches or stopping that
+task. All code and Git operations stayed within the disposable project.
+
+1. Created `qa-greeting` using the actual `SPC r c` prompts from remote Dired.
+   Claude Haiku was asked to trim greeting names, handle blank input, add
+   regression tests and run them, leaving the change uncommitted for review.
+2. Answered Claude's normal directory trust, single-edit and test-command
+   prompts in its terminal. Its observational hooks recorded the conversation
+   and returned the task to `ready` after the response.
+3. Used `SPC r t` to open the worktree shell beside Claude. Independently ran
+   `python3 -B -m unittest -v` there: **six tests passed**. Opening the shell
+   again reused the pane. Native use exposed and verified fixes for shell
+   visibility, asynchronous buffer context and keyboard focus.
+4. Opened task details, used its terminal action, browsed with `SPC r f`, and
+   opened `greet.py`. Switched away and back using perspective commands, then
+   opened Magit with `SPC r r`; it targeted the correct remote task worktree.
+5. Expanded both real file diffs, reviewed the implementation and five added
+   tests, staged with Magit and entered the commit through its editor.
+   Commit `d5e787e` contained only the reviewed changes. Xah command/insert mode
+   required attention when entering the message. Magit's commit editor also
+   reported a remote commit-diff display warning; staging, the earlier status
+   diff and the actual commit all succeeded.
+6. Invoked new-task creation from that task's Magit buffer and verified the
+   suggested directory was the **primary checkout**, then cancelled creation.
+7. Used `SPC r m` to merge and retire. The primary checkout stayed clean on
+   `main`, merge `46eb8ec` retained the new greeting implementation and tests,
+   and only the primary worktree remained. The task record became `retired`;
+   its topic branch and Claude/supporting-shell window were removed.
+8. Removed the disposable project's remaining general shell and fixture data,
+   then restored the original user perspective. The existing user task and its
+   tmux ownership were preserved.
+
+The installed Orca was also exercised with a separate disposable local project:
+workspace creation, a terminal split in its worktree, a file change and the real
+Source Control diff. Its project link was removed afterward and only its owned
+fixture data was cleaned up. See [the comparison](orca-comparison.md).
 
 ## Limits
 

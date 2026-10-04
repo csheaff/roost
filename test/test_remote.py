@@ -146,13 +146,14 @@ class Lifecycle(unittest.TestCase):
         self.request("resume", id=task["id"])
         self.assertEqual(self.wait(task, "ready")["session"], "renamed")
 
-    def test_create_from_task_worktree_keeps_primary_repo_and_current_head(self):
+    def test_new_tasks_default_to_primary_branch_and_explicit_head_forks(self):
         first = self.create()
         wt = Path(first["worktree"])
         (wt / "hello").write_text("parent task commit\n")
         self.git("add", ".", cwd=wt)
         self.git("commit", "-m", "parent change", cwd=wt)
         reply = self.request("create", directory=str(wt), name="child", socket=self.socket,
+                             base="HEAD",
                              command=[sys.executable, str(FAKE)])
         self.assertTrue(reply["ok"], reply)
         child = self.wait(reply["result"], "ready")
@@ -161,6 +162,61 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(child["baseCommit"], self.git("rev-parse", "HEAD", cwd=wt))
         self.assertEqual(child["session"], first["session"])
         self.assertFalse(self.request("retire", id=child["id"])["ok"])
+        reply = self.request("create", directory=str(wt), name="independent", socket=self.socket,
+                             command=[sys.executable, str(FAKE)])
+        self.assertTrue(reply["ok"], reply)
+        independent = self.wait(reply["result"], "ready")
+        self.assertEqual(independent["baseRef"], "main")
+        self.assertEqual(independent["baseCommit"], self.git("rev-parse", "HEAD"))
+        self.assertNotEqual(independent["baseCommit"], child["baseCommit"])
+        self.assertTrue(self.request("retire", id=independent["id"])["ok"])
+
+    def test_shell_reuses_worktree_pane_and_stops_with_task(self):
+        task = self.create()
+        reply = self.request("shell", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        shell = reply["result"]["shellPaneId"]
+        self.assertNotEqual(shell, task["paneId"])
+        path = roost.tmux(self.socket, "display-message", "-p", "-t", shell, "#{pane_current_path}").stdout.strip()
+        self.assertEqual(Path(path).resolve(), Path(task["worktree"]).resolve())
+        self.assertEqual(self.request("shell", id=task["id"])["result"]["shellPaneId"], shell)
+        self.assertEqual(len(roost.pane_inventory(self.socket)), 3)  # repo shell, agent, task shell
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        self.assertNotIn(shell, roost.pane_inventory(self.socket))
+        self.assertFalse(self.request("shell", id=task["id"])["ok"])
+        self.assertTrue(self.request("resume", id=task["id"])["ok"])
+        self.wait(task, "ready")
+        self.assertNotEqual(self.request("shell", id=task["id"])["result"]["shellPaneId"], shell)
+
+    def test_shell_survives_agent_exit_but_refuses_lost_ownership(self):
+        task = self.create()
+        self.request("send", id=task["id"], text="exit")
+        self.wait(task, "exited")
+        reply = self.request("shell", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        shell = reply["result"]["shellPaneId"]
+        roost.tmux(self.socket, "set-option", "-p", "-t", shell, "@roost_task_id", "other")
+        self.assertFalse(self.request("shell", id=task["id"])["ok"])
+        self.assertIn(shell, roost.pane_inventory(self.socket))
+        roost.tmux(self.socket, "set-option", "-p", "-t", task["paneId"], "@roost_task_id", "other")
+        self.assertFalse(self.request("shell", id=task["id"])["ok"])
+
+    def test_agent_adapter_preserves_legacy_conversations_and_rejects_unknown_agents(self):
+        task = self.create()
+        store = roost.Store(str(self.state))
+        record = store.read(task["id"])
+        session = record["claudeSession"]
+        self.assertEqual(record["agentSession"], session)
+        record.pop("agent")
+        record.pop("agentSession")
+        store.save(record)
+        self.request("stop", id=task["id"])
+        self.assertTrue(self.request("resume", id=task["id"])["ok"])
+        self.assertEqual(self.wait(task, "ready")["agentSession"], session)
+        before = self.git("worktree", "list", "--porcelain")
+        reply = self.request("create", directory=str(self.repo), name="future", agent="unknown", socket=self.socket)
+        self.assertFalse(reply["ok"], reply)
+        self.assertEqual(self.git("worktree", "list", "--porcelain"), before)
 
     def test_partial_retirement_can_be_retried_after_branch_deletion(self):
         task = self.create()

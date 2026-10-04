@@ -9,7 +9,10 @@ interface. Roost joins Git worktrees, persistent tmux windows,
 
 1. Run `M-x roost-new-task` from a project or choose its directory. A TRAMP path
    such as `/rpc:claylien:/home/clay/code/project/` creates the task on that host.
-2. Give it a name, starting Git ref (default `HEAD`), and optional initial prompt.
+2. Give it a name, starting Git ref (leave empty for the primary checkout's
+   current branch), and optional initial prompt. New tasks are independent even
+   when created from another task's worktree. A prefix argument defaults to
+   forking the current task's committed `HEAD` instead.
    Roost creates a topic branch, worktree, and tmux window, then opens the actual
    Claude Code terminal. Answer startup and permission prompts there as usual.
 3. Open `roost-status` to see tasks across hosts. `RET` restores a task's terminal
@@ -18,6 +21,9 @@ interface. Roost joins Git worktrees, persistent tmux windows,
 4. Use `roost-review` for Magit in the worktree, or `roost-diff` for tracked changes
    against the starting commit. Remote files use your configured TRAMP method.
    `project.el` and Projectile can use the worktree's normal project directory.
+   `roost-shell` opens a reusable shell beside Claude, in the same worktree;
+   `roost-files` browses it. `roost-task-info` shows the project, starting branch,
+   integration target, and review/finish actions.
 5. Review and commit in Magit, then `roost-merge-retire` to merge into the recorded
    integration branch in the primary checkout and remove the task's resources.
    Or merge manually and run `roost-retire`.
@@ -69,6 +75,9 @@ provide the same API; they are not integrated.
 | | `roost-switch-task` | Choose a task across hosts |
 | `n` | `roost-next-waiting` | Cycle through ready/permission sessions |
 | `r` | `roost-review` | Magit status in the task's worktree |
+| `t` | `roost-shell` | Reuse a worktree shell beside the agent |
+| `f` | `roost-files` | Browse the worktree with Dired |
+| `?` / `i` | `roost-task-info` | Task details and review/finish actions |
 | `D` | `roost-diff` | Tracked changes since task creation |
 | `e` | `roost-send` | Paste a prompt literally, then Enter |
 | | `roost-send-region` | Send selected text with file/line context |
@@ -114,9 +123,17 @@ For a project setup command:
 ((nil . ((roost-setup-command . "npm ci"))))
 ```
 
-When creating from an existing task worktree, `HEAD` means that task's current
-commit. The new task still belongs to the original repository and integrates
-into its primary checkout.
+When creating from an existing task worktree, an empty starting ref uses the
+primary checkout's current branch. Explicit `HEAD` uses the source worktree's
+current committed state. A prefix argument defaults the source directory to the
+current task's worktree and the starting ref to `HEAD`. Dirty files are never
+copied. The new task belongs to the original repository and integrates into its
+primary checkout.
+
+Task commands infer context from the selected dashboard row, tmux pane, worktree
+directory, or current perspective. Switching perspectives manually follows the
+task too. An unrelated perspective does not silently target the last task.
+Task panels retain their own identity even when opened in another workspace.
 
 Setup is an ordinary project shell command. Review it when Emacs asks about
 local variables, and keep Gitignored dependencies out of commits.
@@ -146,6 +163,23 @@ stages, commits, or force-removes work. Unmerged commits block retirement.
 Merge conflicts abort the merge that Roost started and retain the task. A
 persisted cleanup checkpoint permits retry after interrupted retirement.
 The general shell/session remains available after the last task is retired.
+The supporting task shell belongs to the task window: stopping or retiring the
+task stops that shell too. Opening it again reuses its existing pane, preserving
+shell history and running commands. A stopped task must be resumed first.
+
+## Agent boundary
+
+Claude is currently the only supported agent. Records identify the agent and
+store a generic conversation ID. The host helper's `ClaudeAgent` adapter owns
+command validation, launch/resume arguments, and conversion of Claude hooks into
+Roost statuses. Git worktrees, tmux ownership, SSH, review and retirement remain
+outside the adapter. A future provider must implement those adapter operations
+and have its CLI behavior tested; changing `roost-claude-command` to another CLI
+does not provide integration. Older records without an agent field or generic
+conversation ID still resume through their recorded Claude conversation.
+
+The [Orca comparison](docs/orca-comparison.md) explains the small set of workflow
+improvements retained from hands-on exploration.
 
 ## Migration from 0.2
 
