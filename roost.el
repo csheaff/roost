@@ -1875,15 +1875,20 @@ everything inside inline code."
 
 (defun roost--last-message-summary (task)
   "First meaningful line of TASK's latest reply, or nil.
-Empty lines, headings and lines without letters or digits are skipped."
+Empty lines, ATX and Setext headings, and lines without letters or digits
+are skipped."
   (when-let* ((message (roost--field task 'lastMessage))
               ((stringp message)))
-    (seq-some (lambda (line)
-                (let ((line (string-trim (roost--strip-markdown line))))
-                  (and (not (string-prefix-p "#" line))
-                       (string-match-p "[[:alnum:]]" line)
-                       line)))
-              (split-string message "[\n\r]+"))))
+    (let ((lines (split-string message "\r?\n\\|\r")))
+      (seq-some (lambda (line)
+                  (let ((raw (string-trim line))
+                        (next (string-trim (or (cadr (memq line lines)) ""))))
+                    (and (not (string-match-p "\\`#\\{1,6\\}\\(?:[ \t]\\|\\'\\)" raw))
+                         (not (and (not (string-empty-p raw))
+                                   (string-match-p "\\`\\(?:=+\\|-+\\)\\'" next)))
+                         (string-match-p "[[:alnum:]]" raw)
+                         (string-trim (roost--strip-markdown raw)))))
+                lines))))
 
 (defun roost--evil-state (mode state)
   "Start MODE's buffers in Evil STATE when Evil is loaded.

@@ -67,6 +67,16 @@
   (should-not (roost--last-message-summary '((lastMessage . "# Title\n\n--- ..."))))
   (should-not (roost--last-message-summary (roost-test--task))))
 
+(ert-deftest roost-last-message-summary-recognizes-only-real-headings ()
+  (let ((summary (lambda (text) (roost--last-message-summary `((lastMessage . ,text))))))
+    (should (equal (funcall summary "#123 is fixed\n\nDetails") "#123 is fixed"))
+    (should (equal (funcall summary "#hashtag\nmore") "#hashtag"))
+    (should (equal (funcall summary "###### Six\n####### seven\nBody") "####### seven"))
+    (should (equal (funcall summary "#\nBody") "Body"))
+    (should (equal (funcall summary "Summary\n=======\nAll fixed") "All fixed"))
+    (should (equal (funcall summary "Summary\r\n---\r\nAll fixed") "All fixed"))
+    (should (equal (funcall summary "Fixed it.\n\n---\nNext") "Fixed it."))))
+
 (ert-deftest roost-dashboard-shows-last-message-or-prompt ()
   (roost-test--isolated
    (let* ((with (append `((lastMessage . ,roost-test--reply)) (roost-test--task)))
