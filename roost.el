@@ -1541,20 +1541,18 @@ Trailers have hyphenated keys, such as Co-Authored-By and Signed-off-by."
 
 (defun roost--pr-initial-text (task commits)
   "Draft text for TASK's pull request: a title line, then the body.
-COMMITS are the task's commit messages.  For one commit, the title and
-body are its own.  Otherwise the title is the task name, and the body is
-the prompt followed by the subjects."
+COMMITS are the task's commit messages, oldest first.  The first commit
+gives the title and body, and later ones, often review fixes, are listed
+by subject.  Without commits the title is the task name, and without a
+message body the prompt stands in."
   (let* ((subjects (mapcar (lambda (message) (car (split-string message "\n"))) commits))
-         (title (if (cdr commits)
-                    (roost--readable-name (roost--field task 'name))
-                  (or (car subjects) (roost--readable-name (roost--field task 'name)))))
-         (message-body (and commits (null (cdr commits))
-                            (string-trim (substring (car commits) (length (car subjects))))))
-         (body (if (and message-body (not (string-empty-p message-body)))
-                   (list message-body)
-                 (delq nil (list (when-let* ((prompt (roost--prompt-text task))) (string-trim prompt))
-                                 (when (cdr subjects)
-                                   (mapconcat (lambda (subject) (concat "- " subject)) subjects "\n")))))))
+         (title (or (car subjects) (roost--readable-name (roost--field task 'name))))
+         (first-body (and commits (string-trim (substring (car commits) (length (car subjects))))))
+         (body (delq nil (list (if (and first-body (not (string-empty-p first-body)))
+                                   first-body
+                                 (when-let* ((prompt (roost--prompt-text task))) (string-trim prompt)))
+                               (when (cdr subjects)
+                                 (mapconcat (lambda (subject) (concat "- " subject)) (cdr subjects) "\n"))))))
     (concat title "\n\n" (string-join body "\n\n") (if body "\n" ""))))
 
 (defun roost--pr-header (task)
