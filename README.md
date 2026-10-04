@@ -51,7 +51,7 @@ starts the agent in tmux, and opens its terminal.
   Its title and text become the prompt, and the task's pull request will close
   it.
 
-![Drafting a new task beside the dashboard](docs/images/roost-new-task.jpg)
+![A new task drafted from an Org heading: the heading and its notes are the prompt](docs/images/roost-new-task.jpg)
 
 **Let them work.** Start more tasks; each is independent. Roost watches the
 agents' own lifecycle hooks and notifies you when one finishes or asks for
@@ -159,6 +159,8 @@ Magit is optional (review falls back to Dired).
 ## Commands
 
 `roost-status` opens the dashboard. In it, and in a task's details panel:
+
+![The command menu below the dashboard, naming the task it acts on, with the agent's reply in the row and Roost:1 in the mode line](docs/images/roost-menu.jpg)
 
 | Key | Command | |
 | --- | --- | --- |
