@@ -731,6 +731,23 @@
      (dolist (buffer (buffer-list))
        (when (string-prefix-p "*roost send:" (buffer-name buffer)) (kill-buffer buffer)))))
 
+(ert-deftest roost-agents-stuck-starting-count-as-waiting-at-a-prompt ()
+  (roost-test--isolated
+   (let* ((old (format-time-string "%FT%T%z" (time-subtract nil 120)))
+          (new (format-time-string "%FT%T%z")))
+     (roost--cache-task "dev" (append `((updatedAt . ,old) (name . "stuck")) (roost-test--task "1111111111111111" "starting")))
+     (roost--cache-task "dev" (append `((updatedAt . ,new) (name . "booting")) (roost-test--task "2222222222222222" "starting")))
+     (roost--cache-task "dev" (append `((updatedAt . ,new) (name . "idle")) (roost-test--task "3333333333333333" "ready")))
+     (should (equal (roost--attention-status (gethash '("dev" "1111111111111111") roost--tasks)) "prompt"))
+     (should (equal (roost--attention-status (gethash '("dev" "2222222222222222") roost--tasks)) "starting"))
+     (should (string-prefix-p "1 at a startup prompt · 1 ready · 1 running" (roost--summary (roost-tasks))))
+     (let (opened)
+       (cl-letf (((symbol-function 'roost-open-task)
+                  (lambda (task) (setq opened (roost--field task 'name) roost--current-task (roost--key task)))))
+         (roost-next-waiting) (should (equal opened "stuck"))
+         (roost-next-waiting) (should (equal opened "idle"))
+         (roost-next-waiting) (should (equal opened "stuck")))))))
+
 (ert-deftest roost-send-region-drafts-the-last-selected-line ()
   (roost-test--isolated
    (roost-test--with-send-buffers
