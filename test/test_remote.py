@@ -144,6 +144,8 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(reply["ok"], reply)
         self.assertEqual(reply["result"]["update"], dict(conflicts=[], changed=True))
         self.assertEqual((wt / "other").read_text(), "main moved\n")
+        listed = self.request("list", full=True)["result"][0]
+        self.assertEqual(listed["diff"], "", "main's changes are not the task's")
         self.assertEqual(self.request("update", id=task["id"])["result"]["update"]["changed"], False)
         (wt / "hello").write_text("task\n")
         self.git("commit", "-qam", "task", cwd=wt)

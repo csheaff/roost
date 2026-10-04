@@ -1395,13 +1395,13 @@ chosen one."
 
 ;;;###autoload
 (defun roost-diff (&optional task)
-  "Diff TASK's tracked files against its recorded starting commit."
+  "Diff TASK's tracked files against where its own work begins."
   (interactive)
   (setq task (roost--choose task))
   (require 'magit)
   (roost--activate-workspace task)
   (let ((default-directory (roost--remote-directory task)))
-    (magit-diff-working-tree (roost--field task 'baseCommit))))
+    (magit-diff-working-tree (roost--fork-point task))))
 
 ;;;###autoload
 (defun roost-update (&optional task)
@@ -1450,16 +1450,39 @@ conflicts, offer to have the task's agent resolve them."
   (roost--evil-state 'roost-pr-mode 'insert)
   (roost--quiet-display))
 
+(defun roost--git-output (task &rest args)
+  "Output of Git ARGS in TASK's worktree (over TRAMP for remote tasks).
+Nil when Git fails."
+  (let ((default-directory (roost--remote-directory task)))
+    (ignore-errors
+      (with-temp-buffer
+        (when (zerop (apply #'process-file "git" nil t nil args))
+          (buffer-string))))))
+
+(defun roost--fork-point (task)
+  "Commit where TASK's own work begins, as the host helper reckons it.
+Updating a task merges its integration branch in and moves the merge base
+forward; before that, or when that branch was rewritten, it is the commit
+the task started from."
+  (let ((base (roost--field task 'baseCommit))
+        (integration (roost--field task 'integrationBranch)))
+    (or (when-let* ((base)
+                    (integration)
+                    (output (roost--git-output task "merge-base"
+                                               (concat "refs/heads/" integration) "HEAD"))
+                    (merged (string-trim output))
+                    ((roost--git-output task "merge-base" "--is-ancestor" base merged)))
+          merged)
+        base)))
+
 (defun roost--pr-commits (task)
-  "Subjects of TASK's commits since it started, oldest first, read with Git
-in its worktree (over TRAMP for remote tasks).  Nil when Git cannot say."
-  (when-let* ((base (roost--field task 'baseCommit)))
-    (let ((default-directory (roost--remote-directory task)))
-      (ignore-errors
-        (with-temp-buffer
-          (when (zerop (process-file "git" nil t nil "log" "--reverse" "--format=%s"
-                                     (concat base "..HEAD")))
-            (split-string (buffer-string) "\n" t)))))))
+  "Subjects of TASK's own commits, oldest first, read with Git in its worktree.
+Merges, such as updates from the integration branch, are left out.  Nil
+when Git cannot say."
+  (when-let* ((base (roost--fork-point task))
+              (output (roost--git-output task "log" "--reverse" "--no-merges" "--format=%s"
+                                         (concat base "..HEAD"))))
+    (split-string output "\n" t)))
 
 (defun roost--readable-name (name)
   "TASK NAME's words as a sentence: \"fix-auth\" becomes \"Fix auth\"."

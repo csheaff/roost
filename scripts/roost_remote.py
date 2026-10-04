@@ -203,6 +203,19 @@ def ref_exists(repo, branch):
                                 "refs/heads/" + branch, check=False).returncode == 0
 
 
+def fork_point(worktree, task):
+    """Where the task's own work begins. Updating a task merges its
+    integration branch in, which moves the merge base forward; before that,
+    or when the integration branch was rewritten, it is the starting commit."""
+    base = task["baseCommit"]
+    integration = task.get("integrationBranch")
+    if integration:
+        merged = git(worktree, "merge-base", "refs/heads/" + integration, "HEAD", check=False).stdout.strip()
+        if merged and git(worktree, "merge-base", "--is-ancestor", base, merged, check=False).returncode == 0:
+            return merged
+    return base
+
+
 def delete_branch(repo, branch, commit):
     """Delete BRANCH only if it still points at the verified COMMIT."""
     ref = "refs/heads/" + branch
@@ -668,7 +681,7 @@ def add_git_stats(tasks):
         task["worktreeMissing"] = not worktree.is_dir()
         if task["worktreeMissing"]:
             continue
-        stats = git(worktree, "diff", "--shortstat", task["baseCommit"], check=False)
+        stats = git(worktree, "diff", "--shortstat", fork_point(worktree, task), check=False)
         dirty = git(worktree, "status", "--porcelain", check=False)
         task["diff"] = stats.stdout.strip()
         task["dirty"] = bool(dirty.stdout)
@@ -922,7 +935,7 @@ def pull_request(store, task, request):
         raise RoostError("Task worktree is gone")
     if git(worktree, "status", "--porcelain", "--untracked-files=no").stdout.strip():
         raise RoostError("Commit the task's changes before opening a pull request")
-    if git(worktree, "rev-list", "--count", task["baseCommit"] + "..HEAD").stdout.strip() == "0":
+    if git(worktree, "rev-list", "--count", "--no-merges", fork_point(worktree, task) + "..HEAD").stdout.strip() == "0":
         raise RoostError("The task branch has no commits beyond where it started; there is nothing to propose")
     branch = task["branch"]
     git(worktree, "push", "-u", "origin", branch)
