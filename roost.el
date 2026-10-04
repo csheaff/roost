@@ -1697,7 +1697,10 @@ Without a status from GitHub yet, a recorded pull request counts as open."
                                         (t (propertize "✓" 'face 'roost-status-ready))))
                                 (pcase review
                                   ("APPROVED" (propertize "+" 'face 'roost-status-ready))
-                                  ("CHANGES_REQUESTED" (propertize "!" 'face 'roost-status-permission)))))))
+                                  ("CHANGES_REQUESTED" (propertize "!" 'face 'roost-status-permission)))
+                                ;; Once merged, the commit counts no longer mean work to finish.
+                                (unless open
+                                  (propertize (symbol-name state) 'face (roost--pr-face state)))))))
         (string-join parts " "))
     ""))
 
@@ -1911,9 +1914,15 @@ everything inside inline code."
   (let ((code nil)
         (text (or text "")))
     (setq text (replace-regexp-in-string
-                "`\\([^`\n]+\\)`"
+                "\\(`+\\)\\([^`\n]\\|[^`\n][^\n]*?[^`\n]\\)\\1"
                 (lambda (match)
-                  (push (substring match 1 -1) code)
+                  ;; A run of backticks closes at a run of the same length;
+                  ;; one space inside each end is padding, as in `` `a` ``.
+                  (let ((inner (match-string 2 match)))
+                    (save-match-data
+                      (when (string-match "\\` \\(.*\\) \\'" inner)
+                        (setq inner (match-string 1 inner))))
+                    (push inner code))
                   (format "\ue000%d\ue001" (1- (length code))))
                 text t t))
     (let ((previous nil))

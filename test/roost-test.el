@@ -58,7 +58,9 @@
                    ("a * b and 2*3 and a ** b" . "a * b and 2*3 and a ** b")
                    ("`**`" . "**")
                    ("use `snake_*x*_` or **`code`**" . "use snake_*x*_ or code")
-                   ("`a` and `b`" . "a and b")))
+                   ("`a` and `b`" . "a and b")
+                   ("``a ` b`` and ```c```" . "a ` b and c")
+                   ("`` `x` ``" . "`x`")))
     (should (equal (roost--strip-markdown in) out))))
 
 (ert-deftest roost-last-message-summary-skips-noise ()
@@ -1156,8 +1158,8 @@
                                                       (checks . ((pending . 2)))))))
                    "#12 … +"))
     (should (equal (funcall marker '(prStatus . ((state . "MERGED") (checks . ((failing . 1))))))
-                   '("#12" . roost-pr-merged)))
-    (should (equal (funcall marker '(prStatus . ((state . "CLOSED")))) '("#12" . roost-pr-closed)))
+                   '("#12 merged" . roost-pr-merged)))
+    (should (equal (funcall marker '(prStatus . ((state . "CLOSED")))) '("#12 closed" . roost-pr-closed)))
     (should (equal (roost--pr-marker (roost-test--task)) ""))))
 
 (ert-deftest roost-pr-shows-in-the-dashboard-and-panel ()
