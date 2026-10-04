@@ -458,8 +458,8 @@ Call SUCCESS with the result, or FAILURE with an error message."
                         (equal (roost--field task 'lastEvent) "Stop")
                         (not (equal (roost--field task 'updatedAt)
                                     (roost--field old 'updatedAt))))))
-    ;; Quiet polls skip Git; keep the statistics from the last full refresh.
-    (dolist (field '(diff dirty ahead behind worktreeMissing prStatus))
+    ;; Quiet polls skip Git and the latest reply; keep the last full refresh's.
+    (dolist (field '(diff dirty ahead behind worktreeMissing prStatus lastMessage))
       (unless (assoc field task)
         (when (assoc field old) (push (assoc field old) task))))
     (if (member status '("retired" "forgotten"))
@@ -1782,6 +1782,29 @@ COMPACT abbreviates commits ahead of and behind the integration branch."
   (let ((prompt (roost--field task 'task)))
     (unless (or (null prompt) (equal prompt (roost--field task 'name))) prompt)))
 
+(defun roost--strip-markdown (text)
+  "TEXT without Markdown emphasis markers and backticks."
+  (replace-regexp-in-string "\\*\\*\\|`" "" (or text "")))
+
+(defun roost--last-message (task)
+  "TASK's latest agent reply with Markdown markers removed, or nil."
+  (let ((message (roost--field task 'lastMessage)))
+    (when (stringp message)
+      (let ((text (string-trim (roost--strip-markdown message))))
+        (unless (string-empty-p text) text)))))
+
+(defun roost--last-message-summary (task)
+  "First meaningful line of TASK's latest reply, or nil.
+Empty lines, headings and lines without letters or digits are skipped."
+  (when-let* ((message (roost--field task 'lastMessage))
+              ((stringp message)))
+    (seq-some (lambda (line)
+                (let ((line (string-trim (roost--strip-markdown line))))
+                  (and (not (string-prefix-p "#" line))
+                       (string-match-p "[[:alnum:]]" line)
+                       line)))
+              (split-string message "[\n\r]+"))))
+
 (defun roost--evil-state (mode state)
   "Start MODE's buffers in Evil STATE when Evil is loaded.
 Called from the mode bodies, before Evil sets up the new buffer.  Evil
@@ -1932,6 +1955,9 @@ Status is the last observation from the task's host.
                    'roost-status-permission)))))
         (when-let* ((error (roost--field task 'error)))
           (roost--insert-indented (concat "Last error: " error) 'roost-status-failed))
+        (when-let* ((reply (roost--last-message task)))
+          (roost--insert-heading "Agent's latest reply")
+          (roost--insert-indented reply))
         (roost--insert-pull-request task)
         (roost--insert-heading "Actions")
         (dolist (group roost--task-actions)
@@ -2150,7 +2176,8 @@ The changes column shrinks first, then the agent column is dropped."
          (room (- width (string-width line) 1)))
     (concat line
             (when (> room 8)
-              (propertize (truncate-string-to-width (roost--one-line (roost--prompt-text task))
+              (propertize (truncate-string-to-width (roost--one-line (or (roost--last-message-summary task)
+                                                                   (roost--prompt-text task)))
                                                     room nil nil "…")
                           'face 'roost-dim)))))
 

@@ -46,6 +46,49 @@
    (roost--apply-snapshot nil (list (roost-test--task)))
    (should (equal (roost--field (car (roost-tasks)) 'diff) "1 file changed"))))
 
+(defconst roost-test--reply
+  "## Summary\n\n---\n\nFixed the **auth** bug in `login.py`.\n\nSecond line.")
+
+(ert-deftest roost-last-message-summary-skips-noise ()
+  (should (equal (roost--last-message-summary `((lastMessage . ,roost-test--reply)))
+                 "Fixed the auth bug in login.py."))
+  (should-not (roost--last-message-summary '((lastMessage . "# Title\n\n--- ..."))))
+  (should-not (roost--last-message-summary (roost-test--task))))
+
+(ert-deftest roost-dashboard-shows-last-message-or-prompt ()
+  (roost-test--isolated
+   (let* ((with (append `((lastMessage . ,roost-test--reply)) (roost-test--task)))
+          (without (roost-test--task "fedcba9876543210")))
+     (dolist (task (list with without))
+       (let ((row (roost--dashboard-row task (roost--dashboard-layout (list task) 120) 120)))
+         (if (eq task with)
+             (progn (should (string-match-p "Fixed the auth bug in login\\.py\\." row))
+                    (should-not (string-match-p "fix authentication" row)))
+           (should (string-match-p "fix authentication" row))))))))
+
+(ert-deftest roost-task-panel-shows-latest-reply ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (append `((lastMessage . ,roost-test--reply))
+                                                (roost-test--task)))))
+     (with-temp-buffer
+       (roost-task-info-mode)
+       (setq roost--buffer-task-key (roost--key task))
+       (roost--render-task-info)
+       (let ((text (buffer-string)))
+         (should (< (string-match "^Changes$" text) (string-match "^Agent's latest reply$" text)))
+         (should (string-match-p "^Agent's latest reply\n## Summary\n" text))
+         (should (equal (get-text-property (string-match "Fixed the" text) 'line-prefix text) "  "))
+         (should (string-match-p "^Fixed the auth bug in login\\.py\\.\n" text))
+         (should-not (string-match-p "\\*\\*\\|`" text)))))))
+
+(ert-deftest roost-quiet-refresh-retains-last-message ()
+  (roost-test--isolated
+   (roost--cache-task "dev" (append '((lastMessage . "All done")) (roost-test--task)))
+   (roost--apply-snapshot "dev" (list (roost-test--task)))
+   (should (equal (roost--field (car (roost-tasks)) 'lastMessage) "All done"))
+   (roost--apply-snapshot "dev" (list (append '((lastMessage . "Newer")) (roost-test--task))))
+   (should (equal (roost--field (car (roost-tasks)) 'lastMessage) "Newer"))))
+
 (ert-deftest roost-notifies-once-and-not-on-initial-attachment ()
   (roost-test--isolated
    (let* ((roost-notify t) notices
