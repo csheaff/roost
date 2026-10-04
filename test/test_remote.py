@@ -58,6 +58,17 @@ class Lifecycle(unittest.TestCase):
         self.wait(task, "ready")
         return task
 
+    def wait_for_pane_exit(self, task):
+        """The runner records a final status just before its pane's process
+        exits, so act on the pane only once tmux shows it dead or gone."""
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            pane = (roost.pane_inventory(self.socket) or {}).get(task["paneId"])
+            if pane is None or pane["dead"]:
+                return
+            time.sleep(0.05)
+        self.fail("the agent's pane is still running")
+
     def wait(self, task, status, event=None):
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
@@ -510,6 +521,7 @@ class Lifecycle(unittest.TestCase):
         reply = self.request("create", directory=str(self.repo), name="dies", socket=self.socket,
                              command=[sys.executable, str(script)])
         task = self.wait(reply["result"], "failed")
+        self.wait_for_pane_exit(task)
         inspected = self.request("inspect", id=task["id"])
         self.assertTrue(inspected["ok"], inspected)
         self.assertFalse(inspected["result"]["live"])
@@ -536,6 +548,12 @@ class Lifecycle(unittest.TestCase):
         listed = self.request("list")["result"][0]
         self.assertEqual((listed["status"], listed["live"]), ("ready", True))
         self.assertNotIn("live", store.read(task["id"]))
+
+    def test_a_server_still_shutting_down_counts_as_none(self):
+        for stderr, expected in (("server exited unexpectedly\n", {}), ("no server running on x\n", {}),
+                                 ("protocol version mismatch (client 8, server 7)\n", None)):
+            with patch.object(roost, "tmux", return_value=subprocess.CompletedProcess([], 1, "", stderr)):
+                self.assertEqual(roost.pane_inventory("s"), expected, stderr)
 
     def test_no_tmux_server_means_crashed(self):
         task = self.create()
@@ -598,6 +616,7 @@ class Lifecycle(unittest.TestCase):
                              setup=setup, command=[sys.executable, str(FAKE)])
         task = self.wait(reply["result"], "failed")
         self.assertFalse(roost.Store(str(self.state)).read(task["id"])["setupComplete"])
+        self.wait_for_pane_exit(task)
         self.assertTrue(self.request("resume", id=task["id"])["ok"])
         self.assertTrue(self.wait(task, "ready")["setupComplete"])
         self.request("stop", id=task["id"])
@@ -954,15 +973,27 @@ class RemoteGit(unittest.TestCase):
             roost.run_detached(["sh", "-c", 'sleep 30 & echo $! > "$1"; wait', "sh", str(pidfile)], 0.5)
         self.assertLess(time.monotonic() - started, 10)
         child = int(pidfile.read_text())
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
+
+        def running(pid):
+            # A zombie has exited; without an init process (as in some
+            # containers) nobody reaps it, but it is no longer running.
             try:
-                os.kill(child, 0)
+                os.kill(pid, 0)
             except ProcessLookupError:
-                break
+                return False
+            stat = Path("/proc/%d/stat" % pid)
+            if stat.exists():
+                state = stat.read_text().rsplit(")", 1)[1].split()[0]
+            else:
+                state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)],
+                                       capture_output=True, text=True).stdout.strip()
+            return bool(state) and not state.startswith("Z")
+
+        deadline = time.monotonic() + 5
+        while running(child):
+            if time.monotonic() > deadline:
+                self.fail("the background child survived the timeout")
             time.sleep(0.05)
-        else:
-            self.fail("the background child survived the timeout")
 
     def test_a_timeout_is_a_roost_error(self):
         with patch.object(roost, "run_detached",

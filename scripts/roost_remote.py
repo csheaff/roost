@@ -189,7 +189,9 @@ class Store:
 
 
 # tmux reports these when no server is running on the socket, so no panes exist.
-NO_SERVER = ("no server running", "No such file or directory", "Connection refused")
+# "server exited unexpectedly" is a server still shutting down (tmux 3.4).
+NO_SERVER = ("no server running", "No such file or directory", "Connection refused",
+             "server exited unexpectedly")
 
 
 def pane_inventory(socket):
