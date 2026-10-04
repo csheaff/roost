@@ -27,7 +27,9 @@ ACTIVE = ("starting", "running", "permission", "background")
 ENDED = ("stopped", "exited", "failed", "crashed")
 # Computed per request and never persisted in a task record.
 TRANSIENT = ("live", "diff", "dirty", "ahead", "behind", "update", "worktreeMissing",
-             "prStatus")
+             "prStatus", "lastMessage")
+LAST_MESSAGE_TAIL = 256 * 1024
+LAST_MESSAGE_LIMIT = 2000
 DEFAULT_BRANCH_PREFIX = "roost/"
 
 
@@ -222,6 +224,60 @@ def claude_hook_settings(store, task):
     return str(path)
 
 
+def transcript_tail(path):
+    """Complete JSON lines from the end of a transcript, newest last."""
+    with open(path, "rb") as handle:
+        size = handle.seek(0, os.SEEK_END)
+        handle.seek(max(0, size - LAST_MESSAGE_TAIL))
+        data = handle.read()
+    lines = data.splitlines()
+    if size > LAST_MESSAGE_TAIL and lines:
+        lines.pop(0)  # Starts mid-line.
+    entries = []
+    for line in lines:
+        try:
+            entries.append(json.loads(line))
+        except ValueError:
+            pass
+    return entries
+
+
+def message_text(content, kinds=("text",)):
+    """The text parts of a message's content, joined; None if there are none."""
+    if isinstance(content, str):
+        parts = [content]
+    elif isinstance(content, list):
+        parts = [part["text"] for part in content
+                 if isinstance(part, dict) and part.get("type") in kinds and isinstance(part.get("text"), str)]
+    else:
+        return None
+    joined = "\n\n".join(part.strip() for part in parts if part.strip())
+    return joined or None
+
+
+def last_assistant_text(entries, extract):
+    """The newest nonempty text EXTRACT finds. Agents write a message as several
+    entries (text, then tool calls), so entries without text are skipped."""
+    for entry in reversed(entries):
+        if isinstance(entry, dict):
+            found = extract(entry)
+            if found:
+                return found
+    return None
+
+
+def last_message(task):
+    """The agent's latest reply, shortened for display, or None. A missing or
+    malformed transcript never fails a request."""
+    try:
+        reply = agent_for(task).last_message(task)
+    except (RoostError, OSError, ValueError, TypeError, AttributeError, KeyError):
+        return None
+    if not reply:
+        return None
+    return reply if len(reply) <= LAST_MESSAGE_LIMIT else reply[:LAST_MESSAGE_LIMIT].rstrip() + "…"
+
+
 class ClaudeAgent:
     """Agent-specific CLI and events; Git/tmux lifecycle stays outside this adapter."""
 
@@ -261,6 +317,18 @@ class ClaudeAgent:
             # Keep the old field for tasks whose original helper is still running.
             updates.update(agentSession=payload["session_id"], claudeSession=payload["session_id"])
         return updates
+
+    def last_message(self, task):
+        session = task.get("agentSession") or task.get("claudeSession")
+        if not session or not isinstance(task.get("worktree"), str):
+            return None
+        folder = re.sub(r"[/.]", "-", task["worktree"])
+        path = Path.home() / ".claude" / "projects" / folder / (session + ".jsonl")
+        message = lambda entry: (entry.get("message") if isinstance(entry.get("message"), dict)
+                                 and entry["message"].get("role") == "assistant" else None)
+        return last_assistant_text(
+            transcript_tail(path),
+            lambda entry: message_text((message(entry) or {}).get("content")))
 
 
 # Codex asks the user to review hook commands and remembers the approval.
@@ -321,6 +389,23 @@ class CodexAgent:
             updates["agentSession"] = payload["session_id"]
         return updates
 
+    def last_message(self, task):
+        session = task.get("agentSession")
+        if not session or not re.fullmatch(r"[\w.-]+", session):
+            return None
+        sessions = Path.home() / ".codex" / "sessions"
+        files = sorted(sessions.glob("*/*/*/rollout-*-" + session + ".jsonl"))
+        if not files:
+            return None
+
+        def extract(entry):
+            payload = entry.get("payload")
+            if (entry.get("type") == "response_item" and isinstance(payload, dict)
+                    and payload.get("type") == "message" and payload.get("role") == "assistant"):
+                return message_text(payload.get("content"), ("output_text", "text"))
+
+        return last_assistant_text(transcript_tail(files[-1]), extract)
+
 
 PI_EXTENSION = r'''import { spawn } from "node:child_process";
 export default function (pi) {
@@ -379,6 +464,18 @@ class PiAgent:
         if payload.get("session"):
             updates["agentSession"] = payload["session"]
         return updates
+
+    def last_message(self, task):
+        session = task.get("agentSession")
+        if not session:
+            return None
+
+        def extract(entry):
+            message = entry.get("message") if isinstance(entry.get("message"), dict) else entry
+            if message.get("role") == "assistant":
+                return message_text(message.get("content"))
+
+        return last_assistant_text(transcript_tail(session), extract)
 
 
 def validate_command(command, label):
@@ -557,9 +654,12 @@ def pr_status(task):
 
 def add_git_stats(tasks):
     """Diffstat, dirtiness and divergence from the integration branch, and
-    pull request status. Runs outside the registry lock: in a large
+    pull request status, and the agent's latest reply. Runs outside the registry lock: in a large
     repository, or over the network, these take seconds."""
     for task in tasks:
+        reply = last_message(task)
+        if reply:
+            task["lastMessage"] = reply
         if isinstance(task.get("pr"), dict) and task["pr"].get("number"):
             status = pr_status(task)
             if status:
@@ -618,6 +718,9 @@ def inspect(store, task):
     task.update(windowIndex=pane["index"], session=pane["session_name"])
     store.save(task)
     task["live"] = not pane["dead"]
+    reply = last_message(task)
+    if reply:
+        task["lastMessage"] = reply
     return task
 
 

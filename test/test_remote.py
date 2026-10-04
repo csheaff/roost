@@ -3,6 +3,7 @@ import concurrent.futures
 import importlib.util
 import json
 import os
+import re
 import shlex
 from pathlib import Path
 import subprocess
@@ -822,6 +823,26 @@ elif args[:2] == ["auth", "status"]:
         self.assertTrue(checks["GitHub CLI"]["optional"])
         self.assertIn("install gh", checks["GitHub CLI"]["hint"])
 
+    def test_list_and_inspect_show_the_agents_latest_reply_without_saving_it(self):
+        task = self.create()
+        record = roost.Store(str(self.state)).read(task["id"])
+        home = self.root / "home"
+        folder = home / ".claude/projects" / re.sub(r"[/.]", "-", task["worktree"])
+        folder.mkdir(parents=True)
+        (folder / (record["agentSession"] + ".jsonl")).write_text(
+            json.dumps({"message": {"role": "assistant", "content": [{"type": "text", "text": "x" * 3000}]}}) + "\n")
+        with patch.dict(os.environ, HOME=str(home)):
+            listed = self.request("list", full=True)["result"][0]
+            inspected = self.request("inspect", id=task["id"])["result"]
+            plain = self.request("list")["result"][0]
+        for shown in (listed, inspected):
+            self.assertTrue(shown["lastMessage"].startswith("x" * 2000))
+            self.assertLess(len(shown["lastMessage"]), 2010)
+        self.assertNotIn("lastMessage", plain)
+        self.assertNotIn("lastMessage", roost.Store(str(self.state)).read(task["id"]))
+        # No transcript: the request still succeeds, with no field.
+        self.assertNotIn("lastMessage", self.request("list", full=True)["result"][0])
+
     def test_bad_base_and_missing_executable_report_errors_without_touching_repo(self):
         response = self.request("create", directory=str(self.repo), name="bad", base="missing-ref", socket=self.socket)
         self.assertFalse(response["ok"])
@@ -830,6 +851,75 @@ elif args[:2] == ["auth", "status"]:
         self.assertTrue(response["ok"])
         self.wait(response["result"], "failed")
         self.assertEqual(self.git("status", "--porcelain"), "")
+
+
+class LastMessage(unittest.TestCase):
+    """Adapters read the end of each agent's own transcript, from a fake HOME."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.home = Path(self.temp.name)
+        patcher = patch.dict(os.environ, HOME=str(self.home))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(self.temp.cleanup)
+
+    def write(self, path, entries, raw=""):
+        path = self.home / path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("".join(json.dumps(entry) + "\n" for entry in entries) + raw)
+        return path
+
+    def test_claude_takes_the_last_assistant_text_in_the_task_directory_transcript(self):
+        task = dict(agent="claude", worktree="/work/my.repo/wt", agentSession="s1")
+        reply = lambda *parts: {"message": {"role": "assistant", "content": list(parts)}}
+        text = lambda value: {"type": "text", "text": value}
+        self.write(".claude/projects/-work-my-repo-wt/s1.jsonl", [
+            reply(text("old")),
+            {"message": {"role": "user", "content": "hi"}},
+            reply(text("first part"), {"type": "thinking", "thinking": "no"}, text("second part")),
+            reply({"type": "tool_use", "name": "Bash", "input": {}}),
+        ], raw="not json\n{\"truncated")
+        self.assertEqual(roost.last_message(task), "first part\n\nsecond part")
+        legacy = dict(task, agentSession=None, claudeSession="s1")
+        self.assertEqual(roost.last_message(legacy), "first part\n\nsecond part")
+
+    def test_only_the_end_of_a_large_transcript_is_read(self):
+        task = dict(agent="claude", worktree="/w", agentSession="big")
+        line = {"message": {"role": "assistant", "content": [{"type": "text", "text": "tail"}]}}
+        filler = {"message": {"role": "user", "content": "y" * 1000}}
+        self.write(".claude/projects/-w/big.jsonl", [dict(line, message=dict(line["message"], content="head"))]
+                   + [filler] * 600 + [line])
+        self.assertEqual(roost.last_message(task), "tail")
+        self.write(".claude/projects/-w/big.jsonl", [line] + [filler] * 600)
+        self.assertIsNone(roost.last_message(task))
+
+    def test_codex_finds_the_rollout_by_session_id(self):
+        task = dict(agent="codex", worktree="/w", agentSession="abc-123")
+        message = lambda role, value: {"type": "response_item", "payload": {
+            "type": "message", "role": role, "content": [{"type": "output_text", "text": value}]}}
+        self.write(".codex/sessions/2026/08/28/rollout-2026-08-28T18-33-42-abc-123.jsonl", [
+            message("assistant", "done"), message("user", "thanks"),
+            {"type": "event_msg", "payload": {"type": "task_complete"}}])
+        self.write(".codex/sessions/2026/08/28/rollout-2026-08-28T18-33-42-other.jsonl",
+                   [message("assistant", "wrong")])
+        self.assertEqual(roost.last_message(task), "done")
+
+    def test_pi_reads_its_session_file(self):
+        path = self.write("pi/session.jsonl", [
+            {"type": "session", "id": "x"},
+            {"type": "message", "message": {"role": "assistant", "content": [{"type": "text", "text": "pi says"}]}},
+            {"type": "message", "message": {"role": "user", "content": "ok"}}])
+        self.assertEqual(roost.last_message(dict(agent="pi", worktree="/w", agentSession=str(path))), "pi says")
+
+    def test_missing_or_malformed_transcripts_give_none(self):
+        for agent in ("claude", "codex", "pi"):
+            for session in (None, "missing", "../escape", str(self.home / "nowhere.jsonl")):
+                self.assertIsNone(roost.last_message(dict(agent=agent, worktree="/w", agentSession=session)))
+        self.write(".claude/projects/-w/bad.jsonl", [[], "x", {"message": "str"}, {"message": {"role": "assistant", "content": 5}}])
+        self.assertIsNone(roost.last_message(dict(agent="claude", worktree="/w", agentSession="bad")))
+        self.assertIsNone(roost.last_message(dict(agent="unknown", worktree="/w")))
+        self.assertIsNone(roost.last_message(dict(agent="claude")))
 
 
 if __name__ == "__main__":
