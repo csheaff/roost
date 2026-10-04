@@ -100,6 +100,12 @@ Existing tasks keep their branch."
   "Tmux session to place new task windows in, or nil for one session per repo."
   :type '(choice (const nil) string))
 
+(defcustom roost-startup-grace 15
+  "Seconds after which a task still starting is taken to be waiting at a prompt.
+Agents report nothing until their folder-trust or hook-review prompts
+are answered, so a long start usually needs you."
+  :type 'number)
+
 (defcustom roost-watch-interval 3
   "Seconds between asynchronous status refreshes."
   :type 'number)
@@ -534,12 +540,21 @@ recently failed."
 ;;;; Choosing a task
 
 (defconst roost--status-order
-  '("permission" "ready" "failed" "crashed" "running" "background" "starting" "exited" "stopped")
-  "Statuses from most to least in need of attention.")
+  '("permission" "prompt" "ready" "failed" "crashed" "running" "background" "starting"
+    "exited" "stopped")
+  "Attention statuses from most to least in need of attention.")
+
+(defun roost--attention-status (task)
+  "TASK's status for attention: \"prompt\" when it has been starting too long."
+  (let ((status (roost--display-status task)))
+    (if (and (equal status "starting")
+             (> (or (roost--seconds-since (roost--field task 'updatedAt)) 0) roost-startup-grace))
+        "prompt"
+      status)))
 
 (defun roost--attention-rank (task)
   "Sort rank of TASK by how much it needs attention."
-  (or (seq-position roost--status-order (roost--display-status task)) 99))
+  (or (seq-position roost--status-order (roost--attention-status task)) 99))
 
 (defun roost--read-task (prompt)
   "Choose a cached task with PROMPT, those needing attention first."
@@ -1356,16 +1371,17 @@ A running agent must be stopped first."
 ;;;###autoload
 (defun roost-next-waiting ()
   "Open the next task whose agent is waiting for you.
-Permission requests come first, since they block their agent; then
-tasks ready for a prompt, in turn."
+Permission requests and agents stuck at a startup prompt come first,
+since they block their agent; then tasks ready for a prompt, in turn."
   (interactive)
   (let* ((waiting (sort (seq-filter (lambda (task)
-                                      (member (roost--display-status task) '("permission" "ready")))
+                                      (member (roost--attention-status task)
+                                              '("permission" "prompt" "ready")))
                                     (roost-tasks))
                         (lambda (a b) (< (roost--attention-rank a) (roost--attention-rank b)))))
          (keys (mapcar #'roost--key waiting))
          (blocked (seq-find (lambda (task)
-                              (and (equal (roost--field task 'status) "permission")
+                              (and (member (roost--attention-status task) '("permission" "prompt"))
                                    (not (equal (roost--key task) roost--current-task))))
                             waiting))
          (key (if blocked
@@ -1387,23 +1403,26 @@ tasks ready for a prompt, in turn."
 (defun roost--status-face (status)
   "Face for STATUS."
   (pcase status
-    ("permission" 'roost-status-permission)
+    ((or "permission" "prompt") 'roost-status-permission)
     ("ready" 'roost-status-ready)
     ((or "running" "background") 'roost-status-running)
     ((or "failed" "crashed") 'roost-status-failed)
     (_ 'roost-status-inactive)))
 
+(defun roost--seconds-since (timestamp)
+  "Whole seconds since TIMESTAMP, or nil if it is missing or unreadable."
+  (when timestamp
+    (ignore-errors
+      (floor (max 0 (- (float-time) (float-time (date-to-time timestamp))))))))
+
 (defun roost--elapsed (timestamp)
   "Format time since TIMESTAMP."
-  (if (not timestamp)
-      "?"
-    (condition-case nil
-        (let ((seconds (floor (max 0 (- (float-time) (float-time (date-to-time timestamp)))))))
-          (cond ((< seconds 60) (format "%ds" seconds))
-                ((< seconds 3600) (format "%dm" (/ seconds 60)))
-                ((< seconds 86400) (format "%dh%02dm" (/ seconds 3600) (/ (mod seconds 3600) 60)))
-                (t (format "%dd" (/ seconds 86400)))))
-      (error "?"))))
+  (let ((seconds (roost--seconds-since timestamp)))
+    (cond ((not seconds) "?")
+          ((< seconds 60) (format "%ds" seconds))
+          ((< seconds 3600) (format "%dm" (/ seconds 60)))
+          ((< seconds 86400) (format "%dh%02dm" (/ seconds 3600) (/ (mod seconds 3600) 60)))
+          (t (format "%dd" (/ seconds 86400))))))
 
 (defun roost--changes (task &optional compact)
   "Git summary for TASK from the last full refresh.
@@ -1549,7 +1568,7 @@ Status is the last observation from the task's host.
              (base (roost--field task 'baseRef))
              (integration (roost--field task 'integrationBranch)))
         (insert (propertize (roost--field task 'name) 'face 'roost-title) "   "
-                (propertize (concat "● " status) 'face (roost--status-face status))
+                (propertize (concat "● " status) 'face (roost--status-face (roost--attention-status task)))
                 (propertize (format " for %s" (roost--elapsed (roost--field task 'updatedAt)))
                             'face 'roost-dim)
                 "\n"
@@ -1583,10 +1602,14 @@ Status is the last observation from the task's host.
           ("offline"
            (roost--insert-indented "The host is unreachable; this is the last known state." 'roost-dim))
           ("starting"
-           (when (equal (roost--field task 'agent) "codex")
-             (roost--insert-indented
-              "Codex reports status from its first turn. Open the terminal, review any hook or startup prompts, and enter the first prompt there; sending prompts from Emacs works after that."
-              'roost-dim))))
+           (cond ((equal (roost--field task 'agent) "codex")
+                  (roost--insert-indented
+                   "Codex reports status from its first turn. Open the terminal, review any hook or startup prompts, and enter the first prompt there; sending prompts from Emacs works after that."
+                   'roost-dim))
+                 ((equal (roost--attention-status task) "prompt")
+                  (roost--insert-indented
+                   "The agent has reported nothing yet, so it is probably waiting at a startup prompt such as folder trust. RET opens its terminal."
+                   'roost-status-permission)))))
         (when-let* ((error (roost--field task 'error)))
           (roost--insert-indented (concat "Last error: " error) 'roost-status-failed))
         (roost--insert-heading "Actions")
@@ -1738,7 +1761,7 @@ Refreshes are asynchronous; rendering uses only cached state.
   "One-line count of TASKS by status class."
   (let ((counts (make-hash-table :test 'equal)))
     (dolist (task tasks)
-      (cl-incf (gethash (roost--display-status task) counts 0)))
+      (cl-incf (gethash (roost--attention-status task) counts 0)))
     (string-join
      (delq nil
            (mapcar (lambda (class)
@@ -1748,6 +1771,7 @@ Refreshes are asynchronous; rendering uses only cached state.
                          (propertize (format "%d %s" count (car class))
                                      'face (roost--status-face (nth 2 class))))))
                    '(("awaiting permission" nil "permission")
+                     ("at a startup prompt" nil "prompt")
                      ("ready" nil "ready")
                      ("failed" nil "failed" "crashed")
                      ("running" nil "running" "background" "starting")
@@ -1779,7 +1803,7 @@ The changes column shrinks first, then the agent column is dropped."
 (defun roost--dashboard-row (task layout width)
   "Dashboard line for TASK using column LAYOUT, fitting WIDTH columns."
   (let* ((status (roost--display-status task))
-         (face (roost--status-face status))
+         (face (roost--status-face (roost--attention-status task)))
          (cell (lambda (text size &optional cell-face)
                  (propertize (truncate-string-to-width text size nil ?\s "…") 'face cell-face)))
          (line (concat "  " (propertize "●" 'face face) " "
