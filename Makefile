@@ -9,5 +9,6 @@ test:
 
 .PHONY: compile
 compile:
-	$(EMACS) -Q --batch -L . -f batch-byte-compile roost.el
+	$(EMACS) -Q --batch -L . --eval '(setq byte-compile-error-on-warn t)' \
+	  -f batch-byte-compile roost.el
 	@rm -f roost.elc

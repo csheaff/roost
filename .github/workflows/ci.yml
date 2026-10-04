@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        emacs-version: ['29.1', '30.1']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # setup-emacs installs Emacs through Nix, which reads GitHub's API; an
+      # authenticated Nix avoids the shared runners' per-IP rate limit (see
+      # tmux-control's workflow for the details).
+      - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+        with:
+          extra-conf: |
+            access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+
+      - uses: purcell/setup-emacs@34c6ded44899fd1bf74d2889558befd1750e61a7
+        with:
+          version: ${{ matrix.emacs-version }}
+
+      # The Python lifecycle tests drive real Git and isolated tmux servers.
+      - name: Install tmux
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q tmux
+          tmux -V
+
+      # ERT (protocol and UI, with tmux-control stubbed), the Python lifecycle
+      # tests, and a byte-compile.
+      - name: Test and compile
+        run: make test compile
