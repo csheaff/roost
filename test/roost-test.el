@@ -106,6 +106,25 @@
          (should (string-match-p "^Fixed the auth bug in login\\.py\\.\n" text))
          (should-not (string-match-p "\\*\\*\\|`" text)))))))
 
+(ert-deftest roost-task-panel-folds-a-long-prompt ()
+  (should (equal (roost--prompt-preview "Fix it.") "Fix it."))
+  (should (equal (roost--prompt-preview "Fix it.\n\nDetails follow.") "Fix it."))
+  (let ((preview (roost--prompt-preview (concat (make-string 500 ?a) " tail"))))
+    (should (string-suffix-p "…" preview))
+    (should (< (length preview) 410)))
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (append '((task . "Fix the login.\n\nRun the tests afterwards."))
+                                                (roost-test--task)))))
+     (with-temp-buffer
+       (setq roost--buffer-task-key (roost--key task))
+       (roost--render-task-info)
+       (should (string-match-p "^Fix the login\\.\nShow the whole prompt$" (buffer-string)))
+       (should-not (string-match-p "Run the tests" (buffer-string)))
+       (goto-char (point-min))
+       (search-forward "Show the whole")
+       (push-button (1- (point)))
+       (should (string-match-p "Run the tests afterwards" (buffer-string)))))))
+
 (ert-deftest roost-quiet-refresh-retains-last-message ()
   (roost-test--isolated
    (roost--cache-task "dev" (append '((lastMessage . "All done")) (roost-test--task)))

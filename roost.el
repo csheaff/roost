@@ -2072,6 +2072,20 @@ Status is the last observation from the task's host.
   "Insert section TITLE."
   (insert "\n" (propertize title 'face 'roost-heading) "\n"))
 
+(defvar-local roost--show-full-prompt nil
+  "Non-nil when the task panel shows a long prompt in full.")
+
+(defun roost--prompt-preview (prompt)
+  "The start of PROMPT for the task panel: its first paragraph, cut to a
+few hundred characters.  A short prompt is returned whole."
+  (let* ((paragraph (car (split-string prompt "\n[ \t]*\n")))
+         (preview (if (> (length paragraph) 400)
+                      (concat (replace-regexp-in-string "[ \t\n]+[^ \t\n]*\\'" ""
+                                                        (substring paragraph 0 400))
+                              "…")
+                    paragraph)))
+    (if (equal (string-trim preview) (string-trim prompt)) prompt preview)))
+
 (defun roost--insert-indented (text &optional face)
   "Insert TEXT wrapped and indented under a heading, adding FACE."
   (let ((text (propertize (concat text "\n") 'line-prefix "  " 'wrap-prefix "  ")))
@@ -2135,10 +2149,20 @@ Status is the last observation from the task's host.
                    'roost-status-permission)))))
         (when-let* ((error (roost--field task 'error)))
           (roost--insert-indented (concat "Last error: " error) 'roost-status-failed))
+        (roost--insert-pull-request task)
         (when-let* ((prompt (roost--prompt-text task)))
           (roost--insert-heading "Prompt")
-          (roost--insert-indented prompt))
-        (roost--insert-pull-request task)
+          (let ((preview (roost--prompt-preview prompt)))
+            (if (or roost--show-full-prompt (equal preview prompt))
+                (roost--insert-indented prompt)
+              (roost--insert-indented preview)
+              (let ((start (point)))
+                (insert-text-button "Show the whole prompt" 'follow-link t 'face 'roost-field
+                                    'action (lambda (_)
+                                              (setq roost--show-full-prompt t)
+                                              (roost--render-task-info)))
+                (insert "\n")
+                (put-text-property start (point) 'line-prefix "  ")))))
         (roost--insert-heading "Actions")
         (dolist (group roost--task-actions)
           (insert "  " (propertize (format "%-9s" (car group)) 'face 'roost-dim))
