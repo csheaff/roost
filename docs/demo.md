@@ -17,7 +17,7 @@ details; a normal setup shows `~/.local/share/roost` and your tmux-control socke
 | `roost-new-task.jpg` | A draft with a multi-line prompt and its derived name, beside the dashboard |
 | `roost-workspace.jpg` | Claude Code's summary beside the task shell, where the tests were rerun independently |
 | `roost-review.jpg` | Magit over TRAMP on the remote worktree, expanding the agent's change |
-| `roost-task-panel.jpg` | Task details after another task merged: the task is two commits behind `main`, with `u` to update |
+| `roost-task-panel.jpg` | Captured later the same day while Roost was developed with Roost: a Claude Code task on `claylien` that changed Roost's own helper, after answering Copilot's review of its pull request (#2) |
 
 ## Try the same workflow
 

@@ -70,7 +70,10 @@ to the agent with `e`; when it has committed, `P` pushes the new commits and
 opens the pull request. Once it is merged, `x` retires the task and deletes the
 branch. Needs `gh` on the task's host, and Git credentials there that can push.
 
-![A task's prompt, changes, actions and details](docs/images/roost-task-panel.jpg)
+![A remote task's panel: the agent's latest reply, its changes, its open pull request, the folded prompt and the actions](docs/images/roost-task-panel.jpg)
+
+*Roost working on itself: a Claude Code task on the SSH host `claylien` has
+answered review feedback on its pull request, and `P` will push the fix.*
 
 ## Install
 
