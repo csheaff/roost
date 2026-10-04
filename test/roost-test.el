@@ -577,6 +577,19 @@
                   "2 files +10 −3 · uncommitted · 1 ahead · 4 behind"))
    (should (equal (roost--changes '((diff . "1 file changed, 1 insertion(+)"))) "1 file +1 −0"))))
 
+(ert-deftest roost-dashboard-columns-fit-narrow-windows ()
+  (roost-test--isolated
+   (let ((tasks (list (append '((agent . "codex") (diff . "3 files changed, 38 insertions(+), 1 deletion(-)") (dirty . t))
+                              (roost-test--task "1111111111111111"))
+                      (append '((name . "dedupe-imports")) (roost-test--task "2222222222222222")))))
+     (should (equal (roost--dashboard-layout tasks 150) '(:name 14 :agent t :changes 28)))
+     (should (plist-get (roost--dashboard-layout tasks 75) :agent))
+     (should-not (plist-get (roost--dashboard-layout tasks 50) :agent))
+     (should (= (plist-get (roost--dashboard-layout tasks 30) :changes) 0))
+     (dolist (width '(150 100 75 60 50 45))
+       (should (<= (string-width (roost--dashboard-row (car tasks) (roost--dashboard-layout tasks width) width))
+                   width))))))
+
 (ert-deftest roost-empty-dashboard-explains-how-to-start ()
   (roost-test--isolated
    (let ((roost-hosts '(nil "dev")))
