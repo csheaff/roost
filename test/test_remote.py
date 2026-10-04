@@ -457,6 +457,21 @@ class Lifecycle(unittest.TestCase):
         self.assertIn("unmerged commits", self.request("retire", id=child["id"])["error"])
         self.assertTrue(roost.ref_exists(self.repo, child["branch"]))
 
+    def test_changes_after_an_update_are_only_the_tasks_own(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        (wt / "task").write_text("task\n")
+        self.git("add", ".", cwd=wt)
+        self.git("commit", "-qm", "task", cwd=wt)
+        (self.repo / "other").write_text("main moved\nand again\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "main moved")
+        self.assertEqual(self.request("list", full=True)["result"][0]["behind"], 1)
+        self.assertTrue(self.request("update", id=task["id"])["ok"])
+        listed = self.request("list", full=True)["result"][0]
+        self.assertEqual((listed["ahead"], listed["behind"]), (1, 0))
+        self.assertEqual(listed["diff"], "1 file changed, 1 insertion(+)")
+
     def test_update_allows_untracked_files_and_lists_missing_worktrees(self):
         task = self.create()
         wt = Path(task["worktree"])

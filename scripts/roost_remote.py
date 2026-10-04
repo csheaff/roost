@@ -687,11 +687,13 @@ def add_git_stats(tasks):
         task["dirty"] = bool(dirty.stdout)
         integration = task.get("integrationBranch")
         if integration:
-            counts = git(worktree, "rev-list", "--left-right", "--count",
-                         "refs/heads/" + integration + "...HEAD", "--", check=False)
-            if counts.returncode == 0 and len(counts.stdout.split()) == 2:
-                behind, ahead = counts.stdout.split()
-                task["behind"], task["ahead"] = int(behind), int(ahead)
+            # Ahead counts the task's own commits, not merges from updates.
+            behind = git(worktree, "rev-list", "--count", "HEAD..refs/heads/" + integration, "--",
+                         check=False)
+            ahead = git(worktree, "rev-list", "--count", "--no-merges",
+                        "refs/heads/" + integration + "..HEAD", "--", check=False)
+            if behind.returncode == 0 and ahead.returncode == 0:
+                task["behind"], task["ahead"] = int(behind.stdout), int(ahead.stdout)
 
 
 def stop(store, task, inventory=None):
