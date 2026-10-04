@@ -19,7 +19,7 @@
 (require 'json)
 (require 'subr-x)
 (require 'seq)
-(require 'tabulated-list)
+(require 'easymenu)
 (require 'tramp)
 (require 'parse-time)
 (require 'button)
@@ -128,6 +128,37 @@ Ordinary perspectives retain their existing labels and click actions."
   "Local file remembering hosts used by Roost."
   :type 'file)
 
+(defcustom roost-projects-file (locate-user-emacs-file "roost/projects.json")
+  "Local file remembering project checkouts used for tasks."
+  :type 'file)
+
+;;;; Faces
+
+(defface roost-title '((t :inherit bold :height 1.1))
+  "Titles of Roost buffers.")
+(defface roost-heading '((t :inherit bold))
+  "Group and section headings.")
+(defface roost-dim '((t :inherit shadow))
+  "Secondary text: labels, timestamps, prompts.")
+(defface roost-key '((t :inherit help-key-binding))
+  "Key bindings shown beside actions.")
+(defface roost-field '((t :inherit link))
+  "Clickable fields and actions.")
+(defface roost-status-permission '((t :inherit warning :weight bold))
+  "A task waiting for a permission answer in its terminal.")
+(defface roost-status-ready '((t :inherit success))
+  "A task waiting for your next prompt.")
+(defface roost-status-running '((t :inherit font-lock-keyword-face))
+  "A task whose agent is working.")
+(defface roost-status-failed '((t :inherit error))
+  "A task whose agent failed or disappeared.")
+(defface roost-status-inactive '((t :inherit shadow))
+  "Stopped, exited, starting or offline tasks.")
+(defface roost-diff-added '((t :inherit success))
+  "Inserted line counts.")
+(defface roost-diff-removed '((t :inherit error))
+  "Deleted line counts.")
+
 ;;;; State
 
 (defconst roost--package-directory
@@ -147,6 +178,8 @@ Ordinary perspectives retain their existing labels and click actions."
   "Last observed status for each task key, for notifications.")
 (defvar roost--remembered-hosts nil)
 (defvar roost--hosts-loaded nil)
+(defvar roost--remembered-projects nil)
+(defvar roost--projects-loaded nil)
 (defvar roost--current-task nil
   "Key of the task most recently opened.")
 (defvar roost--watch-timer nil)
@@ -177,21 +210,30 @@ Ordinary perspectives retain their existing labels and click actions."
   (json-serialize (mapcar (lambda (entry) (cons (car entry) (or (cdr entry) :null)))
                           alist)))
 
+(defun roost--read-json-list (file)
+  "The JSON array in FILE as a list, or nil.  JSON null reads as nil."
+  (when (file-readable-p file)
+    (ignore-errors
+      (with-temp-buffer
+        (insert-file-contents file)
+        ;; Older versions wrote the local host as {}; as an alist that
+        ;; reads back as nil, which is the local host.
+        (json-parse-buffer :array-type 'list :object-type 'alist :null-object nil)))))
+
+(defun roost--write-json-list (file list)
+  "Write LIST to FILE as a private JSON array, with nil as null."
+  (make-directory (file-name-directory file) t)
+  (let ((coding-system-for-write 'utf-8-unix))
+    (with-temp-file file
+      (insert (json-serialize (vconcat (mapcar (lambda (item) (or item :null)) list)))))
+    (set-file-modes file #o600)))
+
 (defun roost--hosts ()
   "Configured and remembered hosts, without network I/O."
   (unless roost--hosts-loaded
-    (setq roost--hosts-loaded t)
-    (when (file-readable-p roost-hosts-file)
-      (setq roost--remembered-hosts
-            (seq-filter
-             #'string-or-null-p
-             (ignore-errors
-               (with-temp-buffer
-                 (insert-file-contents roost-hosts-file)
-                 ;; Older versions wrote the local host as {}; as an alist
-                 ;; that reads back as nil, which is the local host.
-                 (json-parse-buffer :array-type 'list :object-type 'alist
-                                    :null-object nil)))))))
+    (setq roost--hosts-loaded t
+          roost--remembered-hosts (seq-filter #'string-or-null-p
+                                              (roost--read-json-list roost-hosts-file))))
   (delete-dups (append roost-hosts roost--remembered-hosts)))
 
 (defun roost--remember-host (host)
@@ -199,12 +241,7 @@ Ordinary perspectives retain their existing labels and click actions."
   (roost--hosts)
   (unless (member host roost--remembered-hosts)
     (push host roost--remembered-hosts)
-    (make-directory (file-name-directory roost-hosts-file) t)
-    (let ((coding-system-for-write 'utf-8-unix))
-      (with-temp-file roost-hosts-file
-        (insert (json-serialize (vconcat (mapcar (lambda (host) (or host :null))
-                                                 roost--remembered-hosts)))))
-      (set-file-modes roost-hosts-file #o600))))
+    (roost--write-json-list roost-hosts-file roost--remembered-hosts)))
 
 (defun roost--directory-host (directory)
   "SSH destination for DIRECTORY, or nil for local."
@@ -471,26 +508,57 @@ recently failed."
 
 ;;;; Choosing a task
 
+(defconst roost--status-order
+  '("permission" "ready" "failed" "crashed" "running" "background" "starting" "exited" "stopped")
+  "Statuses from most to least in need of attention.")
+
+(defun roost--attention-rank (task)
+  "Sort rank of TASK by how much it needs attention."
+  (or (seq-position roost--status-order (roost--display-status task)) 99))
+
 (defun roost--read-task (prompt)
-  "Choose a cached task with PROMPT."
-  (let* ((tasks (roost-tasks))
+  "Choose a cached task with PROMPT, those needing attention first."
+  (let* ((tasks (sort (roost-tasks)
+                      (lambda (a b) (< (roost--attention-rank a) (roost--attention-rank b)))))
+         (labels (mapcar (lambda (task)
+                           (format "%s  %s · %s" (roost--field task 'name)
+                                   (roost--host-label (roost--field task 'host))
+                                   (roost--project-name task)))
+                         tasks))
          (choices
-          (mapcar (lambda (task)
-                    (cons (format "%s / %s / %s [%s] %s"
-                                  (roost--host-label (roost--field task 'host))
-                                  (roost--project-name task) (roost--field task 'name)
-                                  (roost--field task 'status) (roost--field task 'id))
-                          task))
-                  tasks)))
+          (cl-mapcar (lambda (label task)
+                       ;; Identical names in one project are told apart by ID.
+                       (cons (if (> (seq-count (apply-partially #'equal label) labels) 1)
+                                 (format "%s  [%s]" label (substring (roost--field task 'id) 0 6))
+                               label)
+                             task))
+                     labels tasks))
+         (annotate
+          (lambda (label)
+            (let* ((task (cdr (assoc label choices)))
+                   (status (roost--display-status task)))
+              (concat "  " (propertize status 'face (roost--status-face status))
+                      (propertize (concat "  " (truncate-string-to-width
+                                                (roost--one-line (roost--field task 'task)) 60 nil nil "…"))
+                                  'face 'roost-dim))))))
     (unless tasks
-      (user-error "No cached tasks; open Roost and refresh, or create one"))
-    (cdr (assoc (completing-read prompt choices nil t) choices))))
+      (user-error "No tasks yet; create one with `roost-new-task'"))
+    (cdr (assoc (completing-read
+                 prompt
+                 (lambda (string predicate action)
+                   (if (eq action 'metadata)
+                       `(metadata (category . roost-task)
+                                  (annotation-function . ,annotate)
+                                  (display-sort-function . identity))
+                     (complete-with-action action choices string predicate)))
+                 nil t)
+                choices))))
 
 (defun roost--task-at-point ()
   "Task selected in the dashboard, terminal, or current workspace."
   (cond
    ((derived-mode-p 'roost-dashboard-mode)
-    (gethash (tabulated-list-get-id) roost--tasks))
+    (roost--dashboard-task))
    (roost--buffer-task-key
     (or (gethash roost--buffer-task-key roost--tasks)
         (user-error "This task has been retired or is unavailable")))
@@ -664,34 +732,51 @@ recently failed."
 
 ;;;; Creating tasks
 
-(defun roost--read-new-task ()
-  "Read creation arguments with an independent task as the default.
-A prefix argument instead defaults to forking the current task's committed HEAD."
-  (let* ((task (roost--task-at-point))
-         (source (if task
-                     (if current-prefix-arg
-                         (roost--remote-directory task)
-                       (roost--remote-directory
-                        (cons (cons 'worktree (roost--field task 'repo)) task)))
-                   default-directory))
-         (directory (read-directory-name "Project checkout (local or TRAMP): " source nil t))
-         (name (read-string "Task name: "))
-         (agent (completing-read "Agent: " roost--agents nil t nil nil roost-default-agent)))
-    (list directory name
-          (let ((ref (read-string "Start from ref (empty = primary checkout branch): "
-                                  nil nil (when current-prefix-arg "HEAD"))))
-            (unless (string-empty-p (string-trim ref)) (string-trim ref)))
-          (read-string "Initial prompt (optional): ")
-          agent)))
+(defun roost--project-directory (task)
+  "TASK's primary checkout as a local or TRAMP directory."
+  (roost--remote-directory (cons (cons 'worktree (roost--field task 'repo)) task)))
 
-;;;###autoload
-(defun roost-new-task (directory name &optional base prompt agent)
-  "Create an AGENT task NAME in DIRECTORY from BASE, with optional PROMPT.
-Nil AGENT uses `roost-default-agent'.
-DIRECTORY may be a TRAMP path.  Nil BASE uses the primary checkout's current
-branch, even when DIRECTORY is a task worktree.  Explicit HEAD uses DIRECTORY.
-Interactively, a prefix argument defaults to forking the current task."
-  (interactive (roost--read-new-task))
+(defun roost--remember-project (directory)
+  "Remember project DIRECTORY, most recent first, across restarts."
+  (setq directory (file-name-as-directory directory))
+  (roost--known-projects)
+  (setq roost--remembered-projects
+        (seq-take (cons directory (delete directory roost--remembered-projects)) 50))
+  (roost--write-json-list roost-projects-file roost--remembered-projects))
+
+(defun roost--known-projects ()
+  "Project checkouts used for tasks, most recent first, without network I/O."
+  (unless roost--projects-loaded
+    (setq roost--projects-loaded t
+          roost--remembered-projects
+          (seq-filter #'stringp (roost--read-json-list roost-projects-file))))
+  (delete-dups (append roost--remembered-projects
+                       (mapcar #'roost--project-directory (roost-tasks)))))
+
+(defun roost--abbreviate-path (path)
+  "PATH with a home directory prefix shown as ~."
+  (replace-regexp-in-string "\\`/\\(?:home\\|Users\\)/[^/]+\\(/\\|\\'\\)" "~\\1" path))
+
+(defun roost--project-label (directory)
+  "Short label such as \"claylien · ~/code/app\" for project DIRECTORY."
+  (format "%s · %s"
+          (roost--host-label (ignore-errors (roost--directory-host directory)))
+          (roost--abbreviate-path (directory-file-name (file-local-name directory)))))
+
+(defun roost--name-from-prompt (prompt)
+  "A short task name derived from the first words of PROMPT."
+  (let* ((words (split-string (downcase (replace-regexp-in-string "[^[:alnum:]]+" " " (or prompt "")))
+                              " +" t))
+         (common '("a" "an" "the" "to" "and" "of" "in" "for" "on" "with" "so" "is" "are"
+                   "it" "its" "that" "this" "be" "as" "by" "at" "or" "please" "make" "should"
+                   "we" "i" "you" "can" "could" "would")))
+    (truncate-string-to-width
+     (string-join (seq-take (seq-remove (lambda (word) (member word common)) words) 4) "-")
+     40)))
+
+(defun roost--create-task (directory name base prompt agent &optional on-success on-failure)
+  "Create an AGENT task NAME in DIRECTORY from BASE with PROMPT.
+Call ON-SUCCESS with the task before it opens, or ON-FAILURE with an error."
   (setq agent (or agent roost-default-agent))
   (unless (member agent roost--agents)
     (user-error "Unsupported Roost agent: %s" agent))
@@ -706,7 +791,7 @@ Interactively, a prefix argument defaults to forking the current task."
            (cons 'name name)
            (cons 'base base)
            (cons 'agent agent)
-           (cons 'prompt (unless (string-empty-p (or prompt "")) prompt))
+           (cons 'prompt (unless (string-empty-p (string-trim (or prompt ""))) prompt))
            (cons 'command (vconcat (or (cdr (assoc agent roost-agent-commands))
                                        (and (equal agent "claude") roost-claude-command)
                                        (list agent))))
@@ -719,14 +804,252 @@ Interactively, a prefix argument defaults to forking the current task."
      (lambda (task)
        (cl-incf (gethash host roost--revisions 0))
        (roost--remember-host host)
+       (when (roost--field task 'repo)
+         (roost--remember-project (roost--project-directory (cons (cons 'host host) task))))
        (setq task (roost--cache-task host task))
+       (when on-success (funcall on-success task))
        (roost-watch-mode 1)
        (roost--redraw)
        (roost-open-task task)
        (message "Roost created %s on %s from %s; integrates into %s"
                 name (roost--host-label host)
-                (roost--field task 'baseRef) (roost--field task 'integrationBranch))))
+                (roost--field task 'baseRef) (roost--field task 'integrationBranch)))
+     (lambda (err)
+       (message "Roost could not create %s: %s" name err)
+       (when on-failure (funcall on-failure err))))
     (message "Roost: creating %s…" name)))
+
+;;;###autoload
+(defun roost-new-task (&optional directory name base prompt agent)
+  "Start a new coding agent task.
+Interactively, open a buffer to choose the project, agent and starting
+point and to write the prompt; \\<roost-compose-mode-map>\\[roost-compose-submit] creates the task.
+With a prefix argument, the defaults fork the current task's committed HEAD.
+
+Called with DIRECTORY, create an AGENT task NAME there directly, from
+BASE with optional PROMPT.  DIRECTORY may be a TRAMP path.  Nil BASE uses
+the primary checkout's current branch, even when DIRECTORY is a task
+worktree; explicit HEAD uses DIRECTORY.  Nil AGENT uses
+`roost-default-agent'."
+  (interactive)
+  (if directory
+      (roost--create-task directory name base prompt agent)
+    (roost--compose current-prefix-arg)))
+
+;;;; Composing a new task
+
+(defconst roost--compose-buffer "*roost new task*")
+
+(defvar-local roost--compose-fields nil
+  "Plist of the draft task: :directory :agent :base :name :source.")
+(defvar-local roost--compose-body nil
+  "Marker at the start of the prompt text.")
+(defvar-local roost--compose-timer nil)
+
+(defvar-keymap roost-compose-mode-map
+  :doc "Keys for drafting a new Roost task."
+  "C-c C-c" #'roost-compose-submit
+  "C-c C-k" #'roost-compose-cancel
+  "C-c C-p" #'roost-compose-set-project
+  "C-c C-a" #'roost-compose-set-agent
+  "C-c C-b" #'roost-compose-set-base
+  "C-c C-n" #'roost-compose-set-name)
+
+(define-derived-mode roost-compose-mode text-mode "Roost New Task"
+  "Draft a coding agent task.  Write the prompt below the line.
+\\{roost-compose-mode-map}"
+  (setq-local header-line-format
+              (substitute-command-keys
+               " \\[roost-compose-submit] create · \\[roost-compose-cancel] cancel · click a field to change it"))
+  (add-hook 'after-change-functions #'roost--compose-changed nil t)
+  (add-hook 'after-change-major-mode-hook #'roost--quiet-display 90 t)
+  (roost--quiet-display))
+
+(defun roost--compose-default-directory (task fork)
+  "Default project for a new task, given the TASK in context and FORK."
+  (cond (task (if fork (roost--remote-directory task) (roost--project-directory task)))
+        ((ignore-errors (vc-root-dir)))
+        ((car (roost--known-projects)))))
+
+(defun roost--compose (&optional fork)
+  "Open the new task buffer.  FORK defaults to the current task's HEAD."
+  (let* ((task (roost--task-at-point))
+         (fork (and fork task))
+         (buffer (get-buffer roost--compose-buffer))
+         (fresh (not buffer)))
+    (setq buffer (or buffer (get-buffer-create roost--compose-buffer)))
+    (with-current-buffer buffer
+      (when fresh
+        (roost-compose-mode)
+        (setq roost--compose-body (copy-marker (point-min))))
+      (when (or fresh fork)
+        (setq roost--compose-fields
+              (list :directory (roost--compose-default-directory task fork)
+                    :agent roost-default-agent
+                    :base (when fork "HEAD")
+                    :source (when fork (roost--field task 'name)))))
+      (roost--compose-render)
+      (goto-char (point-max)))
+    (pop-to-buffer buffer)))
+
+(defun roost--compose-prompt ()
+  "The draft's prompt text."
+  (string-trim (buffer-substring-no-properties roost--compose-body (point-max))))
+
+(defun roost--compose-name ()
+  "The draft's explicit name, or one derived from its prompt."
+  (or (plist-get roost--compose-fields :name)
+      (roost--name-from-prompt (roost--compose-prompt))))
+
+(defun roost--compose-field (label value command &optional note)
+  "Insert field LABEL showing VALUE as a button running COMMAND, then NOTE."
+  (insert (propertize (format "%-9s" label) 'font-lock-face 'roost-dim))
+  (insert-text-button value 'action (lambda (_) (call-interactively command))
+                      'follow-link t 'font-lock-face 'roost-field
+                      'help-echo (format "mouse-1 or RET: change %s" (downcase label)))
+  (insert (propertize (concat "  " (substitute-command-keys
+                                    (format "\\<roost-compose-mode-map>\\[%s]" command))
+                              (if note (concat " · " note) ""))
+                      'font-lock-face 'roost-dim))
+  (insert "\n"))
+
+(defun roost--compose-render ()
+  "Redraw the draft's fields above the prompt, leaving the prompt untouched."
+  (let* ((inhibit-read-only t)
+         (inhibit-modification-hooks t)
+         (buffer-undo-list t)
+         (fields roost--compose-fields)
+         (derived (roost--compose-name))
+         ;; Point's offset into the prompt, so rewriting the fields keeps it.
+         (offset (max 0 (- (point) roost--compose-body))))
+    (save-excursion
+      (delete-region (point-min) roost--compose-body)
+      (goto-char (point-min))
+      (insert (propertize "New task" 'font-lock-face 'roost-title) "\n\n")
+      (let ((directory (plist-get fields :directory))
+            (base (plist-get fields :base))
+            (name (plist-get fields :name)))
+        (roost--compose-field "Project" (if directory (roost--project-label directory) "Choose a project…")
+                              #'roost-compose-set-project)
+        (roost--compose-field "Agent" (plist-get fields :agent) #'roost-compose-set-agent)
+        (roost--compose-field "Start" (cond ((plist-get fields :source)
+                                            (format "%s of %s" base (plist-get fields :source)))
+                                           (base)
+                                           (t "primary checkout's current branch"))
+                              #'roost-compose-set-base
+                              (when (plist-get fields :source) "fork: includes its commits"))
+        (roost--compose-field "Name" (cond (name)
+                                          ((string-empty-p derived) "from the prompt")
+                                          (t derived))
+                              #'roost-compose-set-name
+                              (unless (or name (string-empty-p derived)) "from the prompt")))
+      (insert (propertize (make-string 60 ?─) 'font-lock-face 'roost-dim) "\n"
+              (propertize "Describe the task for the agent below.\n" 'font-lock-face 'roost-dim))
+      (add-text-properties (point-min) (point)
+                           '(read-only "Write the prompt below the fields" rear-nonsticky t
+                             front-sticky t))
+      (set-marker roost--compose-body (point)))
+    (goto-char (min (point-max) (+ roost--compose-body offset)))))
+
+(defun roost--compose-changed (&rest _)
+  "Refresh the derived name shortly after the prompt changes."
+  (unless (plist-get roost--compose-fields :name)
+    (when (timerp roost--compose-timer) (cancel-timer roost--compose-timer))
+    (let ((buffer (current-buffer)))
+      (setq roost--compose-timer
+            (run-with-idle-timer 0.3 nil (lambda ()
+                                           (when (buffer-live-p buffer)
+                                             (with-current-buffer buffer
+                                               (roost--compose-render)))))))))
+
+(defun roost--choose-from (prompt choices &optional default)
+  "Choose from CHOICES, an alist of (LABEL . VALUE), with PROMPT.
+A mouse click shows a menu at the pointer; the keyboard uses the minibuffer."
+  (if (and (mouse-event-p last-nonmenu-event) (display-popup-menus-p))
+      (x-popup-menu last-nonmenu-event (list prompt (cons "" choices)))
+    (cdr (assoc (completing-read prompt choices nil t nil nil default) choices))))
+
+(defun roost-compose-set-project ()
+  "Choose the draft's project from known checkouts, or any directory."
+  (interactive)
+  (let* ((other "Other directory…")
+         (choices (append (mapcar (lambda (dir) (cons (roost--project-label dir) dir))
+                                  (roost--known-projects))
+                          (list (cons other 'other))))
+         (choice (roost--choose-from "Project: " choices)))
+    (when (eq choice 'other)
+      (setq choice (read-directory-name "Project checkout (local or TRAMP): "
+                                        (plist-get roost--compose-fields :directory) nil t)))
+    (when choice
+      (setq roost--compose-fields (plist-put roost--compose-fields :directory
+                                             (file-name-as-directory (expand-file-name choice))))
+      (roost--compose-render))))
+
+(defun roost-compose-set-agent ()
+  "Choose the draft's agent."
+  (interactive)
+  (when-let* ((agent (roost--choose-from "Agent: " (mapcar (lambda (agent) (cons agent agent))
+                                                           roost--agents)
+                                         roost-default-agent)))
+    (setq roost--compose-fields (plist-put roost--compose-fields :agent agent))
+    (roost--compose-render)))
+
+(defun roost-compose-set-base ()
+  "Choose the Git ref the draft starts from; empty means the primary branch."
+  (interactive)
+  (let* ((directory (plist-get roost--compose-fields :directory))
+         (refs (when directory
+                 (ignore-errors
+                   (let ((default-directory directory))
+                     (process-lines "git" "for-each-ref" "--format=%(refname:short)"
+                                    "refs/heads" "refs/remotes")))))
+         (ref (string-trim (completing-read "Start from ref (empty = primary checkout's branch): "
+                                            (cons "HEAD" refs) nil nil))))
+    (setq roost--compose-fields
+          (plist-put (plist-put roost--compose-fields :base (unless (string-empty-p ref) ref))
+                     :source nil))
+    (roost--compose-render)))
+
+(defun roost-compose-set-name ()
+  "Name the draft; empty derives the name from the prompt."
+  (interactive)
+  (let ((name (string-trim (read-string "Task name (empty = from the prompt): "
+                                        (plist-get roost--compose-fields :name)))))
+    (setq roost--compose-fields
+          (plist-put roost--compose-fields :name (unless (string-empty-p name) name)))
+    (roost--compose-render)))
+
+(defun roost-compose-cancel ()
+  "Discard the draft."
+  (interactive)
+  (when (or (string-empty-p (roost--compose-prompt))
+            (yes-or-no-p "Discard this task draft? "))
+    (quit-window t)))
+
+(defun roost-compose-submit ()
+  "Create the drafted task.  The draft is kept if creation fails."
+  (interactive)
+  (let ((fields roost--compose-fields)
+        (prompt (roost--compose-prompt))
+        (name (roost--compose-name))
+        (buffer (current-buffer)))
+    (unless (plist-get fields :directory)
+      (user-error "Choose a project first (%s)" (substitute-command-keys "\\[roost-compose-set-project]")))
+    (when (string-empty-p name)
+      (user-error "Write a prompt, or name the task (%s)" (substitute-command-keys "\\[roost-compose-set-name]")))
+    (setq header-line-format (format " Creating %s…" name))
+    (roost--create-task (plist-get fields :directory) name (plist-get fields :base) prompt
+                        (plist-get fields :agent)
+                        (lambda (_task)
+                          (when (buffer-live-p buffer)
+                            (quit-windows-on buffer t)
+                            (when (buffer-live-p buffer) (kill-buffer buffer))))
+                        (lambda (err)
+                          (when (buffer-live-p buffer)
+                            (with-current-buffer buffer
+                              (setq header-line-format
+                                    (format " Could not create the task: %s · %s retries"
+                                            err (substitute-command-keys "\\[roost-compose-submit]")))))))))
 
 ;;;; Task commands
 
@@ -914,6 +1237,104 @@ A running agent must be stopped first."
   "Short primary repository name for TASK."
   (file-name-nondirectory (directory-file-name (or (roost--field task 'repo) "unknown"))))
 
+;;;; Shared display helpers
+
+(defun roost--display-status (task)
+  "TASK's status, or \"offline\" while its host is unreachable."
+  (if (gethash (roost--field task 'host) roost--errors) "offline" (roost--field task 'status)))
+
+(defun roost--status-face (status)
+  "Face for STATUS."
+  (pcase status
+    ("permission" 'roost-status-permission)
+    ("ready" 'roost-status-ready)
+    ((or "running" "background") 'roost-status-running)
+    ((or "failed" "crashed") 'roost-status-failed)
+    (_ 'roost-status-inactive)))
+
+(defun roost--elapsed (timestamp)
+  "Format time since TIMESTAMP."
+  (if (not timestamp)
+      "?"
+    (condition-case nil
+        (let ((seconds (floor (max 0 (- (float-time) (float-time (date-to-time timestamp)))))))
+          (cond ((< seconds 60) (format "%ds" seconds))
+                ((< seconds 3600) (format "%dm" (/ seconds 60)))
+                ((< seconds 86400) (format "%dh%02dm" (/ seconds 3600) (/ (mod seconds 3600) 60)))
+                (t (format "%dd" (/ seconds 86400)))))
+      (error "?"))))
+
+(defun roost--changes (task &optional compact)
+  "Git summary for TASK from the last full refresh.
+COMPACT abbreviates commits ahead of and behind the integration branch."
+  (let* ((diff (or (roost--field task 'diff) ""))
+         (count (lambda (pattern)
+                  (if (string-match (concat "\\([0-9]+\\) " pattern) diff)
+                      (string-to-number (match-string 1 diff))
+                    0)))
+         (files (funcall count "files? changed"))
+         (ahead (or (roost--field task 'ahead) 0))
+         (behind (or (roost--field task 'behind) 0))
+         (commits (delq nil (list (when (> ahead 0) (format (if compact "↑%d" "%d ahead") ahead))
+                                  (when (> behind 0) (format (if compact "↓%d" "%d behind") behind))))))
+    (string-join
+     (delq nil (list (when (> files 0)
+                       (format "%d file%s +%d −%d" files (if (= files 1) "" "s")
+                               (funcall count "insertions?") (funcall count "deletions?")))
+                     (when (roost--field task 'dirty) "uncommitted")
+                     (when commits (string-join commits (if compact " " " · ")))))
+     " · ")))
+
+(defun roost--fontify-changes (changes)
+  "CHANGES with line counts and pending work highlighted."
+  (let ((text (copy-sequence changes)))
+    (dolist (rule '(("\\+[0-9]+" . roost-diff-added)
+                    ("−[0-9]+" . roost-diff-removed)))
+      (let ((start 0))
+        (while (string-match (car rule) text start)
+          (add-face-text-property (match-beginning 0) (match-end 0) (cdr rule) nil text)
+          (setq start (match-end 0)))))
+    text))
+
+(defun roost--one-line (string)
+  "STRING with line breaks and tabs collapsed, for a table cell."
+  (string-trim (replace-regexp-in-string "[\n\r\t]+" " " (or string ""))))
+
+(defun roost--prompt-text (task)
+  "TASK's prompt, or nil when it was created without one."
+  (let ((prompt (roost--field task 'task)))
+    (unless (or (null prompt) (equal prompt (roost--field task 'name))) prompt)))
+
+(defun roost--quiet-display ()
+  "Turn off line numbers and wrapping that global modes enable in Roost buffers."
+  (when (derived-mode-p 'roost-dashboard-mode 'roost-task-info-mode 'roost-compose-mode)
+    (display-line-numbers-mode -1)
+    (when (derived-mode-p 'roost-dashboard-mode)
+      (visual-line-mode -1)
+      (setq truncate-lines t))))
+
+(defconst roost--task-menu-items
+  '(["Open agent terminal" roost-open-task]
+    ["Shell beside agent" roost-shell]
+    ["Browse files" roost-files]
+    ["Send prompt…" roost-send]
+    "---"
+    ["Review in Magit" roost-review]
+    ["Diff since start" roost-diff]
+    "---"
+    ["Merge and retire…" roost-merge-retire]
+    ["Retire…" roost-retire]
+    ["Forget…" roost-forget]
+    "---"
+    ["Stop…" roost-stop]
+    ["Resume" roost-resume]
+    ["Details" roost-task-info])
+  "Menu items acting on the task at point.")
+
+(easy-menu-define roost-task-menu nil
+  "Actions on the selected Roost task."
+  (cons "Roost task" roost--task-menu-items))
+
 ;;;; Task panel
 
 (defvar-keymap roost-task-info-mode-map
@@ -929,10 +1350,39 @@ A running agent must be stopped first."
   "x" #'roost-retire
   "m" #'roost-merge-retire
   "X" #'roost-forget
-  "g" #'roost-refresh)
+  "g" #'roost-task-info-refresh)
+
+(easy-menu-define roost-task-info-menu roost-task-info-mode-map
+  "Menu for a Roost task panel."
+  (cons "Roost" roost--task-menu-items))
 
 (define-derived-mode roost-task-info-mode special-mode "Roost Task"
-  "Task details and lifecycle commands.  Status is the last cached observation.")
+  "A task's prompt, changes, actions and details.
+Status is the last observation from the task's host.
+\\{roost-task-info-mode-map}"
+  (setq-local truncate-lines nil
+              word-wrap t)
+  (add-hook 'after-change-major-mode-hook #'roost--quiet-display 90 t)
+  (roost--quiet-display))
+
+(defconst roost--task-actions
+  '(("Work" ("Agent" "RET" roost-open-task) ("Shell" "t" roost-shell)
+     ("Files" "f" roost-files) ("Send prompt" "e" roost-send))
+    ("Review" ("Magit" "r" roost-review) ("Diff since start" "D" roost-diff))
+    ("Finish" ("Merge and retire" "m" roost-merge-retire) ("Retire" "x" roost-retire)
+     ("Forget" "X" roost-forget))
+    ("Session" ("Stop" "k" roost-stop) ("Resume" "s" roost-resume)))
+  "Task panel actions as (GROUP (LABEL KEY COMMAND)...).")
+
+(defun roost--insert-heading (title)
+  "Insert section TITLE."
+  (insert "\n" (propertize title 'face 'roost-heading) "\n"))
+
+(defun roost--insert-indented (text &optional face)
+  "Insert TEXT wrapped and indented under a heading, adding FACE."
+  (let ((text (propertize (concat text "\n") 'line-prefix "  " 'wrap-prefix "  ")))
+    (when face (add-face-text-property 0 (length text) face t text))
+    (insert text)))
 
 (defun roost--render-task-info ()
   "Update the current task panel from the cache, without changing focus."
@@ -941,134 +1391,120 @@ A running agent must be stopped first."
         (position (point)))
     (erase-buffer)
     (if (not task)
-        (insert "This task has been retired or is unavailable.\n")
-      (insert (format "%s / %s / %s\n\n"
-                      (roost--host-label (roost--field task 'host))
-                      (roost--project-name task) (roost--field task 'name)))
-      (dolist (entry `(("Agent" . ,(or (roost--field task 'agent) "claude"))
-                       ("Status (cached)" . ,(if (gethash (roost--field task 'host) roost--errors)
-                                                 "offline"
-                                               (roost--field task 'status)))
-                       ("Project" . ,(roost--field task 'repo))
-                       ("Worktree" . ,(roost--field task 'worktree))
-                       ("Task branch" . ,(roost--field task 'branch))
-                       ("Started from" . ,(roost--field task 'baseRef))
-                       ("Integrates into" . ,(roost--field task 'integrationBranch))
-                       ("Tmux session" . ,(roost--field task 'session))))
-        (insert (format "%-18s %s\n" (car entry) (or (cdr entry) "unknown"))))
-      (when-let* ((error (roost--field task 'error)))
-        (insert "\nLast error: " error "\n"))
-      (when (and (equal (roost--field task 'agent) "codex")
-                 (equal (roost--field task 'status) "starting"))
-        (insert "\nOpen the agent terminal, review any hooks/startup prompts, and enter the\n"
-                "first prompt there. Codex starts status events on the first turn, including\n"
-                "after resume; Send prompt becomes available after that.\n"))
-      (insert "\n")
-      (dolist (action '(("RET  Agent" . roost-open-task)
-                        ("t  Shell beside agent" . roost-shell)
-                        ("f  Files" . roost-files)
-                        ("r  Review / commit in Magit" . roost-review)
-                        ("D  Diff since creation" . roost-diff)
-                        ("e  Send prompt" . roost-send)
-                        ("k  Stop; keep work" . roost-stop)
-                        ("s  Resume conversation" . roost-resume)
-                        ("m  Merge committed work and retire" . roost-merge-retire)
-                        ("x  Retire after a manual merge" . roost-retire)
-                        ("X  Forget; keep worktree and branch" . roost-forget)))
-        (insert-text-button (car action) 'follow-link t 'roost-command (cdr action)
-                            'action (lambda (button)
-                                      (call-interactively (button-get button 'roost-command))))
-        (insert "\n"))
-      (insert "\nFinished? Review and commit with r, then merge and retire with m.\n"
-              "Both checkouts must be clean. Stop active work first with k.\n"
-              "Ready means the agent awaits input; it does not mean reviewed or complete.\n\n"
-              "g refreshes status; q closes this panel.\n"))
+        (insert "This task has been retired or is no longer available.\n")
+      (let* ((status (roost--display-status task))
+             (changes (roost--changes task))
+             (base (roost--field task 'baseRef))
+             (integration (roost--field task 'integrationBranch)))
+        (insert (propertize (roost--field task 'name) 'face 'roost-title) "   "
+                (propertize (concat "● " status) 'face (roost--status-face status))
+                (propertize (format " for %s" (roost--elapsed (roost--field task 'updatedAt)))
+                            'face 'roost-dim)
+                "\n"
+                (propertize (format "%s · %s · %s" (roost--host-label (roost--field task 'host))
+                                    (roost--project-name task)
+                                    (or (roost--field task 'agent) "claude"))
+                            'face 'roost-dim)
+                "\n")
+        (when-let* ((prompt (roost--prompt-text task)))
+          (roost--insert-heading "Prompt")
+          (roost--insert-indented prompt))
+        (roost--insert-heading "Changes")
+        (roost--insert-indented
+         (cond ((not (assq 'diff task)) (propertize "Refreshing…" 'face 'roost-dim))
+               ((string-empty-p changes) (propertize "No changes yet" 'face 'roost-dim))
+               (t (roost--fontify-changes changes))))
+        (pcase status
+          ((or "exited" "failed" "crashed")
+           (roost--insert-indented
+            (format "The agent has %s. RET shows its last output; s resumes the conversation." status)
+            'roost-status-failed))
+          ("offline"
+           (roost--insert-indented "The host is unreachable; this is the last known state." 'roost-dim))
+          ("starting"
+           (when (equal (roost--field task 'agent) "codex")
+             (roost--insert-indented
+              "Codex reports status from its first turn. Open the terminal, review any hook or startup prompts, and enter the first prompt there; sending prompts from Emacs works after that."
+              'roost-dim))))
+        (when-let* ((error (roost--field task 'error)))
+          (roost--insert-indented (concat "Last error: " error) 'roost-status-failed))
+        (roost--insert-heading "Actions")
+        (dolist (group roost--task-actions)
+          (insert "  " (propertize (format "%-9s" (car group)) 'face 'roost-dim))
+          (dolist (action (cdr group))
+            (insert-text-button (nth 0 action) 'follow-link t 'face 'roost-field
+                                'roost-command (nth 2 action)
+                                'action (lambda (button)
+                                          (call-interactively (button-get button 'roost-command))))
+            (insert " " (propertize (nth 1 action) 'face 'roost-key) "    "))
+          (insert "\n"))
+        (roost--insert-heading "Details")
+        (dolist (entry `(("Branch" . ,(format "%s, from %s%s" (roost--field task 'branch) base
+                                              (if (and integration (not (string-empty-p integration)))
+                                                  (format ", merges into %s" integration)
+                                                "")))
+                         ("Worktree" . ,(roost--abbreviate-path (or (roost--field task 'worktree) "")))
+                         ("Project" . ,(roost--abbreviate-path (or (roost--field task 'repo) "")))
+                         ("Tmux" . ,(format "session %s on socket %s" (roost--field task 'session)
+                                            (roost--field task 'socket)))
+                         ("Conversation" . ,(or (roost--field task 'agentSession)
+                                                (roost--field task 'claudeSession)
+                                                "not recorded yet"))))
+          (insert (propertize (concat "  " (propertize (format "%-13s" (car entry)) 'face 'roost-dim)
+                                      (or (cdr entry) "unknown") "\n")
+                              'wrap-prefix (make-string 15 ?\s))))
+        (insert "\n" (propertize (substitute-command-keys
+                                  "Ready means the agent is waiting for you, not that the work is reviewed.
+\\<roost-task-info-mode-map>\\[roost-task-info-refresh] refreshes · \\[quit-window] closes")
+                                 'face 'roost-dim)
+                "\n")))
     (goto-char (min position (point-max)))))
+
+(defun roost--task-info-buffer-name (task)
+  "Buffer name for TASK's panel, qualified by host when names collide."
+  (let ((name (roost--field task 'name)))
+    (if (> (seq-count (lambda (other) (equal (roost--field other 'name) name)) (roost-tasks)) 1)
+        (format "*roost: %s on %s*" name (roost--host-label (roost--field task 'host)))
+      (format "*roost: %s*" name))))
 
 ;;;###autoload
 (defun roost-task-info (&optional task)
-  "Show TASK's project, starting branch, integration target and actions."
+  "Show TASK's prompt, changes, actions and details."
   (interactive)
   (setq task (roost--choose task))
-  (let ((buffer (get-buffer-create
-                 (format "*roost task %s:%s*" (roost--host-label (roost--field task 'host))
-                         (roost--field task 'id)))))
+  (let* ((key (roost--key task))
+         (buffer (or (seq-find (lambda (buffer)
+                                 (equal (buffer-local-value 'roost--buffer-task-key buffer) key))
+                               (buffer-list))
+                     (get-buffer-create (roost--task-info-buffer-name task)))))
     (with-current-buffer buffer
       (unless (derived-mode-p 'roost-task-info-mode) (roost-task-info-mode))
-      (setq roost--buffer-task-key (roost--key task))
+      (setq roost--buffer-task-key key)
       (roost--render-task-info))
-    (pop-to-buffer buffer)))
+    (pop-to-buffer buffer)
+    ;; Changes come from a full refresh; fetch them for this host now.
+    (roost--refresh-host (roost--field task 'host) nil)))
+
+(defun roost-task-info-refresh ()
+  "Refresh the task's status and Git changes."
+  (interactive)
+  (if-let* ((task (gethash roost--buffer-task-key roost--tasks)))
+      (roost--refresh-host (roost--field task 'host) nil)
+    (roost-refresh)))
 
 ;;;; Dashboard
-
-(defun roost--status-face (status)
-  "Face for STATUS."
-  (pcase status
-    ((or "permission" "ready") 'warning)
-    ((or "failed" "crashed" "offline") 'error)
-    ((or "running" "background") 'font-lock-keyword-face)
-    (_ 'shadow)))
-
-(defun roost--elapsed (timestamp)
-  "Format time since TIMESTAMP."
-  (if (not timestamp)
-      "?"
-    (condition-case nil
-        (let ((seconds (floor (max 0 (- (float-time) (float-time (date-to-time timestamp)))))))
-          (cond ((< seconds 60) (format "%ds" seconds))
-                ((< seconds 3600) (format "%dm" (/ seconds 60)))
-                (t (format "%dh%02dm" (/ seconds 3600) (/ (mod seconds 3600) 60)))))
-      (error "?"))))
-
-(defun roost--changes (task)
-  "Compact Git summary for TASK from the last full refresh."
-  (let* ((diff (or (roost--field task 'diff) ""))
-         (count (lambda (pattern)
-                  (if (string-match (concat "\\([0-9]+\\) " pattern) diff)
-                      (string-to-number (match-string 1 diff))
-                    0)))
-         (files (funcall count "files? changed"))
-         (ahead (or (roost--field task 'ahead) 0))
-         (behind (or (roost--field task 'behind) 0)))
-    (string-join
-     (delq nil (list (when (> files 0)
-                       (format "%d file%s +%d −%d" files (if (= files 1) "" "s")
-                               (funcall count "insertions?") (funcall count "deletions?")))
-                     (when (roost--field task 'dirty) "uncommitted")
-                     (when (> ahead 0) (format "%d ahead" ahead))
-                     (when (> behind 0) (format "%d behind" behind))))
-     " · ")))
-
-(defun roost--one-line (string)
-  "STRING with line breaks and tabs collapsed, for a table cell."
-  (replace-regexp-in-string "[\n\r\t]+" " " (or string "")))
-
-(defun roost--entries ()
-  "Dashboard rows, entirely from cached state."
-  (mapcar (lambda (task)
-            (let* ((host (roost--field task 'host))
-                   (status (if (gethash host roost--errors) "offline" (roost--field task 'status))))
-              (list (roost--key task)
-                    (vector (roost--host-label host)
-                            (roost--field task 'name)
-                            (or (roost--field task 'agent) "claude")
-                            (propertize status 'face (roost--status-face status))
-                            (roost--elapsed (roost--field task 'updatedAt))
-                            (roost--project-name task)
-                            (roost--changes task)
-                            (roost--field task 'branch)
-                            (roost--one-line (roost--field task 'task))))))
-          (roost-tasks)))
 
 (defvar-keymap roost-dashboard-mode-map
   :doc "Task dashboard commands."
   "RET" #'roost-open-task
-  "c" #'roost-new-task
+  "TAB" #'roost-dashboard-next-task
+  "<backtab>" #'roost-dashboard-previous-task
   "d" #'roost-new-task
+  "c" #'roost-new-task
   "r" #'roost-review
   "D" #'roost-diff
-  "?" #'roost-task-info
   "i" #'roost-task-info
+  "?" #'roost-task-info
   "f" #'roost-files
   "t" #'roost-shell
   "e" #'roost-send
@@ -1080,35 +1516,203 @@ A running agent must be stopped first."
   "n" #'roost-next-waiting
   "g" #'roost-refresh)
 
-(defun roost--dashboard-display-settings ()
-  "Keep table columns intact after global minor modes enable themselves."
-  (when (derived-mode-p 'roost-dashboard-mode)
-    (visual-line-mode -1)
-    (display-line-numbers-mode -1)
-    (setq truncate-lines t)))
+(easy-menu-define roost-dashboard-menu roost-dashboard-mode-map
+  "Menu for the Roost dashboard."
+  `("Roost"
+    ["New task…" roost-new-task]
+    ["Next task needing attention" roost-next-waiting]
+    ["Switch task…" roost-switch-task]
+    ["Refresh" roost-refresh]
+    ["Watch hosts" roost-watch-mode :style toggle :selected roost-watch-mode]
+    "---"
+    ,@roost--task-menu-items))
 
-(define-derived-mode roost-dashboard-mode tabulated-list-mode "Roost"
-  "Tasks across hosts.  All refreshes are asynchronous."
-  (setq tabulated-list-format [("Host" 14 t) ("Task" 24 t) ("Agent" 8 t) ("Status" 12 t)
-                               ("Since" 8 t) ("Project" 20 t) ("Changes" 30 t)
-                               ("Branch" 36 t) ("Prompt" 0 nil)]
-        tabulated-list-use-header-line nil
-        truncate-lines t
-        display-line-numbers nil
-        tabulated-list-entries #'roost--entries)
-  (add-hook 'after-change-major-mode-hook #'roost--dashboard-display-settings 90 t)
-  (tabulated-list-init-header))
+(defvar-keymap roost--dashboard-row-map
+  :doc "Mouse actions on a dashboard row."
+  "<mouse-1>" #'roost-dashboard-mouse-open
+  "<mouse-3>" #'roost-dashboard-mouse-menu)
+
+(define-derived-mode roost-dashboard-mode special-mode "Roost"
+  "Coding agent tasks across hosts, grouped by project.
+Refreshes are asynchronous; rendering uses only cached state.
+\\{roost-dashboard-mode-map}"
+  (setq-local truncate-lines t
+              revert-buffer-function (lambda (&rest _) (roost-refresh)))
+  (setq header-line-format
+        (substitute-command-keys
+         " \\<roost-dashboard-mode-map>\\[roost-open-task] open · \\[roost-new-task] new · \\[roost-next-waiting] next waiting · \\[roost-shell] shell · \\[roost-review] review · \\[roost-merge-retire] merge · \\[roost-task-info] details · \\[roost-refresh] refresh"))
+  (add-hook 'after-change-major-mode-hook #'roost--quiet-display 90 t)
+  (add-hook 'window-size-change-functions #'roost--dashboard-resized nil t)
+  (roost--quiet-display))
+
+(defun roost--dashboard-resized (window)
+  "Reflow the dashboard when WINDOW changes width."
+  (with-current-buffer (window-buffer window)
+    (roost--render-dashboard)))
+
+(defun roost--task-groups (tasks)
+  "TASKS grouped by host and repository, as ((HOST REPO) TASK...) in display order."
+  (let (groups)
+    (dolist (task tasks)
+      (let* ((key (list (roost--field task 'host) (roost--field task 'repo)))
+             (group (assoc key groups)))
+        (if group (push task (cdr group)) (push (list key task) groups))))
+    (sort (mapcar (lambda (group)
+                    (cons (car group)
+                          (sort (cdr group)
+                                (lambda (a b) (string< (or (roost--field a 'startedAt) "")
+                                                       (or (roost--field b 'startedAt) ""))))))
+                  groups)
+          (lambda (a b)
+            (string< (format "%s %s" (roost--host-label (caar a)) (cadar a))
+                     (format "%s %s" (roost--host-label (caar b)) (cadar b)))))))
+
+(defun roost--summary (tasks)
+  "One-line count of TASKS by status class."
+  (let ((counts (make-hash-table :test 'equal)))
+    (dolist (task tasks)
+      (cl-incf (gethash (roost--display-status task) counts 0)))
+    (string-join
+     (delq nil
+           (mapcar (lambda (class)
+                     (let ((count (apply #'+ (mapcar (lambda (status) (gethash status counts 0))
+                                                     (cddr class)))))
+                       (when (> count 0)
+                         (propertize (format "%d %s" count (car class))
+                                     'face (roost--status-face (nth 2 class))))))
+                   '(("awaiting permission" nil "permission")
+                     ("ready" nil "ready")
+                     ("failed" nil "failed" "crashed")
+                     ("running" nil "running" "background" "starting")
+                     ("stopped" nil "stopped" "exited")
+                     ("offline" nil "offline"))))
+     (propertize " · " 'face 'roost-dim))))
+
+(defun roost--dashboard-row (task layout width)
+  "Dashboard line for TASK using column LAYOUT, fitting WIDTH columns."
+  (let* ((status (roost--display-status task))
+         (face (roost--status-face status))
+         (cell (lambda (text size &optional cell-face)
+                 (propertize (truncate-string-to-width text size nil ?\s "…") 'face cell-face)))
+         (line (concat "  " (propertize "●" 'face face) " "
+                       (funcall cell (roost--field task 'name) (plist-get layout :name)) "  "
+                       (funcall cell status 11 face) " "
+                       (funcall cell (roost--elapsed (roost--field task 'updatedAt)) 6 'roost-dim) "  "
+                       (if (plist-get layout :agent)
+                           (concat (funcall cell (or (roost--field task 'agent) "claude") 6 'roost-dim) "  ")
+                         "")
+                       (if (> (plist-get layout :changes) 0)
+                           (concat (roost--fontify-changes
+                                    (truncate-string-to-width (roost--changes task t)
+                                                              (plist-get layout :changes) nil ?\s "…"))
+                                   "  ")
+                         "")))
+         (room (- width (string-width line) 1)))
+    (concat line
+            (when (> room 8)
+              (propertize (truncate-string-to-width (roost--one-line (roost--prompt-text task))
+                                                    room nil nil "…")
+                          'face 'roost-dim)))))
+
+(defun roost--insert-empty-dashboard ()
+  "Explain how to start when there are no tasks."
+  (insert (propertize "No tasks yet." 'face 'roost-title) "\n\n"
+          (substitute-command-keys
+           "  \\<roost-dashboard-mode-map>\\[roost-new-task]  Start a task: choose a project (local, or remote over TRAMP), an agent, and a prompt.\n")
+          (format "\n  Watching %s.\n"
+                  (string-join (mapcar #'roost--host-label (roost--hosts)) ", "))))
+
+(defun roost--render-dashboard ()
+  "Render the dashboard from cached state, keeping point on the same task."
+  (let* ((window (get-buffer-window (current-buffer) t))
+         (position (if window (window-point window) (point)))
+         (key (get-text-property position 'roost-task))
+         (start-line (when window (line-number-at-pos (window-start window))))
+         (width (if window (window-body-width window) 120))
+         (tasks (roost-tasks))
+         (inhibit-read-only t))
+    (erase-buffer)
+    (if (null tasks)
+        (roost--insert-empty-dashboard)
+      (let ((layout (list :name (min 28 (max 8 (apply #'max (mapcar (lambda (task)
+                                                                          (string-width (roost--field task 'name)))
+                                                                        tasks))))
+                          :agent (> (length (delete-dups (mapcar (lambda (task)
+                                                                   (or (roost--field task 'agent) "claude"))
+                                                                 tasks)))
+                                    1)
+                          :changes (min 40 (apply #'max (mapcar (lambda (task)
+                                                                   (string-width (roost--changes task t)))
+                                                                 tasks))))))
+        (insert (roost--summary tasks) "\n")
+        (dolist (group (roost--task-groups tasks))
+          (let ((host (caar group)) (repo (cadar group)))
+            (insert "\n" (propertize (format "%s · %s" (roost--host-label host)
+                                             (file-name-nondirectory (directory-file-name (or repo "?"))))
+                                     'face 'roost-heading)
+                    (propertize (concat "  " (roost--abbreviate-path (or repo ""))) 'face 'roost-dim)
+                    (if (gethash host roost--errors)
+                        (propertize "  unreachable; showing the last known state" 'face 'roost-status-failed)
+                      "")
+                    "\n")
+            (dolist (task (cdr group))
+              (insert (propertize (concat (roost--dashboard-row task layout width) "\n")
+                                  'roost-task (roost--key task)
+                                  'keymap roost--dashboard-row-map
+                                  'mouse-face 'highlight
+                                  'help-echo "mouse-1: open · mouse-3: actions")))))))
+    (let ((target (or (and key (save-excursion
+                                 (goto-char (point-min))
+                                 ;; Keys are lists, so compare with `equal'.
+                                 (when-let* ((match (text-property-search-forward 'roost-task key t)))
+                                   (prop-match-beginning match))))
+                      (text-property-not-all (point-min) (point-max) 'roost-task nil)
+                      (point-min))))
+      (goto-char target)
+      (when window
+        (set-window-start window (save-excursion (goto-char (point-min))
+                                                 (forward-line (1- start-line))
+                                                 (point)))
+        (set-window-point window target)))))
+
+(defun roost--dashboard-task ()
+  "The task on the current dashboard line, if any."
+  (when-let* ((key (get-text-property (line-beginning-position) 'roost-task)))
+    (gethash key roost--tasks)))
+
+(defun roost-dashboard-next-task (&optional count)
+  "Move to the next task line, or COUNT lines of tasks."
+  (interactive "p")
+  (dotimes (_ (abs (or count 1)))
+    (let ((step (if (< (or count 1) 0) -1 1)) (origin (point)))
+      (forward-line step)
+      (while (and (not (get-text-property (point) 'roost-task))
+                  (zerop (forward-line step))))
+      (unless (get-text-property (point) 'roost-task) (goto-char origin)))))
+
+(defun roost-dashboard-previous-task (&optional count)
+  "Move to the previous task line, or COUNT lines of tasks."
+  (interactive "p")
+  (roost-dashboard-next-task (- (or count 1))))
+
+(defun roost-dashboard-mouse-open (event)
+  "Open the task clicked in EVENT."
+  (interactive "e")
+  (mouse-set-point event)
+  (roost-open-task))
+
+(defun roost-dashboard-mouse-menu (event)
+  "Show the actions for the task clicked in EVENT."
+  (interactive "e")
+  (mouse-set-point event)
+  (popup-menu roost-task-menu event))
 
 (defun roost--redraw ()
   "Refresh an existing dashboard and task panels without changing focus."
   (when-let* ((buffer (get-buffer "*roost*")))
     (with-current-buffer buffer
       (when (derived-mode-p 'roost-dashboard-mode)
-        (setq header-line-format
-              (concat " RET open · c new · ? task/actions · t shell · r Magit · m merge/retire · g refresh"
-                      (when (> (hash-table-count roost--errors) 0)
-                        "  — host unavailable; last state retained")))
-        (tabulated-list-print t))))
+        (roost--render-dashboard))))
   (dolist (buffer (buffer-list))
     (with-current-buffer buffer
       (when (derived-mode-p 'roost-task-info-mode)

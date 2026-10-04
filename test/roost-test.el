@@ -6,6 +6,8 @@
 
 (defmacro roost-test--isolated (&rest body)
   `(let ((roost--tasks (make-hash-table :test 'equal))
+         (roost-projects-file (expand-file-name "projects.json" (make-temp-file "roost-projects" t)))
+         (roost--projects-loaded t) (roost--remembered-projects nil)
          (roost--statuses (make-hash-table :test 'equal))
          (roost--errors (make-hash-table :test 'equal))
          (roost--installed (make-hash-table :test 'equal))
@@ -84,7 +86,12 @@
                 (lambda (_host _action _params _success failure) (funcall failure "connection lost"))))
        (roost-refresh t))
      (should (equal (roost--field (car (roost-tasks)) 'status) "ready"))
-     (should (equal (substring-no-properties (aref (cadar (roost--entries)) 3)) "offline")))))
+     (should (equal (roost--display-status (car (roost-tasks))) "offline"))
+     (with-temp-buffer
+       (roost-dashboard-mode)
+       (roost--render-dashboard)
+       (should (string-match-p "unreachable; showing the last known state" (buffer-string)))
+       (should (string-match-p "1 offline" (buffer-string)))))))
 
 (ert-deftest roost-remote-path-respects-tramp-method-and-user ()
   (let ((tramp-methods (cons '("rpc" (tramp-login-program "ssh")) tramp-methods))
@@ -246,17 +253,71 @@
   (roost-test--isolated
    (roost--cache-task "dev" (append '((repo . "/home/user/repo")) (roost-test--task)))
    (setq roost--current-task '("dev" "0123456789abcdef"))
-   (let ((default-directory "/tmp/") seen)
-     (cl-letf (((symbol-function 'read-directory-name)
-                (lambda (_prompt directory &rest _) (push directory seen) directory))
-               ((symbol-function 'completing-read) (lambda (&rest _) "claude"))
-               ((symbol-function 'read-string) (lambda (_prompt &optional _initial _history default &rest _) (or default ""))))
-       (let ((current-prefix-arg nil))
-         (let ((args (roost--read-new-task)))
-           (should (string-suffix-p ":/home/user/repo/" (car args))) (should-not (nth 2 args))))
-       (let ((current-prefix-arg '(4)))
-         (let ((args (roost--read-new-task)))
-           (should (string-suffix-p ":/home/user/work/fix auth/" (car args))) (should (equal (nth 2 args) "HEAD"))))))))
+   (let ((default-directory "/tmp/"))
+     (save-window-excursion
+       (unwind-protect
+           (progn
+             (roost--compose)
+             (with-current-buffer roost--compose-buffer
+               (should (string-suffix-p ":/home/user/repo/" (plist-get roost--compose-fields :directory)))
+               (should-not (plist-get roost--compose-fields :base))
+               (should (string-match-p "Start    primary checkout's current branch  C-c C-b" (buffer-string))))
+             (roost--compose t)
+             (with-current-buffer roost--compose-buffer
+               (should (string-suffix-p ":/home/user/work/fix auth/" (plist-get roost--compose-fields :directory)))
+               (should (equal (plist-get roost--compose-fields :base) "HEAD"))
+               (should (string-match-p "HEAD of fix auth  C-c C-b · fork: includes its commits" (buffer-string)))))
+         (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-compose-derives-a-name-and-submits-the-draft ()
+  (roost-test--isolated
+   (let ((default-directory "/tmp/") created failure)
+     (save-window-excursion
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--create-task)
+                      (lambda (directory name base prompt agent on-success on-failure)
+                        (setq created (list directory name base prompt agent) failure on-failure)
+                        (ignore on-success))))
+             (roost--compose)
+             (with-current-buffer roost--compose-buffer
+               (setq roost--compose-fields (plist-put roost--compose-fields :directory "/ssh:dev:/repo/"))
+               (goto-char (point-max))
+               (insert "Fix the CSV importer so quoted commas work.\nAdd tests.")
+               (roost--compose-render)
+               (should (string-match-p "Name     fix-csv-importer-quoted  C-c C-n · from the prompt" (buffer-string)))
+               ;; Rewriting the fields keeps point in the prompt.
+               (should (= (point) (point-max)))
+               (should (string-match-p "Project  dev · /repo" (buffer-string)))
+               ;; The fields above the line are not editable.
+               (goto-char (point-min))
+               (should-error (insert "x") :type 'text-read-only)
+               (roost-compose-submit)
+               (should (equal created '("/ssh:dev:/repo/" "fix-csv-importer-quoted" nil
+                                        "Fix the CSV importer so quoted commas work.\nAdd tests." "claude")))
+               (funcall failure "no such host")
+               (should (string-match-p "Could not create the task: no such host" header-line-format))
+               (should (buffer-live-p (current-buffer)))))
+         (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-compose-requires-a-project-and-a-prompt-or-name ()
+  (roost-test--isolated
+   (let ((default-directory "/tmp/"))
+     (save-window-excursion
+       (unwind-protect
+           (progn
+             (roost--compose)
+             (with-current-buffer roost--compose-buffer
+               (setq roost--compose-fields (plist-put roost--compose-fields :directory nil))
+               (should-error (roost-compose-submit) :type 'user-error)
+               (setq roost--compose-fields (plist-put roost--compose-fields :directory "/repo/"))
+               (should-error (roost-compose-submit) :type 'user-error)))
+         (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-names-come-from-the-first-meaningful-words ()
+  (should (equal (roost--name-from-prompt "Importing examples/october.csv crashes: the importer")
+                 "importing-examples-october-csv"))
+  (should (equal (roost--name-from-prompt "Please add a --json flag to the report") "add-json-flag-report"))
+  (should (equal (roost--name-from-prompt "") "")))
 
 (ert-deftest roost-shell-ignores-a-slower-earlier-navigation ()
   (roost-test--isolated
@@ -466,19 +527,95 @@
        (should (= attempts 2))
        (should (= (car (gethash "dev" roost--failures)) 2))))))
 
-(ert-deftest roost-dashboard-summarizes-git-state-on-one-line ()
+(ert-deftest roost-dashboard-groups-by-project-and-summarizes-attention ()
   (roost-test--isolated
-   (roost--cache-task nil (append '((diff . "2 files changed, 10 insertions(+), 3 deletions(-)")
-                                    (dirty . t) (ahead . 1) (behind . 4)
-                                    (task . "Fix the parser.\nThen add tests."))
-                                  (roost-test--task)))
-   (let ((row (cadar (roost--entries))))
-     (should (equal (aref row 6) "2 files +10 −3 · uncommitted · 1 ahead · 4 behind"))
-     (should (equal (aref row 8) "Fix the parser. Then add tests.")))
+   (roost--cache-task "dev" (append '((repo . "/home/user/ledger") (startedAt . "1")
+                                      (diff . "2 files changed, 10 insertions(+), 3 deletions(-)")
+                                      (dirty . t) (ahead . 1) (behind . 4)
+                                      (task . "Fix the parser.\nThen add tests."))
+                                    (roost-test--task "1111111111111111" "permission")))
+   (roost--cache-task "dev" (append '((repo . "/home/user/ledger") (startedAt . "2") (name . "totals"))
+                                    (roost-test--task "2222222222222222" "running")))
+   (roost--cache-task nil (append '((repo . "/Users/me/site") (name . "docs") (agent . "codex"))
+                                  (roost-test--task "3333333333333333" "ready")))
+   (with-temp-buffer
+     (roost-dashboard-mode)
+     (roost--render-dashboard)
+     (let ((text (buffer-string)))
+       (should (string-prefix-p "1 awaiting permission · 1 ready · 1 running\n" text))
+       (should (string-match-p "^dev · ledger  ~/ledger$" text))
+       (should (string-match-p "^local · site  ~/site$" text))
+       (should (string-match-p "  ● fix auth  permission  [0-9a-z]+ +claude  2 files \\+10 −3 · uncommitted · ↑1 ↓4  Fix the parser\\. Then add tests\\." text))
+       ;; Creation order within a project; projects sorted by host.
+       (should (< (string-match "fix auth" text) (string-match "totals" text)))
+       (should (< (string-match "dev · ledger" text) (string-match "local · site" text))))
+     ;; Point starts on the first task, and task commands target the row.
+     (should (equal (roost--field (roost--task-at-point) 'id) "1111111111111111"))
+     (roost-dashboard-next-task)
+     (should (equal (roost--field (roost--task-at-point) 'id) "2222222222222222"))
+     (roost-dashboard-next-task)
+     (should (equal (roost--field (roost--task-at-point) 'id) "3333333333333333"))
+     (roost-dashboard-next-task)
+     (should (equal (roost--field (roost--task-at-point) 'id) "3333333333333333"))
+     ;; A redraw keeps point on the same task.
+     (roost--render-dashboard)
+     (should (equal (roost--field (roost--task-at-point) 'id) "3333333333333333")))
    ;; A quiet poll omits Git fields; the last full refresh's remain.
-   (roost--apply-snapshot nil (list (roost-test--task)))
-   (should (equal (aref (cadar (roost--entries)) 6) "2 files +10 −3 · uncommitted · 1 ahead · 4 behind"))
+   (roost--apply-snapshot "dev" (list (append '((repo . "/home/user/ledger")) (roost-test--task "1111111111111111"))
+                                      (append '((repo . "/home/user/ledger")) (roost-test--task "2222222222222222"))))
+   (should (equal (roost--changes (gethash '("dev" "1111111111111111") roost--tasks))
+                  "2 files +10 −3 · uncommitted · 1 ahead · 4 behind"))
    (should (equal (roost--changes '((diff . "1 file changed, 1 insertion(+)"))) "1 file +1 −0"))))
+
+(ert-deftest roost-empty-dashboard-explains-how-to-start ()
+  (roost-test--isolated
+   (let ((roost-hosts '(nil "dev")))
+     (with-temp-buffer
+       (roost-dashboard-mode)
+       (roost--render-dashboard)
+       (should (string-match-p "No tasks yet" (buffer-string)))
+       (should (string-match-p "Watching local, dev" (buffer-string)))))))
+
+(ert-deftest roost-task-picker-orders-by-attention-and-hides-ids ()
+  (roost-test--isolated
+   (roost--cache-task "dev" (append '((name . "alpha")) (roost-test--task "1111111111111111" "running")))
+   (roost--cache-task "dev" (append '((name . "beta")) (roost-test--task "2222222222222222" "permission")))
+   (roost--cache-task "dev" (append '((name . "beta")) (roost-test--task "3333333333333333" "stopped")))
+   (let (candidates annotation)
+     (cl-letf (((symbol-function 'completing-read)
+                (lambda (_prompt table &rest _)
+                  (setq candidates (funcall table "" nil t)
+                        annotation (alist-get 'annotation-function (cdr (funcall table "" nil 'metadata))))
+                  (car candidates))))
+       (should (equal (roost--field (roost--read-task "Task: ") 'id) "2222222222222222")))
+     (should (equal candidates '("beta  dev · unknown  [222222]" "alpha  dev · unknown" "beta  dev · unknown  [333333]")))
+     (should (string-match-p "permission  fix authentication" (funcall annotation (car candidates)))))))
+
+(ert-deftest roost-task-panel-shows-prompt-changes-and-grouped-actions ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (append '((repo . "/home/user/ledger") (diff . "1 file changed, 2 insertions(+)")
+                                                  (baseRef . "main") (integrationBranch . "main")
+                                                  (agentSession . "abc-123"))
+                                                (roost-test--task)))))
+     (cl-letf (((symbol-function 'roost--refresh-host) #'ignore))
+       (save-window-excursion
+         (roost-task-info task)
+         (with-current-buffer "*roost: fix auth*"
+           (unwind-protect
+               (let ((text (buffer-string)))
+                 (should (string-match-p "^fix auth   ● ready for" text))
+                 (should (string-match-p "^Prompt\nfix authentication" text))
+                 (should (string-match-p "^Changes\n1 file \\+2 −0" text))
+                 (should (string-match-p "Finish   Merge and retire m    Retire x    Forget X" text))
+                 (should (string-match-p "Branch       codex/roost/fix-auth-123456, from main, merges into main" text))
+                 (should (string-match-p "Worktree     ~/work/fix auth" text))
+                 ;; Line counts keep their colors inside the indented section.
+                 (goto-char (point-min))
+                 (search-forward "+2")
+                 (should (memq 'roost-diff-added (ensure-list (get-text-property (1- (point)) 'face))))
+                 (should (string-match-p "Conversation abc-123" text))
+                 (should-not display-line-numbers))
+             (kill-buffer))))))))
 
 (ert-deftest roost-forget-removes-the-task-and-reports-what-remains ()
   (roost-test--isolated
