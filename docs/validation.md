@@ -2,7 +2,7 @@
 
 ## Automated checks
 
-- `make test compile` on macOS: **27 ERT tests and 17 Python lifecycle tests pass**;
+- Automated checks on macOS: **29 ERT tests and 17 Python lifecycle tests pass**;
   `roost.el` byte-compiles without warnings.
 - The same 17 Python tests pass on **`claylien`** over SSH, with Python 3.13.7 and
   tmux 3.7c. Local tests use an isolated socket and real Git/tmux too.
@@ -19,6 +19,9 @@ perspective switches, host-qualified worktree context, shell context, independen
 creation versus explicit forks, task-panel identity, and stale shell callbacks.
 Shell display tests check idempotent tiling, the callback's terminal buffer, and
 deferred focus that respects later file/workspace navigation.
+Mode-line checks group 100 task perspectives into one bounded label, retain
+ordinary perspective click actions, respect Perspective's current-only display,
+and handle restored workspaces before the first host refresh.
 
 Python tests exercise create, hook commands, literal prompt delivery, permissions,
 stop, conversation resume, stable tmux IDs, existing/renamed sessions, creating from linked worktrees, ownership
@@ -111,6 +114,26 @@ The installed Orca was also exercised with a separate disposable local project:
 workspace creation, a terminal split in its worktree, a file change and the real
 Source Control diff. Its project link was removed afterward and only its owned
 fixture data was cleaned up. See [the comparison](orca-comparison.md).
+
+## Compact perspective bar and README captures
+
+Used a separate temporary Emacs frame with a real remote `trim-greeting` task
+to capture Claude's response, independently passing shell tests, the expanded
+Magit diff, and task details. Claude added six tests to the existing baseline;
+**all seven passed**. See [the walkthrough](demo.md) for capture details.
+
+Created 39 additional task perspectives in that frame, without creating extra
+agents or worktrees. With 40 task perspectives, the bar showed
+`[main|Roost: claylien/trim-greeting +39]`. Ordinary perspectives retained their
+normal labels. Clicking the group opened the searchable task picker; typing a
+task name and pressing Return restored its terminal.
+
+Native clicking exposed a focus problem when the picker opened on mouse-down:
+the later mouse-up could reselect the terminal underneath the minibuffer. The
+group now ignores mouse-down and opens the picker on release. The corrected
+click-and-select interaction was verified in GUI Emacs. Temporary perspectives,
+the demo frame, task and fixture were removed afterward; the original user
+workspace and agent were retained.
 
 ## Limits
 

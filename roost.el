@@ -29,6 +29,8 @@
 (declare-function persp-switch "perspective" (name))
 (declare-function persp-kill "perspective" (name))
 (declare-function persp-current-name "perspective" ())
+(declare-function persp-names "perspective" ())
+(declare-function persp-format-name "perspective" (name))
 (defvar tmux-control-default-socket-name)
 (defvar tmux-control--host)
 (defvar tmux-control--socket-name)
@@ -38,6 +40,8 @@
 (defvar tmux-control-ssh-options)
 (defvar persp-autokill-buffer-on-remove)
 (defvar persp-mode nil)
+(defvar persp-modestring-short)
+(defvar persp-modestring-dividers)
 (defgroup roost nil "Claude tasks in persistent local or remote tmux." :group 'tools)
 (defcustom roost-hosts '(nil)
   "SSH hosts to monitor. Nil means local. Task hosts are also remembered."
@@ -60,6 +64,11 @@ May be set directory-locally. Not rerun on resume."
 (defcustom roost-request-timeout 60 "Maximum seconds for a host operation." :type 'number)
 (defcustom roost-use-perspectives t
   "Use one perspective per task when perspective.el is active." :type 'boolean)
+(defcustom roost-compact-mode-line t
+  "Collapse Roost perspectives into one clickable group in the mode line.
+The group shows the current task and the number of other task workspaces.
+Ordinary perspectives retain their existing labels and click actions."
+  :type 'boolean)
 (defcustom roost-notify t "Notify on transitions requiring attention." :type 'boolean)
 (defcustom roost-notify-function nil
   "Optional function of TITLE and BODY to display notifications."
@@ -306,6 +315,53 @@ May be set directory-locally. Not rerun on resume."
   "Unique workspace name for TASK."
   (format "roost:%s:%s:%s" (roost--host-label (roost--field task 'host))
           (roost--field task 'name) (substring (roost--field task 'id) 0 6)))
+
+(defvar roost--workspace-mode-line-map
+  (let ((map (make-sparse-keymap)))
+    ;; Start minibuffer interaction on release; a subsequent mouse-up can
+    ;; otherwise reselect the terminal underneath an active task picker.
+    (dolist (area '(mode-line header-line))
+      (define-key map (vector area 'down-mouse-1) #'ignore)
+      (define-key map (vector area 'mouse-1) #'roost-switch-task))
+    map))
+
+(defun roost--workspace-mode-line-label (names current)
+  "Compact label for Roost perspective NAMES with CURRENT selected."
+  (let* ((active (member current names))
+         (task (and active (seq-find (lambda (task) (equal current (roost--perspective-name task))) (roost-tasks))))
+         (description (when active
+                        (if task (format "%s/%s" (roost--host-label (roost--field task 'host)) (roost--field task 'name))
+                          ;; Restored perspectives can precede the first host refresh.
+                          (replace-regexp-in-string ":[a-f0-9]\\{6\\}\\'" "" (string-remove-prefix "roost:" current)))))
+         (count (length names)))
+    (propertize (if active
+                    (concat "Roost: " (truncate-string-to-width description 30 nil nil "…")
+                            (if (> count 1) (format " +%d" (1- count)) ""))
+                  (format "Roost (%d)" count))
+                'face (when active 'persp-selected-face)
+                'local-map roost--workspace-mode-line-map 'mouse-face 'mode-line-highlight
+                'help-echo (format "%s%d task workspaces. Click to switch tasks; roost-status shows the dashboard."
+                                   (if description (concat description ". ") "") count))))
+
+(defun roost--compact-perspective-mode-line (original)
+  "Collapse task perspectives in ORIGINAL without changing their identity."
+  (if (not (and original roost-compact-mode-line roost-use-perspectives (bound-and-true-p persp-mode))) original
+    (let* ((current (persp-current-name)) (names (persp-names))
+           (tasks (seq-filter (lambda (name) (string-prefix-p "roost:" name)) names))
+           (visible (if persp-modestring-short (list current) names)))
+      (if (not (seq-intersection tasks visible)) original
+        (let (labels grouped)
+          (dolist (name visible)
+            (if (member name tasks)
+                (unless grouped (push (roost--workspace-mode-line-label tasks current) labels) (setq grouped t))
+              (push (persp-format-name name) labels)))
+          (append (list (nth 0 persp-modestring-dividers))
+                  (cdr (apply #'append (mapcar (lambda (label) (list (nth 2 persp-modestring-dividers) label)) (nreverse labels))))
+                  (list (nth 1 persp-modestring-dividers))))))))
+
+(with-eval-after-load 'perspective
+  (unless (advice-member-p #'roost--compact-perspective-mode-line 'persp-mode-line)
+    (advice-add 'persp-mode-line :filter-return #'roost--compact-perspective-mode-line)))
 
 (defun roost--activate-workspace (task)
   "Restore TASK's saved window arrangement when perspective.el is active."

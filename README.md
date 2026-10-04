@@ -5,6 +5,28 @@ interface. Roost joins Git worktrees, persistent tmux windows,
 [tmux-control](https://github.com/csheaff/tmux-control), TRAMP, Magit, and
 [perspective.el](https://github.com/nex3/perspective-el) into one task workflow.
 
+## A task in Emacs
+
+Claude and a reusable shell share the task's worktree. Run your own tests beside
+the agent, then review and commit with Magit.
+
+![Claude Code above and passing tests in the task shell below](docs/images/roost-workspace.jpg)
+
+`roost-review` opens Magit in that worktree. Expand the actual Git diff to review
+the implementation and tests before committing.
+
+![Magit reviewing the greeting implementation and regression tests](docs/images/roost-review.jpg)
+
+`roost-task-info` keeps the project, starting branch, integration target, and
+review/finish actions together.
+
+![Roost task details with the worktree, branches, and review and finish actions](docs/images/roost-task-info.jpg)
+
+These captures show a disposable `hello-service` project running on an SSH host
+in GUI Emacs. See [the demo walkthrough](docs/demo.md) for the commands and
+capture details. The font, theme and keybindings come from the user's Emacs
+configuration; Roost supplies the task workflow.
+
 ## The workflow
 
 1. Run `M-x roost-new-task` from a project or choose its directory. A TRAMP path
@@ -135,6 +157,13 @@ directory, or current perspective. Switching perspectives manually follows the
 task too. An unrelated perspective does not silently target the last task.
 Task panels retain their own identity even when opened in another workspace.
 
+The perspective bar groups task workspaces into one clickable label, such as
+`Roost: claylien/trim-greeting +39`, rather than listing every task. Click it or
+use `roost-switch-task` for the searchable task picker; use `roost-status` for
+the dashboard. Ordinary perspectives retain their labels. Long task names are
+shortened in the bar, with the full name in its tooltip and picker. Set
+`roost-compact-mode-line` to nil to use Perspective's original display.
+
 Setup is an ordinary project shell command. Review it when Emacs asks about
 local variables, and keep Gitignored dependencies out of commits.
 
@@ -178,8 +207,14 @@ and have its CLI behavior tested; changing `roost-claude-command` to another CLI
 does not provide integration. Older records without an agent field or generic
 conversation ID still resume through their recorded Claude conversation.
 
-The [Orca comparison](docs/orca-comparison.md) explains the small set of workflow
-improvements retained from hands-on exploration.
+## Inspiration
+
+[Orca](https://www.onorca.dev/) helped shape the workspace workflow: give each
+task its own worktree, keep a terminal nearby, and review the result before
+finishing. Those are general Git and terminal practices. Roost brings them
+together using existing Emacs tools, with Claude Code as the supported agent.
+See the [hands-on comparison](docs/orca-comparison.md) for the workflow details
+that informed this version.
 
 ## Migration from 0.2
 
