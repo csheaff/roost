@@ -955,19 +955,25 @@ The owner is HOST's SSH user, or the local user."
 
 (defun roost--name-from-prompt (prompt)
   "A short task name derived from the first words of PROMPT.
-Hyphenated words such as off-by-one stay whole, and the name ends at a
-word, within 40 characters."
-  (let* ((words (mapcar (lambda (word) (string-trim word "-+" "-+"))
-                        (split-string (downcase (replace-regexp-in-string "[^[:alnum:]-]+" " " (or prompt "")))
-                                      " +" t)))
-         (common '("a" "an" "the" "to" "and" "of" "in" "for" "on" "with" "so" "is" "are"
+The first line names the task when it has two or more meaningful words,
+as a summary or an Org heading does.  Hyphenated words such as
+off-by-one stay whole, repeated words are dropped, and the name ends at
+a word, within 40 characters."
+  (let* ((common '("a" "an" "the" "to" "and" "of" "in" "for" "on" "with" "so" "is" "are"
                    "it" "its" "that" "this" "be" "as" "by" "at" "or" "please" "make" "should"
                    "we" "i" "you" "can" "could" "would"))
+         (words-of (lambda (text)
+                     (seq-uniq
+                      (seq-remove (lambda (word) (or (string-empty-p word) (member word common)))
+                                  (mapcar (lambda (word) (string-trim word "-+" "-+"))
+                                          (split-string (downcase (replace-regexp-in-string
+                                                                   "[^[:alnum:]-]+" " " (or text "")))
+                                                        " +" t))))))
+         (first-line (funcall words-of (car (split-string (or prompt "") "\n" t "[ \t]+"))))
+         (words (if (>= (length first-line) 2) first-line (funcall words-of prompt)))
          (name ""))
     (catch 'full
-      (dolist (word (seq-take (seq-remove (lambda (word) (or (string-empty-p word) (member word common)))
-                                          words)
-                              4))
+      (dolist (word (seq-take words 4))
         (let ((longer (if (string-empty-p name) word (concat name "-" word))))
           (when (and (> (length longer) 40) (not (string-empty-p name)))
             (throw 'full nil))

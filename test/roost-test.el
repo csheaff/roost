@@ -685,7 +685,11 @@
   (should (equal (roost--name-from-prompt "Off-by-one scroll: cursor-relative full-screen repaint")
                  "off-by-one-scroll-cursor-relative"))
   (should (equal (roost--name-from-prompt "-- --- leading dashes") "leading-dashes"))
-  (should (equal (roost--name-from-prompt (make-string 60 ?x)) (make-string 40 ?x))))
+  (should (equal (roost--name-from-prompt (make-string 60 ?x)) (make-string 40 ?x)))
+  ;; A summary first line names the task; repeats are dropped.
+  (should (equal (roost--name-from-prompt "Capitalize greetings\n\ngreet() in greet.py returns")
+                 "capitalize-greetings"))
+  (should (equal (roost--name-from-prompt "Fix\nthe greet greet.py tests") "fix-greet-py-tests")))
 
 (ert-deftest roost-shell-ignores-a-slower-earlier-navigation ()
   (roost-test--isolated
