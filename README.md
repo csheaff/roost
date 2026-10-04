@@ -31,6 +31,11 @@ projects you've used. Click a field or use its key to change it, write the promp
 (it can span lines), and press `C-c C-c`. Roost creates the branch and worktree,
 starts the agent in tmux, and opens its terminal.
 
+Your task list can live where it already does: run `M-x roost-new-task` on an
+Org heading and the heading and its notes become the prompt. With a region
+selected, the selection does; code is quoted with its file and lines, ready
+for you to say what to do with it.
+
 ![Drafting a new task beside the dashboard](docs/images/roost-new-task.jpg)
 
 **Let them work.** Start more tasks; each is independent. Roost watches the
@@ -55,10 +60,12 @@ it, run the tests and commit. Then `m` merges the task into the branch it
 started from and removes its worktree, branch and window.
 
 **Or open a pull request.** To finish on GitHub instead, `P` drafts one: the first
-line is the title and the rest the body, prefilled from the task's commits and
-prompt. `C-c C-c` pushes the branch and creates it (`C-u C-c C-c` as a draft).
-The dashboard then shows `#12` with its checks and review, and `P` opens it in the
-browser. Once it is merged, `x` retires the task. Needs `gh` on the task's host.
+line is the title and the rest the body, prefilled from the agent's commit
+message. `C-c C-c` pushes the branch and creates it (`C-u C-c C-c` as a draft).
+The dashboard then shows `#12` with its checks and review. Send review feedback
+to the agent with `e`; when it has committed, `P` pushes the new commits and
+opens the pull request. Once it is merged, `x` retires the task and deletes the
+branch. Needs `gh` on the task's host, and Git credentials there that can push.
 
 ![A task's prompt, changes, actions and details](docs/images/roost-task-panel.jpg)
 
@@ -132,7 +139,7 @@ Magit is optional (review falls back to Dired).
 | Key | Command | |
 | --- | --- | --- |
 | `RET` | `roost-open-task` | Open the task's agent terminal and workspace |
-| `c` | `roost-new-task` | Draft a new task (`C-u` forks the current task's commits) |
+| `c` | `roost-new-task` | Draft a new task, from the region or Org entry if any (`C-u` forks the current task's commits) |
 | `n` | `roost-next-waiting` | Next task waiting for you, permission requests first |
 | `t` | `roost-shell` | Shell beside the agent, in the worktree (reused) |
 | `f` | `roost-files` | Dired in the worktree |

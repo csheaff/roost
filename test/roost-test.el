@@ -301,6 +301,48 @@
                (should (buffer-live-p (current-buffer)))))
          (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
 
+(ert-deftest roost-compose-starts-from-the-region-or-org-entry ()
+  (roost-test--isolated
+   (let ((default-directory "/tmp/") (transient-mark-mode t))
+     (save-window-excursion
+       (unwind-protect
+           (progn
+             (with-temp-buffer
+               (org-mode)
+               (insert "* Notes\n** TODO Speed up the importer\nSCHEDULED: <2026-10-05 Mon>\n"
+                       ":PROPERTIES:\n:ID: x\n:END:\nIt reads the file twice.\n** Next\n")
+               (goto-char (point-min))
+               (search-forward "twice")
+               (roost--compose))
+             (with-current-buffer roost--compose-buffer
+               (should (equal (roost--compose-prompt) "Speed up the importer\n\nIt reads the file twice."))
+               (should (= (point) (point-max))))
+             (kill-buffer roost--compose-buffer)
+             (with-temp-buffer
+               (emacs-lisp-mode)
+               (insert "(defun a ()\n  1)\n(defun b ()\n  2)\n")
+               (goto-char (point-min))
+               (forward-line 2)
+               (set-mark (point))
+               (goto-char (point-max))
+               (activate-mark)
+               (roost--compose))
+             (with-current-buffer roost--compose-buffer
+               (should (string-match-p "\\`.*:3-4\n\n(defun b ()\n  2)\\'" (roost--compose-prompt)))
+               ;; Point waits above the quoted code for the instructions.
+               (should (= (point) roost--compose-body))
+               (insert "Make b return 3.")
+               (should (string-prefix-p "Make b return 3." (roost--compose-prompt))))
+             ;; A written draft is kept rather than replaced.
+             (with-temp-buffer
+               (insert "other text")
+               (set-mark (point-min))
+               (activate-mark)
+               (roost--compose))
+             (with-current-buffer roost--compose-buffer
+               (should (string-prefix-p "Make b return 3." (roost--compose-prompt)))))
+         (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
+
 (ert-deftest roost-compose-requires-a-project-and-a-prompt-or-name ()
   (roost-test--isolated
    (let ((default-directory "/tmp/"))

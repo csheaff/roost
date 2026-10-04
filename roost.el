@@ -39,6 +39,11 @@
 (declare-function persp-names "perspective" ())
 (declare-function persp-format-name "perspective" (name))
 (declare-function evil-set-initial-state "evil-core" (mode state))
+(declare-function org-back-to-heading "org" (&optional invisible-ok))
+(declare-function org-before-first-heading-p "org" ())
+(declare-function org-end-of-meta-data "org" (&optional full))
+(declare-function org-entry-end-position "org" ())
+(declare-function org-get-heading "org" (&optional no-tags no-todo no-priority no-comment))
 
 (defvar tmux-control-default-socket-name)
 (defvar tmux-control--host)
@@ -935,7 +940,9 @@ Call ON-SUCCESS with the task before it opens, or ON-FAILURE with an error."
   "Start a new coding agent task.
 Interactively, open a buffer to choose the project, agent and starting
 point and to write the prompt; \\<roost-compose-mode-map>\\[roost-compose-submit] creates the task.
-With a prefix argument, the defaults fork the current task's committed HEAD.
+An active region, or the Org entry at point, starts the prompt; code is
+quoted with its file and lines.  With a prefix argument, the defaults
+fork the current task's committed HEAD.
 
 Called with DIRECTORY, create an AGENT task NAME there directly, from
 BASE with optional PROMPT.  DIRECTORY may be a TRAMP path.  Nil BASE uses
@@ -985,10 +992,42 @@ worktree; explicit HEAD uses DIRECTORY.  Nil AGENT uses
         ((ignore-errors (vc-root-dir)))
         ((car (roost--known-projects)))))
 
+(defun roost--compose-seed ()
+  "Prompt text from the current buffer, or nil.
+The active region, with its file and lines when it is code, or else the
+Org entry at point: its heading and text without planning or drawers.
+The cdr is non-nil when the writer should start above the text."
+  (cond
+   ((use-region-p)
+    (let* ((start (region-beginning))
+           (end (region-end))
+           (last (if (and (> end start) (eq (char-before end) ?\n)) (1- end) end))
+           (text (buffer-substring-no-properties start end)))
+      (if (derived-mode-p 'prog-mode)
+          (cons (format "\n\n%s:%d-%d\n\n%s"
+                        (if buffer-file-name
+                            (file-relative-name (file-local-name buffer-file-name)
+                                                (file-local-name
+                                                 (or (ignore-errors (vc-root-dir)) default-directory)))
+                          (buffer-name))
+                        (line-number-at-pos start) (line-number-at-pos last)
+                        (string-trim-right text))
+                t)
+        (cons (string-trim text) nil))))
+   ((and (derived-mode-p 'org-mode) (not (org-before-first-heading-p)))
+    (save-excursion
+      (org-back-to-heading t)
+      (let* ((title (org-get-heading t t t t))
+             (end (org-entry-end-position))
+             (start (progn (org-end-of-meta-data t) (point)))
+             (body (if (< start end) (string-trim (buffer-substring-no-properties start end)) "")))
+        (cons (if (string-empty-p body) title (concat title "\n\n" body)) nil))))))
+
 (defun roost--compose (&optional fork)
   "Open the new task buffer.  FORK defaults to the current task's HEAD."
   (let* ((task (roost--task-at-point))
          (fork (and fork task))
+         (seed (roost--compose-seed))
          (buffer (get-buffer roost--compose-buffer))
          (fresh (not buffer)))
     (setq buffer (or buffer (get-buffer-create roost--compose-buffer)))
@@ -1004,7 +1043,12 @@ worktree; explicit HEAD uses DIRECTORY.  Nil AGENT uses
                     :base (when fork "HEAD")
                     :source (when fork (roost--field task 'name)))))
       (roost--compose-render)
-      (goto-char (point-max)))
+      (goto-char (point-max))
+      (when (and seed (string-empty-p (roost--compose-prompt)))
+        (delete-region roost--compose-body (point-max))
+        (insert (car seed))
+        (goto-char (if (cdr seed) roost--compose-body (point-max)))
+        (roost--compose-render)))
     (pop-to-buffer buffer)))
 
 (defun roost--compose-prompt ()
