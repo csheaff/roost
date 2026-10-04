@@ -120,6 +120,14 @@ are answered, so a long start usually needs you."
   "Maximum seconds for a host operation."
   :type 'number)
 
+(defcustom roost-ssh-share-connections t
+  "Whether Roost's requests to a host share one SSH connection.
+Each request is a separate ssh command, so sharing saves a handshake per
+poll.  The shared connection's socket lives in `roost-state-directory'
+on this machine and closes a minute after the last request.  Set to nil
+to leave connection sharing to your ssh configuration."
+  :type 'boolean)
+
 (defcustom roost-workspace 'auto
   "How each task keeps its own window arrangement.
 `perspective' uses perspective.el, `tab-bar' a tab per task, and nil
@@ -333,6 +341,21 @@ The file is reread only when its modification time or size changes."
                           (buffer-string))))))
     (cdr roost--helper-cache)))
 
+(defun roost--ssh-share-options ()
+  "SSH options sharing one connection per host, or nil.
+See `roost-ssh-share-connections'."
+  (when roost-ssh-share-connections
+    (let* ((directory (expand-file-name roost-state-directory))
+           (path (expand-file-name "ssh-%C" directory)))
+      ;; ssh refuses socket paths of 104 bytes or more (macOS), counting the
+      ;; 40-character %C hash and the 17-character suffix of the socket it
+      ;; creates first; a longer state directory just doesn't share.
+      (when (< (+ (string-bytes path) (- 40 2) 17) 104)
+        (ignore-errors (make-directory directory t) (set-file-modes directory #o700))
+        (list "-o" "ControlMaster=auto"
+              "-o" (concat "ControlPath=" path)
+              "-o" "ControlPersist=60")))))
+
 (defun roost--python-command (host code)
   "Local argv executing Python CODE on HOST, without interpolating input."
   (if host
@@ -341,6 +364,7 @@ The file is reread only when its modification time or size changes."
         (append (list "ssh" "-T" "-o" "BatchMode=yes")
                 (or (bound-and-true-p tmux-control-ssh-options)
                     '("-o" "ConnectTimeout=8"))
+                (roost--ssh-share-options)
                 (list "--" host
                       (concat (when (bound-and-true-p tmux-control-remote-tmux-socket-setup)
                                 (concat tmux-control-remote-tmux-socket-setup " && "))

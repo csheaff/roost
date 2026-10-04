@@ -238,6 +238,29 @@
     (should (equal (car (last argv)) (concat tmux-control-remote-tmux-socket-setup " && exec python3 -c " (shell-quote-argument code))))
     (should (equal (roost--python-command nil code) (list "python3" "-c" code))))))
 
+(ert-deftest roost-ssh-requests-share-a-connection-unless-disabled ()
+  (let* ((root (make-temp-file "rs" t))
+         (roost-state-directory (expand-file-name "s" root))
+         (roost-ssh-share-connections t)
+         (argv (roost--python-command "dev" "pass")))
+    (if (< (+ (string-bytes roost-state-directory) 5 40 17) 104)
+        (progn
+          (should (member "ControlMaster=auto" argv))
+          (should (member (concat "ControlPath=" roost-state-directory "/ssh-%C") argv))
+          (should (file-directory-p roost-state-directory)))
+      (should-not (member "ControlMaster=auto" argv)))
+    ;; A state directory too long for a socket path connects without sharing.
+    (let ((roost-state-directory (expand-file-name (make-string 60 ?d) root)))
+      (should-not (member "ControlMaster=auto" (roost--python-command "dev" "pass"))))
+    (let ((roost-state-directory (make-temp-file "/tmp/rs" t)))
+      (unwind-protect
+          (progn
+            (should (member (concat "ControlPath=" roost-state-directory "/ssh-%C")
+                            (roost--ssh-share-options)))
+            (let ((roost-ssh-share-connections nil))
+              (should-not (member "ControlMaster=auto" (roost--python-command "dev" "pass")))))
+        (delete-directory roost-state-directory t)))))
+
 (ert-deftest roost-open-checks-ownership-before-touching-the-ui ()
   (roost-test--isolated
    (let (requested displayed)

@@ -203,9 +203,12 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
 - `roost-notify`, `roost-notify-function`, `roost-watch-interval` (3 s),
   `roost-request-timeout` (60 s).
 
-Each poll is one SSH command per host; with OpenSSH connection sharing
-(`ControlMaster auto` and `ControlPersist`) these are cheap. Unreachable hosts are
-retried with backoff and keep their last known tasks, marked unreachable.
+Each poll is one SSH command per host. Roost shares one connection per host
+across them (OpenSSH `ControlMaster`, with its socket in the state directory and
+closed a minute after the last request), so polls skip the handshake; set
+`roost-ssh-share-connections` to nil to leave that to your ssh configuration.
+Unreachable hosts are retried with backoff and keep their last known tasks,
+marked unreachable.
 
 ## How it works
 
