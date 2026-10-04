@@ -579,6 +579,21 @@ recently failed."
                  nil t)
                 choices))))
 
+;; String comparisons avoid opening a remote connection just to infer context.
+(defun roost--task-in-directory (directory &optional tasks)
+  "The task, among TASKS or all, whose worktree contains DIRECTORY."
+  (condition-case nil
+      (let* ((directory (file-name-as-directory (expand-file-name directory)))
+             (host (roost--directory-host directory))
+             (local (file-local-name directory)))
+        (seq-find (lambda (task)
+                    (and (equal host (roost--field task 'host))
+                         (string-prefix-p
+                          (file-name-as-directory (roost--field task 'worktree))
+                          local)))
+                  (or tasks (roost-tasks))))
+    (user-error nil)))
+
 (defun roost--task-at-point ()
   "Task selected in the dashboard, terminal, or current workspace."
   (cond
@@ -599,18 +614,7 @@ recently failed."
                                      (list (roost--field task 'paneId)
                                            (roost--field task 'shellPaneId)))))
                       tasks))
-       ;; String comparisons avoid opening a remote connection just to infer context.
-       (condition-case nil
-           (let* ((directory (file-name-as-directory (expand-file-name default-directory)))
-                  (host (roost--directory-host directory))
-                  (local (file-local-name directory)))
-             (seq-find (lambda (task)
-                         (and (equal host (roost--field task 'host))
-                              (string-prefix-p
-                               (file-name-as-directory (roost--field task 'worktree))
-                               local)))
-                       tasks))
-         (user-error nil))
+       (roost--task-in-directory default-directory tasks)
        (and workspace
             (let ((current (roost--current-workspace)))
               (seq-find (lambda (task) (equal current (roost--workspace-name task))) tasks)))
@@ -1142,8 +1146,9 @@ A mouse click shows a menu at the pointer; the keyboard uses the minibuffer."
 
 ;;;; Task commands
 
-(defun roost--act (task action &optional parameters callback)
-  "Run ACTION on TASK with PARAMETERS, then CALLBACK with the updated task."
+(defun roost--act (task action &optional parameters callback failure)
+  "Run ACTION on TASK with PARAMETERS, then CALLBACK with the updated task.
+FAILURE, if given, receives the error message instead of Roost reporting it."
   (let ((host (roost--field task 'host)))
     (roost--request host action (cons (cons 'id (roost--field task 'id)) parameters)
                     (lambda (updated)
@@ -1151,7 +1156,8 @@ A mouse click shows a menu at the pointer; the keyboard uses the minibuffer."
                       (setq updated (roost--cache-task host updated))
                       (roost--redraw)
                       (message "Roost %s: %s" (roost--field task 'name) action)
-                      (when callback (funcall callback updated))))))
+                      (when callback (funcall callback updated)))
+                    failure)))
 
 ;;;###autoload
 (defun roost-resume (&optional task)
@@ -1162,11 +1168,19 @@ A mouse click shows a menu at the pointer; the keyboard uses the minibuffer."
 ;;;###autoload
 (defun roost-send (&optional task text)
   "Send TEXT as a literal pasted prompt to TASK's agent pane.
+Interactively, write the prompt in a draft buffer; \\<roost-send-mode-map>\\[roost-send-submit] sends it.
 While Roost last saw a startup or permission prompt, ask first: the
 paste could answer that menu, but agents report no event when a
 permission is declined in the terminal."
   (interactive)
   (setq task (roost--choose task))
+  (if (and (not text) (called-interactively-p 'any))
+      (roost--send-draft task)
+    (roost--send-text task (or text (read-string (format "Send to %s: " (roost--field task 'name)))))))
+
+(defun roost--send-text (task text &optional callback failure)
+  "Send TEXT to TASK's agent, confirming first if it may be at a prompt.
+CALLBACK and FAILURE are passed to `roost--act'."
   (let* ((status (roost--field task 'status))
          (force (when (member status '("starting" "permission"))
                   (or (yes-or-no-p
@@ -1174,20 +1188,105 @@ permission is declined in the terminal."
                                (roost--field task 'name)
                                (if (equal status "starting") "starting up" "asking for permission")))
                       (user-error "Open the task with RET to answer it")))))
-    (setq text (or text (read-string (format "Send to %s: " (roost--field task 'name)))))
     (roost--act task "send" (append (list (cons 'text text))
-                                    (when force (list (cons 'force t)))))))
+                                    (when force (list (cons 'force t))))
+                callback failure)))
+
+;;;; Composing a follow-up
+
+(defvar-local roost--send-task nil
+  "The task a follow-up draft will be sent to.")
+(defvar-local roost--send-sending nil
+  "Non-nil while the drafted follow-up is being sent.")
+
+(defvar-keymap roost-send-mode-map
+  :doc "Keys for drafting a follow-up prompt."
+  "C-c C-c" #'roost-send-submit
+  "C-c C-k" #'roost-send-cancel)
+
+(define-derived-mode roost-send-mode text-mode "Roost Send"
+  "Draft a follow-up prompt for a Roost task's agent.
+\\{roost-send-mode-map}"
+  (add-hook 'after-change-major-mode-hook #'roost--quiet-display 90 t)
+  (roost--evil-state 'roost-send-mode 'insert)
+  (roost--quiet-display))
+
+(defun roost--send-header (task)
+  "Header line for TASK's follow-up draft."
+  (substitute-command-keys
+   (format " Send to %s · \\<roost-send-mode-map>\\[roost-send-submit] send · \\[roost-send-cancel] cancel"
+           (roost--field task 'name))))
+
+(defun roost--send-draft (task &optional initial)
+  "Open a draft buffer for a follow-up to TASK, starting with INITIAL.
+An existing draft for TASK is reused, and kept as written unless it is empty."
+  (let* ((name (format "*roost send: %s*" (roost--field task 'name)))
+         (buffer (get-buffer-create name)))
+    (with-current-buffer buffer
+      (unless (derived-mode-p 'roost-send-mode) (roost-send-mode))
+      (setq roost--send-task task
+            header-line-format (roost--send-header task))
+      (when (and initial (string-empty-p (string-trim (buffer-string))))
+        (erase-buffer)
+        (insert initial)
+        ;; Leave point above the quoted text, ready for a note.
+        (goto-char (point-min)))
+      (unless (and initial (= (point) (point-min)))
+        (goto-char (point-max))))
+    (pop-to-buffer buffer)))
+
+(defun roost-send-cancel ()
+  "Discard the follow-up draft."
+  (interactive)
+  (when (or (string-empty-p (string-trim (buffer-string)))
+            (yes-or-no-p "Discard this prompt? "))
+    (quit-window t)))
+
+(defun roost-send-submit ()
+  "Send the drafted follow-up.  The draft is kept if sending fails."
+  (interactive)
+  (let ((text (string-trim-right (buffer-string)))
+        (task roost--send-task)
+        (buffer (current-buffer)))
+    (when (string-empty-p (string-trim text))
+      (user-error "Write a prompt first"))
+    (when roost--send-sending
+      (user-error "Already sending"))
+    (setq roost--send-sending t)
+    (condition-case err
+        (roost--send-text
+         task text
+         (lambda (_task)
+           (when (buffer-live-p buffer)
+             (quit-windows-on buffer t)
+             (when (buffer-live-p buffer) (kill-buffer buffer))))
+         (lambda (err)
+           (message "Roost could not send to %s: %s" (roost--field task 'name) err)
+           (when (buffer-live-p buffer)
+             (with-current-buffer buffer
+               (setq roost--send-sending nil)
+               (setq header-line-format
+                     (format " Could not send: %s · %s retries" err
+                             (substitute-command-keys "\\[roost-send-submit]")))))))
+      ;; A declined confirmation leaves the draft ready to send again.
+      (quit (setq roost--send-sending nil) (signal (car err) (cdr err)))
+      (error (setq roost--send-sending nil) (signal (car err) (cdr err))))))
 
 ;;;###autoload
 (defun roost-send-region (start end)
-  "Send region START to END with file and line context to a chosen task."
+  "Draft a prompt quoting region START to END with its file and lines.
+Inside a task's worktree the prompt goes to that task, otherwise to a
+chosen one."
   (interactive "r")
-  (let ((last (if (and (> end start) (eq (char-before end) ?\n)) (1- end) end)))
-    (roost-send (roost--read-task "Send region to task: ")
-                (format "%s:%d-%d\n\n%s"
-                        (if buffer-file-name (file-local-name buffer-file-name) (buffer-name))
-                        (line-number-at-pos start) (line-number-at-pos last)
-                        (buffer-substring-no-properties start end)))))
+  (let* ((last (if (and (> end start) (eq (char-before end) ?\n)) (1- end) end))
+         (task (or (and buffer-file-name (roost--task-in-directory buffer-file-name))
+                   (roost--read-task "Send region to task: "))))
+    (roost--send-draft
+     task
+     (format "\n\n%s:%d-%d\n\n%s"
+             (if buffer-file-name (file-local-name buffer-file-name) (buffer-name))
+             (line-number-at-pos start) (line-number-at-pos last)
+             (buffer-substring-no-properties start end)))))
 
 ;;;###autoload
 (defun roost-review (&optional task)
@@ -1455,7 +1554,8 @@ keeps one process-wide registration per mode; a nil STATE removes it."
 
 (defun roost--quiet-display ()
   "Turn off line numbers and wrapping that global modes enable in Roost buffers."
-  (when (derived-mode-p 'roost-dashboard-mode 'roost-task-info-mode 'roost-compose-mode)
+  (when (derived-mode-p 'roost-dashboard-mode 'roost-task-info-mode 'roost-compose-mode
+                      'roost-send-mode)
     (display-line-numbers-mode -1)
     (when (derived-mode-p 'roost-dashboard-mode)
       (visual-line-mode -1)
