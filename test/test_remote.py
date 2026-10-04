@@ -917,6 +917,7 @@ class RemoteGit(unittest.TestCase):
             roost.remote_git(self.repo, "push", "origin", "main")
         kwargs = run.call_args.kwargs
         self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
+        self.assertTrue(kwargs["start_new_session"])
         for name, value in (("GIT_TERMINAL_PROMPT", "0"), ("GIT_ASKPASS", ""),
                             ("SSH_ASKPASS_REQUIRE", "never"), ("GCM_INTERACTIVE", "never")):
             self.assertEqual(kwargs["env"][name], value)
@@ -965,6 +966,7 @@ class RemoteGit(unittest.TestCase):
         self.addCleanup(server.shutdown)
         roost.git(self.repo, "config", "user.name", "Roost Test")
         roost.git(self.repo, "config", "user.email", "roost@example.invalid")
+        roost.git(self.repo, "config", "commit.gpgsign", "false")
         roost.git(self.repo, "commit", "--allow-empty", "-m", "base")
         roost.git(self.repo, "remote", "add", "origin",
                   "http://127.0.0.1:%d/x/y.git" % server.server_port)

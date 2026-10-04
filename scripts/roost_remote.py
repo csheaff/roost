@@ -68,6 +68,7 @@ def remote_git(repo, *args, check=True):
     try:
         result = subprocess.run(["git", "-C", str(repo), *args], text=True,
                                 stdin=subprocess.DEVNULL, timeout=REMOTE_GIT_TIMEOUT,
+                                start_new_session=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 env=dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="",
                                          SSH_ASKPASS_REQUIRE="never", GCM_INTERACTIVE="never"))
