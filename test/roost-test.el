@@ -616,6 +616,53 @@
     (should (equal (cadr (should-error (roost--request-wait "dev" "issues" nil 5) :type 'user-error))
                    "gh is not installed"))))
 
+(ert-deftest roost-org-entries-link-to-the-tasks-they-start ()
+  (roost-test--isolated
+   (let ((default-directory "/tmp/") (notes (generate-new-buffer "notes.org")))
+     (require 'org-agenda)
+     (save-window-excursion
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--create-task)
+                      (lambda (_directory _name _base _prompt _agent success _failure &optional _extra)
+                        (funcall success (roost--cache-task
+                                          "dev" (roost-test--task "abcdefabcdef0001" "starting"))))))
+             (with-current-buffer notes
+               (org-mode)
+               (insert "* TODO Speed up the importer\nIt reads the file twice.\n* Other\n")
+               (goto-char (point-min))
+               (forward-line 1)
+               (roost--compose))
+             (with-current-buffer roost--compose-buffer
+               (setq roost--compose-fields (plist-put roost--compose-fields :directory "/ssh:dev:/repo/"))
+               (roost-compose-submit))
+             (with-current-buffer notes
+               (goto-char (point-min))
+               (should (equal (org-entry-get nil "ROOST_TASK") "abcdefabcdef0001"))
+               ;; Commands on the entry act on its task; other entries don't.
+               (forward-line 1)
+               (should (equal (roost--field (roost--task-at-point) 'id) "abcdefabcdef0001"))
+               (search-forward "* Other")
+               (should-not (equal (roost--field (ignore-errors (roost--task-at-point)) 'id)
+                                  "abcdefabcdef0001")))
+             ;; So does the entry's agenda line.
+             (let ((marker (with-current-buffer notes (copy-marker (point-min)))))
+               (with-temp-buffer
+                 (org-agenda-mode)
+                 (insert (propertize "  TODO Speed up the importer\n" 'org-hd-marker marker))
+                 (goto-char (point-min))
+                 (should (equal (roost--field (roost--task-at-point) 'id) "abcdefabcdef0001"))))
+             ;; Linking can be turned off.
+             (let ((roost-org-link-tasks nil))
+               (with-current-buffer notes
+                 (goto-char (point-max))
+                 (insert "* Unlinked\n")
+                 (forward-line -1)
+                 (roost--org-link (point-marker) '((id . "ffff")))
+                 (should-not (org-entry-get nil "ROOST_TASK")))))
+         (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer))
+         (with-current-buffer notes (set-buffer-modified-p nil))
+         (kill-buffer notes))))))
+
 (ert-deftest roost-compose-requires-a-project-and-a-prompt-or-name ()
   (roost-test--isolated
    (let ((default-directory "/tmp/"))

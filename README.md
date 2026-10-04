@@ -33,7 +33,8 @@ starts the agent in tmux, and opens its terminal.
 
 Your task list can live where it already does: run `M-x roost-new-task` on an
 Org heading, or on its line in the agenda, and the heading and its notes become
-the prompt. With a region selected, the selection does; code is quoted with
+the prompt. The heading records the task (a `ROOST_TASK` property), so Roost
+commands run there, such as `roost-open-task` or `roost-review`, act on it. With a region selected, the selection does; code is quoted with
 its file and lines, ready for you to say what to do with it. Or press `C-c C-t`
 in the draft to pick one of the project's open GitHub issues: its title and
 text become the prompt, and the task's pull request will close it.

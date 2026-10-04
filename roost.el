@@ -49,6 +49,8 @@
 (declare-function org-end-of-meta-data "org" (&optional full))
 (declare-function org-entry-end-position "org" ())
 (declare-function org-get-heading "org" (&optional no-tags no-todo no-priority no-comment))
+(declare-function org-entry-get "org" (epom property &optional inherit literal-nil))
+(declare-function org-entry-put "org" (epom property value))
 
 (defvar tmux-control-default-socket-name)
 (defvar tmux-control-remote-tmux-socket-setup)
@@ -126,6 +128,12 @@ Each request is a separate ssh command, so sharing saves a handshake per
 poll.  The shared connection's socket lives in `roost-state-directory'
 on this machine and closes a minute after the last request.  Set to nil
 to leave connection sharing to your ssh configuration."
+  :type 'boolean)
+
+(defcustom roost-org-link-tasks t
+  "Whether a task started from an Org entry is recorded on that entry.
+The entry gets a ROOST_TASK property holding the task's id, and Roost
+commands run on the entry, or on its agenda line, act on that task."
   :type 'boolean)
 
 (defcustom roost-workspace 'auto
@@ -688,7 +696,7 @@ recently failed."
                         (file-name-as-directory (roost--field task 'worktree)))))
 
 (defun roost--task-at-point ()
-  "Task selected in the dashboard, terminal, or current workspace."
+  "Task selected in the dashboard, terminal, linked Org entry, or workspace."
   (cond
    ((derived-mode-p 'roost-dashboard-mode)
     (roost--dashboard-task))
@@ -699,6 +707,8 @@ recently failed."
     (let ((tasks (roost-tasks))
           (workspace (roost--workspace-backend)))
       (or
+       (when-let* ((id (ignore-errors (roost--org-linked-id))))
+         (seq-find (lambda (task) (equal (roost--field task 'id) id)) tasks))
        (when-let* ((pane (and (fboundp 'tmux-control-active-pane)
                               (tmux-control-active-pane))))
          (seq-find (lambda (task)
@@ -1108,6 +1118,32 @@ The cdr is non-nil when the writer should start above the text."
             (goto-char marker)
             (cons (roost--org-entry-text) nil))))))))
 
+(defun roost--org-marker ()
+  "Marker at the Org heading at point or on the agenda line, or nil."
+  (cond ((and (derived-mode-p 'org-mode) (not (org-before-first-heading-p)))
+         (save-excursion (org-back-to-heading t) (point-marker)))
+        ((derived-mode-p 'org-agenda-mode)
+         (when-let* ((marker (get-text-property (line-beginning-position) 'org-hd-marker))
+                     ((markerp marker)))
+           (copy-marker marker)))))
+
+(defun roost--org-linked-id ()
+  "Id of the task linked to the Org entry at point or on the agenda line."
+  (cond ((and (derived-mode-p 'org-mode) (not (org-before-first-heading-p)))
+         (org-entry-get nil "ROOST_TASK"))
+        ((derived-mode-p 'org-agenda-mode)
+         (when-let* ((marker (get-text-property (line-beginning-position) 'org-hd-marker))
+                     ((markerp marker))
+                     ((buffer-live-p (marker-buffer marker))))
+           (with-current-buffer (marker-buffer marker)
+             (org-entry-get marker "ROOST_TASK"))))))
+
+(defun roost--org-link (marker task)
+  "Record TASK's id on the Org entry at MARKER; see `roost-org-link-tasks'."
+  (when (and roost-org-link-tasks (markerp marker) (buffer-live-p (marker-buffer marker)))
+    (with-current-buffer (marker-buffer marker)
+      (org-entry-put marker "ROOST_TASK" (roost--field task 'id)))))
+
 (defun roost--org-entry-text ()
   "The Org entry at point: its heading, then its text.
 Planning lines and drawers are left out."
@@ -1124,6 +1160,7 @@ Planning lines and drawers are left out."
   (let* ((task (roost--task-at-point))
          (fork (and fork task))
          (seed (roost--compose-seed))
+         (org (and seed (not (use-region-p)) (roost--org-marker)))
          (buffer (get-buffer roost--compose-buffer))
          (fresh (not buffer)))
     (setq buffer (or buffer (get-buffer-create roost--compose-buffer)))
@@ -1141,6 +1178,7 @@ Planning lines and drawers are left out."
       (roost--compose-render)
       (goto-char (point-max))
       (when (and seed (string-empty-p (roost--compose-prompt)))
+        (setq roost--compose-fields (plist-put roost--compose-fields :org org))
         (delete-region roost--compose-body (point-max))
         (insert (car seed))
         (goto-char (if (cdr seed) roost--compose-body (point-max)))
@@ -1370,7 +1408,9 @@ listed with gh on the project's host."
           header-line-format (format " Creating %s…" name))
     (roost--create-task (plist-get fields :directory) name (plist-get fields :base) prompt
                         (plist-get fields :agent)
-                        (lambda (_task)
+                        (lambda (task)
+                          (when-let* ((marker (plist-get fields :org)))
+                            (roost--org-link marker task))
                           (when (buffer-live-p buffer)
                             (quit-windows-on buffer t)
                             (when (buffer-live-p buffer) (kill-buffer buffer))))
