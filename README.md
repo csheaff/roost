@@ -73,7 +73,7 @@ branch. Needs `gh` on the task's host, and Git credentials there that can push.
 ![A remote task's panel: the agent's latest reply, its changes, its open pull request, the folded prompt and the actions](docs/images/roost-task-panel.jpg)
 
 *Roost working on itself: a Claude Code task on the SSH host `claylien` has
-answered review feedback on its pull request, and `P` will push the fix.*
+answered review feedback on its pull request; `P` pushes such fixes to it.*
 
 ## Install
 
