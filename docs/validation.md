@@ -310,5 +310,5 @@ host discovery were checked separately. Native QA used one actual remote host;
 multiple-host behavior is covered by ERT. OS notification delivery was disabled
 for the disposable sessions; notification selection/deduplication is tested.
 Concurrent edits from unrelated external clients remain subject to normal Git
-and tmux behavior. Roost relies on narrow private tmux-control connection APIs,
-so changes to those APIs need integration retesting.
+and tmux behavior. Roost relies on a narrow tmux-control connection API,
+so changes to that API need integration retesting.

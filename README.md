@@ -78,7 +78,7 @@ answered review feedback on its pull request; `P` pushes such fixes to it.*
 ## Install
 
 Requirements: Emacs 29.1+ and [tmux-control](https://github.com/csheaff/tmux-control)
-(which brings [Eat](https://codeberg.org/akib/emacs-eat)). Each task host needs
+0.7.0+ (which brings [Eat](https://codeberg.org/akib/emacs-eat)). Each task host needs
 Python 3.9+, Git, tmux 3.0+, and an installed, signed-in agent CLI (Codex 0.160.0
 or newer). Remote hosts need key- or agent-based SSH; use SSH config aliases for
 ports and jump hosts. Roost copies its helper to each host itself.

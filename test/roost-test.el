@@ -20,6 +20,17 @@
          (roost--hosts-loaded t) (roost--remembered-hosts nil)
          (roost--requests nil) (roost-notify nil) (roost--current-task nil)) ,@body))
 
+(defvar-local roost-test--tmux nil
+  "Plist of the stubbed tmux-control identity of the current buffer.")
+
+(defmacro roost-test--with-tmux-buffers (&rest body)
+  "Run BODY with tmux-control's buffer accessors reading `roost-test--tmux'."
+  `(cl-letf (((symbol-function 'tmux-control-buffer-host) (lambda () (plist-get roost-test--tmux :host)))
+             ((symbol-function 'tmux-control-buffer-socket-name) (lambda () (plist-get roost-test--tmux :socket)))
+             ((symbol-function 'tmux-control-active-pane) (lambda () (plist-get roost-test--tmux :pane)))
+             ((symbol-function 'tmux-control-window-id) (lambda () (plist-get roost-test--tmux :window))))
+     ,@body))
+
 (defun roost-test--task (&optional id status)
   (copy-tree `((id . ,(or id "0123456789abcdef")) (name . "fix auth") (status . ,(or status "ready"))
     (worktree . "/home/user/work/fix auth") (branch . "codex/roost/fix-auth-123456")
@@ -358,9 +369,9 @@
   (roost-test--isolated
    (roost--cache-task "dev" (append '((shellPaneId . "%13")) (roost-test--task)))
    (with-temp-buffer
-     (cl-progv '(tmux-control--host tmux-control--socket-name tmux-control--active-pane)
-         '("dev" "main" "%13")
-       (should (equal (roost--field (roost--task-at-point) 'host) "dev"))))))
+     (setq-local roost-test--tmux '(:host "dev" :socket "main" :pane "%13"))
+     (roost-test--with-tmux-buffers
+      (should (equal (roost--field (roost--task-at-point) 'host) "dev"))))))
 
 (ert-deftest roost-new-task-defaults-to-primary-checkout-and-prefix-forks ()
   (roost-test--isolated
@@ -503,13 +514,44 @@
        (funcall callback (roost-test--task))
        (should-not displayed)))))
 
+(ert-deftest roost-display-task-reuses-only-an-untiled-terminal-window ()
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let* ((task (roost-test--task))
+            (code (generate-new-buffer " *roost-test-code*"))
+            (terminal (generate-new-buffer " *roost-test-terminal*"))
+            (origin (selected-window)) (other (split-window-right))
+            tiled sent)
+       (unwind-protect
+           (progn
+             (with-current-buffer terminal
+               (setq-local roost-test--tmux '(:socket "main" :window "@9" :pane "%12")))
+             (set-window-buffer origin code) (set-window-buffer other terminal)
+             (dlet ((features (cons 'tmux-control features)))
+               (roost-test--with-tmux-buffers
+                (cl-letf (((symbol-function 'roost--activate-workspace) #'ignore)
+                          ((symbol-function 'tmux-control-tiled-p) (lambda () tiled))
+                          ((symbol-function 'tmux-control-connect-or-switch) #'ignore)
+                          ((symbol-function 'tmux-control-send-command) (lambda (command) (push command sent)))
+                          ((symbol-function 'tmux-control-select-pane) #'ignore))
+                  ;; A tiled pane of the task's window stays in its grid.
+                  (setq tiled t)
+                  (roost--display-task task)
+                  (should (eq (selected-window) origin))
+                  (setq tiled nil)
+                  (roost--display-task task)
+                  (should (eq (selected-window) other))
+                  (should (equal sent '("select-window -t @9" "select-window -t @9")))))))
+         (mapc #'kill-buffer (list code terminal)))))))
+
 (ert-deftest roost-shell-shows-both-panes-without-toggling-existing-tiling-off ()
   (roost-test--isolated
    (let ((tiled nil) (tiles 0))
      (cl-letf (((symbol-function 'roost--act) (lambda (task _action _params cb) (funcall cb task)))
                ((symbol-function 'roost--display-task) #'ignore)
                ((symbol-function 'roost--focus-shell) #'ignore)
-               ((symbol-function 'tmux-control--tiled-mode-p) (lambda () tiled))
+               ((symbol-function 'tmux-control-tiled-p) (lambda () tiled))
                ((symbol-function 'tmux-control-tile) (lambda () (setq tiled t) (cl-incf tiles))))
        (roost-shell (roost-test--task)) (should (= tiles 1))
        (roost-shell (roost-test--task)) (should (= tiles 1))))))
@@ -523,7 +565,7 @@
                       (lambda (task _action _params cb) (with-temp-buffer (funcall cb task))))
                      ((symbol-function 'roost--display-task)
                       (lambda (&rest _) (set-window-buffer (selected-window) terminal)))
-                     ((symbol-function 'tmux-control--tiled-mode-p) (lambda () t))
+                     ((symbol-function 'tmux-control-tiled-p) (lambda () t))
                      ((symbol-function 'roost--focus-shell) (lambda (&rest _) (setq seen (current-buffer)))))
              (roost-shell (roost-test--task)) (should (eq seen terminal)))
          (kill-buffer terminal))))))
@@ -543,21 +585,21 @@
              (setq roost--current-task (roost--key task))
              (dolist (entry `((,agent . "%12") (,shell . "%13")))
                (with-current-buffer (car entry)
-                 (setq-local tmux-control--host "dev" tmux-control--socket-name "main"
-                             tmux-control--active-pane (cdr entry))))
+                 (setq-local roost-test--tmux `(:host "dev" :socket "main" :pane ,(cdr entry)))))
              (set-window-buffer origin agent) (set-window-buffer target shell)
-             (cl-letf (((symbol-function 'tmux-control--query) (lambda (_command cb) (funcall cb "@9")))
-                       ((symbol-function 'run-at-time) (lambda (_delay _repeat cb &rest _) (setq callback cb)))
-                       ((symbol-function 'persp-current-name) (lambda () perspective)))
-               (roost--focus-shell task 1)
-               (should (eq (selected-window) origin))
-               (funcall callback) (should (eq (selected-window) target))
-               (select-window origin) (set-window-buffer origin file)
-               (funcall callback) (should (eq (selected-window) origin))
-               (set-window-buffer origin agent) (setq perspective "another workspace")
-               (funcall callback) (should (eq (selected-window) origin))
-               (setq perspective (roost--perspective-name task) roost--open-generation 2)
-               (funcall callback) (should (eq (selected-window) origin))))
+             (roost-test--with-tmux-buffers
+              (cl-letf (((symbol-function 'tmux-control-query) (lambda (_command cb) (funcall cb "@9")))
+                        ((symbol-function 'run-at-time) (lambda (_delay _repeat cb &rest _) (setq callback cb)))
+                        ((symbol-function 'persp-current-name) (lambda () perspective)))
+                (roost--focus-shell task 1)
+                (should (eq (selected-window) origin))
+                (funcall callback) (should (eq (selected-window) target))
+                (select-window origin) (set-window-buffer origin file)
+                (funcall callback) (should (eq (selected-window) origin))
+                (set-window-buffer origin agent) (setq perspective "another workspace")
+                (funcall callback) (should (eq (selected-window) origin))
+                (setq perspective (roost--perspective-name task) roost--open-generation 2)
+                (funcall callback) (should (eq (selected-window) origin)))))
          (mapc #'kill-buffer (list agent shell file)))))))
 
 (ert-deftest roost-task-panel-keeps-identity-and-refreshes-without-focus-change ()
@@ -1306,6 +1348,16 @@
                  (should (string-match-p "ssh-copy-id far" text))
                  (should (string-match-p "· Workspaces" text)))))
          (kill-buffer "*roost doctor*"))))))
+
+(ert-deftest roost-doctor-requires-tmux-control-public-api ()
+  (dolist (case '((nil nil "Install tmux-control") ("0.6.0" nil "0.7.0 or newer")
+                  ("installed" nil "0.7.0 or newer") ("0.7.0" t nil) ("0.10.1" t nil)))
+    (cl-letf (((symbol-function 'roost--library-version)
+               (lambda (library) (and (equal library "tmux-control") (car case)))))
+      (let ((check (assoc "tmux-control" (roost--doctor-local-checks))))
+        (should (eq (and (nth 1 check) t) (nth 1 case)))
+        (should (equal (nth 2 check) (car case)))
+        (when (nth 2 case) (should (string-match-p (nth 2 case) (nth 3 check))))))))
 
 (ert-deftest roost-evil-users-get-working-keys ()
   (let (states)

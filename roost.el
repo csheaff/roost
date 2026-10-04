@@ -2,7 +2,7 @@
 
 ;; Author: Clay Sheaff
 ;; Version: 0.6.0
-;; Package-Requires: ((emacs "29.1") (tmux-control "0.6.0"))
+;; Package-Requires: ((emacs "29.1") (tmux-control "0.7.0"))
 ;; Keywords: tools, processes
 ;; URL: https://github.com/csheaff/roost
 
@@ -25,12 +25,16 @@
 (require 'parse-time)
 (require 'button)
 
-(declare-function tmux-control--connect-or-switch "tmux-control" (host socket session))
-(declare-function tmux-control--send-command "tmux-control" (command &optional kind))
+(declare-function tmux-control-connect-or-switch "tmux-control" (host socket-name session))
+(declare-function tmux-control-send-command "tmux-control" (command))
+(declare-function tmux-control-query "tmux-control" (command callback))
 (declare-function tmux-control-select-pane "tmux-control" (&optional pane))
 (declare-function tmux-control-tile "tmux-control" ())
-(declare-function tmux-control--tiled-mode-p "tmux-control" ())
-(declare-function tmux-control--query "tmux-control" (command callback))
+(declare-function tmux-control-tiled-p "tmux-control" ())
+(declare-function tmux-control-buffer-host "tmux-control" ())
+(declare-function tmux-control-buffer-socket-name "tmux-control" ())
+(declare-function tmux-control-active-pane "tmux-control" ())
+(declare-function tmux-control-window-id "tmux-control" ())
 (declare-function magit-status "magit-status" (&optional directory cache))
 (declare-function magit-diff-working-tree "magit-diff" (&optional rev args files))
 (declare-function persp-switch "perspective" (name))
@@ -46,10 +50,6 @@
 (declare-function org-get-heading "org" (&optional no-tags no-todo no-priority no-comment))
 
 (defvar tmux-control-default-socket-name)
-(defvar tmux-control--host)
-(defvar tmux-control--socket-name)
-(defvar tmux-control--active-pane)
-(defvar tmux-control--window-id)
 (defvar tmux-control-remote-tmux-socket-setup)
 (defvar tmux-control-ssh-options)
 (defvar persp-autokill-buffer-on-remove)
@@ -661,14 +661,14 @@ recently failed."
     (let ((tasks (roost-tasks))
           (workspace (roost--workspace-backend)))
       (or
-       (and (bound-and-true-p tmux-control--active-pane)
-            (seq-find (lambda (task)
-                        (and (equal (roost--field task 'host) tmux-control--host)
-                             (equal (roost--field task 'socket) tmux-control--socket-name)
-                             (member tmux-control--active-pane
-                                     (list (roost--field task 'paneId)
-                                           (roost--field task 'shellPaneId)))))
-                      tasks))
+       (when-let* ((pane (and (fboundp 'tmux-control-active-pane)
+                              (tmux-control-active-pane))))
+         (seq-find (lambda (task)
+                     (and (equal (roost--field task 'host) (tmux-control-buffer-host))
+                          (equal (roost--field task 'socket) (tmux-control-buffer-socket-name))
+                          (member pane (list (roost--field task 'paneId)
+                                             (roost--field task 'shellPaneId)))))
+                   tasks))
        (roost--task-in-directory default-directory tasks)
        (and workspace
             (let ((current (roost--current-workspace)))
@@ -812,17 +812,20 @@ recently failed."
   (roost--activate-workspace task)
   ;; Reuse the saved terminal window instead of replacing its neighboring
   ;; code or Magit window when that happened to be selected on departure.
+  ;; A tiled pane's window is left alone: the session buffer would replace
+  ;; that pane in the grid.
   (when-let* ((window
                (seq-find (lambda (window)
                            (with-current-buffer (window-buffer window)
-                             (and (bound-and-true-p tmux-control--window-id)
-                                  (equal tmux-control--host (roost--field task 'host))
-                                  (equal tmux-control--socket-name (roost--field task 'socket))
-                                  (equal tmux-control--window-id (roost--field task 'windowId)))))
+                             (and (tmux-control-window-id)
+                                  (not (tmux-control-tiled-p))
+                                  (equal (tmux-control-buffer-host) (roost--field task 'host))
+                                  (equal (tmux-control-buffer-socket-name) (roost--field task 'socket))
+                                  (equal (tmux-control-window-id) (roost--field task 'windowId)))))
                          (window-list))))
     (select-window window))
-  (tmux-control--connect-or-switch (roost--field task 'host) (roost--field task 'socket)
-                                   (roost--field task 'session))
+  (tmux-control-connect-or-switch (roost--field task 'host) (roost--field task 'socket)
+                                  (roost--field task 'session))
   ;; Explicit window hop also works before the pane map arrives on connect.
   (let ((window (roost--field task 'windowId))
         (pane (or target-pane (roost--field task 'paneId))))
@@ -830,7 +833,7 @@ recently failed."
                  (stringp pane) (string-match-p "\\`%[0-9]+\\'" pane))
       (user-error "Invalid tmux target"))
     (with-current-buffer (window-buffer (selected-window))
-      (tmux-control--send-command (format "select-window -t %s" window))
+      (tmux-control-send-command (format "select-window -t %s" window))
       (tmux-control-select-pane pane))))
 
 ;;;###autoload
@@ -1436,13 +1439,13 @@ chosen one."
                   (when (= generation roost--open-generation)
                     (roost--display-task updated (roost--field updated 'shellPaneId))
                     (with-current-buffer (window-buffer (selected-window))
-                      (unless (tmux-control--tiled-mode-p) (tmux-control-tile))
+                      (unless (tmux-control-tiled-p) (tmux-control-tile))
                       (roost--focus-shell updated generation)))))))
 
 (defun roost--focus-shell (task generation)
   "Focus TASK's shell after queued tiling replies, unless GENERATION changed."
   (let ((frame (selected-frame)))
-    (tmux-control--query
+    (tmux-control-query
      "display-message -p '#{window_id}'"
      (lambda (_reply)
        ;; Select outside the process filter, after its buffer/focus restoration.
@@ -1455,11 +1458,9 @@ chosen one."
                      ;; Opening a file or review while tiling settles cancels
                      ;; the pending terminal focus, even within the same task.
                      (with-current-buffer (window-buffer (selected-window))
-                       (and (equal (bound-and-true-p tmux-control--host)
-                                   (roost--field task 'host))
-                            (equal (bound-and-true-p tmux-control--socket-name)
-                                   (roost--field task 'socket))
-                            (member (bound-and-true-p tmux-control--active-pane)
+                       (and (equal (tmux-control-buffer-host) (roost--field task 'host))
+                            (equal (tmux-control-buffer-socket-name) (roost--field task 'socket))
+                            (member (tmux-control-active-pane)
                                     (list (roost--field task 'paneId)
                                           (roost--field task 'shellPaneId)))))
                      (or (not (roost--workspace-backend))
@@ -1468,11 +1469,10 @@ chosen one."
                          (seq-find
                           (lambda (window)
                             (with-current-buffer (window-buffer window)
-                              (and (equal (bound-and-true-p tmux-control--host)
-                                          (roost--field task 'host))
-                                   (equal (bound-and-true-p tmux-control--socket-name)
+                              (and (equal (tmux-control-buffer-host) (roost--field task 'host))
+                                   (equal (tmux-control-buffer-socket-name)
                                           (roost--field task 'socket))
-                                   (equal (bound-and-true-p tmux-control--active-pane)
+                                   (equal (tmux-control-active-pane)
                                           (roost--field task 'shellPaneId)))))
                           (window-list frame))))
               (select-window window)))))))))
@@ -2541,9 +2541,12 @@ RESULT is `pending', a list of checks, or (error . MESSAGE).")
   (let ((helper (expand-file-name "scripts/roost_remote.py" roost--package-directory)))
     (list (list "Emacs" (version<= "29.1" emacs-version) emacs-version
                 "Roost needs Emacs 29.1 or newer")
-          (list "tmux-control" (locate-library "tmux-control") (roost--library-version "tmux-control")
-                "Install tmux-control: https://github.com/csheaff/tmux-control"
-                (locate-library "tmux-control"))
+          (let ((version (roost--library-version "tmux-control")))
+            (list "tmux-control" (and version (ignore-errors (version<= "0.7.0" version))) version
+                  (if version
+                      "Roost needs tmux-control 0.7.0 or newer: https://github.com/csheaff/tmux-control"
+                    "Install tmux-control: https://github.com/csheaff/tmux-control")
+                  (locate-library "tmux-control")))
           (list "Eat" (locate-library "eat") (roost--library-version "eat")
                 "Install eat from NonGNU ELPA (tmux-control renders through it)"
                 (locate-library "eat"))
