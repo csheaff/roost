@@ -1055,8 +1055,8 @@ The cdr is non-nil when the writer should start above the text."
             (cons (roost--org-entry-text) nil))))))))
 
 (defun roost--org-entry-text ()
-  "The Org entry at point: its heading, then its text without planning
-lines or drawers."
+  "The Org entry at point: its heading, then its text.
+Planning lines and drawers are left out."
   (save-excursion
     (org-back-to-heading t)
     (let* ((title (org-get-heading t t t t))
@@ -2083,8 +2083,9 @@ Status is the last observation from the task's host.
   "Non-nil when the task panel shows a long prompt in full.")
 
 (defun roost--prompt-preview (prompt)
-  "The start of PROMPT for the task panel: its first paragraph, cut to a
-few hundred characters.  A short prompt is returned whole."
+  "The start of PROMPT for the task panel.
+That is its first paragraph, cut to a few hundred characters.  A short
+prompt is returned whole."
   (let* ((paragraph (car (split-string prompt "\n[ \t]*\n")))
          (preview (if (> (length paragraph) 400)
                       (concat (replace-regexp-in-string "[ \t\n]+[^ \t\n]*\\'" ""

@@ -1,5 +1,33 @@
 # Validation
 
+## Developing Roost with Roost — 2026-10-04
+
+The pull request flow, follow-up prompts and the agent's latest reply were
+built by Roost tasks working on Roost, then used for real on
+[csheaff/roost](https://github.com/csheaff/roost):
+
+- **#1 (local).** `P` drafted the pull request from the agent's commit message
+  and created it with `gh`. Copilot's review and my own notes went to the agent
+  with `e`; `P` pushed each fix ("Pushed 1 commit to #1"). After a squash merge
+  on GitHub, `x` retired the task and deleted its local and remote branches.
+- **#2 (from `claylien`).** The first `P` failed at the push: the host's
+  global Git config rewrites GitHub URLs to SSH, and it has no GitHub SSH key.
+  That task's own change made the failure fast and explained, and the
+  `roost-doctor` push check now reports it up front. With a repo-local URL
+  override the pull request was created from the remote host; three Copilot
+  rounds (askpass helpers, test isolation, a controlling terminal) went to the
+  agent the same way, and the last (orphaned helpers on timeout) was fixed on
+  `main`. `x` on `claylien` retired it and deleted the GitHub branch.
+
+Using it found and fixed: changes measured from a task's starting commit
+counted the integration branch's commits after `u`; `n` skipped a blocked task
+you had just created; pull request drafts used the agent's prompt as the body;
+multi-line errors in draft header lines; a merged pull request that looked like
+unfinished work; a long prompt pushing the reply off the task panel.
+
+**79 ERT tests and 65 Python tests pass**; `roost.el` byte-compiles without
+warnings.
+
 ## Fresh install — 2026-10-04
 
 A new Emacs 30.2 configuration (`--init-directory`, nothing from the author's
