@@ -1,5 +1,7 @@
 # Roost
 
+[![CI](https://github.com/csheaff/roost/actions/workflows/ci.yml/badge.svg)](https://github.com/csheaff/roost/actions/workflows/ci.yml)
+
 Run a fleet of coding agents from Emacs, on your machine or on remote hosts
 over SSH. Each task gets its own Git worktree, topic branch and persistent tmux
 terminal running the agent's real CLI: [Claude Code](https://claude.com/claude-code),
@@ -301,7 +303,8 @@ aliases `roost-list` and `roost-kill` still work.
 
 `make test compile` runs the ERT suite, the Python lifecycle tests against real
 Git and isolated tmux sockets (fixture agents drive the actual hook commands,
-without model calls), and a warning-free byte-compile. See
+without model calls), and a warning-free byte-compile. CI runs it on Emacs 29.1
+and 30.1. See
 [validation](docs/validation.md) for the live runs with Claude Code and Codex on
 local and remote hosts, [the demo notes](docs/demo.md) for how the screenshots
 were made, and [MELPA](docs/melpa.md) for the package recipes.
