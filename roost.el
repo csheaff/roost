@@ -1521,7 +1521,7 @@ An existing draft for TASK is reused, and kept as written unless it is empty."
         (insert initial)
         ;; Leave point above the quoted text, ready for a note.
         (goto-char (point-min)))
-      (unless (and initial (= (point) (point-min)))
+      (unless (and initial (bobp))
         (goto-char (point-max))))
     (pop-to-buffer buffer)))
 
@@ -2913,6 +2913,7 @@ Agents asking permission or stuck at a startup prompt color the count."
 (defconst roost--mode-line-entry '(roost-mode-line-count (:eval (roost--mode-line-count)))
   "The `global-mode-string' entry for `roost-watch-mode'.")
 
+;;;###autoload
 (define-minor-mode roost-watch-mode
   "Watch tasks asynchronously, retaining cached records during disconnects.
 While watching, the mode line counts the agents waiting for you; see
