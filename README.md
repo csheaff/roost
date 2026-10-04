@@ -14,13 +14,19 @@ task's actual Claude Code terminal, waiting for an answer.*
 
 - **Agents outlive Emacs.** They run in tmux on the task's host. Close Emacs, lose
   Wi‑Fi or sleep the laptop; reopen Roost and pick up where they are.
+- **Any SSH host, nothing to set up.** A host needs Python 3, Git and tmux; Roost
+  copies a small helper there on first use. There is no server or daemon.
 - **Native terminals, not a wrapper.** [tmux-control](https://github.com/csheaff/tmux-control)
   renders each agent's own interface, so permission prompts, diffs and slash
   commands work exactly as in a terminal.
 - **One view across hosts.** Tasks are grouped by project, with what needs you
-  first, Git changes, and commits ahead of or behind the branch you merge into.
+  first, each agent's latest reply, Git changes, and commits ahead of or behind
+  the branch you merge into.
+- **Start from where the work is.** An Org heading or agenda line, a region of
+  code, or a GitHub issue becomes the prompt, and the heading then stands for
+  its task.
 - **Emacs does the rest.** Magit and Dired over TRAMP, a shell beside each agent,
-  a perspective per task.
+  a perspective per task, and pull requests drafted from the agent's commits.
 - **Finishing never loses work.** Merging refuses uncommitted files and keeps the
   task on conflicts. Roost never force-removes, stages or commits for you.
 
