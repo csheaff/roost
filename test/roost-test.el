@@ -46,6 +46,72 @@
    (roost--apply-snapshot nil (list (roost-test--task)))
    (should (equal (roost--field (car (roost-tasks)) 'diff) "1 file changed"))))
 
+(defconst roost-test--reply
+  "## Summary\n\n---\n\nFixed the **auth** bug in `login.py`.\n\nSecond line.")
+
+(ert-deftest roost-strip-markdown-removes-wrapping-markers-only ()
+  (pcase-dolist (`(,in . ,out)
+                 '(("*it* and _it_" . "it and it")
+                   ("**b** __b__ ***both***" . "b b both")
+                   ("(**b**), _x_." . "(b), x.")
+                   ("snake_case_name and __init__.py" . "snake_case_name and __init__.py")
+                   ("a * b and 2*3 and a ** b" . "a * b and 2*3 and a ** b")
+                   ("`**`" . "**")
+                   ("use `snake_*x*_` or **`code`**" . "use snake_*x*_ or code")
+                   ("`a` and `b`" . "a and b")))
+    (should (equal (roost--strip-markdown in) out))))
+
+(ert-deftest roost-last-message-summary-skips-noise ()
+  (should (equal (roost--last-message-summary `((lastMessage . ,roost-test--reply)))
+                 "Fixed the auth bug in login.py."))
+  (should-not (roost--last-message-summary '((lastMessage . "# Title\n\n--- ..."))))
+  (should-not (roost--last-message-summary (roost-test--task))))
+
+(ert-deftest roost-last-message-summary-recognizes-only-real-headings ()
+  (let ((summary (lambda (text) (roost--last-message-summary `((lastMessage . ,text))))))
+    (should (equal (funcall summary "#123 is fixed\n\nDetails") "#123 is fixed"))
+    (should (equal (funcall summary "#hashtag\nmore") "#hashtag"))
+    (should (equal (funcall summary "###### Six\n####### seven\nBody") "####### seven"))
+    (should (equal (funcall summary "#\nBody") "Body"))
+    (should (equal (funcall summary "Summary\n=======\nAll fixed") "All fixed"))
+    (should (equal (funcall summary "Summary\r\n---\r\nAll fixed") "All fixed"))
+    (should (equal (funcall summary "Fixed it.\n\n---\nNext") "Fixed it."))))
+
+(ert-deftest roost-dashboard-shows-last-message-or-prompt ()
+  (roost-test--isolated
+   (let* ((with (append `((lastMessage . ,roost-test--reply)) (roost-test--task)))
+          (without (roost-test--task "fedcba9876543210")))
+     (dolist (task (list with without))
+       (let ((row (roost--dashboard-row task (roost--dashboard-layout (list task) 120) 120)))
+         (if (eq task with)
+             (progn (should (string-match-p "Fixed the auth bug in login\\.py\\." row))
+                    (should-not (string-match-p "fix authentication" row)))
+           (should (string-match-p "fix authentication" row))))))))
+
+(ert-deftest roost-task-panel-shows-latest-reply ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (append `((lastMessage . ,roost-test--reply))
+                                                (roost-test--task)))))
+     (with-temp-buffer
+       (roost-task-info-mode)
+       (setq roost--buffer-task-key (roost--key task))
+       (roost--render-task-info)
+       (let ((text (buffer-string)))
+         (should (< (string-match "^fix auth " text) (string-match "^Agent's latest reply$" text)
+                    (string-match "^Changes$" text) (string-match "^Prompt$" text)))
+         (should (string-match-p "^Agent's latest reply\n## Summary\n" text))
+         (should (equal (get-text-property (string-match "Fixed the" text) 'line-prefix text) "  "))
+         (should (string-match-p "^Fixed the auth bug in login\\.py\\.\n" text))
+         (should-not (string-match-p "\\*\\*\\|`" text)))))))
+
+(ert-deftest roost-quiet-refresh-retains-last-message ()
+  (roost-test--isolated
+   (roost--cache-task "dev" (append '((lastMessage . "All done")) (roost-test--task)))
+   (roost--apply-snapshot "dev" (list (roost-test--task)))
+   (should (equal (roost--field (car (roost-tasks)) 'lastMessage) "All done"))
+   (roost--apply-snapshot "dev" (list (append '((lastMessage . "Newer")) (roost-test--task))))
+   (should (equal (roost--field (car (roost-tasks)) 'lastMessage) "Newer"))))
+
 (ert-deftest roost-notifies-once-and-not-on-initial-attachment ()
   (roost-test--isolated
    (let* ((roost-notify t) notices
