@@ -1,24 +1,26 @@
 # The README screenshots
 
-The images are native captures of GUI Emacs on 2026-10-04, taken while real
-agents worked on two small disposable projects: `ledger`, an expense-ledger CLI
-on the SSH host `claylien`, and `notes`, a notes CLI on the Mac. Claude Code ran
-Haiku 4.5 and Codex ran `gpt-6-luna`, each in its own terminal with its normal
-permission prompts.
+The images are native captures of GUI Emacs on 2026-10-04, taken while Claude
+Code (Haiku 4.5) worked on two small disposable projects: `notes`, a notes CLI on
+the Mac, and `ledger`, an expense-ledger CLI on the SSH host `claylien`, each
+agent in its own terminal with its normal permission prompts.
 
-The capture Emacs used the author's configuration (FiraCode, modus-vivendi,
-xah-fly-keys) at a larger font size, without the tab line. It used a separate
-state directory and tmux socket named `roost-qa`, which appear in the task
-details; a normal setup shows `~/.local/share/roost` and your tmux-control socket.
+The capture Emacs was a plain configuration so that nothing personal distracts:
+the stock `modus-vivendi` theme and mode line at a larger font size, with
+Roost, tmux-control and Magit and nothing else. It used a separate state
+directory and tmux socket named `roost-demo`, which appear in the task details
+and terminal tab bar; a normal setup shows `~/.local/share/roost` and your
+tmux-control socket. The terminals' shell prompt is the author's.
 
 | Image | What it shows |
 | --- | --- |
-| `roost-dashboard.jpg` | Captured after 0.8 in a plain Emacs (stock `modus-vivendi`, default mode line) so nothing personal distracts: four Claude Code (Haiku 4.5) tasks in `~/roost-demo` projects on `claylien` and the Mac, one waiting for permission, two finished (one uncommitted, one committed), one working. The numbered key was added with ImageMagick |
-| `roost-new-task.jpg` | A draft opened on an Org heading in `~/roost-demo/greet.org`: the heading and its notes are the prompt, with the derived name and the Issue field (captured after 0.8) |
-| `roost-menu.jpg` | After that task ran (Claude Code, Haiku 4.5): its row with the agent's reply, `Roost:1` in the mode line, and `h`'s command menu naming the task |
-| `roost-workspace.jpg` | Claude Code's summary beside the task shell, where the tests were rerun independently |
-| `roost-review.jpg` | Magit over TRAMP on the remote worktree, expanding the agent's change |
-| `roost-task-panel.jpg` | Captured later the same day while Roost was developed with Roost: a Claude Code task on `claylien` that changed Roost's own helper, after answering Copilot's review of its pull request (#2) |
+| `roost-dashboard.jpg` | The dashboard alone, with four tasks on two machines: one waiting for permission, two finished (one uncommitted, one committed), one working. The numbered key was added with ImageMagick |
+| `roost-new-task.jpg` | A draft opened on an Org heading in `notes.org`: the heading and its notes are the prompt, with the derived name and the Issue field |
+| `roost-terminal.jpg` | The `budget-alerts` agent's own terminal on `claylien`, opened with `RET`, asking before it creates a file |
+| `roost-menu.jpg` | `h`'s command menu below the dashboard, naming the task its commands act on |
+| `roost-workspace.jpg` | The `tags` agent's summary beside the task shell (`t`), where the new `--tag` filter was tried by hand |
+| `roost-review.jpg` | Magit on the `tags` worktree (`r`), expanding the agent's uncommitted change |
+| `roost-task-panel.jpg` | The `search` task's panel (`?`): its reply, a commit ahead of `main`, the prompt, actions and details |
 
 ## Try the same workflow
 

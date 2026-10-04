@@ -61,15 +61,20 @@ reply too, and the mode line counts the agents waiting (`Roost:2`; click it for
 the next one). `n` jumps to the next agent waiting for you, permission requests
 first. Answer it in the terminal, then `n` again.
 
+![Claude Code on claylien asking to create budgets.json, in its own terminal inside Emacs](docs/images/roost-terminal.jpg)
+
+*`RET` opens the agent's real terminal, here Claude Code on the SSH host
+`claylien` asking before it creates a file. Answer it as you would anywhere.*
+
 **Check the work yourself.** `t` opens a shell beside the agent, in the same
 worktree. Run the tests, start the app, poke at it.
 
-![Claude Code's summary beside the task shell where the tests were rerun](docs/images/roost-workspace.jpg)
+![The agent's summary beside a shell in the same worktree, trying the new --tag filter by hand](docs/images/roost-workspace.jpg)
 
 **Review in Magit.** `r` opens Magit on the task's worktree, through TRAMP for
 remote tasks. Stage, edit and commit as usual.
 
-![Magit showing the agent's change in a remote worktree](docs/images/roost-review.jpg)
+![Magit on the task's worktree, showing the agent's uncommitted change](docs/images/roost-review.jpg)
 
 **Catch up and finish.** When other tasks land first, the dashboard shows the
 task falling behind (`↓2`). `u` merges the integration branch into the task's
@@ -85,10 +90,10 @@ to the agent with `e`; when it has committed, `P` pushes the new commits and
 opens the pull request. Once it is merged, `x` retires the task and deletes the
 branch. Needs `gh` on the task's host, and Git credentials there that can push.
 
-![A remote task's panel: the agent's latest reply, its changes, its open pull request, the folded prompt and the actions](docs/images/roost-task-panel.jpg)
+![A task's panel: the agent's latest reply, its changes, the prompt, the actions and the details](docs/images/roost-task-panel.jpg)
 
-*Roost working on itself: a Claude Code task on the SSH host `claylien` has
-answered review feedback on its pull request; `P` pushes such fixes to it.*
+*`?` shows a task's panel: what the agent said, what changed, and what you can
+do next.*
 
 ## Install
 
@@ -160,7 +165,7 @@ Magit is optional (review falls back to Dired).
 
 `roost-status` opens the dashboard. In it, and in a task's details panel:
 
-![The command menu below the dashboard, naming the task it acts on, with the agent's reply in the row and Roost:1 in the mode line](docs/images/roost-menu.jpg)
+![The command menu below the dashboard, naming the task its commands act on](docs/images/roost-menu.jpg)
 
 | Key | Command | |
 | --- | --- | --- |
