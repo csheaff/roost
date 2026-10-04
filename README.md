@@ -137,7 +137,7 @@ Magit is optional (review falls back to Dired).
 | `t` | `roost-shell` | Shell beside the agent, in the worktree (reused) |
 | `f` | `roost-files` | Dired in the worktree |
 | `r` | `roost-review` | Magit in the worktree |
-| `D` | `roost-diff` | Diff since the task started |
+| `D` | `roost-diff` | Diff the task's own changes, including uncommitted ones |
 | `e` | `roost-send` | Paste a prompt into the agent and press Enter |
 | `?` | `roost-task-info` | Prompt, changes, actions and details |
 | `u` | `roost-update` | Merge the integration branch into the task |

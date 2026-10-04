@@ -1476,13 +1476,21 @@ the task started from."
         base)))
 
 (defun roost--pr-commits (task)
-  "Subjects of TASK's own commits, oldest first, read with Git in its worktree.
-Merges, such as updates from the integration branch, are left out.  Nil
-when Git cannot say."
+  "Messages of TASK's own commits, oldest first, read with Git in its worktree.
+Merges, such as updates from the integration branch, and trailers such as
+Co-Authored-By are left out.  Nil when Git cannot say."
   (when-let* ((base (roost--fork-point task))
-              (output (roost--git-output task "log" "--reverse" "--no-merges" "--format=%s"
+              (output (roost--git-output task "log" "--reverse" "--no-merges" "--format=%B%x00"
                                          (concat base "..HEAD"))))
-    (split-string output "\n" t)))
+    (delete "" (mapcar #'roost--without-trailers (split-string output "\0")))))
+
+(defun roost--without-trailers (message)
+  "Commit MESSAGE, trimmed, without a final paragraph of trailers.
+Trailers have hyphenated keys, such as Co-Authored-By and Signed-off-by."
+  (let ((message (string-trim message)))
+    (if (string-match "\n\n\\(?:[[:alpha:]]+\\(?:-[[:alnum:]]+\\)+: .*\\(?:\n\\|\\'\\)\\)+\\'" message)
+        (string-trim (substring message 0 (match-beginning 0)))
+      message)))
 
 (defun roost--readable-name (name)
   "TASK NAME's words as a sentence: \"fix-auth\" becomes \"Fix auth\"."
@@ -1491,17 +1499,21 @@ when Git cannot say."
 
 (defun roost--pr-initial-text (task commits)
   "Draft text for TASK's pull request: a title line, then the body.
-The title is the only commit's subject, else the task name; the body is the
-prompt, followed by the subjects when there are several COMMITS."
-  (let ((title (if (= (length commits) 1)
-                   (car commits)
-                 (roost--readable-name (roost--field task 'name))))
-        (prompt (roost--prompt-text task))
-        (list (when (cdr commits)
-                (mapconcat (lambda (subject) (concat "- " subject)) commits "\n"))))
-    (concat title "\n\n"
-            (string-join (delq nil (list (and prompt (string-trim prompt)) list)) "\n\n")
-            (if (or prompt list) "\n" ""))))
+COMMITS are the task's commit messages.  For one commit, the title and
+body are its own.  Otherwise the title is the task name, and the body is
+the prompt followed by the subjects."
+  (let* ((subjects (mapcar (lambda (message) (car (split-string message "\n"))) commits))
+         (title (if (cdr commits)
+                    (roost--readable-name (roost--field task 'name))
+                  (or (car subjects) (roost--readable-name (roost--field task 'name)))))
+         (message-body (and commits (null (cdr commits))
+                            (string-trim (substring (car commits) (length (car subjects))))))
+         (body (if (and message-body (not (string-empty-p message-body)))
+                   (list message-body)
+                 (delq nil (list (when-let* ((prompt (roost--prompt-text task))) (string-trim prompt))
+                                 (when (cdr subjects)
+                                   (mapconcat (lambda (subject) (concat "- " subject)) subjects "\n")))))))
+    (concat title "\n\n" (string-join body "\n\n") (if body "\n" ""))))
 
 (defun roost--pr-header (task)
   "Header line for TASK's pull request draft."
@@ -1871,7 +1883,7 @@ keeps one process-wide registration per mode; a nil STATE removes it."
     ["Send prompt…" roost-send]
     "---"
     ["Review in Magit" roost-review]
-    ["Diff since start" roost-diff]
+    ["Diff the task's changes" roost-diff]
     ["Update from integration branch" roost-update]
     "---"
     ["Pull request…" roost-pr]
@@ -1924,7 +1936,7 @@ Status is the last observation from the task's host.
 (defconst roost--task-actions
   '(("Work" ("Agent" "RET" roost-open-task) ("Shell" "t" roost-shell)
      ("Files" "f" roost-files) ("Send prompt" "e" roost-send))
-    ("Review" ("Magit" "r" roost-review) ("Diff since start" "D" roost-diff)
+    ("Review" ("Magit" "r" roost-review) ("Diff" "D" roost-diff)
      ("Update" "u" roost-update))
     ("Finish" ("Pull request" "P" roost-pr) ("Merge and retire" "m" roost-merge-retire) ("Retire" "x" roost-retire)
      ("Forget" "X" roost-forget))
