@@ -13,7 +13,7 @@ details; a normal setup shows `~/.local/share/roost` and your tmux-control socke
 
 | Image | What it shows |
 | --- | --- |
-| `roost-dashboard.jpg` | Four tasks across two hosts: a Codex task that committed its work (`↑1`), Claude tasks ready with uncommitted changes or asking for permission, and the selected task's Claude Code permission prompt below |
+| `roost-dashboard.jpg` | Captured after 0.8 in a plain Emacs (stock `modus-vivendi`, default mode line) so nothing personal distracts: four Claude Code (Haiku 4.5) tasks in `~/roost-demo` projects on `claylien` and the Mac, one waiting for permission, two finished (one uncommitted, one committed), one working. The numbered key was added with ImageMagick |
 | `roost-new-task.jpg` | A draft opened on an Org heading in `~/roost-demo/greet.org`: the heading and its notes are the prompt, with the derived name and the Issue field (captured after 0.8) |
 | `roost-menu.jpg` | After that task ran (Claude Code, Haiku 4.5): its row with the agent's reply, `Roost:1` in the mode line, and `h`'s command menu naming the task |
 | `roost-workspace.jpg` | Claude Code's summary beside the task shell, where the tests were rerun independently |

@@ -9,10 +9,10 @@ terminal running the agent's real CLI: [Claude Code](https://claude.com/claude-c
 Roost tells you which agents need you, and gets the work reviewed and merged
 with the Emacs tools you already use.
 
-![The Roost dashboard above Claude Code asking for permission in a remote task](docs/images/roost-dashboard.jpg)
+![The Roost dashboard: four Claude Code tasks on two machines, one waiting for permission, two finished with changes to review, one working](docs/images/roost-dashboard.jpg)
 
-*Four tasks in two projects on two hosts. Below the dashboard is the selected
-task's actual Claude Code terminal, waiting for an answer.*
+*The dashboard. `RET` on a row opens that agent's own terminal, where you
+answer it as you would in any terminal.*
 
 - **Agents outlive Emacs.** They run in tmux on the task's host. Close Emacs, lose
   Wi‑Fi or sleep the laptop; reopen Roost and pick up where they are.
