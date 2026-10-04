@@ -1183,7 +1183,8 @@ Planning lines and drawers are left out."
                     :source (when fork (roost--field task 'name)))))
       (roost--compose-render)
       (goto-char (point-max))
-      (when (and seed (string-empty-p (roost--compose-prompt)))
+      (if (not (and seed (string-empty-p (roost--compose-prompt))))
+          (when org (set-marker org nil))
         (setq roost--compose-fields (plist-put roost--compose-fields :org org))
         (delete-region roost--compose-body (point-max))
         (insert (car seed))
@@ -1374,8 +1375,8 @@ listed with gh on the project's host."
            (prompt (roost--compose-prompt)))
       (setq roost--compose-fields (plist-put roost--compose-fields :issue
                                              (when issue
-                                               (list (assq 'number issue) (assq 'title issue)
-                                                     (assq 'url issue)))))
+                                               (delq nil (list (assq 'number issue) (assq 'title issue)
+                                                               (assq 'url issue))))))
       ;; An untouched prompt follows the issue; a written one gains it below.
       (when issue
         (let ((inhibit-read-only t)
