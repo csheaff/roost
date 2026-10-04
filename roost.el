@@ -1001,8 +1001,12 @@ A mouse click shows a menu at the pointer; the keyboard uses the minibuffer."
          (refs (when directory
                  (ignore-errors
                    (let ((default-directory directory))
-                     (process-lines "git" "for-each-ref" "--format=%(refname:short)"
-                                    "refs/heads" "refs/remotes")))))
+                     ;; `process-file' runs Git on the project's host.
+                     (with-temp-buffer
+                       (when (zerop (process-file "git" nil t nil "for-each-ref"
+                                                  "--format=%(refname:short)"
+                                                  "refs/heads" "refs/remotes"))
+                         (split-string (buffer-string) "\n" t)))))))
          (ref (string-trim (completing-read "Start from ref (empty = primary checkout's branch): "
                                             (cons "HEAD" refs) nil nil))))
     (setq roost--compose-fields
