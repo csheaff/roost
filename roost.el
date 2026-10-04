@@ -879,6 +879,13 @@ recently failed."
   (delete-dups (append roost--remembered-projects
                        (mapcar #'roost--project-directory (roost-tasks)))))
 
+(defun roost--host-projects (host)
+  "Paths on HOST of the projects Roost has used there."
+  (delq nil (mapcar (lambda (directory)
+                      (when (equal (ignore-errors (roost--directory-host directory)) host)
+                        (directory-file-name (file-local-name directory))))
+                    (roost--known-projects))))
+
 (defun roost--abbreviate-path (path &optional host)
   "PATH with its owner's home directory shown as ~.
 The owner is HOST's SSH user, or the local user."
@@ -2630,7 +2637,8 @@ With a prefix argument, read a HOST to check (empty for this machine)."
     (dolist (host hosts)
       (let ((host host))
         (roost--request
-         host "doctor" (list (cons 'commands commands))
+         host "doctor" (list (cons 'commands commands)
+                             (cons 'projects (vconcat (roost--host-projects host))))
          (lambda (checks)
            (setf (alist-get host roost--doctor-results nil nil #'equal) checks)
            (roost--render-doctor))

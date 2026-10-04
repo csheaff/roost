@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -62,18 +63,32 @@ CREDENTIAL_FAILURES = ("Permission denied (publickey)", "could not read Username
                        "Authentication failed", "terminal prompts disabled")
 
 
-def remote_git(repo, *args, check=True):
+def run_detached(argv, timeout, env=None):
+    """Run ARGV in a session of its own, without stdin, for at most TIMEOUT
+    seconds. Without a controlling terminal nothing it starts can prompt. On
+    timeout the whole process group is killed, so helpers such as ssh or a
+    credential helper die with it, and TimeoutExpired is raised."""
+    process = subprocess.Popen(argv, text=True, stdin=subprocess.DEVNULL, start_new_session=True,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(process.pid, signal.SIGKILL)
+        process.communicate()
+        raise
+    return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
+
+
+def remote_git(repo, *args, check=True, timeout=REMOTE_GIT_TIMEOUT):
     """Run Git where it talks to the remote, so it can never prompt on the
     helper's RPC pipe or hang forever. Explains credential failures."""
     try:
-        result = subprocess.run(["git", "-C", str(repo), *args], text=True,
-                                stdin=subprocess.DEVNULL, timeout=REMOTE_GIT_TIMEOUT,
-                                start_new_session=True,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                env=dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="",
-                                         SSH_ASKPASS_REQUIRE="never", GCM_INTERACTIVE="never"))
+        result = run_detached(["git", "-C", str(repo), *args], timeout,
+                              env=dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="",
+                                       SSH_ASKPASS_REQUIRE="never", GCM_INTERACTIVE="never"))
     except subprocess.TimeoutExpired:
-        raise RoostError("git %s timed out after %d seconds" % (args[0], REMOTE_GIT_TIMEOUT))
+        raise RoostError("git %s timed out after %d seconds" % (args[0], timeout))
     if check and result.returncode:
         message = (result.stderr.strip() or result.stdout.strip()
                    or "Command failed: " + shlex.join(["git", *args]))
@@ -1116,7 +1131,32 @@ def doctor(store, request):
             check("GitHub CLI", False, "not signed in",
                   "Optional: run `gh auth login` on this host to open pull requests", executable,
                   optional=True)
+    for repo in dict.fromkeys(p for p in request.get("projects") or [] if isinstance(p, str)):
+        push_check(check, repo)
     return checks
+
+
+def push_check(check, repo):
+    """Whether Git on this host can push REPO's branches to origin, as pull
+    requests need. A dry run authenticates like a push but sends nothing."""
+    name = "Push · " + Path(repo).name
+    if git(repo, "rev-parse", "--verify", "--quiet", "HEAD", check=False).returncode:
+        return
+    url = git(repo, "remote", "get-url", "--push", "origin", check=False)
+    if url.returncode:
+        check(name, False, "no origin remote", "Optional: add an origin remote to open pull requests",
+              repo, optional=True)
+        return
+    try:
+        remote_git(repo, "push", "--dry-run", "--quiet", "origin", "HEAD:refs/heads/roost-doctor-check",
+                   timeout=30)
+        check(name, True, url.stdout.strip(), None, repo, optional=True)
+    except RoostError as exc:
+        lines = [line for line in str(exc).splitlines() if line.strip()]
+        advice = next((line for line in lines if line.startswith("Roost pushes")), None)
+        check(name, False, lines[0] if lines else "push failed",
+              advice or "Optional: make sure Git on this host can push to " + url.stdout.strip(),
+              repo, optional=True)
 
 
 def update_hook(store, task_id, payload, run_id=None):

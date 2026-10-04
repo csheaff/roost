@@ -913,18 +913,37 @@ class RemoteGit(unittest.TestCase):
         return subprocess.CompletedProcess([], returncode, "", stderr)
 
     def test_runs_without_stdin_or_prompts_under_a_timeout(self):
-        with patch.object(roost.subprocess, "run", return_value=self.completed(0, "")) as run:
+        with patch.object(roost.subprocess, "Popen") as popen:
+            popen.return_value.communicate.return_value = ("", "")
+            popen.return_value.returncode = 0
             roost.remote_git(self.repo, "push", "origin", "main")
-        kwargs = run.call_args.kwargs
+        kwargs = popen.call_args.kwargs
         self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
         self.assertTrue(kwargs["start_new_session"])
         for name, value in (("GIT_TERMINAL_PROMPT", "0"), ("GIT_ASKPASS", ""),
                             ("SSH_ASKPASS_REQUIRE", "never"), ("GCM_INTERACTIVE", "never")):
             self.assertEqual(kwargs["env"][name], value)
-        self.assertEqual(kwargs["timeout"], 120)
+        self.assertEqual(popen.return_value.communicate.call_args.kwargs["timeout"], 120)
+
+    def test_a_timeout_kills_everything_the_command_started(self):
+        pidfile = self.repo / "child.pid"
+        started = time.monotonic()
+        with self.assertRaises(subprocess.TimeoutExpired):
+            roost.run_detached(["sh", "-c", 'sleep 30 & echo $! > "$1"; wait', "sh", str(pidfile)], 0.5)
+        self.assertLess(time.monotonic() - started, 10)
+        child = int(pidfile.read_text())
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                os.kill(child, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        else:
+            self.fail("the background child survived the timeout")
 
     def test_a_timeout_is_a_roost_error(self):
-        with patch.object(roost.subprocess, "run",
+        with patch.object(roost, "run_detached",
                           side_effect=subprocess.TimeoutExpired("git", 120)):
             with self.assertRaisesRegex(roost.RoostError, "git push timed out"):
                 roost.remote_git(self.repo, "push", "origin", "main")
@@ -934,7 +953,7 @@ class RemoteGit(unittest.TestCase):
                         "fatal: could not read Username for 'https://github.com'",
                         "remote: Authentication failed",
                         "fatal: terminal prompts disabled"):
-            with patch.object(roost.subprocess, "run", return_value=self.completed(128, message)):
+            with patch.object(roost, "run_detached", return_value=self.completed(128, message)):
                 with self.assertRaises(roost.RoostError) as caught:
                     roost.remote_git(self.repo, "push", "origin", "main")
             self.assertIn(message, str(caught.exception))
@@ -943,7 +962,7 @@ class RemoteGit(unittest.TestCase):
             self.assertIn("gh auth setup-git", str(caught.exception))
 
     def test_other_failures_get_no_advice(self):
-        with patch.object(roost.subprocess, "run", return_value=self.completed(1, "rejected")):
+        with patch.object(roost, "run_detached", return_value=self.completed(1, "rejected")):
             with self.assertRaises(roost.RoostError) as caught:
                 roost.remote_git(self.repo, "push", "origin", "main")
         self.assertEqual(str(caught.exception), "rejected")
@@ -977,6 +996,43 @@ class RemoteGit(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 30)
         self.assertIn("gh auth setup-git", str(caught.exception))
         self.assertIn("on this host (%s)" % roost.socket.gethostname(), str(caught.exception))
+
+
+class PushCheck(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name)
+        self.origin = root / "origin.git"
+        self.repo = root / "project"
+        roost.git(root, "init", "--bare", "-b", "main", str(self.origin))
+        roost.git(root, "init", "-b", "main", str(self.repo))
+        for key, value in (("user.name", "Roost Test"), ("user.email", "roost@example.invalid"),
+                           ("commit.gpgsign", "false")):
+            roost.git(self.repo, "config", key, value)
+        roost.git(self.repo, "commit", "--allow-empty", "-m", "base")
+        self.checks = []
+
+    def check(self, name, ok, detail, hint=None, path=None, optional=False):
+        self.checks.append(dict(name=name, ok=ok, detail=detail, hint=hint, optional=optional))
+
+    def test_a_reachable_origin_passes_without_pushing_anything(self):
+        roost.git(self.repo, "remote", "add", "origin", str(self.origin))
+        roost.push_check(self.check, str(self.repo))
+        self.assertEqual(self.checks, [dict(name="Push · project", ok=True, detail=str(self.origin),
+                                            hint=None, optional=True)])
+        self.assertEqual(roost.git(self.origin, "for-each-ref").stdout, "")
+
+    def test_failures_and_missing_origins_are_optional_problems(self):
+        roost.push_check(self.check, str(self.repo))
+        roost.git(self.repo, "remote", "add", "origin", str(Path(self.temp.name) / "missing.git"))
+        roost.push_check(self.check, str(self.repo))
+        roost.push_check(self.check, str(Path(self.temp.name) / "gone"))
+        self.assertEqual([(c["ok"], c["detail"], c["optional"]) for c in self.checks][0],
+                         (False, "no origin remote", True))
+        self.assertFalse(self.checks[1]["ok"])
+        self.assertIn("missing.git", self.checks[1]["detail"])
+        self.assertEqual(len(self.checks), 2, "a missing checkout is skipped")
 
 
 class LastMessage(unittest.TestCase):

@@ -118,7 +118,9 @@ and in `config.el`: `(setq roost-hosts '(nil "devbox"))`.
 
 Then run **`M-x roost-doctor`**. It checks Emacs's side and, on each host, SSH,
 Python, Git, tmux and each agent CLI's version and sign-in, with a fix for
-anything missing. `C-u M-x roost-doctor` checks a host before you add it.
+anything missing. For pull requests it also checks the GitHub CLI and whether
+Git on the host can push each project you've used there (a dry run that sends
+nothing). `C-u M-x roost-doctor` checks a host before you add it.
 
 Magit is optional (review falls back to Dired).
 
