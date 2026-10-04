@@ -56,10 +56,10 @@ closer to Orca's surfaces where that helped:
 | Delete, with an explicit force waiver | Retire for finished work; forget drops only Roost's record and never touches Git |
 | Branch prefix setting | `roost-branch-prefix` |
 | Pull requests from a workspace | `P` drafts one from the agent's commit message and creates it with `gh` on the task's host; `P` again pushes review fixes; `x` retires after a squash merge and deletes the branch |
-| Issue imports | `roost-new-task` on an Org heading, an agenda line, or a region starts the prompt |
+| Issue imports | `C-c C-t` in the draft starts from a GitHub issue, and the pull request closes it; `roost-new-task` on an Org heading, an agenda line, or a region starts the prompt, and the heading then stands for its task |
 
-Mobile access, embedded browsers, issue-tracker imports, workflow boards and
-sparse checkouts remain outside Roost. Emacs already supplies
+Mobile access, embedded browsers, trackers other than GitHub, workflow boards
+and sparse checkouts remain outside Roost. Emacs already supplies
 file editing, project navigation and Git review. Roost's job is to make those
 tools belong to the same durable task.
 
