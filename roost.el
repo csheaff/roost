@@ -447,6 +447,13 @@ Dirty worktrees are refused; review and commit in Magit first."
   :doc "Task dashboard commands."
   "RET" #'roost-open-task "c" #'roost-new-task "d" #'roost-new-task "r" #'roost-review "D" #'roost-diff
   "e" #'roost-send "s" #'roost-resume "k" #'roost-stop "x" #'roost-retire "m" #'roost-merge-retire "n" #'roost-next-waiting "g" #'roost-refresh)
+(defun roost--dashboard-display-settings ()
+  "Keep table columns intact after global minor modes enable themselves."
+  (when (derived-mode-p 'roost-dashboard-mode)
+    (visual-line-mode -1)
+    (display-line-numbers-mode -1)
+    (setq truncate-lines t)))
+
 (define-derived-mode roost-dashboard-mode tabulated-list-mode "Roost"
   "Tasks across hosts. All refreshes are asynchronous."
   (setq tabulated-list-format [("Host" 14 t) ("Task" 24 t) ("Status" 12 t) ("Since" 8 t)
@@ -455,6 +462,7 @@ Dirty worktrees are refused; review and commit in Magit first."
         truncate-lines t
         display-line-numbers nil
         tabulated-list-entries #'roost--entries)
+  (add-hook 'after-change-major-mode-hook #'roost--dashboard-display-settings 90 t)
   (tabulated-list-init-header))
 
 (defun roost--redraw ()
