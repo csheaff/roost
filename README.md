@@ -267,6 +267,8 @@ Things to know:
   command stays the same across Roost upgrades. Codex's sandbox keeps a
   worktree's shared `.git` read-only, so it asks before committing.
 - Pi is experimental: launch, events and resume were checked, but no full model run.
+- A GitHub issue's text goes to the agent as written, and anyone can open an
+  issue on a public repository. Read it in the draft before pressing `C-c C-c`.
 
 ## Upgrading
 
