@@ -54,6 +54,12 @@ own worktree. If that conflicts, Roost offers to have the task's agent resolve
 it, run the tests and commit. Then `m` merges the task into the branch it
 started from and removes its worktree, branch and window.
 
+**Or open a pull request.** To finish on GitHub instead, `P` drafts one: the first
+line is the title and the rest the body, prefilled from the task's commits and
+prompt. `C-c C-c` pushes the branch and creates it (`C-u C-c C-c` as a draft).
+The dashboard then shows `#12` with its checks and review, and `P` opens it in the
+browser. Once it is merged, `x` retires the task. Needs `gh` on the task's host.
+
 ![A task's prompt, changes, actions and details](docs/images/roost-task-panel.jpg)
 
 ## Install
@@ -135,6 +141,7 @@ Magit is optional (review falls back to Dired).
 | `e` | `roost-send` | Paste a prompt into the agent and press Enter |
 | `?` | `roost-task-info` | Prompt, changes, actions and details |
 | `u` | `roost-update` | Merge the integration branch into the task |
+| `P` | `roost-pr` | Draft a pull request for the task, or open the one it has |
 | `m` | `roost-merge-retire` | Merge committed work, then retire the task |
 | `x` | `roost-retire` | Retire a task that is already merged or has no commits |
 | `X` | `roost-forget` | Drop Roost's record; keep the worktree and branch |
@@ -151,6 +158,9 @@ with its file and lines), and `roost-watch-mode` (background polling).
 In the new task draft: `C-c C-c` creates, `C-c C-k` cancels, and `C-c C-p`,
 `C-c C-a`, `C-c C-b` and `C-c C-n` change the project, agent, starting ref and
 name. An empty name is derived from the prompt.
+
+In the pull request draft: `C-c C-c` creates the pull request (`C-u` as a draft)
+and `C-c C-k` cancels. A failed creation keeps the draft.
 
 ## Configuration
 

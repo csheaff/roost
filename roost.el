@@ -177,6 +177,14 @@ Ordinary perspectives retain their existing labels and click actions."
   "A task whose agent failed or disappeared.")
 (defface roost-status-inactive '((t :inherit shadow))
   "Stopped, exited, starting or offline tasks.")
+(defface roost-pr-open '((t :inherit success))
+  "Face for an open pull request." :group 'roost)
+(defface roost-pr-draft '((t :inherit shadow))
+  "Face for a draft pull request." :group 'roost)
+(defface roost-pr-merged '((t :inherit font-lock-keyword-face))
+  "Face for a merged pull request." :group 'roost)
+(defface roost-pr-closed '((t :inherit error))
+  "Face for a pull request closed without merging." :group 'roost)
 (defface roost-diff-added '((t :inherit success))
   "Inserted line counts.")
 (defface roost-diff-removed '((t :inherit error))
@@ -451,7 +459,7 @@ Call SUCCESS with the result, or FAILURE with an error message."
                         (not (equal (roost--field task 'updatedAt)
                                     (roost--field old 'updatedAt))))))
     ;; Quiet polls skip Git; keep the statistics from the last full refresh.
-    (dolist (field '(diff dirty ahead behind worktreeMissing))
+    (dolist (field '(diff dirty ahead behind worktreeMissing prStatus))
       (unless (assoc field task)
         (when (assoc field old) (push (assoc field old) task))))
     (if (member status '("retired" "forgotten"))
@@ -1419,6 +1427,208 @@ conflicts, offer to have the task's agent resolve them."
               (message "%s now includes the latest %s" name branch))
              (t (message "%s is already up to date with %s" name branch)))))))
 
+;;;; Pull requests
+
+(defvar-local roost--pr-task nil
+  "The task a pull request draft will be created for.")
+(defvar-local roost--pr-sending nil
+  "Non-nil while the drafted pull request is being created.")
+
+(defvar-keymap roost-pr-mode-map
+  :doc "Keys for drafting a pull request."
+  "C-c C-c" #'roost-pr-submit
+  "C-c C-k" #'roost-pr-cancel)
+
+(define-derived-mode roost-pr-mode text-mode "Roost PR"
+  "Draft a pull request: the first line is the title, the rest the body.
+\\{roost-pr-mode-map}"
+  (add-hook 'after-change-major-mode-hook #'roost--quiet-display 90 t)
+  (roost--evil-state 'roost-pr-mode 'insert)
+  (roost--quiet-display))
+
+(defun roost--pr-commits (task)
+  "Subjects of TASK's commits since it started, oldest first, read with Git
+in its worktree (over TRAMP for remote tasks).  Nil when Git cannot say."
+  (when-let* ((base (roost--field task 'baseCommit)))
+    (let ((default-directory (roost--remote-directory task)))
+      (ignore-errors
+        (with-temp-buffer
+          (when (zerop (process-file "git" nil t nil "log" "--reverse" "--format=%s"
+                                     (concat base "..HEAD")))
+            (split-string (buffer-string) "\n" t)))))))
+
+(defun roost--readable-name (name)
+  "TASK NAME's words as a sentence: \"fix-auth\" becomes \"Fix auth\"."
+  (let ((words (string-trim (replace-regexp-in-string "[-_ ]+" " " (or name "")))))
+    (if (string-empty-p words) words (concat (upcase (substring words 0 1)) (substring words 1)))))
+
+(defun roost--pr-initial-text (task commits)
+  "Draft text for TASK's pull request: a title line, then the body.
+The title is the only commit's subject, else the task name; the body is the
+prompt, followed by the subjects when there are several COMMITS."
+  (let ((title (if (= (length commits) 1)
+                   (car commits)
+                 (roost--readable-name (roost--field task 'name))))
+        (prompt (roost--prompt-text task))
+        (list (when (cdr commits)
+                (mapconcat (lambda (subject) (concat "- " subject)) commits "\n"))))
+    (concat title "\n\n"
+            (string-join (delq nil (list (and prompt (string-trim prompt)) list)) "\n\n")
+            (if (or prompt list) "\n" ""))))
+
+(defun roost--pr-header (task)
+  "Header line for TASK's pull request draft."
+  (substitute-command-keys
+   (format " Pull request for %s · \\<roost-pr-mode-map>\\[roost-pr-submit] create (C-u: draft) · \\[roost-pr-cancel] cancel"
+           (roost--field task 'name))))
+
+(defun roost--pr-draft (task)
+  "Open a draft buffer for TASK's pull request.
+An existing draft for TASK is reused, and kept as written unless it is empty."
+  (let* ((buffer (get-buffer-create (format "*roost pr: %s*" (roost--field task 'name)))))
+    (with-current-buffer buffer
+      (unless (derived-mode-p 'roost-pr-mode) (roost-pr-mode))
+      (setq roost--pr-task task
+            header-line-format (roost--pr-header task))
+      (when (string-empty-p (string-trim (buffer-string)))
+        (erase-buffer)
+        (insert (roost--pr-initial-text task (roost--pr-commits task)))
+        (goto-char (point-min))
+        (end-of-line)))
+    (pop-to-buffer buffer)))
+
+;;;###autoload
+(defun roost-pr (&optional task)
+  "Open a pull request for TASK, or show the one it already has.
+Write the title on the first line and the body below it;
+\\<roost-pr-mode-map>\\[roost-pr-submit] pushes the branch and creates it."
+  (interactive)
+  (setq task (roost--choose task))
+  (if-let* ((url (alist-get 'url (roost--field task 'pr))))
+      (browse-url url)
+    (roost--pr-draft task)))
+
+(defun roost-pr-cancel ()
+  "Discard the pull request draft."
+  (interactive)
+  (when (or (string-empty-p (string-trim (buffer-string)))
+            (yes-or-no-p "Discard this pull request? "))
+    (quit-window t)))
+
+(defun roost-pr-submit (&optional draft)
+  "Create the drafted pull request; with prefix argument DRAFT, as a draft.
+The text is kept if creation fails."
+  (interactive "P")
+  (let* ((text (buffer-string))
+         (newline (string-match "\n" text))
+         (title (string-trim (if newline (substring text 0 newline) text)))
+         (body (if newline (string-trim (substring text newline)) ""))
+         (task roost--pr-task)
+         (buffer (current-buffer)))
+    (when (string-empty-p title)
+      (user-error "Write a title on the first line"))
+    (when roost--pr-sending
+      (user-error "Already creating"))
+    (setq roost--pr-sending t)
+    (message "Roost: creating a pull request for %s…" (roost--field task 'name))
+    (roost--act
+     task "pr" `((title . ,title) (body . ,body) (draft . ,(and draft t)))
+     (lambda (updated)
+       (when (buffer-live-p buffer)
+         (quit-windows-on buffer t)
+         (when (buffer-live-p buffer) (kill-buffer buffer)))
+       (message "Roost: opened pull request #%s %s"
+                (alist-get 'number (roost--field updated 'pr))
+                (alist-get 'url (roost--field updated 'pr))))
+     (lambda (err)
+       (message "Roost could not create the pull request: %s" err)
+       (when (buffer-live-p buffer)
+         (with-current-buffer buffer
+           (setq roost--pr-sending nil
+                 header-line-format
+                 (format " Could not create: %s · %s retries" err
+                         (substitute-command-keys "\\[roost-pr-submit]")))))))))
+
+(defun roost--pr-state (task)
+  "TASK's pull request state: `open', `draft', `merged', `closed', or nil.
+Without a status from GitHub yet, a recorded pull request counts as open."
+  (when (roost--field task 'pr)
+    (let ((status (roost--field task 'prStatus)))
+      (cond ((not status) 'open)
+            ((equal (alist-get 'state status) "MERGED") 'merged)
+            ((equal (alist-get 'state status) "CLOSED") 'closed)
+            ((alist-get 'draft status) 'draft)
+            (t 'open)))))
+
+(defun roost--pr-face (state)
+  "Face for pull request STATE."
+  (pcase state
+    ('draft 'roost-pr-draft) ('merged 'roost-pr-merged) ('closed 'roost-pr-closed)
+    (_ 'roost-pr-open)))
+
+(defun roost--pr-checks (task)
+  "TASK's check counts as (PASSING FAILING PENDING), or nil if unknown or none."
+  (when-let* ((checks (alist-get 'checks (roost--field task 'prStatus))))
+    (let ((counts (mapcar (lambda (key) (or (alist-get key checks) 0))
+                          '(passing failing pending))))
+      (when (> (apply #'+ counts) 0) counts))))
+
+(defun roost--pr-marker (task)
+  "Compact pull request marker for TASK's dashboard row, such as \"#12 ✓\"."
+  (if-let* ((pr (roost--field task 'pr))
+            (state (roost--pr-state task)))
+      (let* ((open (memq state '(open draft)))
+             (counts (and open (roost--pr-checks task)))
+             (review (and open (alist-get 'review (roost--field task 'prStatus))))
+             (parts (delq nil
+                          (list (propertize (format "#%s" (alist-get 'number pr))
+                                            'face (roost--pr-face state))
+                                (when counts
+                                  (cond ((> (nth 1 counts) 0) (propertize "✗" 'face 'roost-status-failed))
+                                        ((> (nth 2 counts) 0) (propertize "…" 'face 'roost-dim))
+                                        (t (propertize "✓" 'face 'roost-status-ready))))
+                                (pcase review
+                                  ("APPROVED" (propertize "+" 'face 'roost-status-ready))
+                                  ("CHANGES_REQUESTED" (propertize "!" 'face 'roost-status-permission)))))))
+        (string-join parts " "))
+    ""))
+
+(defun roost--insert-pull-request (task)
+  "Insert TASK's \"Pull request\" section when it has a pull request."
+  (when-let* ((pr (roost--field task 'pr))
+              (state (roost--pr-state task)))
+    (let* ((status (roost--field task 'prStatus))
+           (counts (roost--pr-checks task))
+           (review (alist-get 'review status)))
+      (roost--insert-heading "Pull request")
+      (insert "  ")
+      (insert-text-button (format "#%s" (alist-get 'number pr))
+                          'follow-link t 'face 'roost-field
+                          'help-echo (alist-get 'url pr)
+                          'action (lambda (_) (browse-url (alist-get 'url pr))))
+      (insert (propertize (format "  %s\n" (alist-get 'url pr)) 'face 'roost-dim))
+      (roost--insert-indented
+       (string-join
+        (delq nil
+              (list (propertize (pcase state ('draft "Draft") ('merged "Merged") ('closed "Closed")
+                                  (_ "Open"))
+                                'face (roost--pr-face state))
+                    (when (and counts (memq state '(open draft)))
+                      (string-join
+                       (delq nil (list (when (> (nth 1 counts) 0) (format "%d failing" (nth 1 counts)))
+                                       (when (> (nth 2 counts) 0) (format "%d pending" (nth 2 counts)))
+                                       (when (> (nth 0 counts) 0) (format "%d passing" (nth 0 counts)))))
+                       ", "))
+                    (when (and review (memq state '(open draft)))
+                      (pcase review ("APPROVED" "approved") ("CHANGES_REQUESTED" "changes requested")
+                        ("REVIEW_REQUIRED" "review required")))))
+        " · "))
+      (when (eq state 'merged)
+        (roost--insert-indented
+         (substitute-command-keys
+          "Merged on GitHub. \\<roost-task-info-mode-map>\\[roost-retire] retires this task, removing its worktree and branch.")
+         'roost-dim)))))
+
 ;;;###autoload
 (defun roost-stop (&optional task)
   "Stop TASK's window, retaining its worktree, branch and conversation."
@@ -1582,7 +1792,7 @@ keeps one process-wide registration per mode; a nil STATE removes it."
 (defun roost--quiet-display ()
   "Turn off line numbers and wrapping that global modes enable in Roost buffers."
   (when (derived-mode-p 'roost-dashboard-mode 'roost-task-info-mode 'roost-compose-mode
-                      'roost-send-mode)
+                      'roost-send-mode 'roost-pr-mode)
     (display-line-numbers-mode -1)
     (when (derived-mode-p 'roost-dashboard-mode)
       (visual-line-mode -1)
@@ -1598,6 +1808,7 @@ keeps one process-wide registration per mode; a nil STATE removes it."
     ["Diff since start" roost-diff]
     ["Update from integration branch" roost-update]
     "---"
+    ["Pull request…" roost-pr]
     ["Merge and retire…" roost-merge-retire]
     ["Retire…" roost-retire]
     ["Forget…" roost-forget]
@@ -1625,6 +1836,7 @@ keeps one process-wide registration per mode; a nil STATE removes it."
   "K" #'roost-stop
   "x" #'roost-retire
   "m" #'roost-merge-retire
+  "P" #'roost-pr
   "X" #'roost-forget
   "u" #'roost-update
   "g" #'roost-task-info-refresh)
@@ -1648,7 +1860,7 @@ Status is the last observation from the task's host.
      ("Files" "f" roost-files) ("Send prompt" "e" roost-send))
     ("Review" ("Magit" "r" roost-review) ("Diff since start" "D" roost-diff)
      ("Update" "u" roost-update))
-    ("Finish" ("Merge and retire" "m" roost-merge-retire) ("Retire" "x" roost-retire)
+    ("Finish" ("Pull request" "P" roost-pr) ("Merge and retire" "m" roost-merge-retire) ("Retire" "x" roost-retire)
      ("Forget" "X" roost-forget))
     ("Session" ("Stop" "K" roost-stop) ("Resume" "s" roost-resume)))
   "Task panel actions as (GROUP (LABEL KEY COMMAND)...).")
@@ -1720,6 +1932,7 @@ Status is the last observation from the task's host.
                    'roost-status-permission)))))
         (when-let* ((error (roost--field task 'error)))
           (roost--insert-indented (concat "Last error: " error) 'roost-status-failed))
+        (roost--insert-pull-request task)
         (roost--insert-heading "Actions")
         (dolist (group roost--task-actions)
           (insert "  " (propertize (format "%-9s" (car group)) 'face 'roost-dim))
@@ -1808,6 +2021,7 @@ Status is the last observation from the task's host.
   "K" #'roost-stop
   "x" #'roost-retire
   "m" #'roost-merge-retire
+  "P" #'roost-pr
   "X" #'roost-forget
   "u" #'roost-update
   "n" #'roost-next-waiting
@@ -1898,15 +2112,16 @@ The changes column shrinks first, then the agent column is dropped."
          (widest (min 40 (apply #'max (mapcar (lambda (task) (string-width (roost--changes task t)))
                                              tasks))))
          (changes widest)
+         (pr (apply #'max (mapcar (lambda (task) (string-width (roost--pr-marker task))) tasks)))
          ;; Bullet, name, status, since and their separators.
-         (fixed (+ 4 name 2 11 1 6 2))
+         (fixed (+ 4 name 2 11 1 6 2 (if (> pr 0) (+ pr 2) 0)))
          (over (- (+ fixed (if agent 8 0) (if (> changes 0) (+ changes 2) 0)) width)))
     (when (> over 0)
       (setq changes (max 0 (- changes over)))
       (when (and agent (< changes 12))
         (setq agent nil changes (min widest (max 0 (- width fixed 2))))))
     (when (< changes 6) (setq changes 0))
-    (list :name name :agent agent :changes changes)))
+    (list :name name :agent agent :changes changes :pr pr)))
 
 (defun roost--dashboard-row (task layout width)
   "Dashboard line for TASK using column LAYOUT, fitting WIDTH columns."
@@ -1918,6 +2133,11 @@ The changes column shrinks first, then the agent column is dropped."
                        (funcall cell (roost--field task 'name) (plist-get layout :name)) "  "
                        (funcall cell status 11 face) " "
                        (funcall cell (roost--elapsed (roost--field task 'updatedAt)) 6 'roost-dim) "  "
+                       (if (> (plist-get layout :pr) 0)
+                           (concat (truncate-string-to-width (roost--pr-marker task) (plist-get layout :pr)
+                                                             nil ?\s "…")
+                                   "  ")
+                         "")
                        (if (plist-get layout :agent)
                            (concat (funcall cell (or (roost--field task 'agent) "claude") 6 'roost-dim) "  ")
                          "")
@@ -2141,13 +2361,15 @@ RESULT is `pending', a list of checks, or (error . MESSAGE).")
               (dolist (check result)
                 (let* ((name (alist-get 'name check))
                        ;; Agents you don't use by default are optional.
-                       (optional (and (not (alist-get 'ok check))
-                                      (member (downcase name) roost--agents)
-                                      (not (equal name default))))
+                       (flagged (and (not (alist-get 'ok check)) (alist-get 'optional check)))
+                       (optional (or flagged
+                                     (and (not (alist-get 'ok check))
+                                          (member (downcase name) roost--agents)
+                                          (not (equal name default)))))
                        (hint (alist-get 'hint check)))
                   (roost--doctor-line name (cond (optional 'optional) ((alist-get 'ok check)) (t nil))
                                       (alist-get 'detail check)
-                                      (cond ((not optional) hint)
+                                      (cond ((or flagged (not optional)) hint)
                                             ((string-suffix-p "not found" (or (alist-get 'detail check) ""))
                                              (format "Optional: needed only for %s tasks" name))
                                             (t (format "For %s tasks: %s" name hint)))
