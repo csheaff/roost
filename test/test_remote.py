@@ -3,6 +3,7 @@ import concurrent.futures
 import importlib.util
 import json
 import os
+import shlex
 from pathlib import Path
 import subprocess
 import sys
@@ -162,6 +163,12 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(child["integrationBranch"], "main")
         self.assertEqual(child["baseCommit"], self.git("rev-parse", "HEAD", cwd=wt))
         self.assertEqual(child["session"], first["session"])
+        # The fork's own commit is not on main, so retiring it would lose work.
+        child_wt = Path(child["worktree"])
+        (child_wt / "child").write_text("child work\n")
+        self.git("add", ".", cwd=child_wt)
+        self.git("commit", "-m", "child change", cwd=child_wt)
+        self.request("stop", id=child["id"])
         self.assertFalse(self.request("retire", id=child["id"])["ok"])
         reply = self.request("create", directory=str(wt), name="independent", socket=self.socket,
                              command=[sys.executable, str(FAKE)])
@@ -311,14 +318,10 @@ class Lifecycle(unittest.TestCase):
 
     def test_partial_retirement_can_be_retried_after_branch_deletion(self):
         task = self.create()
-        original = roost.Store.save
-        def interrupted_save(store, record):
-            if record["status"] == "retired":
-                raise OSError("simulated disconnect after cleanup")
-            original(store, record)
-        with patch.object(roost.Store, "save", interrupted_save):
+        with patch.object(roost.Store, "remove", side_effect=OSError("simulated disconnect after cleanup")):
             self.assertFalse(self.request("retire", id=task["id"])["ok"])
         self.assertFalse(Path(task["worktree"]).exists())
+        self.assertFalse(roost.ref_exists(self.repo, task["branch"]))
         self.assertTrue(self.request("retire", id=task["id"])["ok"])
         self.assertEqual(self.request("list")["result"], [])
 
@@ -346,9 +349,12 @@ class Lifecycle(unittest.TestCase):
         store = roost.Store(str(self.state))
         roost.update_hook(store, task["id"], dict(hook_event_name="SessionEnd"), old["runId"])
         self.assertEqual(store.read(task["id"])["status"], "ready")
-        self.request("retire", id=task["id"])
-        roost.update_hook(store, task["id"], dict(hook_event_name="UserPromptSubmit"))
-        self.assertEqual(store.read(task["id"])["status"], "retired")
+        self.assertTrue(self.request("retire", id=task["id"])["ok"])
+        # Retirement deletes the record; a late hook cannot recreate it.
+        with self.assertRaises(roost.RoostError):
+            roost.update_hook(store, task["id"], dict(hook_event_name="UserPromptSubmit"))
+        self.assertFalse(store.path(task["id"]).exists())
+        self.assertFalse(store.path(task["id"]).with_suffix(".settings").exists())
 
     def test_concurrent_hooks_preserve_other_tasks_and_valid_json(self):
         tasks = [self.create(name="task " + str(i)) for i in range(2)]
@@ -359,6 +365,170 @@ class Lifecycle(unittest.TestCase):
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             list(pool.map(write_event, tasks))
         self.assertEqual(len(self.request("list")["result"]), 2)
+
+    def test_failed_spawn_leaves_no_record_worktree_or_branch(self):
+        before = self.git("worktree", "list", "--porcelain")
+        reply = self.request("create", directory=str(self.repo), name="bad session", socket=self.socket,
+                             session="bad:name.x", command=[sys.executable, str(FAKE)])
+        self.assertFalse(reply["ok"], reply)
+        self.assertEqual(self.request("list")["result"], [])
+        self.assertEqual(self.git("worktree", "list", "--porcelain"), before)
+        self.assertEqual(self.git("branch", "--list", "roost/*"), "")
+
+    def test_detached_primary_task_retires_when_empty_and_forgets_when_not(self):
+        self.git("checkout", "-q", "--detach")
+        empty = self.create(name="empty")
+        self.assertEqual(empty["integrationBranch"], "")
+        self.request("stop", id=empty["id"])
+        self.assertTrue(self.request("retire", id=empty["id"])["ok"])
+        worked = self.create(name="worked")
+        wt = Path(worked["worktree"])
+        (wt / "hello").write_text("work\n")
+        self.git("commit", "-qam", "work", cwd=wt)
+        self.request("stop", id=worked["id"])
+        merge = self.request("merge", id=worked["id"])
+        self.assertIn("detached HEAD", merge["error"])
+        self.assertIn("forget", self.request("retire", id=worked["id"])["error"])
+        forgotten = self.request("forget", id=worked["id"])["result"]
+        self.assertEqual(forgotten["status"], "forgotten")
+        self.assertEqual(forgotten["leftBehind"], ["worktree " + worked["worktree"], "branch " + worked["branch"]])
+        self.assertEqual(self.request("list")["result"], [])
+        self.assertEqual(self.git("show", worked["branch"] + ":hello"), "work")
+
+    def test_retire_finishes_when_worktree_and_branch_were_removed_by_hand(self):
+        task = self.create()
+        self.request("stop", id=task["id"])
+        self.git("worktree", "remove", task["worktree"])
+        self.git("branch", "-D", task["branch"])
+        self.assertTrue(self.request("retire", id=task["id"])["ok"])
+        self.assertEqual(self.request("list")["result"], [])
+
+    def test_forget_refuses_a_running_agent_and_never_touches_git(self):
+        task = self.create()
+        self.assertIn("stop", self.request("forget", id=task["id"])["error"])
+        self.assertIn(task["paneId"], roost.pane_inventory(self.socket))
+        self.request("stop", id=task["id"])
+        self.assertTrue(self.request("forget", id=task["id"])["ok"])
+        self.assertTrue(Path(task["worktree"]).exists())
+        self.assertTrue(roost.ref_exists(self.repo, task["branch"]))
+        self.assertFalse(self.request("inspect", id=task["id"])["ok"])
+
+    def test_failed_agent_pane_can_be_opened_to_read_its_error(self):
+        script = self.root / "dies.py"
+        script.write_text("import sys\nprint('AUTH ERROR: please log in')\nsys.exit(3)\n")
+        reply = self.request("create", directory=str(self.repo), name="dies", socket=self.socket,
+                             command=[sys.executable, str(script)])
+        task = self.wait(reply["result"], "failed")
+        inspected = self.request("inspect", id=task["id"])
+        self.assertTrue(inspected["ok"], inspected)
+        self.assertFalse(inspected["result"]["live"])
+        output = roost.tmux(self.socket, "capture-pane", "-p", "-S", "-", "-t", task["paneId"]).stdout
+        self.assertIn("AUTH ERROR", output)
+        self.assertFalse(self.request("send", id=task["id"], text="hello")["ok"])
+        self.assertTrue(self.request("forget", id=task["id"])["ok"])
+        self.assertNotIn(task["paneId"], roost.pane_inventory(self.socket))
+
+    def test_unreadable_tmux_keeps_status_and_a_live_crashed_task_recovers(self):
+        task = self.create()
+        with patch.object(roost, "pane_inventory", return_value=None):
+            listed = self.request("list")["result"][0]
+            self.assertEqual(listed["status"], "ready")
+            self.assertIsNone(listed["live"])
+            self.assertIn("tmux did not answer", self.request("stop", id=task["id"])["error"])
+        # A record marked crashed by an older helper's bad poll, while the agent lives on.
+        store = roost.Store(str(self.state))
+        record = store.read(task["id"])
+        record.update(status="crashed")
+        store.save(record)
+        self.assertIn("still live", self.request("retire", id=task["id"])["error"])
+        self.assertTrue(roost.owned_pane(record, roost.pane_inventory(self.socket)))
+        listed = self.request("list")["result"][0]
+        self.assertEqual((listed["status"], listed["live"]), ("ready", True))
+        self.assertNotIn("live", store.read(task["id"]))
+
+    def test_no_tmux_server_means_crashed(self):
+        task = self.create()
+        roost.tmux(self.socket, "kill-server")
+        self.assertEqual(roost.pane_inventory(self.socket), {})
+        listed = self.request("list")["result"][0]
+        self.assertEqual((listed["status"], listed["live"]), ("crashed", False))
+        self.assertTrue(self.request("resume", id=task["id"])["ok"])
+        self.wait(task, "ready")
+
+    def test_git_statistics_run_outside_the_registry_lock(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        (wt / "hello").write_text("task\n")
+        self.git("commit", "-qam", "task", cwd=wt)
+        (wt / "scratch").write_text("untracked\n")
+        (self.repo / "other").write_text("main moved\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "main moved")
+        observed = []
+        original = roost.add_git_stats
+        def probe(tasks):
+            import fcntl
+            with (self.state / "registry.lock").open("a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)  # Raises if held.
+                observed.append(True)
+            original(tasks)
+        with patch.object(roost, "add_git_stats", probe):
+            listed = self.request("list", full=True)["result"][0]
+        self.assertEqual(observed, [True])
+        self.assertEqual((listed["ahead"], listed["behind"], listed["dirty"]), (1, 1, True))
+        self.assertIn("1 file changed", listed["diff"])
+        for field in roost.TRANSIENT:
+            self.assertNotIn(field, roost.Store(str(self.state)).read(task["id"]))
+
+    def test_branch_prefix_is_configurable_and_validated(self):
+        default = self.create(name="default prefix")
+        self.assertTrue(default["branch"].startswith("roost/default-prefix-"))
+        custom = self.create(name="custom", branchPrefix="clay/")
+        self.assertTrue(custom["branch"].startswith("clay/custom-"))
+        before = self.git("worktree", "list", "--porcelain")
+        reply = self.request("create", directory=str(self.repo), name="bad", socket=self.socket,
+                             branchPrefix="bad..prefix/", command=[sys.executable, str(FAKE)])
+        self.assertIn("Invalid branch name", reply["error"])
+        self.assertEqual(self.git("worktree", "list", "--porcelain"), before)
+
+    def test_null_and_legacy_empty_object_parameters(self):
+        for empty in (None, {}):
+            with self.subTest(empty=empty):
+                task = self.create(name="params", prompt=empty, setup=empty, base=empty, session=empty)
+                record = roost.Store(str(self.state)).read(task["id"])
+                self.assertEqual((record["prompt"], record["setup"], record["task"]), (None, None, "params"))
+                self.assertEqual(record["session"], task["session"])
+                self.assertTrue(record["session"].startswith("roost-"))
+
+    def test_failed_setup_reruns_on_resume_and_then_never_again(self):
+        marker = self.root / "setup-ran"
+        setup = "echo run >> %s; test $(wc -l < %s) -ge 2" % (shlex.quote(str(marker)), shlex.quote(str(marker)))
+        reply = self.request("create", directory=str(self.repo), name="setup", socket=self.socket,
+                             setup=setup, command=[sys.executable, str(FAKE)])
+        task = self.wait(reply["result"], "failed")
+        self.assertFalse(roost.Store(str(self.state)).read(task["id"])["setupComplete"])
+        self.assertTrue(self.request("resume", id=task["id"])["ok"])
+        self.assertTrue(self.wait(task, "ready")["setupComplete"])
+        self.request("stop", id=task["id"])
+        self.request("resume", id=task["id"])
+        self.wait(task, "ready")
+        self.assertEqual(marker.read_text().count("run"), 2)
+
+    def test_agent_path_keeps_inherited_precedence(self):
+        path = roost.agent_path("/project/bin" + os.pathsep + "/usr/local/bin").split(os.pathsep)
+        self.assertEqual(path[:2], ["/project/bin", "/usr/local/bin"])
+        self.assertEqual(path.count("/usr/local/bin"), 1)
+        self.assertIn(str(Path.home() / ".local/bin"), path[2:])
+
+    def test_legacy_retired_records_are_pruned(self):
+        task = self.create()
+        self.request("stop", id=task["id"])
+        store = roost.Store(str(self.state))
+        record = store.read(task["id"])
+        record["status"] = "retired"
+        store.save(record)
+        self.assertEqual(self.request("list")["result"], [])
+        self.assertEqual(list(store.tasks_dir.glob("*.json")), [])
 
     def test_bad_base_and_missing_executable_report_errors_without_touching_repo(self):
         response = self.request("create", directory=str(self.repo), name="bad", base="missing-ref", socket=self.socket)

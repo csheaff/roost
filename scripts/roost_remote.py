@@ -20,8 +20,23 @@ class RoostError(Exception):
     pass
 
 
+# Agent states that mean work may be in progress.
+ACTIVE = ("starting", "running", "permission", "background")
+# States in which the agent process is known to have ended.
+ENDED = ("stopped", "exited", "failed", "crashed")
+# Computed per request and never persisted in a task record.
+TRANSIENT = ("live", "diff", "dirty", "ahead", "behind")
+DEFAULT_BRANCH_PREFIX = "roost/"
+
+
 def now():
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+def text(value):
+    """An optional nonempty string from a request, else None.
+    Older Emacs clients encoded nil as an empty JSON object."""
+    return value if isinstance(value, str) and value else None
 
 
 def execute(argv, cwd=None, check=True, input=None):
@@ -69,13 +84,15 @@ class Store:
 
     @contextlib.contextmanager
     def locked(self):
+        # Agent hooks take this lock on every event, so hold it only for
+        # short record and tmux operations, never for slow Git work.
         with (self.root / "registry.lock").open("a") as lock:
             os.chmod(lock.name, 0o600)
             fcntl.flock(lock, fcntl.LOCK_EX)
             yield
 
     def path(self, task_id):
-        if not re.fullmatch(r"[a-f0-9]{16}", task_id):
+        if not isinstance(task_id, str) or not re.fullmatch(r"[a-f0-9]{16}", task_id):
             raise RoostError("Invalid task ID")
         return self.tasks_dir / (task_id + ".json")
 
@@ -86,19 +103,39 @@ class Store:
             raise RoostError("Task no longer exists: " + task_id)
 
     def save(self, task):
-        atomic_json(self.path(task["id"]), task)
+        atomic_json(self.path(task["id"]),
+                    {key: value for key, value in task.items() if key not in TRANSIENT})
+
+    def remove(self, task_id):
+        """Delete a task's record and hook settings. Conversations are kept."""
+        path = self.path(task_id)
+        for stale in (path, path.with_suffix(".settings")):
+            with contextlib.suppress(FileNotFoundError):
+                stale.unlink()
 
     def all(self):
-        return [json.loads(path.read_text()) for path in sorted(self.tasks_dir.glob("*.json"))]
+        tasks = []
+        for path in sorted(self.tasks_dir.glob("*.json")):
+            # One unreadable record must not hide every other task.
+            with contextlib.suppress(OSError, ValueError):
+                tasks.append(json.loads(path.read_text()))
+        return tasks
+
+
+# tmux reports these when no server is running on the socket, so no panes exist.
+NO_SERVER = ("no server running", "No such file or directory", "Connection refused")
 
 
 def pane_inventory(socket):
+    """Map pane IDs to their tmux details.
+    Return {} when no server runs, or None when tmux could not answer (for
+    example a client/server version mismatch after upgrading tmux)."""
     result = tmux(socket, "list-panes", "-a", "-F",
                   "#{pane_id}\t#{window_id}\t#{window_index}\t#{session_id}\t#{pane_dead}\t#{@roost_task_id}\t#{session_name}",
                   check=False)
-    panes = {}
     if result.returncode:
-        return panes
+        return {} if any(marker in result.stderr for marker in NO_SERVER) else None
+    panes = {}
     for line in result.stdout.splitlines():
         fields = line.split("\t")
         if len(fields) == 7:
@@ -108,8 +145,16 @@ def pane_inventory(socket):
     return panes
 
 
-def owned_pane(task, inventory=None):
-    inventory = inventory if inventory is not None else pane_inventory(task["socket"])
+def inventory_for(task):
+    """The pane inventory for TASK's socket, or an error when tmux is unreadable."""
+    inventory = pane_inventory(task["socket"])
+    if inventory is None:
+        raise RoostError("tmux did not answer on socket %r; check `tmux -L %s ls` on the host"
+                         % (task["socket"], task["socket"]))
+    return inventory
+
+
+def owned_pane(task, inventory):
     pane = inventory.get(task.get("paneId"))
     # Pane IDs may be reused after a tmux server restart. A per-pane ownership
     # tag prevents steering or killing an unrelated process with the same ID.
@@ -131,6 +176,20 @@ def check_worktree(store, task):
     return worktree
 
 
+def ref_exists(repo, branch):
+    return bool(branch) and git(repo, "show-ref", "--verify", "--quiet",
+                                "refs/heads/" + branch, check=False).returncode == 0
+
+
+def delete_branch(repo, branch, commit):
+    """Delete BRANCH only if it still points at the verified COMMIT."""
+    ref = "refs/heads/" + branch
+    worktrees = git(repo, "worktree", "list", "--porcelain").stdout.splitlines()
+    if "branch " + ref in worktrees:
+        raise RoostError("The task branch is checked out in another worktree; remove it there first")
+    git(repo, "update-ref", "-d", ref, commit)
+
+
 def claude_hook_settings(store, task):
     script = str(Path(__file__).resolve())
     command = shlex.join([sys.executable, script, "hook", str(store.root), task["id"], task["runId"]])
@@ -149,8 +208,7 @@ class ClaudeAgent:
     default_command = ["claude"]
 
     def validate(self, command):
-        if not isinstance(command, list) or not command or not all(isinstance(x, str) and x for x in command):
-            raise RoostError("Claude command must be a nonempty argument list")
+        validate_command(command, "Claude")
         reserved = {"--worktree", "-w", "--tmux", "--background", "--bg", "--resume", "-r",
                     "--continue", "-c", "--settings", "--bare", "--safe-mode", "--session-id"}
         if any(arg.split("=", 1)[0] in reserved for arg in command[1:]):
@@ -161,7 +219,7 @@ class ClaudeAgent:
         session = task.get("agentSession") or task.get("claudeSession")
         if resume_conversation and session:
             argv += ["--resume", session]
-        elif task.get("prompt"):
+        elif text(task.get("prompt")):
             argv.append(task["prompt"])
         return argv
 
@@ -208,7 +266,7 @@ class CodexAgent:
         session = task.get("agentSession")
         if resume_conversation and session:
             argv += ["resume", session]
-        elif task.get("prompt"):
+        elif text(task.get("prompt")):
             argv += ["--", task["prompt"]]
         return argv
 
@@ -265,7 +323,7 @@ class PiAgent:
         argv = task["command"] + ["--extension", str(extension), "--session-dir", str(sessions)]
         if resume_conversation and task.get("agentSession"):
             argv += ["--session", task["agentSession"]]
-        elif task.get("prompt"):
+        elif text(task.get("prompt")):
             # Pi has no -- separator. A leading newline keeps -flags and
             # @file-looking prompts literal instead of interpreting them as CLI input.
             argv.append("\n" + task["prompt"])
@@ -293,7 +351,7 @@ AGENTS = {"claude": ClaudeAgent(), "codex": CodexAgent(), "pi": PiAgent()}
 
 
 def agent_for(task):
-    name = task.get("agent", "claude")  # Existing 0.3 records remain usable.
+    name = task.get("agent") or "claude"  # Existing 0.3 records remain usable.
     if not isinstance(name, str) or name not in AGENTS:
         raise RoostError("Unsupported agent: " + str(name))
     return AGENTS[name]
@@ -325,6 +383,8 @@ def spawn(store, task, resume=False):
 
 
 def create(store, request):
+    """Create a worktree and agent window. Preparation and `git worktree add`
+    run without the registry lock; only the tmux spawn is serialized."""
     directory = str(Path(request["directory"]).expanduser().resolve())
     checkout = git(directory, "rev-parse", "--show-toplevel").stdout.strip()
     # Git lists the main worktree first. Creating from an existing task must
@@ -337,86 +397,136 @@ def create(store, request):
     slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", name).strip("-")[:50]
     if not slug or any(ord(c) < 32 or ord(c) == 127 for c in name):
         raise RoostError("Give the task a printable name containing letters or numbers")
-    agent = agent_for(request)
+    agent_name = text(request.get("agent")) or "claude"
+    agent = agent_for(dict(agent=agent_name))
     command = request.get("command", agent.default_command)
     agent.validate(command)
     integration = git(repo, "symbolic-ref", "--short", "HEAD", check=False).stdout.strip()
     # Independent tasks start at the primary checkout. HEAD only forks the
     # source worktree when explicitly requested, rather than accidentally.
-    explicit_base = request.get("base")
+    explicit_base = text(request.get("base"))
     base = explicit_base or integration or "HEAD"
     commit = git(directory if explicit_base else repo, "rev-parse", "--verify", base + "^{commit}").stdout.strip()
     task_id = uuid.uuid4().hex[:16]
+    prefix = text(request.get("branchPrefix")) or DEFAULT_BRANCH_PREFIX
+    branch = prefix + slug + "-" + task_id[:6]
+    if git(repo, "check-ref-format", "--branch", branch, check=False).returncode:
+        raise RoostError("Invalid branch name %r; check the branch prefix" % branch)
     repo_hash = hashlib.sha256(repo.encode()).hexdigest()[:10]
-    branch = "codex/roost/" + slug + "-" + task_id[:6]
     worktree = store.root / "worktrees" / repo_hash / (slug + "-" + task_id[:6])
     worktree.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    socket = request.get("socket") or "main"
-    task = dict(id=task_id, name=name, task=request.get("prompt") or name, repo=repo,
+    socket = text(request.get("socket")) or "main"
+    prompt = text(request.get("prompt"))
+    setup = text(request.get("setup"))
+    task = dict(id=task_id, name=name, task=prompt or name, repo=repo,
                 worktree=str(worktree), branch=branch, baseRef=base, baseCommit=commit,
-                integrationBranch=integration, socket=socket, session=request.get("session") or "roost-" + repo_hash,
-                agent=request.get("agent", "claude"), command=command, setup=request.get("setup"), prompt=request.get("prompt"),
+                integrationBranch=integration, socket=socket,
+                session=text(request.get("session")) or "roost-" + repo_hash,
+                agent=agent_name, command=command, setup=setup, prompt=prompt,
                 status="starting", startedAt=now(), updatedAt=now(), claudeSession=None)
+    if setup:
+        task["setupComplete"] = False
     git(repo, "-c", "branch.autoSetupMerge=false", "worktree", "add", "-b", branch,
         str(worktree), commit)
-    try:
-        store.save(task)
-        spawn(store, task)
-    except Exception:
-        # Never force-remove: a runner could already have written real work.
-        if not git(worktree, "status", "--porcelain").stdout:
-            git(repo, "worktree", "remove", str(worktree), check=False)
-            git(repo, "branch", "-d", branch, check=False)
-        task.update(status="failed", error="Creation failed; inspect the task before retrying")
-        store.save(task)
-        raise
+    with store.locked():
+        try:
+            store.save(task)
+            spawn(store, task)
+        except Exception:
+            if task.get("windowId"):
+                tmux(socket, "kill-window", "-t", task["windowId"], check=False)
+            # Never force-remove: a runner could already have written real work.
+            if not git(worktree, "status", "--porcelain", check=False).stdout:
+                git(repo, "worktree", "remove", str(worktree), check=False)
+                with contextlib.suppress(RoostError):
+                    delete_branch(repo, branch, commit)
+            if worktree.exists():
+                task.update(status="failed", error="Creation failed; inspect the worktree, then retire or forget the task")
+                store.save(task)
+            else:
+                store.remove(task_id)
+            raise
     return task
 
 
 def list_tasks(store, request):
-    tasks = store.all()
-    sockets = {task["socket"] for task in tasks if task["status"] != "retired"}
-    inventories = {socket: pane_inventory(socket) for socket in sockets}
-    for task in tasks:
+    tasks = []
+    for task in store.all():
         if task["status"] == "retired":
+            # Retirement now deletes records; clear out ones left by older helpers.
+            store.remove(task["id"])
+        else:
+            tasks.append(task)
+    inventories = {}
+    for task in tasks:
+        socket = task["socket"]
+        if socket not in inventories:
+            inventories[socket] = pane_inventory(socket)
+        inventory = inventories[socket]
+        if inventory is None:
+            # tmux could not answer: keep the last observed status rather than
+            # declaring every agent on this socket crashed.
+            task["live"] = None
             continue
-        pane = owned_pane(task, inventories[task["socket"]])
-        if pane:
-            moved = task.get("session") != pane["session_name"] or task.get("windowIndex") != pane["index"]
-            task["windowIndex"] = pane["index"]
-            task["session"] = pane["session_name"]
-            if moved:
-                store.save(task)
+        pane = owned_pane(task, inventory)
+        changed = False
+        if pane and (task.get("session"), task.get("windowIndex")) != (pane["session_name"], pane["index"]):
+            task.update(session=pane["session_name"], windowIndex=pane["index"])
+            changed = True
         task["live"] = bool(pane and not pane["dead"])
-        if not task["live"] and task["status"] not in ("stopped", "exited", "failed", "crashed"):
-            task.update(status="crashed", updatedAt=now())
+        if task["live"] and task["status"] == "crashed":
+            # An earlier poll missed a pane that is in fact alive.
+            task.update(status=task.pop("statusBeforeCrash", None) or "ready", updatedAt=now())
+            changed = True
+        elif not task["live"] and task["status"] not in ENDED:
+            task.update(status="crashed", statusBeforeCrash=task["status"], updatedAt=now())
+            changed = True
+        if changed:
             store.save(task)
-        if request.get("full") and Path(task["worktree"]).exists():
-            stats = git(task["worktree"], "diff", "--shortstat", task["baseCommit"], check=False)
-            dirty = git(task["worktree"], "status", "--porcelain", check=False)
-            task["diff"] = stats.stdout.strip()
-            task["dirty"] = bool(dirty.stdout)
-    return [task for task in tasks if task["status"] != "retired"]
+    return tasks
 
 
-def stop(store, task):
-    inventory = pane_inventory(task["socket"])
-    pane = owned_pane(task, inventory)
-    if task.get("paneId") in inventory and not pane:
-        raise RoostError("Task's tmux ownership changed; refusing to stop another window")
-    if pane:
+def add_git_stats(tasks):
+    """Diffstat, dirtiness and divergence from the integration branch.
+    Runs outside the registry lock: in a large repository these take seconds."""
+    for task in tasks:
+        worktree = Path(task["worktree"])
+        if not worktree.is_dir():
+            continue
+        stats = git(worktree, "diff", "--shortstat", task["baseCommit"], check=False)
+        dirty = git(worktree, "status", "--porcelain", check=False)
+        task["diff"] = stats.stdout.strip()
+        task["dirty"] = bool(dirty.stdout)
+        integration = task.get("integrationBranch")
+        if integration:
+            counts = git(worktree, "rev-list", "--left-right", "--count",
+                         "refs/heads/" + integration + "...HEAD", "--", check=False)
+            if counts.returncode == 0 and len(counts.stdout.split()) == 2:
+                behind, ahead = counts.stdout.split()
+                task["behind"], task["ahead"] = int(behind), int(ahead)
+
+
+def stop(store, task, inventory=None):
+    """Kill the task's window if Roost still owns it. Work is kept."""
+    inventory = inventory if inventory is not None else inventory_for(task)
+    if owned_pane(task, inventory):
         tmux(task["socket"], "kill-window", "-t", task["windowId"])
-    task.update(status="stopped", updatedAt=now(), live=False)
+    # A pane ID owned by something else means ours is gone (for example after a
+    # tmux server restart reused the ID): never touch it, and forget the IDs.
+    task.update(status="stopped", updatedAt=now(), paneId=None, windowId=None)
+    task.pop("shellPaneId", None)
     store.save(task)
+    task["live"] = False
     return task
 
 
 def resume(store, task):
-    pane = owned_pane(task)
+    inventory = inventory_for(task)
+    pane = owned_pane(task, inventory)
     if pane and not pane["dead"]:
         raise RoostError("The agent is still running; open the existing task")
     if not Path(task["worktree"]).is_dir():
-        raise RoostError("Task worktree is gone")
+        raise RoostError("Task worktree is gone; forget the task to remove it from Roost")
     check_worktree(store, task)
     if pane:
         tmux(task["socket"], "kill-window", "-t", task["windowId"])
@@ -424,13 +534,25 @@ def resume(store, task):
     return task
 
 
+def inspect(store, task):
+    """Validate ownership before Emacs displays the task. A dead pane is still
+    shown: it holds the agent's last output, such as a startup error."""
+    pane = owned_pane(task, inventory_for(task))
+    if not pane:
+        raise RoostError("The agent's tmux window is gone; resume the task")
+    task.update(windowIndex=pane["index"], session=pane["session_name"])
+    store.save(task)
+    task["live"] = not pane["dead"]
+    return task
+
+
 def send(task, text):
-    pane = owned_pane(task)
+    pane = owned_pane(task, inventory_for(task))
     if not pane or pane["dead"]:
         raise RoostError("The agent is not running; resume the task first")
     if task["status"] in ("starting", "permission"):
         raise RoostError("Open the task to finish startup or answer its permission prompt")
-    if not text.strip():
+    if not isinstance(text, str) or not text.strip():
         raise RoostError("Empty prompt")
     buffer = "roost-" + uuid.uuid4().hex
     tmux(task["socket"], "load-buffer", "-b", buffer, "-", input=text)
@@ -444,7 +566,7 @@ def send(task, text):
 
 def shell(store, task):
     """Reuse one supporting shell in the task's tmux window and worktree."""
-    inventory = pane_inventory(task["socket"])
+    inventory = inventory_for(task)
     if not owned_pane(task, inventory):
         raise RoostError("Task's tmux window is gone; resume the task before opening its shell")
     pane = inventory.get(task.get("shellPaneId"))
@@ -467,9 +589,13 @@ def shell(store, task):
     return task
 
 
-def require_finished(task):
-    if task["status"] in ("starting", "running", "permission", "background"):
+def require_finished(task, pane):
+    if task["status"] in ACTIVE:
         raise RoostError("The agent is active; stop it or wait before retiring this task")
+    # The cached status can lag (or predate a reconnect); a live pane in an
+    # unexpected state is treated as working.
+    if pane and not pane["dead"] and task["status"] not in ("ready", "exited", "failed", "stopped"):
+        raise RoostError("The agent's pane is still live; stop the task before retiring it")
 
 
 def require_clean(repo):
@@ -479,47 +605,86 @@ def require_clean(repo):
 
 def integration_branch(task):
     branch = task.get("integrationBranch")
-    if not branch or git(task["repo"], "symbolic-ref", "--short", "HEAD").stdout.strip() != branch:
-        raise RoostError("Check out the task's recorded integration branch in its primary repository")
+    if not branch:
+        raise RoostError("The task has no integration branch (it was created from a detached HEAD); merge it manually, then retire")
+    if git(task["repo"], "symbolic-ref", "--short", "HEAD", check=False).stdout.strip() != branch:
+        raise RoostError("Check out %s in the primary repository %s before merging" % (branch, task["repo"]))
     if git(task["repo"], "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0:
         raise RoostError("The primary repository already has a merge in progress")
     return branch
 
 
+def safe_to_delete(task, commit):
+    """True when deleting the task branch at COMMIT loses no commits."""
+    if commit == task.get("baseCommit"):
+        return True  # The task never committed anything.
+    integration = task.get("integrationBranch")
+    return ref_exists(task["repo"], integration) and git(
+        task["repo"], "merge-base", "--is-ancestor", commit, "refs/heads/" + integration,
+        check=False).returncode == 0
+
+
 def retire(store, task, merge=False):
-    require_finished(task)
-    inventory = pane_inventory(task["socket"])
-    if task.get("paneId") in inventory and not owned_pane(task, inventory):
-        raise RoostError("Task's tmux ownership changed; resolve it before retiring the worktree")
+    """Remove a finished task's worktree, branch, window and record.
+    Never discards uncommitted files or unmerged commits."""
+    inventory = inventory_for(task)
+    pane = owned_pane(task, inventory)
+    require_finished(task, pane)
+    if task.get("paneId") in inventory and not pane:
+        raise RoostError("Task's tmux ownership changed; stop or forget the task instead")
+    repo = task["repo"]
+    branch = task["branch"]
     worktree = check_worktree(store, task)
-    base = integration_branch(task)
-    require_clean(task["repo"])
-    if worktree.exists():
+    worktree_exists = worktree.exists()
+    branch_exists = ref_exists(repo, branch)
+    if worktree_exists:
         require_clean(str(worktree))
-    branch_exists = git(task["repo"], "show-ref", "--verify", "--quiet",
-                        "refs/heads/" + task["branch"], check=False).returncode == 0
-    commit = git(task["repo"], "rev-parse", task["branch"] + "^{commit}").stdout.strip() if branch_exists else task.get("retiringCommit")
-    if not commit:
-        raise RoostError("Task branch disappeared without a retirement checkpoint; review manually")
-    if merge and branch_exists:
-        result = git(task["repo"], "merge", "--no-ff", "--no-edit", task["branch"], check=False)
+    if merge:
+        if not branch_exists:
+            raise RoostError("The task branch no longer exists; there is nothing to merge")
+        integration_branch(task)
+        require_clean(repo)
+        result = git(repo, "merge", "--no-ff", "--no-edit", branch, check=False)
         if result.returncode:
-            if git(task["repo"], "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0:
-                git(task["repo"], "merge", "--abort")
+            if git(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0:
+                git(repo, "merge", "--abort")
             raise RoostError("Merge failed; task retained: " + (result.stderr.strip() or result.stdout.strip()))
-    if git(task["repo"], "merge-base", "--is-ancestor", commit, base, check=False).returncode:
-        raise RoostError("Task branch has unmerged commits; merge it before retiring")
-    # A durable checkpoint permits retry after a disconnect or partial cleanup.
-    task["retiringCommit"] = commit
-    store.save(task)
-    stop(store, task)
-    if worktree.exists():
-        require_clean(str(worktree))
-        git(task["repo"], "worktree", "remove", str(worktree))
+    commit = None
     if branch_exists:
-        git(task["repo"], "branch", "-d", task["branch"])
+        commit = git(repo, "rev-parse", "refs/heads/" + branch + "^{commit}").stdout.strip()
+        if not safe_to_delete(task, commit):
+            raise RoostError("Task branch has unmerged commits; merge it (m) before retiring, "
+                             "or forget the task to keep its branch")
+        # A durable checkpoint permits retry after a disconnect or partial cleanup.
+        task["retiringCommit"] = commit
+        store.save(task)
+    stop(store, task, inventory)
+    if worktree_exists:
+        require_clean(str(worktree))
+        git(repo, "worktree", "remove", str(worktree))
+    if branch_exists:
+        delete_branch(repo, branch, commit)
+    store.remove(task["id"])
     task.update(status="retired", updatedAt=now())
-    store.save(task)
+    return task
+
+
+def forget(store, task):
+    """Drop Roost's record without touching Git, closing an ended task's window.
+    The escape hatch for tasks Roost can no longer retire."""
+    inventory = pane_inventory(task["socket"])
+    pane = owned_pane(task, inventory) if inventory else None
+    if pane and not pane["dead"]:
+        raise RoostError("The agent is running; stop the task before forgetting it")
+    if pane:
+        tmux(task["socket"], "kill-window", "-t", task["windowId"], check=False)
+    left = []
+    if Path(task["worktree"]).exists():
+        left.append("worktree " + task["worktree"])
+    if Path(task["repo"]).is_dir() and ref_exists(task["repo"], task.get("branch")):
+        left.append("branch " + task["branch"])
+    store.remove(task["id"])
+    task.update(status="forgotten", updatedAt=now(), leftBehind=left, live=False)
     return task
 
 
@@ -536,6 +701,18 @@ def update_hook(store, task_id, payload, run_id=None):
             store.save(task)
 
 
+def agent_path(inherited):
+    """PATH for the agent: the inherited PATH first, then common install
+    directories that SSH noninteractive shells often omit. Keeping the
+    inherited order means the agent sees the same tools as the task shell."""
+    nvm_bins = sorted((Path.home() / ".nvm/versions/node").glob("*/bin"),
+                      key=lambda p: tuple(int(n) for n in re.findall(r"\d+", p.parent.name)), reverse=True)
+    fallbacks = [str(Path.home() / ".local/bin"), str(Path.home() / "bin"),
+                 "/opt/homebrew/bin", "/usr/local/bin", *(str(path) for path in nvm_bins)]
+    entries = [entry for entry in inherited.split(os.pathsep) if entry]
+    return os.pathsep.join(entries + [entry for entry in fallbacks if entry not in entries])
+
+
 def runner(root, task_id, run_id, resume_conversation=False):
     store = Store(root)
     with store.locked():
@@ -548,12 +725,7 @@ def runner(root, task_id, run_id, resume_conversation=False):
     env["ROOST_STATE_DIRECTORY"] = str(store.root)
     env["ROOST_HELPER"] = str(Path(__file__).resolve())
     env["ROOST_PYTHON"] = sys.executable
-    # SSH noninteractive shells often omit an otherwise installed Node CLI.
-    nvm_bins = sorted((Path.home() / ".nvm/versions/node").glob("*/bin"),
-                      key=lambda p: tuple(int(n) for n in re.findall(r"\d+", p.parent.name)), reverse=True)
-    env["PATH"] = os.pathsep.join([str(Path.home() / ".local/bin"), str(Path.home() / "bin"),
-                                   "/opt/homebrew/bin", "/usr/local/bin", env.get("PATH", ""),
-                                   *(str(path) for path in nvm_bins)])
+    env["PATH"] = agent_path(env.get("PATH", ""))
     code = 1
     error = None
     try:
@@ -563,14 +735,21 @@ def runner(root, task_id, run_id, resume_conversation=False):
             if task.get("runId") != run_id or task["status"] in ("stopped", "retired"):
                 return 0
             argv = agent_for(task).launch(store, task, resume_conversation)
-        if task.get("setup") and not resume_conversation:
-            subprocess.run(["/bin/sh", "-lc", task["setup"]], cwd=task["worktree"], env=env, check=True)
+        setup = text(task.get("setup"))
+        # Resume reruns setup only when the first run never finished it.
+        if setup and (not resume_conversation or task.get("setupComplete") is False):
+            subprocess.run(["/bin/sh", "-lc", setup], cwd=task["worktree"], env=env, check=True)
+            with store.locked():
+                current = store.read(task_id)
+                if current.get("runId") == run_id:
+                    current["setupComplete"] = True
+                    store.save(current)
         code = subprocess.call(argv, cwd=task["worktree"], env=env)
     except (OSError, RoostError, subprocess.CalledProcessError) as exc:
         error = str(exc)
         print("Roost: " + error, file=sys.stderr)
     finally:
-        with store.locked():
+        with store.locked(), contextlib.suppress(RoostError):
             current = store.read(task_id)
             if current.get("runId") == run_id and current["status"] not in ("stopped", "retired"):
                 current.update(status="exited" if code == 0 else "failed", updatedAt=now(),
@@ -579,42 +758,41 @@ def runner(root, task_id, run_id, resume_conversation=False):
     return code
 
 
+TASK_ACTIONS = {
+    "resume": lambda store, task, request: resume(store, task),
+    "stop": lambda store, task, request: stop(store, task),
+    "send": lambda store, task, request: send(task, request["text"]),
+    "shell": lambda store, task, request: shell(store, task),
+    "inspect": lambda store, task, request: inspect(store, task),
+    "retire": lambda store, task, request: retire(store, task),
+    "merge": lambda store, task, request: retire(store, task, merge=True),
+    "forget": lambda store, task, request: forget(store, task),
+}
+
+
 def rpc(request):
     try:
         store = Store(request["root"])
+        action = request["action"]
+        if action == "create":
+            return {"ok": True, "result": create(store, request)}
         with store.locked():
-            action = request["action"]
             if action == "list":
                 result = list_tasks(store, request)
-            elif action == "create":
-                result = create(store, request)
-            else:
+            elif action in TASK_ACTIONS:
                 task = store.read(request["id"])
                 if task["status"] == "retired":
                     raise RoostError("Task is retired")
-                if action == "resume":
-                    result = resume(store, task)
-                elif action == "stop":
-                    result = stop(store, task)
-                elif action == "send":
-                    result = send(task, request["text"])
-                elif action == "shell":
-                    result = shell(store, task)
-                elif action == "inspect":
-                    pane = owned_pane(task)
-                    if not pane or pane["dead"]:
-                        raise RoostError("The agent's tmux pane is gone or stopped; resume the task")
-                    task["windowIndex"] = pane["index"]
-                    task["session"] = pane["session_name"]
-                    store.save(task)
-                    result = task
-                elif action in ("retire", "merge"):
-                    result = retire(store, task, merge=action == "merge")
-                else:
-                    raise RoostError("Unknown action: " + str(action))
+                result = TASK_ACTIONS[action](store, task, request)
+            else:
+                raise RoostError("Unknown action: " + str(action))
+        if action == "list" and request.get("full"):
+            add_git_stats(result)
         return {"ok": True, "result": result}
-    except (RoostError, OSError, ValueError, KeyError) as exc:
+    except (RoostError, OSError, ValueError) as exc:
         return {"ok": False, "error": str(exc)}
+    except Exception as exc:  # The protocol boundary reports, rather than prints, bugs.
+        return {"ok": False, "error": "%s: %s" % (type(exc).__name__, exc)}
 
 
 def main():
