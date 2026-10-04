@@ -1,5 +1,31 @@
 # Validation
 
+## After 0.7.0 — 2026-10-04
+
+- **GitHub issues.** The host's `issues` action listed tmux-control's real open
+  issue (#70) through `gh`. In a test Emacs with the author's configuration,
+  `C-c C-t` in a draft offered it; choosing it filled the prompt from the issue
+  and named the task `70-off-by-one-scroll-cursor-relative`.
+- **Org to merge, with an agent.** In a throwaway repository, a draft opened on
+  an Org heading took the heading and its notes as the prompt; creating the
+  task recorded `ROOST_TASK` on the heading. Claude Code (Haiku 4.5) stopped at
+  folder trust (the mode line showed `Roost:1`), then asked to edit and to
+  commit. The ready notification read "Done. The greet() function now returns
+  "Hello, Alice!"…". Run on the heading, `roost-merge-retire` merged the
+  commit and retired the task.
+- **The command menu.** `h` in the dashboard opened `roost-dispatch` only after
+  an alias left from 0.2, which redefined the name as `roost-new-task`, was
+  removed; a test now guards it.
+- **Shared SSH connections.** Against `claylien` on a LAN, a bare `ssh true`
+  took 0.34 s alone and 0.13 s over a shared connection. Through Roost, the
+  request that started the shared connection returned in 0.72 s and the next in
+  0.39 s, with no hang from the backgrounded master. ssh refuses control socket
+  paths of 104 bytes or more, so long state directories don't share.
+- **MELPA.** `package-build` built both packages from GitHub, with Roost's
+  helper in `scripts/`; see [MELPA](melpa.md).
+
+**88 ERT tests and 66 Python tests pass**; byte compilation has no warnings.
+
 ## Developing Roost with Roost — 2026-10-04
 
 The pull request flow, follow-up prompts and the agent's latest reply were

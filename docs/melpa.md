@@ -31,10 +31,10 @@ Both recipes were built with MELPA's `package-build`. The Roost archive holds
 
 | Check | tmux-control | Roost |
 | --- | --- | --- |
-| `package-lint` | Clean after [tmux-control#153](https://github.com/csheaff/tmux-control/pull/153) moved `C-c x`, a key reserved for users | Only "tmux-control is not installable", which clears once tmux-control is on MELPA |
+| `package-lint` | Clean since 0.7.1 ([tmux-control#153](https://github.com/csheaff/tmux-control/pull/153) moved `C-c x`, a key reserved for users, to `C-c C-x`) | Only "tmux-control is not installable", which clears once tmux-control is on MELPA |
 | Byte compilation | No warnings | No warnings |
 | `checkdoc` | 73 advisory notes, mostly messages starting with "tmux-control:" and keys written into docstrings | 3, all false positives |
-| Tests | 302 ERT, source and compiled, in CI | 85 ERT and 66 Python lifecycle tests |
+| Tests | 303 ERT, source and compiled, in CI | 88 ERT and 66 Python lifecycle tests |
 
 MELPA's reviewers also run [melpazoid](https://github.com/riscy/melpazoid);
 run it on each package before submitting, and expect requests about the
