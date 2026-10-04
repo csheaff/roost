@@ -1,663 +1,488 @@
-;;; roost.el --- Cockpit for tmux agent fleets, over tmux-control -*- lexical-binding: t; -*-
-
+;;; roost.el --- Remote Claude tasks over tmux-control -*- lexical-binding: t; -*-
 ;; Author: Clay Sheaff
-;; Version: 0.2.0
+;; Version: 0.3.0
 ;; Package-Requires: ((emacs "29.1"))
-;; Keywords: tools, processes, tmux, agents
+;; Keywords: tools, processes
 ;; URL: https://github.com/csheaff/roost
-
 ;;; Commentary:
-
-;; Roost is the perch from which you watch and direct a flock of coding
-;; agents.  Background agent frameworks that drive tmux -- notably
-;; `pi-side-agents' -- run each agent in its own tmux window and git worktree
-;; and record their lifecycle in a small registry.  Roost reads that registry
-;; and, leaning on `tmux-control' to render the tmux session, turns watching
-;; into acting:
-;;
-;;   - `roost-status'        a dashboard of every agent (status, elapsed, diff)
-;;   - `roost-next-waiting'  jump to the next agent that wants you
-;;   - `roost-review'        magit on the agent's worktree (review/merge)
-;;   - `roost-merge-retire'  merge the agent's branch and tear it down
-;;   - `roost-send'          re-steer an agent by sending it a prompt
-;;   - `roost-dispatch'      kick off a new agent from Emacs
-;;   - `roost-watch-mode'    reflect status into tmux window names (glyphs),
-;;                           notify when an agent starts waiting, keep the
-;;                           dashboard live
-;;
-;; Roost touches tmux-control through only two seams -- the tmux window (its
-;; index, and its name) -- so tmux-control stays completely agent-agnostic.
-;; The contract with the framework is its registry file; `pi-side-agents' is
-;; the reference producer.
-
+;; Claude runs in tmux on the task's host. Roost owns task lifecycle and
+;; observational Claude hooks; tmux-control owns rendering. JSON RPC over SSH
+;; is asynchronous. Files and Magit use TRAMP. Global Claude settings are never
+;; changed, and stopping Claude never removes its work.
 ;;; Code:
-
 (require 'cl-lib)
 (require 'json)
 (require 'subr-x)
+(require 'seq)
 (require 'tabulated-list)
-(require 'iso8601)
-(require 'tmux-control nil t)
-
-(declare-function tmux-control-select-window "tmux-control" (&optional index))
+(require 'tramp)
+(require 'parse-time)
+(declare-function tmux-control--connect-or-switch "tmux-control" (host socket session))
 (declare-function tmux-control--send-command "tmux-control" (command &optional kind))
-(declare-function tmux-control--live-session-buffers "tmux-control" ())
-(defvar tmux-control--session)
-(defvar tmux-control--current-window)
+(declare-function tmux-control-select-pane "tmux-control" (&optional pane))
 (declare-function magit-status "magit-status" (&optional directory cache))
-
-(defgroup roost nil
-  "Cockpit for tmux agent fleets, rendered through tmux-control."
-  :group 'tools
-  :prefix "roost-")
-
-(defcustom roost-registry-relative-path ".pi/side-agents/registry.json"
-  "Path of the agent registry, relative to the repository root.
-The default matches `pi-side-agents'."
-  :type 'string)
-
-(defcustom roost-directory nil
-  "Repository whose agent registry roost reads.
-A tmux-control buffer keeps its `default-directory' local, which is not
-necessarily the fleet's repository, so set this to the repo where your agents
-run (it is resolved to its git top-level).  Nil falls back to
-`default-directory'."
-  :type '(choice (const :tag "Use default-directory" nil) directory))
-
-(defcustom roost-wait-statuses '("waiting_user" "failed" "crashed")
-  "Agent statuses that mean an agent wants your attention.
-`roost-next-waiting' cycles over agents in these statuses, and
-`roost-watch-mode' notifies when an agent enters one of them."
-  :type '(repeat string))
-
-(defcustom roost-status-glyphs
-  '(("allocating_worktree" . "•")
-    ("spawning_tmux"       . "•")
-    ("running"             . "▸")
-    ("waiting_user"        . "◆")
-    ("done"                . "✓")
-    ("failed"              . "✗")
-    ("crashed"            . "☠"))
-  "Glyph shown at the start of an agent's tmux window name, per status."
-  :type '(alist :key-type string :value-type string))
-
-(define-obsolete-variable-alias 'roost-glyph-interval 'roost-watch-interval "0.2")
-(defcustom roost-watch-interval 3
-  "Seconds between `roost-watch-mode' registry syncs."
-  :type 'number)
-
-(defcustom roost-reflect-glyphs t
-  "When non-nil, `roost-watch-mode' reflects agent status into tmux window names."
-  :type 'boolean)
-
-(defcustom roost-notify t
-  "When non-nil, `roost-watch-mode' fires an OS notification when an agent
-enters a `roost-wait-statuses' status (it finished its turn, failed, or
-crashed)."
-  :type 'boolean)
-
+(declare-function magit-diff-working-tree "magit-diff" (&optional rev args files))
+(declare-function persp-switch "perspective" (name))
+(declare-function persp-kill "perspective" (name))
+(defvar tmux-control-default-socket-name)
+(defvar tmux-control--host)
+(defvar tmux-control--socket-name)
+(defvar tmux-control--active-pane)
+(defvar tmux-control--window-id)
+(defvar tmux-control-remote-tmux-socket-setup)
+(defvar tmux-control-ssh-options)
+(defvar persp-autokill-buffer-on-remove)
+(defgroup roost nil "Claude tasks in persistent local or remote tmux." :group 'tools)
+(defcustom roost-hosts '(nil)
+  "SSH hosts to monitor. Nil means local. Task hosts are also remembered."
+  :type '(repeat (choice (const :tag "Local" nil) string)))
+(defcustom roost-state-directory "~/.local/share/roost"
+  "Host-side directory for task records, helper, settings, and worktrees." :type 'string)
+(defcustom roost-claude-command '("claude")
+  "Claude executable and extra arguments, evaluated on the task host." :type '(repeat string))
+(defcustom roost-setup-command nil
+  "Optional project setup shell command, run before Claude in new worktrees.
+May be set directory-locally. Not rerun on resume."
+  :type '(choice (const nil) string))
+(defcustom roost-socket-name nil
+  "Tmux socket, or nil to use tmux-control's configured default."
+  :type '(choice (const nil) string))
+(defcustom roost-session-name nil
+  "Tmux session to place new task windows in, or nil for one session per repo."
+  :type '(choice (const nil) string))
+(defcustom roost-watch-interval 3 "Seconds between asynchronous status refreshes." :type 'number)
+(defcustom roost-request-timeout 60 "Maximum seconds for a host operation." :type 'number)
+(defcustom roost-use-perspectives t
+  "Use one perspective per task when perspective.el is active." :type 'boolean)
+(defcustom roost-notify t "Notify on transitions requiring attention." :type 'boolean)
 (defcustom roost-notify-function nil
-  "Function of (TITLE BODY) used for notifications, or nil for the default.
-The default tries terminal-notifier, then macOS osascript, then
-`notifications-notify', then a minibuffer message."
-  :type '(choice (const :tag "Default" nil) function))
+  "Optional function of TITLE and BODY to display notifications."
+  :type '(choice (const nil) function))
+(defcustom roost-hosts-file (locate-user-emacs-file "roost/hosts.json")
+  "Local file remembering hosts used by Roost." :type 'file)
+(defconst roost--package-directory (file-name-directory (or load-file-name buffer-file-name)))
+(defvar roost--tasks (make-hash-table :test 'equal))
+(defvar roost--installed (make-hash-table :test 'equal))
+(defvar roost--refreshing (make-hash-table :test 'equal))
+(defvar roost--revisions (make-hash-table :test 'equal))
+(defvar roost--errors (make-hash-table :test 'equal))
+(defvar roost--statuses (make-hash-table :test 'equal))
+(defvar roost--remembered-hosts nil)
+(defvar roost--hosts-loaded nil)
+(defvar roost--current-task nil)
+(defvar roost--watch-timer nil)
+(defvar roost--requests nil)
+(defvar roost--open-generation 0)
 
-(defcustom roost-base-branches '("main" "master")
-  "Candidate base branch names that agents branched from.
-The first that exists is used for diffstats and as the merge target."
-  :type '(repeat string))
+(defun roost--host-label (host) "Display label for HOST." (or host "local"))
 
-(defcustom roost-dispatch-command "/agent %s"
-  "Command sent to the orchestrator pane by `roost-dispatch'.
-%s is replaced by the task text.  The default is the `pi-side-agents'
-slash command."
-  :type 'string)
+(defun roost--key (task) "Qualified identity of TASK." (list (alist-get 'host task) (alist-get 'id task)))
 
-;;;; Registry model ----------------------------------------------------------
+(defun roost--field (task field) "Read FIELD from TASK." (alist-get field task))
 
-(cl-defstruct (roost-agent (:constructor roost--make-agent) (:copier nil))
-  id status task worktree branch window-id window-index started updated)
+(defun roost--hosts ()
+  "Configured and remembered hosts, without network I/O."
+  (unless roost--hosts-loaded
+    (setq roost--hosts-loaded t)
+    (when (file-readable-p roost-hosts-file)
+      (setq roost--remembered-hosts
+            (ignore-errors (with-temp-buffer (insert-file-contents roost-hosts-file)
+                                             (json-parse-buffer :array-type 'list :null-object nil))))))
+  (delete-dups (append roost-hosts roost--remembered-hosts)))
 
-(defun roost--git-root (&optional dir)
-  "Return the git top-level directory for DIR, or nil if none."
-  (let ((default-directory (or dir default-directory)))
-    (when-let* ((root (ignore-errors
-                        (string-trim
-                         (shell-command-to-string
-                          "git rev-parse --show-toplevel 2>/dev/null")))))
-      (and (not (string-empty-p root)) (file-name-as-directory root)))))
+(defun roost--remember-host (host)
+  "Remember HOST across restarts."
+  (roost--hosts)
+  (unless (member host roost--remembered-hosts)
+    (push host roost--remembered-hosts)
+    (make-directory (file-name-directory roost-hosts-file) t)
+    (let ((coding-system-for-write 'utf-8-unix))
+      (with-temp-file roost-hosts-file (insert (json-serialize (vconcat roost--remembered-hosts))))
+      (set-file-modes roost-hosts-file #o600))))
 
-(defun roost-registry-path (&optional dir)
-  "Return the registry file path for DIR's repository, or nil."
-  (when-let* ((root (roost--git-root dir)))
-    (expand-file-name roost-registry-relative-path root)))
+(defun roost--directory-host (directory)
+  "SSH destination for DIRECTORY, or nil for local."
+  (when (file-remote-p directory)
+    (let* ((parts (tramp-dissect-file-name directory)) (host (tramp-file-name-host parts))
+           (user (tramp-file-name-user parts)) (port (tramp-file-name-port parts)))
+      (when (or port (tramp-file-name-hop parts))
+        (user-error "Use an SSH config alias for custom ports or jump hosts"))
+      (if user (concat user "@" host) host))))
 
-(defun roost--parse-registry (data)
-  "Turn parsed registry DATA (an alist) into a list of `roost-agent'.
-Sorted by tmux window index ascending.  Pure: no I/O, for testing."
-  (let ((agents (alist-get 'agents data)))
-    (cl-sort
-     (cl-loop for cell in agents
-              for rec = (cdr cell)
-              collect (roost--make-agent
-                       :id (symbol-name (car cell))
-                       :status (alist-get 'status rec)
-                       :task (alist-get 'task rec)
-                       :worktree (alist-get 'worktreePath rec)
-                       :branch (alist-get 'branch rec)
-                       :window-id (alist-get 'tmuxWindowId rec)
-                       :window-index (alist-get 'tmuxWindowIndex rec)
-                       :started (alist-get 'startedAt rec)
-                       :updated (alist-get 'updatedAt rec)))
-     #'< :key (lambda (a) (or (roost-agent-window-index a) most-positive-fixnum)))))
+(defun roost--remote-directory (task)
+  "TASK's worktree as a local or configured TRAMP path."
+  (let ((host (roost--field task 'host)) (path (roost--field task 'worktree)))
+    (if (not host) (file-name-as-directory path)
+      (let* ((parts (split-string host "@")) (user (and (> (length parts) 1) (car parts)))
+             (bare (car (last parts)))
+             (method (substring-no-properties (tramp-find-method nil user bare))))
+        (concat "/" method ":" host ":" (file-name-as-directory path))))))
 
-(defvar roost--retired (make-hash-table :test 'equal)
-  "Set of agent ids roost has retired or killed this session.
-Filtered out of `roost-agents' so a retired agent does not linger as a ghost
-\"crashed\" row once the framework's poll notices its window is gone.")
+(defun roost--helper ()
+  "Return (VERSIONED-FILENAME . SOURCE) for the host helper."
+  (with-temp-buffer
+    (insert-file-contents (expand-file-name "scripts/roost_remote.py" roost--package-directory))
+    (cons (concat "remote-" (substring (secure-hash 'sha256 (current-buffer)) 0 16) ".py") (buffer-string))))
 
-(defun roost-agents (&optional dir)
-  "Return the agents in DIR's repository registry as `roost-agent' structs.
-DIR defaults to `roost-directory', then `default-directory'.  Agents roost
-has retired this session are excluded."
-  (let ((path (roost-registry-path (or dir roost-directory))))
-    (when (and path (file-readable-p path))
-      (let ((json-object-type 'alist)
-            (json-array-type 'list)
-            (json-key-type 'symbol))
-        (seq-remove (lambda (a) (gethash (roost-agent-id a) roost--retired))
-                    (roost--parse-registry (ignore-errors (json-read-file path))))))))
+(defun roost--python-command (host code)
+  "Local argv executing Python CODE on HOST, without interpolating input."
+  (if host
+      (progn
+        (require 'tmux-control nil t)
+        (append (list "ssh" "-T" "-o" "BatchMode=yes")
+                (or (bound-and-true-p tmux-control-ssh-options)
+                    '("-o" "ConnectTimeout=8"))
+                (list "--" host
+                      (concat (when (bound-and-true-p tmux-control-remote-tmux-socket-setup)
+                                (concat tmux-control-remote-tmux-socket-setup " && "))
+                              "exec python3 -c " (shell-quote-argument code)))))
+    (list "python3" "-c" code)))
 
-(defun roost-waiting-agents (agents)
-  "Return the subset of AGENTS whose status is in `roost-wait-statuses'."
-  (seq-filter (lambda (a) (member (roost-agent-status a) roost-wait-statuses))
-              agents))
+(defun roost--decode-response (output)
+  "Parse the last nonempty line of OUTPUT as the protocol response."
+  (json-parse-string (car (last (split-string output "\n" t "[ \t\r]+")))
+                     :object-type 'alist :array-type 'list :null-object nil :false-object nil))
 
-(defun roost--next-after (agents index)
-  "Return the first of AGENTS with window index greater than INDEX, wrapping.
-AGENTS is assumed sorted by window index ascending.  INDEX may be nil."
-  (or (and index
-           (seq-find (lambda (a) (and (roost-agent-window-index a)
-                                      (> (roost-agent-window-index a) index)))
-                     agents))
-      (car agents)))
+(defun roost--run (host code input success failure)
+  "Execute CODE asynchronously on HOST with INPUT and SUCCESS/FAILURE callbacks."
+  (let* ((buffer (generate-new-buffer " *roost-rpc*")) (errors (generate-new-buffer " *roost-rpc-errors*"))
+         (default-directory temporary-file-directory) process timer finished)
+    (condition-case err
+        (progn
+          (setq process
+                (make-process
+                 :name "roost-rpc" :buffer buffer :stderr errors :noquery t
+                 :coding 'utf-8-unix :connection-type 'pipe :command (roost--python-command host code)
+                 :sentinel
+                 (lambda (proc _event)
+                   (when (and (memq (process-status proc) '(exit signal)) (not finished))
+                     (setq finished t roost--requests (delq proc roost--requests))
+                     (when timer (cancel-timer timer))
+                     (unwind-protect
+                         (let ((stdout (with-current-buffer buffer (buffer-string)))
+                               (stderr (with-current-buffer errors (string-trim (buffer-string)))))
+                           (condition-case parse-error
+                               (if (= (process-exit-status proc) 0)
+                                   (let ((response (roost--decode-response stdout)))
+                                     (if (alist-get 'ok response) (funcall success (alist-get 'result response))
+                                       (funcall failure (or (alist-get 'error response) "Host operation failed"))))
+                                 (funcall failure (if (string-empty-p stderr) "Host operation failed or timed out" stderr)))
+                             (error (funcall failure (error-message-string parse-error)))))
+                       (kill-buffer buffer) (kill-buffer errors))))))
+          (push process roost--requests)
+          (setq timer (run-at-time roost-request-timeout nil
+                                   (lambda () (when (process-live-p process) (delete-process process)))))
+          (process-send-string process input) (process-send-eof process))
+      (error (when (and process (process-live-p process)) (delete-process process))
+             (when (buffer-live-p buffer) (kill-buffer buffer))
+             (when (buffer-live-p errors) (kill-buffer errors))
+             (funcall failure (error-message-string err))))))
 
-(defun roost--glyph-name (agent)
-  "Return the tmux window name for AGENT: its status glyph plus its id."
-  (let ((glyph (or (cdr (assoc (roost-agent-status agent) roost-status-glyphs)) "")))
-    (string-trim (concat glyph " " (roost-agent-id agent)))))
+(defun roost--request (host action parameters success &optional failure)
+  "Run ACTION with PARAMETERS on HOST, installing the versioned helper as needed."
+  (let* ((helper (roost--helper)) (filename (car helper))
+         (root roost-state-directory) (installation-key (list host root))
+         (failure (or failure (lambda (err) (message "Roost %s: %s" (roost--host-label host) err))))
+         (invoke
+          (lambda ()
+            (roost--run host
+                       (format "import os,runpy,sys; p=os.path.join(os.path.expanduser(%s),%s); sys.argv=[p,'rpc']; runpy.run_path(p,run_name='__main__')"
+                               (json-serialize root) (json-serialize filename))
+                       (json-serialize (append (list (cons 'action action) (cons 'root root)) parameters))
+                       success failure))))
+    (if (equal (gethash installation-key roost--installed) filename) (funcall invoke)
+      (roost--run host
+                 (format "import os,sys,tempfile,json\nr=os.path.expanduser(%s)\nos.makedirs(r,mode=0o700,exist_ok=True)\np=os.path.join(r,%s)\nfd,t=tempfile.mkstemp(dir=r)\nwith os.fdopen(fd,'wb') as f: f.write(sys.stdin.buffer.read())\nos.chmod(t,0o700)\nos.replace(t,p)\nprint(json.dumps({'ok':True}))"
+                         (json-serialize root) (json-serialize filename))
+                 (cdr helper) (lambda (_) (puthash installation-key filename roost--installed) (funcall invoke)) failure))))
 
-;;;; git + formatting helpers -------------------------------------------------
+(defun roost--notify (title body)
+  "Display notification TITLE with BODY."
+  (cond ((functionp roost-notify-function) (funcall roost-notify-function title body))
+        ((executable-find "terminal-notifier") (call-process "terminal-notifier" nil 0 nil "-title" title "-message" body))
+        ((eq system-type 'darwin) (call-process "osascript" nil 0 nil "-e"
+                                               (format "display notification %S with title %S" body title)))
+        ((fboundp 'notifications-notify) (notifications-notify :title title :body body))
+        (t (message "%s: %s" title body))))
 
-(defun roost--git (dir &rest args)
-  "Run git with ARGS in DIR; return trimmed stdout, or nil on non-zero exit."
-  (when (and dir (file-directory-p dir))
-    (with-temp-buffer
-      (when (eq 0 (apply #'process-file "git" nil t nil "-C" dir args))
-        (string-trim (buffer-string))))))
+(defun roost--cache-task (host task)
+  "Cache TASK from HOST and notify only on attention transitions."
+  (setf (alist-get 'host task) host)
+  (let* ((key (roost--key task)) (old (gethash key roost--tasks))
+         (status (roost--field task 'status)) (previous (gethash key roost--statuses))
+         (new-stop (and (equal status "ready") (equal (roost--field task 'lastEvent) "Stop")
+                        (not (equal (roost--field task 'updatedAt) (roost--field old 'updatedAt))))))
+    (dolist (field '(diff dirty))
+      (unless (assoc field task) (when (assoc field old) (push (assoc field old) task))))
+    (if (equal status "retired") (remhash key roost--tasks) (puthash key task roost--tasks))
+    (when (and roost-notify previous (or (not (equal previous status)) new-stop)
+               (or (not (equal previous "starting")) new-stop)
+               (member status '("ready" "permission" "failed" "crashed" "exited")))
+      (roost--notify (format "Roost: %s — %s" (roost--field task 'name) status) (roost--host-label host)))
+    (puthash key status roost--statuses) task))
 
-(defun roost--base-branch (dir)
-  "Return the first of `roost-base-branches' that exists in DIR's repo, or nil."
-  (seq-find (lambda (b) (roost--git dir "rev-parse" "--verify" "--quiet"
-                                    (concat "refs/heads/" b)))
-            roost-base-branches))
+(defun roost--apply-snapshot (host tasks)
+  "Replace only HOST's cached tasks with a successful snapshot."
+  (let ((keys (mapcar (lambda (task) (list host (roost--field task 'id))) tasks)))
+    (maphash (lambda (key _) (when (and (equal (car key) host) (not (member key keys)))
+                              (remhash key roost--tasks) (remhash key roost--statuses))) roost--tasks)
+    (mapc (lambda (task) (roost--cache-task host task)) tasks) (remhash host roost--errors)))
 
-(defun roost--parse-shortstat (s)
-  "Turn a git --shortstat line S into a compact \"Nf +X -Y\" string, or nil.
-Pure, for testing."
-  (when (and s (not (string-empty-p s)))
-    (let ((files (and (string-match "\\([0-9]+\\) files? changed" s)
-                      (match-string 1 s)))
-          (ins (and (string-match "\\([0-9]+\\) insertion" s) (match-string 1 s)))
-          (del (and (string-match "\\([0-9]+\\) deletion" s) (match-string 1 s))))
-      (string-trim
-       (concat (and files (format "%sf " files))
-               (and ins (format "+%s " ins))
-               (and del (format "-%s" del)))))))
+(defun roost-refresh (&optional quiet)
+  "Refresh hosts asynchronously. QUIET skips expensive Git diffstats."
+  (interactive)
+  (dolist (host (roost--hosts))
+    (unless (gethash host roost--refreshing)
+      (puthash host t roost--refreshing)
+      (let ((host host) (revision (gethash host roost--revisions 0)))
+        (roost--request host "list" (list (cons 'full (if quiet :false t)))
+                       (lambda (tasks)
+                         (remhash host roost--refreshing)
+                         ;; A newer mutation must win over a stale list reply.
+                         (when (= revision (gethash host roost--revisions 0)) (roost--apply-snapshot host tasks))
+                         (roost--redraw))
+                       (lambda (err)
+                         (remhash host roost--refreshing)
+                         (unless (equal err (gethash host roost--errors)) (message "Roost %s: %s" (roost--host-label host) err))
+                         (puthash host err roost--errors)
+                         (remhash (list host roost-state-directory) roost--installed) (roost--redraw)))))))
 
-(defun roost--diffstat (agent)
-  "Return a compact diffstat of AGENT's worktree against its base branch, or nil."
-  (let ((wt (roost-agent-worktree agent)))
-    (when (and wt (file-directory-p wt))
-      (when-let* ((base (roost--base-branch wt)))
-        (roost--parse-shortstat (roost--git wt "diff" "--shortstat" base))))))
+(defun roost-tasks ()
+  "Cached tasks across hosts, without network I/O."
+  (let (tasks)
+    (maphash (lambda (_ task) (push task tasks)) roost--tasks)
+    (sort tasks (lambda (a b) (string-lessp (concat (roost--host-label (roost--field a 'host)) (roost--field a 'name))
+                                           (concat (roost--host-label (roost--field b 'host)) (roost--field b 'name)))))))
 
-(defun roost--format-duration (seconds)
-  "Format SECONDS as a compact duration like 9s, 4m, 1h12m.  Pure."
-  (let ((s (max 0 (floor seconds))))
-    (cond ((< s 60) (format "%ds" s))
-          ((< s 3600) (format "%dm" (/ s 60)))
-          (t (format "%dh%02dm" (/ s 3600) (/ (% s 3600) 60))))))
-
-(defun roost--since (iso)
-  "Return the human time elapsed since ISO 8601 timestamp ISO, or \"?\"."
-  (or (and iso
-           (ignore-errors
-             (roost--format-duration
-              (- (float-time) (float-time (encode-time (iso8601-parse iso)))))))
-      "?"))
-
-(defun roost--elapsed (agent)
-  "Return the human elapsed time since AGENT started, or \"?\"."
-  (roost--since (roost-agent-started agent)))
-
-(defun roost--idle (agent)
-  "Return how long since AGENT's status last changed, or \"?\".
-For a waiting agent this is how long it has wanted you; for a running agent,
-a large value hints it may be stuck."
-  (roost--since (roost-agent-updated agent)))
-
-(defun roost--status-face (agent)
-  "Return a face symbol for AGENT's status."
-  (pcase (roost-agent-status agent)
-    ("waiting_user" 'warning)
-    ("done" 'success)
-    ((or "failed" "crashed") 'error)
-    ("running" 'font-lock-keyword-face)
-    (_ 'shadow)))
-
-;;;; tmux-control glue -------------------------------------------------------
-
-(defun roost--cockpit-buffer ()
-  "Return the tmux-control buffer to drive, or nil.
-Prefers the current buffer when it is a live tmux-control session, else the
-first live session."
-  (cond
-   ((and (boundp 'tmux-control--session) tmux-control--session (current-buffer)))
-   ((not (fboundp 'tmux-control--live-session-buffers)) nil)
-   (t (car (tmux-control--live-session-buffers)))))
-
-(defun roost--require-cockpit ()
-  "Return a live cockpit buffer or signal a `user-error'."
-  (or (roost--cockpit-buffer)
-      (user-error "No live tmux-control session; connect one first")))
-
-(defun roost--tmux-quote (s)
-  "Quote S as a single tmux command-line argument (double-quoted)."
-  (concat "\"" (replace-regexp-in-string "\\([\"\\$`]\\)" "\\\\\\1" s) "\""))
-
-(defun roost--current-window-index (cockpit)
-  "Return COCKPIT's currently active tmux window index as a number, or nil."
-  (with-current-buffer cockpit
-    (and (boundp 'tmux-control--current-window)
-         tmux-control--current-window
-         (string-to-number tmux-control--current-window))))
-
-(defun roost--select (cockpit index)
-  "Switch COCKPIT's live view to tmux window INDEX."
-  (when index
-    (with-current-buffer cockpit
-      (tmux-control-select-window index))))
-
-(defun roost--rename-window (cockpit session index name)
-  "Rename SESSION's window INDEX to NAME over COCKPIT's control connection."
-  (with-current-buffer cockpit
-    (tmux-control--send-command
-     (format "rename-window -t %s:%s %s" session index (roost--tmux-quote name)))))
-
-(defun roost--send-to-window (cockpit session index text)
-  "Send TEXT then Enter as input to SESSION's window INDEX via COCKPIT."
-  (with-current-buffer cockpit
-    (let ((target (format "%s:%s" session index)))
-      (tmux-control--send-command
-       (format "send-keys -t %s -l -- %s" target (roost--tmux-quote text)))
-      (tmux-control--send-command (format "send-keys -t %s Enter" target)))))
-
-;;;; Agent selection ---------------------------------------------------------
-
-(defun roost--agent-at-window (agents cockpit)
-  "Return the agent in AGENTS occupying COCKPIT's active window, or nil."
-  (when cockpit
-    (let ((idx (roost--current-window-index cockpit)))
-      (and idx (seq-find (lambda (a) (equal (roost-agent-window-index a) idx)) agents)))))
-
-(defun roost--read-agent (agents prompt)
-  "Choose an agent from AGENTS with completion under PROMPT."
-  (let ((choices (mapcar (lambda (a)
-                           (cons (format "%-13s w%-3s %s  %s"
-                                         (or (roost-agent-status a) "?")
-                                         (or (roost-agent-window-index a) "?")
-                                         (roost-agent-id a)
-                                         (truncate-string-to-width
-                                          (or (roost-agent-task a) "") 54))
-                                 a))
-                         agents)))
+(defun roost--read-task (prompt)
+  "Choose a cached task with PROMPT."
+  (let* ((tasks (roost-tasks))
+         (choices (mapcar (lambda (task) (cons (format "%s / %s [%s] %s" (roost--host-label (roost--field task 'host))
+                                                      (roost--field task 'name) (roost--field task 'status) (roost--field task 'id)) task)) tasks)))
+    (unless tasks (user-error "No cached tasks; open Roost and refresh, or create one"))
     (cdr (assoc (completing-read prompt choices nil t) choices))))
 
-(defun roost--pick (agents prompt)
-  "Return the agent at the active window, else prompt over AGENTS with PROMPT."
-  (or (roost--agent-at-window agents (roost--cockpit-buffer))
-      (roost--read-agent agents prompt)))
+(defun roost--task-at-point ()
+  "Task selected in the dashboard, terminal, or current workspace."
+  (if (derived-mode-p 'roost-dashboard-mode)
+      (gethash (tabulated-list-get-id) roost--tasks)
+    (or
+      (and (boundp 'tmux-control--active-pane) tmux-control--active-pane
+           (seq-find (lambda (task) (and (equal (roost--field task 'host) tmux-control--host)
+                                         (equal (roost--field task 'socket) tmux-control--socket-name)
+                                         (equal (roost--field task 'paneId) tmux-control--active-pane))) (roost-tasks)))
+      (gethash roost--current-task roost--tasks))))
 
-;;;; Commands: navigate ------------------------------------------------------
+(defun roost--choose (&optional task)
+  "Choose TASK or infer it from context." (or task (roost--task-at-point) (roost--read-task "Task: ")))
+
+(defun roost--perspective-name (task)
+  "Unique workspace name for TASK."
+  (format "roost:%s:%s:%s" (roost--host-label (roost--field task 'host))
+          (roost--field task 'name) (substring (roost--field task 'id) 0 6)))
+
+(defun roost--activate-workspace (task)
+  "Restore TASK's saved window arrangement when perspective.el is active."
+  (when (and roost-use-perspectives (bound-and-true-p persp-mode) (fboundp 'persp-switch))
+    (persp-switch (roost--perspective-name task)))
+  (setq roost--current-task (roost--key task)))
+
+(defun roost--display-task (task)
+  "Display TASK after its pane ownership has been checked on its host."
+  (require 'tmux-control)
+  (roost--activate-workspace task)
+  ;; Reuse the saved terminal window instead of replacing its neighboring
+  ;; code or Magit window when that happened to be selected on departure.
+  (when-let* ((window
+               (seq-find (lambda (window)
+                           (with-current-buffer (window-buffer window)
+                             (and (bound-and-true-p tmux-control--window-id)
+                                  (equal tmux-control--host (roost--field task 'host))
+                                  (equal tmux-control--socket-name (roost--field task 'socket))
+                                  (equal tmux-control--window-id (roost--field task 'windowId)))))
+                         (window-list))))
+    (select-window window))
+  (tmux-control--connect-or-switch (roost--field task 'host) (roost--field task 'socket) (roost--field task 'session))
+  ;; Explicit window hop also works before the pane map arrives on connect.
+  (let ((window (roost--field task 'windowId)) (pane (roost--field task 'paneId)))
+    (unless (and (stringp window) (string-match-p "\\`@[0-9]+\\'" window)
+                 (stringp pane) (string-match-p "\\`%[0-9]+\\'" pane)) (user-error "Invalid tmux target"))
+    (tmux-control--send-command (format "select-window -t %s" window)) (tmux-control-select-pane pane)))
+
+;;;###autoload
+(defun roost-open-task (&optional task)
+  "Validate TASK's tmux ownership, then restore its perspective and terminal."
+  (interactive)
+  (setq task (roost--choose task))
+  (let ((generation (cl-incf roost--open-generation)))
+    (roost--request (roost--field task 'host) "inspect"
+                  (list (cons 'id (roost--field task 'id)))
+                  (lambda (current)
+                    (setq current (roost--cache-task (roost--field task 'host) current))
+                    (when (= generation roost--open-generation)
+                      (roost--display-task current))))))
+
+;;;###autoload
+(defun roost-switch-task ()
+  "Choose a task across hosts and restore its workspace."
+  (interactive) (roost-open-task (roost--read-task "Switch task: ")))
+
+;;;###autoload
+(defun roost-new-task (directory name &optional base prompt)
+  "Create a Claude task NAME in DIRECTORY from BASE, with optional PROMPT.
+DIRECTORY may be a TRAMP path."
+  (interactive (list (read-directory-name "Repository (local or TRAMP): " default-directory nil t)
+                     (read-string "Task name: ") (read-string "Start from ref: " nil nil "HEAD") (read-string "Initial prompt (optional): ")))
+  (let ((host (roost--directory-host directory))
+        (setup (with-temp-buffer (setq default-directory directory) (hack-dir-local-variables-non-file-buffer) roost-setup-command)))
+    (roost--request host "create"
+                   (list (cons 'directory (file-local-name directory)) (cons 'name name) (cons 'base (or base "HEAD"))
+                         (cons 'prompt (unless (string-empty-p (or prompt "")) prompt)) (cons 'command (vconcat roost-claude-command)) (cons 'setup setup)
+                         (cons 'socket (or roost-socket-name (bound-and-true-p tmux-control-default-socket-name) "main"))
+                         (cons 'session roost-session-name))
+                   (lambda (task)
+                     (cl-incf (gethash host roost--revisions 0)) (roost--remember-host host)
+                     (setq task (roost--cache-task host task))
+                     (roost-watch-mode 1) (roost--redraw) (roost-open-task task)
+                     (message "Roost created %s on %s" name (roost--host-label host))))
+    (message "Roost: creating %s…" name)))
+
+(defun roost--act (task action &optional parameters callback)
+  "Run ACTION on TASK with PARAMETERS, then CALLBACK."
+  (let ((host (roost--field task 'host)))
+    (roost--request host action (cons (cons 'id (roost--field task 'id)) parameters)
+                   (lambda (updated)
+                     (cl-incf (gethash host roost--revisions 0))
+                     (setq updated (roost--cache-task host updated)) (roost--redraw)
+                     (when callback (funcall callback updated)) (message "Roost %s: %s" (roost--field task 'name) action)))))
+
+;;;###autoload
+(defun roost-resume (&optional task)
+  "Restart TASK, resuming its recorded Claude conversation."
+  (interactive) (roost--act (roost--choose task) "resume" nil #'roost-open-task))
+
+;;;###autoload
+(defun roost-send (&optional task text)
+  "Send TEXT as a literal pasted prompt to TASK's Claude pane."
+  (interactive) (setq task (roost--choose task) text (or text (read-string (format "Send to %s: " (roost--field task 'name)))))
+  (roost--act task "send" (list (cons 'text text))))
+
+;;;###autoload
+(defun roost-send-region (start end)
+  "Send region START to END with file and line context to a chosen task."
+  (interactive "r")
+  (roost-send (roost--read-task "Send region to task: ")
+              (format "%s:%d-%d\n\n%s" (if buffer-file-name (file-local-name buffer-file-name) (buffer-name))
+                      (line-number-at-pos start) (line-number-at-pos end) (buffer-substring-no-properties start end))))
+
+;;;###autoload
+(defun roost-review (&optional task)
+  "Open Magit on TASK's worktree, through TRAMP for remote tasks."
+  (interactive) (setq task (roost--choose task)) (roost--activate-workspace task)
+  (if (require 'magit nil t) (magit-status (roost--remote-directory task)) (dired (roost--remote-directory task))))
+
+;;;###autoload
+(defun roost-diff (&optional task)
+  "Review TASK's tracked changes against its recorded starting commit."
+  (interactive) (setq task (roost--choose task)) (require 'magit)
+  (roost--activate-workspace task)
+  (let ((default-directory (roost--remote-directory task))) (magit-diff-working-tree (roost--field task 'baseCommit))))
+
+;;;###autoload
+(defun roost-stop (&optional task)
+  "Stop TASK's window, retaining its worktree, branch and conversation."
+  (interactive) (setq task (roost--choose task))
+  (when (yes-or-no-p (format "Stop %s's window and its processes? Work is kept. " (roost--field task 'name))) (roost--act task "stop")))
+
+;;;###autoload
+(defun roost-retire (&optional task)
+  "Remove TASK's clean, merged worktree and branch, then stop its window."
+  (interactive) (setq task (roost--choose task))
+  (when (yes-or-no-p (format "Retire %s? Its clean, merged worktree and branch will be removed. " (roost--field task 'name)))
+    (roost--act task "retire" nil #'roost--retired-workspace)))
+
+;;;###autoload
+(defun roost-merge-retire (&optional task)
+  "Merge TASK's committed work into its recorded integration branch and retire.
+Dirty worktrees are refused; review and commit in Magit first."
+  (interactive) (setq task (roost--choose task))
+  (when (yes-or-no-p (format "Merge committed work from %s and retire it? " (roost--field task 'name)))
+    (roost--act task "merge" nil #'roost--retired-workspace)))
+
+(defun roost--retired-workspace (task)
+  "Remove TASK's perspective, retaining buffers."
+  (when (and roost-use-perspectives (bound-and-true-p persp-mode) (fboundp 'persp-kill))
+    (let ((persp-autokill-buffer-on-remove nil)) (persp-kill (roost--perspective-name task)))))
 
 ;;;###autoload
 (defun roost-next-waiting ()
-  "Switch the live view to the next agent that wants your attention.
-Cycles, by tmux window order, over agents whose status is in
-`roost-wait-statuses' (finished a turn, failed, or crashed)."
+  "Cycle through live tasks whose Claude session needs attention."
   (interactive)
-  (let* ((cockpit (roost--require-cockpit))
-         (waiting (roost-waiting-agents (roost-agents))))
-    (unless waiting (user-error "No agents are waiting"))
-    (let ((next (roost--next-after waiting (roost--current-window-index cockpit))))
-      (roost--select cockpit (roost-agent-window-index next))
-      (message "roost → %s [%s]" (roost-agent-id next) (roost-agent-status next)))))
+  (let* ((waiting (seq-filter (lambda (task) (and (not (gethash (roost--field task 'host) roost--errors))
+                                                 (member (roost--field task 'status) '("ready" "permission")))) (roost-tasks)))
+         (keys (mapcar #'roost--key waiting)) (tail (member roost--current-task keys)) (key (or (cadr tail) (car keys))))
+    (unless key (user-error "No live tasks need attention")) (roost-open-task (gethash key roost--tasks))))
 
-;;;###autoload
-(defun roost-list ()
-  "Pick an agent by status/task and switch the live view to it."
-  (interactive)
-  (let* ((cockpit (roost--require-cockpit))
-         (agents (roost-agents)))
-    (unless agents (user-error "No agents in the registry"))
-    (let ((agent (roost--read-agent agents "Agent: ")))
-      (when agent
-        (roost--select cockpit (roost-agent-window-index agent))
-        (message "roost → %s [%s]" (roost-agent-id agent) (roost-agent-status agent))))))
+(defun roost--status-face (status)
+  "Face for STATUS."
+  (pcase status ((or "permission" "ready") 'warning) ((or "failed" "crashed" "offline") 'error)
+         ((or "running" "background") 'font-lock-keyword-face) (_ 'shadow)))
 
-;;;; Commands: act -----------------------------------------------------------
+(defun roost--elapsed (timestamp)
+  "Format time since TIMESTAMP."
+  (if (not timestamp) "?"
+    (condition-case nil
+        (let ((seconds (floor (max 0 (- (float-time) (float-time (date-to-time timestamp)))))))
+          (cond ((< seconds 60) (format "%ds" seconds)) ((< seconds 3600) (format "%dm" (/ seconds 60)))
+                (t (format "%dh%02dm" (/ seconds 3600) (/ (mod seconds 3600) 60))))) (error "?"))))
 
-;;;###autoload
-(defun roost-review (&optional agent)
-  "Open magit on AGENT's git worktree to review and merge its branch.
-With no AGENT, use the one in the active window, else prompt.  Falls back to
-`dired' when magit is unavailable."
-  (interactive)
-  (let ((agent (or agent (roost--pick (roost-agents) "Review agent: "))))
-    (unless agent (user-error "No agent to review"))
-    (let ((wt (roost-agent-worktree agent)))
-      (unless (and wt (file-directory-p wt))
-        (user-error "Worktree for %s is gone (%s)" (roost-agent-id agent) wt))
-      (if (fboundp 'magit-status) (magit-status wt) (dired wt)))))
-
-;;;###autoload
-(defun roost-review-next ()
-  "Jump to the next waiting agent and open its worktree for review."
-  (interactive)
-  (roost-next-waiting)
-  (when-let* ((a (roost--agent-at-window (roost-agents) (roost--cockpit-buffer))))
-    (roost-review a)))
-
-;;;###autoload
-(defun roost-send (&optional agent text)
-  "Send TEXT to AGENT's pane as input, to re-steer it without leaving Emacs.
-With no AGENT, use the one in the active window, else prompt."
-  (interactive)
-  (let* ((agent (or agent (roost--pick (roost-agents) "Steer agent: ")))
-         (text (or text (read-string (format "Send to %s: " (roost-agent-id agent)))))
-         (cockpit (roost--require-cockpit))
-         (session (buffer-local-value 'tmux-control--session cockpit))
-         (index (roost-agent-window-index agent)))
-    (when (string-empty-p (string-trim text)) (user-error "Empty message"))
-    (unless index (user-error "No tmux window for %s" (roost-agent-id agent)))
-    (roost--send-to-window cockpit session index text)
-    (message "roost → %s: %s" (roost-agent-id agent) text)))
-
-;;;###autoload
-(defun roost-dispatch (task)
-  "Kick off a new agent for TASK from the orchestrator pane.
-Sends `roost-dispatch-command' (default the `pi-side-agents' /agent command)
-to the live view's current pane, so run this while viewing the orchestrator."
-  (interactive "sDispatch agent — task: ")
-  (when (string-empty-p (string-trim task)) (user-error "Empty task"))
-  (let* ((cockpit (roost--require-cockpit))
-         (session (buffer-local-value 'tmux-control--session cockpit))
-         (idx (or (roost--current-window-index cockpit) 0))
-         (line (format roost-dispatch-command task)))
-    (roost--send-to-window cockpit session idx line)
-    (message "roost dispatched: %s" line)))
-
-;;;###autoload
-(defun roost-kill (&optional agent)
-  "Kill AGENT's tmux window after confirmation.
-With no AGENT, use the one in the active window, else prompt."
-  (interactive)
-  (let* ((agent (or agent (roost--pick (roost-agents) "Kill agent: ")))
-         (cockpit (roost--require-cockpit))
-         (session (buffer-local-value 'tmux-control--session cockpit))
-         (idx (roost-agent-window-index agent)))
-    (when (and idx (yes-or-no-p (format "Kill agent %s (its tmux window)? "
-                                        (roost-agent-id agent))))
-      (with-current-buffer cockpit
-        (tmux-control--send-command (format "kill-window -t %s:%s" session idx)))
-      (puthash (roost-agent-id agent) t roost--retired)
-      (message "Killed %s" (roost-agent-id agent)))))
-
-;;;###autoload
-(defun roost-merge-retire (&optional agent)
-  "Merge AGENT's branch into the base branch, then tear the agent down.
-Guarded: the repository must be on the base branch with a clean tree; a merge
-conflict aborts and points you at `roost-review' (magit) instead of leaving a
-half-merged tree.  On success, removes the worktree, deletes the branch, and
-kills the tmux window."
-  (interactive)
-  (let* ((agents (roost-agents))
-         (agent (or agent (roost--pick agents "Merge & retire agent: ")))
-         (branch (roost-agent-branch agent))
-         (repo (roost--git-root (or roost-directory default-directory)))
-         (base (and repo (roost--base-branch repo))))
-    (unless (and branch repo base)
-      (user-error "Missing branch/repo/base for %s" (roost-agent-id agent)))
-    (let ((cur (roost--git repo "rev-parse" "--abbrev-ref" "HEAD"))
-          ;; Ignore untracked files: the registry lives in an untracked .pi/,
-          ;; so only uncommitted *tracked* changes should block a merge.
-          (dirty (roost--git repo "status" "--porcelain" "--untracked-files=no")))
-      (unless (equal cur base)
-        (user-error "%s is on %s, not %s — check out %s first" repo cur base base))
-      (when (and dirty (not (string-empty-p dirty)))
-        (user-error "%s has uncommitted (tracked) changes; commit or stash first" repo)))
-    (unless (yes-or-no-p (format "Merge %s into %s and retire %s? "
-                                 branch base (roost-agent-id agent)))
-      (user-error "Aborted"))
-    ;; Agents (pi-side-agents) leave their work *uncommitted* in the worktree.
-    ;; Commit it on the agent's branch first -- staging everything except the
-    ;; framework's own .pi/ runtime dir -- so the merge has something to bring
-    ;; over and `git worktree remove' can never discard real work.
-    (let ((wt (roost-agent-worktree agent)))
-      (when (and wt (file-directory-p wt))
-        (roost--git wt "add" "-A" "--" ":!.pi" ":!.pi/")
-        (unless (roost--git wt "diff" "--cached" "--quiet") ; non-nil = nothing staged
-          (roost--git wt "commit" "-m"
-                      (format "agent %s: %s" (roost-agent-id agent)
-                              (truncate-string-to-width (or (roost-agent-task agent) "") 60))))))
-    (let ((ahead (roost--git repo "rev-list" "--count" (format "%s..%s" base branch))))
-      (when (or (null ahead) (equal ahead "0"))
-        (user-error "%s has no commits to merge into %s — nothing to do" branch base)))
-    (roost--git repo "merge" "--no-ff" "-m"
-                (format "Merge agent %s" (roost-agent-id agent)) branch)
-    (cond
-     ;; A merge in progress means there were conflicts: abort, don't retire.
-     ((roost--git repo "rev-parse" "-q" "--verify" "MERGE_HEAD")
-      (roost--git repo "merge" "--abort")
-      (user-error "Merge conflict — resolve with `roost-review' (magit), then merge"))
-     ;; Branch is now an ancestor of HEAD: the merge landed.  Tear down.
-     ((roost--git repo "merge-base" "--is-ancestor" branch "HEAD")
-      (let* ((wt (roost-agent-worktree agent))
-             (cockpit (roost--cockpit-buffer))
-             (session (and cockpit (buffer-local-value 'tmux-control--session cockpit)))
-             (idx (roost-agent-window-index agent)))
-        (when (and wt (file-directory-p wt))
-          (roost--git repo "worktree" "remove" "--force" wt))
-        (roost--git repo "branch" "-D" branch)
-        (when (and cockpit session idx)
-          (with-current-buffer cockpit
-            (tmux-control--send-command (format "kill-window -t %s:%s" session idx))))
-        (puthash (roost-agent-id agent) t roost--retired)
-        (message "Merged %s into %s and retired %s"
-                 branch base (roost-agent-id agent))))
-     (t (user-error "Merge did not complete; inspect %s" repo)))))
-
-;;;; Dashboard ---------------------------------------------------------------
-
-(defun roost--dashboard-entries ()
-  "Return `tabulated-list-entries' for the current agents."
-  (mapcar
-   (lambda (a)
-     (let ((face (roost--status-face a)))
-       (list (roost-agent-id a)
-             (vector
-              (propertize (or (cdr (assoc (roost-agent-status a) roost-status-glyphs)) " ")
-                          'face face)
-              (roost-agent-id a)
-              (propertize (or (roost-agent-status a) "?") 'face face)
-              (roost--elapsed a)
-              (roost--idle a)
-              (format "%s" (or (roost-agent-window-index a) "?"))
-              (or (roost--diffstat a) "—")
-              (or (roost-agent-branch a) "")
-              (truncate-string-to-width (or (roost-agent-task a) "") 60)))))
-   (roost-agents)))
-
+(defun roost--entries ()
+  "Dashboard rows, entirely from cached state."
+  (mapcar (lambda (task)
+            (let* ((host (roost--field task 'host)) (status (if (gethash host roost--errors) "offline" (roost--field task 'status))))
+              (list (roost--key task) (vector (roost--host-label host) (roost--field task 'name)
+                                             (propertize status 'face (roost--status-face status)) (roost--elapsed (roost--field task 'updatedAt))
+                                             (or (roost--field task 'diff) "") (roost--field task 'branch) (or (roost--field task 'task) ""))))) (roost-tasks)))
 (defvar-keymap roost-dashboard-mode-map
-  :doc "Keymap for `roost-dashboard-mode'."
-  "RET" #'roost-dashboard-jump
-  "r"   #'roost-dashboard-review
-  "m"   #'roost-dashboard-merge
-  "e"   #'roost-dashboard-send
-  "k"   #'roost-dashboard-kill
-  "d"   #'roost-dispatch
-  "g"   #'roost-dashboard-refresh)
-
+  :doc "Task dashboard commands."
+  "RET" #'roost-open-task "c" #'roost-new-task "d" #'roost-new-task "r" #'roost-review "D" #'roost-diff
+  "e" #'roost-send "s" #'roost-resume "k" #'roost-stop "x" #'roost-retire "m" #'roost-merge-retire "n" #'roost-next-waiting "g" #'roost-refresh)
 (define-derived-mode roost-dashboard-mode tabulated-list-mode "Roost"
-  "Major mode for the roost agent dashboard.
-\\{roost-dashboard-mode-map}"
-  (setq tabulated-list-format
-        [(" " 2 t) ("Agent" 18 t) ("Status" 13 t) ("Elapsed" 8 t) ("Idle" 7 t)
-         ("W" 3 t) ("Diff" 11 t) ("Branch" 22 t) ("Task" 0 nil)])
-  (setq tabulated-list-entries #'roost--dashboard-entries)
-  (setq tabulated-list-sort-key (cons "W" nil))
+  "Tasks across hosts. All refreshes are asynchronous."
+  (setq tabulated-list-format [("Host" 14 t) ("Task" 24 t) ("Status" 12 t) ("Since" 8 t)
+                               ("Changes" 30 t) ("Branch" 36 t) ("Prompt" 0 nil)]
+        tabulated-list-use-header-line nil
+        truncate-lines t
+        display-line-numbers nil
+        tabulated-list-entries #'roost--entries)
   (tabulated-list-init-header))
+
+(defun roost--redraw ()
+  "Refresh an existing dashboard without changing focus."
+  (when-let* ((buffer (get-buffer "*roost*")))
+    (with-current-buffer buffer
+      (when (derived-mode-p 'roost-dashboard-mode)
+        (setq header-line-format (concat " RET open · c new · r Magit · D diff · e send · s resume · k stop · x retire · g refresh"
+                                         (when (> (hash-table-count roost--errors) 0) "  — host unavailable; last state retained")))
+        (tabulated-list-print t)))))
 
 ;;;###autoload
 (defun roost-status ()
-  "Open the roost dashboard: every agent with status, elapsed, and diffstat.
-Keys: RET jump, r review, m merge & retire, e send/steer, k kill, d dispatch,
-g refresh."
+  "Open the dashboard and watch configured and remembered hosts."
   (interactive)
-  (let ((buf (get-buffer-create "*roost*")))
-    (with-current-buffer buf
-      (unless (derived-mode-p 'roost-dashboard-mode) (roost-dashboard-mode))
-      (tabulated-list-print t))
-    (pop-to-buffer buf)))
-
-(defun roost--dashboard-agent ()
-  "Return the agent on the current dashboard line, or nil."
-  (when-let* ((id (tabulated-list-get-id)))
-    (seq-find (lambda (a) (equal (roost-agent-id a) id)) (roost-agents))))
-
-(defun roost-dashboard-refresh ()
-  "Refresh the dashboard, preserving point."
-  (interactive)
-  (when (derived-mode-p 'roost-dashboard-mode)
-    (let ((line (line-number-at-pos)))
-      (tabulated-list-print t)
-      (goto-char (point-min))
-      (forward-line (1- line)))))
-
-(defun roost--dashboard-refresh-if-live ()
-  "Refresh the *roost* dashboard if it exists, without selecting it."
-  (when-let* ((buf (get-buffer "*roost*")))
-    (when (buffer-live-p buf)
-      (with-current-buffer buf
-        (when (derived-mode-p 'roost-dashboard-mode)
-          (roost-dashboard-refresh))))))
-
-(defun roost-dashboard-jump ()
-  "Switch the live view to the agent on this line."
-  (interactive)
-  (when-let* ((a (roost--dashboard-agent)) (c (roost--cockpit-buffer)))
-    (roost--select c (roost-agent-window-index a))
-    (message "roost → %s [%s]" (roost-agent-id a) (roost-agent-status a))))
-
-(defun roost-dashboard-review ()
-  "Review the agent on this line (magit on its worktree)."
-  (interactive)
-  (when-let* ((a (roost--dashboard-agent))) (roost-review a)))
-
-(defun roost-dashboard-merge ()
-  "Merge and retire the agent on this line."
-  (interactive)
-  (when-let* ((a (roost--dashboard-agent))) (roost-merge-retire a) (roost-dashboard-refresh)))
-
-(defun roost-dashboard-send ()
-  "Send a prompt to the agent on this line."
-  (interactive)
-  (when-let* ((a (roost--dashboard-agent))) (roost-send a)))
-
-(defun roost-dashboard-kill ()
-  "Kill the agent on this line."
-  (interactive)
-  (when-let* ((a (roost--dashboard-agent))) (roost-kill a) (roost-dashboard-refresh)))
-
-;;;; Watch mode: glyphs + notifications + dashboard ---------------------------
-
-(defvar roost--status-cache (make-hash-table :test 'equal)
-  "Map of agent id -> last status seen, for change detection.")
-
-(defun roost--notify (title body)
-  "Show an OS notification with TITLE and BODY (best effort)."
-  (cond
-   ((functionp roost-notify-function) (funcall roost-notify-function title body))
-   ((executable-find "terminal-notifier")
-    (call-process "terminal-notifier" nil 0 nil
-                  "-title" title "-message" body "-sender" "org.gnu.Emacs"))
-   ((eq system-type 'darwin)
-    (call-process "osascript" nil 0 nil "-e"
-                  (format "display notification %S with title %S" body title)))
-   ((fboundp 'notifications-notify)
-    (notifications-notify :title title :body body))
-   (t (message "%s — %s" title body))))
-
-(defun roost--sync ()
-  "Sync from the registry: reflect glyphs, notify on wait, refresh dashboard."
-  (let* ((cockpit (roost--cockpit-buffer))
-         (session (and cockpit (buffer-local-value 'tmux-control--session cockpit)))
-         (agents (roost-agents))
-         (ids (mapcar #'roost-agent-id agents)))
-    (dolist (agent agents)
-      (let* ((id (roost-agent-id agent))
-             (status (roost-agent-status agent))
-             (index (roost-agent-window-index agent))
-             (prev (gethash id roost--status-cache 'none)))
-        (unless (equal prev status)
-          (when (and roost-reflect-glyphs cockpit session index)
-            (roost--rename-window cockpit session index (roost--glyph-name agent)))
-          ;; Notify only on a genuine transition into a wait status -- not on
-          ;; first sight (so attaching to an existing fleet does not spam).
-          (when (and roost-notify (not (eq prev 'none))
-                     (member status roost-wait-statuses))
-            (roost--notify (format "Agent %s — %s" id status)
-                           (truncate-string-to-width (or (roost-agent-task agent) "") 90)))
-          (puthash id status roost--status-cache))))
-    ;; Drop agents that left the registry.
-    (maphash (lambda (k _) (unless (member k ids) (remhash k roost--status-cache)))
-             roost--status-cache))
-  (roost--dashboard-refresh-if-live))
-
-(defvar roost--watch-timer nil)
+  (let ((buffer (get-buffer-create "*roost*")))
+    (with-current-buffer buffer (unless (derived-mode-p 'roost-dashboard-mode) (roost-dashboard-mode)))
+    (pop-to-buffer buffer) (roost--redraw))
+  (roost-watch-mode 1) (roost-refresh))
 
 ;;;###autoload
 (define-minor-mode roost-watch-mode
-  "Global mode that watches the agent registry.
-While on, every `roost-watch-interval' seconds roost reflects each agent's
-status into its tmux window name (so tmux-control's tab bar and flock view
-show who is running/waiting/failed -- with no change to tmux-control), fires
-an OS notification when an agent enters a waiting/failed/crashed status, and
-keeps the `roost-status' dashboard up to date."
-  :global t
-  :lighter " Roost"
-  (if roost-watch-mode
-      (unless roost--watch-timer
-        (setq roost--watch-timer
-              (run-with-timer 0 roost-watch-interval #'roost--sync)))
-    (when roost--watch-timer
-      (cancel-timer roost--watch-timer)
-      (setq roost--watch-timer nil))
-    (clrhash roost--status-cache)))
-
-;;;###autoload
-(define-obsolete-function-alias 'roost-glyph-mode 'roost-watch-mode "0.2")
-
+  "Watch tasks asynchronously, retaining cached records during disconnects."
+  :global t :lighter " Roost"
+  (when roost--watch-timer (cancel-timer roost--watch-timer) (setq roost--watch-timer nil))
+  (when roost-watch-mode (setq roost--watch-timer (run-with-timer roost-watch-interval roost-watch-interval (lambda () (roost-refresh t))))))
+(defalias 'roost-list #'roost-switch-task)
+(defalias 'roost-kill #'roost-stop)
+(defalias 'roost-dispatch #'roost-new-task)
 (provide 'roost)
 ;;; roost.el ends here

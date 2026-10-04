@@ -1,11 +1,11 @@
 EMACS ?= emacs
 
-# Pure-logic tests: roost loads standalone (tmux-control is an optional,
-# soft require), so no tmux or eat is needed here.
+# Elisp protocol/UI tests plus real isolated Git/tmux lifecycle tests.
 .PHONY: test
 test:
 	$(EMACS) -Q --batch -L . -L test \
 	  -l test/roost-test.el -f ert-run-tests-batch-and-exit
+	python3 -m unittest discover -s test -p 'test_*.py' -v
 
 .PHONY: compile
 compile:
