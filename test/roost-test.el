@@ -11,6 +11,8 @@
          (roost--installed (make-hash-table :test 'equal))
          (roost--refreshing (make-hash-table :test 'equal))
          (roost--revisions (make-hash-table :test 'equal))
+         (roost--full-refresh-pending (make-hash-table :test 'equal))
+         (roost--failures (make-hash-table :test 'equal))
          (roost--hosts-loaded t) (roost--remembered-hosts nil)
          (roost--requests nil) (roost-notify nil) (roost--current-task nil)) ,@body))
 
@@ -405,5 +407,101 @@
                 (setq roost--hosts-loaded nil roost--remembered-hosts nil)
                 (should (equal (roost--hosts) '(nil "dev"))))
        (delete-directory root t)))))
+
+(ert-deftest roost-local-host-survives-restart-and-legacy-files-are-repaired ()
+  (roost-test--isolated
+   (let* ((root (make-temp-file "roost-hosts" t))
+          (roost-hosts-file (expand-file-name "hosts.json" root))
+          (roost-hosts '("dev")))
+     (unwind-protect
+         (progn
+           (roost--remember-host nil)
+           (roost--remember-host "dev")
+           (should (equal (with-temp-buffer (insert-file-contents roost-hosts-file) (buffer-string))
+                          "[\"dev\",null]"))
+           (setq roost--hosts-loaded nil roost--remembered-hosts nil)
+           (should (equal (roost--hosts) '("dev" nil)))
+           ;; Version 0.4 wrote the local host as {}.
+           (with-temp-file roost-hosts-file (insert "[\"dev\",{},7]"))
+           (setq roost--hosts-loaded nil roost--remembered-hosts nil)
+           (should (equal (roost--hosts) '("dev" nil))))
+       (delete-directory root t)))))
+
+(ert-deftest roost-requests-encode-absent-values-as-null ()
+  (should (equal (roost--json-encode '((base) (full . :false) (name . "x") (command . ["a"])))
+                 "{\"base\":null,\"full\":false,\"name\":\"x\",\"command\":[\"a\"]}")))
+
+(ert-deftest roost-creation-sends-branch-prefix-and-nulls ()
+  (roost-test--isolated
+   (let ((roost-branch-prefix "clay/") request)
+     (cl-letf (((symbol-function 'hack-dir-local-variables-non-file-buffer) #'ignore)
+               ((symbol-function 'roost--request) (lambda (_host _action params &rest _) (setq request params))))
+       (roost-new-task "/tmp/" "task")
+       (should (equal (alist-get 'branchPrefix request) "clay/"))
+       (should (string-match-p "\"prompt\":null" (roost--json-encode request)))))))
+
+(ert-deftest roost-manual-refresh-runs-after-an-in-flight-poll ()
+  (roost-test--isolated
+   (let ((roost-hosts '("dev")) calls)
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host _action params success _failure)
+                  (push (cons (alist-get 'full params) success) calls))))
+       (roost-refresh t)
+       (roost-refresh)                  ; `g' while the quiet poll is in flight
+       (should (= (length calls) 1))
+       (funcall (cdar calls) nil)       ; the quiet poll returns
+       (should (= (length calls) 2))
+       (should (eq (caar calls) t))))))
+
+(ert-deftest roost-background-polls-back-off-from-unreachable-hosts ()
+  (roost-test--isolated
+   (let ((roost-hosts '("dev")) (attempts 0))
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host _action _params _success failure)
+                  (cl-incf attempts) (funcall failure "unreachable"))))
+       (roost-refresh t)
+       (roost-refresh t)
+       (should (= attempts 1))
+       (roost-refresh)                  ; a manual refresh always tries
+       (should (= attempts 2))
+       (should (= (car (gethash "dev" roost--failures)) 2))))))
+
+(ert-deftest roost-dashboard-summarizes-git-state-on-one-line ()
+  (roost-test--isolated
+   (roost--cache-task nil (append '((diff . "2 files changed, 10 insertions(+), 3 deletions(-)")
+                                    (dirty . t) (ahead . 1) (behind . 4)
+                                    (task . "Fix the parser.\nThen add tests."))
+                                  (roost-test--task)))
+   (let ((row (cadar (roost--entries))))
+     (should (equal (aref row 6) "2 files +10 −3 · uncommitted · 1 ahead · 4 behind"))
+     (should (equal (aref row 8) "Fix the parser. Then add tests.")))
+   ;; A quiet poll omits Git fields; the last full refresh's remain.
+   (roost--apply-snapshot nil (list (roost-test--task)))
+   (should (equal (aref (cadar (roost--entries)) 6) "2 files +10 −3 · uncommitted · 1 ahead · 4 behind"))
+   (should (equal (roost--changes '((diff . "1 file changed, 1 insertion(+)"))) "1 file +1 −0"))))
+
+(ert-deftest roost-forget-removes-the-task-and-reports-what-remains ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (roost-test--task))) messages)
+     (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_) t))
+               ((symbol-function 'message) (lambda (format &rest args) (push (apply #'format format args) messages)))
+               ((symbol-function 'roost--request)
+                (lambda (_host action _params success &optional _failure)
+                  (should (equal action "forget"))
+                  (funcall success (append '((status . "forgotten") (leftBehind "branch b")) (roost-test--task))))))
+       (roost-forget task)
+       (should-not (roost-tasks))
+       (should (string-match-p "left in place: branch b" (car messages)))))))
+
+(ert-deftest roost-send-region-reports-the-last-selected-line ()
+  (roost-test--isolated
+   (let (sent name)
+     (cl-letf (((symbol-function 'roost--read-task) (lambda (_) (roost-test--task)))
+               ((symbol-function 'roost-send) (lambda (_task text) (setq sent text))))
+       (with-temp-buffer
+         (setq name (buffer-name))
+         (insert "one\ntwo\nthree\n")
+         (roost-send-region (point-min) (save-excursion (goto-char (point-min)) (forward-line 2) (point))))
+       (should (string-prefix-p (concat name ":1-2\n") sent))))))
 
 (provide 'roost-test)

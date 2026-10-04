@@ -1,7 +1,7 @@
 ;;; roost.el --- Coding agent tasks over tmux-control -*- lexical-binding: t; -*-
 
 ;; Author: Clay Sheaff
-;; Version: 0.4.0
+;; Version: 0.5.0
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: tools, processes
 ;; URL: https://github.com/csheaff/roost
@@ -85,6 +85,11 @@ Claude uses `roost-claude-command' unless overridden here."
 May be set directory-locally.  Not rerun on resume."
   :type '(choice (const nil) string))
 
+(defcustom roost-branch-prefix "roost/"
+  "Prefix for task topic branches, which are named PREFIX<task>-<id>.
+Existing tasks keep their branch."
+  :type 'string)
+
 (defcustom roost-socket-name nil
   "Tmux socket, or nil to use tmux-control's configured default."
   :type '(choice (const nil) string))
@@ -166,16 +171,27 @@ Ordinary perspectives retain their existing labels and click actions."
   "Read FIELD from TASK."
   (alist-get field task))
 
+(defun roost--json-encode (alist)
+  "Serialize ALIST as a JSON object, encoding nil values as null.
+`json-serialize' would otherwise encode nil as an empty object."
+  (json-serialize (mapcar (lambda (entry) (cons (car entry) (or (cdr entry) :null)))
+                          alist)))
+
 (defun roost--hosts ()
   "Configured and remembered hosts, without network I/O."
   (unless roost--hosts-loaded
     (setq roost--hosts-loaded t)
     (when (file-readable-p roost-hosts-file)
       (setq roost--remembered-hosts
-            (ignore-errors
-              (with-temp-buffer
-                (insert-file-contents roost-hosts-file)
-                (json-parse-buffer :array-type 'list :null-object nil))))))
+            (seq-filter
+             #'string-or-null-p
+             (ignore-errors
+               (with-temp-buffer
+                 (insert-file-contents roost-hosts-file)
+                 ;; Older versions wrote the local host as {}; as an alist
+                 ;; that reads back as nil, which is the local host.
+                 (json-parse-buffer :array-type 'list :object-type 'alist
+                                    :null-object nil)))))))
   (delete-dups (append roost-hosts roost--remembered-hosts)))
 
 (defun roost--remember-host (host)
@@ -186,7 +202,8 @@ Ordinary perspectives retain their existing labels and click actions."
     (make-directory (file-name-directory roost-hosts-file) t)
     (let ((coding-system-for-write 'utf-8-unix))
       (with-temp-file roost-hosts-file
-        (insert (json-serialize (vconcat roost--remembered-hosts))))
+        (insert (json-serialize (vconcat (mapcar (lambda (host) (or host :null))
+                                                 roost--remembered-hosts)))))
       (set-file-modes roost-hosts-file #o600))))
 
 (defun roost--directory-host (directory)
@@ -214,15 +231,26 @@ Ordinary perspectives retain their existing labels and click actions."
 
 ;;;; Host RPC
 
+(defvar roost--helper-cache nil
+  "(ATTRIBUTES FILENAME . SOURCE) for the helper file last read.")
+
 (defun roost--helper ()
-  "Return (VERSIONED-FILENAME . SOURCE) for the host helper."
-  (with-temp-buffer
-    (insert-file-contents
-     (expand-file-name "scripts/roost_remote.py" roost--package-directory))
-    (cons (concat "remote-"
-                  (substring (secure-hash 'sha256 (current-buffer)) 0 16)
-                  ".py")
-          (buffer-string))))
+  "Return (VERSIONED-FILENAME . SOURCE) for the host helper.
+The file is reread only when its modification time or size changes."
+  (let* ((file (expand-file-name "scripts/roost_remote.py" roost--package-directory))
+         (attributes (file-attributes file))
+         (stamp (list (file-attribute-modification-time attributes)
+                      (file-attribute-size attributes))))
+    (unless (equal (car roost--helper-cache) stamp)
+      (setq roost--helper-cache
+            (with-temp-buffer
+              (insert-file-contents file)
+              (cons stamp
+                    (cons (concat "remote-"
+                                  (substring (secure-hash 'sha256 (current-buffer)) 0 16)
+                                  ".py")
+                          (buffer-string))))))
+    (cdr roost--helper-cache)))
 
 (defun roost--python-command (host code)
   "Local argv executing Python CODE on HOST, without interpolating input."
@@ -240,9 +268,10 @@ Ordinary perspectives retain their existing labels and click actions."
 
 (defun roost--decode-response (output)
   "Parse the last nonempty line of OUTPUT as the protocol response."
-  (json-parse-string (car (last (split-string output "\n" t "[ \t\r]+")))
-                     :object-type 'alist :array-type 'list
-                     :null-object nil :false-object nil))
+  (let ((line (car (last (split-string output "\n" t "[ \t\r]+")))))
+    (unless line (error "The host helper returned no response"))
+    (json-parse-string line :object-type 'alist :array-type 'list
+                       :null-object nil :false-object nil)))
 
 (defun roost--run (host code input success failure)
   "Execute CODE asynchronously on HOST with INPUT.
@@ -250,7 +279,7 @@ Call SUCCESS with the result or FAILURE with an error message."
   (let* ((buffer (generate-new-buffer " *roost-rpc*"))
          (errors (generate-new-buffer " *roost-rpc-errors*"))
          (default-directory temporary-file-directory)
-         process timer finished)
+         process timer finished timed-out)
     (condition-case err
         (progn
           (setq process
@@ -275,9 +304,12 @@ Call SUCCESS with the result or FAILURE with an error message."
                                          (funcall success (alist-get 'result response))
                                        (funcall failure (or (alist-get 'error response)
                                                             "Host operation failed"))))
-                                 (funcall failure (if (string-empty-p stderr)
-                                                      "Host operation failed or timed out"
-                                                    stderr)))
+                                 (funcall failure
+                                          (cond (timed-out
+                                                 (format "No reply after %ss; the operation may still finish on the host, so refresh before retrying"
+                                                         roost-request-timeout))
+                                                ((string-empty-p stderr) "Host operation failed")
+                                                (t stderr))))
                              (error (funcall failure (error-message-string parse-error)))))
                        (kill-buffer buffer)
                        (kill-buffer errors))))))
@@ -285,6 +317,7 @@ Call SUCCESS with the result or FAILURE with an error message."
           (setq timer (run-at-time roost-request-timeout nil
                                    (lambda ()
                                      (when (process-live-p process)
+                                       (setq timed-out t)
                                        (delete-process process)))))
           (process-send-string process input)
           (process-send-eof process))
@@ -309,8 +342,8 @@ Call SUCCESS with the result, or FAILURE with an error message."
              host
              (format "import os,runpy,sys; p=os.path.join(os.path.expanduser(%s),%s); sys.argv=[p,'rpc']; runpy.run_path(p,run_name='__main__')"
                      (json-serialize root) (json-serialize filename))
-             (json-serialize (append (list (cons 'action action) (cons 'root root))
-                                     parameters))
+             (roost--json-encode (append (list (cons 'action action) (cons 'root root))
+                                         parameters))
              success failure))))
     (if (equal (gethash installation-key roost--installed) filename)
         (funcall invoke)
@@ -350,10 +383,11 @@ Call SUCCESS with the result, or FAILURE with an error message."
                         (equal (roost--field task 'lastEvent) "Stop")
                         (not (equal (roost--field task 'updatedAt)
                                     (roost--field old 'updatedAt))))))
-    (dolist (field '(diff dirty))
+    ;; Quiet polls skip Git; keep the statistics from the last full refresh.
+    (dolist (field '(diff dirty ahead behind))
       (unless (assoc field task)
         (when (assoc field old) (push (assoc field old) task))))
-    (if (equal status "retired")
+    (if (member status '("retired" "forgotten"))
         (remhash key roost--tasks)
       (puthash key task roost--tasks))
     (when (and roost-notify previous
@@ -376,29 +410,53 @@ Call SUCCESS with the result, or FAILURE with an error message."
     (mapc (lambda (task) (roost--cache-task host task)) tasks)
     (remhash host roost--errors)))
 
+(defvar roost--full-refresh-pending (make-hash-table :test 'equal)
+  "Hosts whose full refresh was requested while another request was in flight.")
+(defvar roost--failures (make-hash-table :test 'equal)
+  "Consecutive refresh failures per host, as (COUNT . RETRY-AFTER).")
+
+(defun roost--refresh-host (host quiet)
+  "Refresh HOST asynchronously.  QUIET skips Git statistics."
+  (if (gethash host roost--refreshing)
+      ;; Run the requested full refresh once the in-flight poll returns.
+      (unless quiet (puthash host t roost--full-refresh-pending))
+    (puthash host t roost--refreshing)
+    (let ((revision (gethash host roost--revisions 0))
+          (finish (lambda ()
+                    (remhash host roost--refreshing)
+                    (when (gethash host roost--full-refresh-pending)
+                      (remhash host roost--full-refresh-pending)
+                      (roost--refresh-host host nil)))))
+      (roost--request
+       host "list" (list (cons 'full (if quiet :false t)))
+       (lambda (tasks)
+         (remhash host roost--failures)
+         ;; A newer mutation must win over a stale list reply.
+         (when (= revision (gethash host roost--revisions 0))
+           (roost--apply-snapshot host tasks))
+         (roost--redraw)
+         (funcall finish))
+       (lambda (err)
+         (unless (equal err (gethash host roost--errors))
+           (message "Roost %s: %s" (roost--host-label host) err))
+         (puthash host err roost--errors)
+         ;; Back off from unreachable hosts, up to a minute between attempts.
+         (let ((count (1+ (or (car (gethash host roost--failures)) 0))))
+           (puthash host (cons count (+ (float-time)
+                                        (min 60 (* roost-watch-interval (expt 2 (1- count))))))
+                    roost--failures))
+         (remhash (list host roost-state-directory) roost--installed)
+         (roost--redraw)
+         (funcall finish))))))
+
 (defun roost-refresh (&optional quiet)
-  "Refresh hosts asynchronously.  QUIET skips expensive Git diffstats."
+  "Refresh hosts asynchronously, including Git statistics.
+QUIET (used by background polls) skips Git statistics and hosts that
+recently failed."
   (interactive)
   (dolist (host (roost--hosts))
-    (unless (gethash host roost--refreshing)
-      (puthash host t roost--refreshing)
-      (let ((host host)
-            (revision (gethash host roost--revisions 0)))
-        (roost--request
-         host "list" (list (cons 'full (if quiet :false t)))
-         (lambda (tasks)
-           (remhash host roost--refreshing)
-           ;; A newer mutation must win over a stale list reply.
-           (when (= revision (gethash host roost--revisions 0))
-             (roost--apply-snapshot host tasks))
-           (roost--redraw))
-         (lambda (err)
-           (remhash host roost--refreshing)
-           (unless (equal err (gethash host roost--errors))
-             (message "Roost %s: %s" (roost--host-label host) err))
-           (puthash host err roost--errors)
-           (remhash (list host roost-state-directory) roost--installed)
-           (roost--redraw)))))))
+    (unless (and quiet (> (or (cdr (gethash host roost--failures)) 0) (float-time)))
+      (roost--refresh-host host quiet))))
 
 (defun roost-tasks ()
   "Cached tasks across hosts, without network I/O."
@@ -592,7 +650,11 @@ Call SUCCESS with the result, or FAILURE with an error message."
                     (lambda (current)
                       (setq current (roost--cache-task (roost--field task 'host) current))
                       (when (= generation roost--open-generation)
-                        (roost--display-task current))))))
+                        (roost--display-task current)
+                        (when (and (assq 'live current) (not (roost--field current 'live)))
+                          (message "%s's agent has %s; its last output is shown. Resume with `s'."
+                                   (roost--field current 'name)
+                                   (roost--field current 'status))))))))
 
 ;;;###autoload
 (defun roost-switch-task ()
@@ -649,6 +711,7 @@ Interactively, a prefix argument defaults to forking the current task."
                                        (and (equal agent "claude") roost-claude-command)
                                        (list agent))))
            (cons 'setup setup)
+           (cons 'branchPrefix roost-branch-prefix)
            (cons 'socket (or roost-socket-name
                              (bound-and-true-p tmux-control-default-socket-name)
                              "main"))
@@ -675,8 +738,8 @@ Interactively, a prefix argument defaults to forking the current task."
                       (cl-incf (gethash host roost--revisions 0))
                       (setq updated (roost--cache-task host updated))
                       (roost--redraw)
-                      (when callback (funcall callback updated))
-                      (message "Roost %s: %s" (roost--field task 'name) action)))))
+                      (message "Roost %s: %s" (roost--field task 'name) action)
+                      (when callback (funcall callback updated))))))
 
 ;;;###autoload
 (defun roost-resume (&optional task)
@@ -696,11 +759,12 @@ Interactively, a prefix argument defaults to forking the current task."
 (defun roost-send-region (start end)
   "Send region START to END with file and line context to a chosen task."
   (interactive "r")
-  (roost-send (roost--read-task "Send region to task: ")
-              (format "%s:%d-%d\n\n%s"
-                      (if buffer-file-name (file-local-name buffer-file-name) (buffer-name))
-                      (line-number-at-pos start) (line-number-at-pos end)
-                      (buffer-substring-no-properties start end))))
+  (let ((last (if (and (> end start) (eq (char-before end) ?\n)) (1- end) end)))
+    (roost-send (roost--read-task "Send region to task: ")
+                (format "%s:%d-%d\n\n%s"
+                        (if buffer-file-name (file-local-name buffer-file-name) (buffer-name))
+                        (line-number-at-pos start) (line-number-at-pos last)
+                        (buffer-substring-no-properties start end)))))
 
 ;;;###autoload
 (defun roost-review (&optional task)
@@ -810,6 +874,22 @@ Dirty worktrees are refused; review and commit in Magit first."
                              (roost--field task 'name)))
     (roost--act task "merge" nil #'roost--retired-workspace)))
 
+;;;###autoload
+(defun roost-forget (&optional task)
+  "Drop TASK's record from Roost without touching its worktree or branch.
+For tasks Roost can no longer retire, such as one whose repository moved.
+A running agent must be stopped first."
+  (interactive)
+  (setq task (roost--choose task))
+  (when (yes-or-no-p (format "Forget %s? Roost drops its record; its worktree and branch are left as they are. "
+                             (roost--field task 'name)))
+    (roost--act task "forget" nil
+                (lambda (forgotten)
+                  (roost--retired-workspace forgotten)
+                  (when-let* ((left (roost--field forgotten 'leftBehind)))
+                    (message "Forgot %s; left in place: %s"
+                             (roost--field task 'name) (string-join left ", ")))))))
+
 (defun roost--retired-workspace (task)
   "Remove TASK's perspective, retaining buffers."
   (when (and roost-use-perspectives (bound-and-true-p persp-mode) (fboundp 'persp-kill))
@@ -848,6 +928,7 @@ Dirty worktrees are refused; review and commit in Magit first."
   "k" #'roost-stop
   "x" #'roost-retire
   "m" #'roost-merge-retire
+  "X" #'roost-forget
   "g" #'roost-refresh)
 
 (define-derived-mode roost-task-info-mode special-mode "Roost Task"
@@ -892,7 +973,8 @@ Dirty worktrees are refused; review and commit in Magit first."
                         ("k  Stop; keep work" . roost-stop)
                         ("s  Resume conversation" . roost-resume)
                         ("m  Merge committed work and retire" . roost-merge-retire)
-                        ("x  Retire after a manual merge" . roost-retire)))
+                        ("x  Retire after a manual merge" . roost-retire)
+                        ("X  Forget; keep worktree and branch" . roost-forget)))
         (insert-text-button (car action) 'follow-link t 'roost-command (cdr action)
                             'action (lambda (button)
                                       (call-interactively (button-get button 'roost-command))))
@@ -938,6 +1020,29 @@ Dirty worktrees are refused; review and commit in Magit first."
                 (t (format "%dh%02dm" (/ seconds 3600) (/ (mod seconds 3600) 60)))))
       (error "?"))))
 
+(defun roost--changes (task)
+  "Compact Git summary for TASK from the last full refresh."
+  (let* ((diff (or (roost--field task 'diff) ""))
+         (count (lambda (pattern)
+                  (if (string-match (concat "\\([0-9]+\\) " pattern) diff)
+                      (string-to-number (match-string 1 diff))
+                    0)))
+         (files (funcall count "files? changed"))
+         (ahead (or (roost--field task 'ahead) 0))
+         (behind (or (roost--field task 'behind) 0)))
+    (string-join
+     (delq nil (list (when (> files 0)
+                       (format "%d file%s +%d −%d" files (if (= files 1) "" "s")
+                               (funcall count "insertions?") (funcall count "deletions?")))
+                     (when (roost--field task 'dirty) "uncommitted")
+                     (when (> ahead 0) (format "%d ahead" ahead))
+                     (when (> behind 0) (format "%d behind" behind))))
+     " · ")))
+
+(defun roost--one-line (string)
+  "STRING with line breaks and tabs collapsed, for a table cell."
+  (replace-regexp-in-string "[\n\r\t]+" " " (or string "")))
+
 (defun roost--entries ()
   "Dashboard rows, entirely from cached state."
   (mapcar (lambda (task)
@@ -950,9 +1055,9 @@ Dirty worktrees are refused; review and commit in Magit first."
                             (propertize status 'face (roost--status-face status))
                             (roost--elapsed (roost--field task 'updatedAt))
                             (roost--project-name task)
-                            (or (roost--field task 'diff) "")
+                            (roost--changes task)
                             (roost--field task 'branch)
-                            (or (roost--field task 'task) "")))))
+                            (roost--one-line (roost--field task 'task))))))
           (roost-tasks)))
 
 (defvar-keymap roost-dashboard-mode-map
@@ -971,6 +1076,7 @@ Dirty worktrees are refused; review and commit in Magit first."
   "k" #'roost-stop
   "x" #'roost-retire
   "m" #'roost-merge-retire
+  "X" #'roost-forget
   "n" #'roost-next-waiting
   "g" #'roost-refresh)
 
