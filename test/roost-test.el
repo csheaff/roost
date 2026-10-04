@@ -877,6 +877,28 @@
                      '("second" "third"))))
     (should-not (roost--pr-commits `((worktree . ,dir))))))
 
+(ert-deftest roost-pr-commits-leave-out-updates-from-the-integration-branch ()
+  (let* ((dir (make-temp-file "roost-pr" t))
+         (default-directory (file-name-as-directory dir))
+         (git (lambda (&rest args)
+                (apply #'call-process "git" nil nil nil "-c" "user.name=t" "-c" "user.email=t@t"
+                       args))))
+    (funcall git "init" "-q" "-b" "main")
+    (funcall git "commit" "-q" "--allow-empty" "-m" "start")
+    (let ((base (string-trim (shell-command-to-string "git rev-parse HEAD"))))
+      (funcall git "checkout" "-q" "-b" "task")
+      (funcall git "commit" "-q" "--allow-empty" "-m" "task work")
+      (funcall git "checkout" "-q" "main")
+      (funcall git "commit" "-q" "--allow-empty" "-m" "main moved")
+      (funcall git "checkout" "-q" "task")
+      (funcall git "merge" "-q" "--no-edit" "main")
+      (let ((task `((worktree . ,dir) (baseCommit . ,base) (integrationBranch . "main"))))
+        (should (equal (roost--fork-point task)
+                       (string-trim (shell-command-to-string "git rev-parse main"))))
+        (should (equal (roost--pr-commits task) '("task work"))))
+      (let ((task `((worktree . ,dir) (baseCommit . ,base) (integrationBranch . "gone"))))
+        (should (equal (roost--fork-point task) base))))))
+
 (ert-deftest roost-pr-draft-creates-the-pull-request-and-closes ()
   (roost-test--isolated
    (roost-test--with-pr-buffers
