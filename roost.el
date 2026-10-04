@@ -920,15 +920,25 @@ The owner is HOST's SSH user, or the local user."
                                   (ignore-errors (roost--directory-host directory)))))
 
 (defun roost--name-from-prompt (prompt)
-  "A short task name derived from the first words of PROMPT."
-  (let* ((words (split-string (downcase (replace-regexp-in-string "[^[:alnum:]]+" " " (or prompt "")))
-                              " +" t))
+  "A short task name derived from the first words of PROMPT.
+Hyphenated words such as off-by-one stay whole, and the name ends at a
+word, within 40 characters."
+  (let* ((words (mapcar (lambda (word) (string-trim word "-+" "-+"))
+                        (split-string (downcase (replace-regexp-in-string "[^[:alnum:]-]+" " " (or prompt "")))
+                                      " +" t)))
          (common '("a" "an" "the" "to" "and" "of" "in" "for" "on" "with" "so" "is" "are"
                    "it" "its" "that" "this" "be" "as" "by" "at" "or" "please" "make" "should"
-                   "we" "i" "you" "can" "could" "would")))
-    (truncate-string-to-width
-     (string-join (seq-take (seq-remove (lambda (word) (member word common)) words) 4) "-")
-     40)))
+                   "we" "i" "you" "can" "could" "would"))
+         (name ""))
+    (catch 'full
+      (dolist (word (seq-take (seq-remove (lambda (word) (or (string-empty-p word) (member word common)))
+                                          words)
+                              4))
+        (let ((longer (if (string-empty-p name) word (concat name "-" word))))
+          (when (and (> (length longer) 40) (not (string-empty-p name)))
+            (throw 'full nil))
+          (setq name longer))))
+    (truncate-string-to-width name 40)))
 
 (defun roost--agent-command (agent)
   "Executable and arguments for AGENT."
@@ -1118,9 +1128,14 @@ Planning lines and drawers are left out."
   (string-trim (buffer-substring-no-properties roost--compose-body (point-max))))
 
 (defun roost--compose-name ()
-  "The draft's explicit name, or one derived from its prompt."
+  "The draft's explicit name, or one derived from its prompt.
+A task started from a GitHub issue leads with the issue's number."
   (or (plist-get roost--compose-fields :name)
-      (roost--name-from-prompt (roost--compose-prompt))))
+      (let ((derived (roost--name-from-prompt (roost--compose-prompt)))
+            (issue (alist-get 'number (plist-get roost--compose-fields :issue))))
+        (if (and issue (not (string-empty-p derived)))
+            (format "%s-%s" issue derived)
+          derived))))
 
 (defun roost--compose-field (label value command &optional note)
   "Insert field LABEL showing VALUE as a button running COMMAND, then NOTE."

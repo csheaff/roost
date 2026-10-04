@@ -513,7 +513,7 @@
                               "CSV import crashes\n\nQuoted commas split fields.\n\nThis is GitHub issue #12: https://github.com/o/r/issues/12"))
                (should (string-match-p "Issue    #12 CSV import crashes  C-c C-t · the pull request will close it"
                                        (buffer-string)))
-               (should (string-match-p "Name     csv-import-crashes" (buffer-string)))
+               (should (string-match-p "Name     12-csv-import-crashes" (buffer-string)))
                (roost-compose-submit)
                (should (equal (nth 5 created)
                               '((issue (number . 12) (title . "CSV import crashes")
@@ -582,7 +582,11 @@
   (should (equal (roost--name-from-prompt "Importing examples/october.csv crashes: the importer")
                  "importing-examples-october-csv"))
   (should (equal (roost--name-from-prompt "Please add a --json flag to the report") "add-json-flag-report"))
-  (should (equal (roost--name-from-prompt "") "")))
+  (should (equal (roost--name-from-prompt "") ""))
+  (should (equal (roost--name-from-prompt "Off-by-one scroll: cursor-relative full-screen repaint")
+                 "off-by-one-scroll-cursor-relative"))
+  (should (equal (roost--name-from-prompt "-- --- leading dashes") "leading-dashes"))
+  (should (equal (roost--name-from-prompt (make-string 60 ?x)) (make-string 40 ?x))))
 
 (ert-deftest roost-shell-ignores-a-slower-earlier-navigation ()
   (roost-test--isolated
