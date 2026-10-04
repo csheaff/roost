@@ -296,8 +296,9 @@
                (roost-compose-submit)
                (should (equal created '("/ssh:dev:/repo/" "fix-csv-importer-quoted" nil
                                         "Fix the CSV importer so quoted commas work.\nAdd tests." "claude")))
-               (funcall failure "no such host")
-               (should (string-match-p "Could not create the task: no such host" header-line-format))
+               (funcall failure "no such host\nssh: details")
+               (should (string-match-p "Could not create the task: no such host · " header-line-format))
+               (should-not (string-match-p "\n" header-line-format))
                (should (buffer-live-p (current-buffer)))))
          (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
 

@@ -1214,9 +1214,9 @@ A mouse click shows a menu at the pointer; the keyboard uses the minibuffer."
                           (when (buffer-live-p buffer)
                             (with-current-buffer buffer
                               (setq roost--compose-submitting nil)
-                              (setq header-line-format
-                                    (format " Could not create the task: %s · %s retries"
-                                            err (substitute-command-keys "\\[roost-compose-submit]")))))))))
+                              (message "Roost could not create the task: %s" err)
+                              (roost--draft-error "Could not create the task" err
+                                                  'roost-compose-submit)))))))
 
 ;;;; Task commands
 
@@ -1342,9 +1342,7 @@ An existing draft for TASK is reused, and kept as written unless it is empty."
            (when (buffer-live-p buffer)
              (with-current-buffer buffer
                (setq roost--send-sending nil)
-               (setq header-line-format
-                     (format " Could not send: %s · %s retries" err
-                             (substitute-command-keys "\\[roost-send-submit]")))))))
+               (roost--draft-error "Could not send" err 'roost-send-submit)))))
       ;; A declined confirmation leaves the draft ready to send again.
       (quit (setq roost--send-sending nil) (signal (car err) (cdr err)))
       (error (setq roost--send-sending nil) (signal (car err) (cdr err))))))
@@ -1643,10 +1641,8 @@ The text is kept if creation fails."
        (message "Roost could not create the pull request: %s" err)
        (when (buffer-live-p buffer)
          (with-current-buffer buffer
-           (setq roost--pr-sending nil
-                 header-line-format
-                 (format " Could not create: %s · %s retries" err
-                         (substitute-command-keys "\\[roost-pr-submit]")))))))))
+           (setq roost--pr-sending nil)
+           (roost--draft-error "Could not create" err 'roost-pr-submit)))))))
 
 (defun roost--pr-state (task)
   "TASK's pull request state: `open', `draft', `merged', `closed', or nil.
@@ -1876,6 +1872,14 @@ COMPACT abbreviates commits ahead of and behind the integration branch."
           (add-face-text-property (match-beginning 0) (match-end 0) (cdr rule) nil text)
           (setq start (match-end 0)))))
     text))
+
+(defun roost--draft-error (what err command)
+  "Say in the draft's header line that WHAT failed with ERR; COMMAND retries.
+Only ERR's first line fits there; the echo area and *Messages* have it all."
+  (setq header-line-format
+        (format " %s: %s · %s retries" what
+                (or (car (split-string err "\n" t "[ \t]+")) err)
+                (substitute-command-keys (format "\\[%s]" command)))))
 
 (defun roost--one-line (string)
   "STRING with line breaks and tabs collapsed, for a table cell."
