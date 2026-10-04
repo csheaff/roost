@@ -141,7 +141,7 @@ Magit is optional (review falls back to Dired).
 | `e` | `roost-send` | Paste a prompt into the agent and press Enter |
 | `?` | `roost-task-info` | Prompt, changes, actions and details |
 | `u` | `roost-update` | Merge the integration branch into the task |
-| `P` | `roost-pr` | Draft a pull request for the task, or open the one it has |
+| `P` | `roost-pr` | Draft a pull request for the task; if it has one, push new commits and open it (`C-u`: open only) |
 | `m` | `roost-merge-retire` | Merge committed work, then retire the task |
 | `x` | `roost-retire` | Retire a task that is already merged or has no commits |
 | `X` | `roost-forget` | Drop Roost's record; keep the worktree and branch |
