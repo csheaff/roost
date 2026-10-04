@@ -808,7 +808,8 @@
       (let ((roost-evil-state nil)) (with-temp-buffer (roost-task-info-mode))))
     (should (eq (alist-get 'roost-dashboard-mode states) 'emacs))
     (should (eq (alist-get 'roost-compose-mode states) 'insert))
-    (should-not (assq 'roost-task-info-mode states)))
+    ;; nil reaches Evil, which clears any earlier registration.
+    (should (equal (assq 'roost-task-info-mode states) '(roost-task-info-mode))))
   (should (eq (lookup-key roost-dashboard-mode-map "j") 'roost-dashboard-next-task))
   (should (eq (lookup-key roost-dashboard-mode-map "k") 'roost-dashboard-previous-task))
   (should (eq (lookup-key roost-dashboard-mode-map "K") 'roost-stop)))

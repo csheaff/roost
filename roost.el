@@ -1447,9 +1447,10 @@ COMPACT abbreviates commits ahead of and behind the integration branch."
     (unless (or (null prompt) (equal prompt (roost--field task 'name))) prompt)))
 
 (defun roost--evil-state (mode state)
-  "Start MODE's buffers in Evil STATE, when Evil is loaded and STATE is set.
-Called from the mode bodies, before Evil sets up the new buffer."
-  (when (and state (fboundp 'evil-set-initial-state))
+  "Start MODE's buffers in Evil STATE when Evil is loaded.
+Called from the mode bodies, before Evil sets up the new buffer.  Evil
+keeps one process-wide registration per mode; a nil STATE removes it."
+  (when (fboundp 'evil-set-initial-state)
     (evil-set-initial-state mode state)))
 
 (defun roost--quiet-display ()
