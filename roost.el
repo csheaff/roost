@@ -421,7 +421,7 @@ Call SUCCESS with the result, or FAILURE with an error message."
                         (not (equal (roost--field task 'updatedAt)
                                     (roost--field old 'updatedAt))))))
     ;; Quiet polls skip Git; keep the statistics from the last full refresh.
-    (dolist (field '(diff dirty ahead behind))
+    (dolist (field '(diff dirty ahead behind worktreeMissing))
       (unless (assoc field task)
         (when (assoc field old) (push (assoc field old) task))))
     (if (member status '("retired" "forgotten"))
@@ -468,6 +468,7 @@ Call SUCCESS with the result, or FAILURE with an error message."
        host "list" (list (cons 'full (if quiet :false t)))
        (lambda (tasks)
          (remhash host roost--failures)
+         (remhash host roost--errors)
          ;; A newer mutation must win over a stale list reply.
          (when (= revision (gethash host roost--revisions 0))
            (roost--apply-snapshot host tasks))
@@ -753,15 +754,21 @@ recently failed."
   (delete-dups (append roost--remembered-projects
                        (mapcar #'roost--project-directory (roost-tasks)))))
 
-(defun roost--abbreviate-path (path)
-  "PATH with a home directory prefix shown as ~."
-  (replace-regexp-in-string "\\`/\\(?:home\\|Users\\)/[^/]+\\(/\\|\\'\\)" "~\\1" path))
+(defun roost--abbreviate-path (path &optional host)
+  "PATH with its owner's home directory shown as ~.
+The owner is HOST's SSH user, or the local user."
+  (let ((user (if (and host (string-match "\\`\\([^@]+\\)@" host))
+                  (match-string 1 host)
+                user-login-name)))
+    (replace-regexp-in-string
+     (concat "\\`/\\(?:home\\|Users\\)/" (regexp-quote user) "\\(/\\|\\'\\)") "~\\1" path)))
 
 (defun roost--project-label (directory)
   "Short label such as \"claylien · ~/code/app\" for project DIRECTORY."
   (format "%s · %s"
           (roost--host-label (ignore-errors (roost--directory-host directory)))
-          (roost--abbreviate-path (directory-file-name (file-local-name directory)))))
+          (roost--abbreviate-path (directory-file-name (file-local-name directory))
+                                  (ignore-errors (roost--directory-host directory)))))
 
 (defun roost--name-from-prompt (prompt)
   "A short task name derived from the first words of PROMPT."
@@ -845,6 +852,8 @@ worktree; explicit HEAD uses DIRECTORY.  Nil AGENT uses
 (defvar-local roost--compose-body nil
   "Marker at the start of the prompt text.")
 (defvar-local roost--compose-timer nil)
+(defvar-local roost--compose-submitting nil
+  "Non-nil while the drafted task is being created.")
 
 (defvar-keymap roost-compose-mode-map
   :doc "Keys for drafting a new Roost task."
@@ -882,7 +891,8 @@ worktree; explicit HEAD uses DIRECTORY.  Nil AGENT uses
       (when fresh
         (roost-compose-mode)
         (setq roost--compose-body (copy-marker (point-min))))
-      (when (or fresh fork)
+      ;; An untouched draft follows the current context; a written one is kept.
+      (when (or fresh fork (string-empty-p (roost--compose-prompt)))
         (setq roost--compose-fields
               (list :directory (roost--compose-default-directory task fork)
                     :agent roost-default-agent
@@ -1041,7 +1051,10 @@ A mouse click shows a menu at the pointer; the keyboard uses the minibuffer."
       (user-error "Choose a project first (%s)" (substitute-command-keys "\\[roost-compose-set-project]")))
     (when (string-empty-p name)
       (user-error "Write a prompt, or name the task (%s)" (substitute-command-keys "\\[roost-compose-set-name]")))
-    (setq header-line-format (format " Creating %s…" name))
+    (when roost--compose-submitting
+      (user-error "Already creating %s" name))
+    (setq roost--compose-submitting t
+          header-line-format (format " Creating %s…" name))
     (roost--create-task (plist-get fields :directory) name (plist-get fields :base) prompt
                         (plist-get fields :agent)
                         (lambda (_task)
@@ -1051,6 +1064,7 @@ A mouse click shows a menu at the pointer; the keyboard uses the minibuffer."
                         (lambda (err)
                           (when (buffer-live-p buffer)
                             (with-current-buffer buffer
+                              (setq roost--compose-submitting nil)
                               (setq header-line-format
                                     (format " Could not create the task: %s · %s retries"
                                             err (substitute-command-keys "\\[roost-compose-submit]")))))))))
@@ -1464,7 +1478,10 @@ Status is the last observation from the task's host.
           (roost--insert-indented prompt))
         (roost--insert-heading "Changes")
         (roost--insert-indented
-         (cond ((not (assq 'diff task)) (propertize "Refreshing…" 'face 'roost-dim))
+         (cond ((roost--field task 'worktreeMissing)
+                (propertize "The worktree is gone; retire the task if its work is merged, or forget it"
+                            'face 'roost-status-failed))
+               ((not (assq 'diff task)) (propertize "Refreshing…" 'face 'roost-dim))
                ((string-empty-p changes) (propertize "No changes yet" 'face 'roost-dim))
                (t (roost--fontify-changes changes))))
         (when (> (or (roost--field task 'behind) 0) 0)
@@ -1502,8 +1519,10 @@ Status is the last observation from the task's host.
                                               (if (and integration (not (string-empty-p integration)))
                                                   (format ", merges into %s" integration)
                                                 "")))
-                         ("Worktree" . ,(roost--abbreviate-path (or (roost--field task 'worktree) "")))
-                         ("Project" . ,(roost--abbreviate-path (or (roost--field task 'repo) "")))
+                         ("Worktree" . ,(roost--abbreviate-path (or (roost--field task 'worktree) "")
+                                                                (roost--field task 'host)))
+                         ("Project" . ,(roost--abbreviate-path (or (roost--field task 'repo) "")
+                                                               (roost--field task 'host)))
                          ("Tmux" . ,(format "session %s on socket %s" (roost--field task 'session)
                                             (roost--field task 'socket)))
                          ("Conversation" . ,(or (roost--field task 'agentSession)
@@ -1656,15 +1675,16 @@ The changes column shrinks first, then the agent column is dropped."
          (agent (> (length (delete-dups (mapcar (lambda (task) (or (roost--field task 'agent) "claude"))
                                                 tasks)))
                    1))
-         (changes (min 40 (apply #'max (mapcar (lambda (task) (string-width (roost--changes task t)))
-                                              tasks))))
+         (widest (min 40 (apply #'max (mapcar (lambda (task) (string-width (roost--changes task t)))
+                                             tasks))))
+         (changes widest)
          ;; Bullet, name, status, since and their separators.
          (fixed (+ 4 name 2 11 1 6 2))
          (over (- (+ fixed (if agent 8 0) (if (> changes 0) (+ changes 2) 0)) width)))
     (when (> over 0)
       (setq changes (max 0 (- changes over)))
       (when (and agent (< changes 12))
-        (setq agent nil changes (min 40 (max 0 (- width fixed 2))))))
+        (setq agent nil changes (min widest (max 0 (- width fixed 2))))))
     (when (< changes 6) (setq changes 0))
     (list :name name :agent agent :changes changes)))
 
@@ -1721,7 +1741,7 @@ The changes column shrinks first, then the agent column is dropped."
             (insert "\n" (propertize (format "%s · %s" (roost--host-label host)
                                              (file-name-nondirectory (directory-file-name (or repo "?"))))
                                      'face 'roost-heading)
-                    (propertize (concat "  " (roost--abbreviate-path (or repo ""))) 'face 'roost-dim)
+                    (propertize (concat "  " (roost--abbreviate-path (or repo "") host)) 'face 'roost-dim)
                     (if (gethash host roost--errors)
                         (propertize "  unreachable; showing the last known state" 'face 'roost-status-failed)
                       "")

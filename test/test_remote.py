@@ -437,6 +437,35 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(self.request("list")["result"], [])
         self.assertEqual(self.git("show", worked["branch"] + ":hello"), "work")
 
+    def test_retire_keeps_a_fork_whose_parent_branch_is_gone(self):
+        parent = self.create(name="parent")
+        wt = Path(parent["worktree"])
+        (wt / "hello").write_text("parent work\n")
+        self.git("commit", "-qam", "parent work", cwd=wt)
+        reply = self.request("create", directory=str(wt), name="child", socket=self.socket, base="HEAD",
+                             command=[sys.executable, str(FAKE)])
+        child = self.wait(reply["result"], "ready")
+        self.request("stop", id=parent["id"])
+        self.request("forget", id=parent["id"])
+        self.git("worktree", "remove", "--force", parent["worktree"])
+        self.git("branch", "-D", parent["branch"])
+        self.request("stop", id=child["id"])
+        # The child's branch is now the only ref to the parent's commit.
+        self.assertIn("unmerged commits", self.request("retire", id=child["id"])["error"])
+        self.assertTrue(roost.ref_exists(self.repo, child["branch"]))
+
+    def test_update_allows_untracked_files_and_lists_missing_worktrees(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        (wt / "scratch.txt").write_text("not tracked\n")
+        (self.repo / "other").write_text("main moved\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "main moved")
+        self.assertTrue(self.request("update", id=task["id"])["result"]["update"]["changed"])
+        self.request("stop", id=task["id"])
+        self.git("worktree", "remove", "--force", task["worktree"])
+        self.assertTrue(self.request("list", full=True)["result"][0]["worktreeMissing"])
+
     def test_retire_finishes_when_worktree_and_branch_were_removed_by_hand(self):
         task = self.create()
         self.request("stop", id=task["id"])

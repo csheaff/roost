@@ -8,6 +8,7 @@
   `(let ((roost--tasks (make-hash-table :test 'equal))
          (roost-projects-file (expand-file-name "projects.json" (make-temp-file "roost-projects" t)))
          (roost--projects-loaded t) (roost--remembered-projects nil)
+         (user-login-name "user")
          (roost--statuses (make-hash-table :test 'equal))
          (roost--errors (make-hash-table :test 'equal))
          (roost--installed (make-hash-table :test 'equal))
@@ -546,7 +547,7 @@
                                     (roost-test--task "1111111111111111" "permission")))
    (roost--cache-task "dev" (append '((repo . "/home/user/ledger") (startedAt . "2") (name . "totals"))
                                     (roost-test--task "2222222222222222" "running")))
-   (roost--cache-task nil (append '((repo . "/Users/me/site") (name . "docs") (agent . "codex"))
+   (roost--cache-task nil (append '((repo . "/Users/user/site") (name . "docs") (agent . "codex"))
                                   (roost-test--task "3333333333333333" "ready")))
    (with-temp-buffer
      (roost-dashboard-mode)
@@ -589,6 +590,38 @@
      (dolist (width '(150 100 75 60 50 45))
        (should (<= (string-width (roost--dashboard-row (car tasks) (roost--dashboard-layout tasks width) width))
                    width))))))
+
+(ert-deftest roost-review-fixes-for-paths-layout-and-drafts ()
+  (roost-test--isolated
+   ;; Only the owner's home is abbreviated.
+   (should (equal (roost--abbreviate-path "/home/user/app") "~/app"))
+   (should (equal (roost--abbreviate-path "/home/alice/app") "/home/alice/app"))
+   (should (equal (roost--abbreviate-path "/home/alice/app" "alice@dev") "~/app"))
+   ;; Without any changes, dropping the agent column adds no blank column.
+   (let ((tasks (list (append '((agent . "codex")) (roost-test--task "1111111111111111"))
+                      (roost-test--task "2222222222222222"))))
+     (should (equal (plist-get (roost--dashboard-layout tasks 45) :changes) 0)))
+   (let ((default-directory "/tmp/") created)
+     (save-window-excursion
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--create-task)
+                      (lambda (&rest args) (push args created))))
+             ;; An untouched draft follows the task in context.
+             (roost--compose)
+             (with-current-buffer roost--compose-buffer
+               (setq roost--compose-fields (plist-put roost--compose-fields :directory "/old/")))
+             (roost--cache-task "dev" (append '((repo . "/home/user/repo")) (roost-test--task)))
+             (setq roost--current-task '("dev" "0123456789abcdef"))
+             (roost--compose)
+             (with-current-buffer roost--compose-buffer
+               (should (string-suffix-p ":/home/user/repo/" (plist-get roost--compose-fields :directory)))
+               ;; A second C-c C-c while creating does not create twice.
+               (goto-char (point-max))
+               (insert "Do the thing")
+               (roost-compose-submit)
+               (should-error (roost-compose-submit) :type 'user-error)
+               (should (= (length created) 1))))
+         (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
 
 (ert-deftest roost-empty-dashboard-explains-how-to-start ()
   (roost-test--isolated

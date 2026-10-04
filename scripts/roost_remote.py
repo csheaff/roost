@@ -25,7 +25,7 @@ ACTIVE = ("starting", "running", "permission", "background")
 # States in which the agent process is known to have ended.
 ENDED = ("stopped", "exited", "failed", "crashed")
 # Computed per request and never persisted in a task record.
-TRANSIENT = ("live", "diff", "dirty", "ahead", "behind", "update")
+TRANSIENT = ("live", "diff", "dirty", "ahead", "behind", "update", "worktreeMissing")
 DEFAULT_BRANCH_PREFIX = "roost/"
 
 
@@ -510,7 +510,8 @@ def add_git_stats(tasks):
     Runs outside the registry lock: in a large repository these take seconds."""
     for task in tasks:
         worktree = Path(task["worktree"])
-        if not worktree.is_dir():
+        task["worktreeMissing"] = not worktree.is_dir()
+        if task["worktreeMissing"]:
             continue
         stats = git(worktree, "diff", "--shortstat", task["baseCommit"], check=False)
         dirty = git(worktree, "status", "--porcelain", check=False)
@@ -639,7 +640,14 @@ def integration_branch(task):
 def safe_to_delete(task, commit):
     """True when deleting the task branch at COMMIT loses no commits."""
     if commit == task.get("baseCommit"):
-        return True  # The task never committed anything.
+        # The task never committed. Its starting point (perhaps a forked
+        # task's commits, or a detached HEAD) must survive elsewhere.
+        refs = git(task["repo"], "for-each-ref", "--contains", commit, "--format=%(refname)",
+                   check=False).stdout.split()
+        if any(ref != "refs/heads/" + task["branch"] for ref in refs):
+            return True
+        if git(task["repo"], "merge-base", "--is-ancestor", commit, "HEAD", check=False).returncode == 0:
+            return True
     integration = task.get("integrationBranch")
     return ref_exists(task["repo"], integration) and git(
         task["repo"], "merge-base", "--is-ancestor", commit, "refs/heads/" + integration,
@@ -713,7 +721,8 @@ def update(store, task):
         raise RoostError("Task worktree is gone")
     if git(worktree, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0:
         raise RoostError("A merge is already in progress in the task's worktree; resolve or abort it there")
-    if git(worktree, "status", "--porcelain").stdout.strip():
+    # Untracked files are fine; Git refuses the merge if it would overwrite one.
+    if git(worktree, "status", "--porcelain", "--untracked-files=no").stdout.strip():
         raise RoostError("Commit the task's changes before updating it from " + integration)
     before = git(worktree, "rev-parse", "HEAD").stdout.strip()
     result = git(worktree, "merge", "--no-edit", integration, check=False)
