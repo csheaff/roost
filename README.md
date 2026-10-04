@@ -37,13 +37,17 @@ projects you've used. Click a field or use its key to change it, write the promp
 (it can span lines), and press `C-c C-c`. Roost creates the branch and worktree,
 starts the agent in tmux, and opens its terminal.
 
-Your task list can live where it already does: run `M-x roost-new-task` on an
-Org heading, or on its line in the agenda, and the heading and its notes become
-the prompt. The heading records the task (a `ROOST_TASK` property), so Roost
-commands run there, such as `roost-open-task` or `roost-review`, act on it. With a region selected, the selection does; code is quoted with
-its file and lines, ready for you to say what to do with it. Or press `C-c C-t`
-in the draft to pick one of the project's open GitHub issues: its title and
-text become the prompt, and the task's pull request will close it.
+**Start from where the work is.** Your task list can stay where it already is:
+
+- Run `M-x roost-new-task` on an Org heading, or on its agenda line. The
+  heading and its notes become the prompt, and the heading records the task (a
+  `ROOST_TASK` property), so Roost commands run there, such as
+  `roost-open-task` or `roost-review`, act on it.
+- Select a region first, and the selection becomes the prompt. Code is quoted
+  with its file and lines, ready for you to say what to do with it.
+- Press `C-c C-t` in the draft to pick one of the project's open GitHub issues.
+  Its title and text become the prompt, and the task's pull request will close
+  it.
 
 ![Drafting a new task beside the dashboard](docs/images/roost-new-task.jpg)
 
@@ -51,8 +55,8 @@ text become the prompt, and the task's pull request will close it.
 agents' own lifecycle hooks and notifies you when one finishes or asks for
 permission, with the first line of its reply, so you can tell from the
 notification whether it needs you now. The dashboard shows each agent's latest
-reply too, and while Roost watches, the mode line counts the agents waiting
-(`Roost:2`; click it for the next one). `n` jumps to the next agent waiting for you, permission requests
+reply too, and the mode line counts the agents waiting (`Roost:2`; click it for
+the next one). `n` jumps to the next agent waiting for you, permission requests
 first. Answer it in the terminal, then `n` again.
 
 **Check the work yourself.** `t` opens a shell beside the agent, in the same
