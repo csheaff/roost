@@ -25,7 +25,7 @@ ACTIVE = ("starting", "running", "permission", "background")
 # States in which the agent process is known to have ended.
 ENDED = ("stopped", "exited", "failed", "crashed")
 # Computed per request and never persisted in a task record.
-TRANSIENT = ("live", "diff", "dirty", "ahead", "behind")
+TRANSIENT = ("live", "diff", "dirty", "ahead", "behind", "update")
 DEFAULT_BRANCH_PREFIX = "roost/"
 
 
@@ -649,8 +649,13 @@ def retire(store, task, merge=False):
         require_clean(repo)
         result = git(repo, "merge", "--no-ff", "--no-edit", branch, check=False)
         if result.returncode:
+            conflicts = conflicted_files(repo)
             if git(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0:
                 git(repo, "merge", "--abort")
+            if conflicts:
+                raise RoostError("%s conflicts with %s in %s. Nothing was changed; update the task from %s, then merge again"
+                                 % (task["name"], task["integrationBranch"], ", ".join(conflicts),
+                                    task["integrationBranch"]))
             raise RoostError("Merge failed; task retained: " + (result.stderr.strip() or result.stdout.strip()))
     commit = None
     if branch_exists:
@@ -669,6 +674,37 @@ def retire(store, task, merge=False):
         delete_branch(repo, branch, commit)
     store.remove(task["id"])
     task.update(status="retired", updatedAt=now())
+    return task
+
+
+def conflicted_files(repo):
+    return git(repo, "diff", "--name-only", "--diff-filter=U", check=False).stdout.splitlines()
+
+
+def update(store, task):
+    """Merge the integration branch into the task's worktree, so the task can
+    be brought up to date and its conflicts resolved there, not in the
+    primary checkout. Conflicts leave the merge in progress in the worktree."""
+    integration = task.get("integrationBranch")
+    if not integration:
+        raise RoostError("The task has no integration branch to update from")
+    require_finished(task, owned_pane(task, inventory_for(task)))
+    worktree = check_worktree(store, task)
+    if not worktree.is_dir():
+        raise RoostError("Task worktree is gone")
+    if git(worktree, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0:
+        raise RoostError("A merge is already in progress in the task's worktree; resolve or abort it there")
+    if git(worktree, "status", "--porcelain").stdout.strip():
+        raise RoostError("Commit the task's changes before updating it from " + integration)
+    before = git(worktree, "rev-parse", "HEAD").stdout.strip()
+    result = git(worktree, "merge", "--no-edit", integration, check=False)
+    conflicts = conflicted_files(worktree)
+    if result.returncode and not conflicts:
+        if git(worktree, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0:
+            git(worktree, "merge", "--abort")
+        raise RoostError("Updating from %s failed: %s" % (integration, result.stderr.strip() or result.stdout.strip()))
+    task["update"] = dict(conflicts=conflicts,
+                          changed=before != git(worktree, "rev-parse", "HEAD").stdout.strip())
     return task
 
 
@@ -770,6 +806,7 @@ TASK_ACTIONS = {
     "retire": lambda store, task, request: retire(store, task),
     "merge": lambda store, task, request: retire(store, task, merge=True),
     "forget": lambda store, task, request: forget(store, task),
+    "update": lambda store, task, request: update(store, task),
 }
 
 

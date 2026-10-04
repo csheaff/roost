@@ -663,6 +663,22 @@
        (should-not asked)
        (should-not (assq 'force sent))))))
 
+(ert-deftest roost-update-offers-the-agent-its-conflicts ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (append '((integrationBranch . "main")) (roost-test--task))))
+         sent)
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host action _params success &rest _)
+                  (should (equal action "update"))
+                  (funcall success (append '((update (conflicts "a.py" "b.py") (changed . t))
+                                             (integrationBranch . "main"))
+                                           (roost-test--task)))))
+               ((symbol-function 'roost--refresh-host) #'ignore)
+               ((symbol-function 'yes-or-no-p) (lambda (_) t))
+               ((symbol-function 'roost-send) (lambda (_task text) (setq sent text))))
+       (roost-update task)
+       (should (string-match-p "merged main into this branch and Git reports conflicts in: a.py, b.py" sent))))))
+
 (ert-deftest roost-send-region-reports-the-last-selected-line ()
   (roost-test--isolated
    (let (sent name)

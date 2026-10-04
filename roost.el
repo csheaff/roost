@@ -1181,6 +1181,34 @@ permission is declined in the terminal."
     (magit-diff-working-tree (roost--field task 'baseCommit))))
 
 ;;;###autoload
+(defun roost-update (&optional task)
+  "Merge TASK's integration branch into its worktree.
+This brings a task that fell behind up to date before merging it, and
+resolves conflicts in the task rather than the primary checkout.  On
+conflicts, offer to have the task's agent resolve them."
+  (interactive)
+  (setq task (roost--choose task))
+  (roost--act
+   task "update" nil
+   (lambda (updated)
+     (let* ((result (roost--field updated 'update))
+            (conflicts (alist-get 'conflicts result))
+            (name (roost--field updated 'name))
+            (branch (roost--field updated 'integrationBranch)))
+       (roost--refresh-host (roost--field updated 'host) nil)
+       (cond (conflicts
+              (if (yes-or-no-p (format "%s conflicts with %s in %s. Ask its agent to resolve them? "
+                                       name branch (string-join conflicts ", ")))
+                  (roost-send updated
+                              (format "I merged %s into this branch and Git reports conflicts in: %s. Resolve the conflicts so the changes from both sides keep working, run the tests, and commit the merge."
+                                      branch (string-join conflicts ", ")))
+                (message "The merge is in progress in %s's worktree; resolve it in Magit (r) and commit"
+                         name)))
+             ((alist-get 'changed result)
+              (message "%s now includes the latest %s" name branch))
+             (t (message "%s is already up to date with %s" name branch)))))))
+
+;;;###autoload
 (defun roost-stop (&optional task)
   "Stop TASK's window, retaining its worktree, branch and conversation."
   (interactive)
@@ -1339,6 +1367,7 @@ COMPACT abbreviates commits ahead of and behind the integration branch."
     "---"
     ["Review in Magit" roost-review]
     ["Diff since start" roost-diff]
+    ["Update from integration branch" roost-update]
     "---"
     ["Merge and retire…" roost-merge-retire]
     ["Retire…" roost-retire]
@@ -1368,6 +1397,7 @@ COMPACT abbreviates commits ahead of and behind the integration branch."
   "x" #'roost-retire
   "m" #'roost-merge-retire
   "X" #'roost-forget
+  "u" #'roost-update
   "g" #'roost-task-info-refresh)
 
 (easy-menu-define roost-task-info-menu roost-task-info-mode-map
@@ -1386,7 +1416,8 @@ Status is the last observation from the task's host.
 (defconst roost--task-actions
   '(("Work" ("Agent" "RET" roost-open-task) ("Shell" "t" roost-shell)
      ("Files" "f" roost-files) ("Send prompt" "e" roost-send))
-    ("Review" ("Magit" "r" roost-review) ("Diff since start" "D" roost-diff))
+    ("Review" ("Magit" "r" roost-review) ("Diff since start" "D" roost-diff)
+     ("Update" "u" roost-update))
     ("Finish" ("Merge and retire" "m" roost-merge-retire) ("Retire" "x" roost-retire)
      ("Forget" "X" roost-forget))
     ("Session" ("Stop" "k" roost-stop) ("Resume" "s" roost-resume)))
@@ -1432,6 +1463,12 @@ Status is the last observation from the task's host.
          (cond ((not (assq 'diff task)) (propertize "Refreshing…" 'face 'roost-dim))
                ((string-empty-p changes) (propertize "No changes yet" 'face 'roost-dim))
                (t (roost--fontify-changes changes))))
+        (when (> (or (roost--field task 'behind) 0) 0)
+          (roost--insert-indented
+           (substitute-command-keys
+            (format "%s has moved on; \\<roost-task-info-mode-map>\\[roost-update] merges it into this task before you merge the task back."
+                    integration))
+           'roost-dim))
         (pcase status
           ((or "exited" "failed" "crashed")
            (roost--insert-indented
@@ -1531,6 +1568,7 @@ Status is the last observation from the task's host.
   "x" #'roost-retire
   "m" #'roost-merge-retire
   "X" #'roost-forget
+  "u" #'roost-update
   "n" #'roost-next-waiting
   "g" #'roost-refresh)
 
