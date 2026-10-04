@@ -2,9 +2,9 @@
 
 ## Automated checks
 
-- Automated checks on macOS: **29 ERT tests and 17 Python lifecycle tests pass**;
+- Automated checks on macOS: **30 ERT tests and 24 Python lifecycle tests pass**;
   `roost.el` byte-compiles without warnings.
-- The same 17 Python tests pass on **`claylien`** over SSH, with Python 3.13.7 and
+- The same 24 Python tests pass on **`claylien`** over SSH, with Python 3.13.7 and
   tmux 3.7c. Local tests use an isolated socket and real Git/tmux too.
 - A fresh `emacs -Q --batch` check of the default profile's new Roost configuration
   verifies balanced init syntax, deferred loading, `SPC r` bindings, configured
@@ -31,7 +31,10 @@ retirement, invalid refs/CLI flags, and missing executables. New checks cover
 independent creation from a linked worktree, shell reuse/cwd/ownership and
 stop/resume, and agent adapters preserving legacy conversations while rejecting
 unknown providers. The fixture CLI uses
-real per-task hook commands, without model API calls.
+real observer commands, without model API calls. Codex and Pi coverage checks
+create/send/shell/stop/resume/retire, exact conversation identity, old-run guards,
+reserved CLI flags, literal initial prompts, Codex deferred startup and approval
+blocking, Pi queued work, and failure while writing observer files.
 
 ## Actual Claude and native Emacs
 
@@ -134,6 +137,59 @@ group now ignores mouse-down and opens the picker on release. The corrected
 click-and-select interaction was verified in GUI Emacs. Temporary perspectives,
 the demo frame, task and fixture were removed afterward; the original user
 workspace and agent were retained.
+
+## Codex and Pi adapters
+
+Used another disposable remote `hello-service` project, an isolated registry and
+socket, and a separate GUI Emacs frame. Both agents had independent worktrees
+and perspectives within the same project session. The existing user task was
+left running on its original socket.
+
+Codex CLI 0.160.0 was authenticated with the user's ChatGPT account. Its old
+configured model rejected the first request; the test task alone selected
+`gpt-6-luna` for the successful run. Global model configuration was unchanged.
+
+1. Reviewed the eight per-invocation observer hooks in Codex's normal hook UI.
+   All handlers called Roost's status helper, without approval decisions.
+2. Submitted the greeting task in the actual Codex terminal. Roost recorded its
+   conversation ID, tracked tool activity as `running`, and observed `Stop` as
+   `ready`. Codex edited the implementation and added three regression tests.
+3. Stopped and resumed through Roost. The conversation ID was unchanged and the
+   original prompt, diff, test output and response remained visible.
+4. Opened the supporting shell and independently ran
+   `python3 -B -m unittest -v`: **all four tests passed**. Reopening it with
+   `SPC r t` reused that shell. Opened remote Magit with `SPC r r`, expanded both
+   real diffs, staged them and committed through Magit's message editor.
+5. Stopped the task and used `SPC r m` to merge and retire. Commit `5e851ed`
+   contained the reviewed change; the clean primary checkout retained it, and
+   the task's branch, worktree and agent/supporting-shell window were removed.
+
+Codex 0.160.0 defers `SessionStart` until the first submitted turn, including
+resume. Before that, `starting` prevents Roost from pasting into possible startup
+or hook-review prompts. Enter the first prompt in the native terminal, or supply
+one during task creation. This behavior has a dedicated lifecycle regression
+check and an explanation in task details. A failed model request can omit
+`Stop` and leave the cached status as `running`; the terminal shows the actual
+error. No transcript scraping or approval bypass was added.
+
+Created Pi through the actual `SPC r c` agent picker, using installed Pi 0.78.1.
+Its observer loaded alongside the user's existing extension and recorded turn
+start/end and the exact session file. Native testing found that Pi rejects a
+`--` argument separator; Roost now passes literal prompts without that separator,
+with regression coverage for flag/file-looking prompts. Stop/resume restored
+the same session file and visible original prompt/error transcript.
+
+Pi's remote Anthropic credentials returned `No API key for provider: anthropic`,
+so an actual model edit remains **unverified** and Pi is experimental. Roost did
+not copy credentials from another CLI. Permission prompts from arbitrary Pi
+extensions have no universal event and must be handled directly in the terminal.
+
+Earlier failed launches left the QA terminal client aimed at a removed pane;
+reconnecting that isolated tmux-control client restored the live view. Subsequent
+native stop/resume and review operated on the correct panes. Emacs window
+arrangements were adjusted during review; physical resize/input behavior is
+subject to the limits below. Both test tasks were retired, the isolated server
+and fixture removed, and the original Emacs state and user agent restored.
 
 ## Limits
 

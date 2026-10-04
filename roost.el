@@ -1,14 +1,13 @@
-;;; roost.el --- Remote Claude tasks over tmux-control -*- lexical-binding: t; -*-
+;;; roost.el --- Coding agent tasks over tmux-control -*- lexical-binding: t; -*-
 ;; Author: Clay Sheaff
-;; Version: 0.3.0
+;; Version: 0.4.0
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: tools, processes
 ;; URL: https://github.com/csheaff/roost
 ;;; Commentary:
-;; Claude runs in tmux on the task's host. Roost owns task lifecycle and
-;; observational Claude hooks; tmux-control owns rendering. JSON RPC over SSH
-;; is asynchronous. Files and Magit use TRAMP. Global Claude settings are never
-;; changed, and stopping Claude never removes its work.
+;; Coding agents run in tmux on the task's host. Roost owns task lifecycle and
+;; observational status events; tmux-control owns rendering. JSON RPC over SSH
+;; is asynchronous. Files and Magit use TRAMP. Stopping an agent keeps its work.
 ;;; Code:
 (require 'cl-lib)
 (require 'json)
@@ -42,7 +41,7 @@
 (defvar persp-mode nil)
 (defvar persp-modestring-short)
 (defvar persp-modestring-dividers)
-(defgroup roost nil "Claude tasks in persistent local or remote tmux." :group 'tools)
+(defgroup roost nil "Coding agent tasks in persistent local or remote tmux." :group 'tools)
 (defcustom roost-hosts '(nil)
   "SSH hosts to monitor. Nil means local. Task hosts are also remembered."
   :type '(repeat (choice (const :tag "Local" nil) string)))
@@ -50,8 +49,16 @@
   "Host-side directory for task records, helper, settings, and worktrees." :type 'string)
 (defcustom roost-claude-command '("claude")
   "Claude executable and extra arguments, evaluated on the task host." :type '(repeat string))
+(defcustom roost-default-agent "claude"
+  "Default agent offered when creating a task. Existing tasks retain their agent."
+  :type '(choice (const "claude") (const "codex") (const "pi")))
+(defcustom roost-agent-commands '(("codex" "codex") ("pi" "pi"))
+  "Executable and extra arguments for each agent, evaluated on the task host.
+Claude uses `roost-claude-command' unless overridden here."
+  :type '(alist :key-type string :value-type (repeat string)))
+(defconst roost--agents '("claude" "codex" "pi"))
 (defcustom roost-setup-command nil
-  "Optional project setup shell command, run before Claude in new worktrees.
+  "Optional project setup shell command, run before the agent in new worktrees.
 May be set directory-locally. Not rerun on resume."
   :type '(choice (const nil) string))
 (defcustom roost-socket-name nil
@@ -418,25 +425,32 @@ A prefix argument instead defaults to forking the current task's committed HEAD.
                      (if current-prefix-arg (roost--remote-directory task)
                        (roost--remote-directory (cons (cons 'worktree (roost--field task 'repo)) task)))
                    default-directory))
-         (directory (read-directory-name "Project checkout (local or TRAMP): " source nil t)))
-    (list directory (read-string "Task name: ")
+         (directory (read-directory-name "Project checkout (local or TRAMP): " source nil t))
+         (name (read-string "Task name: "))
+         (agent (completing-read "Agent: " roost--agents nil t nil nil roost-default-agent)))
+    (list directory name
           (let ((ref (read-string "Start from ref (empty = primary checkout branch): " nil nil
                                   (when current-prefix-arg "HEAD"))))
             (unless (string-empty-p (string-trim ref)) (string-trim ref)))
-          (read-string "Initial prompt (optional): "))))
+          (read-string "Initial prompt (optional): ") agent)))
 
 ;;;###autoload
-(defun roost-new-task (directory name &optional base prompt)
-  "Create a Claude task NAME in DIRECTORY from BASE, with optional PROMPT.
+(defun roost-new-task (directory name &optional base prompt agent)
+  "Create an AGENT task NAME in DIRECTORY from BASE, with optional PROMPT.
+Nil AGENT uses `roost-default-agent'.
 DIRECTORY may be a TRAMP path. Nil BASE uses the primary checkout's current
 branch, even when DIRECTORY is a task worktree. Explicit HEAD uses DIRECTORY.
 Interactively, a prefix argument defaults to forking the current task."
   (interactive (roost--read-new-task))
+  (setq agent (or agent roost-default-agent))
+  (unless (member agent roost--agents) (user-error "Unsupported Roost agent: %s" agent))
   (let ((host (roost--directory-host directory))
         (setup (with-temp-buffer (setq default-directory directory) (hack-dir-local-variables-non-file-buffer) roost-setup-command)))
     (roost--request host "create"
-                   (list (cons 'directory (file-local-name directory)) (cons 'name name) (cons 'base base) (cons 'agent "claude")
-                         (cons 'prompt (unless (string-empty-p (or prompt "")) prompt)) (cons 'command (vconcat roost-claude-command)) (cons 'setup setup)
+                   (list (cons 'directory (file-local-name directory)) (cons 'name name) (cons 'base base) (cons 'agent agent)
+                         (cons 'prompt (unless (string-empty-p (or prompt "")) prompt))
+                         (cons 'command (vconcat (or (cdr (assoc agent roost-agent-commands))
+                                                    (and (equal agent "claude") roost-claude-command) (list agent)))) (cons 'setup setup)
                          (cons 'socket (or roost-socket-name (bound-and-true-p tmux-control-default-socket-name) "main"))
                          (cons 'session roost-session-name))
                    (lambda (task)
@@ -458,12 +472,12 @@ Interactively, a prefix argument defaults to forking the current task."
 
 ;;;###autoload
 (defun roost-resume (&optional task)
-  "Restart TASK, resuming its recorded Claude conversation."
+  "Restart TASK, resuming its recorded agent conversation."
   (interactive) (roost--act (roost--choose task) "resume" nil #'roost-open-task))
 
 ;;;###autoload
 (defun roost-send (&optional task text)
-  "Send TEXT as a literal pasted prompt to TASK's Claude pane."
+  "Send TEXT as a literal pasted prompt to TASK's agent pane."
   (interactive) (setq task (roost--choose task) text (or text (read-string (format "Send to %s: " (roost--field task 'name)))))
   (roost--act task "send" (list (cons 'text text))))
 
@@ -565,7 +579,7 @@ Dirty worktrees are refused; review and commit in Magit first."
 
 ;;;###autoload
 (defun roost-next-waiting ()
-  "Cycle through live tasks whose Claude session needs attention."
+  "Cycle through live tasks whose agent session needs attention."
   (interactive)
   (let* ((waiting (seq-filter (lambda (task) (and (not (gethash (roost--field task 'host) roost--errors))
                                                  (member (roost--field task 'status) '("ready" "permission")))) (roost-tasks)))
@@ -599,6 +613,11 @@ Dirty worktrees are refused; review and commit in Magit first."
                        ("Tmux session" . ,(roost--field task 'session))))
         (insert (format "%-18s %s\n" (car entry) (or (cdr entry) "unknown"))))
       (when-let* ((error (roost--field task 'error))) (insert "\nLast error: " error "\n"))
+      (when (and (equal (roost--field task 'agent) "codex")
+                 (equal (roost--field task 'status) "starting"))
+        (insert "\nOpen the agent terminal, review any hooks/startup prompts, and enter the\n"
+                "first prompt there. Codex starts status events on the first turn, including\n"
+                "after resume; Send prompt becomes available after that.\n"))
       (insert "\n")
       (dolist (action '(("RET  Agent" . roost-open-task) ("t  Shell beside agent" . roost-shell)
                         ("f  Files" . roost-files) ("r  Review / commit in Magit" . roost-review)
@@ -644,6 +663,7 @@ Dirty worktrees are refused; review and commit in Magit first."
   (mapcar (lambda (task)
             (let* ((host (roost--field task 'host)) (status (if (gethash host roost--errors) "offline" (roost--field task 'status))))
               (list (roost--key task) (vector (roost--host-label host) (roost--field task 'name)
+                                             (or (roost--field task 'agent) "claude")
                                              (propertize status 'face (roost--status-face status)) (roost--elapsed (roost--field task 'updatedAt))
                                              (roost--project-name task) (or (roost--field task 'diff) "")
                                              (roost--field task 'branch) (or (roost--field task 'task) ""))))) (roost-tasks)))
@@ -661,7 +681,7 @@ Dirty worktrees are refused; review and commit in Magit first."
 
 (define-derived-mode roost-dashboard-mode tabulated-list-mode "Roost"
   "Tasks across hosts. All refreshes are asynchronous."
-  (setq tabulated-list-format [("Host" 14 t) ("Task" 24 t) ("Status" 12 t) ("Since" 8 t)
+  (setq tabulated-list-format [("Host" 14 t) ("Task" 24 t) ("Agent" 8 t) ("Status" 12 t) ("Since" 8 t)
                                ("Project" 20 t) ("Changes" 30 t) ("Branch" 36 t) ("Prompt" 0 nil)]
         tabulated-list-use-header-line nil
         truncate-lines t

@@ -17,6 +17,7 @@ spec = importlib.util.spec_from_file_location("roost_remote", SOURCE)
 roost = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(roost)
 FAKE = Path(__file__).with_name("fake_claude.py")
+FAKE_AGENT = Path(__file__).with_name("fake_agent.py")
 
 
 class Lifecycle(unittest.TestCase):
@@ -53,11 +54,11 @@ class Lifecycle(unittest.TestCase):
         self.wait(task, "ready")
         return task
 
-    def wait(self, task, status):
+    def wait(self, task, status, event=None):
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
             record = roost.Store(str(self.state)).read(task["id"])
-            if record["status"] == status:
+            if record["status"] == status and (event is None or record.get("lastEvent") == event):
                 return record
             time.sleep(.04)
         self.fail("Expected %s; got %s" % (status, record))
@@ -217,6 +218,96 @@ class Lifecycle(unittest.TestCase):
         reply = self.request("create", directory=str(self.repo), name="future", agent="unknown", socket=self.socket)
         self.assertFalse(reply["ok"], reply)
         self.assertEqual(self.git("worktree", "list", "--porcelain"), before)
+
+    def test_codex_and_pi_create_send_shell_resume_and_retire(self):
+        for agent in ("codex", "pi"):
+            with self.subTest(agent=agent):
+                task = self.create(name=agent, agent=agent, command=[sys.executable, str(FAKE_AGENT), agent])
+                record = self.wait(task, "ready")
+                session = record["agentSession"]
+                self.assertTrue(session)
+                self.assertIsNone(record["claudeSession"])
+                self.assertTrue(self.request("send", id=task["id"], text="literal $() `ticks` prompt")["ok"])
+                finished = self.wait(task, "ready", event="Stop")
+                self.assertEqual(finished["lastEvent"], "Stop")
+                pane = self.request("shell", id=task["id"])["result"]["shellPaneId"]
+                self.assertTrue(self.request("stop", id=task["id"])["ok"])
+                self.assertNotIn(pane, roost.pane_inventory(self.socket))
+                self.assertTrue(self.request("resume", id=task["id"])["ok"])
+                resumed = self.wait(task, "ready")
+                self.assertEqual(resumed["agentSession"], session)
+                self.assertNotEqual(resumed["runId"], record["runId"])
+                # Older provider events cannot steer a resumed task.
+                payload = dict(hook_event_name="Stop", session_id="wrong") if agent == "codex" else dict(event="agent_end", session="wrong")
+                store = roost.Store(str(self.state))
+                roost.update_hook(store, task["id"], payload, record["runId"])
+                self.assertEqual(store.read(task["id"])["agentSession"], session)
+                self.assertTrue(self.request("retire", id=task["id"])["ok"])
+        self.assertEqual(self.git("status", "--porcelain"), "")
+
+    def test_codex_approvals_block_send_and_retirement(self):
+        task = self.create(agent="codex", command=[sys.executable, str(FAKE_AGENT), "codex"])
+        self.assertTrue(self.request("send", id=task["id"], text="permission")["ok"])
+        self.wait(task, "permission")
+        self.assertFalse(self.request("send", id=task["id"], text="yes")["ok"])
+        self.assertFalse(self.request("retire", id=task["id"])["ok"])
+
+    def test_codex_deferred_start_requires_first_prompt_in_native_terminal(self):
+        reply = self.request("create", directory=str(self.repo), name="deferred", socket=self.socket,
+                             agent="codex", command=[sys.executable, str(FAKE_AGENT), "codex", "deferred-start"])
+        self.assertTrue(reply["ok"], reply)
+        task = reply["result"]
+        self.wait(task, "starting")
+        self.assertTrue(self.request("inspect", id=task["id"])["ok"])
+        self.assertFalse(self.request("send", id=task["id"], text="do not paste into startup")["ok"])
+        roost.tmux(self.socket, "send-keys", "-t", task["paneId"], "first native prompt", "Enter")
+        self.wait(task, "ready", event="Stop")
+        self.assertTrue(self.request("send", id=task["id"], text="second prompt")["ok"])
+
+    def test_provider_flags_are_checked_before_worktree_creation(self):
+        before = self.git("worktree", "list", "--porcelain")
+        for agent, flags in (("codex", ["resume", "last"]), ("codex", ["--cd=/other"]),
+                             ("pi", ["--session=other"]), ("pi", ["--mode", "rpc"]), ("pi", ["--print"])):
+            with self.subTest(agent=agent, flags=flags):
+                reply = self.request("create", directory=str(self.repo), name="bad", socket=self.socket,
+                                     agent=agent, command=[agent, *flags])
+                self.assertFalse(reply["ok"], reply)
+                self.assertEqual(self.git("worktree", "list", "--porcelain"), before)
+
+    def test_pi_queued_work_is_background_and_codex_interrupt_is_ready(self):
+        self.assertEqual(roost.PiAgent().observe(dict(event="agent_end", pending=True))["status"], "background")
+        self.assertEqual(roost.CodexAgent().observe(dict(hook_event_name="Interrupt"))["status"], "ready")
+        self.assertIsNone(roost.PiAgent().observe(dict(event="unknown")))
+        self.assertIsNone(roost.CodexAgent().observe(dict(hook_event_name="SubagentStop")))
+
+    def test_initial_prompts_are_literal_and_not_replayed_on_resume(self):
+        store = roost.Store(str(self.state))
+        for name, adapter in (("codex", roost.CodexAgent()), ("pi", roost.PiAgent())):
+            for prompt in ("--help", "@private-file", "literal $() `ticks`\nsecond line"):
+                with self.subTest(agent=name, prompt=prompt):
+                    task = dict(id="1234567890abcdef", command=[name], prompt=prompt, agentSession="recorded-session")
+                    argv = adapter.launch(store, task, False)
+                    if name == "codex":
+                        self.assertEqual(argv[-2:], ["--", prompt])
+                    else:
+                        self.assertNotIn("--", argv)
+                        self.assertEqual(argv[-1], "\n" + prompt)
+                    resumed = adapter.launch(store, task, True)
+                    self.assertEqual(resumed[-1], "recorded-session")
+                    self.assertNotIn(prompt, resumed)
+
+    def test_adapter_launch_failure_marks_the_task_failed(self):
+        task = self.create()
+        self.request("stop", id=task["id"])
+        store = roost.Store(str(self.state))
+        record = store.read(task["id"])
+        record["status"] = "starting"
+        store.save(record)
+        with patch.object(roost.ClaudeAgent, "launch", side_effect=OSError("cannot write observer")):
+            self.assertEqual(roost.runner(str(self.state), task["id"], record["runId"]), 1)
+        failed = store.read(task["id"])
+        self.assertEqual(failed["status"], "failed")
+        self.assertIn("cannot write observer", failed["error"])
 
     def test_partial_retirement_can_be_retried_after_branch_deletion(self):
         task = self.create()

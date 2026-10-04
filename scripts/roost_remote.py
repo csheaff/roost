@@ -41,20 +41,23 @@ def tmux(socket, *args, check=True, input=None):
     return execute(["tmux", "-L", socket, *args], check=check, input=input)
 
 
-def atomic_json(path, data):
+def atomic_text(path, text):
     path = Path(path)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=".roost-", dir=path.parent)
     try:
         with os.fdopen(fd, "w") as output:
-            json.dump(data, output, ensure_ascii=False)
-            output.write("\n")
+            output.write(text)
             output.flush()
             os.fsync(output.fileno())
         os.replace(temporary, path)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+
+
+def atomic_json(path, data):
+    atomic_text(path, json.dumps(data, ensure_ascii=False) + "\n")
 
 
 class Store:
@@ -182,7 +185,111 @@ class ClaudeAgent:
         return updates
 
 
-AGENTS = {"claude": ClaudeAgent()}
+class CodexAgent:
+    """Native Codex TUI with per-invocation, normally reviewed lifecycle hooks."""
+
+    default_command = ["codex"]
+
+    def validate(self, command):
+        validate_command(command, "Codex")
+        reserved = {"resume", "fork", "exec", "review", "app-server", "--remote", "--cd", "-C"}
+        if any(arg.split("=", 1)[0] in reserved for arg in command[1:]):
+            raise RoostError("Roost owns Codex's working directory and conversation resume; use interactive CLI options only")
+
+    def launch(self, store, task, resume_conversation):
+        # Environment carries task/run identity, so the reviewed hook command
+        # stays the same across tasks using this helper version.
+        command = shlex.join([sys.executable, str(Path(__file__).resolve()), "hook-env"])
+        argv = list(task["command"])
+        for event in ("SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse",
+                      "PostToolUse", "PermissionRequest", "Stop", "Interrupt"):
+            handler = '{ hooks = [{ type = "command", command = ' + json.dumps(command) + ', timeout = 3 }] }'
+            argv += ["-c", "hooks." + event + "=[" + handler + "]"]
+        session = task.get("agentSession")
+        if resume_conversation and session:
+            argv += ["resume", session]
+        elif task.get("prompt"):
+            argv += ["--", task["prompt"]]
+        return argv
+
+    def observe(self, payload):
+        event = payload.get("hook_event_name")
+        status = {"SessionStart": "ready", "SessionEnd": "exited", "UserPromptSubmit": "running",
+                  "PreToolUse": "running", "PostToolUse": "running", "PermissionRequest": "permission",
+                  "Stop": "ready", "Interrupt": "ready"}.get(event)
+        if not status:
+            return None
+        updates = dict(status=status, updatedAt=now(), lastEvent="Stop" if event == "Interrupt" else event)
+        if payload.get("session_id"):
+            updates["agentSession"] = payload["session_id"]
+        return updates
+
+
+PI_EXTENSION = r'''import { spawn } from "node:child_process";
+export default function (pi) {
+  const report = (event, ctx, extra = {}) => new Promise(resolve => {
+    const child = spawn(process.env.ROOST_PYTHON, [process.env.ROOST_HELPER, "hook-env"],
+      { stdio: ["pipe", "ignore", "ignore"] });
+    const timer = setTimeout(() => { child.kill(); resolve(); }, 3000);
+    const done = () => { clearTimeout(timer); resolve(); };
+    child.on("error", done);
+    child.on("close", done);
+    child.stdin.on("error", () => {});
+    child.stdin.end(JSON.stringify({ event, session: ctx.sessionManager.getSessionFile(), ...extra }));
+  });
+  pi.on("session_start", (_event, ctx) => report("session_start", ctx));
+  pi.on("agent_start", (_event, ctx) => report("agent_start", ctx));
+  pi.on("agent_end", (_event, ctx) => report("agent_end", ctx, { pending: ctx.hasPendingMessages() }));
+  // Pi emits shutdown when replacing a session too; the runner records actual exit.
+}
+'''
+
+
+class PiAgent:
+    """Observe Pi extension events without changing tools or approval extensions."""
+
+    default_command = ["pi"]
+
+    def validate(self, command):
+        validate_command(command, "Pi")
+        reserved = {"--session", "--session-id", "--session-dir", "--no-session", "--continue", "-c",
+                    "--resume", "-r", "--fork", "--mode", "--print", "-p", "--export"}
+        if any(arg.split("=", 1)[0] in reserved for arg in command[1:]):
+            raise RoostError("Roost owns Pi's session and interactive mode; remove conflicting CLI flags")
+
+    def launch(self, store, task, resume_conversation):
+        extension = store.root / ("pi-observer-" + hashlib.sha256(PI_EXTENSION.encode()).hexdigest()[:16] + ".mjs")
+        atomic_text(extension, PI_EXTENSION)
+        sessions = store.root / "sessions" / task["id"]
+        sessions.mkdir(mode=0o700, parents=True, exist_ok=True)
+        argv = task["command"] + ["--extension", str(extension), "--session-dir", str(sessions)]
+        if resume_conversation and task.get("agentSession"):
+            argv += ["--session", task["agentSession"]]
+        elif task.get("prompt"):
+            # Pi has no -- separator. A leading newline keeps -flags and
+            # @file-looking prompts literal instead of interpreting them as CLI input.
+            argv.append("\n" + task["prompt"])
+        return argv
+
+    def observe(self, payload):
+        event = payload.get("event")
+        status = {"session_start": "ready", "agent_start": "running", "agent_end": "ready"}.get(event)
+        if not status:
+            return None
+        if event == "agent_end" and payload.get("pending"):
+            status = "background"
+        updates = dict(status=status, updatedAt=now(), lastEvent="Stop" if event == "agent_end" else event)
+        if payload.get("session"):
+            updates["agentSession"] = payload["session"]
+        return updates
+
+
+def validate_command(command, label):
+    if not isinstance(command, list) or not command or not all(isinstance(x, str) and x for x in command):
+        raise RoostError(label + " command must be a nonempty argument list")
+
+
+AGENTS = {"claude": ClaudeAgent(), "codex": CodexAgent(), "pi": PiAgent()}
 
 
 def agent_for(task):
@@ -307,7 +414,7 @@ def stop(store, task):
 def resume(store, task):
     pane = owned_pane(task)
     if pane and not pane["dead"]:
-        raise RoostError("Claude is still running; open the existing task")
+        raise RoostError("The agent is still running; open the existing task")
     if not Path(task["worktree"]).is_dir():
         raise RoostError("Task worktree is gone")
     check_worktree(store, task)
@@ -320,7 +427,7 @@ def resume(store, task):
 def send(task, text):
     pane = owned_pane(task)
     if not pane or pane["dead"]:
-        raise RoostError("Claude is not running; resume the task first")
+        raise RoostError("The agent is not running; resume the task first")
     if task["status"] in ("starting", "permission"):
         raise RoostError("Open the task to finish startup or answer its permission prompt")
     if not text.strip():
@@ -362,7 +469,7 @@ def shell(store, task):
 
 def require_finished(task):
     if task["status"] in ("starting", "running", "permission", "background"):
-        raise RoostError("Claude is active; stop it or wait before retiring this task")
+        raise RoostError("The agent is active; stop it or wait before retiring this task")
 
 
 def require_clean(repo):
@@ -435,18 +542,31 @@ def runner(root, task_id, run_id, resume_conversation=False):
         task = store.read(task_id)
         if task.get("runId") != run_id:
             return 0
-        argv = agent_for(task).launch(store, task, resume_conversation)
     env = os.environ.copy()
     env["ROOST_TASK_ID"] = task_id
+    env["ROOST_RUN_ID"] = run_id
+    env["ROOST_STATE_DIRECTORY"] = str(store.root)
+    env["ROOST_HELPER"] = str(Path(__file__).resolve())
+    env["ROOST_PYTHON"] = sys.executable
+    # SSH noninteractive shells often omit an otherwise installed Node CLI.
+    nvm_bins = sorted((Path.home() / ".nvm/versions/node").glob("*/bin"),
+                      key=lambda p: tuple(int(n) for n in re.findall(r"\d+", p.parent.name)), reverse=True)
     env["PATH"] = os.pathsep.join([str(Path.home() / ".local/bin"), str(Path.home() / "bin"),
-                                   "/opt/homebrew/bin", "/usr/local/bin", env.get("PATH", "")])
+                                   "/opt/homebrew/bin", "/usr/local/bin", env.get("PATH", ""),
+                                   *(str(path) for path in nvm_bins)])
     code = 1
     error = None
     try:
+        # Observer files must not be rewritten by a superseded runner.
+        with store.locked():
+            task = store.read(task_id)
+            if task.get("runId") != run_id or task["status"] in ("stopped", "retired"):
+                return 0
+            argv = agent_for(task).launch(store, task, resume_conversation)
         if task.get("setup") and not resume_conversation:
             subprocess.run(["/bin/sh", "-lc", task["setup"]], cwd=task["worktree"], env=env, check=True)
         code = subprocess.call(argv, cwd=task["worktree"], env=env)
-    except (OSError, subprocess.CalledProcessError) as exc:
+    except (OSError, RoostError, subprocess.CalledProcessError) as exc:
         error = str(exc)
         print("Roost: " + error, file=sys.stderr)
     finally:
@@ -483,7 +603,7 @@ def rpc(request):
                 elif action == "inspect":
                     pane = owned_pane(task)
                     if not pane or pane["dead"]:
-                        raise RoostError("Claude's tmux pane is gone or stopped; resume the task")
+                        raise RoostError("The agent's tmux pane is gone or stopped; resume the task")
                     task["windowIndex"] = pane["index"]
                     task["session"] = pane["session_name"]
                     store.save(task)
@@ -501,11 +621,15 @@ def main():
     mode = sys.argv[1]
     if mode == "rpc":
         print(json.dumps(rpc(json.load(sys.stdin)), ensure_ascii=False))
-    elif mode == "hook":
-        # Observational hooks never emit Claude decision-control JSON or fail
+    elif mode in ("hook", "hook-env"):
+        # Observational hooks never emit decision-control JSON or fail
         # the coding session just because its status dashboard is unavailable.
         try:
-            update_hook(Store(sys.argv[2]), sys.argv[3], json.load(sys.stdin), sys.argv[4])
+            if mode == "hook-env":
+                update_hook(Store(os.environ["ROOST_STATE_DIRECTORY"]), os.environ["ROOST_TASK_ID"],
+                            json.load(sys.stdin), os.environ["ROOST_RUN_ID"])
+            else:
+                update_hook(Store(sys.argv[2]), sys.argv[3], json.load(sys.stdin), sys.argv[4])
         except (OSError, ValueError, KeyError, RoostError):
             pass
     elif mode == "run":

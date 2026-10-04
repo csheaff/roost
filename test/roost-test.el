@@ -82,7 +82,7 @@
                 (lambda (_host _action _params _success failure) (funcall failure "connection lost"))))
        (roost-refresh t))
      (should (equal (roost--field (car (roost-tasks)) 'status) "ready"))
-     (should (equal (substring-no-properties (aref (cadar (roost--entries)) 2)) "offline")))))
+     (should (equal (substring-no-properties (aref (cadar (roost--entries)) 3)) "offline")))))
 
 (ert-deftest roost-remote-path-respects-tramp-method-and-user ()
   (let ((tramp-methods (cons '("rpc" (tramp-login-program "ssh")) tramp-methods))
@@ -140,6 +140,23 @@
        (setq opened nil)
        (roost-resume (gethash '("dev" "0123456789abcdef") roost--tasks))
        (should (equal (roost--field opened 'host) "dev"))))))
+
+(ert-deftest roost-creation-selects-agent-command-and-preserves-claude-configuration ()
+  (roost-test--isolated
+   (let ((roost-claude-command '("claude" "--model" "sonnet"))
+         (roost-agent-commands '(("codex" "codex" "--model" "test-model") ("pi" "pi" "--provider" "anthropic")))
+         (roost-default-agent "pi") requests)
+     (cl-letf (((symbol-function 'hack-dir-local-variables-non-file-buffer) #'ignore)
+               ((symbol-function 'roost--request) (lambda (_host _action params &rest _) (push params requests))))
+       (roost-new-task "/tmp/" "default")
+       (should (equal (alist-get 'agent (car requests)) "pi"))
+       (should (equal (alist-get 'command (car requests)) ["pi" "--provider" "anthropic"]))
+       (roost-new-task "/tmp/" "codex" nil nil "codex")
+       (should (equal (alist-get 'command (car requests)) ["codex" "--model" "test-model"]))
+       (roost-new-task "/tmp/" "claude" nil nil "claude")
+       (should (equal (alist-get 'command (car requests)) ["claude" "--model" "sonnet"]))
+       (should-error (roost-new-task "/tmp/" "unknown" nil nil "unknown") :type 'user-error)
+       (should (= (length requests) 3))))))
 
 (ert-deftest roost-empty-dashboard-does-not-target-previous-task ()
   (roost-test--isolated
@@ -230,6 +247,7 @@
    (let ((default-directory "/tmp/") seen)
      (cl-letf (((symbol-function 'read-directory-name)
                 (lambda (_prompt directory &rest _) (push directory seen) directory))
+               ((symbol-function 'completing-read) (lambda (&rest _) "claude"))
                ((symbol-function 'read-string) (lambda (_prompt &optional _initial _history default &rest _) (or default ""))))
        (let ((current-prefix-arg nil))
          (let ((args (roost--read-new-task)))
