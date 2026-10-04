@@ -726,6 +726,11 @@
        (roost-update task)
        (should (string-match-p "merged main into this branch and Git reports conflicts in: a.py, b.py" sent))))))
 
+(defmacro roost-test--with-send-buffers (&rest body)
+  `(unwind-protect (progn ,@body)
+     (dolist (buffer (buffer-list))
+       (when (string-prefix-p "*roost send:" (buffer-name buffer)) (kill-buffer buffer)))))
+
 (ert-deftest roost-agents-stuck-starting-count-as-waiting-at-a-prompt ()
   (roost-test--isolated
    (let* ((old (format-time-string "%FT%T%z" (time-subtract nil 120)))
@@ -743,16 +748,98 @@
          (roost-next-waiting) (should (equal opened "idle"))
          (roost-next-waiting) (should (equal opened "stuck")))))))
 
-(ert-deftest roost-send-region-reports-the-last-selected-line ()
+(ert-deftest roost-send-region-drafts-the-last-selected-line ()
   (roost-test--isolated
-   (let (sent name)
-     (cl-letf (((symbol-function 'roost--read-task) (lambda (_) (roost-test--task)))
-               ((symbol-function 'roost-send) (lambda (_task text) (setq sent text))))
-       (with-temp-buffer
-         (setq name (buffer-name))
-         (insert "one\ntwo\nthree\n")
-         (roost-send-region (point-min) (save-excursion (goto-char (point-min)) (forward-line 2) (point))))
-       (should (string-prefix-p (concat name ":1-2\n") sent))))))
+   (roost-test--with-send-buffers
+    (let (name)
+      (cl-letf (((symbol-function 'roost--read-task) (lambda (_) (roost-test--task)))
+                ((symbol-function 'pop-to-buffer) #'set-buffer))
+        (with-temp-buffer
+          (setq name (buffer-name))
+          (insert "one\ntwo\nthree\n")
+          (roost-send-region (point-min) (save-excursion (goto-char (point-min)) (forward-line 2) (point)))))
+      (with-current-buffer "*roost send: fix auth*"
+        (should (derived-mode-p 'roost-send-mode))
+        (should (string-match-p (concat (regexp-quote name) ":1-2\n\none\ntwo\n") (buffer-string)))
+        (should (= (point) (point-min))))))))
+
+(ert-deftest roost-send-region-targets-the-task-owning-the-file ()
+  (roost-test--isolated
+   (roost-test--with-send-buffers
+    (let ((task (roost--cache-task "dev" (roost-test--task))) asked)
+      (ignore task)
+      (cl-letf (((symbol-function 'roost--read-task) (lambda (_) (setq asked t) (roost-test--task)))
+                ((symbol-function 'pop-to-buffer) #'set-buffer)
+                ((symbol-function 'roost--directory-host) (lambda (_) "dev")))
+        (with-temp-buffer
+          (setq buffer-file-name "/home/user/work/fix auth/src/a.py")
+          (insert "x\n")
+          (roost-send-region (point-min) (point-max))
+          (should-not asked)
+          (should (get-buffer "*roost send: fix auth*"))
+          (with-current-buffer "*roost send: fix auth*"
+            (should (string-prefix-p "\n\nsrc/a.py:1-1\n" (buffer-string)))
+            (erase-buffer))
+          (set-buffer-modified-p nil)
+          (setq buffer-file-name "/elsewhere/b.py")
+          (roost-send-region (point-min) (point-max))
+          (should asked)
+          (with-current-buffer "*roost send: fix auth*"
+            (should (string-prefix-p "\n\n/elsewhere/b.py:1-1\n" (buffer-string))))))))))
+
+(ert-deftest roost-send-opens-a-draft-interactively-and-keeps-text-calls ()
+  (roost-test--isolated
+   (roost-test--with-send-buffers
+    (let ((task (roost--cache-task "dev" (roost-test--task))) sent)
+      (cl-letf (((symbol-function 'pop-to-buffer) #'set-buffer)
+                ((symbol-function 'roost--choose) (lambda (&optional _) task))
+                ((symbol-function 'read-string) (lambda (&rest _) (error "no minibuffer")))
+                ((symbol-function 'roost--request)
+                 (lambda (_host _action params &rest _) (setq sent params))))
+        (call-interactively #'roost-send)
+        (should (derived-mode-p 'roost-send-mode))
+        (should (string-match-p "fix auth" header-line-format))
+        (should-not sent)
+        (roost-send task "hello")
+        (should (equal (alist-get 'text sent) "hello")))))))
+
+(ert-deftest roost-send-draft-sends-multi-line-text-and-closes ()
+  (roost-test--isolated
+   (roost-test--with-send-buffers
+    (let ((task (roost--cache-task "dev" (roost-test--task))) sent buffer)
+      (cl-letf (((symbol-function 'pop-to-buffer) #'set-buffer)
+                ((symbol-function 'roost--refresh-host) #'ignore)
+                ((symbol-function 'roost--redraw) #'ignore)
+                ((symbol-function 'roost--request)
+                 (lambda (_host _action params success &rest _)
+                   (setq sent params)
+                   (funcall success (roost-test--task)))))
+        (roost--send-draft task)
+        (setq buffer (current-buffer))
+        (should-error (roost-send-submit) :type 'user-error)
+        (insert "first\nsecond\n")
+        (roost-send-submit)
+        (should (equal (alist-get 'text sent) "first\nsecond"))
+        (should-not (buffer-live-p buffer)))))))
+
+(ert-deftest roost-send-draft-survives-failure-and-declined-confirmation ()
+  (roost-test--isolated
+   (roost-test--with-send-buffers
+    (let ((task (roost--cache-task "dev" (roost-test--task nil "permission"))) answer)
+      (cl-letf (((symbol-function 'pop-to-buffer) #'set-buffer)
+                ((symbol-function 'yes-or-no-p) (lambda (_) answer))
+                ((symbol-function 'roost--request)
+                 (lambda (_host _action _params _success failure) (funcall failure "boom"))))
+        (roost--send-draft task)
+        (insert "hello")
+        (should-error (roost-send-submit) :type 'user-error)
+        (should-not roost--send-sending)
+        (setq answer t)
+        (roost-send-submit)
+        (should (buffer-live-p (current-buffer)))
+        (should-not roost--send-sending)
+        (should (string-match-p "boom" header-line-format))
+        (should (equal (buffer-string) "hello")))))))
 
 (ert-deftest roost-tab-bar-workspaces-follow-tasks ()
   (roost-test--isolated
