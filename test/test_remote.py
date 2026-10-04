@@ -690,6 +690,10 @@ elif args[:2] == ["auth", "status"]:
                          ["pr", "create", "--base", "main", "--head", task["branch"],
                           "--title", "Fix it", "--body", "Because.\n", "--draft"])
         # A pull request that already exists is returned, not duplicated.
+        store = roost.Store(str(self.state))
+        record = store.read(task["id"])
+        del record["pr"]
+        store.save(record)
         (self.gh_dir / "list.json").write_text(json.dumps([dict(number=3, url="https://github.com/octo/repo/pull/3")]))
         before = len(self.gh_calls())
         again = self.request("pr", id=task["id"], title="Again")
@@ -717,8 +721,32 @@ elif args[:2] == ["auth", "status"]:
         store = roost.Store(str(self.state))
         record = store.read(task["id"])
         record["integrationBranch"] = None
+        del record["pr"]
         store.save(record)
         self.assertIn("no integration branch", self.request("pr", id=task["id"], title="Detached")["error"])
+
+    def test_pr_on_a_task_with_a_pull_request_pushes_new_commits(self):
+        self.github()
+        task = self.create()
+        self.commit_in(task, "one")
+        self.assertTrue(self.request("pr", id=task["id"], title="Fix it")["ok"])
+        calls = len(self.gh_calls())
+        # Nothing new: no title needed, no gh, nothing pushed.
+        reply = self.request("pr", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(reply["result"]["pushed"], 0)
+        self.assertEqual(reply["result"]["pr"]["number"], 7)
+        tip = self.commit_in(task, "two")
+        self.commit_in(task, "three")
+        tip = self.git("rev-parse", "HEAD", cwd=Path(task["worktree"]))
+        reply = self.request("pr", id=task["id"])
+        self.assertEqual(reply["result"]["pushed"], 2)
+        self.assertEqual(self.git("rev-parse", "refs/heads/" + task["branch"], cwd=self.origin), tip)
+        self.assertEqual(len(self.gh_calls()), calls)
+        self.assertNotIn("pushed", roost.Store(str(self.state)).read(task["id"]))
+        (Path(task["worktree"]) / "one").write_text("dirty\n")
+        reply = self.request("pr", id=task["id"])
+        self.assertIn("Commit the task's changes", reply["error"])
 
     def test_pr_reports_a_missing_gh(self):
         self.github()
