@@ -935,7 +935,8 @@ class RemoteGit(unittest.TestCase):
                 with self.assertRaises(roost.RoostError) as caught:
                     roost.remote_git(self.repo, "push", "origin", "main")
             self.assertIn(message, str(caught.exception))
-            self.assertIn(roost.socket.gethostname(), str(caught.exception))
+            self.assertIn("the Git credentials on this host (%s)" % roost.socket.gethostname(),
+                          str(caught.exception))
             self.assertIn("gh auth setup-git", str(caught.exception))
 
     def test_other_failures_get_no_advice(self):
@@ -971,7 +972,7 @@ class RemoteGit(unittest.TestCase):
                 roost.remote_git(self.repo, "push", "-u", "origin", "main")
         self.assertLess(time.monotonic() - started, 30)
         self.assertIn("gh auth setup-git", str(caught.exception))
-        self.assertIn(roost.socket.gethostname(), str(caught.exception))
+        self.assertIn("on this host (%s)" % roost.socket.gethostname(), str(caught.exception))
 
 
 class LastMessage(unittest.TestCase):

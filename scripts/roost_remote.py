@@ -76,8 +76,8 @@ def remote_git(repo, *args, check=True):
         message = (result.stderr.strip() or result.stdout.strip()
                    or "Command failed: " + shlex.join(["git", *args]))
         if any(failure in message for failure in CREDENTIAL_FAILURES):
-            message += ("\nRoost pushes with %s's own Git credentials: run `gh auth setup-git` "
-                        "there for HTTPS, or add an SSH key that GitHub accepts."
+            message += ("\nRoost pushes with the Git credentials on this host (%s): run "
+                        "`gh auth setup-git` there for HTTPS, or add an SSH key that GitHub accepts."
                         % socket.gethostname())
         raise RoostError(message)
     return result
