@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -755,6 +756,74 @@ def forget(store, task):
     return task
 
 
+def version_of(text):
+    match = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", text or "")
+    return tuple(int(part or 0) for part in match.groups()) if match else None
+
+
+def doctor(store, request):
+    """Check what tasks need on this host, with a fix for each problem."""
+    checks = []
+
+    def check(name, ok, detail, hint=None):
+        checks.append(dict(name=name, ok=ok, detail=detail, hint=hint))
+
+    check("Python", sys.version_info >= (3, 9), sys.version.split()[0],
+          None if sys.version_info >= (3, 9) else "Install Python 3.9 or newer")
+    path = agent_path(os.environ.get("PATH", ""))
+    env = dict(os.environ, PATH=path)
+
+    def run(argv):
+        try:
+            result = subprocess.run(argv, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    env=env, timeout=30)
+            return result.returncode, result.stdout.strip()
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return None, str(exc)
+
+    for name, argv, minimum, hint in (
+            ("Git", ["git", "--version"], (2, 17), "Install Git 2.17 or newer"),
+            ("tmux", ["tmux", "-V"], (3, 0), "Install tmux 3.0 or newer")):
+        code, out = run(argv)
+        version = version_of(out) if code == 0 else None
+        check(name, bool(version and version >= minimum), out if code == 0 else "not found",
+              None if version and version >= minimum else hint)
+    check("State directory", os.access(store.root, os.W_OK), str(store.root),
+          None if os.access(store.root, os.W_OK) else "Make the directory writable")
+    for agent, command in sorted((request.get("commands") or {}).items()):
+        label = agent.capitalize() if agent != "pi" else "Pi"
+        if not isinstance(command, list) or not command or not isinstance(command[0], str):
+            check(label, False, "no command configured", "Set roost-agent-commands")
+            continue
+        executable = shutil.which(command[0], path=path)
+        if not executable:
+            check(label, False, command[0] + " not found",
+                  "Install %s on this host, or point roost-agent-commands at it" % label)
+            continue
+        code, out = run([executable, "--version"])
+        version = version_of(out)
+        detail = "%s %s" % (executable, out.splitlines()[0] if out else "")
+        if agent == "codex" and not (version and version >= (0, 160, 0)):
+            check(label, False, detail, "Upgrade to Codex 0.160.0 or newer for its lifecycle hooks")
+            continue
+        if agent == "claude":
+            code, out = run([executable, "auth", "status"])
+            try:
+                signed_in = json.loads(out).get("loggedIn")
+            except ValueError:
+                signed_in = None
+            if signed_in is False:
+                check(label, False, detail, "Run `claude` once on this host to sign in")
+                continue
+        elif agent == "codex":
+            code, out = run([executable, "login", "status"])
+            if code != 0 or "logged in" not in out.lower():
+                check(label, False, detail, "Run `codex login` on this host")
+                continue
+        check(label, True, detail)
+    return checks
+
+
 def update_hook(store, task_id, payload, run_id=None):
     with store.locked():
         task = store.read(task_id)
@@ -844,6 +913,8 @@ def rpc(request):
         action = request["action"]
         if action == "create":
             return {"ok": True, "result": create(store, request)}
+        if action == "doctor":
+            return {"ok": True, "result": doctor(store, request)}
         with store.locked():
             if action == "list":
                 result = list_tasks(store, request)

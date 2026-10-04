@@ -1,6 +1,7 @@
 ;;; roost-test.el --- Task protocol and UI tests -*- lexical-binding: t; -*-
 (require 'ert)
 (require 'roost)
+(defvar persp-mode nil)
 (defvar persp-modestring-short nil)
 (defvar persp-modestring-dividers nil)
 
@@ -735,5 +736,78 @@
          (insert "one\ntwo\nthree\n")
          (roost-send-region (point-min) (save-excursion (goto-char (point-min)) (forward-line 2) (point))))
        (should (string-prefix-p (concat name ":1-2\n") sent))))))
+
+(ert-deftest roost-tab-bar-workspaces-follow-tasks ()
+  (roost-test--isolated
+   (let ((roost-workspace 'tab-bar)
+         (task (roost--cache-task "dev" (roost-test--task))))
+     (unwind-protect
+         (progn
+           (roost--activate-workspace task)
+           (should (equal (roost--current-workspace) "dev/fix auth"))
+           (should (member "dev/fix auth" (roost--tabs)))
+           ;; Back in the task's tab, commands target it.
+           (with-temp-buffer
+             (setq default-directory "/tmp/")
+             (should (equal (roost--key (roost--task-at-point)) (roost--key task))))
+           (roost--activate-workspace task)
+           (should (= (seq-count (apply-partially #'equal "dev/fix auth") (roost--tabs)) 1))
+           (roost--retired-workspace task)
+           (should-not (member "dev/fix auth" (roost--tabs))))
+       (while (cdr (roost--tabs)) (tab-bar-close-tab))))))
+
+(ert-deftest roost-workspace-backend-is-chosen-automatically ()
+  (roost-test--isolated
+   (let ((roost-workspace 'auto) (persp-mode nil) (tab-bar-mode nil))
+     (should-not (roost--workspace-backend))
+     (setq tab-bar-mode t)
+     (should (eq (roost--workspace-backend) 'tab-bar))
+     (setq persp-mode t)
+     (cl-letf (((symbol-function 'persp-current-name) (lambda () "main")))
+       (should (eq (roost--workspace-backend) 'perspective))
+       (let ((roost-use-perspectives nil))
+         (should (eq (roost--workspace-backend) 'tab-bar))))
+     (let ((roost-workspace nil)) (should-not (roost--workspace-backend))))))
+
+(ert-deftest roost-doctor-reports-checks-and-connection-fixes ()
+  (roost-test--isolated
+   (let ((roost-hosts '("dev" "far")) (roost-default-agent "claude"))
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (host action _params success failure)
+                  (should (equal action "doctor"))
+                  (if (equal host "dev")
+                      (funcall success '(((name . "tmux") (ok . t) (detail . "tmux 3.7c"))
+                                         ((name . "Claude") (ok) (detail . "/bin/claude 2.1")
+                                          (hint . "Run `claude` once on this host to sign in"))
+                                         ((name . "Pi") (ok) (detail . "pi not found")
+                                          (hint . "Install Pi"))))
+                    (funcall failure "far: Permission denied (publickey)."))))
+               ((symbol-function 'pop-to-buffer) #'ignore))
+       (unwind-protect
+           (progn
+             (roost-doctor)
+             (with-current-buffer "*roost doctor*"
+               (let ((text (buffer-string)))
+                 (should (string-match-p "✓ tmux +tmux 3.7c" text))
+                 (should (string-match-p "✗ Claude.*\n +Run `claude` once on this host to sign in" text))
+                 (should (string-match-p "– Pi.*\n +Optional: needed only for Pi tasks" text))
+                 (should (string-match-p "✗ SSH and Python +far: Permission denied" text))
+                 (should (string-match-p "ssh-copy-id far" text))
+                 (should (string-match-p "· Workspaces" text)))))
+         (kill-buffer "*roost doctor*"))))))
+
+(ert-deftest roost-evil-users-get-working-keys ()
+  (let (states)
+    (cl-letf (((symbol-function 'evil-set-initial-state)
+               (lambda (mode state) (push (cons mode state) states))))
+      (with-temp-buffer (roost-dashboard-mode))
+      (with-temp-buffer (roost-compose-mode))
+      (let ((roost-evil-state nil)) (with-temp-buffer (roost-task-info-mode))))
+    (should (eq (alist-get 'roost-dashboard-mode states) 'emacs))
+    (should (eq (alist-get 'roost-compose-mode states) 'insert))
+    (should-not (assq 'roost-task-info-mode states)))
+  (should (eq (lookup-key roost-dashboard-mode-map "j") 'roost-dashboard-next-task))
+  (should (eq (lookup-key roost-dashboard-mode-map "k") 'roost-dashboard-previous-task))
+  (should (eq (lookup-key roost-dashboard-mode-map "K") 'roost-stop)))
 
 (provide 'roost-test)

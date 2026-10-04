@@ -601,6 +601,18 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(self.request("list")["result"], [])
         self.assertEqual(list(store.tasks_dir.glob("*.json")), [])
 
+    def test_doctor_reports_tools_agents_and_fixes(self):
+        reply = self.request("doctor", commands={"claude": [sys.executable, str(FAKE)],
+                                                 "codex": ["/does/not/exist/codex"]})
+        self.assertTrue(reply["ok"], reply)
+        checks = {check["name"]: check for check in reply["result"]}
+        for name in ("Python", "Git", "tmux", "State directory"):
+            self.assertTrue(checks[name]["ok"], checks[name])
+        self.assertFalse(checks["Codex"]["ok"])
+        self.assertIn("Install Codex", checks["Codex"]["hint"])
+        self.assertEqual(roost.version_of("tmux 3.7c"), (3, 7, 0))
+        self.assertEqual(roost.version_of("codex-cli 0.160.0"), (0, 160, 0))
+
     def test_bad_base_and_missing_executable_report_errors_without_touching_repo(self):
         response = self.request("create", directory=str(self.repo), name="bad", base="missing-ref", socket=self.socket)
         self.assertFalse(response["ok"])

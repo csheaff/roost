@@ -1,8 +1,8 @@
 ;;; roost.el --- Coding agent tasks over tmux-control -*- lexical-binding: t; -*-
 
 ;; Author: Clay Sheaff
-;; Version: 0.5.0
-;; Package-Requires: ((emacs "29.1"))
+;; Version: 0.6.0
+;; Package-Requires: ((emacs "29.1") (tmux-control "0.6.0"))
 ;; Keywords: tools, processes
 ;; URL: https://github.com/csheaff/roost
 
@@ -37,6 +37,7 @@
 (declare-function persp-current-name "perspective" ())
 (declare-function persp-names "perspective" ())
 (declare-function persp-format-name "perspective" (name))
+(declare-function evil-set-initial-state "evil-core" (mode state))
 
 (defvar tmux-control-default-socket-name)
 (defvar tmux-control--host)
@@ -46,7 +47,7 @@
 (defvar tmux-control-remote-tmux-socket-setup)
 (defvar tmux-control-ssh-options)
 (defvar persp-autokill-buffer-on-remove)
-(defvar persp-mode nil)
+(defvar persp-mode)
 (defvar persp-modestring-short)
 (defvar persp-modestring-dividers)
 
@@ -106,9 +107,24 @@ Existing tasks keep their branch."
   "Maximum seconds for a host operation."
   :type 'number)
 
+(defcustom roost-workspace 'auto
+  "How each task keeps its own window arrangement.
+`perspective' uses perspective.el, `tab-bar' a tab per task, and nil
+leaves your windows alone.  `auto' uses perspective.el when
+`persp-mode' is on, otherwise tab-bar when `tab-bar-mode' is on."
+  :type '(choice (const :tag "Automatic" auto)
+                 (const :tag "perspective.el" perspective)
+                 (const :tag "A tab per task" tab-bar)
+                 (const :tag "None" nil)))
+
 (defcustom roost-use-perspectives t
-  "Use one perspective per task when perspective.el is active."
+  "Allow `roost-workspace' to use perspective.el."
   :type 'boolean)
+
+(defcustom roost-evil-state 'emacs
+  "Evil state for the dashboard and task panels, or nil for Evil's default.
+In Emacs state Roost's single keys work, and \`j' and \`k' move between tasks."
+  :type '(choice (const emacs) (const motion) (const normal) (const :tag "Evil's default" nil)))
 
 (defcustom roost-compact-mode-line t
   "Collapse Roost perspectives into one clickable group in the mode line.
@@ -162,7 +178,13 @@ Ordinary perspectives retain their existing labels and click actions."
 ;;;; State
 
 (defconst roost--package-directory
-  (file-name-directory (or load-file-name buffer-file-name)))
+  (file-name-directory
+   (let ((file (or load-file-name buffer-file-name)))
+     ;; Natively compiled code loads from the eln cache, away from scripts/.
+     (if (and file (string-suffix-p ".eln" file))
+         (or (locate-library "roost") file)
+       file)))
+  "Directory holding roost.el and scripts/roost_remote.py.")
 
 (defvar roost--tasks (make-hash-table :test 'equal)
   "Cached task records keyed by (HOST ID).")
@@ -211,7 +233,8 @@ Ordinary perspectives retain their existing labels and click actions."
                           alist)))
 
 (defun roost--read-json-list (file)
-  "The JSON array in FILE as a list, or nil.  JSON null reads as nil."
+  "Return the JSON array in FILE as a list, or nil if it is unreadable.
+JSON null becomes nil."
   (when (file-readable-p file)
     (ignore-errors
       (with-temp-buffer
@@ -476,7 +499,7 @@ Call SUCCESS with the result, or FAILURE with an error message."
          (funcall finish))
        (lambda (err)
          (unless (equal err (gethash host roost--errors))
-           (message "Roost %s: %s" (roost--host-label host) err))
+           (message "Roost %s: %s (M-x roost-doctor checks this host)" (roost--host-label host) err))
          (puthash host err roost--errors)
          ;; Back off from unreachable hosts, up to a minute between attempts.
          (let ((count (1+ (or (car (gethash host roost--failures)) 0))))
@@ -565,8 +588,7 @@ recently failed."
         (user-error "This task has been retired or is unavailable")))
    (t
     (let ((tasks (roost-tasks))
-          (perspective-active (and roost-use-perspectives (bound-and-true-p persp-mode)
-                                   (fboundp 'persp-current-name))))
+          (workspace (roost--workspace-backend)))
       (or
        (and (bound-and-true-p tmux-control--active-pane)
             (seq-find (lambda (task)
@@ -588,12 +610,11 @@ recently failed."
                                local)))
                        tasks))
          (user-error nil))
-       (and perspective-active
-            (seq-find (lambda (task)
-                        (equal (persp-current-name) (roost--perspective-name task)))
-                      tasks))
-       ;; An unrelated perspective or file must not silently target the last task.
-       (and (not perspective-active) (not buffer-file-name)
+       (and workspace
+            (let ((current (roost--current-workspace)))
+              (seq-find (lambda (task) (equal current (roost--workspace-name task))) tasks)))
+       ;; An unrelated workspace or file must not silently target the last task.
+       (and (not workspace) (not buffer-file-name)
             (gethash roost--current-task roost--tasks)))))))
 
 (defun roost--choose (&optional task)
@@ -669,14 +690,58 @@ recently failed."
                                       (nreverse labels))))
                   (list (nth 1 persp-modestring-dividers))))))))
 
-(with-eval-after-load 'perspective
-  (unless (advice-member-p #'roost--compact-perspective-mode-line 'persp-mode-line)
-    (advice-add 'persp-mode-line :filter-return #'roost--compact-perspective-mode-line)))
+(unless (advice-member-p #'roost--compact-perspective-mode-line 'persp-mode-line)
+  (advice-add 'persp-mode-line :filter-return #'roost--compact-perspective-mode-line))
+
+(defun roost--workspace-backend ()
+  "The workspace mechanism in use: `perspective', `tab-bar' or nil."
+  (let ((perspective (and roost-use-perspectives (bound-and-true-p persp-mode)
+                          (fboundp 'persp-current-name))))
+    (pcase roost-workspace
+      ('auto (cond (perspective 'perspective)
+                   ((bound-and-true-p tab-bar-mode) 'tab-bar)))
+      ('perspective (and perspective 'perspective))
+      ('tab-bar 'tab-bar))))
+
+(defun roost--tab-name (task)
+  "Tab name for TASK, with its ID when another task has the same name."
+  (let* ((host (roost--field task 'host))
+         (name (roost--field task 'name))
+         (twin (seq-find (lambda (other)
+                           (and (equal (roost--field other 'host) host)
+                                (equal (roost--field other 'name) name)
+                                (not (equal (roost--field other 'id) (roost--field task 'id)))))
+                         (roost-tasks))))
+    (format "%s/%s%s" (roost--host-label host) name
+            (if twin (concat ":" (substring (roost--field task 'id) 0 6)) ""))))
+
+(defun roost--tabs ()
+  "Names of the tab bar's tabs."
+  (mapcar (lambda (tab) (alist-get 'name tab)) (funcall tab-bar-tabs-function)))
+
+(defun roost--workspace-name (task)
+  "Name of TASK's workspace in the current backend."
+  (if (eq (roost--workspace-backend) 'tab-bar)
+      (roost--tab-name task)
+    (roost--perspective-name task)))
+
+(defun roost--current-workspace ()
+  "Name of the current workspace, or nil without a backend."
+  (pcase (roost--workspace-backend)
+    ('perspective (persp-current-name))
+    ('tab-bar (alist-get 'name (assq 'current-tab (funcall tab-bar-tabs-function))))))
 
 (defun roost--activate-workspace (task)
-  "Restore TASK's saved window arrangement when perspective.el is active."
-  (when (and roost-use-perspectives (bound-and-true-p persp-mode) (fboundp 'persp-switch))
-    (persp-switch (roost--perspective-name task)))
+  "Restore TASK's window arrangement, creating its workspace if needed."
+  (pcase (roost--workspace-backend)
+    ('perspective
+     (when (fboundp 'persp-switch) (persp-switch (roost--perspective-name task))))
+    ('tab-bar
+     (let ((name (roost--tab-name task)))
+       (if (member name (roost--tabs))
+           (tab-bar-select-tab-by-name name)
+         (tab-bar-new-tab)
+         (tab-bar-rename-tab name)))))
   (setq roost--current-task (roost--key task)))
 
 ;;;; Opening tasks
@@ -781,6 +846,12 @@ The owner is HOST's SSH user, or the local user."
      (string-join (seq-take (seq-remove (lambda (word) (member word common)) words) 4) "-")
      40)))
 
+(defun roost--agent-command (agent)
+  "Executable and arguments for AGENT."
+  (or (cdr (assoc agent roost-agent-commands))
+      (and (equal agent "claude") roost-claude-command)
+      (list agent)))
+
 (defun roost--create-task (directory name base prompt agent &optional on-success on-failure)
   "Create an AGENT task NAME in DIRECTORY from BASE with PROMPT.
 Call ON-SUCCESS with the task before it opens, or ON-FAILURE with an error."
@@ -799,9 +870,7 @@ Call ON-SUCCESS with the task before it opens, or ON-FAILURE with an error."
            (cons 'base base)
            (cons 'agent agent)
            (cons 'prompt (unless (string-empty-p (string-trim (or prompt ""))) prompt))
-           (cons 'command (vconcat (or (cdr (assoc agent roost-agent-commands))
-                                       (and (equal agent "claude") roost-claude-command)
-                                       (list agent))))
+           (cons 'command (vconcat (roost--agent-command agent)))
            (cons 'setup setup)
            (cons 'branchPrefix roost-branch-prefix)
            (cons 'socket (or roost-socket-name
@@ -872,6 +941,7 @@ worktree; explicit HEAD uses DIRECTORY.  Nil AGENT uses
                " \\[roost-compose-submit] create · \\[roost-compose-cancel] cancel · click a field to change it"))
   (add-hook 'after-change-functions #'roost--compose-changed nil t)
   (add-hook 'after-change-major-mode-hook #'roost--quiet-display 90 t)
+  (roost--evil-state 'roost-compose-mode 'insert)
   (roost--quiet-display))
 
 (defun roost--compose-default-directory (task fork)
@@ -962,7 +1032,7 @@ worktree; explicit HEAD uses DIRECTORY.  Nil AGENT uses
     (goto-char (min (point-max) (+ roost--compose-body offset)))))
 
 (defun roost--compose-changed (&rest _)
-  "Refresh the derived name shortly after the prompt changes."
+  "Refresh the derived name soon after each edit to the prompt."
   (unless (plist-get roost--compose-fields :name)
     (when (timerp roost--compose-timer) (cancel-timer roost--compose-timer))
     (let ((buffer (current-buffer)))
@@ -1005,7 +1075,7 @@ A mouse click shows a menu at the pointer; the keyboard uses the minibuffer."
     (roost--compose-render)))
 
 (defun roost-compose-set-base ()
-  "Choose the Git ref the draft starts from; empty means the primary branch."
+  "Choose the draft's starting Git ref; empty means the primary branch."
   (interactive)
   (let* ((directory (plist-get roost--compose-fields :directory))
          (refs (when directory
@@ -1099,7 +1169,7 @@ permission is declined in the terminal."
   (let* ((status (roost--field task 'status))
          (force (when (member status '("starting" "permission"))
                   (or (yes-or-no-p
-                       (format "Roost last saw %s %s. Send only if you have answered it in the terminal. Send anyway? "
+                       (format "Roost last saw %s %s; send anyway, if you have answered it in the terminal? "
                                (roost--field task 'name)
                                (if (equal status "starting") "starting up" "asking for permission")))
                       (user-error "Open the task with RET to answer it")))))
@@ -1173,8 +1243,8 @@ permission is declined in the terminal."
                             (member (bound-and-true-p tmux-control--active-pane)
                                     (list (roost--field task 'paneId)
                                           (roost--field task 'shellPaneId)))))
-                     (or (not (and roost-use-perspectives (bound-and-true-p persp-mode)))
-                         (equal (persp-current-name) (roost--perspective-name task))))
+                     (or (not (roost--workspace-backend))
+                         (equal (roost--current-workspace) (roost--workspace-name task))))
             (when-let* ((window
                          (seq-find
                           (lambda (window)
@@ -1190,7 +1260,7 @@ permission is declined in the terminal."
 
 ;;;###autoload
 (defun roost-diff (&optional task)
-  "Review TASK's tracked changes against its recorded starting commit."
+  "Diff TASK's tracked files against its recorded starting commit."
   (interactive)
   (setq task (roost--choose task))
   (require 'magit)
@@ -1231,7 +1301,7 @@ conflicts, offer to have the task's agent resolve them."
   "Stop TASK's window, retaining its worktree, branch and conversation."
   (interactive)
   (setq task (roost--choose task))
-  (when (yes-or-no-p (format "Stop %s's window and its processes? Work is kept. "
+  (when (yes-or-no-p (format "Stop %s's window and its processes, keeping its work? "
                              (roost--field task 'name)))
     (roost--act task "stop")))
 
@@ -1240,7 +1310,7 @@ conflicts, offer to have the task's agent resolve them."
   "Remove TASK's clean, merged worktree and branch, then stop its window."
   (interactive)
   (setq task (roost--choose task))
-  (when (yes-or-no-p (format "Retire %s? Its clean, merged worktree and branch will be removed. "
+  (when (yes-or-no-p (format "Retire %s, removing its merged worktree and branch? "
                              (roost--field task 'name)))
     (roost--act task "retire" nil #'roost--retired-workspace)))
 
@@ -1261,7 +1331,7 @@ For tasks Roost can no longer retire, such as one whose repository moved.
 A running agent must be stopped first."
   (interactive)
   (setq task (roost--choose task))
-  (when (yes-or-no-p (format "Forget %s? Roost drops its record; its worktree and branch are left as they are. "
+  (when (yes-or-no-p (format "Forget %s, leaving its worktree and branch as they are? "
                              (roost--field task 'name)))
     (roost--act task "forget" nil
                 (lambda (forgotten)
@@ -1271,10 +1341,16 @@ A running agent must be stopped first."
                              (roost--field task 'name) (string-join left ", ")))))))
 
 (defun roost--retired-workspace (task)
-  "Remove TASK's perspective, retaining buffers."
-  (when (and roost-use-perspectives (bound-and-true-p persp-mode) (fboundp 'persp-kill))
-    (let ((persp-autokill-buffer-on-remove nil))
-      (persp-kill (roost--perspective-name task)))))
+  "Remove TASK's workspace, retaining buffers."
+  (pcase (roost--workspace-backend)
+    ('perspective
+     (when (fboundp 'persp-kill)
+       (let ((persp-autokill-buffer-on-remove nil))
+         (persp-kill (roost--perspective-name task)))))
+    ('tab-bar
+     (let ((name (roost--tab-name task)))
+       (when (and (member name (roost--tabs)) (cdr (roost--tabs)))
+         (tab-bar-close-tab-by-name name))))))
 
 ;;;###autoload
 (defun roost-next-waiting ()
@@ -1350,7 +1426,7 @@ COMPACT abbreviates commits ahead of and behind the integration branch."
      " · ")))
 
 (defun roost--fontify-changes (changes)
-  "CHANGES with line counts and pending work highlighted."
+  "Highlight the line counts and pending work in CHANGES."
   (let ((text (copy-sequence changes)))
     (dolist (rule '(("\\+[0-9]+" . roost-diff-added)
                     ("−[0-9]+" . roost-diff-removed)))
@@ -1368,6 +1444,12 @@ COMPACT abbreviates commits ahead of and behind the integration branch."
   "TASK's prompt, or nil when it was created without one."
   (let ((prompt (roost--field task 'task)))
     (unless (or (null prompt) (equal prompt (roost--field task 'name))) prompt)))
+
+(defun roost--evil-state (mode state)
+  "Start MODE's buffers in Evil STATE, when Evil is loaded and STATE is set.
+Called from the mode bodies, before Evil sets up the new buffer."
+  (when (and state (fboundp 'evil-set-initial-state))
+    (evil-set-initial-state mode state)))
 
 (defun roost--quiet-display ()
   "Turn off line numbers and wrapping that global modes enable in Roost buffers."
@@ -1411,7 +1493,7 @@ COMPACT abbreviates commits ahead of and behind the integration branch."
   "t" #'roost-shell
   "e" #'roost-send
   "s" #'roost-resume
-  "k" #'roost-stop
+  "K" #'roost-stop
   "x" #'roost-retire
   "m" #'roost-merge-retire
   "X" #'roost-forget
@@ -1429,6 +1511,7 @@ Status is the last observation from the task's host.
   (setq-local truncate-lines nil
               word-wrap t)
   (add-hook 'after-change-major-mode-hook #'roost--quiet-display 90 t)
+  (roost--evil-state 'roost-task-info-mode roost-evil-state)
   (roost--quiet-display))
 
 (defconst roost--task-actions
@@ -1438,7 +1521,7 @@ Status is the last observation from the task's host.
      ("Update" "u" roost-update))
     ("Finish" ("Merge and retire" "m" roost-merge-retire) ("Retire" "x" roost-retire)
      ("Forget" "X" roost-forget))
-    ("Session" ("Stop" "k" roost-stop) ("Resume" "s" roost-resume)))
+    ("Session" ("Stop" "K" roost-stop) ("Resume" "s" roost-resume)))
   "Task panel actions as (GROUP (LABEL KEY COMMAND)...).")
 
 (defun roost--insert-heading (title)
@@ -1547,7 +1630,7 @@ Status is the last observation from the task's host.
 
 ;;;###autoload
 (defun roost-task-info (&optional task)
-  "Show TASK's prompt, changes, actions and details."
+  "Show TASK's prompt, Git status, actions and details."
   (interactive)
   (setq task (roost--choose task))
   (let* ((key (roost--key task))
@@ -1564,7 +1647,7 @@ Status is the last observation from the task's host.
     (roost--refresh-host (roost--field task 'host) nil)))
 
 (defun roost-task-info-refresh ()
-  "Refresh the task's status and Git changes."
+  "Refresh the task's status and Git statistics."
   (interactive)
   (if-let* ((task (gethash roost--buffer-task-key roost--tasks)))
       (roost--refresh-host (roost--field task 'host) nil)
@@ -1577,6 +1660,8 @@ Status is the last observation from the task's host.
   "RET" #'roost-open-task
   "TAB" #'roost-dashboard-next-task
   "<backtab>" #'roost-dashboard-previous-task
+  "j" #'roost-dashboard-next-task
+  "k" #'roost-dashboard-previous-task
   "d" #'roost-new-task
   "c" #'roost-new-task
   "r" #'roost-review
@@ -1587,7 +1672,7 @@ Status is the last observation from the task's host.
   "t" #'roost-shell
   "e" #'roost-send
   "s" #'roost-resume
-  "k" #'roost-stop
+  "K" #'roost-stop
   "x" #'roost-retire
   "m" #'roost-merge-retire
   "X" #'roost-forget
@@ -1622,10 +1707,11 @@ Refreshes are asynchronous; rendering uses only cached state.
          " \\<roost-dashboard-mode-map>\\[roost-open-task] open · \\[roost-new-task] new · \\[roost-next-waiting] next waiting · \\[roost-shell] shell · \\[roost-review] review · \\[roost-merge-retire] merge · \\[roost-task-info] details · \\[roost-refresh] refresh"))
   (add-hook 'after-change-major-mode-hook #'roost--quiet-display 90 t)
   (add-hook 'window-size-change-functions #'roost--dashboard-resized nil t)
+  (roost--evil-state 'roost-dashboard-mode roost-evil-state)
   (roost--quiet-display))
 
 (defun roost--dashboard-resized (window)
-  "Reflow the dashboard when WINDOW changes width."
+  "Reflow the dashboard after WINDOW is resized."
   (with-current-buffer (window-buffer window)
     (roost--render-dashboard)))
 
@@ -1820,6 +1906,136 @@ The changes column shrinks first, then the agent column is dropped."
     (roost--redraw))
   (roost-watch-mode 1)
   (roost-refresh))
+
+;;;; Setup check
+
+(defvar roost--doctor-results nil
+  "Alist of (HOST . RESULT) for `roost-doctor'.
+RESULT is `pending', a list of checks, or (error . MESSAGE).")
+
+(defvar-keymap roost-doctor-mode-map
+  :doc "Keys for the Roost setup check."
+  "g" #'roost-doctor)
+
+(define-derived-mode roost-doctor-mode special-mode "Roost Doctor"
+  "What Roost needs locally and on each host, with fixes for problems.
+\\{roost-doctor-mode-map}"
+  (setq-local truncate-lines nil word-wrap t)
+  (roost--evil-state 'roost-doctor-mode roost-evil-state))
+
+(defconst roost--ssh-hints
+  '(("Permission denied" . "Set up key-based SSH (ssh-copy-id HOST), or add your key to ssh-agent")
+    ("Host key verification failed" . "Connect once with `ssh HOST' to accept its host key")
+    ("Could not resolve hostname" . "Check the host name, or add it to ~/.ssh/config")
+    ("Connection timed out" . "Check the host is up and reachable")
+    ("Connection refused" . "Check that sshd is running on the host")
+    ("No reply after" . "Check the host is up and reachable")
+    ("python3: " . "Install Python 3.9 or newer on the host")
+    ("command not found" . "Install Python 3.9 or newer on the host"))
+  "Fixes for common connection errors, matched against the error text.")
+
+(defun roost--doctor-local-checks ()
+  "List the local checks, each (NAME OK DETAIL HINT)."
+  (let ((helper (expand-file-name "scripts/roost_remote.py" roost--package-directory)))
+    (list (list "Emacs" (version<= "29.1" emacs-version) emacs-version
+                "Roost needs Emacs 29.1 or newer")
+          (list "tmux-control" (locate-library "tmux-control") (locate-library "tmux-control")
+                "Install tmux-control: https://github.com/csheaff/tmux-control")
+          (list "Eat" (locate-library "eat") (locate-library "eat")
+                "Install eat from NonGNU ELPA (tmux-control renders through it)")
+          (list "Magit" (or (locate-library "magit") 'optional) (locate-library "magit")
+                "Optional: review (r) falls back to Dired")
+          (list "Host helper" (file-readable-p helper) helper
+                "Reinstall Roost with its scripts/ directory")
+          (list "Workspaces" 'info
+                (pcase (roost--workspace-backend)
+                  ('perspective "a perspective per task (perspective.el)")
+                  ('tab-bar "a tab per task (tab-bar-mode)")
+                  (_ "none; tasks open in the selected window (see `roost-workspace')"))
+                nil))))
+
+(defun roost--doctor-line (name ok detail hint)
+  "Insert one check NAME with status OK, DETAIL and HINT."
+  (insert "  "
+          (pcase ok
+            ('info (propertize "·" 'face 'roost-dim))
+            ('optional (propertize "–" 'face 'roost-dim))
+            ('nil (propertize "✗" 'face 'roost-status-failed))
+            (_ (propertize "✓" 'face 'roost-status-ready)))
+          " " (format "%-16s" name)
+          (propertize (or (if (stringp detail) detail "") "") 'face 'roost-dim)
+          "\n")
+  (when (and hint (memq ok '(nil optional)))
+    (insert (propertize (concat "      " hint "\n")
+                        'face (if ok 'roost-dim 'roost-status-permission)))))
+
+(defun roost--render-doctor ()
+  "Redraw the setup check from `roost--doctor-results'."
+  (when-let* ((buffer (get-buffer "*roost doctor*")))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t)
+            (default (if (equal roost-default-agent "pi") "Pi" (capitalize roost-default-agent))))
+        (erase-buffer)
+        (insert (propertize "Roost setup check" 'face 'roost-title) "\n\n"
+                (propertize "Emacs" 'face 'roost-heading) "\n")
+        (dolist (check (roost--doctor-local-checks))
+          (apply #'roost--doctor-line check))
+        (dolist (entry roost--doctor-results)
+          (let ((result (cdr entry)))
+            (insert "\n" (propertize (roost--host-label (car entry)) 'face 'roost-heading) "\n")
+            (cond
+             ((eq result 'pending) (insert (propertize "  Checking…\n" 'face 'roost-dim)))
+             ((eq (car-safe result) 'error)
+              (let ((hint (cdr (seq-find (lambda (hint) (string-match-p (regexp-quote (car hint)) (cdr result)))
+                                         roost--ssh-hints))))
+                (roost--doctor-line (if (car entry) "SSH and Python" "Python") nil (cdr result)
+                                    (and hint (string-replace "HOST" (or (car entry) "localhost") hint)))))
+             (t
+              (when (car entry) (roost--doctor-line "SSH" t "connected" nil))
+              (dolist (check result)
+                (let* ((name (alist-get 'name check))
+                       (missing (and (not (alist-get 'ok check))
+                                     (string-suffix-p "not found" (or (alist-get 'detail check) ""))
+                                     (member (downcase name) roost--agents)
+                                     (not (equal name default)))))
+                  (roost--doctor-line name (cond (missing 'optional) ((alist-get 'ok check)) (t nil))
+                                      (alist-get 'detail check)
+                                      (if missing
+                                          (format "Optional: needed only for %s tasks" name)
+                                        (alist-get 'hint check)))))))))
+        (insert "\n" (propertize (substitute-command-keys
+                                   "\\<roost-doctor-mode-map>\\[roost-doctor] checks again · C-u \\[roost-doctor] checks another host")
+                                  'face 'roost-dim)
+                "\n")
+        (goto-char (point-min))))))
+
+;;;###autoload
+(defun roost-doctor (&optional host)
+  "Check what Roost needs locally and on each host, and how to fix problems.
+With a prefix argument, read a HOST to check (empty for this machine)."
+  (interactive
+   (list (when current-prefix-arg
+           (let ((host (string-trim (read-string "SSH host to check (empty = this machine): "))))
+             (if (string-empty-p host) nil host)))))
+  (let ((hosts (if (or host current-prefix-arg) (list host) (roost--hosts)))
+        (commands (mapcar (lambda (agent) (cons (intern agent) (vconcat (roost--agent-command agent))))
+                          roost--agents)))
+    (setq roost--doctor-results (mapcar (lambda (host) (cons host 'pending)) hosts))
+    (with-current-buffer (get-buffer-create "*roost doctor*")
+      (unless (derived-mode-p 'roost-doctor-mode) (roost-doctor-mode)))
+    (roost--render-doctor)
+    (pop-to-buffer "*roost doctor*")
+    (dolist (host hosts)
+      (let ((host host))
+        (roost--request
+         host "doctor" (list (cons 'commands commands))
+         (lambda (checks)
+           (setf (alist-get host roost--doctor-results nil nil #'equal) checks)
+           (roost--render-doctor))
+         (lambda (err)
+           (setf (alist-get host roost--doctor-results nil nil #'equal) (cons 'error err))
+           (remhash (list host roost-state-directory) roost--installed)
+           (roost--render-doctor)))))))
 
 ;;;###autoload
 (define-minor-mode roost-watch-mode
