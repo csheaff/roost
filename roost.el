@@ -450,6 +450,7 @@ Call SUCCESS with the result, or FAILURE with an error message."
 (defun roost--cache-task (host task)
   "Cache TASK from HOST and notify only on attention transitions."
   (setf (alist-get 'host task) host)
+  (setq task (assq-delete-all 'pushed task))
   (let* ((key (roost--key task))
          (old (gethash key roost--tasks))
          (status (roost--field task 'status))
@@ -1182,10 +1183,13 @@ FAILURE, if given, receives the error message instead of Roost reporting it."
     (roost--request host action (cons (cons 'id (roost--field task 'id)) parameters)
                     (lambda (updated)
                       (cl-incf (gethash host roost--revisions 0))
-                      (setq updated (roost--cache-task host updated))
-                      (roost--redraw)
-                      (message "Roost %s: %s" (roost--field task 'name) action)
-                      (when callback (funcall callback updated)))
+                      ;; `pushed' is transient: the callback sees it, the cache does not.
+                      (let ((pushed (assq 'pushed updated)))
+                        (setq updated (roost--cache-task host updated))
+                        (roost--redraw)
+                        (message "Roost %s: %s" (roost--field task 'name) action)
+                        (when callback
+                          (funcall callback (if pushed (cons pushed updated) updated)))))
                     failure)))
 
 ;;;###autoload
@@ -1498,14 +1502,28 @@ An existing draft for TASK is reused, and kept as written unless it is empty."
     (pop-to-buffer buffer)))
 
 ;;;###autoload
-(defun roost-pr (&optional task)
-  "Open a pull request for TASK, or show the one it already has.
+(defun roost-pr (&optional task skip-push)
+  "Open a pull request for TASK, or push to the one it already has.
 Write the title on the first line and the body below it;
-\\<roost-pr-mode-map>\\[roost-pr-submit] pushes the branch and creates it."
-  (interactive)
+\\<roost-pr-mode-map>\\[roost-pr-submit] pushes the branch and creates it.
+For a task with a pull request, push its new commits and open it in the
+browser; with prefix argument SKIP-PUSH, only open it."
+  (interactive (list nil current-prefix-arg))
   (setq task (roost--choose task))
-  (if-let* ((url (alist-get 'url (roost--field task 'pr))))
-      (browse-url url)
+  (if-let* ((pr (roost--field task 'pr))
+            (url (alist-get 'url pr)))
+      (if skip-push
+          (browse-url url)
+        (roost--act
+         task "pr" nil
+         (lambda (updated)
+           (let ((pushed (or (alist-get 'pushed updated) 0))
+                 (number (alist-get 'number pr)))
+             (if (zerop pushed)
+                 (message "Roost: #%s is up to date" number)
+               (message "Roost: Pushed %d commit%s to #%s"
+                        pushed (if (= pushed 1) "" "s") number)))
+           (browse-url url))))
     (roost--pr-draft task)))
 
 (defun roost-pr-cancel ()

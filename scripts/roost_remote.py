@@ -891,6 +891,23 @@ def delete_remote_branch(repo, branch):
             git(repo, "push", "origin", "--delete", branch, check=False)
 
 
+def push_pull_request(store, task):
+    """Push new commits to the task's existing pull request branch and say how
+    many were new. Runs without the registry lock."""
+    worktree = check_worktree(store, task)
+    if not worktree.is_dir():
+        raise RoostError("Task worktree is gone")
+    if git(worktree, "status", "--porcelain", "--untracked-files=no").stdout.strip():
+        raise RoostError("Commit the task's changes before pushing")
+    branch = task["branch"]
+    remote = git(worktree, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/" + branch + "^{commit}",
+                 check=False)
+    since = remote.stdout.strip() if remote.returncode == 0 else task["baseCommit"]
+    pushed = int(git(worktree, "rev-list", "--count", since + "..HEAD").stdout.strip())
+    git(worktree, "push", "-u", "origin", branch)
+    return pushed
+
+
 def pull_request(store, task, request):
     """Push the task branch and open a pull request. Runs without the registry
     lock, because pushing and talking to GitHub are slow."""
@@ -1154,6 +1171,11 @@ def rpc(request):
                 task = store.read(request["id"])
                 if task["status"] == "retired":
                     raise RoostError("Task is retired")
+            if isinstance(task.get("pr"), dict) and task["pr"].get("number"):
+                pushed = push_pull_request(store, task)
+                with store.locked():
+                    task = store.read(request["id"])
+                return {"ok": True, "result": dict(task, pushed=pushed)}
             pr = pull_request(store, task, request)
             with store.locked():
                 task = store.read(request["id"])
