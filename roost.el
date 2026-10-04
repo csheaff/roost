@@ -20,6 +20,7 @@
 (require 'subr-x)
 (require 'seq)
 (require 'easymenu)
+(require 'lisp-mnt)
 (require 'tramp)
 (require 'parse-time)
 (require 'button)
@@ -1934,19 +1935,30 @@ RESULT is `pending', a list of checks, or (error . MESSAGE).")
     ("command not found" . "Install Python 3.9 or newer on the host"))
   "Fixes for common connection errors, matched against the error text.")
 
+(defun roost--library-version (library)
+  "Version of LIBRARY from its header, \"installed\" without one, or nil."
+  (when-let* ((file (locate-library library)))
+    (or (ignore-errors
+          (with-temp-buffer
+            (insert-file-contents (replace-regexp-in-string "\\.elc\\'" ".el" file) nil 0 4000)
+            (lm-header "Version")))
+        "installed")))
+
 (defun roost--doctor-local-checks ()
-  "List the local checks, each (NAME OK DETAIL HINT)."
+  "List the local checks, each (NAME OK DETAIL HINT PATH)."
   (let ((helper (expand-file-name "scripts/roost_remote.py" roost--package-directory)))
     (list (list "Emacs" (version<= "29.1" emacs-version) emacs-version
                 "Roost needs Emacs 29.1 or newer")
-          (list "tmux-control" (locate-library "tmux-control") (locate-library "tmux-control")
-                "Install tmux-control: https://github.com/csheaff/tmux-control")
-          (list "Eat" (locate-library "eat") (locate-library "eat")
-                "Install eat from NonGNU ELPA (tmux-control renders through it)")
-          (list "Magit" (or (locate-library "magit") 'optional) (locate-library "magit")
-                "Optional: review (r) falls back to Dired")
-          (list "Host helper" (file-readable-p helper) helper
-                "Reinstall Roost with its scripts/ directory")
+          (list "tmux-control" (locate-library "tmux-control") (roost--library-version "tmux-control")
+                "Install tmux-control: https://github.com/csheaff/tmux-control"
+                (locate-library "tmux-control"))
+          (list "Eat" (locate-library "eat") (roost--library-version "eat")
+                "Install eat from NonGNU ELPA (tmux-control renders through it)"
+                (locate-library "eat"))
+          (list "Magit" (or (locate-library "magit") 'optional) (roost--library-version "magit")
+                "Optional: review (r) falls back to Dired" (locate-library "magit"))
+          (list "Host helper" (file-readable-p helper) (if (file-readable-p helper) "found" "missing")
+                "Reinstall Roost with its scripts/ directory" helper)
           (list "Workspaces" 'info
                 (pcase (roost--workspace-backend)
                   ('perspective "a perspective per task (perspective.el)")
@@ -1954,8 +1966,8 @@ RESULT is `pending', a list of checks, or (error . MESSAGE).")
                   (_ "none; tasks open in the selected window (see `roost-workspace')"))
                 nil))))
 
-(defun roost--doctor-line (name ok detail hint)
-  "Insert one check NAME with status OK, DETAIL and HINT."
+(defun roost--doctor-line (name ok detail hint &optional path)
+  "Insert one check NAME with status OK, DETAIL and HINT; PATH is a tooltip."
   (insert "  "
           (pcase ok
             ('info (propertize "·" 'face 'roost-dim))
@@ -1963,7 +1975,8 @@ RESULT is `pending', a list of checks, or (error . MESSAGE).")
             ('nil (propertize "✗" 'face 'roost-status-failed))
             (_ (propertize "✓" 'face 'roost-status-ready)))
           " " (format "%-16s" name)
-          (propertize (or (if (stringp detail) detail "") "") 'face 'roost-dim)
+          (propertize (or (if (stringp detail) detail "") "") 'face 'roost-dim
+                      'help-echo path)
           "\n")
   (when (and hint (memq ok '(nil optional)))
     (insert (propertize (concat "      " hint "\n")
@@ -1994,15 +2007,18 @@ RESULT is `pending', a list of checks, or (error . MESSAGE).")
               (when (car entry) (roost--doctor-line "SSH" t "connected" nil))
               (dolist (check result)
                 (let* ((name (alist-get 'name check))
-                       (missing (and (not (alist-get 'ok check))
-                                     (string-suffix-p "not found" (or (alist-get 'detail check) ""))
-                                     (member (downcase name) roost--agents)
-                                     (not (equal name default)))))
-                  (roost--doctor-line name (cond (missing 'optional) ((alist-get 'ok check)) (t nil))
+                       ;; Agents you don't use by default are optional.
+                       (optional (and (not (alist-get 'ok check))
+                                      (member (downcase name) roost--agents)
+                                      (not (equal name default))))
+                       (hint (alist-get 'hint check)))
+                  (roost--doctor-line name (cond (optional 'optional) ((alist-get 'ok check)) (t nil))
                                       (alist-get 'detail check)
-                                      (if missing
-                                          (format "Optional: needed only for %s tasks" name)
-                                        (alist-get 'hint check)))))))))
+                                      (cond ((not optional) hint)
+                                            ((string-suffix-p "not found" (or (alist-get 'detail check) ""))
+                                             (format "Optional: needed only for %s tasks" name))
+                                            (t (format "For %s tasks: %s" name hint)))
+                                      (alist-get 'path check))))))))
         (insert "\n" (propertize (substitute-command-keys
                                    "\\<roost-doctor-mode-map>\\[roost-doctor] checks again · C-u \\[roost-doctor] checks another host")
                                   'face 'roost-dim)

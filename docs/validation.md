@@ -1,5 +1,26 @@
 # Validation
 
+## Fresh install — 2026-10-04
+
+A new Emacs 30.2 configuration (`--init-directory`, nothing from the author's
+setup) installed Roost the way the README describes: tmux-control and Roost
+from GitHub with `use-package :vc`, Eat from NonGNU ELPA, and Evil from MELPA,
+with `tab-bar-mode` on and Roost pointed at an isolated state directory.
+
+- Roost loaded from the package directory and found its helper.
+- `roost-doctor` reported versions locally and on `claylien`, flagged the
+  Mac's Codex 0.150.1 as too old for Codex tasks, and for an unknown host
+  showed the SSH error with a fix.
+- With Evil, the dashboard opened in Emacs state with its empty-state help, `c`
+  opened a draft in insert state, a project chosen over plain `/ssh:` TRAMP
+  created a task, and Roost opened it in its own tab.
+- Two problems were in tmux-control and are fixed in
+  [tmux-control#150](https://github.com/csheaff/tmux-control/pull/150): agent
+  terminals opened in Evil normal state, so answering a permission prompt
+  started a numeric prefix instead of reaching the agent; and `package-vc`
+  compiled its `test/` files, printing load errors during install.
+- `package-lint` reports only that tmux-control is not yet on an archive.
+
 ## Review and dogfooding pass — 2026-10-04
 
 ### Automated checks

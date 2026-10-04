@@ -58,31 +58,66 @@ started from and removes its worktree, branch and window.
 
 ## Install
 
-Requirements: Emacs 29.1+ and [tmux-control](https://github.com/csheaff/tmux-control).
-Each task host needs Python 3.9+, Git, tmux, and an installed, signed-in agent
-CLI (Codex 0.160.0 or newer for its lifecycle hooks; Pi was checked with
-0.78.1). Remote hosts need key- or agent-based SSH; use SSH config aliases for
-ports and jump hosts.
+Requirements: Emacs 29.1+ and [tmux-control](https://github.com/csheaff/tmux-control)
+(which brings [Eat](https://codeberg.org/akib/emacs-eat)). Each task host needs
+Python 3.9+, Git, tmux 3.0+, and an installed, signed-in agent CLI (Codex 0.160.0
+or newer). Remote hosts need key- or agent-based SSH; use SSH config aliases for
+ports and jump hosts. Roost copies its helper to each host itself.
+
+Emacs 30 (built-in `use-package`):
 
 ```elisp
+(use-package tmux-control
+  :vc (:url "https://github.com/csheaff/tmux-control" :rev :newest))
+
 (use-package roost
-  :load-path "~/code/roost"
-  :commands (roost-status roost-new-task roost-switch-task roost-next-waiting)
-  :custom
-  (roost-hosts '(nil "devbox")))   ; nil is this machine
+  :vc (:url "https://github.com/csheaff/roost" :rev :newest)
+  :custom (roost-hosts '(nil "devbox")))   ; nil is this machine
 ```
 
-With Straight, include the helper script:
+Emacs 29: `M-x package-vc-install` tmux-control's URL, then Roost's, and
+`(setq roost-hosts '(nil "devbox"))`.
+
+straight.el:
 
 ```elisp
-:straight (roost :type git :host github :repo "csheaff/roost"
-                 :files ("roost.el" "scripts"))
+(use-package tmux-control
+  :straight (:host github :repo "csheaff/tmux-control"))
+(use-package roost
+  :straight (:host github :repo "csheaff/roost" :files ("roost.el" "scripts"))
+  :custom (roost-hosts '(nil "devbox")))
 ```
 
-Roost copies `scripts/roost_remote.py` to each host on first use, and again
-whenever it changes. Running tasks keep the helper they started with. Magit is
-optional (review falls back to Dired), as is
-[perspective.el](https://github.com/nex3/perspective-el).
+Doom Emacs, in `packages.el`:
+
+```elisp
+(package! tmux-control :recipe (:host github :repo "csheaff/tmux-control"))
+(package! roost :recipe (:host github :repo "csheaff/roost" :files ("roost.el" "scripts")))
+```
+
+and in `config.el`: `(setq roost-hosts '(nil "devbox"))`.
+
+Then run **`M-x roost-doctor`**. It checks Emacs's side and, on each host, SSH,
+Python, Git, tmux and each agent CLI's version and sign-in, with a fix for
+anything missing. `C-u M-x roost-doctor` checks a host before you add it.
+
+Magit is optional (review falls back to Dired).
+
+### Fitting your setup
+
+- **Workspaces.** Each task gets its own window arrangement: a perspective with
+  [perspective.el](https://github.com/nex3/perspective-el), otherwise a tab when
+  `tab-bar-mode` is on, otherwise none (tasks open in the selected window). Set
+  `roost-workspace` to choose.
+- **Evil.** Roost's dashboard and panels start in Emacs state so their keys work
+  (`roost-evil-state`); `j`/`k` move between tasks. Drafts start in insert
+  state. tmux-control starts agent terminals in insert state, so typing reaches
+  the agent; ESC returns to normal state.
+- **Other modal setups** (Meow, xah-fly-keys): put `roost-dashboard-mode`,
+  `roost-task-info-mode` and `roost-compose-mode` in your insert or Emacs-state
+  list so their single keys work.
+- **Completion.** Prompts use `completing-read`, so Vertico, Ivy, Helm and the
+  default UI all work.
 
 ## Commands
 
@@ -103,11 +138,11 @@ optional (review falls back to Dired), as is
 | `m` | `roost-merge-retire` | Merge committed work, then retire the task |
 | `x` | `roost-retire` | Retire a task that is already merged or has no commits |
 | `X` | `roost-forget` | Drop Roost's record; keep the worktree and branch |
-| `k` | `roost-stop` | Stop the agent's window; keep all work |
+| `K` | `roost-stop` | Stop the agent's window; keep all work |
 | `s` | `roost-resume` | Restart a stopped task in its recorded conversation |
 | `g` | `roost-refresh` | Refresh status and Git statistics |
 
-`TAB` moves between tasks; `mouse-1` opens one and `mouse-3` shows its actions.
+`j`/`k` or `TAB` move between tasks; `mouse-1` opens one and `mouse-3` shows its actions.
 Outside the dashboard, commands act on the task of the current terminal,
 worktree file or perspective, or ask. Also available: `roost-switch-task`
 (searchable, waiting tasks first), `roost-send-region` (sends the selection
@@ -116,9 +151,6 @@ with its file and lines), and `roost-watch-mode` (background polling).
 In the new task draft: `C-c C-c` creates, `C-c C-k` cancels, and `C-c C-p`,
 `C-c C-a`, `C-c C-b` and `C-c C-n` change the project, agent, starting ref and
 name. An empty name is derived from the prompt.
-
-With modal editing (Evil, Meow, xah-fly-keys), use insert or Emacs state in
-`roost-dashboard-mode` and `roost-task-info-mode` so their single keys work.
 
 ## Configuration
 
@@ -136,8 +168,9 @@ With modal editing (Evil, Meow, xah-fly-keys), use insert or Emacs state in
   worktrees; default `~/.local/share/roost`.
 - `roost-socket-name`, `roost-session-name`: tmux socket (default tmux-control's)
   and session (default one per repository).
-- `roost-use-perspectives`, `roost-compact-mode-line`: one perspective per task,
-  shown as a single `Roost: host/task +N` entry in the perspective bar.
+- `roost-workspace`, `roost-compact-mode-line`: how tasks get their own windows
+  (see above); with perspective.el, task perspectives share one
+  `Roost: host/task +N` entry in the perspective bar.
 - `roost-notify`, `roost-notify-function`, `roost-watch-interval` (3 s),
   `roost-request-timeout` (60 s).
 
@@ -187,6 +220,10 @@ Things to know:
 - Pi is experimental: launch, events and resume were checked, but no full model run.
 
 ## Upgrading
+
+0.6 declares tmux-control as a package dependency and adds `roost-doctor`,
+tab-bar workspaces and Evil support. Stopping a task moved from `k` to `K`; `j`
+and `k` now move between tasks in the dashboard.
 
 0.5 defaults new branches to `roost/…` (formerly `codex/roost/…`; existing tasks
 keep theirs). It replaces the minibuffer prompts of `roost-new-task` with the

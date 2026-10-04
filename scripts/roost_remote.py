@@ -765,8 +765,8 @@ def doctor(store, request):
     """Check what tasks need on this host, with a fix for each problem."""
     checks = []
 
-    def check(name, ok, detail, hint=None):
-        checks.append(dict(name=name, ok=ok, detail=detail, hint=hint))
+    def check(name, ok, detail, hint=None, path=None):
+        checks.append(dict(name=name, ok=ok, detail=detail, hint=hint, path=path))
 
     check("Python", sys.version_info >= (3, 9), sys.version.split()[0],
           None if sys.version_info >= (3, 9) else "Install Python 3.9 or newer")
@@ -802,9 +802,9 @@ def doctor(store, request):
             continue
         code, out = run([executable, "--version"])
         version = version_of(out)
-        detail = "%s %s" % (executable, out.splitlines()[0] if out else "")
+        detail = out.splitlines()[0] if out else executable
         if agent == "codex" and not (version and version >= (0, 160, 0)):
-            check(label, False, detail, "Upgrade to Codex 0.160.0 or newer for its lifecycle hooks")
+            check(label, False, detail, "Upgrade to Codex 0.160.0 or newer for its lifecycle hooks", executable)
             continue
         if agent == "claude":
             code, out = run([executable, "auth", "status"])
@@ -813,14 +813,14 @@ def doctor(store, request):
             except ValueError:
                 signed_in = None
             if signed_in is False:
-                check(label, False, detail, "Run `claude` once on this host to sign in")
+                check(label, False, detail, "Run `claude` once on this host to sign in", executable)
                 continue
         elif agent == "codex":
             code, out = run([executable, "login", "status"])
             if code != 0 or "logged in" not in out.lower():
-                check(label, False, detail, "Run `codex login` on this host")
+                check(label, False, detail, "Run `codex login` on this host", executable)
                 continue
-        check(label, True, detail)
+        check(label, True, detail, None, executable)
     return checks
 
 

@@ -780,7 +780,9 @@
                                          ((name . "Claude") (ok) (detail . "/bin/claude 2.1")
                                           (hint . "Run `claude` once on this host to sign in"))
                                          ((name . "Pi") (ok) (detail . "pi not found")
-                                          (hint . "Install Pi"))))
+                                          (hint . "Install Pi"))
+                                         ((name . "Codex") (ok) (detail . "codex-cli 0.150.1")
+                                          (hint . "Upgrade to Codex 0.160.0"))))
                     (funcall failure "far: Permission denied (publickey)."))))
                ((symbol-function 'pop-to-buffer) #'ignore))
        (unwind-protect
@@ -791,6 +793,7 @@
                  (should (string-match-p "✓ tmux +tmux 3.7c" text))
                  (should (string-match-p "✗ Claude.*\n +Run `claude` once on this host to sign in" text))
                  (should (string-match-p "– Pi.*\n +Optional: needed only for Pi tasks" text))
+                 (should (string-match-p "– Codex +codex-cli 0.150.1\n +For Codex tasks: Upgrade to Codex 0.160.0" text))
                  (should (string-match-p "✗ SSH and Python +far: Permission denied" text))
                  (should (string-match-p "ssh-copy-id far" text))
                  (should (string-match-p "· Workspaces" text)))))
