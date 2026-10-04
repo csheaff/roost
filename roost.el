@@ -2,7 +2,7 @@
 
 ;; Author: Clay Sheaff
 ;; Version: 0.7.0
-;; Package-Requires: ((emacs "29.1") (tmux-control "0.7.0"))
+;; Package-Requires: ((emacs "29.1") (tmux-control "0.7.0") (transient "0.4.1"))
 ;; Keywords: tools, processes
 ;; URL: https://github.com/csheaff/roost
 
@@ -24,6 +24,7 @@
 (require 'tramp)
 (require 'parse-time)
 (require 'button)
+(require 'transient)
 
 (declare-function tmux-control-connect-or-switch "tmux-control" (host socket-name session))
 (declare-function tmux-control-send-command "tmux-control" (command))
@@ -2132,8 +2133,56 @@ keeps one process-wide registration per mode; a nil STATE removes it."
 
 ;;;; Task panel
 
+(defvar transient--original-buffer)
+
+(defun roost--dispatch-task-description ()
+  "Heading for `roost-dispatch' naming the task its commands act on.
+Transient formats headings in a temporary buffer; the task comes from
+the buffer the menu was opened from."
+  (if-let* ((task (with-current-buffer (if (buffer-live-p transient--original-buffer)
+                                           transient--original-buffer
+                                         (current-buffer))
+                    (ignore-errors (roost--task-at-point)))))
+      (format "Task %s (%s)" (propertize (roost--field task 'name) 'face 'roost-title)
+              (roost--display-status task))
+    "Task (chosen when needed)"))
+
+;;;###autoload (autoload 'roost-dispatch "roost" nil t)
+(transient-define-prefix roost-dispatch ()
+  "Show Roost's commands.
+Task commands act on the task at point, in the dashboard, a task panel,
+terminal or worktree, or ask which task."
+  [:description roost--dispatch-task-description
+   ["Work"
+    ("RET" "Agent" roost-open-task)
+    ("t" "Shell" roost-shell)
+    ("f" "Files" roost-files)
+    ("e" "Send prompt" roost-send)
+    ("i" "Details" roost-task-info)]
+   ["Review"
+    ("r" "Magit" roost-review)
+    ("D" "Diff" roost-diff)
+    ("u" "Update from integration" roost-update)]
+   ["Finish"
+    ("P" "Pull request" roost-pr)
+    ("m" "Merge and retire" roost-merge-retire)
+    ("x" "Retire" roost-retire)
+    ("X" "Forget" roost-forget)]
+   ["Session"
+    ("K" "Stop" roost-stop)
+    ("s" "Resume" roost-resume)]]
+  ["Roost"
+   [("c" "New task" roost-new-task)
+    ("n" "Next waiting" roost-next-waiting)
+    ("l" "Switch task" roost-switch-task)]
+   [("S" "Dashboard" roost-status)
+    ("g" "Refresh" roost-refresh)
+    ("w" "Watch hosts" roost-watch-mode)]
+   [("!" "Setup check" roost-doctor)]])
+
 (defvar-keymap roost-task-info-mode-map
   :doc "Actions on the task shown in this buffer."
+  "h" #'roost-dispatch
   "RET" #'roost-open-task
   "r" #'roost-review
   "D" #'roost-diff
@@ -2362,6 +2411,7 @@ prompt is returned whole."
   "X" #'roost-forget
   "u" #'roost-update
   "n" #'roost-next-waiting
+  "h" #'roost-dispatch
   "g" #'roost-refresh)
 
 (easy-menu-define roost-dashboard-menu roost-dashboard-mode-map
@@ -2388,7 +2438,7 @@ Refreshes are asynchronous; rendering uses only cached state.
               revert-buffer-function (lambda (&rest _) (roost-refresh)))
   (setq header-line-format
         (substitute-command-keys
-         " \\<roost-dashboard-mode-map>\\[roost-open-task] open · \\[roost-new-task] new · \\[roost-next-waiting] next waiting · \\[roost-shell] shell · \\[roost-review] review · \\[roost-merge-retire] merge · \\[roost-task-info] details · \\[roost-refresh] refresh"))
+         " \\<roost-dashboard-mode-map>\\[roost-open-task] open · \\[roost-new-task] new · \\[roost-next-waiting] next waiting · \\[roost-shell] shell · \\[roost-review] review · \\[roost-merge-retire] merge · \\[roost-task-info] details · \\[roost-dispatch] all commands"))
   (add-hook 'after-change-major-mode-hook #'roost--quiet-display 90 t)
   (add-hook 'window-size-change-functions #'roost--dashboard-resized nil t)
   (roost--evil-state 'roost-dashboard-mode roost-evil-state)

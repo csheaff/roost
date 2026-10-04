@@ -538,6 +538,21 @@
        (roost--render-task-info)
        (should (string-match-p "^Issue\n  #12  CSV import crashes$" (buffer-string)))))))
 
+(ert-deftest roost-dispatch-names-the-task-of-the-buffer-it-was-opened-from ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (roost-test--task))))
+     (with-temp-buffer
+       (setq roost--buffer-task-key (roost--key task))
+       (let ((transient--original-buffer (current-buffer)))
+         (with-temp-buffer
+           (should (string-match-p "\\`Task fix auth (ready)\\'"
+                                   (substring-no-properties (roost--dispatch-task-description))))))))
+   (let ((transient--original-buffer nil))
+     (with-temp-buffer
+       (should (equal (roost--dispatch-task-description) "Task (chosen when needed)"))))
+   (should (eq (lookup-key roost-dashboard-mode-map "h") 'roost-dispatch))
+   (should (eq (lookup-key roost-task-info-mode-map "h") 'roost-dispatch))))
+
 (ert-deftest roost-request-wait-returns-results-and-signals-failures ()
   (cl-letf (((symbol-function 'roost--request)
              (lambda (_host _action _params success &optional _failure)

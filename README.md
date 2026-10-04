@@ -147,6 +147,7 @@ Magit is optional (review falls back to Dired).
 
 | Key | Command | |
 | --- | --- | --- |
+| `h` | `roost-dispatch` | A Magit-style menu of every command below, naming the task they act on |
 | `RET` | `roost-open-task` | Open the task's agent terminal and workspace |
 | `c` | `roost-new-task` | Draft a new task, from the region or Org entry if any (`C-u` forks the current task's commits) |
 | `n` | `roost-next-waiting` | Next task waiting for you, permission requests first |
@@ -167,7 +168,8 @@ Magit is optional (review falls back to Dired).
 
 `j`/`k` or `TAB` move between tasks; `mouse-1` opens one and `mouse-3` shows its actions.
 Outside the dashboard, commands act on the task of the current terminal,
-worktree file or perspective, or ask. Also available: `roost-switch-task`
+worktree file or perspective, or ask. Bind the menu globally to reach Roost from
+anywhere, for example `(keymap-global-set "C-c r" #'roost-dispatch)`. Also available: `roost-switch-task`
 (searchable, waiting tasks first), `roost-send-region` (sends the selection
 with its file and lines), and `roost-watch-mode` (background polling).
 
