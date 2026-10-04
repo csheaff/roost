@@ -289,6 +289,16 @@ class Lifecycle(unittest.TestCase):
         argv = roost.CodexAgent().launch(roost.Store(str(self.state)), roost.Store(str(self.state)).read(task["id"]), False)
         self.assertEqual(argv[argv.index("--add-dir") + 1], str((self.repo / ".git").resolve()))
 
+    def test_codex_hook_command_survives_helper_upgrades(self):
+        store = roost.Store(str(self.state))
+        task = dict(id="1234567890abcdef", command=["codex"], prompt=None)
+        hooks = lambda argv: [arg for arg in argv if arg.startswith("hooks.")]
+        before = hooks(roost.CodexAgent().launch(store, task, False))
+        with patch.object(roost, "__file__", str(self.root / "remote-newversion.py")):
+            after = hooks(roost.CodexAgent().launch(store, task, False))
+        self.assertEqual(before, after)
+        self.assertNotIn("remote-", " ".join(after))
+
     def test_codex_approvals_block_send_and_retirement(self):
         task = self.create(agent="codex", command=[sys.executable, str(FAKE_AGENT), "codex"])
         self.assertTrue(self.request("send", id=task["id"], text="permission")["ok"])

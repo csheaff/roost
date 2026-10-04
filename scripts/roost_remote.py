@@ -253,6 +253,25 @@ class ClaudeAgent:
         return updates
 
 
+# Codex asks the user to review hook commands and remembers the approval.
+# The command runs this fixed shim, which hands the event to the helper
+# version that launched the task (from its environment), so upgrading
+# Roost does not change the command or ask for review again.
+HOOK_SHIM = (
+    "import os, sys\n"
+    "helper = os.environ.get('ROOST_HELPER')\n"
+    "if helper:\n"
+    "    os.execv(sys.executable, [sys.executable, helper, 'hook-env'])\n"
+)
+
+
+def hook_shim(store):
+    path = store.root / "hook.py"
+    if not path.exists() or path.read_text() != HOOK_SHIM:
+        atomic_text(path, HOOK_SHIM)
+    return str(path)
+
+
 class CodexAgent:
     """Native Codex TUI with per-invocation, normally reviewed lifecycle hooks."""
 
@@ -265,9 +284,9 @@ class CodexAgent:
             raise RoostError("Roost owns Codex's working directory and conversation resume; use interactive CLI options only")
 
     def launch(self, store, task, resume_conversation):
-        # Environment carries task/run identity, so the reviewed hook command
-        # stays the same across tasks using this helper version.
-        command = shlex.join([sys.executable, str(Path(__file__).resolve()), "hook-env"])
+        # Environment carries task/run identity and the helper, so the
+        # reviewed hook command stays the same across tasks and upgrades.
+        command = shlex.join([sys.executable, hook_shim(store)])
         argv = list(task["command"])
         for event in ("SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse",
                       "PostToolUse", "PermissionRequest", "Stop", "Interrupt"):
