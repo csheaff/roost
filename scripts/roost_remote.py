@@ -190,16 +190,6 @@ def delete_branch(repo, branch, commit):
     git(repo, "update-ref", "-d", ref, commit)
 
 
-def git_common_dir(worktree):
-    """Absolute path of the Git directory shared by WORKTREE's checkouts."""
-    if not worktree or not Path(worktree).is_dir():
-        return None
-    result = git(worktree, "rev-parse", "--git-common-dir", check=False)
-    if result.returncode or not result.stdout.strip():
-        return None
-    return str((Path(worktree) / result.stdout.strip()).resolve())
-
-
 def claude_hook_settings(store, task):
     script = str(Path(__file__).resolve())
     command = shlex.join([sys.executable, script, "hook", str(store.root), task["id"], task["runId"]])
@@ -292,12 +282,6 @@ class CodexAgent:
                       "PostToolUse", "PermissionRequest", "Stop", "Interrupt"):
             handler = '{ hooks = [{ type = "command", command = ' + json.dumps(command) + ', timeout = 3 }] }'
             argv += ["-c", "hooks." + event + "=[" + handler + "]"]
-        # A worktree's Git metadata lives in the primary checkout's .git,
-        # outside Codex's writable workspace. Allow it, so Codex can commit
-        # on the task branch as it can in an ordinary checkout.
-        common = git_common_dir(task.get("worktree"))
-        if common:
-            argv += ["--add-dir", common]
         session = task.get("agentSession")
         if resume_conversation and session:
             argv += ["resume", session]

@@ -284,11 +284,6 @@ class Lifecycle(unittest.TestCase):
                 self.assertTrue(self.request("retire", id=task["id"])["ok"])
         self.assertEqual(self.git("status", "--porcelain"), "")
 
-    def test_codex_may_write_the_shared_git_directory_of_its_worktree(self):
-        task = self.create(agent="codex", command=[sys.executable, str(FAKE_AGENT), "codex"])
-        argv = roost.CodexAgent().launch(roost.Store(str(self.state)), roost.Store(str(self.state)).read(task["id"]), False)
-        self.assertEqual(argv[argv.index("--add-dir") + 1], str((self.repo / ".git").resolve()))
-
     def test_codex_hook_command_survives_helper_upgrades(self):
         store = roost.Store(str(self.state))
         task = dict(id="1234567890abcdef", command=["codex"], prompt=None)
