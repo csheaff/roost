@@ -692,22 +692,25 @@ def integration_branch(task):
     return branch
 
 
-def merged_by_pull_request(task, commit):
-    """True when GitHub reports the task's pull request MERGED with the
-    branch tip at COMMIT, so nothing was committed after the merge. This
-    covers squash merges, which leave the branch's commits unmerged to Git."""
+def merged_pull_request_head(task):
+    """The branch tip GitHub merged for the task's pull request, or None when
+    there is no recorded pull request, it is not MERGED, or gh cannot say.
+    Slow: call it without the registry lock and pass the answer to `retire`."""
     if not isinstance(task.get("pr"), dict) or not task["pr"].get("number"):
-        return False
+        return None
     try:
         view = json.loads(gh(task["repo"], "pr", "view", str(task["pr"]["number"]),
                              "--json", "state,headRefOid", timeout=15))
-        return view["state"] == "MERGED" and view["headRefOid"] == commit
+        return view["headRefOid"] if view["state"] == "MERGED" else None
     except (RoostError, ValueError, KeyError, TypeError):
-        return False
+        return None
 
 
-def safe_to_delete(task, commit, merged_pr=None):
-    """True when deleting the task branch at COMMIT loses no commits."""
+def safe_to_delete(task, commit, merged_head=None):
+    """True when deleting the task branch at COMMIT loses no commits.
+    MERGED_HEAD is the tip GitHub merged for the task's pull request. A squash
+    merge leaves the branch's commits unmerged to Git, so a branch still at
+    that tip, with nothing committed after the merge, is also safe."""
     if commit == task.get("baseCommit"):
         # The task never committed. Its starting point (perhaps a forked
         # task's commits, or a detached HEAD) must survive elsewhere.
@@ -722,10 +725,10 @@ def safe_to_delete(task, commit, merged_pr=None):
             task["repo"], "merge-base", "--is-ancestor", commit, "refs/heads/" + integration,
             check=False).returncode == 0:
         return True
-    return merged_by_pull_request(task, commit) if merged_pr is None else merged_pr
+    return merged_head is not None and merged_head == commit
 
 
-def retire(store, task, merge=False):
+def retire(store, task, merge=False, merged_head=None):
     """Remove a finished task's worktree, branch, window and record.
     Never discards uncommitted files or unmerged commits."""
     inventory = inventory_for(task)
@@ -758,8 +761,7 @@ def retire(store, task, merge=False):
     commit = None
     if branch_exists:
         commit = git(repo, "rev-parse", "refs/heads/" + branch + "^{commit}").stdout.strip()
-        merged_pr = merged_by_pull_request(task, commit)
-        if not safe_to_delete(task, commit, merged_pr):
+        if not safe_to_delete(task, commit, merged_head):
             raise RoostError("Task branch has unmerged commits; merge it (m) before retiring, "
                              "or forget the task to keep its branch")
         # A durable checkpoint permits retry after a disconnect or partial cleanup.
@@ -773,7 +775,7 @@ def retire(store, task, merge=False):
         delete_branch(repo, branch, commit)
     store.remove(task["id"])
     task.update(status="retired", updatedAt=now())
-    if branch_exists and merged_pr:
+    if commit and merged_head == commit:
         task["remoteCleanup"] = True
     return task
 
@@ -879,8 +881,8 @@ def doctor(store, request):
     """Check what tasks need on this host, with a fix for each problem."""
     checks = []
 
-    def check(name, ok, detail, hint=None, path=None):
-        checks.append(dict(name=name, ok=ok, detail=detail, hint=hint, path=path))
+    def check(name, ok, detail, hint=None, path=None, optional=False):
+        checks.append(dict(name=name, ok=ok, detail=detail, hint=hint, path=path, optional=optional))
 
     check("Python", sys.version_info >= (3, 9), sys.version.split()[0],
           None if sys.version_info >= (3, 9) else "Install Python 3.9 or newer")
@@ -938,16 +940,18 @@ def doctor(store, request):
     executable = shutil.which("gh", path=path)
     if not executable:
         check("GitHub CLI", False, "not found",
-              "Optional: install gh (https://cli.github.com) to open pull requests")
+              "Optional: install gh (https://cli.github.com) to open pull requests",
+              optional=True)
     else:
         code, out = run([executable, "auth", "status"])
         account = re.search(r"account (\S+)", out)
         if code == 0:
             check("GitHub CLI", True, "signed in as " + account.group(1) if account else "signed in",
-                  None, executable)
+                  None, executable, optional=True)
         else:
             check("GitHub CLI", False, "not signed in",
-                  "Optional: run `gh auth login` on this host to open pull requests", executable)
+                  "Optional: run `gh auth login` on this host to open pull requests", executable,
+                  optional=True)
     return checks
 
 
@@ -1027,8 +1031,8 @@ TASK_ACTIONS = {
     "send": lambda store, task, request: send(task, request["text"], request.get("force") is True),
     "shell": lambda store, task, request: shell(store, task),
     "inspect": lambda store, task, request: inspect(store, task),
-    "retire": lambda store, task, request: retire(store, task),
-    "merge": lambda store, task, request: retire(store, task, merge=True),
+    "retire": lambda store, task, request: retire(store, task, merged_head=request.get("mergedHead")),
+    "merge": lambda store, task, request: retire(store, task, merge=True, merged_head=request.get("mergedHead")),
     "forget": lambda store, task, request: forget(store, task),
     "update": lambda store, task, request: update(store, task),
 }
@@ -1053,6 +1057,12 @@ def rpc(request):
                 task["pr"] = pr
                 store.save(task)
             return {"ok": True, "result": task}
+        if action in ("retire", "merge"):
+            # Ask GitHub without the lock; retire then trusts only this answer.
+            with store.locked():
+                task = store.read(request["id"])
+            merged = merged_pull_request_head(task) if task.get("pr") else None
+            request = dict(request, mergedHead=merged)
         with store.locked():
             if action == "list":
                 result = list_tasks(store, request)

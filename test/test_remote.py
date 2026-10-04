@@ -774,7 +774,18 @@ elif args[:2] == ["auth", "status"]:
         view.write_text(json.dumps(dict(state="OPEN", headRefOid=tip)))
         self.assertFalse(self.request("retire", id=task["id"])["ok"])
         view.write_text(json.dumps(dict(state="MERGED", headRefOid=tip)))
-        reply = self.request("retire", id=task["id"])
+        # gh is asked once, with the registry lock released; retire never calls it.
+        observed = []
+        original = roost.gh
+        def probe(*args, **kwargs):
+            import fcntl
+            with (self.state / "registry.lock").open("a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)  # Raises if held.
+                observed.append(args[1:3])
+            return original(*args, **kwargs)
+        with patch.object(roost, "gh", probe):
+            reply = self.request("retire", id=task["id"], mergedHead=tip)
+        self.assertEqual(observed, [("pr", "view")])
         self.assertTrue(reply["ok"], reply)
         self.assertNotIn("remoteCleanup", reply["result"])
         self.assertFalse(Path(task["worktree"]).exists())
@@ -797,6 +808,8 @@ elif args[:2] == ["auth", "status"]:
         checks = {check["name"]: check for check in self.request("doctor")["result"]}
         self.assertTrue(checks["GitHub CLI"]["ok"], checks["GitHub CLI"])
         self.assertIn("octocat", checks["GitHub CLI"]["detail"])
+        self.assertTrue(checks["GitHub CLI"]["optional"])
+        self.assertFalse(checks["Git"]["optional"])
         (self.gh_dir / "signed-out").write_text("")
         checks = {check["name"]: check for check in self.request("doctor")["result"]}
         self.assertFalse(checks["GitHub CLI"]["ok"])
@@ -806,6 +819,7 @@ elif args[:2] == ["auth", "status"]:
             checks = {check["name"]: check for check in self.request("doctor")["result"]}
         self.assertFalse(checks["GitHub CLI"]["ok"])
         self.assertEqual(checks["GitHub CLI"]["detail"], "not found")
+        self.assertTrue(checks["GitHub CLI"]["optional"])
         self.assertIn("install gh", checks["GitHub CLI"]["hint"])
 
     def test_bad_base_and_missing_executable_report_errors_without_touching_repo(self):
