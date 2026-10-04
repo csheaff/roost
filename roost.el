@@ -1838,8 +1838,33 @@ COMPACT abbreviates commits ahead of and behind the integration branch."
     (unless (or (null prompt) (equal prompt (roost--field task 'name))) prompt)))
 
 (defun roost--strip-markdown (text)
-  "TEXT without Markdown emphasis markers and backticks."
-  (replace-regexp-in-string "\\*\\*\\|`" "" (or text "")))
+  "TEXT without Markdown emphasis delimiters and the backticks of inline code.
+Delimiters are removed only where they wrap text, so identifiers such as
+snake_case_name and expressions such as a * b are kept, and so is
+everything inside inline code."
+  (let ((code nil)
+        (text (or text "")))
+    (setq text (replace-regexp-in-string
+                "`\\([^`\n]+\\)`"
+                (lambda (match)
+                  (push (substring match 1 -1) code)
+                  (format "\ue000%d\ue001" (1- (length code))))
+                text t t))
+    (let ((previous nil))
+      (while (not (equal previous text))
+        (setq previous text
+              text (replace-regexp-in-string
+                    (concat "\\(^\\|[^[:alnum:]*_]\\)"
+                            "\\(\\*\\{1,3\\}\\|_\\{1,2\\}\\)"
+                            "\\([^[:space:]]\\(?:[^\n]*?[^[:space:]]\\)??\\)"
+                            "\\2\\($\\|[^[:alnum:]*_.]\\|\\.\\($\\|[[:space:]]\\)\\)")
+                    "\\1\\3\\4" text))))
+    (setq code (nreverse code))
+    (replace-regexp-in-string
+     "\ue000\\([0-9]+\\)\ue001"
+     (lambda (match)
+       (nth (string-to-number (substring match 1 -1)) code))
+     text t t)))
 
 (defun roost--last-message (task)
   "TASK's latest agent reply with Markdown markers removed, or nil."
@@ -1975,9 +2000,9 @@ Status is the last observation from the task's host.
                                     (or (roost--field task 'agent) "claude"))
                             'face 'roost-dim)
                 "\n")
-        (when-let* ((prompt (roost--prompt-text task)))
-          (roost--insert-heading "Prompt")
-          (roost--insert-indented prompt))
+        (when-let* ((reply (roost--last-message task)))
+          (roost--insert-heading "Agent's latest reply")
+          (roost--insert-indented reply))
         (roost--insert-heading "Changes")
         (roost--insert-indented
          (cond ((roost--field task 'worktreeMissing)
@@ -2010,9 +2035,9 @@ Status is the last observation from the task's host.
                    'roost-status-permission)))))
         (when-let* ((error (roost--field task 'error)))
           (roost--insert-indented (concat "Last error: " error) 'roost-status-failed))
-        (when-let* ((reply (roost--last-message task)))
-          (roost--insert-heading "Agent's latest reply")
-          (roost--insert-indented reply))
+        (when-let* ((prompt (roost--prompt-text task)))
+          (roost--insert-heading "Prompt")
+          (roost--insert-indented prompt))
         (roost--insert-pull-request task)
         (roost--insert-heading "Actions")
         (dolist (group roost--task-actions)

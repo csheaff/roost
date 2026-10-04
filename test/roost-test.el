@@ -49,6 +49,18 @@
 (defconst roost-test--reply
   "## Summary\n\n---\n\nFixed the **auth** bug in `login.py`.\n\nSecond line.")
 
+(ert-deftest roost-strip-markdown-removes-wrapping-markers-only ()
+  (pcase-dolist (`(,in . ,out)
+                 '(("*it* and _it_" . "it and it")
+                   ("**b** __b__ ***both***" . "b b both")
+                   ("(**b**), _x_." . "(b), x.")
+                   ("snake_case_name and __init__.py" . "snake_case_name and __init__.py")
+                   ("a * b and 2*3 and a ** b" . "a * b and 2*3 and a ** b")
+                   ("`**`" . "**")
+                   ("use `snake_*x*_` or **`code`**" . "use snake_*x*_ or code")
+                   ("`a` and `b`" . "a and b")))
+    (should (equal (roost--strip-markdown in) out))))
+
 (ert-deftest roost-last-message-summary-skips-noise ()
   (should (equal (roost--last-message-summary `((lastMessage . ,roost-test--reply)))
                  "Fixed the auth bug in login.py."))
@@ -75,7 +87,8 @@
        (setq roost--buffer-task-key (roost--key task))
        (roost--render-task-info)
        (let ((text (buffer-string)))
-         (should (< (string-match "^Changes$" text) (string-match "^Agent's latest reply$" text)))
+         (should (< (string-match "^fix auth " text) (string-match "^Agent's latest reply$" text)
+                    (string-match "^Changes$" text) (string-match "^Prompt$" text)))
          (should (string-match-p "^Agent's latest reply\n## Summary\n" text))
          (should (equal (get-text-property (string-match "Fixed the" text) 'line-prefix text) "  "))
          (should (string-match-p "^Fixed the auth bug in login\\.py\\.\n" text))
