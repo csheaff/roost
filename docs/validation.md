@@ -4,8 +4,8 @@
 
 ### Automated checks
 
-- **47 ERT tests and 39 Python lifecycle tests pass** on macOS; `roost.el`
-  byte-compiles without warnings. The 39 Python tests also pass on `claylien`
+- **48 ERT tests and 41 Python lifecycle tests pass** on macOS; `roost.el`
+  byte-compiles without warnings. The Python tests also pass on `claylien`
   (Ubuntu, Python 3.13.7, tmux 3.7c) in a temporary directory and socket.
 - New coverage: unretirable records (failed spawn, detached primary checkout,
   worktree and branch removed by hand) and `forget`; live panes restoring a
