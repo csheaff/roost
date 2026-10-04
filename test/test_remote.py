@@ -87,6 +87,9 @@ class Lifecycle(unittest.TestCase):
         self.wait(task, "permission")
         self.assertFalse(self.request("send", id=task["id"], text="yes")["ok"])
         self.assertFalse(self.request("retire", id=task["id"])["ok"])
+        # Declining in the terminal reports no event; the user can confirm a send.
+        self.assertTrue(self.request("send", id=task["id"], text="do this instead", force=True)["ok"])
+        self.wait(task, "ready")
         store = roost.Store(str(self.state))
         roost.update_hook(store, task["id"], dict(hook_event_name="Stop"))
         self.assertEqual(store.read(task["id"])["status"], "ready")

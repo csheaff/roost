@@ -412,10 +412,20 @@
    (let (opened)
      (cl-letf (((symbol-function 'roost-open-task)
                 (lambda (task) (setq opened (roost--key task) roost--current-task opened))))
+       ;; The permission request comes first, then the ready task, in turn.
+       (roost-next-waiting) (should (equal (car opened) "b"))
        (roost-next-waiting) (should (equal (car opened) "a"))
        (roost-next-waiting) (should (equal (car opened) "b"))
+       ;; A new permission request jumps ahead of the remaining ready tasks.
+       (roost--cache-task "d" (roost-test--task nil "ready"))
+       (roost-next-waiting) (should (equal (car opened) "a"))
+       (roost--cache-task "c" (roost-test--task nil "permission"))
+       (roost-next-waiting) (should (equal (car opened) "b"))
+       (roost-next-waiting) (should (equal (car opened) "c"))
        (puthash "a" "offline" roost--errors)
-       (roost-next-waiting) (should (equal (car opened) "b"))))))
+       (puthash "b" "offline" roost--errors)
+       (puthash "c" "offline" roost--errors)
+       (roost-next-waiting) (should (equal (car opened) "d"))))))
 
 (ert-deftest roost-background-refresh-never-steals-focus ()
   (roost-test--isolated
@@ -629,6 +639,29 @@
        (roost-forget task)
        (should-not (roost-tasks))
        (should (string-match-p "left in place: branch b" (car messages)))))))
+
+(ert-deftest roost-send-confirms-before-pasting-into-a-possible-permission-prompt ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (roost-test--task nil "permission"))) sent asked)
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host _action params &rest _) (setq sent params)))
+               ((symbol-function 'yes-or-no-p) (lambda (prompt) (setq asked prompt) nil)))
+       (should-error (roost-send task "hello") :type 'user-error)
+       (should (string-match-p "asking for permission" asked))
+       (should-not sent))
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host _action params &rest _) (setq sent params)))
+               ((symbol-function 'yes-or-no-p) (lambda (_) t)))
+       (roost-send task "hello")
+       (should (eq (alist-get 'force sent) t)))
+     (setf (alist-get 'status task) "ready")
+     (setq sent nil asked nil)
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host _action params &rest _) (setq sent params)))
+               ((symbol-function 'yes-or-no-p) (lambda (prompt) (setq asked prompt) t)))
+       (roost-send task "hello")
+       (should-not asked)
+       (should-not (assq 'force sent))))))
 
 (ert-deftest roost-send-region-reports-the-last-selected-line ()
   (roost-test--isolated

@@ -546,11 +546,14 @@ def inspect(store, task):
     return task
 
 
-def send(task, text):
+def send(task, text, force=False):
     pane = owned_pane(task, inventory_for(task))
     if not pane or pane["dead"]:
         raise RoostError("The agent is not running; resume the task first")
-    if task["status"] in ("starting", "permission"):
+    # A paste could answer a startup or permission menu. The status can lag
+    # (agents report no event after a declined permission), so the client
+    # may confirm with the user and force the send.
+    if task["status"] in ("starting", "permission") and not force:
         raise RoostError("Open the task to finish startup or answer its permission prompt")
     if not isinstance(text, str) or not text.strip():
         raise RoostError("Empty prompt")
@@ -761,7 +764,7 @@ def runner(root, task_id, run_id, resume_conversation=False):
 TASK_ACTIONS = {
     "resume": lambda store, task, request: resume(store, task),
     "stop": lambda store, task, request: stop(store, task),
-    "send": lambda store, task, request: send(task, request["text"]),
+    "send": lambda store, task, request: send(task, request["text"], request.get("force") is True),
     "shell": lambda store, task, request: shell(store, task),
     "inspect": lambda store, task, request: inspect(store, task),
     "retire": lambda store, task, request: retire(store, task),

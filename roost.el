@@ -1072,11 +1072,22 @@ A mouse click shows a menu at the pointer; the keyboard uses the minibuffer."
 
 ;;;###autoload
 (defun roost-send (&optional task text)
-  "Send TEXT as a literal pasted prompt to TASK's agent pane."
+  "Send TEXT as a literal pasted prompt to TASK's agent pane.
+While Roost last saw a startup or permission prompt, ask first: the
+paste could answer that menu, but agents report no event when a
+permission is declined in the terminal."
   (interactive)
-  (setq task (roost--choose task)
-        text (or text (read-string (format "Send to %s: " (roost--field task 'name)))))
-  (roost--act task "send" (list (cons 'text text))))
+  (setq task (roost--choose task))
+  (let* ((status (roost--field task 'status))
+         (force (when (member status '("starting" "permission"))
+                  (or (yes-or-no-p
+                       (format "Roost last saw %s %s. Send only if you have answered it in the terminal. Send anyway? "
+                               (roost--field task 'name)
+                               (if (equal status "starting") "starting up" "asking for permission")))
+                      (user-error "Open the task with RET to answer it")))))
+    (setq text (or text (read-string (format "Send to %s: " (roost--field task 'name)))))
+    (roost--act task "send" (append (list (cons 'text text))
+                                    (when force (list (cons 'force t)))))))
 
 ;;;###autoload
 (defun roost-send-region (start end)
@@ -1221,16 +1232,23 @@ A running agent must be stopped first."
 
 ;;;###autoload
 (defun roost-next-waiting ()
-  "Cycle through live tasks whose agent session needs attention."
+  "Open the next task whose agent is waiting for you.
+Permission requests come first, since they block their agent; then
+tasks ready for a prompt, in turn."
   (interactive)
-  (let* ((waiting (seq-filter (lambda (task)
-                                (and (not (gethash (roost--field task 'host) roost--errors))
-                                     (member (roost--field task 'status) '("ready" "permission"))))
-                              (roost-tasks)))
+  (let* ((waiting (sort (seq-filter (lambda (task)
+                                      (member (roost--display-status task) '("permission" "ready")))
+                                    (roost-tasks))
+                        (lambda (a b) (< (roost--attention-rank a) (roost--attention-rank b)))))
          (keys (mapcar #'roost--key waiting))
-         (tail (member roost--current-task keys))
-         (key (or (cadr tail) (car keys))))
-    (unless key (user-error "No live tasks need attention"))
+         (blocked (seq-find (lambda (task)
+                              (and (equal (roost--field task 'status) "permission")
+                                   (not (equal (roost--key task) roost--current-task))))
+                            waiting))
+         (key (if blocked
+                  (roost--key blocked)
+                (or (cadr (member roost--current-task keys)) (car keys)))))
+    (unless key (user-error "No tasks are waiting for you"))
     (roost-open-task (gethash key roost--tasks))))
 
 (defun roost--project-name (task)
