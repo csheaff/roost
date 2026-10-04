@@ -148,8 +148,9 @@ Magit is optional (review falls back to Dired).
   state. tmux-control starts agent terminals in insert state, so typing reaches
   the agent; ESC returns to normal state.
 - **Other modal setups** (Meow, xah-fly-keys): put `roost-dashboard-mode`,
-  `roost-task-info-mode` and `roost-compose-mode` in your insert or Emacs-state
-  list so their single keys work.
+  `roost-task-info-mode` and `roost-doctor-mode`, and the drafts
+  `roost-compose-mode`, `roost-send-mode` and `roost-pr-mode`, in your insert or
+  Emacs-state list so their keys work.
 - **Completion.** Prompts use `completing-read`, so Vertico, Ivy, Helm and the
   default UI all work.
 
@@ -180,10 +181,11 @@ Magit is optional (review falls back to Dired).
 
 `j`/`k` or `TAB` move between tasks; `mouse-1` opens one and `mouse-3` shows its actions.
 Outside the dashboard, commands act on the task of the current terminal,
-worktree file or perspective, or ask. Bind the menu globally to reach Roost from
-anywhere, for example `(keymap-global-set "C-c r" #'roost-dispatch)`. Also available: `roost-switch-task`
-(searchable, waiting tasks first), `roost-send-region` (sends the selection
-with its file and lines), and `roost-watch-mode` (background polling).
+worktree file, Org entry or perspective, or ask. Bind the menu globally to reach
+Roost from anywhere, for example `(keymap-global-set "C-c r" #'roost-dispatch)`.
+Also available: `roost-switch-task` (searchable, waiting tasks first),
+`roost-send-region` (sends the selection with its file and lines), and
+`roost-watch-mode` (background polling).
 
 In the new task draft: `C-c C-c` creates, `C-c C-k` cancels, and `C-c C-p`,
 `C-c C-a`, `C-c C-b` and `C-c C-n` change the project, agent, starting ref and
@@ -243,7 +245,7 @@ never changes your global agent settings or answers prompts.
 | `starting` | Startup prompts may be showing; Codex reports status from its first turn |
 | `exited`, `failed` | The agent exited normally, or the CLI failed; `RET` shows its last output |
 | `crashed` | The agent's tmux pane disappeared |
-| `stopped` | Stopped with `k`; `s` resumes the conversation |
+| `stopped` | Stopped with `K`; `s` resumes the conversation |
 
 A task's identity is its host and ID. A per-pane ownership tag keeps Roost from
 steering or killing an unrelated pane after a tmux restart, and hooks from an
