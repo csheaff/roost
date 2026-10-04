@@ -34,8 +34,8 @@ Both recipes were built with MELPA's `package-build`. The Roost archive holds
 | `package-lint` | Clean since 0.7.1 ([tmux-control#153](https://github.com/csheaff/tmux-control/pull/153) moved `C-c x`, a key reserved for users, to `C-c C-x`) | Only "tmux-control is not installable", which clears once tmux-control is on MELPA |
 | Byte compilation | No warnings | No warnings |
 | `checkdoc` | 42 advisory notes since [tmux-control#154](https://github.com/csheaff/tmux-control/pull/154): messages starting with "tmux-control:", keys written into docstrings, and wording-mood suggestions | 3, all false positives |
-| melpazoid | Top-level `advice-add` on Eat (5 sites) and hooks added at load (2), which are how tmux-control integrates with Eat; expect a question about `unload-feature` | Clean apart from the dependency note |
-| Tests | 303 ERT, source and compiled, in CI | 88 ERT and 67 Python lifecycle tests, in CI on Emacs 29.1 and 30.1 |
+| melpazoid | Since 0.7.2 ([tmux-control#155](https://github.com/csheaff/tmux-control/pull/155)), no hooks are added at load, and `tmux-control-unload-function` undoes the five top-level `advice-add` calls on Eat, which melpazoid still lists because its check is a pattern | Clean apart from the dependency note |
+| Tests | 304 ERT, source and compiled, and 32 live integration scenarios, in CI | 88 ERT and 67 Python lifecycle tests, in CI on Emacs 29.1 and 30.1 |
 
 MELPA's reviewers run [melpazoid](https://github.com/riscy/melpazoid); its
 Emacs Lisp checks were run locally for the table above. Run it again before
