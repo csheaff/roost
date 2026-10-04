@@ -1,261 +1,214 @@
 # Roost
 
-Coding agent tasks in Emacs, locally or over SSH. Claude Code, Codex CLI and
-Pi keep their own terminal interfaces. Roost joins Git worktrees, persistent tmux windows,
-[tmux-control](https://github.com/csheaff/tmux-control), TRAMP, Magit, and
-[perspective.el](https://github.com/nex3/perspective-el) into one task workflow.
+Run a fleet of coding agents from Emacs, on your machine or on remote hosts
+over SSH. Each task gets its own Git worktree, topic branch and persistent tmux
+terminal running the agent's real CLI: [Claude Code](https://claude.com/claude-code),
+[Codex](https://github.com/openai/codex) or [Pi](https://github.com/earendil-works/pi).
+Roost tells you which agents need you, and gets the work reviewed and merged
+with the Emacs tools you already use.
 
-## A task in Emacs
+![The Roost dashboard above Claude Code asking for permission in a remote task](docs/images/roost-dashboard.jpg)
 
-The agent and a reusable shell share the task's worktree. Run your own tests beside
-the agent, then review and commit with Magit.
+*Four tasks in two projects on two hosts. Below the dashboard is the selected
+task's actual Claude Code terminal, waiting for an answer.*
 
-![Claude Code above and passing tests in the task shell below](docs/images/roost-workspace.jpg)
+- **Agents outlive Emacs.** They run in tmux on the task's host. Close Emacs, lose
+  Wi‑Fi or sleep the laptop; reopen Roost and pick up where they are.
+- **Native terminals, not a wrapper.** [tmux-control](https://github.com/csheaff/tmux-control)
+  renders each agent's own interface, so permission prompts, diffs and slash
+  commands work exactly as in a terminal.
+- **One view across hosts.** Tasks are grouped by project, with what needs you
+  first, Git changes, and commits ahead of or behind the branch you merge into.
+- **Emacs does the rest.** Magit and Dired over TRAMP, a shell beside each agent,
+  a perspective per task.
+- **Finishing never loses work.** Merging refuses uncommitted files and keeps the
+  task on conflicts. Roost never force-removes, stages or commits for you.
 
-`roost-review` opens Magit in that worktree. Expand the actual Git diff to review
-the implementation and tests before committing.
+## A day with Roost
 
-![Magit reviewing the greeting implementation and regression tests](docs/images/roost-review.jpg)
+**Start a task.** `c` opens a draft. The project comes from where you are, or from
+projects you've used. Click a field or use its key to change it, write the prompt
+(it can span lines), and press `C-c C-c`. Roost creates the branch and worktree,
+starts the agent in tmux, and opens its terminal.
 
-`roost-task-info` keeps the project, starting branch, integration target, and
-review/finish actions together.
+![Drafting a new task beside the dashboard](docs/images/roost-new-task.jpg)
 
-![Roost task details with the worktree, branches, and review and finish actions](docs/images/roost-task-info.jpg)
+**Let them work.** Start more tasks; each is independent. Roost watches the
+agents' own lifecycle hooks and notifies you when one finishes or asks for
+permission. `n` jumps to the next agent waiting for you, permission requests
+first. Answer it in the terminal, then `n` again.
 
-These captures show a disposable `hello-service` project running on an SSH host
-in GUI Emacs. See [the demo walkthrough](docs/demo.md) for the commands and
-capture details. The font, theme and keybindings come from the user's Emacs
-configuration; Roost supplies the task workflow.
+**Check the work yourself.** `t` opens a shell beside the agent, in the same
+worktree. Run the tests, start the app, poke at it.
 
-## The workflow
+![Claude Code's summary beside the task shell where the tests were rerun](docs/images/roost-workspace.jpg)
 
-1. Run `M-x roost-new-task` from a project or choose its directory. A TRAMP path
-   such as `/rpc:claylien:/home/clay/code/project/` creates the task on that host.
-2. Give it a name, choose Claude, Codex or Pi, select a starting Git ref (leave empty for the primary checkout's
-   current branch), and optional initial prompt. New tasks are independent even
-   when created from another task's worktree. A prefix argument defaults to
-   forking the current task's committed `HEAD` instead.
-   Roost creates a topic branch, worktree, and tmux window, then opens the actual
-   agent terminal. Answer startup and permission prompts there as usual.
-3. Open `roost-status` to see tasks across hosts. `RET` restores a task's terminal
-   and perspective; arrange code and review buffers alongside it as you prefer.
-   `roost-next-waiting` cycles through sessions ready for input or permission.
-4. Use `roost-review` for Magit in the worktree, or `roost-diff` for tracked changes
-   against the starting commit. Remote files use your configured TRAMP method.
-   `project.el` and Projectile can use the worktree's normal project directory.
-   `roost-shell` opens a reusable shell beside the agent, in the same worktree;
-   `roost-files` browses it. `roost-task-info` shows the project, starting branch,
-   integration target, and review/finish actions.
-5. Review and commit in Magit, then `roost-merge-retire` to merge into the recorded
-   integration branch in the primary checkout and remove the task's resources.
-   Or merge manually and run `roost-retire`.
+**Review in Magit.** `r` opens Magit on the task's worktree, through TRAMP for
+remote tasks. Stage, edit and commit as usual.
 
-Closing Emacs or losing SSH leaves the agent running in tmux. Reopen Roost and
-select the task to reconnect. `roost-stop` stops its window and processes while
-keeping the worktree, branch, and conversation. `roost-resume` starts a new
-window with the recorded conversation: a session ID for Claude/Codex, or a
-session file for Pi. If startup never recorded a conversation, resume starts
-a new one instead.
+![Magit showing the agent's change in a remote worktree](docs/images/roost-review.jpg)
+
+**Catch up and finish.** When other tasks land first, the dashboard shows the
+task falling behind (`↓2`). `u` merges the integration branch into the task's
+own worktree. If that conflicts, Roost offers to have the task's agent resolve
+it, run the tests and commit. Then `m` merges the task into the branch it
+started from and removes its worktree, branch and window.
+
+![A task's prompt, changes, actions and details](docs/images/roost-task-panel.jpg)
 
 ## Install
 
-Requirements: Emacs 29.1+, tmux-control, and, on each task host, Python 3.9+, Git,
-tmux, and an installed, authenticated CLI for the selected agent. Python uses only its
-standard library. Use Codex CLI 0.160.0 or newer for its lifecycle hooks;
-Pi was checked with 0.78.1. Remote hosts need key/agent-based SSH authentication; use SSH
-config aliases for ports, ProxyJump, or other connection settings.
-
-Keep `scripts/roost_remote.py` beside `roost.el`; Roost installs a versioned copy
-on each host automatically. Existing tasks keep their original helper until
-resumed, so upgrading Roost does not change a running agent process.
+Requirements: Emacs 29.1+ and [tmux-control](https://github.com/csheaff/tmux-control).
+Each task host needs Python 3.9+, Git, tmux, and an installed, signed-in agent
+CLI (Codex 0.160.0 or newer for its lifecycle hooks; Pi was checked with
+0.78.1). Remote hosts need key- or agent-based SSH; use SSH config aliases for
+ports and jump hosts.
 
 ```elisp
 (use-package roost
-  :ensure nil
   :load-path "~/code/roost"
-  :commands (roost-status roost-new-task roost-switch-task)
+  :commands (roost-status roost-new-task roost-switch-task roost-next-waiting)
   :custom
-  (roost-hosts '("claylien" nil))) ; nil = local
+  (roost-hosts '(nil "devbox")))   ; nil is this machine
 ```
 
-For Straight, include the helper directory in the package recipe:
+With Straight, include the helper script:
 
 ```elisp
 :straight (roost :type git :host github :repo "csheaff/roost"
                  :files ("roost.el" "scripts"))
 ```
 
-Magit is optional (`roost-review` falls back to Dired). If perspective.el is
-active, each task gets a separate saved window arrangement. Without it, task
-switching still opens the correct terminal. Other perspective packages do not
-provide the same API; they are not integrated.
+Roost copies `scripts/roost_remote.py` to each host on first use, and again
+whenever it changes. Running tasks keep the helper they started with. Magit is
+optional (review falls back to Dired), as is
+[perspective.el](https://github.com/nex3/perspective-el).
 
 ## Commands
 
-| Dashboard key | Command | Action |
-| --- | --- | --- |
-| `RET` | `roost-open-task` | Open selected task |
-| `c` / `d` | `roost-new-task` | Create a worktree and agent window |
-| | `roost-switch-task` | Choose a task across hosts |
-| `n` | `roost-next-waiting` | Cycle through ready/permission sessions |
-| `r` | `roost-review` | Magit status in the task's worktree |
-| `t` | `roost-shell` | Reuse a worktree shell beside the agent |
-| `f` | `roost-files` | Browse the worktree with Dired |
-| `?` / `i` | `roost-task-info` | Task details and review/finish actions |
-| `D` | `roost-diff` | Tracked changes since task creation |
-| `e` | `roost-send` | Paste a prompt literally, then Enter |
-| | `roost-send-region` | Send selected text with file/line context |
-| `s` | `roost-resume` | Restart a stopped/exited task |
-| `k` | `roost-stop` | Stop the window; retain all work |
-| `x` | `roost-retire` | Remove a clean task already merged into its integration branch |
-| `m` | `roost-merge-retire` | Merge committed work, then retire |
-| `g` | `roost-refresh` | Refresh status and Git statistics |
-| | `roost-watch-mode` | Toggle periodic background status refresh |
+`roost-status` opens the dashboard. In it, and in a task's details panel:
 
-The dashboard's `Since` column measures time since the last status event.
-`Changes` is Git's tracked diffstat against the recorded starting commit; inspect
-Magit to see untracked files as well. Background polls skip Git; press `g` for
-fresh statistics. An offline host retains its last known tasks and reports
-`offline`, rather than declaring the agent crashed.
+| Key | Command | |
+| --- | --- | --- |
+| `RET` | `roost-open-task` | Open the task's agent terminal and workspace |
+| `c` | `roost-new-task` | Draft a new task (`C-u` forks the current task's commits) |
+| `n` | `roost-next-waiting` | Next task waiting for you, permission requests first |
+| `t` | `roost-shell` | Shell beside the agent, in the worktree (reused) |
+| `f` | `roost-files` | Dired in the worktree |
+| `r` | `roost-review` | Magit in the worktree |
+| `D` | `roost-diff` | Diff since the task started |
+| `e` | `roost-send` | Paste a prompt into the agent and press Enter |
+| `?` | `roost-task-info` | Prompt, changes, actions and details |
+| `u` | `roost-update` | Merge the integration branch into the task |
+| `m` | `roost-merge-retire` | Merge committed work, then retire the task |
+| `x` | `roost-retire` | Retire a task that is already merged or has no commits |
+| `X` | `roost-forget` | Drop Roost's record; keep the worktree and branch |
+| `k` | `roost-stop` | Stop the agent's window; keep all work |
+| `s` | `roost-resume` | Restart a stopped task in its recorded conversation |
+| `g` | `roost-refresh` | Refresh status and Git statistics |
+
+`TAB` moves between tasks; `mouse-1` opens one and `mouse-3` shows its actions.
+Outside the dashboard, commands act on the task of the current terminal,
+worktree file or perspective, or ask. Also available: `roost-switch-task`
+(searchable, waiting tasks first), `roost-send-region` (sends the selection
+with its file and lines), and `roost-watch-mode` (background polling).
+
+In the new task draft: `C-c C-c` creates, `C-c C-k` cancels, and `C-c C-p`,
+`C-c C-a`, `C-c C-b` and `C-c C-n` change the project, agent, starting ref and
+name. An empty name is derived from the prompt.
+
+With modal editing (Evil, Meow, xah-fly-keys), use insert or Emacs state in
+`roost-dashboard-mode` and `roost-task-info-mode` so their single keys work.
 
 ## Configuration
 
-- `roost-hosts`: hosts monitored by the dashboard. Hosts used to create tasks are
-  also remembered locally in `roost-hosts-file` across Emacs restarts.
-- `roost-state-directory`: `~/.local/share/roost` on each host, containing private
-  task records, per-task hook settings, versioned helpers, and worktrees.
-- `roost-socket-name`: defaults to tmux-control's socket, normally `main`.
-  Remote operations also use `tmux-control-remote-tmux-socket-setup` and
-  `tmux-control-ssh-options`, so the terminal and task manager see the same server.
-- `roost-session-name`: nil creates one tmux session per repository, with a general
-  shell window and one window per task. Set a name to use an existing session
-  instead; a missing session is created. Renaming sessions or renumbering windows
-  does not change task identity.
-- `roost-claude-command`: executable plus extra arguments, e.g.
-  `'("claude" "--model" "sonnet")`. Common CLI installation directories are added
-  to the runner's PATH. Roost owns worktree, resume, and hook flags; conflicting
-  CLI options are rejected. Claude's normal settings and approval mode still apply.
-- `roost-setup-command`: optional shell command run once in a new worktree before
-  the agent. It can be directory-local, e.g. `npm ci`; it does not rerun on resume.
-- `roost-use-perspectives`, `roost-notify`, `roost-watch-interval` (3 seconds), and
-  `roost-request-timeout` (60 seconds) customize the Emacs integration.
+- `roost-hosts`: hosts the dashboard watches (`nil` is local). Hosts and projects
+  you create tasks in are remembered in `roost-hosts-file` and `roost-projects-file`.
+- `roost-default-agent`, `roost-claude-command`, `roost-agent-commands`: which
+  agent new tasks use, and each CLI with extra arguments, such as
+  `'("claude" "--model" "sonnet")`. Roost owns worktree, resume and hook flags and
+  rejects conflicting ones.
+- `roost-setup-command`: a shell command run once in a new worktree before the
+  agent starts, such as `npm ci`. Set it in `.dir-locals.el` per project:
+  `((nil . ((roost-setup-command . "npm ci"))))`.
+- `roost-branch-prefix`: topic branches are `PREFIX<name>-<id>`; default `roost/`.
+- `roost-state-directory`: where each host keeps task records, the helper and
+  worktrees; default `~/.local/share/roost`.
+- `roost-socket-name`, `roost-session-name`: tmux socket (default tmux-control's)
+  and session (default one per repository).
+- `roost-use-perspectives`, `roost-compact-mode-line`: one perspective per task,
+  shown as a single `Roost: host/task +N` entry in the perspective bar.
+- `roost-notify`, `roost-notify-function`, `roost-watch-interval` (3 s),
+  `roost-request-timeout` (60 s).
 
-For a project setup command:
+Each poll is one SSH command per host; with OpenSSH connection sharing
+(`ControlMaster auto` and `ControlPersist`) these are cheap. Unreachable hosts are
+retried with backoff and keep their last known tasks, marked unreachable.
 
-```elisp
-;; .dir-locals.el
-((nil . ((roost-setup-command . "npm ci"))))
-```
+## How it works
 
-When creating from an existing task worktree, an empty starting ref uses the
-primary checkout's current branch. Explicit `HEAD` uses the source worktree's
-current committed state. A prefix argument defaults the source directory to the
-current task's worktree and the starting ref to `HEAD`. Dirty files are never
-copied. The new task belongs to the original repository and integrates into its
-primary checkout.
+Emacs talks to a small standard-library Python helper on each host, over SSH
+with JSON on stdin and stdout. All requests are asynchronous; the dashboard
+draws from a local cache. The helper creates worktrees, starts each agent under
+a runner in its own tmux window, and records the task.
 
-Task commands infer context from the selected dashboard row, tmux pane, worktree
-directory, or current perspective. Switching perspectives manually follows the
-task too. An unrelated perspective does not silently target the last task.
-Task panels retain their own identity even when opened in another workspace.
+Status comes from each agent's native lifecycle events: Claude Code hooks passed
+with `--settings`, Codex hooks passed per invocation, and a Pi extension. Roost
+never changes your global agent settings or answers prompts.
 
-The perspective bar groups task workspaces into one clickable label, such as
-`Roost: claylien/trim-greeting +39`, rather than listing every task. Click it or
-use `roost-switch-task` for the searchable task picker; use `roost-status` for
-the dashboard. Ordinary perspectives retain their labels. Long task names are
-shortened in the bar, with the full name in its tooltip and picker. Set
-`roost-compact-mode-line` to nil to use Perspective's original display.
+| Status | Meaning |
+| --- | --- |
+| `running` | The agent is working on a prompt |
+| `permission` | The agent asked for permission; answer it in the terminal |
+| `ready` | The agent is waiting for your next prompt. Not "reviewed" or "done" |
+| `background` | Claude background work or Pi queued messages remain |
+| `starting` | Startup prompts may be showing; Codex reports status from its first turn |
+| `exited`, `failed` | The agent exited normally, or the CLI failed; `RET` shows its last output |
+| `crashed` | The agent's tmux pane disappeared |
+| `stopped` | Stopped with `k`; `s` resumes the conversation |
 
-Setup is an ordinary project shell command. Review it when Emacs asks about
-local variables, and keep Gitignored dependencies out of commits.
+A task's identity is its host and ID. A per-pane ownership tag keeps Roost from
+steering or killing an unrelated pane after a tmux restart, and hooks from an
+earlier run cannot overwrite a resumed one. Merging needs both checkouts clean
+and the primary checkout on the task's integration branch. A conflicting merge
+is aborted and leaves nothing changed. Branches are deleted only if they still
+point at the commit Roost verified.
 
-## Lifecycle and review
+Things to know:
 
-Roost observes each agent's native lifecycle events:
+- Agents report no event when you decline a permission prompt, so a task can
+  show `permission` while the agent waits for a prompt. `e` asks before sending
+  in that state. Likewise, an approved command shows `permission` until it finishes.
+- Claude and Codex each ask once per repository to trust it; every task worktree
+  of that repository is trusted after that.
+- Codex asks you to review Roost's observer hooks the first time. The hook
+  command stays the same across Roost upgrades. Codex's sandbox keeps a
+  worktree's shared `.git` read-only, so it asks before committing.
+- Pi is experimental: launch, events and resume were checked, but no full model run.
 
-| Agent | Status and resume integration | Native validation |
-| --- | --- | --- |
-| Claude Code | Per-task `--settings` hooks; conversation ID | Full edit, approval, review, resume and merge workflow |
-| Codex CLI | Per-invocation hooks; conversation ID | Codex 0.160.0; see [validation notes](docs/validation.md) |
-| Pi (experimental) | Per-invocation extension; exact session file | Pi 0.78.1; launch/events checked, model authentication required for a full run |
+## Upgrading
 
-[Codex hooks](https://learn.chatgpt.com/docs/hooks) require its normal trust
-review. Review Roost's observer command in the terminal or `/hooks` and trust
-it to enable status tracking. A helper upgrade changes that command and needs
-review again. Codex 0.160.0 emits its start event on the first submitted turn,
-including after resume. Until then Roost shows `starting`: enter the first prompt
-in Codex's terminal (or supply one during task creation). After that, normal
-status tracking and `roost-send` are available. Task details include this hint.
-Older CLIs without these lifecycle hooks are not supported.
-Roost does not edit global agent settings or approve tool calls.
+0.5 defaults new branches to `roost/…` (formerly `codex/roost/…`; existing tasks
+keep theirs). It replaces the minibuffer prompts of `roost-new-task` with the
+draft buffer; called from Lisp with arguments, it still creates the task
+directly. Retired task records are now deleted. Codex tasks started after
+upgrading ask for one final hook review.
 
-Pi's observer and conversations live in Roost's state directory, outside the
-worktree. Existing Pi extensions remain active. Configure and authenticate the
-model in Pi normally; Roost does not borrow Claude's credentials. Pi exposes
-turn start/end events but has no universal permission event for third-party
-approval extensions: answer those prompts directly in its terminal.
+0.4 added Codex and Pi. 0.3 replaced the 0.2 Pi orchestrator registry; old
+aliases `roost-list`, `roost-kill` and `roost-dispatch` still work.
 
-`running` means the agent submitted a prompt or is using tools. `ready` means it
-started or finished a response; it does **not** mean the task is reviewed or
-complete. `permission` needs a terminal answer; `roost-send` refuses to paste
-into startup and detected permission prompts. Claude background work and Pi
-queued messages report `background`. `failed`, `exited`, and `crashed`
-distinguish CLI failure, normal exit, and a missing/dead tmux pane. Disabled or
-untrusted hooks, and CLI failures that omit turn-end events, can leave finer
-status information stale; the native terminal remains the source of truth.
+## Development
 
-Task identity is `(SSH host, task ID)`. Window/pane IDs and a pane ownership tag
-prevent window renumbering or a restarted server from steering unrelated panes.
-Old hooks cannot overwrite a newer resumed run. SSH requests and polling are
-asynchronous; rendering the dashboard reads a local cache.
+`make test compile` runs the ERT suite, the Python lifecycle tests against real
+Git and isolated tmux sockets (fixture agents drive the actual hook commands,
+without model calls), and a warning-free byte-compile. See
+[validation](docs/validation.md) for the live runs with Claude Code and Codex on
+local and remote hosts, and [the demo notes](docs/demo.md) for how the
+screenshots were made.
 
-Retirement requires both checkouts to be clean, including untracked files, and
-the primary checkout to remain on its recorded integration branch. Roost never
-stages, commits, or force-removes work. Unmerged commits block retirement.
-Merge conflicts abort the merge that Roost started and retain the task. A
-persisted cleanup checkpoint permits retry after interrupted retirement.
-The general shell/session remains available after the last task is retired.
-The supporting task shell belongs to the task window: stopping or retiring the
-task stops that shell too. Opening it again reuses its existing pane, preserving
-shell history and running commands. A stopped task must be resumed first.
-
-## Agent boundary
-
-The host helper's `ClaudeAgent`, `CodexAgent`, and `PiAgent` adapters own command
-validation, launch/resume arguments, and conversion of native events into Roost
-statuses. Git worktrees, tmux ownership, SSH, review and retirement stay outside
-the adapters. A future provider needs those operations plus CLI integration
-validation. Changing a command executable alone does not provide integration.
-Older records without an agent field or generic conversation ID still resume
-through their recorded Claude conversation.
-
-## Inspiration
-
-[Orca](https://www.onorca.dev/) helped shape the workspace workflow: give each
-task its own worktree, keep a terminal nearby, and review the result before
-finishing. Those are general Git and terminal practices. Roost brings them
-together using existing Emacs tools and the agent's own CLI.
-See the [hands-on comparison](docs/orca-comparison.md) for the workflow details
-that informed this version.
-
-## Migration from 0.2
-
-0.3 owns Claude task creation and its registry. It no longer reads
-`.pi/side-agents/registry.json` or dispatches `/agent` to a Pi orchestrator.
-Existing Pi tasks are untouched and are not imported. The old registry,
-agent-session, and status-glyph customization variables no longer apply.
-`roost-list` aliases `roost-switch-task`; `roost-kill` aliases `roost-stop`;
-`roost-dispatch` aliases `roost-new-task` with its new arguments and prompts.
-
-0.4 adds independent Codex and Pi tasks to that lifecycle. Existing 0.3 Claude
-tasks and `roost-claude-command` continue working; Claude remains the default.
-
-## Validation
-
-Run `make test compile`. Tests use isolated tmux sockets and temporary Git
-repositories; agent fixtures exercise real observer commands without API
-calls. See [validation notes](docs/validation.md) for the checked remote and
-native Emacs workflow. This remains experimental software.
+[Orca](https://www.onorca.dev/) shaped the workflow: a worktree per task, a
+terminal nearby, review before finishing. See the
+[comparison](docs/orca-comparison.md).
 
 ## License
 

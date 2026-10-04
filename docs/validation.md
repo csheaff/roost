@@ -1,6 +1,68 @@
-# Validation — 2026-10-03
+# Validation
 
-## Automated checks
+## Review and dogfooding pass — 2026-10-04
+
+### Automated checks
+
+- **47 ERT tests and 39 Python lifecycle tests pass** on macOS; `roost.el`
+  byte-compiles without warnings. The 39 Python tests also pass on `claylien`
+  (Ubuntu, Python 3.13.7, tmux 3.7c) in a temporary directory and socket.
+- New coverage: unretirable records (failed spawn, detached primary checkout,
+  worktree and branch removed by hand) and `forget`; live panes restoring a
+  `crashed` task and blocking retirement; unreadable tmux versus no server;
+  opening a dead pane; Git statistics running outside the registry lock;
+  branch prefixes; null and legacy `{}` request values; setup rerun after a
+  failed first run; inherited PATH order; legacy retired records; updating from
+  the integration branch with and without conflicts; conflict messages; the
+  stable Codex hook command; a confirmed send after a permission prompt.
+- Emacs-side coverage: JSON null encoding and repair of hosts files written as
+  `{}`; queued manual refresh and backoff; the grouped dashboard (summary,
+  ordering, point preservation, narrow windows, empty state); the task picker;
+  the task panel; the new task draft (defaults, forks, derived names,
+  read-only fields, failed creation keeping the draft).
+
+### Live use
+
+A separate GUI Emacs with the author's configuration used an isolated state
+directory and tmux socket (`roost-qa`), so the existing user task and socket
+were untouched. Two disposable projects were used: `ledger` on `claylien` and
+`notes` on the Mac. Claude Code 2.1.289 ran Haiku 4.5; Codex 0.160.0 ran
+`gpt-6-luna`.
+
+1. Created tasks through the old prompts, then through the new draft buffer,
+   locally and over TRAMP. Claude and Codex trust prompts appear once per
+   repository: both record trust for the primary checkout.
+2. Watched permission requests, `ready` and `running` in the dashboard and
+   notifications; cycled with `n`; answered prompts in the native terminals.
+3. Restarted Emacs entirely. Reopening the dashboard found all three running
+   tasks on both hosts and reconnected to a pending permission prompt.
+4. Ran tests independently in the task shell, reviewed and committed in Magit
+   over TRAMP and locally, and merged with `m`.
+5. Two tasks edited the same files. Merging the second reported the conflicting
+   files and changed nothing. `u` merged `main` into the task's worktree, and
+   the agent resolved the conflicts, ran the tests and committed when asked
+   (Claude and Codex). Both merges then succeeded. The demo's `main` ended with
+   CSV import fixes, Decimal totals and JSON output from three agents.
+6. Declining a Claude permission emits no hook; the task stayed `permission`
+   for over two minutes while Claude waited. A confirmed `e` delivered the next
+   prompt and the task returned to `ready`.
+
+Findings that changed the code are described in the commit history: a
+five-prompt creation flow, a dashboard that repeated columns and colored
+permission like ready, a task panel without the prompt or changes, `n` not
+favoring blocked agents, the stale permission dead end, conflicts without a
+next step, and Codex re-reviewing hooks after every upgrade.
+
+One attempted fix was reverted: passing the shared `.git` to Codex with
+`--add-dir` did not let it commit, because its sandbox keeps `.git`
+directories read-only. Codex asks before committing in a worktree.
+
+## Earlier validation — 2026-10-03
+
+The record below predates the 0.5 changes; commands such as `SPC r c` refer to
+the author's bindings and the old minibuffer creation prompts.
+
+### Automated checks
 
 - Automated checks on macOS: **30 ERT tests and 24 Python lifecycle tests pass**;
   `roost.el` byte-compiles without warnings.
@@ -36,7 +98,7 @@ create/send/shell/stop/resume/retire, exact conversation identity, old-run guard
 reserved CLI flags, literal initial prompts, Codex deferred startup and approval
 blocking, Pi queued work, and failure while writing observer files.
 
-## Actual Claude and native Emacs
+### Actual Claude and native Emacs
 
 Used a disposable Git repository, state directory, and separate tmux socket on
 `claylien`; no existing coding sessions or repositories were used for QA.
@@ -77,7 +139,7 @@ was transferred over SSH with a SHA256 check and atomic installation at the
 package's expected cache path. Remote Magit then worked normally. No TRAMP
 method or global connection settings were changed.
 
-## Developer workflow after the Orca comparison
+### Developer workflow after the Orca comparison
 
 Used a fresh disposable remote project with `greet.py` and a unittest baseline.
 This run used the normal Roost registry and socket alongside the existing user
@@ -118,7 +180,7 @@ workspace creation, a terminal split in its worktree, a file change and the real
 Source Control diff. Its project link was removed afterward and only its owned
 fixture data was cleaned up. See [the comparison](orca-comparison.md).
 
-## Compact perspective bar and README captures
+### Compact perspective bar and README captures
 
 Used a separate temporary Emacs frame with a real remote `trim-greeting` task
 to capture Claude's response, independently passing shell tests, the expanded
@@ -138,7 +200,7 @@ click-and-select interaction was verified in GUI Emacs. Temporary perspectives,
 the demo frame, task and fixture were removed afterward; the original user
 workspace and agent were retained.
 
-## Codex and Pi adapters
+### Codex and Pi adapters
 
 Used another disposable remote `hello-service` project, an isolated registry and
 socket, and a separate GUI Emacs frame. Both agents had independent worktrees
@@ -191,7 +253,7 @@ arrangements were adjusted during review; physical resize/input behavior is
 subject to the limits below. Both test tasks were retired, the isolated server
 and fixture removed, and the original Emacs state and user agent restored.
 
-## Limits
+### Limits
 
 Physical laptop/network loss and restarting the entire GUI Emacs process were
 not simulated. Client disconnect/reconnect, cache reconstruction, and persistent

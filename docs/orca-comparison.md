@@ -38,13 +38,26 @@ visible in Emacs. Tiling is now explicit and idempotent. It also found that
 process callbacks could restore focus after selecting the shell. Shell focus is
 applied after tiling settles, with guards for subsequent navigation.
 
-Claude stays the supported provider. A small host-side adapter owns Claude's
-command validation, launch/resume arguments and hook interpretation, while Git,
-SSH and tmux lifecycle operations stay outside it. Older Claude records still
-resume. No untested provider selector was added.
+Each agent (Claude Code, Codex and the experimental Pi) has a small host-side
+adapter for command validation, launch/resume arguments and hook
+interpretation, while Git, SSH and tmux lifecycle operations stay outside it.
+Older Claude records still resume.
 
-Mobile access, embedded browsers, issue imports, workflow boards, sparse
-checkouts and extra providers remain outside this pass. Emacs already supplies
+## Later changes from using Roost daily
+
+A review pass on 2026-10-04 used Roost for real parallel work and brought it
+closer to Orca's surfaces where that helped:
+
+| Orca | Roost |
+| --- | --- |
+| A creation dialog with project, base branch and prompt | A draft buffer with clickable fields, known projects and a multi-line prompt |
+| A sidebar of workspaces with agent status | A dashboard grouped by host and project, with a status summary and Git changes |
+| Base branch drift | Commits ahead and behind the integration branch; `u` merges it into the task, and the agent can resolve conflicts |
+| Delete, with an explicit force waiver | Retire for finished work; forget drops only Roost's record and never touches Git |
+| Branch prefix setting | `roost-branch-prefix` |
+
+Mobile access, embedded browsers, issue imports, workflow boards, pull request
+creation and sparse checkouts remain outside Roost. Emacs already supplies
 file editing, project navigation and Git review. Roost's job is to make those
 tools belong to the same durable task.
 
