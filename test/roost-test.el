@@ -114,8 +114,31 @@
    (roost--apply-snapshot "dev" (list (append '((lastMessage . "Newer")) (roost-test--task))))
    (should (equal (roost--field (car (roost-tasks)) 'lastMessage) "Newer"))))
 
+(defmacro roost-test--without-inspect (&rest body)
+  "Run BODY with notification inspections failing at once."
+  `(cl-letf (((symbol-function 'roost--request)
+              (lambda (_host _action _params _success failure) (funcall failure "offline"))))
+     ,@body))
+
+(ert-deftest roost-notifications-say-what-the-agent-finished ()
+  (roost-test--isolated
+   (let* ((roost-notify t) notices
+          (roost-notify-function (lambda (title body) (push (list title body) notices))))
+     (cl-letf (((symbol-function 'roost--redraw) #'ignore)
+               ((symbol-function 'roost--request)
+                (lambda (_host action _params success _failure)
+                  (should (equal action "inspect"))
+                  (funcall success (append '((lastMessage . "## Done\n\nFixed the **login** bug."))
+                                           (roost-test--task nil "ready"))))))
+       (roost--cache-task "dev" (roost-test--task nil "running"))
+       (roost--cache-task "dev" (roost-test--task nil "ready"))
+       (should (equal notices '(("Roost: fix auth — ready" "dev · Fixed the login bug."))))
+       (should (equal (roost--field (car (roost-tasks)) 'lastMessage)
+                      "## Done\n\nFixed the **login** bug."))))))
+
 (ert-deftest roost-notifies-once-and-not-on-initial-attachment ()
   (roost-test--isolated
+   (roost-test--without-inspect
    (let* ((roost-notify t) notices
          (roost-notify-function (lambda (title _body) (push title notices))))
      (roost--cache-task "dev" (roost-test--task nil "ready"))
@@ -123,10 +146,11 @@
      (roost--cache-task "dev" (roost-test--task nil "running"))
      (roost--cache-task "dev" (roost-test--task nil "permission"))
      (roost--cache-task "dev" (roost-test--task nil "permission"))
-     (should (= (length notices) 1)))))
+     (should (= (length notices) 1))))))
 
 (ert-deftest roost-notifies-on-fast-turns-that-finish-between-polls ()
   (roost-test--isolated
+   (roost-test--without-inspect
    (let* ((roost-notify t) notices
           (roost-notify-function (lambda (title _body) (push title notices)))
           (finished (append '((lastEvent . "Stop")) (roost-test--task))))
@@ -134,7 +158,7 @@
      (setf (alist-get 'updatedAt finished) "2026-10-03T20:00:01+00:00")
      (roost--cache-task "dev" finished)
      (roost--cache-task "dev" (copy-tree finished))
-     (should (= (length notices) 1)))))
+     (should (= (length notices) 1))))))
 
 (ert-deftest roost-refresh-captures-each-host-and-rejects-stale-replies ()
   (roost-test--isolated

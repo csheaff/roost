@@ -41,7 +41,9 @@ for you to say what to do with it.
 
 **Let them work.** Start more tasks; each is independent. Roost watches the
 agents' own lifecycle hooks and notifies you when one finishes or asks for
-permission. `n` jumps to the next agent waiting for you, permission requests
+permission, with the first line of its reply, so you can tell from the
+notification whether it needs you now. The dashboard shows each agent's latest
+reply too. `n` jumps to the next agent waiting for you, permission requests
 first. Answer it in the terminal, then `n` again.
 
 **Check the work yourself.** `t` opens a shell beside the agent, in the same

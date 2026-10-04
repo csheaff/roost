@@ -471,14 +471,34 @@ Call SUCCESS with the result, or FAILURE with an error message."
     (if (member status '("retired" "forgotten"))
         (remhash key roost--tasks)
       (puthash key task roost--tasks))
+    ;; Record the status before notifying, which may cache this task again.
+    (puthash key status roost--statuses)
     (when (and roost-notify previous
                (or (not (equal previous status)) new-stop)
                (or (not (equal previous "starting")) new-stop)
                (member status '("ready" "permission" "failed" "crashed" "exited")))
-      (roost--notify (format "Roost: %s — %s" (roost--field task 'name) status)
-                     (roost--host-label host)))
-    (puthash key status roost--statuses)
+      (roost--notify-attention host task status))
     task))
+
+(defun roost--notify-attention (host task status)
+  "Notify that TASK on HOST became STATUS.
+A ready agent or one asking permission is inspected first, since quiet
+polls leave out its latest reply, so the notification can say what it
+finished or wants."
+  (let ((title (format "Roost: %s — %s" (roost--field task 'name) status))
+        (label (roost--host-label host)))
+    (if (not (member status '("ready" "permission")))
+        (roost--notify title label)
+      (roost--request
+       host "inspect" (list (cons 'id (roost--field task 'id)))
+       (lambda (current)
+         (setq current (roost--cache-task host current))
+         (roost--redraw)
+         (roost--notify title
+                        (if-let* ((reply (roost--last-message-summary current)))
+                            (concat label " · " (truncate-string-to-width reply 160 nil nil "…"))
+                          label)))
+       (lambda (_error) (roost--notify title label))))))
 
 (defun roost--apply-snapshot (host tasks)
   "Replace only HOST's cached tasks with a successful snapshot TASKS."
