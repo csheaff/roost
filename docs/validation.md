@@ -7,7 +7,7 @@ built by Roost tasks working on Roost, then used for real on
 [csheaff/roost](https://github.com/csheaff/roost):
 
 - **#1 (local).** `P` drafted the pull request from the agent's commit message
-  and created it with `gh`. Copilot's review and my own notes went to the agent
+  and created it with `gh`. Copilot's review and other review notes went to the agent
   with `e`; `P` pushed each fix ("Pushed 1 commit to #1"). After a squash merge
   on GitHub, `x` retired the task and deleted its local and remote branches.
 - **#2 (from `claylien`).** The first `P` failed at the push: the host's
