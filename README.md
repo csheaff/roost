@@ -246,6 +246,15 @@ Things to know:
 
 ## Upgrading
 
+0.7 needs tmux-control 0.7.0, which adds the public API Roost now uses. Update
+tmux-control first: with straight.el or a Git checkout, pull it before Roost;
+with `package-vc`, run `package-vc-upgrade` on tmux-control, then Roost. Then
+restart Emacs. `M-x roost-doctor` flags an older tmux-control. 0.7 also adds
+pull requests (`P`), the agent's latest reply in the dashboard, task panel
+and notifications, prompts from Org entries and the region, and a push check
+in `roost-doctor`. `D` now diffs a task's own changes since it last met its
+integration branch, so updates from `u` no longer appear as the task's work.
+
 0.6 declares tmux-control as a package dependency and adds `roost-doctor`,
 tab-bar workspaces and Evil support. Stopping a task moved from `k` to `K`; `j`
 and `k` now move between tasks in the dashboard.

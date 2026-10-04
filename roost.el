@@ -1,7 +1,7 @@
 ;;; roost.el --- Coding agent tasks over tmux-control -*- lexical-binding: t; -*-
 
 ;; Author: Clay Sheaff
-;; Version: 0.6.0
+;; Version: 0.7.0
 ;; Package-Requires: ((emacs "29.1") (tmux-control "0.7.0"))
 ;; Keywords: tools, processes
 ;; URL: https://github.com/csheaff/roost
