@@ -2854,7 +2854,6 @@ With a prefix argument, read a HOST to check (empty for this machine)."
 
 (defalias 'roost-list #'roost-switch-task)
 (defalias 'roost-kill #'roost-stop)
-(defalias 'roost-dispatch #'roost-new-task)
 
 (provide 'roost)
 ;;; roost.el ends here

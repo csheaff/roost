@@ -273,7 +273,8 @@ directly. Retired task records are now deleted. Codex tasks started after
 upgrading ask for one final hook review.
 
 0.4 added Codex and Pi. 0.3 replaced the 0.2 Pi orchestrator registry; old
-aliases `roost-list`, `roost-kill` and `roost-dispatch` still work.
+aliases `roost-list` and `roost-kill` still work. `roost-dispatch`, once an
+alias for `roost-new-task`, now opens the command menu, which includes it.
 
 ## Development
 

@@ -573,6 +573,9 @@
    (let ((transient--original-buffer nil))
      (with-temp-buffer
        (should (equal (roost--dispatch-task-description) "Task (chosen when needed)"))))
+   ;; The 0.2 alias of roost-dispatch to roost-new-task must not shadow the menu.
+   (should (get 'roost-dispatch 'transient--prefix))
+   (should-not (eq (indirect-function 'roost-dispatch) (indirect-function 'roost-new-task)))
    (should (eq (lookup-key roost-dashboard-mode-map "h") 'roost-dispatch))
    (should (eq (lookup-key roost-task-info-mode-map "h") 'roost-dispatch))))
 
