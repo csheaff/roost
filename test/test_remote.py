@@ -982,8 +982,11 @@ class RemoteGit(unittest.TestCase):
             except ProcessLookupError:
                 return False
             stat = Path("/proc/%d/stat" % pid)
-            if stat.exists():
-                state = stat.read_text().rsplit(")", 1)[1].split()[0]
+            if Path("/proc/self/stat").exists():
+                try:
+                    state = stat.read_text().rsplit(")", 1)[1].split()[0]
+                except FileNotFoundError:  # Reaped since the kill check.
+                    return False
             else:
                 state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)],
                                        capture_output=True, text=True).stdout.strip()
