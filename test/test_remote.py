@@ -917,7 +917,9 @@ class RemoteGit(unittest.TestCase):
             roost.remote_git(self.repo, "push", "origin", "main")
         kwargs = run.call_args.kwargs
         self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
-        self.assertEqual(kwargs["env"]["GIT_TERMINAL_PROMPT"], "0")
+        for name, value in (("GIT_TERMINAL_PROMPT", "0"), ("GIT_ASKPASS", ""),
+                            ("SSH_ASKPASS_REQUIRE", "never"), ("GCM_INTERACTIVE", "never")):
+            self.assertEqual(kwargs["env"][name], value)
         self.assertEqual(kwargs["timeout"], 120)
 
     def test_a_timeout_is_a_roost_error(self):
@@ -967,7 +969,7 @@ class RemoteGit(unittest.TestCase):
         roost.git(self.repo, "remote", "add", "origin",
                   "http://127.0.0.1:%d/x/y.git" % server.server_port)
         started = time.monotonic()
-        with patch.dict(os.environ, {"GIT_ASKPASS": "", "SSH_ASKPASS": ""}):
+        with patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}):
             with self.assertRaises(roost.RoostError) as caught:
                 roost.remote_git(self.repo, "push", "-u", "origin", "main")
         self.assertLess(time.monotonic() - started, 30)
