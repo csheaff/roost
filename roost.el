@@ -594,6 +594,12 @@ recently failed."
                   (or tasks (roost-tasks))))
     (user-error nil)))
 
+(defun roost--worktree-relative (task file)
+  "FILE's path relative to TASK's worktree, or nil if FILE is elsewhere."
+  (when-let* ((task (roost--task-in-directory file (list task))))
+    (file-relative-name (file-local-name file)
+                        (file-name-as-directory (roost--field task 'worktree)))))
+
 (defun roost--task-at-point ()
   "Task selected in the dashboard, terminal, or current workspace."
   (cond
@@ -1284,7 +1290,9 @@ chosen one."
     (roost--send-draft
      task
      (format "\n\n%s:%d-%d\n\n%s"
-             (if buffer-file-name (file-local-name buffer-file-name) (buffer-name))
+             (cond ((and buffer-file-name (roost--worktree-relative task buffer-file-name)))
+                   (buffer-file-name (file-local-name buffer-file-name))
+                   (t (buffer-name)))
              (line-number-at-pos start) (line-number-at-pos last)
              (buffer-substring-no-properties start end)))))
 

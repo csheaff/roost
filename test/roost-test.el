@@ -760,10 +760,15 @@
           (roost-send-region (point-min) (point-max))
           (should-not asked)
           (should (get-buffer "*roost send: fix auth*"))
+          (with-current-buffer "*roost send: fix auth*"
+            (should (string-prefix-p "\n\nsrc/a.py:1-1\n" (buffer-string)))
+            (erase-buffer))
           (set-buffer-modified-p nil)
           (setq buffer-file-name "/elsewhere/b.py")
           (roost-send-region (point-min) (point-max))
-          (should asked)))))))
+          (should asked)
+          (with-current-buffer "*roost send: fix auth*"
+            (should (string-prefix-p "\n\n/elsewhere/b.py:1-1\n" (buffer-string))))))))))
 
 (ert-deftest roost-send-opens-a-draft-interactively-and-keeps-text-calls ()
   (roost-test--isolated
