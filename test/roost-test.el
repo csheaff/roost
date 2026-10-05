@@ -1578,7 +1578,14 @@
                                       (append '((repo . "/home/user/ledger")) (roost-test--task "2222222222222222"))))
    (should (equal (roost--changes (gethash '("dev" "1111111111111111") roost--tasks))
                   "2 files +10 −3 · uncommitted · 1 ahead · 4 behind"))
-   (should (equal (roost--changes '((diff . "1 file changed, 1 insertion(+)"))) "1 file +1 −0"))))
+   (should (equal (roost--changes '((diff . "1 file changed, 1 insertion(+)"))) "1 file +1 −0"))
+   ;; Files Git does not track yet are counted from the list of changed files.
+   (let ((new '((path . "now.txt") (untracked . t))))
+     (should (equal (roost--changes `((diff . "") (dirty . t) (files ,new)))
+                    "1 new file · uncommitted"))
+     (should (equal (roost--changes `((diff . "1 file changed, 1 insertion(+)") (dirty . t)
+                                      (files ((path . "a") (added . 1) (deleted . 0)) ,new ,new)))
+                    "1 file +1 −0 · 2 new · uncommitted")))))
 
 (ert-deftest roost-dashboard-columns-fit-narrow-windows ()
   (roost-test--isolated

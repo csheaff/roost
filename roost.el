@@ -2220,6 +2220,8 @@ COMPACT abbreviates commits ahead of and behind the integration branch."
                       (string-to-number (match-string 1 diff))
                     0)))
          (files (funcall count "files? changed"))
+         ;; Git's statistics leave out files it does not track yet.
+         (new (seq-count (lambda (file) (alist-get 'untracked file)) (roost--field task 'files)))
          (ahead (or (roost--field task 'ahead) 0))
          (behind (or (roost--field task 'behind) 0))
          (commits (delq nil (list (when (> ahead 0) (format (if compact "↑%d" "%d ahead") ahead))
@@ -2228,6 +2230,9 @@ COMPACT abbreviates commits ahead of and behind the integration branch."
      (delq nil (list (when (> files 0)
                        (format "%d file%s +%d −%d" files (if (= files 1) "" "s")
                                (funcall count "insertions?") (funcall count "deletions?")))
+                     (when (> new 0)
+                       (if (> files 0) (format "%d new" new)
+                         (format "%d new file%s" new (if (= new 1) "" "s"))))
                      (when (roost--field task 'dirty) "uncommitted")
                      (when commits (string-join commits (if compact " " " · ")))))
      " · ")))
