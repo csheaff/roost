@@ -2,35 +2,52 @@
 
 [![CI](https://github.com/csheaff/roost/actions/workflows/ci.yml/badge.svg)](https://github.com/csheaff/roost/actions/workflows/ci.yml)
 
-Run a fleet of coding agents from Emacs, on your machine or on remote hosts
-over SSH. Each task gets its own Git worktree, topic branch and persistent tmux
-terminal running the agent's real CLI: [Claude Code](https://claude.com/claude-code),
-[Codex](https://github.com/openai/codex) or [Pi](https://github.com/earendil-works/pi).
-Roost tells you which agents need you, and gets the work reviewed and merged
-with the Emacs tools you already use.
+Running more than one coding agent means juggling terminals, wondering which
+one is waiting on you, and untangling their changes afterwards. Roost gives each
+agent ([Claude Code](https://claude.com/claude-code),
+[Codex](https://github.com/openai/codex) or [Pi](https://github.com/earendil-works/pi))
+its own Git worktree, branch and persistent terminal, on your machine or any SSH
+host. It tells you which agents need you, and you review and merge their work
+with Magit. If you've used Orca or Conductor, it's that idea, inside the Emacs
+you already use.
 
-![The Roost dashboard: four Claude Code tasks on two machines, one waiting for permission, two finished with changes to review, one working](docs/images/roost-dashboard.jpg)
+![An agent asks permission and the sidebar shows it waiting; n opens its terminal, beside the task's panel; the answer lets it finish; its changed file opens in Magit; m merges it](docs/images/roost-loop.gif)
 
-*The dashboard. `RET` on a row opens that agent's own terminal, where you
-answer it as you would in any terminal.*
+*Real Claude Code agents in a plain Emacs: an agent asks permission, `n` takes
+you to it, you answer, look at its changes and merge.*
 
-- **Agents outlive Emacs.** They run in tmux on the task's host. Close Emacs, lose
-  Wi‑Fi or sleep the laptop; reopen Roost and pick up where they are.
-- **Any SSH host, nothing to set up.** A host needs Python 3, Git and tmux; Roost
-  copies a small helper there on first use. There is no server or daemon.
-- **Native terminals, not a wrapper.** [tmux-control](https://github.com/csheaff/tmux-control)
-  renders each agent's own interface, so permission prompts, diffs and slash
-  commands work exactly as in a terminal.
-- **One view across hosts.** Tasks are grouped by project, with what needs you
-  first, each agent's latest reply, Git changes, and commits ahead of or behind
-  the branch you merge into.
-- **Start from where the work is.** An Org heading or agenda line, a region of
-  code, or a GitHub issue becomes the prompt, and the heading then stands for
-  its task.
-- **Emacs does the rest.** Magit and Dired over TRAMP, a shell beside each agent,
-  a perspective per task, and pull requests drafted from the agent's commits.
-- **Finishing never loses work.** Merging refuses uncommitted files and keeps the
-  task on conflicts. Roost never force-removes, stages or commits for you.
+- **See who needs you.** The sidebar, the dashboard and your mode line show which
+  agents are waiting, permission requests first, and `n` takes you to the next.
+- **The agent's real terminal.** Permission prompts, diffs and slash commands work
+  as in any terminal; [tmux-control](https://github.com/csheaff/tmux-control)
+  renders each agent's own interface in an Emacs buffer.
+- **Tasks stay apart.** Each has its own worktree and branch, so agents never
+  trip over each other or over your checkout.
+- **Agents outlive Emacs, on any machine.** They run in tmux, locally or on any SSH
+  host with Python 3, Git and tmux. Close Emacs or lose Wi‑Fi, then pick up
+  where they are.
+- **Start from your notes.** An Org heading, a region of code or a GitHub issue
+  becomes the prompt.
+- **Finish with the tools you know.** Try the work in a shell beside the agent,
+  review it in Magit, merge it or open a pull request. Roost never stages,
+  commits or force-removes anything for you.
+
+### Why not just run the agent in a terminal?
+
+For one agent, do. With several, you need to know which one is waiting, keep
+their changes apart, and finish each one cleanly. Roost puts every agent in its
+own worktree, so they can't overwrite each other; watches the agents' own
+lifecycle hooks, so it knows which are working, waiting or done, on every
+machine; keeps them in tmux, so closing Emacs costs nothing; and makes finishing
+a review in Magit followed by a merge or a pull request.
+
+### Try it
+
+1. [Install](#install) Roost and tmux-control.
+2. `M-x roost-doctor` checks this machine, and any SSH hosts you list.
+3. In a Git project, `M-x roost-new-task`, write a prompt, and `C-c C-c`.
+4. `M-x roost-status` opens the dashboard; `b` there pins the task list to the
+   side.
 
 ## A day with Roost
 
@@ -61,6 +78,20 @@ reply too, and the mode line counts the agents waiting (`Roost:2`; click it for
 the next one). `n` jumps to the next agent waiting for you, permission requests
 first. Answer it in the terminal, then `n` again. A finished agent you have
 looked at stops counting, and turns grey, until it replies again.
+
+![The Roost dashboard: four Claude Code tasks on two machines, one waiting for permission, two finished with changes to review, one working](docs/images/roost-dashboard.jpg)
+
+*`M-x roost-status`, the dashboard. `RET` on a row opens that agent's own
+terminal.*
+
+**Keep them in view.** `b` in the dashboard, or `M-x roost-sidebar-mode`, keeps a
+compact task list at the left of every frame, through perspective and tab
+switches and `C-x 1`; add `(roost-sidebar-mode 1)` to your configuration to have
+it from the start. An open task also gets a panel at the right of its
+terminal: the agent's latest reply, the files it changed (each opens its diff)
+and the actions, kept current as the agent works. The panel steps aside when
+the terminal would drop below 80 columns; `q` in it turns it off, and `I` in the
+dashboard or sidebar turns it back on.
 
 ![Claude Code on claylien asking to create budgets.json, in its own terminal inside Emacs](docs/images/roost-terminal.jpg)
 
@@ -144,26 +175,6 @@ Git on the host can push each project you've used there (a dry run that sends
 nothing). `C-u M-x roost-doctor` checks a host before you add it.
 
 Magit is optional (review falls back to Dired).
-
-### Keeping Roost in view
-
-`b` in the dashboard, or `M-x roost-sidebar-mode`, keeps a compact list of your
-tasks at the left of every frame: a dot and status per task, grouped by
-project, with how many agents are waiting at the top. It stays when you switch
-perspectives or tabs and survives `C-x 1`. Click a task or press `RET` to open
-it; hover to see its full name and project; `q` hides the list. To have it from
-the start, add `(roost-sidebar-mode 1)` to your configuration.
-
-![The sidebar lists two tasks, one waiting for permission; in the middle, that task's Claude Code asks to edit notes.py; on the right, its panel shows the agent's latest message, the changes and the actions](docs/images/roost-sidebar.jpg)
-
-*The sidebar, an agent asking to edit a file, and that task's panel.*
-
-An open task also gets its panel at the right of its terminal: the agent's
-latest reply (long ones fold to a few lines), the files it changed, each of
-which opens its diff, and the actions. They stay current as the agent works. It
-docks while the terminal keeps at least 80 columns and steps aside when a
-split or a narrower frame would squeeze it. `q` in the panel turns it off and
-`I` in the dashboard or sidebar turns it back on (`roost-task-panel-mode`).
 
 ### Fitting your setup
 

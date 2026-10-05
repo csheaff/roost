@@ -2059,7 +2059,10 @@ Without a status from GitHub yet, a recorded pull request counts as open."
   (setq task (roost--choose task))
   (when (yes-or-no-p (format "Retire %s, removing its merged worktree and branch? "
                              (roost--field task 'name)))
-    (roost--act task "retire" nil #'roost--retired-workspace)))
+    (roost--act task "retire" nil
+                (lambda (retired)
+                  (roost--retired-workspace retired)
+                  (roost--kill-worktree-buffers retired)))))
 
 ;;;###autoload
 (defun roost-merge-retire (&optional task)
@@ -2072,8 +2075,12 @@ Dirty worktrees are refused; review and commit in Magit first."
     (roost--act task "merge" nil
                 (lambda (merged)
                   (roost--retired-workspace merged)
+                  (roost--kill-worktree-buffers merged)
                   ;; The other tasks are measured against the branch that moved.
-                  (roost--refresh-host (roost--field merged 'host) nil)))))
+                  (roost--refresh-host (roost--field merged 'host) nil)
+                  (message "Merged %s into %s, and removed its worktree and branch"
+                           (roost--field task 'name)
+                           (or (roost--field task 'integrationBranch) "its branch"))))))
 
 ;;;###autoload
 (defun roost-forget (&optional task)
@@ -2090,6 +2097,15 @@ A running agent must be stopped first."
                   (when-let* ((left (roost--field forgotten 'leftBehind)))
                     (message "Forgot %s; left in place: %s"
                              (roost--field task 'name) (string-join left ", ")))))))
+
+(defun roost--kill-worktree-buffers (task)
+  "Kill the Magit and Dired buffers left in TASK's removed worktree.
+File buffers stay, since they may hold unsaved edits."
+  (dolist (buffer (buffer-list))
+    (with-current-buffer buffer
+      (when (and (derived-mode-p 'magit-mode 'dired-mode)
+                 (roost--task-in-directory default-directory (list task)))
+        (kill-buffer buffer)))))
 
 (defun roost--retired-workspace (task)
   "Remove TASK's workspace, retaining buffers."

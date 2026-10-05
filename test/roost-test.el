@@ -1561,9 +1561,23 @@
                   (funcall success (append '((status . "retired")) (roost-test--task)))))
                ((symbol-function 'roost--refresh-host)
                 (lambda (host quiet &optional _ids) (push (list host quiet) refreshes))))
-       (roost-merge-retire task)
-       (should-not (roost-tasks))
-       (should (equal refreshes '(("dev" nil))))))))
+       (let ((dired (generate-new-buffer " *roost-test-dired*"))
+             (notes (generate-new-buffer " *roost-test-notes*")))
+         (with-current-buffer dired
+           (dired-mode)
+           (setq default-directory "/ssh:dev:/home/user/work/fix auth/"))
+         (with-current-buffer notes
+           (setq default-directory "/ssh:dev:/home/user/work/fix auth/"))
+         (unwind-protect
+             (progn
+               (roost-merge-retire task)
+               (should-not (roost-tasks))
+               (should (equal refreshes '(("dev" nil))))
+               ;; Views of the removed worktree go; other buffers stay.
+               (should-not (buffer-live-p dired))
+               (should (buffer-live-p notes)))
+           (mapc (lambda (buffer) (when (buffer-live-p buffer) (kill-buffer buffer)))
+                 (list dired notes))))))))
 
 (ert-deftest roost-forget-removes-the-task-and-reports-what-remains ()
   (roost-test--isolated
