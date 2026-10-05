@@ -337,6 +337,47 @@ All **114 ERT tests and 69 Python tests** pass, with byte compilation under
 warnings-as-errors. Batch Emacs has no redisplay, so the tests call the layout
 sync directly where the window hook would run it.
 
+### A day of testing, 2026-10-05
+
+Before recapturing the README images, Roost and tmux-control were tested
+broadly: the fake agent through the real hooks for most scenarios, Claude Code
+(Haiku) where a real reply mattered, on this Mac and on `claylien`.
+
+- **Static and install.** package-lint, melpazoid and checkdoc as before; a
+  fresh `package-vc-install` of both packages from GitHub into an empty
+  Emacs loads, finds the host helper and passes `roost-doctor`'s local
+  checks. `roost-doctor` passes on both hosts.
+- **Lifecycle, in Clay's configuration** (perspective.el, xah-fly-keys, his
+  mode line), in a copy of it with its own state and tmux socket: a draft
+  submitted with keys, `e`, a permission request found by `n`, `K` and `s`,
+  `t` with the tiled shell, scrollback, a window renamed from outside tmux,
+  `m` from the sidebar with the other task's behind count updating, `u` into a
+  conflict, `X` and `x`; on `claylien`, the same through to a merge, with
+  changed files appearing as the agent worked. Two frames each kept their own
+  task's panel.
+- **Plain Emacs, terminal Emacs and tmux-control alone.** Sessions with the
+  same name on two sockets, a session named like another's scrollback,
+  bookmarks, diagnostics and the all-sessions grid; Roost in `emacs -nw`;
+  task names with accents and wide characters; Ediff beside the side
+  windows; the long-reply preview with a real reply.
+- **Suites.** 119 ERT and 71 Python tests, the Python ones also on
+  `claylien` (Python 3.13, tmux 3.7c); tmux-control's 308 ERT tests and 32
+  live integration scenarios.
+
+Found and fixed: `X` asked to forget a running agent's task and only then
+said to stop it first (it now offers to do both); unloading Roost left task
+panels in other frames; the list of changed files could be saved into task
+records; long paths in wide scripts raised an error; sidebar lines lost their
+last character in a terminal; measuring the panel's width moved point while
+it was drawn, scrambling it (introduced and caught the same day); and
+`git status` behind the statistics could take the index lock while an agent
+committed. Notifications also no longer fire for the agent you are watching.
+
+Not Roost's to fix: on this Mac, tmux 3.6a shows non-ASCII window names as
+underscores whatever the locale (tmux 3.7c on Linux keeps them); Roost's own
+views show them correctly. Unloading a package also unbinds its settings, so
+`unload-feature` followed by a reload returns Roost to its defaults.
+
 ### Codex and Pi adapters
 
 Used another disposable remote `hello-service` project, an isolated registry and
