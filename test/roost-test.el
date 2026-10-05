@@ -11,6 +11,7 @@
          (roost--projects-loaded t) (roost--remembered-projects nil)
          (user-login-name "user")
          (roost--statuses (make-hash-table :test 'equal))
+         (roost--seen (make-hash-table :test 'equal))
          (roost--errors (make-hash-table :test 'equal))
          (roost--installed (make-hash-table :test 'equal))
          (roost--refreshing (make-hash-table :test 'equal))
@@ -1117,6 +1118,8 @@
                  ((symbol-function 'roost--refresh-host) (lambda (host quiet) (push (list host quiet) refreshes))))
          (roost--display-task task)
          (should (equal refreshes '(("dev" nil))))
+         ;; Opening the agent counts as seeing it.
+         (should (equal (roost--attention-status task) "idle"))
          (setq visible nil refreshes nil)
          (cl-letf (((symbol-function 'roost--sync-side-windows) #'ignore))
            (roost--display-task task))
@@ -1350,6 +1353,25 @@
        (let ((default-directory "/ssh:dev:/home/user/elsewhere/"))
          (roost--magit-refreshed))
        (should (equal refreshes `(("dev" nil (,(roost--field task 'id))))))))))
+
+(ert-deftest roost-a-seen-ready-agent-stops-counting-as-waiting ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (roost-test--task nil "ready")))
+         (roost-mode-line-count t))
+     (should (equal (roost--attention-status task) "ready"))
+     (should (string-match-p "Roost:1" (roost--mode-line-count)))
+     (roost--mark-seen task)
+     (should (equal (roost--attention-status task) "idle"))
+     (should-not (roost--mode-line-count))
+     (should-error (roost-next-waiting) :type 'user-error)
+     ;; A new reply makes it wait again.
+     (setq task (roost--cache-task "dev" (append '((updatedAt . "2026-10-03T20:05:00+00:00"))
+                                                 (roost-test--task nil "ready"))))
+     (should (equal (roost--attention-status task) "ready"))
+     ;; Seeing a task that is working changes nothing until it is ready.
+     (roost--mark-seen (roost--cache-task "dev" (roost-test--task nil "running")))
+     (should (equal (roost--attention-status (roost--cache-task "dev" (roost-test--task nil "running")))
+                    "running")))))
 
 (ert-deftest roost-background-polls-back-off-from-unreachable-hosts ()
   (roost-test--isolated

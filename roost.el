@@ -244,6 +244,9 @@ Ordinary perspectives retain their existing labels and click actions."
   "Last refresh error for each unreachable host.")
 (defvar roost--statuses (make-hash-table :test 'equal)
   "Last observed status for each task key, for notifications.")
+(defvar roost--seen (make-hash-table :test 'equal)
+  "For each task key, its `updatedAt' when you last saw its agent.
+A ready agent you have seen since its last event is no longer waiting.")
 (defvar roost--remembered-hosts nil)
 (defvar roost--hosts-loaded nil)
 (defvar roost--remembered-projects nil)
@@ -568,7 +571,8 @@ finished or wants."
     (maphash (lambda (key _)
                (when (and (equal (car key) host) (not (member key keys)))
                  (remhash key roost--tasks)
-                 (remhash key roost--statuses)))
+                 (remhash key roost--statuses)
+                 (remhash key roost--seen)))
              roost--tasks)
     (mapc (lambda (task) (roost--cache-task host task)) tasks)
     (remhash host roost--errors)))
@@ -663,17 +667,42 @@ recently failed."
 ;;;; Choosing a task
 
 (defconst roost--status-order
-  '("permission" "prompt" "ready" "failed" "crashed" "running" "background" "starting"
-    "exited" "stopped")
+  '("permission" "prompt" "ready" "failed" "crashed" "running" "background" "idle"
+    "starting" "exited" "stopped")
   "Attention statuses from most to least in need of attention.")
 
 (defun roost--attention-status (task)
-  "TASK's status for attention: \"prompt\" when it has been starting too long."
+  "TASK's status for attention.
+That is \"prompt\" when it has been starting too long, and \"idle\" when
+it is ready and you have seen it since, rather than \"ready\"."
   (let ((status (roost--display-status task)))
-    (if (and (equal status "starting")
-             (> (or (roost--seconds-since (roost--field task 'updatedAt)) 0) roost-startup-grace))
-        "prompt"
-      status)))
+    (cond ((and (equal status "starting")
+                (> (or (roost--seconds-since (roost--field task 'updatedAt)) 0)
+                   roost-startup-grace))
+           "prompt")
+          ((and (equal status "ready")
+                (equal (gethash (roost--key task) roost--seen) (roost--field task 'updatedAt))
+                (roost--field task 'updatedAt))
+           "idle")
+          (t status))))
+
+(defun roost--mark-seen (task)
+  "Record that you have seen TASK's agent as it is now."
+  (puthash (roost--key task) (roost--field task 'updatedAt) roost--seen))
+
+(defun roost--note-watched-agent ()
+  "Mark seen the agent whose terminal is in the selected window.
+Only while Emacs has focus, since otherwise nobody is looking."
+  (when (and (frame-focus-state) (fboundp 'tmux-control-active-pane))
+    (with-current-buffer (window-buffer (selected-window))
+      (when-let* ((pane (tmux-control-active-pane))
+                  (task (seq-find (lambda (task)
+                                    (and (equal (roost--field task 'paneId) pane)
+                                         (equal (roost--field task 'host) (tmux-control-buffer-host))
+                                         (equal (roost--field task 'socket)
+                                                (tmux-control-buffer-socket-name))))
+                                  (roost-tasks))))
+        (roost--mark-seen task)))))
 
 (defun roost--attention-rank (task)
   "Sort rank of TASK by how much it needs attention."
@@ -932,6 +961,7 @@ recently failed."
     (with-current-buffer (window-buffer (selected-window))
       (tmux-control-send-command (format "select-window -t %s" window))
       (tmux-control-select-pane pane)))
+  (roost--mark-seen (or (gethash (roost--key task) roost--tasks) task))
   (roost--watch-layout)
   (roost--sync-side-windows)
   (when (roost--task-panel-window)
@@ -2781,6 +2811,7 @@ Refreshes are asynchronous; rendering uses only cached state.
                    '(("awaiting permission" nil "permission")
                      ("at a startup prompt" nil "prompt")
                      ("ready" nil "ready")
+                     ("seen" nil "idle")
                      ("failed" nil "failed" "crashed")
                      ("running" nil "running" "background" "starting")
                      ("stopped" nil "stopped" "exited")
@@ -2932,6 +2963,7 @@ The changes column shrinks first, then the agent column is dropped."
 
 (defun roost--redraw ()
   "Refresh an existing dashboard and task panels without changing focus."
+  (roost--note-watched-agent)
   (when-let* ((buffer (get-buffer "*roost*")))
     (with-current-buffer buffer
       (when (derived-mode-p 'roost-dashboard-mode)

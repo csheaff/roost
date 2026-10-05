@@ -320,11 +320,16 @@ through the real hooks, so no agent credits were used.
   - Two tasks with the same name on one host shared a panel buffer.
   - Without workspaces, the panel followed only `RET`, not `r` or other task
     commands.
+  - Both tasks still counted as waiting after their replies had been read, so
+    the mode line kept saying `Roost:2`. A ready agent you have opened, or
+    whose terminal you are watching while Emacs has focus, now counts as seen
+    until its next event. Checked live with the fake agent: unfocused, it kept
+    counting; focused on its terminal, the count cleared.
 - An earlier pass with a long reply seeded in the cache checked the folded
   six-line preview, clicking to expand and collapse it, a new reply starting
   folded, and the sidebar's hover text giving the full name, host and project.
 
-All **112 ERT tests and 68 Python tests** pass, with byte compilation under
+All **113 ERT tests and 68 Python tests** pass, with byte compilation under
 warnings-as-errors. Batch Emacs has no redisplay, so the tests call the layout
 sync directly where the window hook would run it.
 

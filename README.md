@@ -59,7 +59,8 @@ permission, with the first line of its reply, so you can tell from the
 notification whether it needs you now. The dashboard shows each agent's latest
 reply too, and the mode line counts the agents waiting (`Roost:2`; click it for
 the next one). `n` jumps to the next agent waiting for you, permission requests
-first. Answer it in the terminal, then `n` again.
+first. Answer it in the terminal, then `n` again. A finished agent you have
+looked at stops counting, and turns grey, until it replies again.
 
 ![Claude Code on claylien asking to create budgets.json, in its own terminal inside Emacs](docs/images/roost-terminal.jpg)
 
