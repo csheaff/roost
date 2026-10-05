@@ -2488,9 +2488,14 @@ prompt is returned whole."
                                  ("Conversation" . ,(or (roost--field task 'agentSession)
                                                         (roost--field task 'claudeSession)
                                                         "not recorded yet"))))))
-            (insert (propertize (concat "  " (propertize (format "%-13s" (car entry)) 'face 'roost-dim)
-                                        (or (cdr entry) "unknown") "\n")
-                                'wrap-prefix (make-string 15 ?\s))))
+            (if (< width 72)
+                ;; Too narrow for a label column: the value goes below its label.
+                (insert "  " (propertize (car entry) 'face 'roost-dim) "\n"
+                        (propertize (concat (or (cdr entry) "unknown") "\n")
+                                    'line-prefix "  " 'wrap-prefix "  "))
+              (insert (propertize (concat "  " (propertize (format "%-13s" (car entry)) 'face 'roost-dim)
+                                          (or (cdr entry) "unknown") "\n")
+                                  'wrap-prefix (make-string 15 ?\s)))))
           (unless (< width 72)
             (insert "\n" (propertize (substitute-command-keys
                                       "Ready means the agent is waiting for you, not that the work is reviewed.
