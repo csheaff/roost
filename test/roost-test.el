@@ -2293,4 +2293,29 @@
          (when (get-buffer roost--compose-buffer)
            (kill-buffer roost--compose-buffer)))))))
 
+(ert-deftest roost-an-unreachable-host-is-reported-once-per-outage ()
+  ;; ssh alternated "Operation timed out" and "Host is down" for a host
+  ;; asleep, and each change printed again.
+  (roost-test--isolated
+   (let ((roost-hosts '("dev")) (messages '()) failure success)
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host _action _params ok fail) (setq success ok failure fail)))
+               ((symbol-function 'message)
+                (lambda (format &rest args) (push (apply #'format format args) messages))))
+       (dolist (err '("ssh: connect to host dev port 22: Operation timed out"
+                      "ssh: connect to host dev port 22: Host is down"
+                      "ssh: connect to host dev port 22: Operation timed out"))
+         (clrhash roost--refreshing)
+         (roost--refresh-host "dev" t)
+         (funcall failure err))
+       (should (= (length messages) 1))
+       ;; Back, then down again: a new outage.
+       (clrhash roost--refreshing)
+       (roost--refresh-host "dev" t)
+       (funcall success nil)
+       (clrhash roost--refreshing)
+       (roost--refresh-host "dev" t)
+       (funcall failure "ssh: connect to host dev port 22: Host is down")
+       (should (= (length messages) 2))))))
+
 (provide 'roost-test)

@@ -639,7 +639,9 @@ those tasks."
          (roost--redraw)
          (funcall finish))
        (lambda (err)
-         (unless (equal err (gethash host roost--errors))
+         ;; Once per outage: ssh words a sleeping host's failure differently
+         ;; from one poll to the next, and the sidebar shows it meanwhile.
+         (unless (gethash host roost--errors)
            (message "Roost %s: %s (M-x roost-doctor checks this host)" (roost--host-label host) err))
          (puthash host err roost--errors)
          ;; Back off from unreachable hosts, up to a minute between attempts.
