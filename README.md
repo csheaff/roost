@@ -253,13 +253,17 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
 - `roost-state-directory`: where each host keeps task records, the helper and
   worktrees; default `~/.local/share/roost`.
 - `roost-socket-name`, `roost-session-name`: tmux socket (default tmux-control's)
-  and session (default one per repository).
+  and session (default one per repository, named after it).
 - `roost-sidebar-width` (30), `roost-task-panel-width` (44): the sidebar and
   the panel docked beside a task's terminal.
 - `roost-workspace`, `roost-compact-mode-line`: how tasks get their own windows
   (see above); with perspective.el, task perspectives share one
   `Roost: host/task +N` entry in the perspective bar.
-- `roost-notify`, `roost-notify-function`, `roost-mode-line-count`,
+- `roost-mode-line-count`: the waiting count in `global-mode-string`. For a
+  mode line of your own, set it to nil and place
+  `(:eval (and (fboundp 'roost-mode-line-waiting) (roost-mode-line-waiting)))`
+  where you want the count.
+- `roost-notify`, `roost-notify-function`,
   `roost-watch-interval` (3 s), `roost-request-timeout` (60 s),
   `roost-ssh-share-connections`.
 

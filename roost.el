@@ -105,7 +105,8 @@ Existing tasks keep their branch."
   :type '(choice (const nil) string))
 
 (defcustom roost-session-name nil
-  "Tmux session to place new task windows in, or nil for one session per repo."
+  "Tmux session to place new task windows in, or nil for one per repository.
+Those are named after the repository, such as \"roost-notes-3f2a\"."
   :type '(choice (const nil) string))
 
 (defcustom roost-startup-grace 15
@@ -2232,7 +2233,7 @@ COMPACT abbreviates commits ahead of and behind the integration branch."
        'roost-dim))))
 
 (defun roost--diff-file (task file)
-  "Show TASK's changes to FILE, an entry of its `files'.
+  "Show how TASK has changed FILE, an entry of its `files'.
 An untracked file, with nothing to compare, is opened instead."
   (roost--activate-workspace task)
   (let ((default-directory (roost--remote-directory task))
@@ -3154,7 +3155,11 @@ Task commands act on the task at point, as in the dashboard.
 (defun roost--side-window-alist (side width)
   "Display action entries for a pinned Roost window on SIDE, WIDTH wide."
   `((side . ,side) (slot . 0) (window-width . ,width) (preserve-size . (t . nil))
-    (dedicated . t) (window-parameters . ((no-delete-other-windows . t)))))
+    (dedicated . t)
+    ;; Each names its task or Roost at the top, so a mode line or a
+    ;; `global-tab-line-mode' tab adds nothing.
+    (window-parameters . ((no-delete-other-windows . t) (mode-line-format . none)
+                          (tab-line-format . none)))))
 
 (defun roost--show-side-window (buffer side width)
   "Show BUFFER in a pinned window on SIDE, WIDTH wide, and return the window."
@@ -3510,6 +3515,14 @@ Agents asking permission or stuck at a startup prompt color the count."
                           'mouse-face 'mode-line-highlight
                           'local-map (make-mode-line-mouse-map 'mouse-1 #'roost-next-waiting))
               " "))))
+
+(defun roost-mode-line-waiting ()
+  "Return \" Roost:N \" while agents wait for you, for your own mode line.
+Return nil while none wait, or while `roost-watch-mode' is off.  To place
+it yourself, set `roost-mode-line-count' to nil and add
+\(:eval (and (fboundp \='roost-mode-line-waiting) (roost-mode-line-waiting)))
+to `mode-line-format'."
+  (and roost-watch-mode (roost--mode-line-count)))
 
 (defconst roost--mode-line-entry '(roost-mode-line-count (:eval (roost--mode-line-count)))
   "The `global-mode-string' entry for `roost-watch-mode'.")

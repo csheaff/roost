@@ -2,6 +2,7 @@
 import concurrent.futures
 import http.server
 import importlib.util
+import hashlib
 import json
 import os
 import re
@@ -205,6 +206,15 @@ class Lifecycle(unittest.TestCase):
         listed = self.request("list", full=True)["result"][0]
         self.assertEqual(listed["windowIndex"], 8)
         self.assertEqual(listed["paneId"], task["paneId"])
+
+    def test_sessions_are_named_after_their_project(self):
+        repo_hash = hashlib.sha256(str(self.repo.resolve()).encode()).hexdigest()[:10]
+        task = self.create()
+        # The fixture's "repo with spaces" also shows names made safe for tmux.
+        self.assertEqual(task["session"], "roost-repo-with-spaces-" + repo_hash[:4])
+        # A session from before, named by hash alone, keeps the project's tasks.
+        roost.tmux(self.socket, "new-session", "-d", "-s", "roost-" + repo_hash)
+        self.assertEqual(self.create(name="later")["session"], "roost-" + repo_hash)
 
     def test_existing_session_and_rename_survive_resume(self):
         roost.tmux(self.socket, "new-session", "-d", "-s", "existing")

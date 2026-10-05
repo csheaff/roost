@@ -714,6 +714,8 @@
                (let ((window (get-buffer-window roost--sidebar-buffer)))
                  (should (eq (window-parameter window 'window-side) 'left))
                  (should (window-dedicated-p window))
+                 (should (eq (window-parameter window 'mode-line-format) 'none))
+                 (should (eq (window-parameter window 'tab-line-format) 'none))
                  ;; It survives C-x 1 from the main window.
                  (select-window (window-main-window))
                  (delete-other-windows)
@@ -1384,6 +1386,14 @@
        (let ((default-directory "/ssh:dev:/home/user/elsewhere/"))
          (roost--magit-refreshed))
        (should (equal refreshes `(("dev" nil (,(roost--field task 'id))))))))))
+
+(ert-deftest roost-mode-line-waiting-is-there-for-custom-mode-lines ()
+  (roost-test--isolated
+   (roost--cache-task "dev" (roost-test--task nil "permission"))
+   (let ((roost-watch-mode nil))
+     (should-not (roost-mode-line-waiting)))
+   (let ((roost-watch-mode t))
+     (should (equal (substring-no-properties (roost-mode-line-waiting)) " Roost:1 ")))))
 
 (ert-deftest roost-a-seen-ready-agent-stops-counting-as-waiting ()
   (roost-test--isolated
