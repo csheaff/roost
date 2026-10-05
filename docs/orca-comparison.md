@@ -77,7 +77,8 @@ tasks were then taken from creation to merge in it (see
 
 Using it found what a screenshot would not. Changes went stale while agents
 worked, because background polls skip Git; Roost now measures a task whenever
-its agent reports an event or Magit refreshes its worktree. Read replies kept
+its agent reports an event, a Git command such as your own commit touches its
+worktree, you save a file there, or Magit refreshes it. Read replies kept
 counting as waiting. Magit could open inside the panel's window. These are
 fixed.
 

@@ -107,11 +107,11 @@
 
 (ert-deftest roost-a-permission-request-says-what-it-asks ()
   (roost-test--isolated
-   (let* ((asking (roost--cache-task "dev" (append `((request . "run make test")
+   (let* ((asking (roost--cache-task "dev" (append `((request . "Asks to run make test")
                                                      (lastMessage . ,roost-test--reply))
                                                    (roost-test--task nil "permission"))))
           ;; A request left in the record after the agent moved on is stale.
-          (moved-on (append '((request . "run make test")) (roost-test--task "fedcba9876543210" "running")))
+          (moved-on (append '((request . "Asks to run make test")) (roost-test--task "fedcba9876543210" "running")))
           (row (lambda (task) (roost--dashboard-row task (roost--dashboard-layout (list task) 120) 120))))
      (should (string-match-p "Asks to run make test" (funcall row asking)))
      (should-not (string-match-p "Asks to" (funcall row moved-on)))

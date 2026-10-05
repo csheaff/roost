@@ -412,7 +412,10 @@ event:
   said only `permission`, with the agent's last words. The hook's tool and
   input now give `Asks to run date -u > /tmp/…` or `Asks to edit notes.py`,
   kept through the notification that follows a request and cleared when the
-  agent moves on.
+  agent moves on. A multiple-choice question from the agent arrives the same
+  way (its `AskUserQuestion` tool asks permission first), and reads `Asks:
+  Which color do you prefer?`; a plan waiting for approval, `Asks you to
+  approve its plan`.
 - **New files.** An agent that only added files showed `uncommitted` with no
   count, since `git diff --shortstat` leaves out untracked files. The
   dashboard counts them from the list of changed files: `1 new file`, or

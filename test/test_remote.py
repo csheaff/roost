@@ -169,10 +169,10 @@ class Lifecycle(unittest.TestCase):
         hook = lambda **payload: roost.update_hook(store, task["id"], payload)
         hook(hook_event_name="PermissionRequest", tool_name="Bash",
              tool_input=dict(command="cd sub &&\n  make test"))
-        self.assertEqual(store.read(task["id"])["request"], "run cd sub && make test")
+        self.assertEqual(store.read(task["id"])["request"], "Asks to run cd sub && make test")
         # The notification that follows names no tool, and keeps it.
         hook(hook_event_name="Notification", notification_type="permission_prompt")
-        self.assertEqual(store.read(task["id"])["request"], "run cd sub && make test")
+        self.assertEqual(store.read(task["id"])["request"], "Asks to run cd sub && make test")
         hook(hook_event_name="PostToolUse", tool_name="Bash", tool_input=dict(command="make test"))
         self.assertNotIn("request", store.read(task["id"]))
         # A prompt reported only by a notification has nothing to show.
@@ -181,7 +181,7 @@ class Lifecycle(unittest.TestCase):
         self.assertNotIn("request", store.read(task["id"]))
         hook(hook_event_name="PermissionRequest", tool_name="Write",
              tool_input=dict(file_path=str(Path(task["worktree"]) / "docs" / "notes.md")))
-        self.assertEqual(self.request("list")["result"][0]["request"], "write docs/notes.md")
+        self.assertEqual(self.request("list")["result"][0]["request"], "Asks to write docs/notes.md")
 
     def test_dirty_tracked_and_untracked_work_blocks_cleanup(self):
         task = self.create()
@@ -1244,14 +1244,21 @@ class PushCheck(unittest.TestCase):
 class PermissionRequest(unittest.TestCase):
     def test_requests_read_as_phrases(self):
         ask = lambda tool, **args: roost.permission_request(dict(tool_name=tool, tool_input=args), "/work/task")
-        self.assertEqual(ask("Edit", file_path="/work/task/notes.py"), "edit notes.py")
-        self.assertEqual(ask("Read", file_path="/etc/hosts"), "read /etc/hosts")
-        self.assertEqual(ask("shell", command=["bash", "-lc", "make test"]), "run bash -lc 'make test'")
-        self.assertEqual(ask("WebFetch", url="https://example.com"), "fetch https://example.com")
-        self.assertEqual(ask("apply_patch", input="*** Begin Patch"), "edit files")
-        self.assertEqual(ask("mcp__github__create_issue", title="x"), "use mcp__github__create_issue")
-        self.assertEqual(ask("Bash"), "use Bash")
-        self.assertEqual(len(ask("Bash", command="x" * 1000)), len("run ") + roost.REQUEST_LIMIT)
+        self.assertEqual(ask("Edit", file_path="/work/task/notes.py"), "Asks to edit notes.py")
+        self.assertEqual(ask("Read", file_path="/etc/hosts"), "Asks to read /etc/hosts")
+        self.assertEqual(ask("shell", command=["bash", "-lc", "make test"]), "Asks to run bash -lc 'make test'")
+        self.assertEqual(ask("WebFetch", url="https://example.com"), "Asks to fetch https://example.com")
+        self.assertEqual(ask("apply_patch", input="*** Begin Patch"), "Asks to edit files")
+        self.assertEqual(ask("mcp__github__create_issue", title="x"), "Asks to use mcp__github__create_issue")
+        self.assertEqual(ask("Bash"), "Asks to use Bash")
+        self.assertEqual(len(ask("Bash", command="x" * 1000)), len("Asks to run ") + roost.REQUEST_LIMIT)
+        # Questions and plans wait for an answer rather than a permission.
+        question = lambda text: dict(question=text, header="h", options=[dict(label="a"), dict(label="b")])
+        self.assertEqual(ask("AskUserQuestion", questions=[question("Red or blue?")]), "Asks: Red or blue?")
+        self.assertEqual(ask("AskUserQuestion", questions=[question("Red?"), question("Blue?")]),
+                         "Asks: Red? (and 1 more)")
+        self.assertEqual(ask("AskUserQuestion", questions="odd"), "Asks you a question")
+        self.assertEqual(ask("ExitPlanMode", plan="1. Do it"), "Asks you to approve its plan")
         self.assertIsNone(roost.permission_request(dict(hook_event_name="Notification")))
 
 

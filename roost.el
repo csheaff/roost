@@ -2354,11 +2354,11 @@ everything inside inline code."
         (unless (string-empty-p text) text)))))
 
 (defun roost--permission-request (task)
-  "What TASK's agent asks permission to do, as \"Asks to run make\", or nil."
+  "What TASK's agent asks you, as \"Asks to run make\", or nil."
   (when-let* (((equal (roost--field task 'status) "permission"))
               (request (roost--field task 'request))
               ((stringp request)))
-    (concat "Asks to " request)))
+    request))
 
 (defun roost--last-message-summary (task)
   "First meaningful line of TASK's latest reply, or nil.

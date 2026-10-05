@@ -1333,13 +1333,17 @@ REQUEST_LIMIT = 300
 
 
 def permission_request(payload, worktree=None):
-    """What a permission request asks to do, as a phrase: "run python3 -m
-    pytest", "edit notes.py". None when the payload names no tool, as in
-    the notification that follows a request."""
+    """What a permission request asks, as a sentence: "Asks to run python3
+    -m pytest", "Asks to edit notes.py", "Asks: Which color do you prefer?".
+    None when the payload names no tool, as in the notification that
+    follows a request."""
     tool = payload.get("tool_name")
     if not isinstance(tool, str) or not tool:
         return None
     args = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+
+    def clip(value):
+        return " ".join(value.split())[:REQUEST_LIMIT]
 
     def arg(*keys):
         for key in keys:
@@ -1350,9 +1354,20 @@ def permission_request(payload, worktree=None):
                 if key in ("file_path", "notebook_path", "path") and worktree:
                     with contextlib.suppress(ValueError):
                         value = str(Path(value).relative_to(worktree))
-                return " ".join(value.split())[:REQUEST_LIMIT]
+                return clip(value)
         return None
 
+    if tool == "AskUserQuestion":
+        questions = [q.get("question") for q in args.get("questions") or [] if isinstance(q, dict)]
+        questions = [q for q in questions if isinstance(q, str) and q.strip()]
+        if not questions:
+            return "Asks you a question"
+        more = len(questions) - 1
+        return "Asks: " + clip(questions[0]) + (" (and %d more)" % more if more else "")
+    if tool == "ExitPlanMode":
+        return "Asks you to approve its plan"
+    if tool == "apply_patch":
+        return "Asks to edit files"
     detail = None
     if tool in ("Bash", "shell", "exec_command", "local_shell"):
         verb, detail = "run", arg("command", "cmd")
@@ -1362,9 +1377,7 @@ def permission_request(payload, worktree=None):
         verb, detail = "fetch", arg("url")
     elif tool == "WebSearch":
         verb, detail = "search the web for", arg("query")
-    elif tool == "apply_patch":
-        return "edit files"
-    return verb + " " + detail if detail else "use " + tool
+    return "Asks to " + (verb + " " + detail if detail else "use " + tool)
 
 
 def update_hook(store, task_id, payload, run_id=None):
