@@ -627,7 +627,30 @@ def spawn(store, task, resume=False):
     tmux(socket, "set-option", "-p", "-t", pane, "@roost_task_id", task["id"])
     tmux(socket, "set-option", "-w", "-t", window, "remain-on-exit", "on")
     tmux(socket, "set-option", "-w", "-t", window, "automatic-rename", "off")
+    # The agent's hooks call this helper for as long as it runs.
+    task["helper"] = script
     store.save(task)
+    with contextlib.suppress(OSError, TypeError, ValueError):
+        prune_helpers(store)
+
+
+HELPER_KEEP_SECONDS = 7 * 24 * 3600
+
+
+def prune_helpers(store):
+    """Delete copies of older helpers that nothing will call again: not this
+    one, not one a task's agent was launched with, since its hooks call it,
+    and none installed in the last week, which another Emacs may still use."""
+    records = list(store.tasks_dir.glob("*.json"))
+    tasks = store.all()
+    if len(tasks) != len(records) or any(not task.get("helper") for task in tasks):
+        return  # A task whose helper is unknown might still call any of them.
+    keep = {Path(__file__).resolve().name} | {Path(task["helper"]).name for task in tasks}
+    cutoff = datetime.datetime.now().timestamp() - HELPER_KEEP_SECONDS
+    for path in store.root.glob("remote-*.py"):
+        with contextlib.suppress(OSError):
+            if path.name not in keep and path.stat().st_mtime < cutoff:
+                path.unlink()
 
 
 def create(store, request):

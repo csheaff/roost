@@ -418,7 +418,14 @@ event:
   dashboard counts them from the list of changed files: `1 new file`, or
   `2 files +10 −3 · 1 new`.
 
-All 123 ERT and 76 Python tests pass.
+Helpers no longer pile up: each host kept a copy of every helper version
+Emacs had installed (eight in the capture state after a day of edits). A
+task now records the helper that launched it, whose copy its hooks call,
+and launching a task deletes copies that no task records and no Emacs has
+installed in a week. Hosts with tasks from before the record keep every copy
+until those tasks end.
+
+All 123 ERT and 77 Python tests pass.
 
 Not Roost's to fix: on this Mac, tmux 3.6a shows non-ASCII window names as
 underscores whatever the locale (tmux 3.7c on Linux keeps them); Roost's own

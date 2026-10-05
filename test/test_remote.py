@@ -112,6 +112,31 @@ class Lifecycle(unittest.TestCase):
         roost.update_hook(store, task["id"], dict(hook_event_name="Stop", background_tasks=[{}]))
         self.assertEqual(store.read(task["id"])["status"], "background")
 
+    def test_launching_prunes_old_helpers_nothing_calls(self):
+        first = self.create()
+        week_ago = time.time() - 8 * 24 * 3600
+        helpers = {name: self.state / ("remote-%s.py" % name) for name in ("old", "recent", "used")}
+        for name, path in helpers.items():
+            path.write_text("# an older helper\\n")
+            if name != "recent":
+                os.utime(path, (week_ago, week_ago))
+        store = roost.Store(str(self.state))
+        # A running agent's hooks call the helper that launched it.
+        store.save(dict(store.read(first["id"]), helper=str(helpers["used"])))
+        self.assertEqual(store.read(self.create(name="second")["id"])["helper"],
+                         str(Path(roost.__file__).resolve()))
+        self.assertFalse(helpers["old"].exists())
+        self.assertTrue(helpers["recent"].exists())
+        self.assertTrue(helpers["used"].exists())
+        # Tasks from before helpers were recorded keep every copy.
+        helpers["old"].write_text("# an older helper\\n")
+        os.utime(helpers["old"], (week_ago, week_ago))
+        record = store.read(first["id"])
+        record.pop("helper")
+        store.save(record)
+        self.create(name="third")
+        self.assertTrue(helpers["old"].exists())
+
     def test_a_turn_you_stop_leaves_the_agent_waiting_for_you(self):
         # Claude runs no hook for Esc or a declined request; its transcript
         # records the interrupt, which a listing notices.
