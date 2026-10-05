@@ -1185,6 +1185,9 @@
                  "importing-examples-october-csv"))
   (should (equal (roost--name-from-prompt "Please add a --json flag to the report") "add-json-flag-report"))
   (should (equal (roost--name-from-prompt "") ""))
+  ;; An apostrophe joins, rather than splits off a stray letter.
+  (should (equal (roost--name-from-prompt "List the notes command's options") "list-notes-commands-options"))
+  (should (equal (roost--name-from-prompt "Don’t crash on empty files") "dont-crash-empty-files"))
   (should (equal (roost--name-from-prompt "Off-by-one scroll: cursor-relative full-screen repaint")
                  "off-by-one-scroll-cursor-relative"))
   (should (equal (roost--name-from-prompt "-- --- leading dashes") "leading-dashes"))

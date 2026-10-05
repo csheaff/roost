@@ -1062,7 +1062,10 @@ a word, within 40 characters."
                       (seq-remove (lambda (word) (or (string-empty-p word) (member word common)))
                                   (mapcar (lambda (word) (string-trim word "-+" "-+"))
                                           (split-string (downcase (replace-regexp-in-string
-                                                                   "[^[:alnum:]-]+" " " (or text "")))
+                                                                   "[^[:alnum:]-]+" " "
+                                                                   ;; command's, not command-s
+                                                                   (replace-regexp-in-string
+                                                                    "['’]" "" (or text ""))))
                                                         " +" t))))))
          (first-line (funcall words-of (car (split-string (or prompt "") "\n" t "[ \t]+"))))
          (words (if (>= (length first-line) 2) first-line (funcall words-of prompt)))
