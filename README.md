@@ -11,10 +11,10 @@ host. It tells you which agents need you, and you review and merge their work
 with Magit. If you've used Orca or Conductor, it's that idea, inside the Emacs
 you already use.
 
-![An agent asks permission and the sidebar shows it waiting; n opens its terminal, beside the task's panel; the answer lets it finish; its changed file opens in Magit; m merges it](docs/images/roost-loop.gif)
+![Three agents, one on another machine, which the sidebar shows asking permission; n opens its terminal over SSH beside the task's panel; the answer lets it finish; its changed file opens in Magit; m merges it](docs/images/roost-loop.gif)
 
-*Real Claude Code agents in a plain Emacs: an agent asks permission, `n` takes
-you to it, you answer, look at its changes and merge.*
+*Real Claude Code agents in a plain Emacs, one of them on another machine: it
+asks permission, `n` takes you to it, you answer, look at its changes and merge.*
 
 - **See who needs you.** The sidebar, the dashboard and your mode line show which
   agents are waiting, permission requests first, and `n` takes you to the next.

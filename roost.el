@@ -3069,9 +3069,18 @@ down.  With WIDTH, fit each line within it, leaving details to hover."
   (mouse-set-point event)
   (popup-menu roost-task-menu event))
 
+(defvar roost--shown-mode-line-count nil
+  "The waiting count the mode lines last showed.")
+
 (defun roost--redraw ()
   "Refresh an existing dashboard and task panels without changing focus."
   (roost--note-watched-agent)
+  ;; Mode lines are redrawn with their windows, so a terminal you are not
+  ;; typing in would keep showing an old count.
+  (let ((count (roost--mode-line-count)))
+    (unless (equal count roost--shown-mode-line-count)
+      (setq roost--shown-mode-line-count count)
+      (force-mode-line-update t)))
   (when-let* ((buffer (get-buffer "*roost*")))
     (with-current-buffer buffer
       (when (derived-mode-p 'roost-dashboard-mode)
