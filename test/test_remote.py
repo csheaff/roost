@@ -191,6 +191,10 @@ class Lifecycle(unittest.TestCase):
         self.assertIn(dict(path="image"), files)
         self.assertIn(dict(path="new file", untracked=True), files)
         self.assertIn(dict(path="greeting", added=2, deleted=0), files)
+        # Like the other statistics, the list is never saved in the record.
+        store = roost.Store(str(self.state))
+        store.save(dict(store.read(task["id"]), files=files))
+        self.assertNotIn("files", store.read(task["id"]))
 
     def test_a_full_listing_can_name_the_tasks_to_measure(self):
         first, second = self.create(), self.create(name="second")

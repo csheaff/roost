@@ -941,6 +941,14 @@
       (cl-letf (((symbol-function 'roost--diff-file) (lambda (_task file) (setq shown file))))
         (push-button (1- (point))))
       (should (equal (alist-get 'path shown) "notes.py")))
+    ;; Wide characters are cut by their width.
+    (with-temp-buffer
+      (roost--insert-changed-files
+       (append '((files ((path . "文档/说明/非常长的文件名称说明文档.md") (added . 1) (deleted . 0))))
+               (roost-test--task))
+       30)
+      (should (string-match-p "…" (buffer-string)))
+      (should (<= (string-width (car (split-string (buffer-string) "\n"))) 30)))
     ;; Beyond a dozen, the rest are summed up.
     (with-temp-buffer
       (roost--insert-changed-files

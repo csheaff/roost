@@ -28,7 +28,7 @@ ACTIVE = ("starting", "running", "permission", "background")
 # States in which the agent process is known to have ended.
 ENDED = ("stopped", "exited", "failed", "crashed")
 # Computed per request and never persisted in a task record.
-TRANSIENT = ("live", "diff", "dirty", "ahead", "behind", "update", "worktreeMissing",
+TRANSIENT = ("live", "diff", "dirty", "files", "ahead", "behind", "update", "worktreeMissing",
              "prStatus", "lastMessage")
 LAST_MESSAGE_TAIL = 256 * 1024
 LAST_MESSAGE_LIMIT = 2000

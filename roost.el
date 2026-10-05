@@ -2230,7 +2230,9 @@ COMPACT abbreviates commits ahead of and behind the integration branch."
         (insert "  ")
         ;; Long paths keep their end, which names the file.
         (insert-text-button (if (> (string-width path) room)
-                                (concat "…" (substring path (- (length path) (1- room))))
+                                (concat "…" (truncate-string-to-width
+                                             path (string-width path)
+                                             (- (string-width path) (1- room))))
                               path)
                             'follow-link t 'face 'roost-field
                             'help-echo (concat path "\nmouse-1: show its changes")
