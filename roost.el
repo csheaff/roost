@@ -3307,10 +3307,20 @@ scrolled stays where you left it."
   (dolist (frame (frame-list))
     (with-selected-frame frame (roost--sync-side-windows))))
 
+(defvar roost--layout-timer nil
+  "Timer that brings the side windows in step after a layout change.")
+
 (defun roost--layout-changed ()
-  "Keep Roost's side windows in step with a changed window layout.
-Runs from `window-configuration-change-hook', once for each changed frame."
-  (with-demoted-errors "Roost: %S" (roost--sync-side-windows)))
+  "Bring Roost's side windows in step with a changed window layout, soon.
+Runs from `window-configuration-change-hook'.  The side windows change
+just after redisplay rather than during it: Emacs records window sizes as
+its window change hooks finish, so a resize made from one of them would go
+unreported to other packages, such as tmux-control resizing a terminal."
+  (unless (timerp roost--layout-timer)
+    (setq roost--layout-timer
+          (run-at-time 0 nil (lambda ()
+                               (setq roost--layout-timer nil)
+                               (with-demoted-errors "Roost: %S" (roost--sync-all-frames)))))))
 
 (defun roost--watch-layout ()
   "Keep Roost's side windows in step with the window layout from now on.
@@ -3400,6 +3410,7 @@ Beside a terminal, that turns off `roost-task-panel-mode'."
       (when-let* ((panel (roost--task-panel-window)))
         (delete-window panel))))
   (remove-hook 'window-configuration-change-hook #'roost--layout-changed)
+  (when (timerp roost--layout-timer) (cancel-timer roost--layout-timer))
   (remove-hook 'magit-post-refresh-hook #'roost--magit-refreshed)
   (when roost-watch-mode (roost-watch-mode -1))
   (advice-remove 'persp-mode-line #'roost--compact-perspective-mode-line)

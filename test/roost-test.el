@@ -773,6 +773,21 @@
     (should-not after-make-frame-functions)
     (should-not persp-activated-hook)))
 
+(ert-deftest roost-layout-changes-are-followed-after-redisplay ()
+  ;; Changing windows during redisplay's change hooks would hide the
+  ;; resize from other packages; Roost waits for a timer instead.
+  (let ((roost--layout-timer nil) synced)
+    (cl-letf (((symbol-function 'roost--sync-all-frames) (lambda () (setq synced t))))
+      (roost--layout-changed)
+      (roost--layout-changed)
+      (should (timerp roost--layout-timer))
+      (should-not synced)
+      (let ((timer roost--layout-timer))
+        (cancel-timer timer)
+        (funcall (timer--function timer)))
+      (should synced)
+      (should-not roost--layout-timer))))
+
 (ert-deftest roost-unloading-stops-following-the-layout ()
   (let ((window-configuration-change-hook nil))
     (roost--watch-layout)
