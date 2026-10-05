@@ -3609,7 +3609,6 @@ to `mode-line-format'."
 While watching, the mode line counts the agents waiting for you; see
 `roost-mode-line-count'."
   :global t
-  :lighter " Roost"
   (when roost--watch-timer
     (cancel-timer roost--watch-timer)
     (setq roost--watch-timer nil))
