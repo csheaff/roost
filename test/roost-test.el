@@ -897,6 +897,25 @@
     (should-not truncate-lines)
     (should word-wrap)))
 
+(ert-deftest roost-task-panel-draws-in-order-in-a-window-not-selected ()
+  ;; Measuring the panel's window must not move point while it is drawn.
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let* ((task (roost--cache-task "dev" (roost-test--task)))
+            (buffer (roost--task-info-buffer task))
+            (other (split-window-right)))
+       (unwind-protect
+           (progn
+             (set-window-buffer other buffer)
+             (with-current-buffer buffer
+               (roost--render-task-info)
+               (roost--render-task-info)
+               (should (string-prefix-p "fix auth" (buffer-string)))
+               (should (< (string-search "Actions" (buffer-string))
+                          (string-search "Details" (buffer-string))))))
+         (kill-buffer buffer))))))
+
 (ert-deftest roost-task-panel-redraws-keep-the-scroll-position ()
   (roost-test--isolated
    (save-window-excursion

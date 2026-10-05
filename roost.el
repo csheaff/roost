@@ -2510,7 +2510,15 @@ For a panel in a narrow window, such as beside a task's terminal."
 (defun roost--task-info-width ()
   "Columns in the narrowest window showing the current task panel."
   (let ((windows (get-buffer-window-list (current-buffer) nil t)))
-    (if windows (apply #'min (mapcar #'window-body-width windows)) 80)))
+    (if windows (apply #'min (mapcar #'roost--usable-width windows)) 80)))
+
+(defun roost--usable-width (window)
+  "Columns WINDOW shows on a line without truncating or continuing it.
+Without fringes, as in a terminal, that is one less than its body width:
+the last column is kept for the truncation mark."
+  ;; `window-max-chars-per-line' selects WINDOW, which moves point in its
+  ;; buffer to the window's point; a drawing in progress must keep its own.
+  (save-excursion (window-max-chars-per-line window)))
 
 (defun roost--task-info-resized (window)
   "Reflow the task panel after WINDOW is resized."
@@ -2978,7 +2986,9 @@ down.  With WIDTH, fit each line within it, leaving details to hover."
          (position (if window (window-point window) (point)))
          (key (get-text-property position 'roost-task))
          (start-line (when window (line-number-at-pos (window-start window))))
-         (width (if window (window-body-width window) 120))
+         ;; Without fringes, as in a terminal, a full line would lose its last
+         ;; column to the truncation mark; this leaves room for it.
+         (width (if window (roost--usable-width window) 120))
          (tasks (roost-tasks))
          (inhibit-read-only t))
     (erase-buffer)
@@ -3142,7 +3152,7 @@ Task commands act on the task at point, as in the dashboard.
 (defun roost--render-sidebar ()
   "Render the task sidebar from cached state, keeping point on its task."
   (let* ((window (get-buffer-window (current-buffer) t))
-         (width (max 12 (if window (window-body-width window) roost-sidebar-width)))
+         (width (max 12 (if window (roost--usable-width window) roost-sidebar-width)))
          (key (get-text-property (point) 'roost-task))
          (tasks (roost-tasks))
          (inhibit-read-only t))
