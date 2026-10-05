@@ -144,6 +144,17 @@ nothing). `C-u M-x roost-doctor` checks a host before you add it.
 
 Magit is optional (review falls back to Dired).
 
+### Keeping Roost in view
+
+`M-x roost-sidebar-mode` keeps a compact list of your tasks at the left of every
+frame, like Orca's sidebar: a colored dot and status per task, grouped by
+project, with how many agents are waiting at the top. It stays when you switch
+perspectives or tabs and survives `C-x 1`; click a task or press `RET` to open
+it, and `q` hides the sidebar. Opening a task also docks its panel on the right
+(the agent's latest reply, changes and actions) when the terminal keeps at
+least 80 columns, so a task reads as three columns: tasks, terminal, details.
+`roost-task-panel-beside-terminal` turns the docked panel off.
+
 ### Fitting your setup
 
 - **Workspaces.** Each task gets its own window arrangement: a perspective with
@@ -220,6 +231,9 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
   worktrees; default `~/.local/share/roost`.
 - `roost-socket-name`, `roost-session-name`: tmux socket (default tmux-control's)
   and session (default one per repository).
+- `roost-sidebar-width` (30), `roost-task-panel-beside-terminal`,
+  `roost-task-panel-width` (44): the sidebar and the panel docked beside a
+  task's terminal.
 - `roost-workspace`, `roost-compact-mode-line`: how tasks get their own windows
   (see above); with perspective.el, task perspectives share one
   `Roost: host/task +N` entry in the perspective bar.

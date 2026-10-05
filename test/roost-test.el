@@ -605,6 +605,88 @@
        (roost-watch-mode -1))
      (should (equal global-mode-string '("" display-time-string))))))
 
+(ert-deftest roost-sidebar-lists-tasks-compactly ()
+  (roost-test--isolated
+   (let ((roost--current-task nil))
+     (roost--cache-task "dev" (append '((name . "budget-alerts") (repo . "/srv/ledger"))
+                                      (roost-test--task "1111111111111111" "permission")))
+     (roost--cache-task "dev" (append '((name . "a-task-with-a-very-long-name-indeed") (repo . "/srv/ledger"))
+                                      (roost-test--task "2222222222222222" "running")))
+     (setq roost--current-task '("dev" "1111111111111111"))
+     (with-temp-buffer
+       (roost-sidebar-list-mode)
+       (roost--render-sidebar)
+       (let ((lines (split-string (buffer-string) "\n")))
+         (should (equal (substring-no-properties (car lines)) "Roost  1 waiting"))
+         (should (member "dev · ledger" lines))
+         ;; The current task is marked; statuses are right-aligned.
+         (should (member "▸● budget-alerts    permission" lines))
+         (should (= (string-width "▸● budget-alerts    permission") roost-sidebar-width))
+         ;; Long names are cut to fit, keeping the status when it fits.
+         (should (seq-some (lambda (line) (and (string-prefix-p " ● a-task" line)
+                                                (string-match-p "…" line)
+                                                (<= (string-width line) roost-sidebar-width)))
+                           lines)))
+       ;; Task commands find the task on the line, as in the dashboard.
+       (goto-char (point-min))
+       (search-forward "budget-alerts")
+       (should (equal (roost--field (roost--task-at-point) 'id) "1111111111111111"))))))
+
+(ert-deftest roost-sidebar-mode-pins-a-left-window-and-follows-workspaces ()
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let ((roost-watch-interval 3600))
+       (cl-letf (((symbol-function 'roost-refresh) #'ignore))
+         (unwind-protect
+             (progn
+               (roost-sidebar-mode 1)
+               (should (memq #'roost--sidebar-show persp-activated-hook))
+               (let ((window (get-buffer-window roost--sidebar-buffer)))
+                 (should (eq (window-parameter window 'window-side) 'left))
+                 (should (window-dedicated-p window))
+                 ;; It survives C-x 1 from the main window.
+                 (select-window (window-main-window))
+                 (delete-other-windows)
+                 (should (window-live-p window))
+                 ;; Opening a task from the sidebar uses the main window.
+                 (select-window window)
+                 (roost--leave-side-window)
+                 (should-not (window-parameter (selected-window) 'window-side))))
+           (roost-sidebar-mode -1)
+           (roost-watch-mode -1)))
+       (should-not (get-buffer-window roost--sidebar-buffer))
+       (should-not (memq #'roost--sidebar-show persp-activated-hook))))))
+
+(ert-deftest roost-task-panel-docks-beside-the-terminal-when-there-is-room ()
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let ((task (roost--cache-task "dev" (roost-test--task)))
+           (roost-task-panel-width 44))
+       (cl-letf (((symbol-function 'frame-width) (lambda (&rest _) 160)))
+         (roost--show-task-panel task))
+       (let ((window (seq-find (lambda (w) (eq (window-parameter w 'window-side) 'right)) (window-list))))
+         (should window)
+         (should (equal (buffer-local-value 'roost--buffer-task-key (window-buffer window))
+                        (roost--key task))))
+       ;; Too narrow: a remembered panel goes away and the terminal keeps its room.
+       (cl-letf (((symbol-function 'frame-width) (lambda (&rest _) 110)))
+         (roost--show-task-panel task))
+       (should-not (seq-find (lambda (w) (eq (window-parameter w 'window-side) 'right)) (window-list)))
+       (let ((roost-task-panel-beside-terminal nil))
+         (cl-letf (((symbol-function 'frame-width) (lambda (&rest _) 200)))
+           (roost--show-task-panel task))
+         (should-not (seq-find (lambda (w) (eq (window-parameter w 'window-side) 'right)) (window-list))))))))
+
+(ert-deftest roost-task-panel-flows-actions-in-a-narrow-window ()
+  (with-temp-buffer
+    (roost--insert-narrow-actions 40)
+    (let ((lines (split-string (buffer-string) "\n" t)))
+      (should (seq-every-p (lambda (line) (<= (string-width line) 40)) lines))
+      (should (string-match-p "RET Agent · t Shell" (buffer-string)))
+      (should (string-match-p "m Merge and retire" (buffer-string))))))
+
 (ert-deftest roost-request-wait-returns-results-and-signals-failures ()
   (cl-letf (((symbol-function 'roost--request)
              (lambda (_host _action _params success &optional _failure)
