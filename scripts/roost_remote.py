@@ -32,11 +32,21 @@ TRANSIENT = ("live", "diff", "dirty", "files", "ahead", "behind", "update", "wor
              "prStatus", "lastMessage", "gitStamp")
 LAST_MESSAGE_TAIL = 256 * 1024
 LAST_MESSAGE_LIMIT = 2000
+INTERRUPT_TAIL = 64 * 1024
 DEFAULT_BRANCH_PREFIX = "roost/"
 
 
 def now():
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+def parse_time(value):
+    """An ISO 8601 time as written by now() or by agents ("...Z"), or None."""
+    try:
+        parsed = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return parsed if parsed.tzinfo else None
 
 
 def text(value):
@@ -301,14 +311,14 @@ def claude_hook_settings(store, task):
     return str(path)
 
 
-def transcript_tail(path):
-    """Complete JSON lines from the end of a transcript, newest last."""
+def transcript_tail(path, limit=LAST_MESSAGE_TAIL):
+    """Complete JSON lines from the last LIMIT bytes of a transcript, newest last."""
     with open(path, "rb") as handle:
         size = handle.seek(0, os.SEEK_END)
-        handle.seek(max(0, size - LAST_MESSAGE_TAIL))
+        handle.seek(max(0, size - limit))
         data = handle.read()
     lines = data.splitlines()
-    if size > LAST_MESSAGE_TAIL and lines:
+    if size > limit and lines:
         lines.pop(0)  # Starts mid-line.
     entries = []
     for line in lines:
@@ -395,17 +405,42 @@ class ClaudeAgent:
             updates.update(agentSession=payload["session_id"], claudeSession=payload["session_id"])
         return updates
 
-    def last_message(self, task):
+    def transcript(self, task):
         session = task.get("agentSession") or task.get("claudeSession")
         if not session or not isinstance(task.get("worktree"), str):
             return None
         folder = re.sub(r"[/.]", "-", task["worktree"])
-        path = Path.home() / ".claude" / "projects" / folder / (session + ".jsonl")
+        return Path.home() / ".claude" / "projects" / folder / (session + ".jsonl")
+
+    def last_message(self, task):
+        path = self.transcript(task)
+        if not path:
+            return None
         message = lambda entry: (entry.get("message") if isinstance(entry.get("message"), dict)
                                  and entry["message"].get("role") == "assistant" else None)
         return last_assistant_text(
             transcript_tail(path),
             lambda entry: message_text((message(entry) or {}).get("content")))
+
+    def interrupted(self, task):
+        """Whether you stopped the agent's turn since its last hook event, with
+        Esc or by declining a permission request. Claude runs no hook for
+        either, and waits for a prompt; its transcript records the interrupt."""
+        path = self.transcript(task)
+        since = parse_time(task.get("updatedAt"))
+        if not path or not since or not path.is_file():
+            return False
+        if path.stat().st_mtime < since.timestamp():
+            return False
+        for entry in reversed(transcript_tail(path, INTERRUPT_TAIL)):
+            message = entry.get("message") if isinstance(entry, dict) else None
+            if entry.get("type") not in ("user", "assistant") or not isinstance(message, dict):
+                continue
+            stamp = parse_time(entry.get("timestamp"))
+            return bool(message.get("role") == "user" and stamp and stamp >= since
+                        and (message_text(message.get("content")) or "").startswith(
+                            "[Request interrupted by user"))
+        return False
 
 
 # Codex asks the user to review hook commands and remembers the approval.
@@ -688,6 +723,16 @@ def issues(request):
     return result
 
 
+def was_interrupted(task):
+    """Whether you stopped the task's agent mid-turn, for agents that report
+    no event when that happens. A missing or odd transcript says no."""
+    try:
+        check = getattr(agent_for(task), "interrupted", None)
+        return bool(check and check(task))
+    except (RoostError, OSError, ValueError, TypeError, AttributeError, KeyError):
+        return False
+
+
 def list_tasks(store, request):
     tasks = []
     for task in store.all():
@@ -719,6 +764,11 @@ def list_tasks(store, request):
             changed = True
         elif not task["live"] and task["status"] not in ENDED:
             task.update(status="crashed", statusBeforeCrash=task["status"], updatedAt=now())
+            changed = True
+        elif task["live"] and task["status"] in ("running", "permission") and was_interrupted(task):
+            # Stopped by you, so waiting for you; it reports no event of its own.
+            task.update(status="ready", updatedAt=now(), lastEvent="Interrupt")
+            task.pop("request", None)
             changed = True
         if changed:
             store.save(task)
@@ -1256,6 +1306,44 @@ def push_check(check, repo):
               repo, optional=True)
 
 
+REQUEST_LIMIT = 300
+
+
+def permission_request(payload, worktree=None):
+    """What a permission request asks to do, as a phrase: "run python3 -m
+    pytest", "edit notes.py". None when the payload names no tool, as in
+    the notification that follows a request."""
+    tool = payload.get("tool_name")
+    if not isinstance(tool, str) or not tool:
+        return None
+    args = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+
+    def arg(*keys):
+        for key in keys:
+            value = args.get(key)
+            if isinstance(value, list) and value and all(isinstance(x, str) for x in value):
+                value = shlex.join(value)
+            if isinstance(value, str) and value.strip():
+                if key in ("file_path", "notebook_path", "path") and worktree:
+                    with contextlib.suppress(ValueError):
+                        value = str(Path(value).relative_to(worktree))
+                return " ".join(value.split())[:REQUEST_LIMIT]
+        return None
+
+    detail = None
+    if tool in ("Bash", "shell", "exec_command", "local_shell"):
+        verb, detail = "run", arg("command", "cmd")
+    elif tool in ("Edit", "MultiEdit", "NotebookEdit", "Write", "Read"):
+        verb, detail = {"Write": "write", "Read": "read"}.get(tool, "edit"), arg("file_path", "notebook_path")
+    elif tool == "WebFetch":
+        verb, detail = "fetch", arg("url")
+    elif tool == "WebSearch":
+        verb, detail = "search the web for", arg("query")
+    elif tool == "apply_patch":
+        return "edit files"
+    return verb + " " + detail if detail else "use " + tool
+
+
 def update_hook(store, task_id, payload, run_id=None):
     with store.locked():
         task = store.read(task_id)
@@ -1263,9 +1351,18 @@ def update_hook(store, task_id, payload, run_id=None):
             return
         if task["status"] in ("stopped", "retired"):
             return
+        before = task["status"]
         updates = agent_for(task).observe(payload)
         if updates:
             task.update(updates)
+            request = (permission_request(payload, task.get("worktree"))
+                       if task["status"] == "permission" else None)
+            if request:
+                task["request"] = request
+            elif task["status"] != "permission" or before != "permission":
+                # The notification that follows a request names no tool:
+                # keep the request it follows, and only that one.
+                task.pop("request", None)
             store.save(task)
 
 

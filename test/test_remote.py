@@ -1,5 +1,6 @@
 """Real Git/tmux lifecycle tests. Isolated sockets; no API calls or user config."""
 import concurrent.futures
+import datetime
 import http.server
 import importlib.util
 import hashlib
@@ -110,6 +111,52 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(store.read(task["id"])["status"], "ready")
         roost.update_hook(store, task["id"], dict(hook_event_name="Stop", background_tasks=[{}]))
         self.assertEqual(store.read(task["id"])["status"], "background")
+
+    def test_a_turn_you_stop_leaves_the_agent_waiting_for_you(self):
+        # Claude runs no hook for Esc or a declined request; its transcript
+        # records the interrupt, which a listing notices.
+        task = self.create()
+        self.assertTrue(self.request("send", id=task["id"], text="permission")["ok"])
+        self.wait(task, "permission")
+        store = roost.Store(str(self.state))
+        roost.update_hook(store, task["id"], dict(hook_event_name="PermissionRequest", tool_name="Bash",
+                                                  tool_input=dict(command="make")))
+        record = store.read(task["id"])
+        home = self.root / "home"
+        transcript = (home / ".claude" / "projects" / re.sub(r"[/.]", "-", task["worktree"])
+                      / (record["agentSession"] + ".jsonl"))
+        transcript.parent.mkdir(parents=True)
+        since = roost.parse_time(record["updatedAt"])
+        marker = lambda seconds: json.dumps({
+            "type": "user", "timestamp": (since + datetime.timedelta(seconds=seconds)).isoformat(),
+            "message": {"role": "user", "content": [{"type": "text", "text": "[Request interrupted by user for tool use]"}]}})
+        with patch.dict(os.environ, HOME=str(home)):
+            transcript.write_text(marker(-60) + "\n")
+            self.assertEqual(self.request("list")["result"][0]["status"], "permission")
+            transcript.write_text(marker(1) + "\n")
+            listed = self.request("list")["result"][0]
+        self.assertEqual((listed["status"], listed["lastEvent"]), ("ready", "Interrupt"))
+        self.assertNotIn("request", store.read(task["id"]))
+
+    def test_a_permission_request_records_what_it_asks(self):
+        task = self.create()
+        store = roost.Store(str(self.state))
+        hook = lambda **payload: roost.update_hook(store, task["id"], payload)
+        hook(hook_event_name="PermissionRequest", tool_name="Bash",
+             tool_input=dict(command="cd sub &&\n  make test"))
+        self.assertEqual(store.read(task["id"])["request"], "run cd sub && make test")
+        # The notification that follows names no tool, and keeps it.
+        hook(hook_event_name="Notification", notification_type="permission_prompt")
+        self.assertEqual(store.read(task["id"])["request"], "run cd sub && make test")
+        hook(hook_event_name="PostToolUse", tool_name="Bash", tool_input=dict(command="make test"))
+        self.assertNotIn("request", store.read(task["id"]))
+        # A prompt reported only by a notification has nothing to show.
+        hook(hook_event_name="Notification", notification_type="permission_prompt")
+        self.assertEqual(store.read(task["id"])["status"], "permission")
+        self.assertNotIn("request", store.read(task["id"]))
+        hook(hook_event_name="PermissionRequest", tool_name="Write",
+             tool_input=dict(file_path=str(Path(task["worktree"]) / "docs" / "notes.md")))
+        self.assertEqual(self.request("list")["result"][0]["request"], "write docs/notes.md")
 
     def test_dirty_tracked_and_untracked_work_blocks_cleanup(self):
         task = self.create()
@@ -1168,6 +1215,20 @@ class PushCheck(unittest.TestCase):
         self.assertEqual(len(self.checks), 2, "a missing checkout is skipped")
 
 
+class PermissionRequest(unittest.TestCase):
+    def test_requests_read_as_phrases(self):
+        ask = lambda tool, **args: roost.permission_request(dict(tool_name=tool, tool_input=args), "/work/task")
+        self.assertEqual(ask("Edit", file_path="/work/task/notes.py"), "edit notes.py")
+        self.assertEqual(ask("Read", file_path="/etc/hosts"), "read /etc/hosts")
+        self.assertEqual(ask("shell", command=["bash", "-lc", "make test"]), "run bash -lc 'make test'")
+        self.assertEqual(ask("WebFetch", url="https://example.com"), "fetch https://example.com")
+        self.assertEqual(ask("apply_patch", input="*** Begin Patch"), "edit files")
+        self.assertEqual(ask("mcp__github__create_issue", title="x"), "use mcp__github__create_issue")
+        self.assertEqual(ask("Bash"), "use Bash")
+        self.assertEqual(len(ask("Bash", command="x" * 1000)), len("run ") + roost.REQUEST_LIMIT)
+        self.assertIsNone(roost.permission_request(dict(hook_event_name="Notification")))
+
+
 class LastMessage(unittest.TestCase):
     """Adapters read the end of each agent's own transcript, from a fake HOME."""
 
@@ -1198,6 +1259,33 @@ class LastMessage(unittest.TestCase):
         self.assertEqual(roost.last_message(task), "first part\n\nsecond part")
         legacy = dict(task, agentSession=None, claudeSession="s1")
         self.assertEqual(roost.last_message(legacy), "first part\n\nsecond part")
+
+    def test_claude_turns_stopped_by_you_are_read_from_the_transcript(self):
+        start = datetime.datetime(2026, 10, 5, 14, 0, tzinfo=datetime.timezone.utc)
+        task = dict(agent="claude", worktree="/w", agentSession="s2", updatedAt=start.isoformat())
+        at = lambda seconds: (start + datetime.timedelta(seconds=seconds)).isoformat().replace("+00:00", "Z")
+        user = lambda content, seconds: {"type": "user", "timestamp": at(seconds),
+                                         "message": {"role": "user", "content": content}}
+        reply = {"type": "assistant", "timestamp": at(1),
+                 "message": {"role": "assistant", "content": [{"type": "tool_use", "name": "Bash"}]}}
+        rejected = user([{"type": "tool_result", "is_error": True, "content": "The user doesn't want to proceed"}], 5)
+        marker = user([{"type": "text", "text": "[Request interrupted by user for tool use]"}], 5)
+        tail = [{"type": "system", "timestamp": at(6)}, {"type": "last-prompt"}]
+        transcript = lambda *entries: self.write(".claude/projects/-w/s2.jsonl", list(entries))
+        interrupted = lambda: roost.ClaudeAgent().interrupted(task)
+        transcript(reply, rejected, marker, *tail)
+        self.assertTrue(interrupted())
+        # Esc while it works.
+        transcript(reply, user([{"type": "text", "text": "[Request interrupted by user]"}], 5))
+        self.assertTrue(interrupted())
+        # Not once it has a new prompt, nor for an interrupt before its last event.
+        transcript(reply, marker, user("Try again", 7))
+        self.assertFalse(interrupted())
+        transcript(reply, user([{"type": "text", "text": "[Request interrupted by user]"}], -5))
+        self.assertFalse(interrupted())
+        transcript(reply, *tail)
+        self.assertFalse(interrupted())
+        self.assertFalse(roost.ClaudeAgent().interrupted(dict(task, agentSession="missing")))
 
     def test_only_the_end_of_a_large_transcript_is_read(self):
         task = dict(agent="claude", worktree="/w", agentSession="big")

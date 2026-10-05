@@ -564,7 +564,8 @@ finished or wants."
          (setq current (roost--cache-task host current))
          (roost--redraw)
          (roost--notify title
-                        (if-let* ((reply (roost--last-message-summary current)))
+                        (if-let* ((reply (or (roost--permission-request current)
+                                             (roost--last-message-summary current))))
                             (concat label " · " (truncate-string-to-width reply 160 nil nil "…"))
                           label)))
        (lambda (_error) (roost--notify title label))))))
@@ -2349,6 +2350,13 @@ everything inside inline code."
       (let ((text (string-trim (roost--strip-markdown message))))
         (unless (string-empty-p text) text)))))
 
+(defun roost--permission-request (task)
+  "What TASK's agent asks permission to do, as \"Asks to run make\", or nil."
+  (when-let* (((equal (roost--field task 'status) "permission"))
+              (request (roost--field task 'request))
+              ((stringp request)))
+    (concat "Asks to " request)))
+
 (defun roost--last-message-summary (task)
   "First meaningful line of TASK's latest reply, or nil.
 Empty lines, ATX and Setext headings, and lines without letters or digits
@@ -2667,6 +2675,9 @@ Windows showing the panel keep their scroll position."
                                     (or (roost--field task 'agent) "claude"))
                             'face 'roost-dim)
                 "\n")
+        (when-let* ((request (roost--permission-request task)))
+          (roost--insert-heading "Waiting for your answer")
+          (roost--insert-indented request))
         (when-let* ((reply (roost--last-message task)))
           (roost--insert-heading "Agent's latest reply")
           (let* ((preview (if (< width 72) (roost--reply-preview reply width) reply))
@@ -2970,7 +2981,8 @@ The changes column shrinks first, then the agent column is dropped."
          (room (- width (string-width line) 1)))
     (concat line
             (when (> room 8)
-              (propertize (truncate-string-to-width (roost--one-line (or (roost--last-message-summary task)
+              (propertize (truncate-string-to-width (roost--one-line (or (roost--permission-request task)
+                                                                   (roost--last-message-summary task)
                                                                    (roost--prompt-text task)))
                                                     room nil nil "…")
                           'face 'roost-dim)))))

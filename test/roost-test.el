@@ -105,6 +105,30 @@
                     (should-not (string-match-p "fix authentication" row)))
            (should (string-match-p "fix authentication" row))))))))
 
+(ert-deftest roost-a-permission-request-says-what-it-asks ()
+  (roost-test--isolated
+   (let* ((asking (roost--cache-task "dev" (append `((request . "run make test")
+                                                     (lastMessage . ,roost-test--reply))
+                                                   (roost-test--task nil "permission"))))
+          ;; A request left in the record after the agent moved on is stale.
+          (moved-on (append '((request . "run make test")) (roost-test--task "fedcba9876543210" "running")))
+          (row (lambda (task) (roost--dashboard-row task (roost--dashboard-layout (list task) 120) 120))))
+     (should (string-match-p "Asks to run make test" (funcall row asking)))
+     (should-not (string-match-p "Asks to" (funcall row moved-on)))
+     (with-temp-buffer
+       (roost-task-info-mode)
+       (setq roost--buffer-task-key (roost--key asking))
+       (roost--render-task-info)
+       (should (string-match-p "^Waiting for your answer\nAsks to run make test\n\nAgent's latest reply$"
+                               (buffer-string))))
+     ;; The notification names it, rather than the agent's last words.
+     (let (body)
+       (cl-letf (((symbol-function 'roost--request)
+                  (lambda (_host _action _params success _failure) (funcall success asking)))
+                 ((symbol-function 'roost--notify) (lambda (_title text) (setq body text))))
+         (roost--notify-attention "dev" asking "permission"))
+       (should (equal body "dev · Asks to run make test"))))))
+
 (ert-deftest roost-task-panel-shows-latest-reply ()
   (roost-test--isolated
    (let ((task (roost--cache-task "dev" (append `((lastMessage . ,roost-test--reply))

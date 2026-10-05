@@ -72,8 +72,8 @@ starts the agent in tmux, and opens its terminal.
 
 **Let them work.** Start more tasks; each is independent. Roost watches the
 agents' own lifecycle hooks and notifies you when one finishes or asks for
-permission, with the first line of its reply, so you can tell from the
-notification whether it needs you now. The agent whose terminal you are
+permission, with the first line of its reply or what it asks to do (`Asks to
+run make test`), so you can tell from the notification whether it needs you now. The agent whose terminal you are
 looking at doesn't notify. The dashboard shows each agent's latest
 reply too, and the mode line counts the agents waiting (`Roost:2`; click it for
 the next one). `n` jumps to the next agent waiting for you, permission requests
@@ -306,9 +306,11 @@ point at the commit Roost verified.
 
 Things to know:
 
-- Agents report no event when you decline a permission prompt, so a task can
-  show `permission` while the agent waits for a prompt. `e` asks before sending
-  in that state. Likewise, an approved command shows `permission` until it finishes.
+- Nothing reports your answer to a permission request. Approved, a command
+  shows `permission`, and what it asked, until it finishes. Declined, or
+  stopped with Esc, a Claude Code task shows `ready` at the next poll, read
+  from its transcript; Codex and Pi tasks may keep showing `permission`. `e`
+  asks before sending to a task in that state.
 - Claude and Codex each ask once per repository to trust it; every task worktree
   of that repository is trusted after that.
 - Codex asks you to review Roost's observer hooks the first time. The hook

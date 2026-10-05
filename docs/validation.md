@@ -392,8 +392,33 @@ its worktree's index and `HEAD` reflog and its integration branch's reflog,
 read with `stat` and no Git process, and Emacs measures a task whose stamp
 moved. Saving a file in a worktree, which leaves the index alone, measures its
 task too. Live, a commit from a shell showed up four seconds later, and a save
-with polling paused updated the count at once. All 122 ERT and 72 Python tests
-pass.
+with polling paused updated the count at once.
+
+Then, with Claude Code 2.1.289 (Haiku) and a probe session logging every hook
+event:
+
+- **Turns you stop.** Declining a permission request, or pressing Esc while
+  the agent works, runs no hook at all (no `Stop`, `PostToolUseFailure` or
+  `PermissionDenied`, and no `idle_prompt` notification in the two minutes
+  after), so Roost kept showing `permission` or `running` until the next
+  prompt. Claude's transcript records the interrupt (`[Request interrupted by
+  user]`); a listing now reads the end of a working Claude task's transcript
+  and marks it `ready` when that marker is newer than its last hook. Live, a
+  declined request and an Esc during a command each showed `ready` within
+  four seconds. An Esc before the first word of a reply leaves no marker
+  (Claude puts the prompt back in the input box), and an approval writes
+  nothing until the command finishes, so both still go unseen.
+- **What a request asks.** The dashboard, the task panel and notifications
+  said only `permission`, with the agent's last words. The hook's tool and
+  input now give `Asks to run date -u > /tmp/…` or `Asks to edit notes.py`,
+  kept through the notification that follows a request and cleared when the
+  agent moves on.
+- **New files.** An agent that only added files showed `uncommitted` with no
+  count, since `git diff --shortstat` leaves out untracked files. The
+  dashboard counts them from the list of changed files: `1 new file`, or
+  `2 files +10 −3 · 1 new`.
+
+All 123 ERT and 76 Python tests pass.
 
 Not Roost's to fix: on this Mac, tmux 3.6a shows non-ASCII window names as
 underscores whatever the locale (tmux 3.7c on Linux keeps them); Roost's own
