@@ -384,6 +384,17 @@ goes unreported to every package; it now changes side windows just after
 redisplay. Splits, `C-x 1`, the panel turning on and off and four frame sizes
 then each left tmux at exactly the terminal window's size.
 
+Recapturing the dashboard found one more. A commit made in a task's shell
+rather than by its agent left the dashboard saying `uncommitted` until `g`,
+since background polls measure only tasks whose agents have reported
+something. Each poll now stamps every task with the modification times of
+its worktree's index and `HEAD` reflog and its integration branch's reflog,
+read with `stat` and no Git process, and Emacs measures a task whose stamp
+moved. Saving a file in a worktree, which leaves the index alone, measures its
+task too. Live, a commit from a shell showed up four seconds later, and a save
+with polling paused updated the count at once. All 122 ERT and 72 Python tests
+pass.
+
 Not Roost's to fix: on this Mac, tmux 3.6a shows non-ASCII window names as
 underscores whatever the locale (tmux 3.7c on Linux keeps them); Roost's own
 views show them correctly. Unloading a package also unbinds its settings, so

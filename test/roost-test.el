@@ -1451,6 +1451,44 @@
        (should (= (length calls) 5))
        (should (equal (caar calls) ["0123456789abcdef"]))))))
 
+(ert-deftest roost-a-moved-git-stamp-fetches-git-statistics ()
+  ;; A commit made in the task's shell is no agent event.
+  (roost-test--isolated
+   (let ((roost-hosts '("dev")) calls)
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host _action params success _failure)
+                  (push (cons (alist-get 'full params) success) calls))))
+       (roost--cache-task "dev" (cons '(gitStamp . "1 2 3") (roost-test--task nil "ready")))
+       (roost-refresh t)
+       (funcall (cdar calls) (list (cons '(gitStamp . "1 2 3") (roost-test--task nil "ready"))))
+       (should (= (length calls) 1))
+       ;; An inspection, which has no stamp, keeps the last one.
+       (roost--cache-task "dev" (roost-test--task nil "ready"))
+       (roost-refresh t)
+       (funcall (cdar calls) (list (cons '(gitStamp . "1 2 3") (roost-test--task nil "ready"))))
+       (should (= (length calls) 2))
+       (roost-refresh t)
+       (funcall (cdar calls) (list (cons '(gitStamp . "1 4 3") (roost-test--task nil "ready"))))
+       (should (= (length calls) 4))
+       (should (equal (caar calls) ["0123456789abcdef"]))))))
+
+(ert-deftest roost-saving-a-file-in-a-worktree-measures-its-task ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (roost-test--task))) refreshes)
+     (cl-letf (((symbol-function 'roost--refresh-host)
+                (lambda (host quiet &optional ids) (push (list host quiet ids) refreshes))))
+       (let ((buffer-file-name "/ssh:dev:/home/user/work/fix auth/app.py"))
+         (roost--file-saved))
+       (let ((buffer-file-name "/ssh:dev:/home/user/elsewhere/app.py"))
+         (roost--file-saved))
+       (should (equal refreshes `(("dev" nil (,(roost--field task 'id)))))))
+     (let ((after-save-hook nil) (global-mode-string nil) (roost-watch-mode nil))
+       (unwind-protect
+           (progn (roost-watch-mode 1)
+                  (should (memq #'roost--file-saved after-save-hook)))
+         (roost-watch-mode -1))
+       (should-not (memq #'roost--file-saved after-save-hook))))))
+
 (ert-deftest roost-magit-refreshes-measure-their-task ()
   (roost-test--isolated
    (let ((task (roost--cache-task "dev" (roost-test--task))) refreshes)

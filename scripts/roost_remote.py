@@ -29,7 +29,7 @@ ACTIVE = ("starting", "running", "permission", "background")
 ENDED = ("stopped", "exited", "failed", "crashed")
 # Computed per request and never persisted in a task record.
 TRANSIENT = ("live", "diff", "dirty", "files", "ahead", "behind", "update", "worktreeMissing",
-             "prStatus", "lastMessage")
+             "prStatus", "lastMessage", "gitStamp")
 LAST_MESSAGE_TAIL = 256 * 1024
 LAST_MESSAGE_LIMIT = 2000
 DEFAULT_BRANCH_PREFIX = "roost/"
@@ -775,6 +775,35 @@ def changed_files(worktree, base, limit=50):
     return files[:limit]
 
 
+def git_stamp(task):
+    """When the task's Git state last moved, from file times alone: commits,
+    staging, resets and checkouts in its worktree, and moves of its
+    integration branch. Cheap enough for every poll, unlike the statistics,
+    so a commit made outside the agent still gets measured. Edits not yet
+    staged leave it alone."""
+    worktree = Path(task["worktree"])
+    try:
+        gitdir = worktree / ".git"
+        if gitdir.is_file():
+            # A linked worktree's .git names its directory in the repository.
+            gitdir = worktree / gitdir.read_text().split("gitdir:", 1)[1].strip()
+        common = gitdir
+        if (gitdir / "commondir").is_file():
+            common = gitdir / (gitdir / "commondir").read_text().strip()
+    except (OSError, IndexError, UnicodeDecodeError):
+        return None
+    paths = [gitdir / "index", gitdir / "logs" / "HEAD"]
+    if task.get("integrationBranch"):
+        paths.append(common / "logs" / "refs" / "heads" / task["integrationBranch"])
+    times = []
+    for path in paths:
+        try:
+            times.append(str(path.stat().st_mtime_ns))
+        except OSError:
+            times.append("-")
+    return " ".join(times)
+
+
 def add_git_stats(tasks, pull_requests=True):
     """Diffstat, dirtiness and divergence from the integration branch, and
     pull request status, and the agent's latest reply. Runs outside the registry lock: in a large
@@ -1352,6 +1381,9 @@ def rpc(request):
                 result = TASK_ACTIONS[action](store, task, request)
             else:
                 raise RoostError("Unknown action: " + str(action))
+        if action == "list":
+            for task in result:
+                task["gitStamp"] = git_stamp(task)
         if action == "list" and request.get("full"):
             # Full is true for every task, or a list of task IDs whose agents
             # have been active; their pull requests are checked with the rest.

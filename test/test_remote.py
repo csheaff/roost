@@ -218,6 +218,30 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(listed[first["id"]]["dirty"])
         self.assertNotIn("diff", listed[second["id"]])
 
+    def test_listings_stamp_each_tasks_git_state(self):
+        # Polls skip the statistics; a moved stamp tells Emacs to measure the
+        # task again, as after a commit made in a shell rather than by the agent.
+        task = self.create()
+        wt = Path(task["worktree"])
+        stamp = lambda: self.request("list")["result"][0]["gitStamp"]
+        first = stamp()
+        self.assertTrue(first)
+        # Measuring takes no index lock, so it leaves the stamp alone.
+        (wt / "hello").write_text("changed\n")
+        self.request("list", full=True)
+        self.assertEqual(stamp(), first)
+        time.sleep(0.05)  # Some file systems keep coarse times.
+        self.git("commit", "-qam", "change", cwd=wt)
+        second = stamp()
+        self.assertNotEqual(second, first)
+        # The integration branch moving on changes how far behind the task is.
+        time.sleep(0.05)
+        (self.repo / "other").write_text("x\n")
+        self.git("add", "other")
+        self.git("commit", "-qm", "other")
+        self.assertNotEqual(stamp(), second)
+        self.assertNotIn("gitStamp", roost.Store(str(self.state)).read(task["id"]))
+
     def test_window_renumbering_does_not_change_task_identity(self):
         task = self.create()
         roost.tmux(self.socket, "move-window", "-s", task["windowId"], "-t", task["session"] + ":8")

@@ -531,7 +531,7 @@ Call SUCCESS with the result, or FAILURE with an error message."
                         (not (equal (roost--field task 'updatedAt)
                                     (roost--field old 'updatedAt))))))
     ;; Quiet polls skip Git and the latest reply; keep the last full refresh's.
-    (dolist (field '(diff dirty files ahead behind worktreeMissing prStatus lastMessage))
+    (dolist (field '(diff dirty files ahead behind worktreeMissing prStatus lastMessage gitStamp))
       (unless (assoc field task)
         (when (assoc field old) (push (assoc field old) task))))
     (if (member status '("retired" "forgotten"))
@@ -582,13 +582,14 @@ finished or wants."
     (remhash host roost--errors)))
 
 (defun roost--task-states (host)
-  "HOST's cached tasks as an alist of ID to (STATUS . UPDATED-AT).
-Each agent hook event, such as finishing a tool, moves UPDATED-AT."
+  "HOST's cached tasks as an alist of ID to (STATUS UPDATED-AT GIT-STAMP).
+Each agent hook event, such as finishing a tool, moves UPDATED-AT; Git
+commands in the worktree, such as your commit, change GIT-STAMP."
   (let (states)
     (maphash (lambda (key task)
                (when (equal (car key) host)
-                 (push (cons (cadr key) (cons (roost--field task 'status)
-                                              (roost--field task 'updatedAt)))
+                 (push (list (cadr key) (roost--field task 'status)
+                             (roost--field task 'updatedAt) (roost--field task 'gitStamp))
                        states)))
              roost--tasks)
     states))
@@ -625,8 +626,9 @@ those tasks."
            (let ((before (roost--task-states host)))
              (roost--apply-snapshot host tasks)
              ;; Quiet polls leave out Git statistics.  An agent that reported
-             ;; something, such as finishing an edit, may have changed files:
-             ;; measure its task once this poll is done.
+             ;; something, such as finishing an edit, may have changed files,
+             ;; and a commit moves the task's Git stamp: measure those tasks
+             ;; once this poll is done.
              (when-let* ((quiet)
                          (changed (seq-keep (lambda (state)
                                               (unless (equal state (assoc (car state) before))
@@ -1681,12 +1683,23 @@ chosen one."
     (add-hook 'magit-post-refresh-hook #'roost--magit-refreshed)
     (magit-status (roost--remote-directory task))))
 
+(defun roost--measure-task-in (directory)
+  "Fetch the Git statistics of the task whose worktree contains DIRECTORY."
+  (when-let* ((task (roost--task-in-directory directory)))
+    (roost--refresh-host (roost--field task 'host) nil (list (roost--field task 'id)))))
+
 (defun roost--magit-refreshed ()
   "Measure the task whose worktree Magit has just refreshed.
 Commits and staging there change the task's Git statistics, with no
 agent event to prompt a refresh."
-  (when-let* ((task (roost--task-in-directory default-directory)))
-    (roost--refresh-host (roost--field task 'host) nil (list (roost--field task 'id)))))
+  (roost--measure-task-in default-directory))
+
+(defun roost--file-saved ()
+  "Measure the task whose worktree holds the file just saved.
+An edit not yet staged changes the statistics but not the task's Git
+stamp, so polls would not notice it."
+  (when buffer-file-name
+    (roost--measure-task-in buffer-file-name)))
 
 ;;;###autoload
 (defun roost-files (&optional task)
@@ -3622,9 +3635,10 @@ While watching, the mode line counts the agents waiting for you; see
     (cancel-timer roost--watch-timer)
     (setq roost--watch-timer nil))
   (setq global-mode-string (delete roost--mode-line-entry (ensure-list global-mode-string)))
+  (remove-hook 'after-save-hook #'roost--file-saved)
   (when roost-watch-mode
-    (setq global-mode-string (append global-mode-string (list roost--mode-line-entry))))
-  (when roost-watch-mode
+    (setq global-mode-string (append global-mode-string (list roost--mode-line-entry)))
+    (add-hook 'after-save-hook #'roost--file-saved)
     (setq roost--watch-timer
           (run-with-timer roost-watch-interval roost-watch-interval
                           (lambda () (roost-refresh t))))))
