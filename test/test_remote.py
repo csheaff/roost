@@ -111,6 +111,9 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(store.read(task["id"])["status"], "ready")
         roost.update_hook(store, task["id"], dict(hook_event_name="Stop", background_tasks=[{}]))
         self.assertEqual(store.read(task["id"])["status"], "background")
+        roost.update_hook(store, task["id"], dict(hook_event_name="Notification",
+                                                  notification_type="worker_permission_prompt"))
+        self.assertEqual(store.read(task["id"])["status"], "permission")
 
     def test_launching_prunes_old_helpers_nothing_calls(self):
         first = self.create()

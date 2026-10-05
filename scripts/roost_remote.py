@@ -396,7 +396,9 @@ class ClaudeAgent:
         if event == "Stop":
             status = "background" if payload.get("background_tasks") or payload.get("session_crons") else "ready"
         if event == "Notification":
-            status = {"permission_prompt": "permission", "idle_prompt": "ready"}.get(payload.get("notification_type"))
+            # A teammate's permission prompt also waits in this terminal.
+            status = {"permission_prompt": "permission", "worker_permission_prompt": "permission",
+                      "idle_prompt": "ready"}.get(payload.get("notification_type"))
         if not status:
             return None
         updates = dict(status=status, updatedAt=now(), lastEvent=event)
