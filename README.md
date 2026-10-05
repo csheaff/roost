@@ -311,6 +311,10 @@ Things to know:
   stopped with Esc, a Claude Code task shows `ready` at the next poll, read
   from its transcript; Codex and Pi tasks may keep showing `permission`. `e`
   asks before sending to a task in that state.
+- Roost turns on tmux's `extended-keys` on the server it starts agents on, so
+  they can tell Shift+Return and Option+Return from Return (a new line in
+  Claude's prompt rather than sending it). Programs that do not ask for
+  extended keys see no difference. Agents started before it was on need `s`.
 - Claude and Codex each ask once per repository to trust it; every task worktree
   of that repository is trusted after that.
 - Codex asks you to review Roost's observer hooks the first time. The hook

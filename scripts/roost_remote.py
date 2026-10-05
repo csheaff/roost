@@ -139,6 +139,17 @@ def tmux(socket, *args, check=True, input=None):
     return execute(["tmux", "-L", socket, *args], check=check, input=input)
 
 
+def enable_extended_keys(socket):
+    """Let agents tell Shift+Return from Return. A program asks the terminal
+    for modified keys as it starts, and tmux (3.2 or later) grants it only
+    while extended-keys is on; otherwise Claude Code gets Shift+Return as
+    Return and submits a half-written prompt. Programs that do not ask see
+    no difference, and a server set to "always" is left alone."""
+    current = tmux(socket, "show-options", "-sv", "extended-keys", check=False)
+    if current.returncode == 0 and current.stdout.strip() == "off":
+        tmux(socket, "set-option", "-s", "extended-keys", "on", check=False)
+
+
 def session_name(socket, repo, repo_hash):
     """The tmux session for REPO's tasks, named after the project so tmux
     and Emacs show which project it holds. A running session named in the
@@ -612,6 +623,8 @@ def spawn(store, task, resume=False):
     session = task["session"]
     if tmux(socket, "has-session", "-t", "=" + session, check=False).returncode:
         tmux(socket, "new-session", "-d", "-s", session, "-n", "shell", "-c", task["repo"])
+    # Before the agent starts, which is when it asks.
+    enable_extended_keys(socket)
     script = str(Path(__file__).resolve())
     task["runId"] = uuid.uuid4().hex
     task.pop("shellPaneId", None)

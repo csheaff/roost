@@ -141,6 +141,15 @@ class Lifecycle(unittest.TestCase):
         self.create(name="third")
         self.assertTrue(helpers["old"].exists())
 
+    def test_agents_start_with_extended_keys_on(self):
+        # Claude Code asks for modified keys as it starts; without
+        # extended-keys tmux sends its Shift+Return as Return.
+        self.create()
+        self.assertEqual(roost.tmux(self.socket, "show-options", "-sv", "extended-keys").stdout.strip(), "on")
+        roost.tmux(self.socket, "set-option", "-s", "extended-keys", "always")
+        self.create(name="second")
+        self.assertEqual(roost.tmux(self.socket, "show-options", "-sv", "extended-keys").stdout.strip(), "always")
+
     def test_ctrl_c_in_the_pane_is_for_the_agent_not_the_runner(self):
         # An agent that leaves the terminal in cooked mode gets C-c as SIGINT,
         # sent to the pane's whole foreground group, runner included.
