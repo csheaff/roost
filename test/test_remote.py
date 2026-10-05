@@ -196,6 +196,21 @@ class Lifecycle(unittest.TestCase):
         store.save(dict(store.read(task["id"]), files=files))
         self.assertNotIn("files", store.read(task["id"]))
 
+    def test_measuring_takes_no_optional_git_locks(self):
+        # git status would refresh the index under its lock, and an agent
+        # committing at that moment would fail.
+        task = self.create()
+        (Path(task["worktree"]) / "hello").write_text("changed\n")
+        calls = []
+        real = roost.execute
+        with patch.object(roost, "execute", lambda argv, **kw: calls.append(argv) or real(argv, **kw)):
+            roost.add_git_stats([roost.Store(str(self.state)).read(task["id"])], pull_requests=False)
+        statuses = [argv for argv in calls if "status" in argv]
+        self.assertTrue(statuses)
+        for argv in calls:
+            if argv[0] == "git" and "merge-base" not in argv:
+                self.assertIn("--no-optional-locks", argv)
+
     def test_a_full_listing_can_name_the_tasks_to_measure(self):
         first, second = self.create(), self.create(name="second")
         (Path(first["worktree"]) / "hello").write_text("changed\n")

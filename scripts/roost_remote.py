@@ -58,6 +58,13 @@ def git(repo, *args, check=True):
     return execute(["git", "-C", str(repo), *args], check=check)
 
 
+def read_git(repo, *args):
+    """Run a read-only git command for statistics, without optional locks.
+    `git status` would otherwise refresh the index under its lock, and an
+    agent committing in the same worktree at that moment would fail."""
+    return git(repo, "--no-optional-locks", *args, check=False)
+
+
 REMOTE_GIT_TIMEOUT = 120
 CREDENTIAL_FAILURES = ("Permission denied (publickey)", "could not read Username",
                        "Authentication failed", "terminal prompts disabled")
@@ -752,7 +759,7 @@ def changed_files(worktree, base, limit=50):
     """The task's changed files since BASE, committed or not. Line counts
     are absent for binary files, and untracked files are marked so."""
     files = []
-    fields = git(worktree, "diff", "--numstat", "-z", base, check=False).stdout.split("\0")
+    fields = read_git(worktree, "diff", "--numstat", "-z", base).stdout.split("\0")
     while fields and fields[0]:
         added, deleted, path = fields.pop(0).split("\t", 2)
         if not path:
@@ -763,7 +770,7 @@ def changed_files(worktree, base, limit=50):
         if added != "-":
             file.update(added=int(added), deleted=int(deleted))
         files.append(file)
-    untracked = git(worktree, "ls-files", "--others", "--exclude-standard", "-z", check=False)
+    untracked = read_git(worktree, "ls-files", "--others", "--exclude-standard", "-z")
     files += [dict(path=path, untracked=True) for path in untracked.stdout.split("\0") if path]
     return files[:limit]
 
@@ -786,18 +793,17 @@ def add_git_stats(tasks, pull_requests=True):
         if task["worktreeMissing"]:
             continue
         base = fork_point(worktree, task)
-        stats = git(worktree, "diff", "--shortstat", base, check=False)
-        dirty = git(worktree, "status", "--porcelain", check=False)
+        stats = read_git(worktree, "diff", "--shortstat", base)
+        dirty = read_git(worktree, "status", "--porcelain")
         task["diff"] = stats.stdout.strip()
         task["dirty"] = bool(dirty.stdout)
         task["files"] = changed_files(worktree, base)
         integration = task.get("integrationBranch")
         if integration:
             # Ahead counts the task's own commits, not merges from updates.
-            behind = git(worktree, "rev-list", "--count", "HEAD..refs/heads/" + integration, "--",
-                         check=False)
-            ahead = git(worktree, "rev-list", "--count", "--no-merges",
-                        "refs/heads/" + integration + "..HEAD", "--", check=False)
+            behind = read_git(worktree, "rev-list", "--count", "HEAD..refs/heads/" + integration, "--")
+            ahead = read_git(worktree, "rev-list", "--count", "--no-merges",
+                             "refs/heads/" + integration + "..HEAD", "--")
             if behind.returncode == 0 and ahead.returncode == 0:
                 task["behind"], task["ahead"] = int(behind.stdout), int(ahead.stdout)
 
