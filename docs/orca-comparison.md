@@ -70,7 +70,7 @@ tasks were then taken from creation to merge in it (see
 | --- | --- |
 | Left sidebar: projects and their workspaces, each with a status dot and an unread marker | `roost-sidebar-mode` (`b`): tasks grouped by host and project, a status dot, how many wait for you; a finished agent you have seen turns grey |
 | Always there by default | Opt-in, since an Emacs package that claims a column of every frame should be asked to; one line in your configuration keeps it |
-| Right sidebar: Source Control with the changed files and their diffs, live | The task panel: the agent's latest reply, a live summary of changes and of commits ahead and behind, the pull request's review and checks, and every action. The files and their diffs are one key away in Magit (`r`) or `D` |
+| Right sidebar: Source Control with the changed files and their diffs, live | The task panel: the agent's latest reply, the changed files, kept current, each opening its diff in Magit, commits ahead and behind, the pull request's review and checks, and every action. Staging and committing stay in Magit (`r`) |
 | Checks tab | Pull request checks as passing, failing and pending counts in the panel |
 | Agents tab: past sessions to resume | `s` resumes the task's own conversation; there is no history browser |
 | Panels collapse by hand | The panel steps aside by itself when the terminal would drop below 80 columns, and comes back with room; `q` and `I` turn it off and on |
@@ -81,12 +81,13 @@ its agent reports an event or Magit refreshes its worktree. Read replies kept
 counting as waiting. Magit could open inside the panel's window. These are
 fixed.
 
+The panel first gave only a count of changed files; it now lists them, as
+Orca's Source Control does, and each opens its diff in Magit.
+
 What Orca still does better, in order of how much it matters day to day:
 
-1. **Changed files beside the terminal.** Orca lists the files and shows
-   their diffs in the right column; Roost's panel gives a count and sends you
-   to Magit. Listing the files in the panel, each opening its diff, would
-   close most of the gap without rebuilding Magit.
+1. **Diffs in place.** Orca shows a file's diff inside the right column;
+   Roost opens it in the main area, in Magit, where it can be staged.
 2. **Width.** Three columns need about 156 columns. On a laptop frame Roost's
    panel steps aside, which keeps the terminal usable but loses the third
    column; Orca's toggles have the same limit.

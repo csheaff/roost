@@ -737,6 +737,26 @@ def pr_status(task):
         return None
 
 
+def changed_files(worktree, base, limit=50):
+    """The task's changed files since BASE, committed or not. Line counts
+    are absent for binary files, and untracked files are marked so."""
+    files = []
+    fields = git(worktree, "diff", "--numstat", "-z", base, check=False).stdout.split("\0")
+    while fields and fields[0]:
+        added, deleted, path = fields.pop(0).split("\t", 2)
+        if not path:
+            # A rename: its old and new paths follow.
+            path = fields[1]
+            del fields[:2]
+        file = dict(path=path)
+        if added != "-":
+            file.update(added=int(added), deleted=int(deleted))
+        files.append(file)
+    untracked = git(worktree, "ls-files", "--others", "--exclude-standard", "-z", check=False)
+    files += [dict(path=path, untracked=True) for path in untracked.stdout.split("\0") if path]
+    return files[:limit]
+
+
 def add_git_stats(tasks, pull_requests=True):
     """Diffstat, dirtiness and divergence from the integration branch, and
     pull request status, and the agent's latest reply. Runs outside the registry lock: in a large
@@ -754,10 +774,12 @@ def add_git_stats(tasks, pull_requests=True):
         task["worktreeMissing"] = not worktree.is_dir()
         if task["worktreeMissing"]:
             continue
-        stats = git(worktree, "diff", "--shortstat", fork_point(worktree, task), check=False)
+        base = fork_point(worktree, task)
+        stats = git(worktree, "diff", "--shortstat", base, check=False)
         dirty = git(worktree, "status", "--porcelain", check=False)
         task["diff"] = stats.stdout.strip()
         task["dirty"] = bool(dirty.stdout)
+        task["files"] = changed_files(worktree, base)
         integration = task.get("integrationBranch")
         if integration:
             # Ahead counts the task's own commits, not merges from updates.

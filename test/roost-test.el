@@ -906,6 +906,37 @@
                                                                    (line-end-position))))
              (should (equal (buffer-substring (line-beginning-position) (point)) "Line 30 ")))
          (kill-buffer buffer))))))
+(ert-deftest roost-task-panel-lists-changed-files-that-open-their-diffs ()
+  (let* ((files '(((path . "notes.py") (added . 10) (deleted . 3))
+                  ((path . "docs/a/very/long/path/to/the/guide.md") (added . 1) (deleted . 0))
+                  ((path . "logo.png"))
+                  ((path . "notes.md") (untracked . t))))
+         (task (append `((files . ,files)) (roost-test--task)))
+         shown)
+    (with-temp-buffer
+      (roost--insert-changed-files task 40)
+      (let ((lines (split-string (buffer-string) "\n" t)))
+        (should (equal (car lines) "  notes.py  +10 −3"))
+        (should (member "  logo.png  binary" lines))
+        (should (member "  notes.md  new" lines))
+        ;; A long path keeps its end and fits.
+        (should (seq-some (lambda (line) (and (string-match-p "….*guide\\.md  \\+1 −0" line)
+                                              (<= (string-width line) 40)))
+                          lines)))
+      (goto-char (point-min))
+      (search-forward "notes.py")
+      (cl-letf (((symbol-function 'roost--diff-file) (lambda (_task file) (setq shown file))))
+        (push-button (1- (point))))
+      (should (equal (alist-get 'path shown) "notes.py")))
+    ;; Beyond a dozen, the rest are summed up.
+    (with-temp-buffer
+      (roost--insert-changed-files
+       (append `((files . ,(mapcar (lambda (n) `((path . ,(format "f%d" n)) (added . 1) (deleted . 0)))
+                                   (number-sequence 1 15))))
+               (roost-test--task))
+       60)
+      (should (string-match-p "and 3 more" (buffer-string))))))
+
 (ert-deftest roost-task-panel-flows-actions-in-a-narrow-window ()
   (with-temp-buffer
     (roost--insert-narrow-actions 40)

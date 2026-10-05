@@ -530,7 +530,7 @@ Call SUCCESS with the result, or FAILURE with an error message."
                         (not (equal (roost--field task 'updatedAt)
                                     (roost--field old 'updatedAt))))))
     ;; Quiet polls skip Git and the latest reply; keep the last full refresh's.
-    (dolist (field '(diff dirty ahead behind worktreeMissing prStatus lastMessage))
+    (dolist (field '(diff dirty files ahead behind worktreeMissing prStatus lastMessage))
       (unless (assoc field task)
         (when (assoc field old) (push (assoc field old) task))))
     (if (member status '("retired" "forgotten"))
@@ -2185,6 +2185,46 @@ COMPACT abbreviates commits ahead of and behind the integration branch."
                      (when commits (string-join commits (if compact " " " · ")))))
      " · ")))
 
+(defconst roost--changed-files-shown 12
+  "How many changed files a task panel lists before summing up the rest.")
+
+(defun roost--insert-changed-files (task width)
+  "Insert TASK's changed files as buttons that show them, within WIDTH columns."
+  (let ((files (roost--field task 'files)))
+    (dolist (file (seq-take files roost--changed-files-shown))
+      (let* ((path (alist-get 'path file))
+             (counts (cond ((alist-get 'untracked file) (propertize "new" 'face 'roost-diff-added))
+                           ((alist-get 'added file)
+                            (roost--fontify-changes (format "+%d −%d" (alist-get 'added file)
+                                                            (alist-get 'deleted file))))
+                           (t (propertize "binary" 'face 'roost-dim))))
+             (room (max 8 (- width 6 (string-width counts)))))
+        (insert "  ")
+        ;; Long paths keep their end, which names the file.
+        (insert-text-button (if (> (string-width path) room)
+                                (concat "…" (substring path (- (length path) (1- room))))
+                              path)
+                            'follow-link t 'face 'roost-field
+                            'help-echo (concat path "\nmouse-1: show its changes")
+                            'action (lambda (_) (roost--diff-file task file)))
+        (insert "  " counts "\n")))
+    (when (length> files roost--changed-files-shown)
+      (roost--insert-indented
+       (substitute-command-keys
+        (format "and %d more; \\<roost-task-info-mode-map>\\[roost-diff] shows every change"
+                (- (length files) roost--changed-files-shown)))
+       'roost-dim))))
+
+(defun roost--diff-file (task file)
+  "Show TASK's changes to FILE, an entry of its `files'.
+An untracked file, with nothing to compare, is opened instead."
+  (roost--activate-workspace task)
+  (let ((default-directory (roost--remote-directory task))
+        (path (alist-get 'path file)))
+    (if (and (not (alist-get 'untracked file)) (require 'magit nil t))
+        (magit-diff-working-tree (roost--fork-point task) nil (list path))
+      (find-file (expand-file-name path)))))
+
 (defun roost--fontify-changes (changes)
   "Highlight the line counts and pending work in CHANGES."
   (let ((text (copy-sequence changes)))
@@ -2583,6 +2623,7 @@ Windows showing the panel keep their scroll position."
                ((not (assq 'diff task)) (propertize "Refreshing…" 'face 'roost-dim))
                ((string-empty-p changes) (propertize "No changes yet" 'face 'roost-dim))
                (t (roost--fontify-changes changes))))
+        (roost--insert-changed-files task width)
         (when (> (or (roost--field task 'behind) 0) 0)
           (roost--insert-indented
            (substitute-command-keys

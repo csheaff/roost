@@ -159,7 +159,8 @@ the start, add `(roost-sidebar-mode 1)` to your configuration.
 *The sidebar, an agent asking to edit a file, and that task's panel.*
 
 An open task also gets its panel at the right of its terminal: the agent's
-latest reply (long ones fold to a few lines), the changes and the actions. It
+latest reply (long ones fold to a few lines), the files it changed, each of
+which opens its diff, and the actions. They stay current as the agent works. It
 docks while the terminal keeps at least 80 columns and steps aside when a
 split or a narrower frame would squeeze it. `q` in the panel turns it off and
 `I` in the dashboard or sidebar turns it back on (`roost-task-panel-mode`).

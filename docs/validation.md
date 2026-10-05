@@ -325,11 +325,15 @@ through the real hooks, so no agent credits were used.
     whose terminal you are watching while Emacs has focus, now counts as seen
     until its next event. Checked live with the fake agent: unfocused, it kept
     counting; focused on its terminal, the count cleared.
+- The panel lists a task's changed files: in a worktree with one edited,
+  one new and one deeply nested new file, it showed `+2 −0`, `new` and
+  `new` against paths cut to keep their file names, and clicking the edited
+  one opened its Magit diff in the main area.
 - An earlier pass with a long reply seeded in the cache checked the folded
   six-line preview, clicking to expand and collapse it, a new reply starting
   folded, and the sidebar's hover text giving the full name, host and project.
 
-All **113 ERT tests and 68 Python tests** pass, with byte compilation under
+All **114 ERT tests and 69 Python tests** pass, with byte compilation under
 warnings-as-errors. Batch Emacs has no redisplay, so the tests call the layout
 sync directly where the window hook would run it.
 

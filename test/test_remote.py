@@ -178,6 +178,19 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(self.request("merge", id=task["id"])["ok"])
         self.assertEqual((self.repo / "hello").read_text(), "main and task\n")
 
+    def test_a_full_listing_names_the_changed_files(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        (wt / "hello").write_text("one\ntwo\n")
+        self.git("mv", "hello", "greeting", cwd=wt)
+        (wt / "new file").write_text("x\n")
+        (wt / "image").write_bytes(b"\0\1")
+        self.git("add", "image", cwd=wt)
+        files = self.request("list", full=True)["result"][0]["files"]
+        self.assertIn(dict(path="image"), files)
+        self.assertIn(dict(path="new file", untracked=True), files)
+        self.assertIn(dict(path="greeting", added=2, deleted=0), files)
+
     def test_a_full_listing_can_name_the_tasks_to_measure(self):
         first, second = self.create(), self.create(name="second")
         (Path(first["worktree"]) / "hello").write_text("changed\n")
