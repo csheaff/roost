@@ -373,6 +373,17 @@ it was drawn, scrambling it (introduced and caught the same day); and
 `git status` behind the statistics could take the index lock while an agent
 committed. Notifications also no longer fire for the agent you are watching.
 
+The largest find came while capturing the README images: tmux was not
+resized when a terminal's window changed size. Emacs reports a new size only
+to the process of the buffer in the window, and Roost's terminals are
+tmux-control's per-window buffers, which have none; an agent kept drawing at
+84x6 in a 128x26 window after `C-x 1`. tmux-control now follows those windows
+([tmux-control#158](https://github.com/csheaff/tmux-control/pull/158)). Roost
+also docked its panel from inside Emacs's window change hook, where a resize
+goes unreported to every package; it now changes side windows just after
+redisplay. Splits, `C-x 1`, the panel turning on and off and four frame sizes
+then each left tmux at exactly the terminal window's size.
+
 Not Roost's to fix: on this Mac, tmux 3.6a shows non-ASCII window names as
 underscores whatever the locale (tmux 3.7c on Linux keeps them); Roost's own
 views show them correctly. Unloading a package also unbinds its settings, so
