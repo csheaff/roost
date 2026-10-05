@@ -681,7 +681,8 @@
        (roost--render-sidebar)
        (let ((lines (split-string (buffer-string) "\n")))
          (should (equal (substring-no-properties (car lines)) "Roost  1 waiting"))
-         (should (member "dev · ledger" lines))
+         ;; Each project's heading ends with a + that starts a task in it.
+         (should (member (concat "dev · ledger" (make-string 17 ?\s) "+") lines))
          ;; The current task is marked; statuses are right-aligned.
          (should (member "▸● budget-alerts    permission" lines))
          (should (= (string-width "▸● budget-alerts    permission") roost-sidebar-width))
@@ -697,7 +698,17 @@
        (search-forward "a-task")
        (let ((help (get-text-property (1- (point)) 'help-echo)))
          (should (string-match-p "a-task-with-a-very-long-name-indeed" help))
-         (should (string-match-p "dev · /srv/ledger" help)))))))
+         (should (string-match-p "dev · /srv/ledger" help)))
+       ;; On the heading, a new task's draft starts in that project.
+       (goto-char (point-min))
+       (search-forward "dev · ledger")
+       (should (string-suffix-p ":dev:/srv/ledger/" (roost--compose-default-directory nil nil)))
+       (let (started)
+         (cl-letf (((symbol-function 'roost-new-task)
+                    (lambda () (interactive) (setq started (roost--compose-default-directory nil nil)))))
+           (search-forward "+")
+           (push-button (1- (point))))
+         (should (string-suffix-p ":dev:/srv/ledger/" started)))))))
 
 (ert-deftest roost-sidebar-mode-pins-a-left-window ()
   (roost-test--isolated

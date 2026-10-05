@@ -1168,8 +1168,10 @@ worktree; explicit HEAD uses DIRECTORY.  Nil AGENT uses
   (roost--quiet-display))
 
 (defun roost--compose-default-directory (task fork)
-  "Default project for a new task, given the TASK in context and FORK."
+  "Default project for a new task, given the TASK in context and FORK.
+On a project's heading in the dashboard or sidebar, that project."
   (cond (task (if fork (roost--remote-directory task) (roost--project-directory task)))
+        ((get-text-property (point) 'roost-directory))
         ((ignore-errors (vc-root-dir)))
         ((car (roost--known-projects)))))
 
@@ -2958,7 +2960,7 @@ The changes column shrinks first, then the agent column is dropped."
       (let ((layout (roost--dashboard-layout tasks width)))
         (insert (roost--summary tasks) "\n")
         (dolist (group (roost--task-groups tasks))
-          (let ((host (caar group)) (repo (cadar group)))
+          (let ((host (caar group)) (repo (cadar group)) (start (1+ (point))))
             (insert "\n" (propertize (format "%s · %s" (roost--host-label host)
                                              (file-name-nondirectory (directory-file-name (or repo "?"))))
                                      'face 'roost-heading)
@@ -2967,6 +2969,10 @@ The changes column shrinks first, then the agent column is dropped."
                         (propertize "  unreachable; showing the last known state" 'face 'roost-status-failed)
                       "")
                     "\n")
+            ;; `c' on the heading starts a task in this project.
+            (when repo
+              (put-text-property start (point) 'roost-directory
+                                 (roost--project-directory (cadr group))))
             (dolist (task (cdr group))
               (insert (propertize (concat (roost--dashboard-row task layout width) "\n")
                                   'roost-task (roost--key task)
@@ -3122,13 +3128,24 @@ Task commands act on the task at point, as in the dashboard.
                                  'face 'roost-dim)
                 "\n")
       (dolist (group (roost--task-groups tasks))
-        (let ((host (caar group)) (repo (cadar group)))
-          (insert "\n" (propertize (truncate-string-to-width
-                                    (format "%s · %s" (roost--host-label host)
-                                            (file-name-nondirectory (directory-file-name (or repo "?"))))
-                                    width nil nil "…")
-                                   'face (if (gethash host roost--errors) 'roost-status-failed 'roost-dim))
-                  "\n")
+        (let* ((host (caar group)) (repo (cadar group)) (start (1+ (point)))
+               (label (truncate-string-to-width
+                       (format "%s · %s" (roost--host-label host)
+                               (file-name-nondirectory (directory-file-name (or repo "?"))))
+                       (- width 2) nil nil "…")))
+          (insert "\n" (propertize label 'face (if (gethash host roost--errors)
+                                                   'roost-status-failed 'roost-dim))
+                  (make-string (max 1 (- width (string-width label) 1)) ?\s))
+          (insert-text-button "+" 'face 'roost-key 'follow-link t
+                              'help-echo (format "New task in %s" (or repo "this project"))
+                              'action (lambda (button)
+                                        (goto-char (button-start button))
+                                        (call-interactively #'roost-new-task)))
+          (insert "\n")
+          ;; `c' on the heading starts a task in this project.
+          (when repo
+            (put-text-property start (point) 'roost-directory
+                               (roost--project-directory (cadr group))))
           (dolist (task (cdr group))
             (insert (propertize (concat (roost--sidebar-row task width) "\n")
                                 'roost-task (roost--key task)
