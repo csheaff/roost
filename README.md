@@ -9,11 +9,10 @@ terminal running the agent's real CLI: [Claude Code](https://claude.com/claude-c
 Roost tells you which agents need you, and gets the work reviewed and merged
 with the Emacs tools you already use.
 
-![Roost's three-column workspace: pinned tasks on the left, a worktree shell running tests and showing a diff in the center, and the task inspector on the right](docs/images/roost-sidebar.jpg)
+![The Roost dashboard: four Claude Code tasks on two machines, one waiting for permission, two finished with changes to review, one working](docs/images/roost-dashboard.jpg)
 
-*The default layout, shown with a local demo: tasks, terminal, inspector.
-`RET` opens an agent; `t` opens its worktree shell, shown here. `I` toggles
-the inspector, and `q` in either side panel hides it.*
+*The dashboard. `RET` on a row opens that agent's own terminal, where you
+answer it as you would in any terminal.*
 
 - **Agents outlive Emacs.** They run in tmux on the task's host. Close Emacs, lose
   Wi‑Fi or sleep the laptop; reopen Roost and pick up where they are.
@@ -61,11 +60,6 @@ notification whether it needs you now. The dashboard shows each agent's latest
 reply too, and the mode line counts the agents waiting (`Roost:2`; click it for
 the next one). `n` jumps to the next agent waiting for you, permission requests
 first. Answer it in the terminal, then `n` again.
-
-![The Roost dashboard: four Claude Code tasks on two machines, one waiting for permission, two finished with changes to review, one working](docs/images/roost-dashboard.jpg)
-
-*`M-x roost-status` opens the full dashboard. `RET` on a row opens that agent's
-own terminal, where you answer it as you would in any terminal.*
 
 ![Claude Code on claylien asking to create budgets.json, in its own terminal inside Emacs](docs/images/roost-terminal.jpg)
 
@@ -152,28 +146,20 @@ Magit is optional (review falls back to Dired).
 
 ### Keeping Roost in view
 
-Opening the dashboard or a task enables a compact list of tasks at the left of
-every frame: a colored dot and status per task, grouped by
+`b` in the dashboard, or `M-x roost-sidebar-mode`, keeps a compact list of your
+tasks at the left of every frame: a dot and status per task, grouped by
 project, with how many agents are waiting at the top. It stays when you switch
-perspectives or tabs and survives `C-x 1`; click a task or press `RET` to open
-it, and `q` hides the sidebar for the rest of the Emacs session.
-`M-x roost-sidebar-mode` brings it back. Set `roost-sidebar-on-open` to nil
-to start with it hidden. Hover over a task to see its full name, host and
-project path. Opening a task also docks its panel on the right
-(the agent's latest reply, changes and actions) when the terminal keeps at
-least 80 columns, so a task reads as three columns: tasks, terminal, details.
-The panel hides when resizing or splitting would squeeze the terminal, and
-returns when there is room again. `q` in the panel keeps that task's inspector
-closed for the session, including when you reopen the task. `I` in the sidebar
-or Roost command menu toggles the inspector while
-keeping focus in the main area; `M-x roost-toggle-task-panel` does the same from
-the terminal or a file. It also works when automatic docking is off through
-`roost-task-panel-beside-terminal`.
+perspectives or tabs and survives `C-x 1`. Click a task or press `RET` to open
+it; hover to see its full name and project; `q` hides the list. To have it from
+the start, add `(roost-sidebar-mode 1)` to your configuration.
 
-Long replies in the narrow inspector start with a six-line preview so changes
-and actions stay close by. Click **Show the whole reply** to expand it, or
-**Collapse reply** above the expanded text to fold it again. A new reply starts
-folded; a wide details view continues to show the complete reply.
+![The sidebar on the left, Claude Code in the middle, and the task's panel on the right](docs/images/roost-sidebar.jpg)
+
+An open task also gets its panel at the right of its terminal: the agent's
+latest reply (long ones fold to a few lines), the changes and the actions. It
+docks while the terminal keeps at least 80 columns and steps aside when a
+split or a narrower frame would squeeze it. `q` in the panel turns it off and
+`I` in the dashboard or sidebar turns it back on (`roost-task-panel-mode`).
 
 ### Fitting your setup
 
@@ -210,7 +196,8 @@ folded; a wide details view continues to show the complete reply.
 | `D` | `roost-diff` | Diff the task's own changes, including uncommitted ones |
 | `e` | `roost-send` | Paste a prompt into the agent and press Enter |
 | `?` | `roost-task-info` | Prompt, changes, actions and details |
-| `I` | `roost-toggle-task-panel` | Show or hide the inspector, keeping focus in the main area |
+| `b` | `roost-sidebar-mode` | Keep the task list at the left of every frame |
+| `I` | `roost-task-panel-mode` | Dock the open task's panel beside its terminal |
 | `u` | `roost-update` | Merge the integration branch into the task |
 | `P` | `roost-pr` | Draft a pull request for the task; if it has one, push new commits and open it (`C-u`: open only) |
 | `m` | `roost-merge-retire` | Merge committed work, then retire the task |
@@ -252,9 +239,8 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
   worktrees; default `~/.local/share/roost`.
 - `roost-socket-name`, `roost-session-name`: tmux socket (default tmux-control's)
   and session (default one per repository).
-- `roost-sidebar-width` (30), `roost-task-panel-beside-terminal`,
-  `roost-task-panel-width` (44): the sidebar and the panel docked beside a
-  task's terminal.
+- `roost-sidebar-width` (30), `roost-task-panel-width` (44): the sidebar and
+  the panel docked beside a task's terminal.
 - `roost-workspace`, `roost-compact-mode-line`: how tasks get their own windows
   (see above); with perspective.el, task perspectives share one
   `Roost: host/task +N` entry in the perspective bar.
