@@ -1,4 +1,4 @@
-;;; roost.el --- Coding agent tasks over tmux-control -*- lexical-binding: t; -*-
+;;; roost.el --- Run coding agents in Git worktrees and tmux -*- lexical-binding: t; -*-
 
 ;; Author: Clay Sheaff
 ;; Version: 0.8.1
