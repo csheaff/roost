@@ -2485,6 +2485,11 @@ terminal or worktree, or ask which task."
   "X" #'roost-forget
   "u" #'roost-update
   "I" #'roost-task-panel-mode
+  ;; Commands beyond this task, as in the dashboard and sidebar.
+  "n" #'roost-next-waiting
+  "c" #'roost-new-task
+  "b" #'roost-sidebar-mode
+  "S" #'roost-status
   "q" #'roost-task-info-quit
   "g" #'roost-task-info-refresh)
 
@@ -3147,6 +3152,7 @@ down.  With WIDTH, fit each line within it, leaving details to hover."
 (defvar-keymap roost-sidebar-list-mode-map
   :doc "Keys in the task sidebar."
   :parent roost-dashboard-mode-map
+  "S" #'roost-status
   "q" #'roost-sidebar-mode)
 
 (define-derived-mode roost-sidebar-list-mode roost-dashboard-mode "Roost Sidebar"

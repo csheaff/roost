@@ -2258,4 +2258,14 @@
   (should (eq (lookup-key roost-dashboard-mode-map "k") 'roost-dashboard-previous-task))
   (should (eq (lookup-key roost-dashboard-mode-map "K") 'roost-stop)))
 
+(ert-deftest roost-every-roost-buffer-reaches-the-other-tasks ()
+  ;; `n' in a task's panel beeped, though the menu lists it everywhere.
+  (dolist (map (list roost-dashboard-mode-map roost-task-info-mode-map roost-sidebar-list-mode-map))
+    (should (eq (lookup-key map "n") #'roost-next-waiting))
+    (should (eq (lookup-key map "c") #'roost-new-task))
+    (should (eq (lookup-key map "b") #'roost-sidebar-mode))
+    (should (eq (lookup-key map "h") #'roost-dispatch)))
+  (should (eq (lookup-key roost-task-info-mode-map "S") #'roost-status))
+  (should (eq (lookup-key roost-sidebar-list-mode-map "S") #'roost-status)))
+
 (provide 'roost-test)
