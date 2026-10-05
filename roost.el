@@ -136,6 +136,11 @@ The entry gets a ROOST_TASK property holding the task's id, and Roost
 commands run on the entry, or on its agenda line, act on that task."
   :type 'boolean)
 
+(defcustom roost-sidebar-on-open t
+  "Whether the first dashboard or task opened enables `roost-sidebar-mode'.
+Explicitly turning the mode off keeps it off for the Emacs session."
+  :type 'boolean)
+
 (defcustom roost-sidebar-width 30
   "Width in columns of the task sidebar; see `roost-sidebar-mode'."
   :type 'natnum)
@@ -257,6 +262,12 @@ Ordinary perspectives retain their existing labels and click actions."
   "Name of the task sidebar buffer; see `roost-sidebar-mode'.")
 
 (defvar roost-sidebar-mode)
+(defvar roost--sidebar-initialized nil
+  "Non-nil after the sidebar's initial visibility has been chosen.")
+(defvar roost--hidden-task-panels (make-hash-table :test 'equal)
+  "Task keys whose inspectors were explicitly closed this Emacs session.")
+(defvar roost--syncing-side-windows nil
+  "Non-nil while restoring Roost's side windows.")
 
 (defvar roost--current-task nil
   "Key of the task most recently opened.")
@@ -860,6 +871,7 @@ recently failed."
 
 (defun roost--activate-workspace (task)
   "Restore TASK's window arrangement, creating its workspace if needed."
+  (roost--leave-side-window)
   (pcase (roost--workspace-backend)
     ('perspective
      (when (fboundp 'persp-switch) (persp-switch (roost--perspective-name task))))
@@ -869,13 +881,15 @@ recently failed."
            (tab-bar-select-tab-by-name name)
          (tab-bar-new-tab)
          (tab-bar-rename-tab name)))))
-  (setq roost--current-task (roost--key task)))
+  (setq roost--current-task (roost--key task))
+  (roost--leave-side-window))
 
 ;;;; Opening tasks
 
 (defun roost--display-task (task &optional target-pane)
   "Display TASK after ownership validation, selecting TARGET-PANE if supplied."
   (require 'tmux-control)
+  (roost--maybe-start-sidebar)
   (roost--leave-side-window)
   (roost--activate-workspace task)
   (roost--leave-side-window)
@@ -904,7 +918,9 @@ recently failed."
     (with-current-buffer (window-buffer (selected-window))
       (tmux-control-send-command (format "select-window -t %s" window))
       (tmux-control-select-pane pane)))
-  (roost--show-task-panel task))
+  (roost--show-task-panel task)
+  (when (roost--task-panel-window)
+    (roost--refresh-host (roost--field task 'host) nil)))
 
 ;;;###autoload
 (defun roost-open-task (&optional task)
@@ -2220,6 +2236,7 @@ keeps one process-wide registration per mode; a nil STATE removes it."
     ["Shell beside agent" roost-shell]
     ["Browse files" roost-files]
     ["Send prompt…" roost-send]
+    ["Toggle inspector" roost-toggle-task-panel]
     "---"
     ["Review in Magit" roost-review]
     ["Diff the task's changes" roost-diff]
@@ -2266,7 +2283,8 @@ terminal or worktree, or ask which task."
     ("t" "Shell" roost-shell)
     ("f" "Files" roost-files)
     ("e" "Send prompt" roost-send)
-    ("i" "Details" roost-task-info)]
+    ("i" "Details" roost-task-info)
+    ("I" "Toggle inspector" roost-toggle-task-panel)]
    ["Review"
     ("r" "Magit" roost-review)
     ("D" "Diff" roost-diff)
@@ -2305,6 +2323,8 @@ terminal or worktree, or ask which task."
   "P" #'roost-pr
   "X" #'roost-forget
   "u" #'roost-update
+  "I" #'roost-toggle-task-panel
+  "q" #'roost-task-info-quit
   "g" #'roost-task-info-refresh)
 
 (easy-menu-define roost-task-info-menu roost-task-info-mode-map
@@ -2373,6 +2393,36 @@ For a panel in a narrow window, such as beside a task's terminal."
 (defvar-local roost--show-full-prompt nil
   "Non-nil when the task panel shows a long prompt in full.")
 
+(defvar-local roost--expanded-reply nil
+  "The reply expanded in a compact panel, or nil.
+A different reply starts collapsed when it arrives.")
+
+(defun roost--reply-preview (reply width)
+  "The first six wrapped lines of REPLY, fitting WIDTH columns.
+Return short replies unchanged."
+  (let* ((columns (max 12 (- width 2)))
+         (lines (with-temp-buffer
+                  (let ((fill-column columns) wrapped)
+                    ;; Preserve explicit newlines, including lists and code.
+                    (dolist (source-line (split-string reply "\n"))
+                      (erase-buffer)
+                      (insert source-line)
+                      (fill-region (point-min) (point-max))
+                      (dolist (line (split-string (buffer-string) "\n"))
+                        ;; Fill leaves long URLs and unbroken tokens alone.
+                        (while (> (string-width line) columns)
+                          (let ((part (truncate-string-to-width line columns)))
+                            (push part wrapped)
+                            (setq line (substring line (length part)))))
+                        (push line wrapped)))
+                    (nreverse wrapped)))))
+    (if (<= (length lines) 6)
+        reply
+      (concat (string-join (seq-take lines 5) "\n") "\n"
+              (truncate-string-to-width (string-trim-right (nth 5 lines))
+                                        (1- columns))
+              "…"))))
+
 (defun roost--prompt-preview (prompt)
   "The start of PROMPT for the task panel.
 That is its first paragraph, cut to a few hundred characters.  A short
@@ -2391,6 +2441,17 @@ prompt is returned whole."
     (when face (add-face-text-property 0 (length text) face t text))
     (insert text)))
 
+(defun roost--insert-reply-toggle (reply expanded)
+  "Insert a button to expand REPLY, or collapse it when EXPANDED."
+  (let ((start (point)))
+    (insert-text-button (if expanded "Collapse reply" "Show the whole reply")
+                        'follow-link t 'face 'roost-field
+                        'action (lambda (_)
+                                  (setq roost--expanded-reply (unless expanded reply))
+                                  (roost--render-task-info)))
+    (insert "\n")
+    (put-text-property start (point) 'line-prefix "  ")))
+
 (defun roost--render-task-info ()
   "Update the current task panel from the cache, without changing focus."
   (let ((task (gethash roost--buffer-task-key roost--tasks))
@@ -2401,6 +2462,7 @@ prompt is returned whole."
         (insert "This task has been retired or is no longer available.\n")
       (let* ((status (roost--display-status task))
              (changes (roost--changes task))
+             (width (roost--task-info-width))
              (base (roost--field task 'baseRef))
              (integration (roost--field task 'integrationBranch)))
         (insert (propertize (roost--field task 'name) 'face 'roost-title) "   "
@@ -2415,7 +2477,14 @@ prompt is returned whole."
                 "\n")
         (when-let* ((reply (roost--last-message task)))
           (roost--insert-heading "Agent's latest reply")
-          (roost--insert-indented reply))
+          (let* ((preview (if (< width 72) (roost--reply-preview reply width) reply))
+                 (expanded (equal reply roost--expanded-reply)))
+            (unless expanded (setq roost--expanded-reply nil))
+            (when (and expanded (not (equal preview reply)))
+              (roost--insert-reply-toggle reply t))
+            (roost--insert-indented (if expanded reply preview))
+            (when (and (not expanded) (not (equal preview reply)))
+              (roost--insert-reply-toggle reply nil))))
         (roost--insert-heading "Changes")
         (roost--insert-indented
          (cond ((roost--field task 'worktreeMissing)
@@ -2499,7 +2568,7 @@ prompt is returned whole."
           (unless (< width 72)
             (insert "\n" (propertize (substitute-command-keys
                                       "Ready means the agent is waiting for you, not that the work is reviewed.
-\\<roost-task-info-mode-map>\\[roost-task-info-refresh] refreshes · \\[quit-window] closes")
+\\<roost-task-info-mode-map>\\[roost-task-info-refresh] refreshes · \\[roost-task-info-quit] closes")
                                      'face 'roost-dim)
                     "\n")))))
     (goto-char (min position (point-max)))))
@@ -2557,6 +2626,7 @@ prompt is returned whole."
   "r" #'roost-review
   "D" #'roost-diff
   "i" #'roost-task-info
+  "I" #'roost-toggle-task-panel
   "?" #'roost-task-info
   "f" #'roost-files
   "t" #'roost-shell
@@ -2809,6 +2879,7 @@ The changes column shrinks first, then the agent column is dropped."
 (defun roost-status ()
   "Open the dashboard and watch configured and remembered hosts."
   (interactive)
+  (roost--maybe-start-sidebar)
   (let ((buffer (get-buffer-create "*roost*")))
     (with-current-buffer buffer
       (unless (derived-mode-p 'roost-dashboard-mode) (roost-dashboard-mode)))
@@ -2818,6 +2889,12 @@ The changes column shrinks first, then the agent column is dropped."
   (roost-refresh))
 
 ;;;; Sidebar
+
+(defun roost--maybe-start-sidebar ()
+  "Choose the sidebar's initial visibility on first use."
+  (unless roost--sidebar-initialized
+    (setq roost--sidebar-initialized t)
+    (when roost-sidebar-on-open (roost-sidebar-mode 1))))
 
 (defvar-keymap roost-sidebar-list-mode-map
   :doc "Keys in the task sidebar."
@@ -2854,7 +2931,9 @@ Task commands act on the task at point, as in the dashboard.
 
 (defun roost--sidebar-row (task width)
   "TASK's sidebar line, within WIDTH columns."
-  (let* ((current (equal (roost--key task) roost--current-task))
+  (let* ((current (if (roost--workspace-backend)
+                      (equal (roost--workspace-name task) (roost--current-workspace))
+                    (equal (roost--key task) roost--current-task)))
          (status (roost--display-status task))
          (face (roost--status-face (roost--attention-status task)))
          (room (- width 3))
@@ -2899,7 +2978,10 @@ Task commands act on the task at point, as in the dashboard.
                                 'roost-task (roost--key task)
                                 'keymap roost--dashboard-row-map
                                 'mouse-face 'highlight
-                                'help-echo "mouse-1: open · mouse-3: actions"))))))
+                                'help-echo (format "%s\n%s · %s\nmouse-1: open · mouse-3: actions"
+                                                   (roost--field task 'name)
+                                                   (roost--host-label host)
+                                                   (or repo "?"))))))))
     (goto-char (or (and key (save-excursion
                               (goto-char (point-min))
                               (when-let* ((match (text-property-search-forward 'roost-task key t)))
@@ -2920,13 +3002,54 @@ Task commands act on the task at point, as in the dashboard.
     (dedicated . t) (window-parameters . ((no-delete-other-windows . t)))))
 
 (defun roost--sidebar-show (&rest _)
-  "Show the task sidebar in the selected frame, if `roost-sidebar-mode' is on."
-  (when (and roost-sidebar-mode
-             (not (frame-parameter nil 'parent-frame))
-             (not (window-minibuffer-p))
-             (not (get-buffer-window roost--sidebar-buffer)))
-    (display-buffer-in-side-window (roost--sidebar-get-buffer)
-                                   (roost--side-window-alist 'left roost-sidebar-width))))
+  "Apply sidebar visibility to the selected frame, including restored layouts."
+  (unless (frame-parameter nil 'parent-frame)
+    (if roost-sidebar-mode
+        (progn
+          (unless (get-buffer-window roost--sidebar-buffer)
+            (display-buffer-in-side-window (roost--sidebar-get-buffer)
+                                           (roost--side-window-alist 'left roost-sidebar-width)))
+          (with-current-buffer roost--sidebar-buffer (roost--render-sidebar)))
+      ;; Saved perspectives and tabs can restore windows after the mode is off.
+      (when (get-buffer roost--sidebar-buffer)
+        (dolist (window (get-buffer-window-list roost--sidebar-buffer))
+          (when (window-parameter window 'window-side) (delete-window window)))))))
+
+(defun roost--sync-side-windows (&rest _)
+  "Restore Roost's side windows without changing focus."
+  (unless (or roost--syncing-side-windows (frame-parameter nil 'parent-frame))
+    (let ((roost--syncing-side-windows t))
+      (roost--sidebar-show)
+      (when-let* ((panel (roost--task-panel-window))
+                  ((not (seq-some (lambda (w) (window-parameter w 'roost-task-panel))
+                                  (window-list))))
+                  (window (seq-find (lambda (w) (not (window-parameter w 'window-side)))
+                                    (window-list))))
+        (set-window-parameter window 'roost-task-panel
+                              (buffer-local-value 'roost--buffer-task-key (window-buffer panel))))
+      (when-let* ((window (seq-find (lambda (w) (and (not (window-parameter w 'window-side))
+                                                     (window-parameter w 'roost-task-panel)))
+                                    (window-list)))
+                  (task (gethash (window-parameter window 'roost-task-panel) roost--tasks)))
+        (when (or (not (roost--workspace-backend))
+                  (equal (roost--workspace-name task) (roost--current-workspace)))
+          (with-selected-window window (roost--show-task-panel task)))))))
+
+(defun roost--sync-frame-side-windows (frame)
+  "Apply Roost's layout after FRAME is created or resized."
+  (when (frame-live-p frame)
+    (with-selected-frame frame (roost--sync-side-windows))))
+
+;; These also clean up sidebars resurrected by saved layouts after disabling
+;; the mode.  Panel resizing works even when the sidebar is not enabled.
+(add-hook 'persp-activated-hook #'roost--sync-side-windows)
+(add-hook 'tab-bar-tab-post-select-functions #'roost--sync-side-windows)
+(add-hook 'tab-bar-tab-post-open-functions #'roost--sync-side-windows)
+(add-hook 'window-configuration-change-hook #'roost--sync-side-windows)
+(add-hook 'after-make-frame-functions #'roost--sync-frame-side-windows)
+(add-hook 'window-size-change-functions #'roost--sync-frame-side-windows)
+(add-to-list 'window-persistent-parameters '(roost-task-panel . t))
+(add-to-list 'window-persistent-parameters '(roost-task-panel-manual . t))
 
 ;;;###autoload
 (define-minor-mode roost-sidebar-mode
@@ -2934,21 +3057,17 @@ Task commands act on the task at point, as in the dashboard.
 It stays when you switch perspectives or tabs and survives
 \\[delete-other-windows].  Click a task, or press RET on it, to open it in
 the main area; task commands such as `roost-review' act on the task at
-point.  Turning the mode on starts `roost-watch-mode'."
+point.  Turning the mode on starts `roost-watch-mode'.
+The first dashboard or task opened enables it by default; see
+`roost-sidebar-on-open'.  Turning it off keeps it off for this session."
   :global t
+  (setq roost--sidebar-initialized t)
   (if roost-sidebar-mode
       (progn
-        (add-hook 'persp-activated-hook #'roost--sidebar-show)
-        (add-hook 'tab-bar-tab-post-select-functions #'roost--sidebar-show)
         (roost-watch-mode 1)
-        (roost--sidebar-show)
+        (dolist (frame (frame-list)) (roost--sync-frame-side-windows frame))
         (roost-refresh t))
-    (remove-hook 'persp-activated-hook #'roost--sidebar-show)
-    (remove-hook 'tab-bar-tab-post-select-functions #'roost--sidebar-show)
-    (dolist (frame (frame-list))
-      (dolist (window (get-buffer-window-list roost--sidebar-buffer nil frame))
-        (when (window-parameter window 'window-side)
-          (delete-window window))))))
+    (dolist (frame (frame-list)) (roost--sync-frame-side-windows frame))))
 
 (defalias 'roost-sidebar #'roost-sidebar-mode)
 
@@ -2956,24 +3075,84 @@ point.  Turning the mode on starts `roost-watch-mode'."
   "Select the main window when a Roost side window is selected.
 Tasks open in the main area, never in the sidebar or the task panel."
   (when (window-parameter (selected-window) 'window-side)
-    (select-window (window-main-window))))
+    (when-let* ((window (or (get-mru-window)
+                           (seq-find (lambda (w) (not (window-parameter w 'window-side)))
+                                     (window-list)))))
+      (select-window window))))
 
-(defun roost--show-task-panel (task)
+(defun roost--task-panel-window ()
+  "The docked Roost task panel in the selected frame, if any."
+  (seq-find (lambda (window)
+              (and (eq (window-parameter window 'window-side) 'right)
+                   (with-current-buffer (window-buffer window)
+                     (derived-mode-p 'roost-task-info-mode))))
+            (window-list)))
+
+(defun roost-task-info-quit ()
+  "Close the task inspector until explicitly reopened.
+Use `roost-toggle-task-panel' to reopen it."
+  (interactive)
+  (if (eq (window-parameter (selected-window) 'window-side) 'right)
+      (roost--hide-task-panel (selected-window))
+    (quit-window)))
+
+(defun roost--hide-task-panel (panel &optional task)
+  "Hide PANEL and clear its remembered docking state in this frame.
+TASK identifies an inspector waiting for room when PANEL is nil."
+  (let ((key (if panel
+                 (buffer-local-value 'roost--buffer-task-key (window-buffer panel))
+               (roost--key task))))
+    (puthash key t roost--hidden-task-panels)
+    (dolist (window (window-list))
+      (when (equal (window-parameter window 'roost-task-panel) key)
+        (set-window-parameter window 'roost-task-panel nil)
+        (set-window-parameter window 'roost-task-panel-manual nil))))
+  (when panel (delete-window panel)))
+
+;;;###autoload
+(defun roost-toggle-task-panel (&optional task)
+  "Toggle TASK's inspector beside the main area without selecting it.
+Works from the task's terminal, files, sidebar, or Roost command menu.
+An explicitly opened inspector stays available even when automatic
+docking is disabled.  It waits for room on a narrow frame."
+  (interactive)
+  (setq task (roost--choose task))
+  (roost--activate-workspace task)
+  (let ((panel (roost--task-panel-window)))
+    (if (or (and panel
+                 (equal (buffer-local-value 'roost--buffer-task-key (window-buffer panel))
+                        (roost--key task)))
+            (and (window-parameter nil 'roost-task-panel-manual)
+                 (equal (window-parameter nil 'roost-task-panel) (roost--key task))))
+        (roost--hide-task-panel panel task)
+      (roost--show-task-panel task t)
+      (if (roost--task-panel-window)
+          (roost--refresh-host (roost--field task 'host) nil)
+        (message "The inspector will appear when there is more room")))))
+
+(defun roost--show-task-panel (task &optional manual)
   "Show TASK's panel to the right of its terminal, when there is room.
-See `roost-task-panel-beside-terminal'."
-  (let* ((sidebar (get-buffer-window roost--sidebar-buffer))
-         (room (>= (- (frame-width) (if sidebar (window-total-width sidebar) 0) roost-task-panel-width)
+See `roost-task-panel-beside-terminal'.  MANUAL overrides that setting."
+  (let* ((panel (roost--task-panel-window))
+         (room (>= (- (+ (window-body-width)
+                        (if panel (window-total-width panel) 0)) roost-task-panel-width)
                    80)))
-    (if (and roost-task-panel-beside-terminal room)
+    (unless (equal (window-parameter nil 'roost-task-panel) (roost--key task))
+      (set-window-parameter nil 'roost-task-panel-manual nil))
+    (when manual
+      (remhash (roost--key task) roost--hidden-task-panels)
+      (set-window-parameter nil 'roost-task-panel-manual t))
+    (set-window-parameter nil 'roost-task-panel
+                          (unless (gethash (roost--key task) roost--hidden-task-panels)
+                            (roost--key task)))
+    (if (and (or roost-task-panel-beside-terminal
+                 (window-parameter nil 'roost-task-panel-manual))
+             (not (gethash (roost--key task) roost--hidden-task-panels)) room)
         (display-buffer-in-side-window (roost--task-info-buffer task)
                                        (roost--side-window-alist 'right roost-task-panel-width))
       ;; A workspace may remember a panel from a wider frame; give the
       ;; terminal its room back.
-      (dolist (window (window-list))
-        (when (and (eq (window-parameter window 'window-side) 'right)
-                   (with-current-buffer (window-buffer window)
-                     (derived-mode-p 'roost-task-info-mode)))
-          (delete-window window))))))
+      (when panel (delete-window panel)))))
 
 ;;;; Setup check
 

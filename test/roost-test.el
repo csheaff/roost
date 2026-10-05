@@ -7,6 +7,8 @@
 
 (defmacro roost-test--isolated (&rest body)
   `(let ((roost--tasks (make-hash-table :test 'equal))
+         (roost--hidden-task-panels (make-hash-table :test 'equal))
+         (roost--sidebar-initialized t)
          (roost-projects-file (expand-file-name "projects.json" (make-temp-file "roost-projects" t)))
          (roost--projects-loaded t) (roost--remembered-projects nil)
          (user-login-name "user")
@@ -135,6 +137,63 @@
        (search-forward "Show the whole")
        (push-button (1- (point)))
        (should (string-match-p "Run the tests afterwards" (buffer-string)))))))
+
+(ert-deftest roost-task-panel-previews-long-replies-and-collapses-new-ones ()
+  (roost-test--isolated
+   (let* ((reply (mapconcat (lambda (n) (format "Progress item %d: handled the edge case." n))
+                           (number-sequence 1 30) "\n\n"))
+          (task (roost--cache-task "dev" (append `((lastMessage . ,reply)) (roost-test--task)))))
+     (with-temp-buffer
+       (roost-task-info-mode)
+       (setq roost--buffer-task-key (roost--key task))
+       (cl-letf (((symbol-function 'roost--task-info-width) (lambda () 40)))
+         (roost--render-task-info)
+         (should (string-match-p "Show the whole reply" (buffer-string)))
+         (should-not (string-match-p "Progress item 30" (buffer-string)))
+         (let ((preview (buffer-substring-no-properties
+                         (progn (goto-char (point-min)) (search-forward "Agent's latest reply\n") (point))
+                         (progn (search-forward "Show the whole reply") (match-beginning 0)))))
+           (should (<= (length (split-string preview "\n" t)) 6)))
+         (search-backward "Show the whole reply")
+         (push-button)
+         (should (string-match-p "Progress item 30" (buffer-string)))
+         (should (string-match-p "Collapse reply" (buffer-string)))
+         ;; Quiet refreshes retain the explicit expansion choice.
+         (roost--render-task-info)
+         (should (string-match-p "Progress item 30" (buffer-string)))
+         (goto-char (point-min))
+         (search-forward "Collapse reply")
+         (push-button (1- (point)))
+         (should-not (string-match-p "Progress item 30" (buffer-string)))
+         (goto-char (point-min))
+         (search-forward "Show the whole reply")
+         (push-button (1- (point)))
+         (setf (alist-get 'lastMessage task) (concat reply "\n\nA new response arrived."))
+         (roost--render-task-info)
+         (should-not roost--expanded-reply)
+         (should-not (string-match-p "A new response arrived" (buffer-string)))
+         (should (string-match-p "^Changes$" (buffer-string)))
+         (should (string-match-p "^Actions$" (buffer-string))))))))
+
+(ert-deftest roost-task-panel-previews-wrap-long-tokens-and-preserve-short-replies ()
+  (should (equal (roost--reply-preview "Done.\nTests passed." 40) "Done.\nTests passed."))
+  (dolist (reply (list (make-string 1000 ?a)
+                       (make-string 500 ?界)
+                       (mapconcat #'number-to-string (number-sequence 1 20) "\n")))
+    (let ((preview (roost--reply-preview reply 40)))
+      (should (string-suffix-p "…" preview))
+      (should (<= (length (split-string preview "\n")) 6))
+      (should (seq-every-p (lambda (line) (<= (string-width line) 38))
+                          (split-string preview "\n")))))
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (append `((lastMessage . ,(make-string 1000 ?a)))
+                                                (roost-test--task)))))
+     (with-temp-buffer
+       (roost-task-info-mode)
+       (setq roost--buffer-task-key (roost--key task))
+       (roost--render-task-info)
+       (should (string-match-p (make-string 1000 ?a) (buffer-string)))
+       (should-not (string-match-p "Show the whole reply" (buffer-string)))))))
 
 (ert-deftest roost-quiet-refresh-retains-last-message ()
   (roost-test--isolated
@@ -630,7 +689,11 @@
        ;; Task commands find the task on the line, as in the dashboard.
        (goto-char (point-min))
        (search-forward "budget-alerts")
-       (should (equal (roost--field (roost--task-at-point) 'id) "1111111111111111"))))))
+       (should (equal (roost--field (roost--task-at-point) 'id) "1111111111111111"))
+       (search-forward "a-task")
+       (let ((help (get-text-property (1- (point)) 'help-echo)))
+         (should (string-match-p "a-task-with-a-very-long-name-indeed" help))
+         (should (string-match-p "dev · /srv/ledger" help)))))))
 
 (ert-deftest roost-sidebar-mode-pins-a-left-window-and-follows-workspaces ()
   (roost-test--isolated
@@ -641,7 +704,7 @@
          (unwind-protect
              (progn
                (roost-sidebar-mode 1)
-               (should (memq #'roost--sidebar-show persp-activated-hook))
+               (should (memq #'roost--sync-side-windows persp-activated-hook))
                (let ((window (get-buffer-window roost--sidebar-buffer)))
                  (should (eq (window-parameter window 'window-side) 'left))
                  (should (window-dedicated-p window))
@@ -656,7 +719,42 @@
            (roost-sidebar-mode -1)
            (roost-watch-mode -1)))
        (should-not (get-buffer-window roost--sidebar-buffer))
-       (should-not (memq #'roost--sidebar-show persp-activated-hook))))))
+       (should-not roost-sidebar-mode)))))
+
+(ert-deftest roost-sidebar-starts-on-first-use-and-respects-explicit-hiding ()
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let ((roost--sidebar-initialized nil) (roost-sidebar-mode nil)
+           (roost-sidebar-on-open t))
+       (cl-letf (((symbol-function 'roost-watch-mode) #'ignore)
+                 ((symbol-function 'roost-refresh) #'ignore))
+         (unwind-protect
+             (progn
+               (roost-status)
+               (should roost-sidebar-mode)
+               (should (get-buffer-window roost--sidebar-buffer))
+               (roost-sidebar-mode -1)
+               (roost-status)
+               (roost--maybe-start-sidebar)
+               (should-not roost-sidebar-mode)
+               (should-not (get-buffer-window roost--sidebar-buffer))
+               (roost-sidebar-mode 1)
+               (should (get-buffer-window roost--sidebar-buffer)))
+           (roost-sidebar-mode -1)))))))
+
+(ert-deftest roost-sidebar-default-can-be-disabled-before-first-use ()
+  (roost-test--isolated
+   (let ((roost--sidebar-initialized nil) (roost-sidebar-mode nil)
+         (roost-sidebar-on-open nil))
+     (roost--maybe-start-sidebar)
+     (should-not roost-sidebar-mode))
+   (let ((roost--sidebar-initialized nil) (roost-sidebar-mode nil)
+         (roost-sidebar-on-open t))
+     ;; An init file can explicitly turn the mode off before any task opens.
+     (roost-sidebar-mode -1)
+     (roost--maybe-start-sidebar)
+     (should-not roost-sidebar-mode))))
 
 (ert-deftest roost-task-panel-docks-beside-the-terminal-when-there-is-room ()
   (roost-test--isolated
@@ -664,18 +762,18 @@
      (delete-other-windows)
      (let ((task (roost--cache-task "dev" (roost-test--task)))
            (roost-task-panel-width 44))
-       (cl-letf (((symbol-function 'frame-width) (lambda (&rest _) 160)))
+       (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 160)))
          (roost--show-task-panel task))
        (let ((window (seq-find (lambda (w) (eq (window-parameter w 'window-side) 'right)) (window-list))))
          (should window)
          (should (equal (buffer-local-value 'roost--buffer-task-key (window-buffer window))
                         (roost--key task))))
        ;; Too narrow: a remembered panel goes away and the terminal keeps its room.
-       (cl-letf (((symbol-function 'frame-width) (lambda (&rest _) 110)))
+       (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 30)))
          (roost--show-task-panel task))
        (should-not (seq-find (lambda (w) (eq (window-parameter w 'window-side) 'right)) (window-list)))
        (let ((roost-task-panel-beside-terminal nil))
-         (cl-letf (((symbol-function 'frame-width) (lambda (&rest _) 200)))
+         (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 200)))
            (roost--show-task-panel task))
          (should-not (seq-find (lambda (w) (eq (window-parameter w 'window-side) 'right)) (window-list))))))))
 
@@ -686,6 +784,181 @@
       (should (seq-every-p (lambda (line) (<= (string-width line) 40)) lines))
       (should (string-match-p "RET Agent · t Shell" (buffer-string)))
       (should (string-match-p "m Merge and retire" (buffer-string))))))
+
+(ert-deftest roost-sidebar-opens-in-a-live-window-when-the-main-area-is-split ()
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (split-window-below)
+     (let ((sidebar (display-buffer-in-side-window (get-buffer-create roost--sidebar-buffer)
+                                                   '((side . left) (window-width . 20)))))
+       (select-window sidebar)
+       (roost--leave-side-window)
+       (should (window-live-p (selected-window)))
+       (should-not (window-parameter (selected-window) 'window-side))))))
+
+(ert-deftest roost-hidden-sidebar-stays-hidden-after-restoring-a-tab ()
+  (roost-test--isolated
+   (save-window-excursion
+     (let ((roost-watch-interval 3600) (roost-workspace 'tab-bar)
+           (original-tab-bar-mode tab-bar-mode))
+       (cl-letf (((symbol-function 'roost-refresh) #'ignore))
+         (unwind-protect
+             (progn
+               (tab-bar-mode 1)
+               (roost-sidebar-mode 1)
+               (tab-bar-new-tab)
+               (should (get-buffer-window roost--sidebar-buffer))
+               (roost-sidebar-mode -1)
+               (tab-bar-select-tab 1)
+               (should-not (get-buffer-window roost--sidebar-buffer))
+               (tab-bar-select-tab 2)
+               (should-not (get-buffer-window roost--sidebar-buffer)))
+           (roost-sidebar-mode -1)
+           (roost-watch-mode -1)
+           (while (cdr (roost--tabs)) (tab-bar-close-tab))
+           (unless original-tab-bar-mode (tab-bar-mode -1))))))))
+
+(ert-deftest roost-sidebar-marker-follows-manual-workspace-switches ()
+  (roost-test--isolated
+   (let* ((a (roost--cache-task "dev" (roost-test--task)))
+          (b (roost--cache-task "dev" (roost-test--task "1111111111111111")))
+          (roost--current-task (roost--key a)) (roost-workspace 'perspective)
+          (persp-mode t))
+     (cl-letf (((symbol-function 'persp-current-name) (lambda () (roost--perspective-name b))))
+       (should (string-prefix-p " " (roost--sidebar-row a 30)))
+       (should (string-prefix-p "▸" (roost--sidebar-row b 30)))))))
+
+(ert-deftest roost-task-panel-resizes-and-explicit-quit-stays-closed ()
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let ((task (roost--cache-task "dev" (roost-test--task)))
+           (roost-workspace nil) (roost-sidebar-mode nil)
+           (main (selected-window)))
+       (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 160)))
+         (roost--show-task-panel task))
+       (should (roost--task-panel-window))
+       (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 30)))
+         (roost--sync-frame-side-windows (selected-frame)))
+       (should-not (roost--task-panel-window))
+       (should (eq main (selected-window)))
+       (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 160)))
+         (roost--sync-frame-side-windows (selected-frame)))
+       (should (roost--task-panel-window))
+       (select-window (roost--task-panel-window))
+       (roost-task-info-quit)
+       (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 160)))
+         (roost--sync-side-windows))
+       (should-not (roost--task-panel-window))
+       (should-not (window-parameter main 'roost-task-panel))))))
+
+(ert-deftest roost-task-panel-stays-hidden-when-reopening-and-restoring-a-task ()
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let ((task (roost--cache-task "dev" (roost-test--task)))
+           (other (roost--cache-task "dev" (roost-test--task "1111111111111111")))
+           (roost-workspace nil) (roost-sidebar-mode nil))
+       (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 160))
+                 ((symbol-function 'roost--refresh-host) #'ignore))
+         (roost--show-task-panel task)
+         (select-window (roost--task-panel-window))
+         (roost-task-info-quit)
+         (roost--show-task-panel other)
+         (should (roost--task-panel-window))
+         (roost--show-task-panel task)
+         (should-not (roost--task-panel-window))
+         ;; Saved workspace layouts can resurrect a previously closed panel.
+         (display-buffer-in-side-window (roost--task-info-buffer task)
+                                         (roost--side-window-alist 'right 44))
+         (roost--sync-side-windows)
+         (should-not (roost--task-panel-window))
+         (roost-toggle-task-panel task)
+         (should (roost--task-panel-window)))))))
+
+(ert-deftest roost-task-panel-toggle-can-cancel-waiting-for-room ()
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let ((task (roost--cache-task "dev" (roost-test--task)))
+           (roost-workspace nil) (roost-sidebar-mode nil))
+       (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 90)))
+         (roost-toggle-task-panel task)
+         (should-not (roost--task-panel-window))
+         (roost-toggle-task-panel task))
+       (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 160)))
+         (roost--sync-side-windows)
+         (roost--show-task-panel task))
+       (should-not (roost--task-panel-window))))))
+
+(ert-deftest roost-task-panel-toggle-keeps-focus-and-works-with-automatic-docking-off ()
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let ((task (roost--cache-task "dev" (roost-test--task)))
+           (roost-workspace nil) (roost-sidebar-mode nil)
+           (roost-task-panel-beside-terminal nil) (main (selected-window)))
+       (cl-letf (((symbol-function 'roost--refresh-host) #'ignore)
+                 ((symbol-function 'window-body-width) (lambda (&rest _) 160)))
+         (roost-toggle-task-panel task)
+         (should (roost--task-panel-window))
+         (should (eq main (selected-window)))
+         (roost--sync-side-windows)
+         (should (roost--task-panel-window))
+         (roost-toggle-task-panel task)
+         (should-not (roost--task-panel-window))
+         (should-not (window-parameter main 'roost-task-panel-manual))
+         (roost--sync-side-windows)
+         (should-not (roost--task-panel-window))
+         ;; Restoring manually after q also keeps the terminal selected.
+         (roost-toggle-task-panel task)
+         (select-window (roost--task-panel-window))
+         (roost-task-info-quit)
+         (roost--sync-side-windows)
+         (should-not (roost--task-panel-window))
+         (should (eq main (selected-window))))))))
+
+(ert-deftest roost-task-panel-toggle-waits-for-room-and-resets-on-a-different-task ()
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let ((task (roost--cache-task "dev" (roost-test--task)))
+           (other (roost--cache-task "dev" (roost-test--task "1111111111111111")))
+           (roost-workspace nil) (roost-sidebar-mode nil)
+           (roost-task-panel-beside-terminal nil))
+       (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 90)))
+         (roost-toggle-task-panel task))
+       (should-not (roost--task-panel-window))
+       (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 160)))
+         (roost--sync-side-windows)
+         (should (roost--task-panel-window))
+         (roost--show-task-panel other))
+       (should-not (roost--task-panel-window))
+       (should-not (window-parameter nil 'roost-task-panel-manual))))))
+
+(ert-deftest roost-task-panel-uses-the-terminal-width-in-a-split-frame ()
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let ((task (roost--cache-task "dev" (roost-test--task))))
+       (cl-letf (((symbol-function 'frame-width) (lambda (&rest _) 200))
+                 ((symbol-function 'window-body-width) (lambda (&rest _) 90)))
+         (roost--show-task-panel task))
+       (should-not (roost--task-panel-window))))))
+
+(ert-deftest roost-files-from-the-sidebar-leaves-the-side-window ()
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let ((task (roost--cache-task "dev" (roost-test--task)))
+           (roost-workspace nil) opened-in)
+       (select-window (display-buffer-in-side-window (get-buffer-create roost--sidebar-buffer)
+                                                      '((side . left) (window-width . 20))))
+       (cl-letf (((symbol-function 'dired) (lambda (&rest _) (setq opened-in (selected-window)))))
+         (roost-files task))
+       (should (window-live-p opened-in))
+       (should-not (window-parameter opened-in 'window-side))))))
 
 (ert-deftest roost-request-wait-returns-results-and-signals-failures ()
   (cl-letf (((symbol-function 'roost--request)
@@ -814,6 +1087,25 @@
                   (should (eq (selected-window) other))
                   (should (equal sent '("select-window -t @9" "select-window -t @9")))))))
          (mapc #'kill-buffer (list code terminal)))))))
+
+(ert-deftest roost-opening-a-docked-panel-fetches-git-statistics ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (roost-test--task))) visible refreshes)
+     (dlet ((features (cons 'tmux-control features)))
+       (cl-letf (((symbol-function 'roost--activate-workspace) #'ignore)
+                 ((symbol-function 'tmux-control-window-id) (lambda () nil))
+                 ((symbol-function 'tmux-control-connect-or-switch) #'ignore)
+                 ((symbol-function 'tmux-control-send-command) #'ignore)
+                 ((symbol-function 'tmux-control-select-pane) #'ignore)
+                 ((symbol-function 'roost--show-task-panel) (lambda (&rest _) (setq visible t)))
+                 ((symbol-function 'roost--task-panel-window) (lambda () (when visible (selected-window))))
+                 ((symbol-function 'roost--refresh-host) (lambda (host quiet) (push (list host quiet) refreshes))))
+         (roost--display-task task)
+         (should (equal refreshes '(("dev" nil))))
+         (setq visible nil refreshes nil)
+         (cl-letf (((symbol-function 'roost--show-task-panel) #'ignore))
+           (roost--display-task task))
+         (should-not refreshes))))))
 
 (ert-deftest roost-shell-shows-both-panes-without-toggling-existing-tiling-off ()
   (roost-test--isolated

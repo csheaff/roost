@@ -275,6 +275,106 @@ click-and-select interaction was verified in GUI Emacs. Temporary perspectives,
 the demo frame, task and fixture were removed afterward; the original user
 workspace and agent were retained.
 
+### Pinned sidebar and task inspector
+
+On 2026-10-04, exercised the layout in GUI Emacs 30.2 with the user's
+perspective.el, Xah, tmux-control and Magit configuration. Three fake Claude
+tasks ran through the actual lifecycle hooks in two disposable local projects,
+using an isolated registry and tmux socket. No agent credits were used.
+
+Verified native mouse clicking and Return on sidebar rows, `f` for the correct
+task worktree, `r` for its real Magit diff, and `t` for its supporting shell.
+Navigation leaves the sidebar intact and selects a live main window, including
+when the main area is split. The inspector identifies the selected task and
+shows its actual Git changes and permission state.
+
+The sidebar follows perspective switches, existing and newly created tabs, and
+new frames, and appears in all existing ordinary frames when enabled. Turning
+it off removes it from every frame; restoring a saved perspective or tab does
+not bring it back. Its current-task marker follows manual workspace switches.
+The sidebar remains protected from `delete-other-windows`.
+
+Shrinking the frame removes the inspector before it crowds the terminal, and
+widening restores it without changing focus. Native `q` closes the inspector
+until the task is opened again. The supporting-shell split was also exercised:
+when its panes need the space, the inspector disappears. Sizing uses the main
+window's usable width, including other splits and display decorations.
+
+Live testing found and fixed an internal-window selection error in a split
+main area, saved layouts resurrecting a disabled sidebar, a stale current-task
+marker, file navigation attempting to replace a dedicated sidebar, and an
+inspector leaving only 36 terminal columns after a resize. Four behavioral
+regressions were checked against the previous source and failed there; the
+updated source passes all **98 ERT tests and 67 Python tests**, and byte-compiles
+with warnings treated as errors. The fake tasks, fixture projects and QA frames
+were cleaned up, and the user's original frame and Roost settings restored.
+
+The sidebar makes several concurrent tasks easier to scan and reach. The
+inspector is useful on a wide display, while keeping it optional and dismissible
+fits smaller frames and workflows that prioritize code or shell splits. This
+is a usability judgment from local testing; broader adoption has not been
+tested with other users.
+
+### Inspector polish
+
+A second GUI pass on 2026-10-04 used a disposable local task with a long name,
+a real dirty Git worktree, and a long reply seeded in the Emacs cache. The
+terminal ran the fake Claude lifecycle fixture; the seeded reply was a display
+fixture, not an actual model response.
+
+Verified native clicking to expand and collapse the reply. Its folded form
+leaves Changes and every action group visible in the 44-column inspector; the
+expanded form keeps its collapse button above the text. Refresh retains an
+explicit expansion, and a new reply starts folded. Tests include preserved
+newlines, unbroken long tokens, wide characters, short replies, and the full
+details view.
+
+Used native `I` in the inspector and sidebar, and the user's terminal keys
+`ESC`, `SPC s h`, then `I`. Showing and hiding the inspector keeps the terminal
+selected; background layout restoration preserves that focus. Tests also
+cover explicit docking when automatic docking is disabled, waiting for room,
+resizing, closing with `q`, and changing tasks. Sidebar hover properties contain
+the complete task name, host and project path even when the row is truncated.
+
+Opening a docked inspector now requests a full Git refresh. A regression check
+confirms this request occurs when the panel is visible and is skipped when it
+is hidden; the fixture's actual Git change appears without a manual refresh.
+
+The final source passes **103 ERT tests and 67 Python tests** and byte-compiles
+with warnings treated as errors. Disposable resources were removed and the
+original Emacs frame, task cache and Roost settings restored.
+
+### Default layout and README
+
+On 2026-10-04, made the sidebar start on the first dashboard or task opened.
+Explicitly disabling it, including before first use, suppresses automatic
+opening for the session. `roost-sidebar-on-open` allows an opt-out. Explicitly
+closing an inspector now suppresses automatic docking for that task across
+reopens and restored layouts; `I` reopens it. A second toggle can cancel an
+inspector waiting for space on a narrow frame.
+
+Captured `docs/images/roost-sidebar.jpg` from the native Emacs UI in a
+disposable local greeting-service project. The center is its actual supporting
+shell, showing three passing unit tests and a real Git diff. The two tasks run
+the fake Claude lifecycle fixture, including a hook-reported permission state;
+the inspector's reply is seeded demo text describing the fixture changes.
+The README caption identifies this as a local demo. The screenshot is an
+unmodified capture, with the full dashboard retained farther down the README.
+
+Verified native `q` in both panels, then opening the dashboard and a task while
+the sidebar remains hidden. Clicking a task after inspector dismissal leaves
+the inspector closed, including after a shrink/widen cycle. The native terminal
+menu (`ESC`, `SPC s h`, `I`) explicitly restores it and keeps the main window
+selected. Opening the first demo task itself enabled the default sidebar and
+inspector without a manual mode toggle.
+
+All **107 ERT tests and 67 Python tests** pass, with clean byte compilation
+under warnings-as-errors. Regression coverage includes first use, configuration
+opt-out, explicit hiding before first use, restored layouts, reopening a closed
+task, and cancelling an inspector waiting for space. The isolated socket,
+worktrees and project were removed; the original frame, task cache and settings
+were restored.
+
 ### Codex and Pi adapters
 
 Used another disposable remote `hello-service` project, an isolated registry and
