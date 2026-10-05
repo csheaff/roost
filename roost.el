@@ -2932,6 +2932,22 @@ The changes column shrinks first, then the agent column is dropped."
                                                     room nil nil "…")
                           'face 'roost-dim)))))
 
+(defun roost--insert-unreachable-hosts (tasks &optional width)
+  "Name each host Roost cannot reach that has none of TASKS to show.
+Its tasks are unknown rather than absent, as after a restart while it is
+down.  With WIDTH, fit each line within it, leaving details to hover."
+  (dolist (host (roost--hosts))
+    (when-let* ((error (gethash host roost--errors))
+                ((not (seq-some (lambda (task) (equal (roost--field task 'host) host)) tasks))))
+      (insert (propertize (if width
+                              (truncate-string-to-width
+                               (format "%s unreachable" (roost--host-label host)) width nil nil "…")
+                            (format "%s is unreachable, so its tasks are unknown: %s"
+                                    (roost--host-label host) error))
+                          'face 'roost-status-failed
+                          'help-echo (format "%s\nM-x roost-doctor checks this host" error))
+              "\n"))))
+
 (defun roost--insert-empty-dashboard ()
   "Explain how to start when there are no tasks."
   (insert (propertize "No tasks yet." 'face 'roost-title) "\n\n"
@@ -2955,6 +2971,7 @@ The changes column shrinks first, then the agent column is dropped."
          (tasks (roost-tasks))
          (inhibit-read-only t))
     (erase-buffer)
+    (roost--insert-unreachable-hosts tasks)
     (if (null tasks)
         (roost--insert-empty-dashboard)
       (let ((layout (roost--dashboard-layout tasks width)))
@@ -3122,6 +3139,7 @@ Task commands act on the task at point, as in the dashboard.
     (insert (propertize "Roost" 'face 'roost-title)
             (if-let* ((summary (roost--sidebar-summary tasks))) (concat "  " summary) "")
             "\n")
+    (roost--insert-unreachable-hosts tasks width)
     (if (null tasks)
         (insert "\n" (propertize (substitute-command-keys
                                   "No tasks.  \\<roost-sidebar-list-mode-map>\\[roost-new-task] starts one.")

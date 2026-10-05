@@ -1523,6 +1523,24 @@
                (should (= (length created) 1))))
          (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
 
+(ert-deftest roost-unreachable-hosts-are-named-rather-than-taken-as-empty ()
+  (roost-test--isolated
+   (let ((roost-hosts '(nil "dev" "lab")))
+     (roost--cache-task "lab" (roost-test--task))
+     (puthash "dev" "ssh: connect to host dev port 22: Host is down" roost--errors)
+     (puthash "lab" "ssh: connect to host lab port 22: Host is down" roost--errors)
+     (with-temp-buffer
+       (roost-sidebar-list-mode)
+       (roost--render-sidebar)
+       ;; dev's tasks are unknown; lab's last known tasks are still listed.
+       (should (string-match-p "^dev unreachable$" (buffer-string)))
+       (should-not (string-match-p "^lab unreachable" (buffer-string))))
+     (with-temp-buffer
+       (roost-dashboard-mode)
+       (roost--render-dashboard)
+       (should (string-match-p "dev is unreachable, so its tasks are unknown: ssh: connect"
+                               (buffer-string)))))))
+
 (ert-deftest roost-empty-dashboard-explains-how-to-start ()
   (roost-test--isolated
    (let ((roost-hosts '(nil "dev")))
