@@ -542,7 +542,10 @@ Call SUCCESS with the result, or FAILURE with an error message."
     (when (and roost-notify previous
                (or (not (equal previous status)) new-stop)
                (or (not (equal previous "starting")) new-stop)
-               (member status '("ready" "permission" "failed" "crashed" "exited")))
+               (member status '("ready" "permission" "failed" "crashed" "exited"))
+               ;; Not when you are looking at it already.
+               (not (when-let* ((watched (roost--watched-task)))
+                      (equal (roost--key watched) key))))
       (roost--notify-attention host task status))
     task))
 
@@ -691,19 +694,22 @@ it is ready and you have seen it since, rather than \"ready\"."
   "Record that you have seen TASK's agent as it is now."
   (puthash (roost--key task) (roost--field task 'updatedAt) roost--seen))
 
-(defun roost--note-watched-agent ()
-  "Mark seen the agent whose terminal is in the selected window.
+(defun roost--watched-task ()
+  "The task whose agent's terminal is in the selected window, if any.
 Only while Emacs has focus, since otherwise nobody is looking."
   (when (and (frame-focus-state) (fboundp 'tmux-control-active-pane))
     (with-current-buffer (window-buffer (selected-window))
-      (when-let* ((pane (tmux-control-active-pane))
-                  (task (seq-find (lambda (task)
-                                    (and (equal (roost--field task 'paneId) pane)
-                                         (equal (roost--field task 'host) (tmux-control-buffer-host))
-                                         (equal (roost--field task 'socket)
-                                                (tmux-control-buffer-socket-name))))
-                                  (roost-tasks))))
-        (roost--mark-seen task)))))
+      (when-let* ((pane (tmux-control-active-pane)))
+        (seq-find (lambda (task)
+                    (and (equal (roost--field task 'paneId) pane)
+                         (equal (roost--field task 'host) (tmux-control-buffer-host))
+                         (equal (roost--field task 'socket) (tmux-control-buffer-socket-name))))
+                  (roost-tasks))))))
+
+(defun roost--note-watched-agent ()
+  "Mark seen the agent whose terminal is in the selected window."
+  (when-let* ((task (roost--watched-task)))
+    (roost--mark-seen task)))
 
 (defun roost--attention-rank (task)
   "Sort rank of TASK by how much it needs attention."

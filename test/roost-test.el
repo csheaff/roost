@@ -239,6 +239,28 @@
      (roost--cache-task "dev" (roost-test--task nil "permission"))
      (should (= (length notices) 1))))))
 
+(ert-deftest roost-does-not-notify-about-the-agent-you-are-watching ()
+  (roost-test--isolated
+   (roost-test--without-inspect
+    (let* ((roost-notify t) notices
+           (roost-notify-function (lambda (title _body) (push title notices)))
+           (focused t))
+      (roost--cache-task "dev" (roost-test--task nil "running"))
+      (with-temp-buffer
+        (setq-local roost-test--tmux '(:host "dev" :socket "main" :pane "%12"))
+        (save-window-excursion
+          (set-window-buffer (selected-window) (current-buffer))
+          (roost-test--with-tmux-buffers
+           (cl-letf (((symbol-function 'frame-focus-state) (lambda (&rest _) focused)))
+             ;; Its terminal is in front of you: no notification.
+             (roost--cache-task "dev" (roost-test--task nil "permission"))
+             (should-not notices)
+             ;; With Emacs in the background, you hear about it.
+             (setq focused nil)
+             (roost--cache-task "dev" (roost-test--task nil "running"))
+             (roost--cache-task "dev" (roost-test--task nil "permission"))
+             (should (= (length notices) 1))))))))))
+
 (ert-deftest roost-notifies-on-fast-turns-that-finish-between-polls ()
   (roost-test--isolated
    (roost-test--without-inspect
