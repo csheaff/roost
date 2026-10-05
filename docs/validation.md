@@ -430,6 +430,46 @@ until those tasks end.
 
 All 123 ERT and 77 Python tests pass.
 
+### The first hour in a real configuration, 2026-10-05
+
+Then the question became what would make someone give up in their first hour.
+Roost ran in a copy of Clay's configuration (xah-fly-keys, perspective.el, his
+mode line, his window keys), first with a raw key echo and the fake agent,
+then with Claude Code (Haiku):
+
+- **Keys.** Esc never reached the agent: the configuration sends it to xah
+  command mode, so it neither interrupted Claude nor cancelled its prompts.
+  In tmux terminals it now goes to the program and C-SPC leaves insert mode
+  (a configuration change). Entering a Roost window in command mode, by
+  C-h/C-l or a click, ran the sidebar's keys as xah commands; insert mode now
+  follows window selection too. Shift+Return submitted half-written prompts:
+  tmux-control now sends it, and Option+Return, as tmux's named keys
+  ([tmux-control#160](https://github.com/csheaff/tmux-control/pull/160),
+  #162; tmux 3.2a–3.4 type the name S-Enter out, so only 3.5 and later),
+  and Roost turns on tmux's `extended-keys` before starting an agent, without
+  which tmux gives Claude Return anyway. With extended keys Claude ignores
+  ESC Return, hence #162. Cmd-V, C-y, C-c C-c, Shift+Tab, C-o, C-r, arrows
+  and word keys arrive intact.
+- **Windows.** The task draft and the dashboard popped up beside the
+  selected window and squeezed an agent's terminal to 19 columns; they now
+  take the window you are in. `n`, `c`, `b` and `S` now work in a task's
+  panel. Magit, help, `C-x 1`, Ediff, window moves and killing a terminal
+  buffer leave agents and side windows alone.
+- **Speed.** Idle with a tmux view open, Emacs redisplayed 24 times a second:
+  tmux-control's optional idle GC polled every 50 ms. It now uses idle timers
+  ([tmux-control#161](https://github.com/csheaff/tmux-control/pull/161)),
+  about a sixth of the CPU. Typing echoes in 3 ms locally and 12 ms on
+  claylien; three agents streaming in the background cost nothing visible;
+  one streaming on screen, about 16% of a core.
+- **Smaller things.** A sleeping host's error printed again whenever ssh
+  reworded it; the C-c that a cooked-mode agent gets as SIGINT killed the
+  runner too; `m` on uncommitted work asked to merge, then refused (it now
+  offers Magit); "command's" named a task `command-s`; Claude's no-break
+  spaces showed as red underscores (#163).
+- **Not ours.** Claude Code leaves `3. Nohift+tab)` in its edit prompt at
+  some widths, in plain tmux with any `TERM` too. Its folder-trust question
+  defaults to "No, exit"; it asks once per repository, not per worktree.
+
 Not Roost's to fix: on this Mac, tmux 3.6a shows non-ASCII window names as
 underscores whatever the locale (tmux 3.7c on Linux keeps them); Roost's own
 views show them correctly. Unloading a package also unbinds its settings, so
