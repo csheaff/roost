@@ -2092,14 +2092,23 @@ For tasks Roost can no longer retire, such as one whose repository moved.
 A running agent must be stopped first."
   (interactive)
   (setq task (roost--choose task))
-  (when (yes-or-no-p (format "Forget %s, leaving its worktree and branch as they are? "
-                             (roost--field task 'name)))
-    (roost--act task "forget" nil
-                (lambda (forgotten)
-                  (roost--retired-workspace forgotten)
-                  (when-let* ((left (roost--field forgotten 'leftBehind)))
-                    (message "Forgot %s; left in place: %s"
-                             (roost--field task 'name) (string-join left ", ")))))))
+  (let* ((name (roost--field task 'name))
+         ;; The host refuses while the agent runs, so stop it first.
+         (running (not (member (roost--field task 'status) '("stopped" "exited" "failed" "crashed"))))
+         (forget (lambda (&rest _)
+                   (roost--act task "forget" nil
+                               (lambda (forgotten)
+                                 (roost--retired-workspace forgotten)
+                                 (when-let* ((left (roost--field forgotten 'leftBehind)))
+                                   (message "Forgot %s; left in place: %s"
+                                            name (string-join left ", "))))))))
+    (when (yes-or-no-p (format (if running
+                                   "Stop %s's agent and forget the task, leaving its worktree and branch as they are? "
+                                 "Forget %s, leaving its worktree and branch as they are? ")
+                               name))
+      (if running
+          (roost--act task "stop" nil forget)
+        (funcall forget)))))
 
 (defun roost--kill-worktree-buffers (task)
   "Kill the Magit and Dired buffers left in TASK's removed worktree.
@@ -3368,7 +3377,10 @@ Beside a terminal, that turns off `roost-task-panel-mode'."
 (defun roost-unload-function ()
   "Remove Roost's hooks, advice and side windows for `unload-feature'."
   (when roost-sidebar-mode (roost-sidebar-mode -1))
-  (when (roost--task-panel-window) (delete-window (roost--task-panel-window)))
+  (dolist (frame (frame-list))
+    (with-selected-frame frame
+      (when-let* ((panel (roost--task-panel-window)))
+        (delete-window panel))))
   (remove-hook 'window-configuration-change-hook #'roost--layout-changed)
   (remove-hook 'magit-post-refresh-hook #'roost--magit-refreshed)
   (when roost-watch-mode (roost-watch-mode -1))

@@ -1618,9 +1618,22 @@
            (mapc (lambda (buffer) (when (buffer-live-p buffer) (kill-buffer buffer)))
                  (list dired notes))))))))
 
+(ert-deftest roost-forget-stops-a-running-agent-first ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (roost-test--task nil "ready"))) actions)
+     (cl-letf (((symbol-function 'yes-or-no-p) (lambda (prompt) (string-prefix-p "Stop " prompt)))
+               ((symbol-function 'roost--request)
+                (lambda (_host action _params success &optional _failure)
+                  (push action actions)
+                  (funcall success (append `((status . ,(if (equal action "stop") "stopped" "forgotten")))
+                                           (roost-test--task))))))
+       (roost-forget task)
+       (should (equal (reverse actions) '("stop" "forget")))
+       (should-not (roost-tasks))))))
+
 (ert-deftest roost-forget-removes-the-task-and-reports-what-remains ()
   (roost-test--isolated
-   (let ((task (roost--cache-task "dev" (roost-test--task))) messages)
+   (let ((task (roost--cache-task "dev" (roost-test--task nil "stopped"))) messages)
      (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_) t))
                ((symbol-function 'message) (lambda (format &rest args) (push (apply #'format format args) messages)))
                ((symbol-function 'roost--request)
