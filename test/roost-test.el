@@ -2318,4 +2318,22 @@
        (funcall failure "ssh: connect to host dev port 22: Host is down")
        (should (= (length messages) 2))))))
 
+(ert-deftest roost-merging-uncommitted-work-offers-magit-instead ()
+  ;; The host refuses a dirty worktree, so asking to merge first only led
+  ;; to that refusal.
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (append '((dirty . t)) (roost-test--task))))
+         actions reviewed questions)
+     (cl-letf (((symbol-function 'roost--act) (lambda (_task action &rest _) (push action actions)))
+               ((symbol-function 'roost-review) (lambda (task) (setq reviewed task)))
+               ((symbol-function 'yes-or-no-p) (lambda (q) (push q questions) t))
+               ((symbol-function 'y-or-n-p) (lambda (q) (push q questions) t)))
+       (roost-merge-retire task)
+       (should-not actions)
+       (should (eq reviewed task))
+       (should (string-match-p "uncommitted" (car questions)))
+       ;; Committed and clean: merge as before.
+       (roost-merge-retire (roost--cache-task "dev" (roost-test--task "fedcba9876543210")))
+       (should (equal actions '("merge")))))))
+
 (provide 'roost-test)

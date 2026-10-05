@@ -2101,8 +2101,14 @@ Without a status from GitHub yet, a recorded pull request counts as open."
 Dirty worktrees are refused; review and commit in Magit first."
   (interactive)
   (setq task (roost--choose task))
-  (when (yes-or-no-p (format "Merge committed work from %s and retire it? "
-                             (roost--field task 'name)))
+  (cond
+   ;; The host refuses a dirty worktree; say so rather than ask to merge.
+   ((roost--field task 'dirty)
+    (when (y-or-n-p (format "%s has uncommitted changes to commit first.  Open Magit? "
+                            (roost--field task 'name)))
+      (roost-review task)))
+   ((yes-or-no-p (format "Merge committed work from %s and retire it? "
+                         (roost--field task 'name)))
     (roost--act task "merge" nil
                 (lambda (merged)
                   (roost--retired-workspace merged)
@@ -2111,7 +2117,7 @@ Dirty worktrees are refused; review and commit in Magit first."
                   (roost--refresh-host (roost--field merged 'host) nil)
                   (message "Merged %s into %s, and removed its worktree and branch"
                            (roost--field task 'name)
-                           (or (roost--field task 'integrationBranch) "its branch"))))))
+                           (or (roost--field task 'integrationBranch) "its branch")))))))
 
 ;;;###autoload
 (defun roost-forget (&optional task)
