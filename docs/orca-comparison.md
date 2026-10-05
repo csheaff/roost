@@ -51,12 +51,47 @@ closer to Orca's surfaces where that helped:
 | Orca | Roost |
 | --- | --- |
 | A creation dialog with project, base branch and prompt | A draft buffer with clickable fields, known projects and a multi-line prompt |
-| A sidebar of workspaces with agent status | A dashboard grouped by host and project, with a status summary and Git changes |
+| A sidebar of workspaces with agent status | A dashboard grouped by host and project, with a status summary and Git changes; since 2026-10-04 also a pinned sidebar (below) |
 | Base branch drift | Commits ahead and behind the integration branch; `u` merges it into the task, and the agent can resolve conflicts |
 | Delete, with an explicit force waiver | Retire for finished work; forget drops only Roost's record and never touches Git |
 | Branch prefix setting | `roost-branch-prefix` |
 | Pull requests from a workspace | `P` drafts one from the agent's commit message and creates it with `gh` on the task's host; `P` again pushes review fixes; `x` retires after a squash merge and deletes the branch |
 | Issue imports | `C-c C-t` in the draft starts from a GitHub issue, and the pull request closes it; `roost-new-task` on an Org heading, an agenda line, or a region starts the prompt, and the heading then stands for its task |
+
+## The pinned layout, used end to end
+
+Orca keeps three columns on screen: workspaces on the left, the agent's
+terminal in the middle, and the workspace's files, source control and checks
+on the right. On 2026-10-04 Roost gained the same shape, and two Claude Code
+tasks were then taken from creation to merge in it (see
+[validation](validation.md)).
+
+| Orca | Roost |
+| --- | --- |
+| Left sidebar: projects and their workspaces, each with a status dot and an unread marker | `roost-sidebar-mode` (`b`): tasks grouped by host and project, a status dot, how many wait for you; a finished agent you have seen turns grey |
+| Always there by default | Opt-in, since an Emacs package that claims a column of every frame should be asked to; one line in your configuration keeps it |
+| Right sidebar: Source Control with the changed files and their diffs, live | The task panel: the agent's latest reply, a live summary of changes and of commits ahead and behind, the pull request's review and checks, and every action. The files and their diffs are one key away in Magit (`r`) or `D` |
+| Checks tab | Pull request checks as passing, failing and pending counts in the panel |
+| Agents tab: past sessions to resume | `s` resumes the task's own conversation; there is no history browser |
+| Panels collapse by hand | The panel steps aside by itself when the terminal would drop below 80 columns, and comes back with room; `q` and `I` turn it off and on |
+
+Using it found what a screenshot would not. Changes went stale while agents
+worked, because background polls skip Git; Roost now measures a task whenever
+its agent reports an event or Magit refreshes its worktree. Read replies kept
+counting as waiting. Magit could open inside the panel's window. These are
+fixed.
+
+What Orca still does better, in order of how much it matters day to day:
+
+1. **Changed files beside the terminal.** Orca lists the files and shows
+   their diffs in the right column; Roost's panel gives a count and sends you
+   to Magit. Listing the files in the panel, each opening its diff, would
+   close most of the gap without rebuilding Magit.
+2. **Width.** Three columns need about 156 columns. On a laptop frame Roost's
+   panel steps aside, which keeps the terminal usable but loses the third
+   column; Orca's toggles have the same limit.
+3. **Automations and usage limits.** Orca runs agents on a schedule and shows
+   Claude and Codex usage in its status bar. Roost has neither.
 
 Mobile access, embedded browsers, trackers other than GitHub, workflow boards
 and sparse checkouts remain outside Roost. Emacs already supplies
