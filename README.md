@@ -153,7 +153,9 @@ perspectives or tabs and survives `C-x 1`. Click a task or press `RET` to open
 it; hover to see its full name and project; `q` hides the list. To have it from
 the start, add `(roost-sidebar-mode 1)` to your configuration.
 
-![The sidebar on the left, Claude Code in the middle, and the task's panel on the right](docs/images/roost-sidebar.jpg)
+![The sidebar lists two tasks, one waiting for permission; in the middle, that task's Claude Code asks to edit notes.py; on the right, its panel shows the agent's latest message, the changes and the actions](docs/images/roost-sidebar.jpg)
+
+*The sidebar, an agent asking to edit a file, and that task's panel.*
 
 An open task also gets its panel at the right of its terminal: the agent's
 latest reply (long ones fold to a few lines), the changes and the actions. It

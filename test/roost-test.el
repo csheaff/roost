@@ -861,6 +861,14 @@
                                             (window-buffer (roost--task-panel-window)))
                         (roost--key other))))))))
 
+(ert-deftest roost-task-panel-wraps-in-a-narrow-window ()
+  (with-temp-buffer
+    (roost-task-info-mode)
+    ;; Emacs truncates lines in windows under 50 columns unless told not to.
+    (should-not truncate-partial-width-windows)
+    (should-not truncate-lines)
+    (should word-wrap)))
+
 (ert-deftest roost-task-panel-redraws-keep-the-scroll-position ()
   (roost-test--isolated
    (save-window-excursion

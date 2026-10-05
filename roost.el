@@ -2323,7 +2323,12 @@ terminal or worktree, or ask which task."
 Status is the last observation from the task's host.
 \\{roost-task-info-mode-map}"
   (setq-local truncate-lines nil
-              word-wrap t)
+              ;; A docked panel is narrower than the default threshold of 50.
+              truncate-partial-width-windows nil
+              word-wrap t
+              ;; As in `visual-line-mode', wrapped lines need no fringe arrows.
+              fringe-indicator-alist (cons '(continuation nil nil)
+                                           (default-value 'fringe-indicator-alist)))
   (add-hook 'after-change-major-mode-hook #'roost--quiet-display 90 t)
   (add-hook 'window-size-change-functions #'roost--task-info-resized nil t)
   (roost--evil-state 'roost-task-info-mode roost-evil-state)

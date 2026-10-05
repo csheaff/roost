@@ -297,11 +297,15 @@ through the real hooks, so no agent credits were used.
 - `q` in the panel turned the panel off for every task, returning to the
   terminal; `I` in the sidebar turned it back on and left the sidebar selected.
   `q` in the sidebar hid it and selected the main window.
+- The README capture, in a plain Emacs with two Claude Code (Haiku) tasks in a
+  local project, showed the docked panel cutting its prompt off at the window
+  edge: Emacs truncates lines in windows narrower than 50 columns. The panel
+  now wraps them, without fringe arrows.
 - An earlier pass with a long reply seeded in the cache checked the folded
   six-line preview, clicking to expand and collapse it, a new reply starting
   folded, and the sidebar's hover text giving the full name, host and project.
 
-All **107 ERT tests and 67 Python tests** pass, with byte compilation under
+All **108 ERT tests and 67 Python tests** pass, with byte compilation under
 warnings-as-errors. Batch Emacs has no redisplay, so the tests call the layout
 sync directly where the window hook would run it.
 
