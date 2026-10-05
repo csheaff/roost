@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shlex
+import signal
 from pathlib import Path
 import subprocess
 import sys
@@ -139,6 +140,17 @@ class Lifecycle(unittest.TestCase):
         store.save(record)
         self.create(name="third")
         self.assertTrue(helpers["old"].exists())
+
+    def test_ctrl_c_in_the_pane_is_for_the_agent_not_the_runner(self):
+        # An agent that leaves the terminal in cooked mode gets C-c as SIGINT,
+        # sent to the pane's whole foreground group, runner included.
+        task = self.create()
+        roost.tmux(self.socket, "send-keys", "-t", task["paneId"], "C-c")
+        self.wait(task, "failed")
+        record = roost.Store(str(self.state)).read(task["id"])
+        self.assertEqual(record["exitCode"], -signal.SIGINT)
+        output = roost.tmux(self.socket, "capture-pane", "-p", "-S", "-", "-t", task["paneId"]).stdout
+        self.assertNotIn("in runner", output)
 
     def test_a_turn_you_stop_leaves_the_agent_waiting_for_you(self):
         # Claude runs no hook for Esc or a declined request; its transcript

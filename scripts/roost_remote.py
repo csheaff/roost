@@ -1429,6 +1429,11 @@ def runner(root, task_id, run_id, resume_conversation=False):
     env["ROOST_HELPER"] = str(Path(__file__).resolve())
     env["ROOST_PYTHON"] = sys.executable
     env["PATH"] = agent_path(env.get("PATH", ""))
+    # C-c and C-\ in the pane are for the agent, as a shell's foreground job
+    # gets them; the runner waits on and records it.  A handler, unlike
+    # SIG_IGN, is not inherited across exec.
+    for number in (signal.SIGINT, signal.SIGQUIT):
+        signal.signal(number, lambda *_: None)
     code = 1
     error = None
     try:
