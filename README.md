@@ -80,7 +80,7 @@ the next one). `n` jumps to the next agent waiting for you, permission requests
 first. Answer it in the terminal, then `n` again. A finished agent you have
 looked at stops counting, and turns grey, until it replies again.
 
-![The Roost dashboard: four Claude Code tasks on two machines, one waiting for permission, two finished with changes to review, one working](docs/images/roost-dashboard.jpg)
+![The Roost dashboard: four Claude Code tasks on two machines, one asking to run its tests, two finished with changes to review, one working](docs/images/roost-dashboard.jpg)
 
 *`M-x roost-status`, the dashboard. `RET` on a row opens that agent's own
 terminal.*
