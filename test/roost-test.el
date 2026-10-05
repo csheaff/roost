@@ -1506,10 +1506,12 @@
        (let ((buffer-file-name "/ssh:dev:/home/user/elsewhere/app.py"))
          (roost--file-saved))
        (should (equal refreshes `(("dev" nil (,(roost--field task 'id))))))
-       ;; An error would stop the hooks after this one; it only reports itself.
+       ;; An error would stop the hooks after this one; it only reports itself,
+       ;; unless you are debugging (as ERT does in Emacs 29).
        (cl-letf (((symbol-function 'roost--task-in-directory)
                   (lambda (&rest _) (error "Not a Tramp file name"))))
-         (let ((buffer-file-name "/ftp:host:/notes.txt"))
+         (let ((buffer-file-name "/ftp:host:/notes.txt")
+               (debug-on-error nil))
            (should-not (roost--file-saved)))))
      (let ((after-save-hook nil) (global-mode-string nil) (roost-watch-mode nil))
        (unwind-protect
