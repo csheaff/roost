@@ -301,11 +301,30 @@ through the real hooks, so no agent credits were used.
   local project, showed the docked panel cutting its prompt off at the window
   edge: Emacs truncates lines in windows narrower than 50 columns. The panel
   now wraps them, without fringe arrows.
+- The same two tasks were then taken through to the end from the sidebar:
+  permission prompts answered in the terminal, `r` for Magit, a commit there,
+  `m` to merge the first task, `u` on the second, which conflicted with it in
+  `notes.py` and which its agent resolved when Roost offered, and `m` again.
+  Both merges landed in `main`, whose tests pass and whose `list --tag` and
+  `export` commands work. Doing this found and fixed:
+  - Changes and commits went stale while agents worked: background polls
+    skip Git statistics, so an agent that edited files still showed "No
+    changes yet". A poll that sees an agent report anything now measures that
+    task (without asking GitHub), and Magit refreshing a task's worktree does
+    too, so a commit made there shows up.
+  - After a merge, the other tasks still showed 0 behind until a manual
+    refresh; merging now measures every task on the host.
+  - `r` from the sidebar opened Magit in the task panel's window: Emacs clears
+    a side window's dedication when it shows another buffer, which happens
+    when the panel switches tasks.
+  - Two tasks with the same name on one host shared a panel buffer.
+  - Without workspaces, the panel followed only `RET`, not `r` or other task
+    commands.
 - An earlier pass with a long reply seeded in the cache checked the folded
   six-line preview, clicking to expand and collapse it, a new reply starting
   folded, and the sidebar's hover text giving the full name, host and project.
 
-All **108 ERT tests and 67 Python tests** pass, with byte compilation under
+All **112 ERT tests and 68 Python tests** pass, with byte compilation under
 warnings-as-errors. Batch Emacs has no redisplay, so the tests call the layout
 sync directly where the window hook would run it.
 

@@ -573,31 +573,58 @@ finished or wants."
     (mapc (lambda (task) (roost--cache-task host task)) tasks)
     (remhash host roost--errors)))
 
+(defun roost--task-states (host)
+  "HOST's cached tasks as an alist of ID to (STATUS . UPDATED-AT).
+Each agent hook event, such as finishing a tool, moves UPDATED-AT."
+  (let (states)
+    (maphash (lambda (key task)
+               (when (equal (car key) host)
+                 (push (cons (cadr key) (cons (roost--field task 'status)
+                                              (roost--field task 'updatedAt)))
+                       states)))
+             roost--tasks)
+    states))
+
 (defvar roost--full-refresh-pending (make-hash-table :test 'equal)
   "Hosts whose full refresh was requested while another request was in flight.")
 (defvar roost--failures (make-hash-table :test 'equal)
   "Consecutive refresh failures per host, as (COUNT . RETRY-AFTER).")
 
-(defun roost--refresh-host (host quiet)
-  "Refresh HOST asynchronously.  QUIET skips Git statistics."
+(defun roost--refresh-host (host quiet &optional ids)
+  "Refresh HOST asynchronously.
+QUIET skips Git statistics; otherwise IDS, if non-nil, limits them to
+those tasks."
   (if (gethash host roost--refreshing)
       ;; Run the requested full refresh once the in-flight poll returns.
-      (unless quiet (puthash host t roost--full-refresh-pending))
+      (unless quiet
+        (let ((pending (gethash host roost--full-refresh-pending)))
+          (puthash host (if (or (null ids) (eq pending t)) t (seq-union pending ids))
+                   roost--full-refresh-pending)))
     (puthash host t roost--refreshing)
     (let ((revision (gethash host roost--revisions 0))
           (finish (lambda ()
                     (remhash host roost--refreshing)
-                    (when (gethash host roost--full-refresh-pending)
+                    (when-let* ((pending (gethash host roost--full-refresh-pending)))
                       (remhash host roost--full-refresh-pending)
-                      (roost--refresh-host host nil)))))
+                      (roost--refresh-host host nil (unless (eq pending t) pending))))))
       (roost--request
-       host "list" (list (cons 'full (if quiet :false t)))
+       host "list" (list (cons 'full (cond (quiet :false) (ids (vconcat ids)) (t t))))
        (lambda (tasks)
          (remhash host roost--failures)
          (remhash host roost--errors)
          ;; A newer mutation must win over a stale list reply.
          (when (= revision (gethash host roost--revisions 0))
-           (roost--apply-snapshot host tasks))
+           (let ((before (roost--task-states host)))
+             (roost--apply-snapshot host tasks)
+             ;; Quiet polls leave out Git statistics.  An agent that reported
+             ;; something, such as finishing an edit, may have changed files:
+             ;; measure its task once this poll is done.
+             (when-let* ((quiet)
+                         (changed (seq-keep (lambda (state)
+                                              (unless (equal state (assoc (car state) before))
+                                                (car state)))
+                                            (roost--task-states host))))
+               (roost--refresh-host host nil changed))))
          (roost--redraw)
          (funcall finish))
        (lambda (err)
@@ -868,6 +895,8 @@ recently failed."
          (tab-bar-new-tab)
          (tab-bar-rename-tab name)))))
   (setq roost--current-task (roost--key task))
+  ;; Without workspaces, the frame's task panel follows the last task used.
+  (set-frame-parameter nil 'roost-task (roost--key task))
   (roost--leave-side-window))
 
 ;;;; Opening tasks
@@ -903,8 +932,6 @@ recently failed."
     (with-current-buffer (window-buffer (selected-window))
       (tmux-control-send-command (format "select-window -t %s" window))
       (tmux-control-select-pane pane)))
-  ;; Without workspaces, the frame remembers which task its panel shows.
-  (set-frame-parameter nil 'roost-task (roost--key task))
   (roost--watch-layout)
   (roost--sync-side-windows)
   (when (roost--task-panel-window)
@@ -1610,9 +1637,17 @@ chosen one."
   (interactive)
   (setq task (roost--choose task))
   (roost--activate-workspace task)
-  (if (require 'magit nil t)
-      (magit-status (roost--remote-directory task))
-    (dired (roost--remote-directory task))))
+  (if (not (require 'magit nil t))
+      (dired (roost--remote-directory task))
+    (add-hook 'magit-post-refresh-hook #'roost--magit-refreshed)
+    (magit-status (roost--remote-directory task))))
+
+(defun roost--magit-refreshed ()
+  "Measure the task whose worktree Magit has just refreshed.
+Commits and staging there change the task's Git statistics, with no
+agent event to prompt a refresh."
+  (when-let* ((task (roost--task-in-directory default-directory)))
+    (roost--refresh-host (roost--field task 'host) nil (list (roost--field task 'id)))))
 
 ;;;###autoload
 (defun roost-files (&optional task)
@@ -2004,7 +2039,11 @@ Dirty worktrees are refused; review and commit in Magit first."
   (setq task (roost--choose task))
   (when (yes-or-no-p (format "Merge committed work from %s and retire it? "
                              (roost--field task 'name)))
-    (roost--act task "merge" nil #'roost--retired-workspace)))
+    (roost--act task "merge" nil
+                (lambda (merged)
+                  (roost--retired-workspace merged)
+                  ;; The other tasks are measured against the branch that moved.
+                  (roost--refresh-host (roost--field merged 'host) nil)))))
 
 ;;;###autoload
 (defun roost-forget (&optional task)
@@ -2596,11 +2635,17 @@ Windows showing the panel keep their scroll position."
     (roost--restore-window-places places)))
 
 (defun roost--task-info-buffer-name (task)
-  "Buffer name for TASK's panel, qualified by host when names collide."
-  (let ((name (roost--field task 'name)))
-    (if (> (seq-count (lambda (other) (equal (roost--field other 'name) name)) (roost-tasks)) 1)
-        (format "*roost: %s on %s*" name (roost--host-label (roost--field task 'host)))
-      (format "*roost: %s*" name))))
+  "Buffer name for TASK's panel, qualified by host when names collide.
+Tasks with the same name on the same host are told apart by their IDs."
+  (let* ((name (roost--field task 'name))
+         (host (roost--field task 'host))
+         (twins (seq-filter (lambda (other) (equal (roost--field other 'name) name))
+                            (roost-tasks))))
+    (cond ((length< twins 2) (format "*roost: %s*" name))
+          ((length< (seq-filter (lambda (other) (equal (roost--field other 'host) host)) twins) 2)
+           (format "*roost: %s on %s*" name (roost--host-label host)))
+          (t (format "*roost: %s on %s (%s)*" name (roost--host-label host)
+                     (substring (roost--field task 'id) 0 6))))))
 
 ;;;###autoload
 (defun roost-task-info (&optional task)
@@ -3022,6 +3067,15 @@ Task commands act on the task at point, as in the dashboard.
   `((side . ,side) (slot . 0) (window-width . ,width) (preserve-size . (t . nil))
     (dedicated . t) (window-parameters . ((no-delete-other-windows . t)))))
 
+(defun roost--show-side-window (buffer side width)
+  "Show BUFFER in a pinned window on SIDE, WIDTH wide, and return the window."
+  (when-let* ((window (display-buffer-in-side-window
+                       buffer (roost--side-window-alist side width))))
+    ;; Reusing the window for another buffer clears its dedication, and
+    ;; other buffers, such as Magit's, would then take it over.
+    (set-window-dedicated-p window t)
+    window))
+
 ;;;; Side windows
 
 (defun roost--side-frame-p ()
@@ -3040,7 +3094,7 @@ Ediff's control frame, are left alone."
 (defun roost--frame-task ()
   "Return the task for the selected frame's task panel.
 With workspaces, that is the task whose workspace is current; without,
-the task last opened in the frame."
+the task last used in the frame."
   (if (roost--workspace-backend)
       (when-let* ((current (roost--current-workspace)))
         (seq-find (lambda (task) (equal (roost--workspace-name task) current))
@@ -3073,8 +3127,7 @@ scrolled stays where you left it."
     (let ((sidebar (get-buffer-window roost--sidebar-buffer)))
       (cond ((and roost-sidebar-mode (not sidebar)
                   (>= (frame-width) (+ roost-sidebar-width 80)))
-             (display-buffer-in-side-window (roost--sidebar-get-buffer)
-                                            (roost--side-window-alist 'left roost-sidebar-width)))
+             (roost--show-side-window (roost--sidebar-get-buffer) 'left roost-sidebar-width))
             ;; A saved workspace can bring back a sidebar after the mode is off.
             ((and sidebar (not roost-sidebar-mode))
              (dolist (window (get-buffer-window-list roost--sidebar-buffer))
@@ -3087,8 +3140,7 @@ scrolled stays where you left it."
                                (roost--key task))))
             (t
              (let ((buffer (roost--task-info-buffer task)))
-               (display-buffer-in-side-window buffer (roost--side-window-alist
-                                                      'right roost-task-panel-width))
+               (roost--show-side-window buffer 'right roost-task-panel-width)
                ;; Lay it out for its window now rather than at the next resize.
                (with-current-buffer buffer (roost--render-task-info)))
              (unless (assq 'diff task)
@@ -3189,6 +3241,7 @@ Beside a terminal, that turns off `roost-task-panel-mode'."
   (when roost-sidebar-mode (roost-sidebar-mode -1))
   (when (roost--task-panel-window) (delete-window (roost--task-panel-window)))
   (remove-hook 'window-configuration-change-hook #'roost--layout-changed)
+  (remove-hook 'magit-post-refresh-hook #'roost--magit-refreshed)
   (when roost-watch-mode (roost-watch-mode -1))
   (advice-remove 'persp-mode-line #'roost--compact-perspective-mode-line)
   ;; Continue with the standard unloading.

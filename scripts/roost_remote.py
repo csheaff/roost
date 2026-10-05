@@ -737,15 +737,16 @@ def pr_status(task):
         return None
 
 
-def add_git_stats(tasks):
+def add_git_stats(tasks, pull_requests=True):
     """Diffstat, dirtiness and divergence from the integration branch, and
     pull request status, and the agent's latest reply. Runs outside the registry lock: in a large
-    repository, or over the network, these take seconds."""
+    repository, or over the network, these take seconds. Without
+    PULL_REQUESTS, GitHub is not asked."""
     for task in tasks:
         reply = last_message(task)
         if reply:
             task["lastMessage"] = reply
-        if isinstance(task.get("pr"), dict) and task["pr"].get("number"):
+        if pull_requests and isinstance(task.get("pr"), dict) and task["pr"].get("number"):
             status = pr_status(task)
             if status:
                 task["prStatus"] = status
@@ -1313,7 +1314,13 @@ def rpc(request):
             else:
                 raise RoostError("Unknown action: " + str(action))
         if action == "list" and request.get("full"):
-            add_git_stats(result)
+            # Full is true for every task, or a list of task IDs whose agents
+            # have been active; their pull requests are checked with the rest.
+            full = request["full"]
+            if full is True:
+                add_git_stats(result)
+            else:
+                add_git_stats([t for t in result if t["id"] in full], pull_requests=False)
         elif action in ("retire", "merge") and result.pop("remoteCleanup", None):
             delete_remote_branch(result["repo"], result["branch"])
         return {"ok": True, "result": result}

@@ -260,7 +260,9 @@
        (dolist (callback callbacks) (funcall (nth 1 callback) (list (roost-test--task))))
        (should-not (gethash '("a" "0123456789abcdef") roost--tasks))
        (should (gethash '("b" "0123456789abcdef") roost--tasks))
-       (should (= (hash-table-count roost--refreshing) 0))))))
+       ;; Only b, which has a new task, goes on to fetch its Git statistics.
+       (should (equal (hash-table-keys roost--refreshing) '("b")))
+       (should (equal (car (car callbacks)) "b"))))))
 
 (ert-deftest roost-offline-host-preserves-tasks-without-claiming-agent-crash ()
   (roost-test--isolated
@@ -812,7 +814,8 @@
    (save-window-excursion
      (delete-other-windows)
      (let* ((a (roost--cache-task "dev" (roost-test--task)))
-            (b (roost--cache-task "dev" (roost-test--task "1111111111111111")))
+            (b (roost--cache-task "dev" (append '((name . "add tags"))
+                                                (roost-test--task "1111111111111111"))))
             (roost-workspace 'perspective) (persp-mode t) (roost-task-panel-mode t)
             (current (roost--perspective-name a)))
        (cl-letf (((symbol-function 'persp-current-name) (lambda () current))
@@ -825,10 +828,21 @@
            (setq current (roost--perspective-name b))
            (roost--sync-side-windows)
            (should (equal (shown) (roost--key b)))
+           ;; Switching tasks keeps the panel's window to itself.
+           (should (window-dedicated-p (roost--task-panel-window)))
            ;; A workspace that belongs to no task has no panel.
            (setq current "main")
            (roost--sync-side-windows)
            (should-not (shown))))))))
+
+(ert-deftest roost-same-named-tasks-get-their-own-panels ()
+  (roost-test--isolated
+   (let ((a (roost--cache-task "dev" (roost-test--task)))
+         (b (roost--cache-task "dev" (roost-test--task "1111111111111111")))
+         (c (roost--cache-task "lab" (roost-test--task "2222222222222222"))))
+     (should (equal (mapcar #'roost--task-info-buffer-name (list a b c))
+                    '("*roost: fix auth on dev (012345)*" "*roost: fix auth on dev (111111)*"
+                      "*roost: fix auth on lab*"))))))
 
 (ert-deftest roost-task-panel-q-turns-it-off-until-asked-back ()
   (roost-test--isolated
@@ -1302,6 +1316,41 @@
        (should (= (length calls) 2))
        (should (eq (caar calls) t))))))
 
+(ert-deftest roost-agent-activity-fetches-its-git-statistics ()
+  (roost-test--isolated
+   (let ((roost-hosts '("dev")) calls)
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host _action params success _failure)
+                  (push (cons (alist-get 'full params) success) calls))))
+       (roost--cache-task "dev" (roost-test--task nil "running"))
+       ;; An unchanged status needs nothing more.
+       (roost-refresh t)
+       (funcall (cdar calls) (list (roost-test--task nil "running")))
+       (should (= (length calls) 1))
+       ;; A finished agent's task is measured for its changes.
+       (roost-refresh t)
+       (funcall (cdar calls) (list (roost-test--task nil "ready")))
+       (should (= (length calls) 3))
+       (should (equal (caar calls) ["0123456789abcdef"]))
+       ;; So is one that reported again without changing status.
+       (funcall (cdar calls) (list (roost-test--task nil "ready")))
+       (roost-refresh t)
+       (funcall (cdar calls) (list (append '((updatedAt . "2026-10-03T20:01:00+00:00"))
+                                           (roost-test--task nil "ready"))))
+       (should (= (length calls) 5))
+       (should (equal (caar calls) ["0123456789abcdef"]))))))
+
+(ert-deftest roost-magit-refreshes-measure-their-task ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (roost-test--task))) refreshes)
+     (cl-letf (((symbol-function 'roost--refresh-host)
+                (lambda (host quiet &optional ids) (push (list host quiet ids) refreshes))))
+       (let ((default-directory "/ssh:dev:/home/user/work/fix auth/"))
+         (roost--magit-refreshed))
+       (let ((default-directory "/ssh:dev:/home/user/elsewhere/"))
+         (roost--magit-refreshed))
+       (should (equal refreshes `(("dev" nil (,(roost--field task 'id))))))))))
+
 (ert-deftest roost-background-polls-back-off-from-unreachable-hosts ()
   (roost-test--isolated
    (let ((roost-hosts '("dev")) (attempts 0))
@@ -1449,6 +1498,19 @@
                  (should (string-match-p "Conversation abc-123" text))
                  (should-not display-line-numbers))
              (kill-buffer))))))))
+
+(ert-deftest roost-merging-measures-the-other-tasks-again ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (roost-test--task))) refreshes)
+     (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_) t))
+               ((symbol-function 'roost--request)
+                (lambda (_host _action _params success &optional _failure)
+                  (funcall success (append '((status . "retired")) (roost-test--task)))))
+               ((symbol-function 'roost--refresh-host)
+                (lambda (host quiet &optional _ids) (push (list host quiet) refreshes))))
+       (roost-merge-retire task)
+       (should-not (roost-tasks))
+       (should (equal refreshes '(("dev" nil))))))))
 
 (ert-deftest roost-forget-removes-the-task-and-reports-what-remains ()
   (roost-test--isolated

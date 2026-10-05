@@ -178,6 +178,13 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(self.request("merge", id=task["id"])["ok"])
         self.assertEqual((self.repo / "hello").read_text(), "main and task\n")
 
+    def test_a_full_listing_can_name_the_tasks_to_measure(self):
+        first, second = self.create(), self.create(name="second")
+        (Path(first["worktree"]) / "hello").write_text("changed\n")
+        listed = {t["id"]: t for t in self.request("list", full=[first["id"]])["result"]}
+        self.assertTrue(listed[first["id"]]["dirty"])
+        self.assertNotIn("diff", listed[second["id"]])
+
     def test_window_renumbering_does_not_change_task_identity(self):
         task = self.create()
         roost.tmux(self.socket, "move-window", "-s", task["windowId"], "-t", task["session"] + ":8")
@@ -844,6 +851,10 @@ elif args[:2] == ["auth", "status"]:
                           "state,isDraft,reviewDecision,statusCheckRollup,headRefOid,mergedAt"])
         self.assertNotIn("prStatus", store.read(task["id"]))
         self.assertNotIn("prStatus", self.request("list")["result"][0])
+        # Refreshing an active agent's changes leaves GitHub alone.
+        calls = len(self.gh_calls())
+        self.assertNotIn("prStatus", self.request("list", full=[task["id"]])["result"][0])
+        self.assertEqual(len(self.gh_calls()), calls)
         (self.gh_dir / "view.json").unlink()
         self.assertNotIn("prStatus", self.request("list", full=True)["result"][0])
 
