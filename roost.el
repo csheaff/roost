@@ -1685,9 +1685,12 @@ chosen one."
     (magit-status (roost--remote-directory task))))
 
 (defun roost--measure-task-in (directory)
-  "Fetch the Git statistics of the task whose worktree contains DIRECTORY."
-  (when-let* ((task (roost--task-in-directory directory)))
-    (roost--refresh-host (roost--field task 'host) nil (list (roost--field task 'id)))))
+  "Fetch the Git statistics of the task whose worktree contains DIRECTORY.
+Run from other packages' hooks, so an error only reports itself: it
+would otherwise stop the functions after this one."
+  (with-demoted-errors "Roost: %S"
+    (when-let* ((task (roost--task-in-directory directory)))
+      (roost--refresh-host (roost--field task 'host) nil (list (roost--field task 'id))))))
 
 (defun roost--magit-refreshed ()
   "Measure the task whose worktree Magit has just refreshed.
