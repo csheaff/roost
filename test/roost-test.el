@@ -2268,4 +2268,29 @@
   (should (eq (lookup-key roost-task-info-mode-map "S") #'roost-status))
   (should (eq (lookup-key roost-sidebar-list-mode-map "S") #'roost-status)))
 
+(ert-deftest roost-draft-and-dashboard-take-the-window-you-are-in ()
+  ;; A split squeezed the agent's terminal beside them; quitting gives the
+  ;; window back.
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let ((main (selected-window))
+           (terminal (get-buffer-create " *roost-test terminal*")))
+       (unwind-protect
+           (progn
+             (set-window-buffer main terminal)
+             (cl-letf (((symbol-function 'roost-refresh) #'ignore)
+                       ((symbol-function 'roost-watch-mode) #'ignore))
+               (roost-status))
+             (should (equal (buffer-name (window-buffer main)) "*roost*"))
+             (should (= (length (window-list)) 1))
+             (quit-window)
+             (should (eq (window-buffer main) terminal))
+             (roost-new-task)
+             (should (eq (window-buffer main) (get-buffer roost--compose-buffer)))
+             (should (= (length (window-list)) 1)))
+         (kill-buffer terminal)
+         (when (get-buffer roost--compose-buffer)
+           (kill-buffer roost--compose-buffer)))))))
+
 (provide 'roost-test)

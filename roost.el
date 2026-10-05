@@ -1285,7 +1285,10 @@ Planning lines and drawers are left out."
         (insert (car seed))
         (goto-char (if (cdr seed) roost--compose-body (point-max)))
         (roost--compose-render)))
-    (pop-to-buffer buffer)))
+    ;; In the window you are in, as Magit does, rather than a split that
+    ;; squeezes an agent's terminal; cancelling gives the window back.
+    (roost--leave-side-window)
+    (pop-to-buffer buffer '((display-buffer-reuse-window display-buffer-same-window)))))
 
 (defun roost--compose-prompt ()
   "The draft's prompt text."
@@ -3142,7 +3145,9 @@ down.  With WIDTH, fit each line within it, leaving details to hover."
   (let ((buffer (get-buffer-create "*roost*")))
     (with-current-buffer buffer
       (unless (derived-mode-p 'roost-dashboard-mode) (roost-dashboard-mode)))
-    (pop-to-buffer buffer)
+    ;; In the window you are in, like the task draft; q gives it back.
+    (roost--leave-side-window)
+    (pop-to-buffer buffer '((display-buffer-reuse-window display-buffer-same-window)))
     (roost--redraw))
   (roost-watch-mode 1)
   (roost-refresh))
