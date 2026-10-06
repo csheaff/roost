@@ -268,6 +268,21 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual((self.repo / "notes.txt").read_text(), "scratch\n")
         self.assertFalse(wt.exists())
 
+    def test_a_file_name_that_is_not_utf8_does_not_fail_listings(self):
+        # Linux allows any bytes in a file name; one such untracked file made
+        # every full listing fail, so the host looked unreachable.
+        printed = roost.execute([sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'caf\\xe9')"])
+        self.assertEqual(printed.stdout, "caf�")
+        task = self.create()
+        try:
+            with open(os.path.join(os.fsencode(task["worktree"]), b"caf\xe9.txt"), "w") as file:
+                file.write("latin-1 name\n")
+        except OSError:
+            self.skipTest("this file system only allows UTF-8 names")
+        reply = self.request("list", full=True)
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(reply["result"][0]["files"], [dict(path="caf�.txt", untracked=True)])
+
     def test_names_in_any_script_get_ascii_branches(self):
         for name, slug in (("修复解析器", "task"), ("исправить ошибку", "task"), ("café menu", "cafe-menu"),
                            ("Ünïcödé--naming_test", "Unicode-naming_test"), ("fix #12: parser!", "fix-12-parser"),

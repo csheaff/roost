@@ -57,7 +57,9 @@ def text(value):
 
 
 def execute(argv, cwd=None, check=True, input=None):
-    result = subprocess.run(argv, cwd=cwd, input=input, text=True,
+    # A file name that is not UTF-8, possible on Linux, must not fail every
+    # listing of the host: undecodable bytes are replaced, here and below.
+    result = subprocess.run(argv, cwd=cwd, input=input, text=True, errors="replace",
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if check and result.returncode:
         raise RoostError(result.stderr.strip() or result.stdout.strip()
@@ -86,7 +88,7 @@ def run_detached(argv, timeout, env=None):
     seconds. Without a controlling terminal nothing it starts can prompt. On
     timeout the whole process group is killed, so helpers such as ssh or a
     credential helper die with it, and TimeoutExpired is raised."""
-    process = subprocess.Popen(argv, text=True, stdin=subprocess.DEVNULL, start_new_session=True,
+    process = subprocess.Popen(argv, text=True, errors="replace", stdin=subprocess.DEVNULL, start_new_session=True,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     try:
         stdout, stderr = process.communicate(timeout=timeout)
@@ -125,7 +127,7 @@ def gh(cwd, *args, timeout=60):
     if not executable:
         raise RoostError("The GitHub CLI (gh) is not installed on this host; install it and run `gh auth login`")
     try:
-        result = subprocess.run([executable, *args], cwd=cwd, text=True, timeout=timeout,
+        result = subprocess.run([executable, *args], cwd=cwd, text=True, errors="replace", timeout=timeout,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 env=dict(os.environ, PATH=path))
     except subprocess.TimeoutExpired:
@@ -1294,7 +1296,7 @@ def doctor(store, request):
 
     def run(argv):
         try:
-            result = subprocess.run(argv, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            result = subprocess.run(argv, text=True, errors="replace", stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                     env=env, timeout=30)
             return result.returncode, result.stdout.strip()
         except (OSError, subprocess.TimeoutExpired) as exc:
