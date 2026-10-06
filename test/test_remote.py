@@ -32,6 +32,11 @@ def claude_folder(directory):
     return re.sub(r"[^a-zA-Z0-9]", "-", os.path.realpath(directory))
 
 
+def tmux_socket_path(name):
+    """Where tmux keeps socket NAME. tmux leaves the file after its server exits."""
+    return Path(os.environ.get("TMUX_TMPDIR") or "/tmp") / ("tmux-%d" % os.getuid()) / name
+
+
 class Lifecycle(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="roost test ' $ ")
@@ -50,6 +55,7 @@ class Lifecycle(unittest.TestCase):
 
     def tearDown(self):
         roost.tmux(self.socket, "kill-server", check=False)
+        tmux_socket_path(self.socket).unlink(missing_ok=True)
         self.temp.cleanup()
 
     def git(self, *args, cwd=None):
