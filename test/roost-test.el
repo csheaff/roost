@@ -1399,6 +1399,78 @@
              (should (= (length (directory-files root nil "remote-.*\\.py")) 1))))
        (dolist (root roots) (delete-directory root t))))))
 
+(defun roost-test--wait-for (predicate)
+  "Accept process output until PREDICATE returns non-nil, for up to 8 seconds."
+  (let ((deadline (+ (float-time) 8)))
+    (while (and (not (funcall predicate)) (< (float-time) deadline))
+      (accept-process-output nil .05))))
+
+(ert-deftest roost-large-requests-never-wait-for-the-host ()
+  ;; A request larger than a pipe holds, such as the helper, waited with
+  ;; Emacs frozen until ssh connected or gave up: ten seconds for a host
+  ;; that was down.  The error then blamed a closed pipe rather than ssh.
+  (roost-test--isolated
+   (let ((large (make-string 200000 ?x))
+         (inputs (directory-files temporary-file-directory nil "\\`roost-input-")))
+     (dolist (case `((,large 2) ("{}" 2) ("{}" 0)))
+       (let ((start (float-time)) failure)
+         (roost--run nil (format "import sys,time; time.sleep(%d); sys.stderr.write('ssh: connect to host dev port 22: Operation timed out'); sys.exit(255)"
+                                 (cadr case))
+                     (car case) #'ignore (lambda (err) (setq failure err)))
+         (should (< (- (float-time) start) 1))
+         (roost-test--wait-for (lambda () failure))
+         (should (equal failure "ssh: connect to host dev port 22: Operation timed out"))))
+     (let (result)
+       (roost--run nil "import sys,json; data=sys.stdin.read(); print(json.dumps({'ok': True, 'result': [len(data), data[:3]]}))"
+                   (concat "é" large) (lambda (value) (setq result value)) #'ignore)
+       (roost-test--wait-for (lambda () result))
+       (should (equal result '(200001 "éxx"))))
+     (should-not roost--requests)
+     (should (equal (directory-files temporary-file-directory nil "\\`roost-input-") inputs)))))
+
+(ert-deftest roost-a-removed-helper-is-installed-again ()
+  ;; A task launched by another Emacs prunes helper copies over a week old.
+  ;; Requests then failed, until a failed poll happened to reinstall it.
+  (roost-test--isolated
+   (let* ((root (make-temp-file "roost-rpc" t)) (roost-state-directory root) (results 0) failure)
+     (unwind-protect
+         (progn
+           (dotimes (round 2)
+             (dolist (helper (directory-files root t "\\`remote-.*\\.py\\'")) (delete-file helper))
+             (roost--request nil "list" nil (lambda (_) (cl-incf results))
+                              (lambda (err) (setq failure err)))
+             (roost-test--wait-for (lambda () (or failure (> results round)))))
+           (should-not failure)
+           (should (= results 2))
+           (should (= (length (directory-files root nil "\\`remote-.*\\.py\\'")) 1)))
+       (delete-directory root t)))))
+
+(ert-deftest roost-an-unreachable-host-keeps-its-helper ()
+  ;; Each poll of a host that was down sent the whole helper again.
+  (roost-test--isolated
+   (let* ((roost-state-directory "~/state") (filename (car (roost--helper))) codes failure
+          (fail-with nil))
+     (puthash (list "dev" "~/state") filename roost--installed)
+     (cl-letf (((symbol-function 'roost--run)
+                (lambda (_host code _input success fail)
+                  (push code codes)
+                  (if (and fail-with (string-match-p "runpy" code))
+                      (funcall fail (pop fail-with))
+                    (funcall success nil)))))
+       (setq fail-with (list "ssh: connect to host dev port 22: Operation timed out"))
+       (roost--request "dev" "list" nil #'ignore (lambda (err) (setq failure err)))
+       (should (= (length codes) 1))
+       (should (equal failure "ssh: connect to host dev port 22: Operation timed out"))
+       (should (equal (gethash (list "dev" "~/state") roost--installed) filename))
+       ;; Python could not find the helper: install it and ask again.
+       (setq codes nil failure nil
+             fail-with (list (format "Traceback (most recent call last):\nFileNotFoundError: [Errno 2] No such file or directory: '/home/user/state/%s'" filename)))
+       (roost--request "dev" "list" nil #'ignore (lambda (err) (setq failure err)))
+       (should-not failure)
+       (should (equal (mapcar (lambda (code) (if (string-match-p "runpy" code) 'invoke 'install))
+                              (reverse codes))
+                      '(invoke install invoke)))))))
+
 (ert-deftest roost-hosts-survive-emacs-restart ()
   (roost-test--isolated
    (let* ((root (make-temp-file "roost-hosts" t)) (roost-hosts-file (expand-file-name "hosts.json" root))
@@ -2305,13 +2377,16 @@
                 (lambda (_host _action _params ok fail) (setq success ok failure fail)))
                ((symbol-function 'message)
                 (lambda (format &rest args) (push (apply #'format format args) messages))))
-       (dolist (err '("ssh: connect to host dev port 22: Operation timed out"
+       (dolist (err '("mux_client_request_session: read from master failed: Broken pipe
+ssh: connect to host dev port 22: Operation timed out"
                       "ssh: connect to host dev port 22: Host is down"
                       "ssh: connect to host dev port 22: Operation timed out"))
          (clrhash roost--refreshing)
          (roost--refresh-host "dev" t)
          (funcall failure err))
        (should (= (length messages) 1))
+       ;; One line, the one that says what failed; the sidebar has the rest.
+       (should (equal (car messages) "Roost dev: ssh: connect to host dev port 22: Operation timed out (M-x roost-doctor checks this host)"))
        ;; Back, then down again: a new outage.
        (clrhash roost--refreshing)
        (roost--refresh-host "dev" t)

@@ -406,26 +406,40 @@ See `roost-ssh-share-connections'."
     (json-parse-string line :object-type 'alist :array-type 'list
                        :null-object nil :false-object nil)))
 
+(defconst roost--pipe-input-limit 4096
+  "Bytes of request input written straight to a host command's pipe.
+Longer input, such as the helper itself or a long prompt, is read from a
+file instead.  Writing it to the pipe would wait, with Emacs frozen,
+until ssh had connected and read it: for a host that is down, the whole
+connection timeout.")
+
 (defun roost--run (host code input success failure)
   "Execute CODE asynchronously on HOST with INPUT.
 Call SUCCESS with the result or FAILURE with an error message."
   (let* ((buffer (generate-new-buffer " *roost-rpc*"))
          (errors (generate-new-buffer " *roost-rpc-errors*"))
          (default-directory temporary-file-directory)
-         process timer finished timed-out)
+         (command (roost--python-command host code))
+         input-file process timer finished timed-out)
     (condition-case err
         (progn
+          (when (> (string-bytes input) roost--pipe-input-limit)
+            (setq input-file (make-temp-file "roost-input-"))
+            (let ((coding-system-for-write 'utf-8-unix))
+              (write-region input nil input-file nil 'silent))
+            (setq command (append (list "/bin/sh" "-c" "exec \"$@\" < \"$0\"" input-file) command)))
           (setq process
                 (make-process
                  :name "roost-rpc" :buffer buffer :stderr errors :noquery t
                  :coding 'utf-8-unix :connection-type 'pipe
-                 :command (roost--python-command host code)
+                 :command command
                  :sentinel
                  (lambda (proc _event)
                    (when (and (memq (process-status proc) '(exit signal)) (not finished))
                      (setq finished t
                            roost--requests (delq proc roost--requests))
                      (when timer (cancel-timer timer))
+                     (when input-file (ignore-errors (delete-file input-file)))
                      (unwind-protect
                          (let ((stdout (with-current-buffer buffer (buffer-string)))
                                (stderr (with-current-buffer errors
@@ -452,12 +466,19 @@ Call SUCCESS with the result or FAILURE with an error message."
                                      (when (process-live-p process)
                                        (setq timed-out t)
                                        (delete-process process)))))
-          (process-send-string process input)
-          (process-send-eof process))
+          (unless input-file
+            ;; ssh may have exited already, as for an unknown host; then
+            ;; the sentinel reports why.
+            (ignore-errors
+              (process-send-string process input)
+              (process-send-eof process))))
       (error
+       (setq finished t roost--requests (delq process roost--requests))
+       (when timer (cancel-timer timer))
        (when (and process (process-live-p process)) (delete-process process))
        (when (buffer-live-p buffer) (kill-buffer buffer))
        (when (buffer-live-p errors) (kill-buffer errors))
+       (when input-file (ignore-errors (delete-file input-file)))
        (funcall failure (error-message-string err))))))
 
 (defun roost--request-wait (host action parameters &optional timeout)
@@ -483,25 +504,37 @@ Call SUCCESS with the result, or FAILURE with an error message."
          (failure (or failure
                       (lambda (err) (message "Roost %s: %s" (roost--host-label host) err))))
          (invoke
-          (lambda ()
+          (lambda (on-failure)
             (roost--run
              host
              (format "import os,runpy,sys; p=os.path.join(os.path.expanduser(%s),%s); sys.argv=[p,'rpc']; runpy.run_path(p,run_name='__main__')"
                      (json-serialize root) (json-serialize filename))
              (roost--json-encode (append (list (cons 'action action) (cons 'root root))
                                          parameters))
-             success failure))))
-    (if (equal (gethash installation-key roost--installed) filename)
-        (funcall invoke)
-      (roost--run
-       host
-       (format "import os,sys,tempfile,json\nr=os.path.expanduser(%s)\nos.makedirs(r,mode=0o700,exist_ok=True)\np=os.path.join(r,%s)\nfd,t=tempfile.mkstemp(dir=r)\nwith os.fdopen(fd,'wb') as f: f.write(sys.stdin.buffer.read())\nos.chmod(t,0o700)\nos.replace(t,p)\nprint(json.dumps({'ok':True}))"
-               (json-serialize root) (json-serialize filename))
-       (cdr helper)
-       (lambda (_)
-         (puthash installation-key filename roost--installed)
-         (funcall invoke))
-       failure))))
+             success on-failure)))
+         (install-and-invoke
+          (lambda ()
+            (roost--run
+             host
+             (format "import os,sys,tempfile,json\nr=os.path.expanduser(%s)\nos.makedirs(r,mode=0o700,exist_ok=True)\np=os.path.join(r,%s)\nfd,t=tempfile.mkstemp(dir=r)\nwith os.fdopen(fd,'wb') as f: f.write(sys.stdin.buffer.read())\nos.chmod(t,0o700)\nos.replace(t,p)\nprint(json.dumps({'ok':True}))"
+                     (json-serialize root) (json-serialize filename))
+             (cdr helper)
+             (lambda (_)
+               (puthash installation-key filename roost--installed)
+               (funcall invoke failure))
+             failure))))
+    (if (not (equal (gethash installation-key roost--installed) filename))
+        (funcall install-and-invoke)
+      (funcall invoke
+               (lambda (err)
+                 ;; Python could not open the helper: another Emacs pruned
+                 ;; it, or the state directory went.  Install it again.
+                 ;; Other failures, such as an unreachable host, keep it.
+                 (if (not (and (string-search "FileNotFoundError" err)
+                               (string-search filename err)))
+                     (funcall failure err)
+                   (remhash installation-key roost--installed)
+                   (funcall install-and-invoke)))))))
 
 ;;;; Status cache and notifications
 
@@ -641,15 +674,17 @@ those tasks."
        (lambda (err)
          ;; Once per outage: ssh words a sleeping host's failure differently
          ;; from one poll to the next, and the sidebar shows it meanwhile.
+         ;; Its last line says what failed; ssh's earlier ones say less, such
+         ;; as that a shared connection broke.  The sidebar's tooltip has all.
          (unless (gethash host roost--errors)
-           (message "Roost %s: %s (M-x roost-doctor checks this host)" (roost--host-label host) err))
+           (message "Roost %s: %s (M-x roost-doctor checks this host)" (roost--host-label host)
+                    (car (last (split-string err "\n" t "[ \t\r]+")))))
          (puthash host err roost--errors)
          ;; Back off from unreachable hosts, up to a minute between attempts.
          (let ((count (1+ (or (car (gethash host roost--failures)) 0))))
            (puthash host (cons count (+ (float-time)
                                         (min 60 (* roost-watch-interval (expt 2 (1- count))))))
                     roost--failures))
-         (remhash (list host roost-state-directory) roost--installed)
          (roost--redraw)
          (funcall finish))))))
 
@@ -3629,7 +3664,6 @@ With a prefix argument, read a HOST to check (empty for this machine)."
            (roost--render-doctor))
          (lambda (err)
            (setf (alist-get host roost--doctor-results nil nil #'equal) (cons 'error err))
-           (remhash (list host roost-state-directory) roost--installed)
            (roost--render-doctor)))))))
 
 ;;;###autoload
