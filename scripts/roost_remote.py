@@ -16,6 +16,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import unicodedata
 import uuid
 
 
@@ -694,6 +695,14 @@ def prune_helpers(store):
                 path.unlink()
 
 
+def name_slug(name):
+    """NAME in ASCII for the task's branch and directory: accents dropped,
+    and each run of other characters but letters, digits and _ a single -.
+    A name in another script, such as 修复解析器, gives "task"."""
+    folded = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-zA-Z0-9_]+", "-", folded).strip("-")[:50].rstrip("-") or "task"
+
+
 def create(store, request):
     """Create a worktree and agent window. Preparation and `git worktree add`
     run without the registry lock; only the tmux spawn is serialized."""
@@ -706,9 +715,9 @@ def create(store, request):
         raise RoostError("Roost needs a primary working checkout")
     repo = primary[0][len("worktree "):]
     name = request["name"].strip()
-    slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", name).strip("-")[:50]
-    if not slug or any(ord(c) < 32 or ord(c) == 127 for c in name):
+    if not any(c.isalnum() for c in name) or any(ord(c) < 32 or ord(c) == 127 for c in name):
         raise RoostError("Give the task a printable name containing letters or numbers")
+    slug = name_slug(name)
     agent_name = text(request.get("agent")) or "claude"
     agent = agent_for(dict(agent=agent_name))
     command = request.get("command", agent.default_command)

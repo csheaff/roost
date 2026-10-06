@@ -234,6 +234,24 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual((self.repo / "hello").read_text(), "changed\n")
         self.assertFalse(wt.exists())
 
+    def test_names_in_any_script_get_ascii_branches(self):
+        for name, slug in (("修复解析器", "task"), ("исправить ошибку", "task"), ("café menu", "cafe-menu"),
+                           ("Ünïcödé--naming_test", "Unicode-naming_test"), ("fix #12: parser!", "fix-12-parser"),
+                           ("x" * 49 + " y", "x" * 49)):
+            with self.subTest(name=name):
+                self.assertEqual(roost.name_slug(name), slug)
+        reply = self.request("create", directory=str(self.repo), name="修复解析器", socket=self.socket,
+                             command=[sys.executable, str(FAKE)])
+        self.assertTrue(reply["ok"], reply)
+        task = self.wait(reply["result"], "ready")
+        self.assertEqual(task["name"], "修复解析器")
+        self.assertEqual(task["branch"], "roost/task-" + task["id"][:6])
+        self.assertEqual(Path(task["worktree"]).name, "task-" + task["id"][:6])
+        for name in ("!!!", " ", "tab\there"):
+            with self.subTest(name=name):
+                self.assertFalse(self.request("create", directory=str(self.repo), name=name,
+                                              socket=self.socket)["ok"])
+
     def test_merge_conflict_aborts_and_keeps_task(self):
         task = self.create()
         wt = Path(task["worktree"])
