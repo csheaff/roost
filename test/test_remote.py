@@ -233,6 +233,17 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(roost.approved_command_running(dict(task, requestCommand="ls"), dict(pid=10),
                                                        table((12, (11, "/bin/bash -c eval 'ls' < /dev/null")))))
         self.assertFalse(roost.approved_command_running({}, dict(pid=10), table((12, (11, shell)))))
+        # A long command, such as a heredoc, is recorded and matched by its start.
+        store = roost.Store(str(self.state))
+        created = self.create()
+        heredoc = "cat > notes.md <<'EOF'\n" + "a line with 'quotes'\n" * 40 + "EOF"
+        roost.update_hook(store, created["id"], dict(hook_event_name="PermissionRequest", tool_name="Bash",
+                                                     tool_input=dict(command=heredoc)))
+        recorded = store.read(created["id"])["requestCommand"]
+        self.assertTrue(heredoc.startswith(recorded) and len(recorded) < len(heredoc))
+        running = "/bin/bash -c eval '" + heredoc.replace("'", "'\"'\"'") + "' < /dev/null"
+        self.assertTrue(roost.approved_command_running(dict(requestCommand=recorded), dict(pid=10),
+                                                       table((12, (11, running)))))
         self.assertFalse(roost.approved_command_running(task, dict(pid=None), table((12, (11, shell)))))
 
     def test_a_permission_request_records_what_it_asks(self):

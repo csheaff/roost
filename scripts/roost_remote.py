@@ -810,6 +810,9 @@ def processes():
     return table
 
 
+APPROVAL_MARKER_LIMIT = 200
+
+
 def approved_command_running(task, pane, table):
     """Whether the command TASK's agent asked permission to run has started,
     so you approved it. Claude Code reports nothing until the command ends,
@@ -819,7 +822,7 @@ def approved_command_running(task, pane, table):
     command = task.get("requestCommand")
     if not isinstance(command, str) or not pane or not pane.get("pid"):
         return False
-    marker = ("eval '" + command.replace("'", "'\"'\"'") + "'")[:200]
+    marker = ("eval '" + command.replace("'", "'\"'\"'") + "'")[:APPROVAL_MARKER_LIMIT]
     agents = [pid for pid, (parent, _) in table.items() if parent == pane["pid"]]
     return any(parent in agents and marker in line for parent, line in table.values())
 
@@ -1487,11 +1490,12 @@ def update_hook(store, task_id, payload, run_id=None):
                        if task["status"] == "permission" else None)
             if request:
                 task["request"] = request
-                # Its exact command, to see it start once you approve.
+                # Its command, to see it start once you approve; the start
+                # identifies it, and a heredoc can be long.
                 arguments = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
                 command = arguments.get("command") if payload.get("tool_name") == "Bash" else None
                 if isinstance(command, str) and command.strip():
-                    task["requestCommand"] = command
+                    task["requestCommand"] = command[:APPROVAL_MARKER_LIMIT]
                 else:
                     task.pop("requestCommand", None)
             elif task["status"] != "permission" or before != "permission":
