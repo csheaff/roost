@@ -520,12 +520,14 @@ class Lifecycle(unittest.TestCase):
 
     def test_initial_prompts_are_literal_and_not_replayed_on_resume(self):
         store = roost.Store(str(self.state))
-        for name, adapter in (("codex", roost.CodexAgent()), ("pi", roost.PiAgent())):
-            for prompt in ("--help", "@private-file", "literal $() `ticks`\nsecond line"):
+        for name, adapter in (("claude", roost.ClaudeAgent()), ("codex", roost.CodexAgent()),
+                              ("pi", roost.PiAgent())):
+            for prompt in ("--help", "- a list\n- of steps", "@private-file", "literal $() `ticks`\nsecond line"):
                 with self.subTest(agent=name, prompt=prompt):
-                    task = dict(id="1234567890abcdef", command=[name], prompt=prompt, agentSession="recorded-session")
+                    task = dict(id="1234567890abcdef", command=[name], prompt=prompt, agentSession="recorded-session",
+                                runId="run")
                     argv = adapter.launch(store, task, False)
-                    if name == "codex":
+                    if name in ("claude", "codex"):
                         self.assertEqual(argv[-2:], ["--", prompt])
                     else:
                         self.assertNotIn("--", argv)

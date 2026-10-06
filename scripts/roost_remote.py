@@ -420,7 +420,8 @@ class ClaudeAgent:
         if resume_conversation and session:
             argv += ["--resume", session]
         elif text(task.get("prompt")):
-            argv.append(task["prompt"])
+            # Otherwise a prompt starting with -, such as a list, is an option.
+            argv += ["--", task["prompt"]]
         return argv
 
     def observe(self, payload):
