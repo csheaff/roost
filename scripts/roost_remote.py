@@ -376,6 +376,32 @@ def last_message(task):
     return reply if len(reply) <= LAST_MESSAGE_LIMIT else reply[:LAST_MESSAGE_LIMIT].rstrip() + "…"
 
 
+CLAUDE_FOLDER_LIMIT = 200
+
+
+def claude_project_folder(directory):
+    """The folder in ~/.claude/projects that holds the transcripts of Claude
+    Code sessions run in DIRECTORY, named as Claude Code names it: from the
+    physical path, every UTF-16 unit but an ASCII letter or digit becomes
+    "-", and a longer name is cut and given a hash of the whole path."""
+    path = os.path.realpath(directory)
+    data = path.encode("utf-16-le", "surrogatepass")
+    units = [data[i] | data[i + 1] << 8 for i in range(0, len(data), 2)]
+    name = "".join(chr(unit) if unit < 128 and chr(unit).isalnum() else "-" for unit in units)
+    if len(name) <= CLAUDE_FOLDER_LIMIT:
+        return name
+    value = 0
+    for unit in units:
+        value = (value * 31 + unit) & 0xFFFFFFFF  # JavaScript's (h << 5) - h + c | 0
+    value = abs(value - (1 << 32) if value >= 1 << 31 else value)
+    digits = ""
+    while True:
+        value, digit = divmod(value, 36)
+        digits = "0123456789abcdefghijklmnopqrstuvwxyz"[digit] + digits
+        if not value:
+            return name[:CLAUDE_FOLDER_LIMIT] + "-" + digits
+
+
 class ClaudeAgent:
     """Agent-specific CLI and events; Git/tmux lifecycle stays outside this adapter."""
 
@@ -422,8 +448,7 @@ class ClaudeAgent:
         session = task.get("agentSession") or task.get("claudeSession")
         if not session or not isinstance(task.get("worktree"), str):
             return None
-        folder = re.sub(r"[/.]", "-", task["worktree"])
-        return Path.home() / ".claude" / "projects" / folder / (session + ".jsonl")
+        return Path.home() / ".claude" / "projects" / claude_project_folder(task["worktree"]) / (session + ".jsonl")
 
     def last_message(self, task):
         path = self.transcript(task)

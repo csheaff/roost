@@ -27,6 +27,11 @@ FAKE = Path(__file__).with_name("fake_claude.py")
 FAKE_AGENT = Path(__file__).with_name("fake_agent.py")
 
 
+def claude_folder(directory):
+    """Claude Code's folder name for a short DIRECTORY, by its own rule."""
+    return re.sub(r"[^a-zA-Z0-9]", "-", os.path.realpath(directory))
+
+
 class Lifecycle(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="roost test ' $ ")
@@ -172,8 +177,7 @@ class Lifecycle(unittest.TestCase):
                                                   tool_input=dict(command="make")))
         record = store.read(task["id"])
         home = self.root / "home"
-        transcript = (home / ".claude" / "projects" / re.sub(r"[/.]", "-", task["worktree"])
-                      / (record["agentSession"] + ".jsonl"))
+        transcript = home / ".claude" / "projects" / claude_folder(task["worktree"]) / (record["agentSession"] + ".jsonl")
         transcript.parent.mkdir(parents=True)
         since = roost.parse_time(record["updatedAt"])
         marker = lambda seconds: json.dumps({
@@ -1088,7 +1092,7 @@ elif args[:2] == ["auth", "status"]:
         task = self.create()
         record = roost.Store(str(self.state)).read(task["id"])
         home = self.root / "home"
-        folder = home / ".claude/projects" / re.sub(r"[/.]", "-", task["worktree"])
+        folder = home / ".claude/projects" / claude_folder(task["worktree"])
         folder.mkdir(parents=True)
         (folder / (record["agentSession"] + ".jsonl")).write_text(
             json.dumps({"message": {"role": "assistant", "content": [{"type": "text", "text": "x" * 3000}]}}) + "\n")
@@ -1316,6 +1320,30 @@ class LastMessage(unittest.TestCase):
         self.assertEqual(roost.last_message(task), "first part\n\nsecond part")
         legacy = dict(task, agentSession=None, claudeSession="s1")
         self.assertEqual(roost.last_message(legacy), "first part\n\nsecond part")
+
+    def test_claude_folders_are_named_as_claude_code_names_them(self):
+        # Expected names computed with Claude Code's own function, in Node.
+        long = "/nowhere/first_last/" + "a_very_long_directory_name/" * 8 + "fix-parser-abc123"
+        for path, folder in (
+                ("/nowhere/.local/share/roost/worktrees/71bdd2542f/fix_parser-abc123",
+                 "-nowhere--local-share-roost-worktrees-71bdd2542f-fix-parser-abc123"),
+                ("/nowhere/jo smith/ünï 🚀/x", "-nowhere-jo-smith--n-----x"),
+                (long, "-nowhere-first-last" + "-a-very-long-directory-name" * 6
+                 + "-a-very-long-direct-69ndg4"),
+                # Cut at 200, then "-" and the hash.
+                ("/nowhere/" + "é" * 195, "-nowhere-" + "-" * 191 + "-a7c1o1")):
+            with self.subTest(path=path):
+                self.assertEqual(roost.claude_project_folder(path), folder)
+        # Claude names the folder after the physical path, as getcwd() gives it.
+        real = self.home / "real_dir"
+        real.mkdir()
+        (self.home / "link").symlink_to(real)
+        self.assertEqual(roost.claude_project_folder(str(self.home / "link")),
+                         re.sub(r"[^a-zA-Z0-9]", "-", os.path.realpath(real)))
+        task = dict(agent="claude", worktree=str(self.home / "link"), agentSession="s3")
+        self.write(".claude/projects/%s/s3.jsonl" % roost.claude_project_folder(str(real)),
+                   [{"message": {"role": "assistant", "content": "found it"}}])
+        self.assertEqual(roost.last_message(task), "found it")
 
     def test_claude_turns_stopped_by_you_are_read_from_the_transcript(self):
         start = datetime.datetime(2026, 10, 5, 14, 0, tzinfo=datetime.timezone.utc)
