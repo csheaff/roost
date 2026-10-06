@@ -294,7 +294,7 @@ never changes your global agent settings or answers prompts.
 | `ready` | The agent is waiting for your next prompt. Not "reviewed" or "done" |
 | `background` | Claude background work or Pi queued messages remain |
 | `starting` | Startup prompts may be showing; Codex reports status from its first turn |
-| `exited`, `failed` | The agent exited normally, or the CLI failed; `RET` shows its last output |
+| `exited`, `failed` | The agent exited normally, or the CLI failed; `RET` shows its last output. A Claude Code turn ended by an API error, such as a usage limit, is also `failed`, with the agent waiting |
 | `crashed` | The agent's tmux pane disappeared |
 | `stopped` | Stopped with `K`; `s` resumes the conversation |
 

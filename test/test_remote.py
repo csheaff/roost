@@ -246,6 +246,19 @@ class Lifecycle(unittest.TestCase):
                                                        table((12, (11, running)))))
         self.assertFalse(roost.approved_command_running(task, dict(pid=None), table((12, (11, shell)))))
 
+    def test_a_turn_ended_by_an_api_error_says_why_until_the_next_turn(self):
+        task = self.create()
+        store = roost.Store(str(self.state))
+        roost.update_hook(store, task["id"], dict(hook_event_name="StopFailure", error="rate_limit",
+                                                  error_details="You've hit your limit\n· resets 3pm"))
+        record = store.read(task["id"])
+        self.assertEqual((record["status"], record["error"]),
+                         ("failed", "Its turn ended on an API error (rate_limit): You've hit your limit · resets 3pm"))
+        listed = self.request("list")["result"][0]
+        self.assertEqual((listed["status"], listed["live"]), ("failed", True))
+        roost.update_hook(store, task["id"], dict(hook_event_name="UserPromptSubmit"))
+        self.assertEqual((store.read(task["id"])["status"], store.read(task["id"])["error"]), ("running", None))
+
     def test_a_permission_request_records_what_it_asks(self):
         task = self.create()
         store = roost.Store(str(self.state))

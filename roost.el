@@ -590,7 +590,9 @@ finished or wants."
   (let ((title (format "Roost: %s — %s" (roost--field task 'name) status))
         (label (roost--host-label host)))
     (if (not (member status '("ready" "permission")))
-        (roost--notify title label)
+        (roost--notify title (if-let* ((error (roost--field task 'error)))
+                                 (concat label " · " (truncate-string-to-width error 160 nil nil "…"))
+                               label))
       (roost--request
        host "inspect" (list (cons 'id (roost--field task 'id)))
        (lambda (current)
@@ -2761,6 +2763,12 @@ Windows showing the panel keep their scroll position."
                     integration))
            'roost-dim))
         (pcase status
+          ((and "failed" (guard (roost--field task 'live)))
+           ;; A turn ended on an error, such as a usage limit, and the
+           ;; agent waits; it has not exited, so there is nothing to resume.
+           (roost--insert-indented
+            "Its last turn failed, and the agent waits. RET opens it to try again."
+            'roost-status-failed))
           ((or "exited" "failed" "crashed")
            (roost--insert-indented
             (format "The agent has %s. RET shows its last output; s resumes the conversation." status)

@@ -449,7 +449,15 @@ class ClaudeAgent:
                       "idle_prompt": "ready"}.get(payload.get("notification_type"))
         if not status:
             return None
-        updates = dict(status=status, updatedAt=now(), lastEvent=event)
+        updates = dict(status=status, updatedAt=now(), lastEvent=event, error=None)
+        if event == "StopFailure":
+            # The turn ended on an API error, such as a usage limit; the
+            # agent itself still runs and waits for you.
+            code = payload.get("error") if isinstance(payload.get("error"), str) else "unknown"
+            details = payload.get("error_details")
+            updates["error"] = ("Its turn ended on an API error (%s)" % code
+                                + (": " + " ".join(details.split())[:REQUEST_LIMIT]
+                                   if isinstance(details, str) and details.strip() else ""))
         if payload.get("session_id"):
             # Keep the old field for tasks whose original helper is still running.
             updates.update(agentSession=payload["session_id"], claudeSession=payload["session_id"])

@@ -251,6 +251,30 @@
        (should (equal (roost--field (car (roost-tasks)) 'lastMessage)
                       "## Done\n\nFixed the **login** bug."))))))
 
+(ert-deftest roost-a-turn-that-failed-says-why-and-that-the-agent-waits ()
+  ;; At a usage limit every agent's turn fails while the agents run on,
+  ;; and the panel suggested `s', which refuses a running agent.
+  (roost-test--isolated
+   (let* ((roost-notify t) notices
+          (roost-notify-function (lambda (title body) (push (list title body) notices)))
+          (error "Its turn ended on an API error (rate_limit): You've hit your limit")
+          (failed (roost--cache-task "dev" (append `((live . t) (error . ,error))
+                                                   (roost-test--task nil "failed")))))
+     (with-temp-buffer
+       (roost-task-info-mode)
+       (setq roost--buffer-task-key (roost--key failed))
+       (roost--render-task-info)
+       (should (string-match-p "Its last turn failed, and the agent waits. RET opens it to try again."
+                               (buffer-string)))
+       (should-not (string-match-p "resumes" (buffer-string)))
+       (should (string-match-p (concat "Last error: " (regexp-quote error)) (buffer-string)))
+       ;; An agent that exited is resumed.
+       (roost--cache-task "dev" (append '((live)) (roost-test--task nil "failed")))
+       (roost--render-task-info)
+       (should (string-match-p "The agent has failed. RET shows its last output; s resumes" (buffer-string))))
+     (roost--notify-attention "dev" failed "failed")
+     (should (equal notices `(("Roost: fix auth — failed" ,(concat "dev · " error))))))))
+
 (ert-deftest roost-notifies-once-and-not-on-initial-attachment ()
   (roost-test--isolated
    (roost-test--without-inspect
