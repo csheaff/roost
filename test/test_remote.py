@@ -234,6 +234,34 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual((self.repo / "hello").read_text(), "changed\n")
         self.assertFalse(wt.exists())
 
+    def test_only_tracked_changes_in_the_primary_checkout_block_a_merge(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        (wt / "hello").write_text("changed\n")
+        (wt / "added").write_text("from the task\n")
+        self.git("add", ".", cwd=wt)
+        self.git("commit", "-m", "fix", cwd=wt)
+        (self.repo / "hello").write_text("local edit\n")
+        reply = self.request("merge", id=task["id"])
+        self.assertFalse(reply["ok"])
+        self.assertIn("The primary checkout %s has uncommitted changes" % os.path.realpath(self.repo), reply["error"])
+        self.git("checkout", "--", "hello")
+        # Git refuses to overwrite an untracked file, and nothing changes.
+        (self.repo / "added").write_text("mine\n")
+        reply = self.request("merge", id=task["id"])
+        self.assertFalse(reply["ok"])
+        self.assertIn("added", reply["error"])
+        self.assertEqual((self.repo / "added").read_text(), "mine\n")
+        self.assertEqual(self.git("show", "HEAD:hello"), "base")
+        self.assertTrue(wt.exists())
+        # Other untracked files stay where they are.
+        (self.repo / "added").unlink()
+        (self.repo / "notes.txt").write_text("scratch\n")
+        self.assertTrue(self.request("merge", id=task["id"])["ok"])
+        self.assertEqual((self.repo / "hello").read_text(), "changed\n")
+        self.assertEqual((self.repo / "notes.txt").read_text(), "scratch\n")
+        self.assertFalse(wt.exists())
+
     def test_names_in_any_script_get_ascii_branches(self):
         for name, slug in (("修复解析器", "task"), ("исправить ошибку", "task"), ("café menu", "cafe-menu"),
                            ("Ünïcödé--naming_test", "Unicode-naming_test"), ("fix #12: parser!", "fix-12-parser"),

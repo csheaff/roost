@@ -299,10 +299,11 @@ never changes your global agent settings or answers prompts.
 
 A task's identity is its host and ID. A per-pane ownership tag keeps Roost from
 steering or killing an unrelated pane after a tmux restart, and hooks from an
-earlier run cannot overwrite a resumed one. Merging needs both checkouts clean
-and the primary checkout on the task's integration branch. A conflicting merge
-is aborted and leaves nothing changed. Branches are deleted only if they still
-point at the commit Roost verified.
+earlier run cannot overwrite a resumed one. Merging needs the task's worktree
+clean, and the primary checkout on the task's integration branch with nothing
+uncommitted; untracked files there stay. A conflicting merge is aborted and
+leaves nothing changed. Branches are deleted only if they still point at the
+commit Roost verified.
 
 Things to know:
 

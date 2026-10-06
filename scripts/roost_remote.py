@@ -1129,7 +1129,11 @@ def retire(store, task, merge=False, merged_head=None):
         if not branch_exists:
             raise RoostError("The task branch no longer exists; there is nothing to merge")
         integration_branch(task)
-        require_clean(repo)
+        # Untracked files there are yours and stay: Git refuses a merge that
+        # would overwrite one, and aborting a merge leaves them alone.
+        if git(repo, "status", "--porcelain", "--untracked-files=no").stdout.strip():
+            raise RoostError("The primary checkout %s has uncommitted changes; commit or stash them before merging"
+                             % repo)
         result = git(repo, "merge", "--no-ff", "--no-edit", branch, check=False)
         if result.returncode:
             conflicts = conflicted_files(repo)
