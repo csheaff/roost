@@ -1228,7 +1228,14 @@ elif args[:2] == ["auth", "status"]:
 
     def test_bad_base_and_missing_executable_report_errors_without_touching_repo(self):
         response = self.request("create", directory=str(self.repo), name="bad", base="missing-ref", socket=self.socket)
+        self.assertEqual(response, dict(ok=False, error="No branch, tag or commit named 'missing-ref' to start from"))
+        # A new repository: Git would say only "Needed a single revision".
+        empty = self.root / "empty"
+        empty.mkdir()
+        roost.git(empty, "init", "-b", "main")
+        response = self.request("create", directory=str(empty), name="scaffold", socket=self.socket)
         self.assertFalse(response["ok"])
+        self.assertIn("has no commits yet", response["error"])
         response = self.request("create", directory=str(self.repo), name="bad executable", socket=self.socket,
                                 command=["/does/not/exist"])
         self.assertTrue(response["ok"])

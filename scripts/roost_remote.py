@@ -730,7 +730,15 @@ def create(store, request):
     # source worktree when explicitly requested, rather than accidentally.
     explicit_base = text(request.get("base"))
     base = explicit_base or integration or "HEAD"
-    commit = git(directory if explicit_base else repo, "rev-parse", "--verify", base + "^{commit}").stdout.strip()
+    resolved = git(directory if explicit_base else repo, "rev-parse", "--verify", "--quiet", base + "^{commit}",
+                   check=False)
+    if resolved.returncode:
+        # Git says only "Needed a single revision".
+        if git(repo, "rev-parse", "--verify", "--quiet", "HEAD", check=False).returncode:
+            raise RoostError("%s has no commits yet, and a task branches from one; commit something first "
+                             "(git commit --allow-empty -m 'Start' will do)" % repo)
+        raise RoostError("No branch, tag or commit named %r to start from" % base)
+    commit = resolved.stdout.strip()
     task_id = uuid.uuid4().hex[:16]
     prefix = text(request.get("branchPrefix")) or DEFAULT_BRANCH_PREFIX
     branch = prefix + slug + "-" + task_id[:6]
