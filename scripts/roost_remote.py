@@ -241,17 +241,18 @@ def pane_inventory(socket):
     Return {} when no server runs, or None when tmux could not answer (for
     example a client/server version mismatch after upgrading tmux)."""
     result = tmux(socket, "list-panes", "-a", "-F",
-                  "#{pane_id}\t#{window_id}\t#{window_index}\t#{session_id}\t#{pane_dead}\t#{@roost_task_id}\t#{session_name}",
+                  "#{pane_id}\t#{window_id}\t#{window_index}\t#{session_id}\t#{pane_dead}\t#{@roost_task_id}\t#{pane_pid}\t#{session_name}",
                   check=False)
     if result.returncode:
         return {} if any(marker in result.stderr for marker in NO_SERVER) else None
     panes = {}
     for line in result.stdout.splitlines():
-        fields = line.split("\t")
-        if len(fields) == 7:
-            pane, window, index, session, dead, task_id, session_name = fields
+        fields = line.split("\t", 7)
+        if len(fields) == 8:
+            pane, window, index, session, dead, task_id, pid, session_name = fields
             panes[pane] = dict(window=window, index=int(index), session=session,
-                               dead=dead == "1", task=task_id, session_name=session_name)
+                               dead=dead == "1", task=task_id, session_name=session_name,
+                               pid=int(pid) if pid.isdigit() else None)
     return panes
 
 
@@ -798,6 +799,31 @@ def issues(request):
     return result
 
 
+def processes():
+    """Each process on this host as PID -> (PARENT, COMMAND LINE), or {}."""
+    result = execute(["ps", "-A", "-ww", "-o", "pid=,ppid=,command="], check=False)
+    table = {}
+    for line in result.stdout.splitlines() if result.returncode == 0 else []:
+        fields = line.split(None, 2)
+        if len(fields) == 3 and fields[0].isdigit() and fields[1].isdigit():
+            table[int(fields[0])] = (int(fields[1]), fields[2])
+    return table
+
+
+def approved_command_running(task, pane, table):
+    """Whether the command TASK's agent asked permission to run has started,
+    so you approved it. Claude Code reports nothing until the command ends,
+    but runs it in a shell of its own as `eval 'COMMAND'`, always quoted.
+    Another command starting, as a subagent's might, says nothing about this
+    request."""
+    command = task.get("requestCommand")
+    if not isinstance(command, str) or not pane or not pane.get("pid"):
+        return False
+    marker = ("eval '" + command.replace("'", "'\"'\"'") + "'")[:200]
+    agents = [pid for pid, (parent, _) in table.items() if parent == pane["pid"]]
+    return any(parent in agents and marker in line for parent, line in table.values())
+
+
 def was_interrupted(task):
     """Whether you stopped the task's agent mid-turn, for agents that report
     no event when that happens. A missing or odd transcript says no."""
@@ -817,6 +843,7 @@ def list_tasks(store, request):
         else:
             tasks.append(task)
     inventories = {}
+    table = None  # The process table, read only when a request may have been approved.
     for task in tasks:
         socket = task["socket"]
         if socket not in inventories:
@@ -844,7 +871,16 @@ def list_tasks(store, request):
             # Stopped by you, so waiting for you; it reports no event of its own.
             task.update(status="ready", updatedAt=now(), lastEvent="Interrupt")
             task.pop("request", None)
+            task.pop("requestCommand", None)
             changed = True
+        elif task["live"] and task["status"] == "permission" and task.get("requestCommand"):
+            if table is None:
+                table = processes()
+            if approved_command_running(task, pane, table):
+                task.update(status="running", updatedAt=now(), lastEvent="Approved")
+                task.pop("request", None)
+                task.pop("requestCommand", None)
+                changed = True
         if changed:
             store.save(task)
     return tasks
@@ -1451,10 +1487,18 @@ def update_hook(store, task_id, payload, run_id=None):
                        if task["status"] == "permission" else None)
             if request:
                 task["request"] = request
+                # Its exact command, to see it start once you approve.
+                arguments = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+                command = arguments.get("command") if payload.get("tool_name") == "Bash" else None
+                if isinstance(command, str) and command.strip():
+                    task["requestCommand"] = command
+                else:
+                    task.pop("requestCommand", None)
             elif task["status"] != "permission" or before != "permission":
                 # The notification that follows a request names no tool:
                 # keep the request it follows, and only that one.
                 task.pop("request", None)
+                task.pop("requestCommand", None)
             store.save(task)
 
 

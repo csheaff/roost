@@ -23,6 +23,16 @@ for line in sys.stdin:
     event("UserPromptSubmit")
     if line.strip() == "permission":
         event("PermissionRequest")
+    elif line.startswith("ask "):
+        # Ask to run a command; once "yes" is typed, run it as Claude Code
+        # does, in a shell of its own, and report only when it ends.
+        command = line[len("ask "):].strip()
+        event("PermissionRequest", tool_name="Bash", tool_input=dict(command=command))
+        if sys.stdin.readline().strip() == "yes":
+            quoted = "'" + command.replace("'", "'\"'\"'") + "'"
+            subprocess.run(["/bin/sh", "-c", "eval " + quoted + " < /dev/null && pwd -P > /dev/null"])
+            event("PostToolUse", tool_name="Bash")
+        event("Stop")
     elif line.strip() == "exit":
         break
     else:

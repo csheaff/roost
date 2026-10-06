@@ -197,6 +197,44 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual((listed["status"], listed["lastEvent"]), ("ready", "Interrupt"))
         self.assertNotIn("request", store.read(task["id"]))
 
+    def test_an_approved_command_shows_running_before_it_ends(self):
+        # Claude reports nothing between your approval and the command's end,
+        # which for tests or a build can be minutes of `permission`.
+        task = self.create()
+        self.assertTrue(self.request("send", id=task["id"], text="ask sleep 3 && echo 'it ran'")["ok"])
+        record = self.wait(task, "permission")
+        self.assertEqual(record["requestCommand"], "sleep 3 && echo 'it ran'")
+        self.assertEqual(self.request("list")["result"][0]["status"], "permission")
+        roost.tmux(self.socket, "send-keys", "-t", task["paneId"], "yes", "Enter")
+        deadline = time.monotonic() + 2.5
+        while time.monotonic() < deadline:
+            listed = self.request("list")["result"][0]
+            if listed["status"] != "permission":
+                break
+            time.sleep(0.1)
+        self.assertEqual((listed["status"], listed["lastEvent"]), ("running", "Approved"))
+        self.assertNotIn("request", listed)
+        self.assertNotIn("requestCommand", listed)
+        self.wait(task, "ready")
+
+    def test_only_the_requested_command_counts_as_approved(self):
+        task = dict(requestCommand="grep -r 'TODO' src")
+        shell = ("/bin/bash -c source /x/shell-snapshots/snapshot.sh && eval 'grep -r '\"'\"'TODO'\"'\"' src'"
+                 " < /dev/null && pwd -P >| /tmp/claude-cwd")
+        runner, agent = (10, (1, "python3 remote.py run")), (11, (10, "claude"))
+        table = lambda *children: dict([runner, agent, *children])
+        self.assertTrue(roost.approved_command_running(task, dict(pid=10), table((12, (11, shell)))))
+        # Another command, or this one run by something else, is not it.
+        self.assertFalse(roost.approved_command_running(
+            task, dict(pid=10), table((12, (11, "/bin/bash -c eval 'make test' < /dev/null")))))
+        self.assertFalse(roost.approved_command_running(task, dict(pid=10), table((12, (5, shell)))))
+        self.assertFalse(roost.approved_command_running(dict(task, requestCommand="ls"), dict(pid=10),
+                                                        table((12, (11, "/bin/bash -c eval ls")))))
+        self.assertTrue(roost.approved_command_running(dict(task, requestCommand="ls"), dict(pid=10),
+                                                       table((12, (11, "/bin/bash -c eval 'ls' < /dev/null")))))
+        self.assertFalse(roost.approved_command_running({}, dict(pid=10), table((12, (11, shell)))))
+        self.assertFalse(roost.approved_command_running(task, dict(pid=None), table((12, (11, shell)))))
+
     def test_a_permission_request_records_what_it_asks(self):
         task = self.create()
         store = roost.Store(str(self.state))
