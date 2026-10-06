@@ -249,7 +249,8 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
   rejects conflicting ones.
 - `roost-setup-command`: a shell command run once in a new worktree before the
   agent starts, such as `npm ci`. Set it in `.dir-locals.el` per project:
-  `((nil . ((roost-setup-command . "npm ci"))))`.
+  `((nil . ((roost-setup-command . "npm ci"))))`. Emacs reads a remote
+  project's `.dir-locals.el` only with `enable-remote-dir-locals` on.
 - `roost-branch-prefix`: topic branches are `PREFIX<name>-<id>`; default `roost/`.
 - `roost-state-directory`: where each host keeps task records, the helper and
   worktrees; default `~/.local/share/roost`.
