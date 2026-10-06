@@ -266,6 +266,27 @@ class Lifecycle(unittest.TestCase):
         record = store.read(task["id"])
         self.assertEqual((record["status"], record["lastEvent"]), ("ready", "Notification"))
 
+    def test_compacting_or_clearing_a_conversation_is_not_a_turn_ending(self):
+        # Claude compacts by itself mid-turn and reports SessionStart, which
+        # flashed a working agent to ready, with a notification.
+        task = self.create()
+        store = roost.Store(str(self.state))
+        hook = lambda **payload: roost.update_hook(store, task["id"], payload)
+        hook(hook_event_name="UserPromptSubmit", session_id="s1")
+        before = store.read(task["id"])
+        hook(hook_event_name="SessionStart", source="compact", session_id="s1")
+        self.assertEqual(store.read(task["id"]), before)
+        hook(hook_event_name="SessionStart", source="compact", session_id="s2")
+        self.assertEqual(store.read(task["id"]), dict(before, agentSession="s2", claudeSession="s2"))
+        # /clear ends one conversation and starts the next in the same process.
+        hook(hook_event_name="Stop", session_id="s2")
+        hook(hook_event_name="SessionEnd", reason="clear", session_id="s2")
+        self.assertEqual(store.read(task["id"])["status"], "ready")
+        hook(hook_event_name="SessionStart", source="clear", session_id="s3")
+        self.assertEqual((store.read(task["id"])["status"], store.read(task["id"])["agentSession"]), ("ready", "s3"))
+        hook(hook_event_name="SessionEnd", reason="prompt_input_exit", session_id="s3")
+        self.assertEqual(store.read(task["id"])["status"], "exited")
+
     def test_a_turn_ended_by_an_api_error_says_why_until_the_next_turn(self):
         task = self.create()
         store = roost.Store(str(self.state))

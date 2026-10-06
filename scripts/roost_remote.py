@@ -437,6 +437,16 @@ class ClaudeAgent:
     def observe(self, payload, current=None):
         """Status updates for hook PAYLOAD, given the task's CURRENT status."""
         event = payload.get("hook_event_name")
+        sessions = (dict(agentSession=payload["session_id"], claudeSession=payload["session_id"])
+                    if payload.get("session_id") else {})
+        # /clear and /resume end one conversation and start another in the
+        # same process, which goes on running.
+        if event == "SessionEnd" and payload.get("reason") in ("clear", "resume"):
+            return None
+        # Compacting the conversation, which Claude also does by itself in the
+        # middle of a turn, changes nothing about whether it waits for you.
+        if event == "SessionStart" and payload.get("source") == "compact":
+            return sessions or None
         status = {
             "SessionStart": "ready", "UserPromptSubmit": "running",
             "PreToolUse": "running", "PostToolUse": "running",
@@ -466,9 +476,8 @@ class ClaudeAgent:
             updates["error"] = ("Its turn ended on an API error (%s)" % code
                                 + (": " + " ".join(details.split())[:REQUEST_LIMIT]
                                    if isinstance(details, str) and details.strip() else ""))
-        if payload.get("session_id"):
-            # Keep the old field for tasks whose original helper is still running.
-            updates.update(agentSession=payload["session_id"], claudeSession=payload["session_id"])
+        # The old claudeSession field serves tasks whose original helper still runs.
+        updates.update(sessions)
         return updates
 
     def transcript(self, task):
