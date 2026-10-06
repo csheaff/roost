@@ -274,16 +274,22 @@ def owned_pane(task, inventory):
     return None
 
 
-def check_worktree(store, task):
+def check_worktree(store, task, branch=True):
+    """TASK's worktree, refusing paths Roost does not own. With BRANCH, also
+    refuse one no longer on the task's branch, as after an agent made a
+    branch of its own: merging, pushing or removing would then act on the
+    wrong commits. Running an agent or shell there needs no such check."""
     worktree = Path(task["worktree"]).resolve()
     if not worktree.is_relative_to((store.root / "worktrees").resolve()):
         raise RoostError("Task worktree is outside Roost's worktree directory")
     if worktree == Path(task["repo"]).resolve():
         raise RoostError("Refusing to remove the primary repository")
-    if worktree.exists():
-        branch = git(worktree, "symbolic-ref", "--short", "HEAD").stdout.strip()
-        if branch != task["branch"]:
-            raise RoostError("The worktree has changed branches; review it manually")
+    if branch and worktree.exists():
+        current = git(worktree, "symbolic-ref", "--short", "-q", "HEAD", check=False).stdout.strip()
+        if current != task["branch"]:
+            raise RoostError("The task's worktree is on %s, not the task's branch %s; check out %s there, "
+                             "bringing over any commits you want, then try again"
+                             % (current or "a detached HEAD", task["branch"], task["branch"]))
     return worktree
 
 
@@ -1030,7 +1036,7 @@ def resume(store, task):
         raise RoostError("The agent is still running; open the existing task")
     if not Path(task["worktree"]).is_dir():
         raise RoostError("Task worktree is gone; forget the task to remove it from Roost")
-    check_worktree(store, task)
+    check_worktree(store, task, branch=False)
     if pane:
         tmux(task["socket"], "kill-window", "-t", task["windowId"])
     spawn(store, task, resume=True)
@@ -1082,7 +1088,7 @@ def shell(store, task):
     if pane and (pane["task"] != task["id"] or pane["window"] != task["windowId"]):
         raise RoostError("Task's shell ownership changed; inspect the window in tmux")
     if not pane or pane["dead"]:
-        check_worktree(store, task)
+        check_worktree(store, task, branch=False)
         if not Path(task["worktree"]).is_dir():
             raise RoostError("Task worktree is gone")
         if pane:

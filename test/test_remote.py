@@ -332,6 +332,30 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(reply["ok"], reply)
         self.assertEqual(reply["result"][0]["files"], [dict(path="caf�.txt", untracked=True)])
 
+    def test_an_agent_on_a_branch_of_its_own_can_resume_but_not_merge(self):
+        # An agent told to work on a feature branch left Roost refusing to
+        # resume it or open its shell, with no way forward.
+        task = self.create()
+        wt = Path(task["worktree"])
+        self.git("checkout", "-q", "-b", "feature/search", cwd=wt)
+        (wt / "hello").write_text("search\n")
+        self.git("commit", "-qam", "search", cwd=wt)
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        self.assertTrue(self.request("resume", id=task["id"])["ok"])
+        self.wait(task, "ready")
+        self.assertTrue(self.request("shell", id=task["id"])["ok"])
+        for action in ("merge", "retire", "update"):
+            with self.subTest(action=action):
+                reply = self.request(action, id=task["id"])
+                self.assertFalse(reply["ok"])
+                self.assertIn("worktree is on feature/search, not the task's branch " + task["branch"],
+                              reply["error"])
+        self.assertEqual(self.git("rev-parse", "HEAD"), task["baseCommit"])
+        self.git("checkout", "-q", task["branch"], cwd=wt)
+        self.git("merge", "-q", "feature/search", cwd=wt)
+        self.assertTrue(self.request("merge", id=task["id"])["ok"])
+        self.assertEqual((self.repo / "hello").read_text(), "search\n")
+
     def test_names_in_any_script_get_ascii_branches(self):
         for name, slug in (("修复解析器", "task"), ("исправить ошибку", "task"), ("café menu", "cafe-menu"),
                            ("Ünïcödé--naming_test", "Unicode-naming_test"), ("fix #12: parser!", "fix-12-parser"),
