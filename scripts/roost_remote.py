@@ -434,7 +434,8 @@ class ClaudeAgent:
             argv += ["--", task["prompt"]]
         return argv
 
-    def observe(self, payload):
+    def observe(self, payload, current=None):
+        """Status updates for hook PAYLOAD, given the task's CURRENT status."""
         event = payload.get("hook_event_name")
         status = {
             "SessionStart": "ready", "UserPromptSubmit": "running",
@@ -444,9 +445,16 @@ class ClaudeAgent:
         if event == "Stop":
             status = "background" if payload.get("background_tasks") or payload.get("session_crons") else "ready"
         if event == "Notification":
+            kind = payload.get("notification_type")
+            # Claude reminds you of an agent waiting a minute after its turn.
+            # That recovers a turn whose end went unreported, but for one
+            # already waiting it is no news: a newer event would count an
+            # agent you have seen as waiting again, or forget why it failed.
+            if kind == "idle_prompt" and current not in ("starting", "running"):
+                return None
             # A teammate's permission prompt also waits in this terminal.
             status = {"permission_prompt": "permission", "worker_permission_prompt": "permission",
-                      "idle_prompt": "ready"}.get(payload.get("notification_type"))
+                      "idle_prompt": "ready"}.get(kind)
         if not status:
             return None
         updates = dict(status=status, updatedAt=now(), lastEvent=event, error=None)
@@ -546,7 +554,7 @@ class CodexAgent:
             argv += ["--", task["prompt"]]
         return argv
 
-    def observe(self, payload):
+    def observe(self, payload, current=None):
         event = payload.get("hook_event_name")
         status = {"SessionStart": "ready", "SessionEnd": "exited", "UserPromptSubmit": "running",
                   "PreToolUse": "running", "PostToolUse": "running", "PermissionRequest": "permission",
@@ -622,7 +630,7 @@ class PiAgent:
             argv.append("\n" + task["prompt"])
         return argv
 
-    def observe(self, payload):
+    def observe(self, payload, current=None):
         event = payload.get("event")
         status = {"session_start": "ready", "agent_start": "running", "agent_end": "ready"}.get(event)
         if not status:
@@ -1505,7 +1513,7 @@ def update_hook(store, task_id, payload, run_id=None):
         if task["status"] in ("stopped", "retired"):
             return
         before = task["status"]
-        updates = agent_for(task).observe(payload)
+        updates = agent_for(task).observe(payload, before)
         if updates:
             task.update(updates)
             request = (permission_request(payload, task.get("worktree"))

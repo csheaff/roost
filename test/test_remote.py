@@ -246,6 +246,26 @@ class Lifecycle(unittest.TestCase):
                                                        table((12, (11, running)))))
         self.assertFalse(roost.approved_command_running(task, dict(pid=None), table((12, (11, shell)))))
 
+    def test_claudes_idle_reminder_is_no_news_for_an_agent_already_waiting(self):
+        # A minute after each turn Claude sends idle_prompt; taken as a new
+        # event, it made an agent you had seen count as waiting again.
+        task = self.create()
+        store = roost.Store(str(self.state))
+        hook = lambda **payload: roost.update_hook(store, task["id"], payload)
+        idle = dict(hook_event_name="Notification", notification_type="idle_prompt")
+        for event in (dict(hook_event_name="Stop"), dict(hook_event_name="Stop", background_tasks=[{}]),
+                      dict(hook_event_name="StopFailure", error="overloaded")):
+            with self.subTest(event=event):
+                hook(**event)
+                before = store.read(task["id"])
+                hook(**idle)
+                self.assertEqual(store.read(task["id"]), before)
+        # It still recovers a turn whose end went unreported.
+        hook(hook_event_name="UserPromptSubmit")
+        hook(**idle)
+        record = store.read(task["id"])
+        self.assertEqual((record["status"], record["lastEvent"]), ("ready", "Notification"))
+
     def test_a_turn_ended_by_an_api_error_says_why_until_the_next_turn(self):
         task = self.create()
         store = roost.Store(str(self.state))
