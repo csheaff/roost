@@ -105,8 +105,8 @@ Existing tasks keep their branch."
   :type '(choice (const nil) string))
 
 (defcustom roost-session-name nil
-  "Tmux session to place new task windows in, or nil for one per repository.
-Those are named after the repository, such as \"roost-notes-3f2a\"."
+  "Tmux session to place new task windows in, or nil for one per task.
+Those are named after the project and task, such as \"roost-notes-3f2a1b\"."
   :type '(choice (const nil) string))
 
 (defcustom roost-startup-grace 15
@@ -3126,12 +3126,14 @@ down.  With WIDTH, fit each line within it, leaving details to hover."
             (when repo
               (put-text-property start (point) 'roost-directory
                                  (roost--project-directory (cadr group))))
+            ;; The newline stays unhighlighted, so each row lights up alone.
             (dolist (task (cdr group))
-              (insert (propertize (concat (roost--dashboard-row task layout width) "\n")
+              (insert (propertize (roost--dashboard-row task layout width)
                                   'roost-task (roost--key task)
                                   'keymap roost--dashboard-row-map
                                   'mouse-face 'highlight
-                                  'help-echo "mouse-1: open · mouse-3: actions")))))))
+                                  'help-echo "mouse-1: open · mouse-3: actions")
+                      "\n"))))))
     (let ((target (or (and key (save-excursion
                                  (goto-char (point-min))
                                  ;; Keys are lists, so compare with `equal'.
@@ -3312,15 +3314,18 @@ Task commands act on the task at point, as in the dashboard.
           (when repo
             (put-text-property start (point) 'roost-directory
                                (roost--project-directory (cadr group))))
+          ;; The newline stays outside the highlighted text: adjacent rows with
+          ;; the same `mouse-face' would otherwise light up together.
           (dolist (task (cdr group))
-            (insert (propertize (concat (roost--sidebar-row task width) "\n")
+            (insert (propertize (roost--sidebar-row task width)
                                 'roost-task (roost--key task)
                                 'keymap roost--dashboard-row-map
                                 'mouse-face 'highlight
                                 'help-echo (format "%s\n%s · %s\nmouse-1: open · mouse-3: actions"
                                                    (roost--field task 'name)
                                                    (roost--host-label host)
-                                                   (or repo "?"))))))))
+                                                   (or repo "?")))
+                    "\n")))))
     (goto-char (or (and key (save-excursion
                               (goto-char (point-min))
                               (when-let* ((match (text-property-search-forward 'roost-task key t)))

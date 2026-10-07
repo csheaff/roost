@@ -559,14 +559,16 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(listed["windowIndex"], 8)
         self.assertEqual(listed["paneId"], task["paneId"])
 
-    def test_sessions_are_named_after_their_project(self):
-        repo_hash = hashlib.sha256(str(self.repo.resolve()).encode()).hexdigest()[:10]
+    def test_each_task_gets_a_session_named_after_its_project_and_task(self):
         task = self.create()
         # The fixture's "repo with spaces" also shows names made safe for tmux.
-        self.assertEqual(task["session"], "roost-repo-with-spaces-" + repo_hash[:4])
-        # A session from before, named by hash alone, keeps the project's tasks.
+        self.assertEqual(task["session"], "roost-repo-with-spaces-" + task["id"][:6])
+        other = self.create(name="later")
+        self.assertNotEqual(other["session"], task["session"])
+        # A session from before, named by hash alone, keeps the tasks it holds.
+        repo_hash = hashlib.sha256(str(self.repo.resolve()).encode()).hexdigest()[:10]
         roost.tmux(self.socket, "new-session", "-d", "-s", "roost-" + repo_hash)
-        self.assertEqual(self.create(name="later")["session"], "roost-" + repo_hash)
+        self.assertNotEqual(self.create(name="newer")["session"], "roost-" + repo_hash)
 
     def test_existing_session_and_rename_survive_resume(self):
         roost.tmux(self.socket, "new-session", "-d", "-s", "existing")
@@ -592,7 +594,8 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(Path(child["repo"]), self.repo.resolve())
         self.assertEqual(child["integrationBranch"], "main")
         self.assertEqual(child["baseCommit"], self.git("rev-parse", "HEAD", cwd=wt))
-        self.assertEqual(child["session"], first["session"])
+        # Each task has its own session, forks included.
+        self.assertNotEqual(child["session"], first["session"])
         # The fork's own commit is not on main, so retiring it would lose work.
         child_wt = Path(child["worktree"])
         (child_wt / "child").write_text("child work\n")

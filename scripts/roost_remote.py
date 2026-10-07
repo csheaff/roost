@@ -153,15 +153,12 @@ def enable_extended_keys(socket):
         tmux(socket, "set-option", "-s", "extended-keys", "on", check=False)
 
 
-def session_name(socket, repo, repo_hash):
-    """The tmux session for REPO's tasks, named after the project so tmux
-    and Emacs show which project it holds. A running session named in the
-    older style, by hash alone, keeps holding that project's tasks."""
-    old = "roost-" + repo_hash
-    if tmux(socket, "has-session", "-t", "=" + old, check=False).returncode == 0:
-        return old
+def session_name(repo, task_id):
+    """The tmux session for one task, named after its project and task so
+    tmux and Emacs show which task a session holds. Tasks started before
+    this kept their session; their records name it."""
     project = re.sub(r"[^A-Za-z0-9_-]+", "-", Path(repo).name).strip("-")[:24] or "project"
-    return "roost-%s-%s" % (project, repo_hash[:4])
+    return "roost-%s-%s" % (project, task_id[:6])
 
 
 def atomic_text(path, text):
@@ -767,7 +764,8 @@ def create(store, request):
     checkout = git(directory, "rev-parse", "--show-toplevel").stdout.strip()
     # Git lists the main worktree first. Creating from an existing task must
     # still use the primary checkout for integration and repository identity.
-    primary = git(checkout, "worktree", "list", "--porcelain", "-z").stdout.split("\0\0", 1)[0].split("\0")
+    # Plain --porcelain: `-z` needs Git 2.36, and hosts often ship older Git.
+    primary = git(checkout, "worktree", "list", "--porcelain").stdout.split("\n\n", 1)[0].split("\n")
     if "bare" in primary or not primary[0].startswith("worktree "):
         raise RoostError("Roost needs a primary working checkout")
     repo = primary[0][len("worktree "):]
@@ -812,7 +810,7 @@ def create(store, request):
     task = dict(id=task_id, name=name, task=prompt or name, repo=repo,
                 worktree=str(worktree), branch=branch, baseRef=base, baseCommit=commit,
                 integrationBranch=integration, socket=socket,
-                session=text(request.get("session")) or session_name(socket, repo, repo_hash),
+                session=text(request.get("session")) or session_name(repo, task_id),
                 agent=agent_name, command=command, setup=setup, prompt=prompt,
                 status="starting", startedAt=now(), updatedAt=now(), claudeSession=None)
     issue = request.get("issue")
