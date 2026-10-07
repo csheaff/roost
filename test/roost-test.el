@@ -1452,6 +1452,27 @@
      (should-not roost--requests)
      (should (equal (directory-files temporary-file-directory nil "\\`roost-input-") inputs)))))
 
+(ert-deftest roost-a-request-that-slept-with-this-computer-gets-its-time-again ()
+  ;; A request in flight when a laptop slept, or between Power Nap wakes,
+  ;; failed the moment it woke, with "No reply after 60s".
+  (let* ((roost-request-timeout 0.5) (offset 0) (timeouts 0)
+         (real (symbol-function 'float-time))
+         (process (make-process :name "roost-test-request" :command '("sleep" "30") :noquery t)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'float-time) (lambda (&rest args) (+ offset (apply real args)))))
+          (roost--expire-request process (lambda () (cl-incf timeouts)))
+          ;; The clock jumps an hour, as across a sleep, before the timer runs:
+          ;; the request gets its time again.
+          (setq offset 3600)
+          (let ((first (process-get process 'roost-timer)))
+            (roost-test--wait-for (lambda () (not (eq (process-get process 'roost-timer) first)))))
+          (should (process-live-p process))
+          (should (= timeouts 0))
+          ;; Awake, its time runs out as usual.
+          (roost-test--wait-for (lambda () (not (process-live-p process))))
+          (should (= timeouts 1)))
+      (when (process-live-p process) (delete-process process)))))
+
 (ert-deftest roost-a-removed-helper-is-installed-again ()
   ;; A task launched by another Emacs prunes helper copies over a week old.
   ;; Requests then failed, until a failed poll happened to reinstall it.

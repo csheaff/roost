@@ -413,6 +413,22 @@ file instead.  Writing it to the pipe would wait, with Emacs frozen,
 until ssh had connected and read it: for a host that is down, the whole
 connection timeout.")
 
+(defun roost--expire-request (process on-timeout)
+  "Kill host request PROCESS, calling ON-TIMEOUT, unless it ends in time.
+That is `roost-request-timeout' seconds.  A timer that runs well after
+then slept with this computer, through a laptop's sleep or Power Nap; the
+request then gets its time again, awake, rather than failing for want of
+a reply nobody could send while asleep."
+  (let ((deadline (+ (float-time) roost-request-timeout)))
+    (process-put process 'roost-timer
+                 (run-at-time roost-request-timeout nil
+                              (lambda ()
+                                (when (process-live-p process)
+                                  (if (> (float-time) (+ deadline 5))
+                                      (roost--expire-request process on-timeout)
+                                    (funcall on-timeout)
+                                    (delete-process process))))))))
+
 (defun roost--run (host code input success failure)
   "Execute CODE asynchronously on HOST with INPUT.
 Call SUCCESS with the result or FAILURE with an error message."
@@ -420,7 +436,7 @@ Call SUCCESS with the result or FAILURE with an error message."
          (errors (generate-new-buffer " *roost-rpc-errors*"))
          (default-directory temporary-file-directory)
          (command (roost--python-command host code))
-         input-file process timer finished timed-out)
+         input-file process finished timed-out)
     (condition-case err
         (progn
           (when (> (string-bytes input) roost--pipe-input-limit)
@@ -438,7 +454,8 @@ Call SUCCESS with the result or FAILURE with an error message."
                    (when (and (memq (process-status proc) '(exit signal)) (not finished))
                      (setq finished t
                            roost--requests (delq proc roost--requests))
-                     (when timer (cancel-timer timer))
+                     (when-let* ((timer (process-get proc 'roost-timer)))
+                       (cancel-timer timer))
                      (when input-file (ignore-errors (delete-file input-file)))
                      (unwind-protect
                          (let ((stdout (with-current-buffer buffer (buffer-string)))
@@ -461,11 +478,7 @@ Call SUCCESS with the result or FAILURE with an error message."
                        (kill-buffer buffer)
                        (kill-buffer errors))))))
           (push process roost--requests)
-          (setq timer (run-at-time roost-request-timeout nil
-                                   (lambda ()
-                                     (when (process-live-p process)
-                                       (setq timed-out t)
-                                       (delete-process process)))))
+          (roost--expire-request process (lambda () (setq timed-out t)))
           (unless input-file
             ;; ssh may have exited already, as for an unknown host; then
             ;; the sentinel reports why.
@@ -474,7 +487,8 @@ Call SUCCESS with the result or FAILURE with an error message."
               (process-send-eof process))))
       (error
        (setq finished t roost--requests (delq process roost--requests))
-       (when timer (cancel-timer timer))
+       (when-let* ((timer (and process (process-get process 'roost-timer))))
+         (cancel-timer timer))
        (when (and process (process-live-p process)) (delete-process process))
        (when (buffer-live-p buffer) (kill-buffer buffer))
        (when (buffer-live-p errors) (kill-buffer errors))
