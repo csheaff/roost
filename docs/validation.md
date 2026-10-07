@@ -475,6 +475,75 @@ underscores whatever the locale (tmux 3.7c on Linux keeps them); Roost's own
 views show them correctly. Unloading a package also unbinds its settings, so
 `unload-feature` followed by a reload returns Roost to its defaults.
 
+### Outages, odd inputs and what Claude Code doesn't say, 2026-10-06
+
+Another round in a copy of Clay's configuration with its own state, socket
+and Emacs server, using Claude Code 2.1.289 and 2.1.292 (Haiku) for a few
+short turns, the fake agent otherwise, and Claude Code's own bundle to check
+what it does. To take a host away mid-session, that Emacs's ssh ran through a
+ProxyCommand that could stop answering, for new connections and for one
+already open, as a closed lid or a dropped network does.
+
+- **A frozen Emacs.** With `claylien` out of reach, one request held Emacs
+  for 10 s, ssh's connection timeout, then said "Output file descriptor of
+  roost-rpc is closed". Requests went to ssh's standard input, and the
+  helper, 73 KB, is more than a pipe holds; every failed poll also forgot
+  the helper was installed, so each retry, about once a minute, sent it
+  again. Input over 4 KB is now read from a file, and the helper is
+  reinstalled only when Python on the host can't find it, as when another
+  Emacs pruned it. The same request then returned in 1.4 ms and failed 10 s
+  later with ssh's own message; a helper deleted on the host was reinstalled
+  and the request answered. A shared connection that froze, as after sleep,
+  cost nothing: ssh opened a new one.
+- **Claude's transcript.** Claude names its project folder by turning every
+  character but ASCII letters and digits into `-` (and hashes names over 200
+  characters); Roost turned only `/` and `.`, so a task named `fix_notes`, or
+  any worktree under a path with a space or an underscore, had no latest
+  reply and no `ready` after Esc. Live, `fix_notes` showed its reply.
+- **Prompts and names.** Claude read a prompt starting with `-`, such as a
+  list, as an option and exited; it now follows `--`, and a two-item list
+  came back "OK". A prompt in Russian or Chinese gave a name with no ASCII
+  letters, which creation refused; the branch is now `roost/task-…`, accents
+  fold (`cafe-menu`), and the name stays as written. A prompt over 120 KB,
+  which Linux refuses as an argument, is refused before anything is created.
+  A new repository with no commits, or a mistyped start, said "Needed a
+  single revision".
+- **What Claude doesn't report.** An approved command showed `permission`
+  until it finished: Claude writes nothing, hook or transcript, until then.
+  Claude runs it in a shell of its own as `eval 'COMMAND'`, so a listing now
+  finds that shell and shows `running`; live, two seconds after approval. A
+  minute after each turn Claude sends `idle_prompt`, which made an agent you
+  had seen count as waiting again, live as `Roost:2` returning; it is now
+  ignored unless the turn's end went unreported. A turn ended by an API
+  error, such as a usage limit, said `s resumes`, which refuses a running
+  agent; it now says why it failed and that RET opens it. Compaction, which
+  Claude does by itself mid-turn, reported `SessionStart` and flashed
+  `ready`; `/clear` and `/resume` reported `SessionEnd`. A background agent
+  waiting for you (`agent_needs_input`) now counts as asking.
+- **Git.** An agent that moved its worktree to a branch of its own could not
+  be resumed (`s`) or given a shell (`t`); those now work, and merging names
+  both branches. Untracked files in the primary checkout blocked merges;
+  Git already refuses to overwrite one. A file whose name is not UTF-8,
+  possible on Linux, made every full listing of its host fail, so the host
+  looked unreachable.
+- **Crashes.** Killing the agent (`kill -9`) showed `failed` with exit code
+  −9 and a notification; killing the tmux server, `exited`. `s` resumed both
+  into the same conversation, the second on a new server with extended keys
+  on. Opening a remote task after an outage reconnected its terminal.
+
+Agents keep reporting through the helper that launched them, so these
+changes to status reach an agent once it is started or resumed with `s`.
+The Python tests left a dead socket file behind for every test (6,816 on
+the Mac, 313 on `claylien`); they now remove it. All 131 ERT and 89 Python
+tests pass, on macOS and on `claylien`.
+
+Not Roost's to fix: Emacs 30.2's server garbled long `emacsclient --eval`
+results containing non-ASCII text ("*ERROR*: Unknown message"). Left as
+they are: `roost-doctor` checks pushing for each project in turn, so many
+projects with slow remotes can outlast its 60-second request; approvals of
+Claude's other tools, and of Codex and Pi, still show `permission` until the
+agent moves on.
+
 ### Codex and Pi adapters
 
 Used another disposable remote `hello-service` project, an isolated registry and
