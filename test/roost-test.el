@@ -2459,6 +2459,28 @@ ssh: connect to host dev port 22: Operation timed out"
        (roost-merge-retire (roost--cache-task "dev" (roost-test--task "fedcba9876543210")))
        (should (equal actions '("merge")))))))
 
+(ert-deftest roost-rows-light-up-alone-and-keep-their-task-at-the-line-end ()
+  ;; With the newline in the highlighted text, hovering a row lit up the
+  ;; next; taking the newline out of the row lost the task there, so a
+  ;; redraw moved point from a row's end to the first task.
+  (roost-test--isolated
+   (dolist (spec '(("1111111111111111" "alpha" "1") ("2222222222222222" "beta" "2")))
+     (roost--cache-task "dev" (append `((repo . "/home/user/p") (startedAt . ,(nth 2 spec)) (name . ,(nth 1 spec)))
+                                      (roost-test--task (car spec) "ready"))))
+   (dolist (mode '(roost-dashboard-mode roost-sidebar-list-mode))
+     (with-temp-buffer
+       (funcall mode)
+       (let ((render (if (eq mode 'roost-dashboard-mode) #'roost--render-dashboard #'roost--render-sidebar)))
+         (funcall render)
+         (goto-char (point-min))
+         (search-forward "beta")
+         (end-of-line)
+         (should (eq (get-text-property (1- (point)) 'mouse-face) 'highlight))
+         (should-not (get-text-property (point) 'mouse-face))
+         (should (eq (get-text-property (point) 'keymap) roost--dashboard-row-map))
+         (funcall render)
+         (should (equal (roost--field (roost--dashboard-task) 'name) "beta")))))))
+
 (ert-deftest roost-ending-a-task-closes-its-own-terminal-first ()
   ;; Its session ends with it; the terminal would report a lost connection.
   (roost-test--isolated
