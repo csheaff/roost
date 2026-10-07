@@ -363,8 +363,17 @@ aliases `roost-list` and `roost-kill` still work.
 `make test compile` runs the ERT suite, the Python lifecycle tests against real
 Git and isolated tmux sockets (fixture agents drive the actual hook commands,
 without model calls), and a warning-free byte-compile. CI runs it on Emacs 29.1
-and 30.1. See
-[validation](docs/validation.md) for the live runs with Claude Code and Codex on
+and 30.1.
+
+Claude Code updates itself often, and Roost relies on what it reports and
+does. `make contract` scans the installed Claude Code for the hook events,
+notification types and payload fields Roost reads, and names any it has not
+seen; `make contract-live` also takes a real session (a few short Haiku turns,
+about three minutes) through each status Roost derives: a reply, a permission
+request approved and declined, Esc, a minute idle and `/clear`. Run them after
+Claude Code updates.
+
+See [validation](docs/validation.md) for the live runs with Claude Code and Codex on
 local and remote hosts, [the demo notes](docs/demo.md) for how the screenshots
 were made, and [MELPA](docs/melpa.md) for the package recipes.
 

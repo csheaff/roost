@@ -320,13 +320,17 @@ def delete_branch(repo, branch, commit):
     git(repo, "update-ref", "-d", ref, commit)
 
 
+# The Claude Code hook events Roost listens to; test/claude_contract.py
+# checks them, and the rest, against the installed Claude Code.
+CLAUDE_HOOK_EVENTS = ("SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse",
+                      "PostToolUse", "PermissionRequest", "Notification", "Stop", "StopFailure")
+
+
 def claude_hook_settings(store, task):
     script = str(Path(__file__).resolve())
     command = shlex.join([sys.executable, script, "hook", str(store.root), task["id"], task["runId"]])
-    events = ["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse",
-              "PostToolUse", "PermissionRequest", "Notification", "Stop", "StopFailure"]
     settings = {"hooks": {event: [{"hooks": [{"type": "command", "command": command}]}]
-                          for event in events}}
+                          for event in CLAUDE_HOOK_EVENTS}}
     path = store.tasks_dir / (task["id"] + ".settings")
     atomic_json(path, settings)
     return str(path)
