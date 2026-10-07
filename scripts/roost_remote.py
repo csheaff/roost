@@ -699,24 +699,30 @@ def agent_for(task):
 def spawn(store, task, resume=False):
     socket = task["socket"]
     session = task["session"]
-    if tmux(socket, "has-session", "-t", "=" + session, check=False).returncode:
-        tmux(socket, "new-session", "-d", "-s", session, "-n", "shell", "-c", task["repo"])
-    # Before the agent starts, which is when it asks.
-    enable_extended_keys(socket)
     script = str(Path(__file__).resolve())
     task["runId"] = uuid.uuid4().hex
     task.pop("shellPaneId", None)
     argv = [sys.executable, script, "run", str(store.root), task["id"], task["runId"]]
     if resume:
         argv.append("resume")
-    # The runner waits on the registry lock until its stable pane ID is saved.
-    result = tmux(socket, "new-window", "-d", "-P", "-F",
-                  "#{window_id}\t#{pane_id}\t#{window_index}", "-t", session + ":",
-                  "-n", task["name"].replace("#", "##"), "-c", task["worktree"],
-                  shlex.join(argv))
-    window, pane, index = result.stdout.strip().split("\t")
-    task.update(windowId=window, paneId=pane, windowIndex=int(index), status="starting",
-                updatedAt=now(), error=None)
+    # The runner waits on the registry lock, held here, until its stable pane
+    # ID is saved, so the agent starts only after this is done.
+    window_options = ["-P", "-F", "#{window_id}\t#{pane_id}\t#{window_index}\t#{session_name}",
+                      "-n", task["name"].replace("#", "##"), "-c", task["worktree"], shlex.join(argv)]
+    if tmux(socket, "has-session", "-t", "=" + session, check=False).returncode:
+        # The task's own session holds only its agent's window, so stopping
+        # or retiring the task, which closes that window, ends the session.
+        result = tmux(socket, "new-session", "-d", "-s", session, *window_options)
+    else:
+        # A shared session (roost-session-name), or one from before.
+        result = tmux(socket, "new-window", "-d", "-t", session + ":", *window_options)
+    # Noted at once, so a failure from here on closes the window. tmux may
+    # have changed the session's name, as it does ":" and ".".
+    window, pane, index, session = result.stdout.strip().split("\t", 3)
+    task.update(windowId=window, paneId=pane, windowIndex=int(index), session=session,
+                status="starting", updatedAt=now(), error=None)
+    # Before the agent starts, which is when it asks.
+    enable_extended_keys(socket)
     tmux(socket, "set-option", "-p", "-t", pane, "@roost_task_id", task["id"])
     tmux(socket, "set-option", "-w", "-t", window, "remain-on-exit", "on")
     tmux(socket, "set-option", "-w", "-t", window, "automatic-rename", "off")

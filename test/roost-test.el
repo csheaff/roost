@@ -2459,4 +2459,36 @@ ssh: connect to host dev port 22: Operation timed out"
        (roost-merge-retire (roost--cache-task "dev" (roost-test--task "fedcba9876543210")))
        (should (equal actions '("merge")))))))
 
+(ert-deftest roost-ending-a-task-closes-its-own-terminal-first ()
+  ;; Its session ends with it; the terminal would report a lost connection.
+  (roost-test--isolated
+   (let* ((own (roost--cache-task "dev" (append '((session . "roost-p-012345"))
+                                                (roost-test--task "0123456789abcdef" "ready"))))
+          (shared (roost--cache-task "dev" (append '((session . "roost-p-3f2a"))
+                                                   (roost-test--task "fedcba9876543210" "ready"))))
+          (terminals (mapcar (lambda (session)
+                               (with-current-buffer (generate-new-buffer " *terminal*")
+                                 (setq-local roost-test--tmux `(:host "dev" :socket "main" :session ,session))
+                                 (current-buffer)))
+                             '("roost-p-012345" "roost-p-3f2a")))
+          disconnected actions)
+     (unwind-protect
+         (roost-test--with-tmux-buffers
+          (cl-letf (((symbol-function 'tmux-control-buffer-session)
+                     (lambda () (plist-get roost-test--tmux :session)))
+                    ((symbol-function 'tmux-control-disconnect)
+                     (lambda () (push (plist-get roost-test--tmux :session) disconnected)))
+                    ((symbol-function 'roost--request)
+                     (lambda (_host action &rest _) (push (cons action disconnected) actions))))
+            (roost--act own "send")
+            (should-not disconnected)
+            (roost--act own "stop")
+            (should (equal disconnected '("roost-p-012345")))
+            ;; Disconnected before the host was asked.
+            (should (equal (car actions) '("stop" "roost-p-012345")))
+            (setq disconnected nil)
+            (roost--act shared "retire")
+            (should-not disconnected)))
+       (mapc #'kill-buffer terminals)))))
+
 (provide 'roost-test)
