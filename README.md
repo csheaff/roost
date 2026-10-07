@@ -255,7 +255,7 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
 - `roost-state-directory`: where each host keeps task records, the helper and
   worktrees; default `~/.local/share/roost`.
 - `roost-socket-name`, `roost-session-name`: tmux socket (default tmux-control's)
-  and session (default one per repository, named after it).
+  and session (default one per task, named after its project and task; set it to share one session).
 - `roost-sidebar-width` (30), `roost-task-panel-width` (44): the sidebar and
   the panel docked beside a task's terminal.
 - `roost-workspace`, `roost-compact-mode-line`: how tasks get their own windows
