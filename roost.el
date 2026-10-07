@@ -3155,14 +3155,13 @@ down.  With WIDTH, fit each line within it, leaving details to hover."
             (when repo
               (put-text-property start (point) 'roost-directory
                                  (roost--project-directory (cadr group))))
-            ;; The newline stays unhighlighted, so each row lights up alone.
             (dolist (task (cdr group))
-              (insert (propertize (roost--dashboard-row task layout width)
-                                  'roost-task (roost--key task)
-                                  'keymap roost--dashboard-row-map
-                                  'mouse-face 'highlight
-                                  'help-echo "mouse-1: open · mouse-3: actions")
-                      "\n"))))))
+              (let ((row (list 'roost-task (roost--key task) 'keymap roost--dashboard-row-map)))
+                (insert (apply #'propertize (roost--dashboard-row task layout width)
+                               'mouse-face 'highlight 'help-echo "mouse-1: open · mouse-3: actions" row)
+                        ;; Without `mouse-face', so each row lights up alone,
+                        ;; but still the task's, for point and clicks there.
+                        (apply #'propertize "\n" row))))))))
     (let ((target (or (and key (save-excursion
                                  (goto-char (point-min))
                                  ;; Keys are lists, so compare with `equal'.
@@ -3343,18 +3342,17 @@ Task commands act on the task at point, as in the dashboard.
           (when repo
             (put-text-property start (point) 'roost-directory
                                (roost--project-directory (cadr group))))
-          ;; The newline stays outside the highlighted text: adjacent rows with
-          ;; the same `mouse-face' would otherwise light up together.
           (dolist (task (cdr group))
-            (insert (propertize (roost--sidebar-row task width)
-                                'roost-task (roost--key task)
-                                'keymap roost--dashboard-row-map
-                                'mouse-face 'highlight
-                                'help-echo (format "%s\n%s · %s\nmouse-1: open · mouse-3: actions"
-                                                   (roost--field task 'name)
-                                                   (roost--host-label host)
-                                                   (or repo "?")))
-                    "\n")))))
+            (let ((row (list 'roost-task (roost--key task) 'keymap roost--dashboard-row-map)))
+              (insert (apply #'propertize (roost--sidebar-row task width)
+                             'mouse-face 'highlight
+                             'help-echo (format "%s\n%s · %s\nmouse-1: open · mouse-3: actions"
+                                                (roost--field task 'name)
+                                                (roost--host-label host)
+                                                (or repo "?"))
+                             row)
+                      ;; As in the dashboard: unhighlighted, still the task's.
+                      (apply #'propertize "\n" row)))))))
     (goto-char (or (and key (save-excursion
                               (goto-char (point-min))
                               (when-let* ((match (text-property-search-forward 'roost-task key t)))
