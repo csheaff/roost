@@ -314,6 +314,9 @@ Things to know:
   shows `ready`, read from its transcript. Claude Code's other tools, and
   Codex and Pi tasks, may keep showing `permission` until the agent moves on.
   `e` asks before sending to a task in that state.
+- Claude Code now starts in auto mode for some accounts, approving most
+  commands itself, so its tasks rarely ask. To be asked before each command,
+  add `"--permission-mode" "manual"` to `roost-claude-command`.
 - Roost turns on tmux's `extended-keys` on the server it starts agents on, so
   they can tell Shift+Return and Option+Return from Return (a new line in
   Claude's prompt rather than sending it). Programs that do not ask for
