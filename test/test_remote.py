@@ -126,6 +126,18 @@ class Lifecycle(unittest.TestCase):
         roost.update_hook(store, task["id"], dict(hook_event_name="Notification",
                                                   notification_type="worker_permission_prompt"))
         self.assertEqual(store.read(task["id"])["status"], "permission")
+        # A background agent of this session blocked on you; its words say what it needs.
+        roost.update_hook(store, task["id"], dict(hook_event_name="Stop"))
+        roost.update_hook(store, task["id"], dict(hook_event_name="Notification", notification_type="agent_needs_input",
+                                                  message="reviewer needs your input: which branch?"))
+        record = store.read(task["id"])
+        self.assertEqual((record["status"], record["request"]), ("permission", "reviewer needs your input: which branch?"))
+        # The notification that follows a request of its own keeps the request.
+        roost.update_hook(store, task["id"], dict(hook_event_name="PermissionRequest", tool_name="Bash",
+                                                  tool_input=dict(command="make")))
+        roost.update_hook(store, task["id"], dict(hook_event_name="Notification", notification_type="permission_prompt",
+                                                  message="Claude needs your permission to use Bash"))
+        self.assertEqual(store.read(task["id"])["request"], "Asks to run make")
 
     def test_launching_prunes_old_helpers_nothing_calls(self):
         first = self.create()

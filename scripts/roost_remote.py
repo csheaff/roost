@@ -462,9 +462,10 @@ class ClaudeAgent:
             # agent you have seen as waiting again, or forget why it failed.
             if kind == "idle_prompt" and current not in ("starting", "running"):
                 return None
-            # A teammate's permission prompt also waits in this terminal.
+            # A teammate's permission prompt, and a background agent of this
+            # session blocked on you, also wait in this terminal.
             status = {"permission_prompt": "permission", "worker_permission_prompt": "permission",
-                      "idle_prompt": "ready"}.get(kind)
+                      "agent_needs_input": "permission", "idle_prompt": "ready"}.get(kind)
         if not status:
             return None
         updates = dict(status=status, updatedAt=now(), lastEvent=event, error=None)
@@ -1471,13 +1472,18 @@ def permission_request(payload, worktree=None):
     -m pytest", "Asks to edit notes.py", "Asks: Which color do you prefer?".
     None when the payload names no tool, as in the notification that
     follows a request."""
+    def clip(value):
+        return " ".join(value.split())[:REQUEST_LIMIT]
+
+    # Another agent's request names no tool, but says who asks for what, as
+    # "reviewer needs permission for Bash".
+    if (payload.get("notification_type") in ("worker_permission_prompt", "agent_needs_input")
+            and isinstance(payload.get("message"), str) and payload["message"].strip()):
+        return clip(payload["message"])
     tool = payload.get("tool_name")
     if not isinstance(tool, str) or not tool:
         return None
     args = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
-
-    def clip(value):
-        return " ".join(value.split())[:REQUEST_LIMIT]
 
     def arg(*keys):
         for key in keys:
