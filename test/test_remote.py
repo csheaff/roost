@@ -1319,6 +1319,13 @@ elif args[:2] == ["auth", "status"]:
     def test_bad_base_and_missing_executable_report_errors_without_touching_repo(self):
         response = self.request("create", directory=str(self.repo), name="bad", base="missing-ref", socket=self.socket)
         self.assertEqual(response, dict(ok=False, error="No branch, tag or commit named 'missing-ref' to start from"))
+        # A prompt too long to be an argument, which Linux refuses, is refused
+        # before anything is created.
+        response = self.request("create", directory=str(self.repo), name="huge", socket=self.socket,
+                                prompt="é" * 70000)
+        self.assertEqual(response, dict(ok=False, error="The prompt is 137 KB, and an agent can start with at most "
+                                                        "120 KB; start it with less and send the rest once it runs"))
+        self.assertEqual(self.git("branch", "--list", "roost/*"), "")
         # A new repository: Git would say only "Needed a single revision".
         empty = self.root / "empty"
         empty.mkdir()

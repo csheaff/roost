@@ -730,6 +730,9 @@ def prune_helpers(store):
                 path.unlink()
 
 
+PROMPT_ARGUMENT_LIMIT = 120 * 1024
+
+
 def name_slug(name):
     """NAME in ASCII for the task's branch and directory: accents dropped,
     and each run of other characters but letters, digits and _ a single -.
@@ -781,6 +784,11 @@ def create(store, request):
     worktree.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     socket = text(request.get("socket")) or "main"
     prompt = text(request.get("prompt"))
+    # The prompt is one argument to the agent, and Linux refuses one of 128 KB.
+    if prompt and len(prompt.encode()) > PROMPT_ARGUMENT_LIMIT:
+        raise RoostError("The prompt is %d KB, and an agent can start with at most %d KB; start it with less "
+                         "and send the rest once it runs" % (-(-len(prompt.encode()) // 1024),
+                                                             PROMPT_ARGUMENT_LIMIT // 1024))
     setup = text(request.get("setup"))
     task = dict(id=task_id, name=name, task=prompt or name, repo=repo,
                 worktree=str(worktree), branch=branch, baseRef=base, baseCommit=commit,
