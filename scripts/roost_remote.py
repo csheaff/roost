@@ -871,8 +871,16 @@ def approved_command_running(task, pane, table):
     if not isinstance(command, str) or not pane or not pane.get("pid"):
         return False
     marker = ("eval '" + command.replace("'", "'\"'\"'") + "'")[:APPROVAL_MARKER_LIMIT]
-    agents = [pid for pid, (parent, _) in table.items() if parent == pane["pid"]]
-    return any(parent in agents and marker in line for parent, line in table.values())
+    agents = {pid for pid, (parent, _) in table.items() if parent == pane["pid"]}
+    for parent, line in table.values():
+        # A sandbox, such as bwrap on Linux, can stand between the two.
+        seen = set()
+        while marker in line and parent in table and parent not in seen:
+            if parent in agents:
+                return True
+            seen.add(parent)
+            parent = table[parent][0]
+    return False
 
 
 def was_interrupted(task):

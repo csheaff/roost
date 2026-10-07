@@ -236,6 +236,9 @@ class Lifecycle(unittest.TestCase):
         runner, agent = (10, (1, "python3 remote.py run")), (11, (10, "claude"))
         table = lambda *children: dict([runner, agent, *children])
         self.assertTrue(roost.approved_command_running(task, dict(pid=10), table((12, (11, shell)))))
+        # A sandbox can run it a level further down.
+        self.assertTrue(roost.approved_command_running(
+            task, dict(pid=10), table((12, (11, "bwrap --ro-bind / / bash")), (13, (12, shell)))))
         # Another command, or this one run by something else, is not it.
         self.assertFalse(roost.approved_command_running(
             task, dict(pid=10), table((12, (11, "/bin/bash -c eval 'make test' < /dev/null")))))
