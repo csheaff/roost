@@ -1319,6 +1319,54 @@ elif args[:2] == ["auth", "status"]:
         # No transcript: the request still succeeds, with no field.
         self.assertNotIn("lastMessage", self.request("list", full=True)["result"][0])
 
+    def test_the_reply_claude_reports_is_the_latest_reply(self):
+        # Claude's Stop event carries the turn's reply, so no transcript is read.
+        task = self.create()
+        self.assertTrue(self.request("send", id=task["id"], text="hello")["ok"])
+        self.wait(task, "ready", "Stop")
+        store = roost.Store(str(self.state))
+        self.assertEqual(store.read(task["id"])["lastReply"], "PROMPT hello")
+        listed = self.request("list", full=True)["result"][0]
+        self.assertEqual(listed["lastMessage"], "PROMPT hello")
+        # It stays on the host.
+        self.assertNotIn("lastReply", listed)
+        self.assertNotIn("lastReply", self.request("inspect", id=task["id"])["result"])
+        # A new turn has no reply yet: the transcript, here none, says what is newest.
+        roost.update_hook(store, task["id"], dict(hook_event_name="UserPromptSubmit"), task["runId"])
+        self.assertNotIn("lastMessage", self.request("list", full=True)["result"][0])
+        roost.update_hook(store, task["id"], dict(hook_event_name="Stop", last_assistant_message="y" * 3000),
+                          task["runId"])
+        reply = self.request("list", full=True)["result"][0]["lastMessage"]
+        self.assertEqual((reply[:2000], reply[2000:]), ("y" * 2000, "…"))
+
+    def test_claudes_transcript_is_read_where_claude_says_it_is(self):
+        task = self.create()
+        store = roost.Store(str(self.state))
+        transcript = self.root / "elsewhere" / "conversation.jsonl"
+        transcript.parent.mkdir()
+        roost.update_hook(store, task["id"], dict(hook_event_name="UserPromptSubmit", session_id="s1",
+                                                  transcript_path=str(transcript)), task["runId"])
+        record = store.read(task["id"])
+        self.assertEqual(record["transcript"], str(transcript))
+        since = roost.parse_time(record["updatedAt"])
+        transcript.write_text("\n".join(json.dumps(entry) for entry in (
+            {"type": "assistant", "timestamp": since.isoformat(),
+             "message": {"role": "assistant", "content": [{"type": "text", "text": "Working on it"}]}},
+            {"type": "user", "timestamp": (since + datetime.timedelta(seconds=1)).isoformat(),
+             "message": {"role": "user", "content": [{"type": "text", "text": "[Request interrupted by user]"}]}},
+        )) + "\n")
+        listed = self.request("list", full=True)["result"][0]
+        self.assertEqual((listed["status"], listed["lastEvent"], listed["lastMessage"]),
+                         ("ready", "Interrupt", "Working on it"))
+        self.assertNotIn("transcript", listed)
+        # /clear starts a new conversation, with no reply of its own yet.
+        roost.update_hook(store, task["id"], dict(hook_event_name="Stop", last_assistant_message="Done"), task["runId"])
+        roost.update_hook(store, task["id"], dict(hook_event_name="SessionStart", source="clear", session_id="s2",
+                                                  transcript_path=str(self.root / "s2.jsonl")), task["runId"])
+        record = store.read(task["id"])
+        self.assertEqual((record["lastReply"], record["transcript"], record["agentSession"]),
+                         (None, str(self.root / "s2.jsonl"), "s2"))
+
     def test_bad_base_and_missing_executable_report_errors_without_touching_repo(self):
         response = self.request("create", directory=str(self.repo), name="bad", base="missing-ref", socket=self.socket)
         self.assertEqual(response, dict(ok=False, error="No branch, tag or commit named 'missing-ref' to start from"))

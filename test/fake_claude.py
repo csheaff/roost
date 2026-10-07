@@ -37,5 +37,5 @@ for line in sys.stdin:
         break
     else:
         print("PROMPT " + line.rstrip(), flush=True)
-        event("Stop")
+        event("Stop", last_assistant_message="PROMPT " + line.rstrip())
 event("SessionEnd")

@@ -375,10 +375,11 @@ def last_assistant_text(entries, extract):
 
 
 def last_message(task):
-    """The agent's latest reply, shortened for display, or None. A missing or
-    malformed transcript never fails a request."""
+    """The agent's latest reply, shortened for display, or None: as the agent
+    reported it at the end of its turn, else from its transcript. A missing
+    or malformed transcript never fails a request."""
     try:
-        reply = agent_for(task).last_message(task)
+        reply = text(task.get("lastReply")) or agent_for(task).last_message(task)
     except (RoostError, OSError, ValueError, TypeError, AttributeError, KeyError):
         return None
     if not reply:
@@ -437,8 +438,11 @@ class ClaudeAgent:
     def observe(self, payload, current=None):
         """Status updates for hook PAYLOAD, given the task's CURRENT status."""
         event = payload.get("hook_event_name")
-        sessions = (dict(agentSession=payload["session_id"], claudeSession=payload["session_id"])
+        # What every event reports: the conversation, and where its transcript is.
+        reported = (dict(agentSession=payload["session_id"], claudeSession=payload["session_id"])
                     if payload.get("session_id") else {})
+        if isinstance(payload.get("transcript_path"), str) and payload["transcript_path"].endswith(".jsonl"):
+            reported["transcript"] = payload["transcript_path"]
         # /clear and /resume end one conversation and start another in the
         # same process, which goes on running.
         if event == "SessionEnd" and payload.get("reason") in ("clear", "resume"):
@@ -446,7 +450,7 @@ class ClaudeAgent:
         # Compacting the conversation, which Claude also does by itself in the
         # middle of a turn, changes nothing about whether it waits for you.
         if event == "SessionStart" and payload.get("source") == "compact":
-            return sessions or None
+            return reported or None
         status = {
             "SessionStart": "ready", "UserPromptSubmit": "running",
             "PreToolUse": "running", "PostToolUse": "running",
@@ -477,11 +481,22 @@ class ClaudeAgent:
             updates["error"] = ("Its turn ended on an API error (%s)" % code
                                 + (": " + " ".join(details.split())[:REQUEST_LIMIT]
                                    if isinstance(details, str) and details.strip() else ""))
+        # A turn's end reports its reply, so the transcript need not be read;
+        # a new turn or conversation leaves the transcript to say what is newest.
+        reply = payload.get("last_assistant_message")
+        if event in ("Stop", "StopFailure") and isinstance(reply, str) and reply.strip():
+            updates["lastReply"] = reply.strip()[:LAST_MESSAGE_LIMIT + 1]
+        elif event == "UserPromptSubmit" or (event == "SessionStart" and payload.get("source") == "clear"):
+            updates["lastReply"] = None
         # The old claudeSession field serves tasks whose original helper still runs.
-        updates.update(sessions)
+        updates.update(reported)
         return updates
 
     def transcript(self, task):
+        """Where the conversation's transcript is: as Claude reported it, or,
+        for a task whose agent has reported nothing yet, by Claude's naming."""
+        if isinstance(task.get("transcript"), str):
+            return Path(task["transcript"])
         session = task.get("agentSession") or task.get("claudeSession")
         if not session or not isinstance(task.get("worktree"), str):
             return None
@@ -1629,6 +1644,19 @@ def runner(root, task_id, run_id, resume_conversation=False):
     return code
 
 
+# Kept in task records for the helper's own use, and not sent to Emacs.
+PRIVATE = ("lastReply", "transcript")
+
+
+def outgoing(result):
+    """RESULT, a task or a list of them, without the fields only the helper uses."""
+    for task in result if isinstance(result, list) else [result]:
+        if isinstance(task, dict):
+            for field in PRIVATE:
+                task.pop(field, None)
+    return result
+
+
 TASK_ACTIONS = {
     "resume": lambda store, task, request: resume(store, task),
     "stop": lambda store, task, request: stop(store, task),
@@ -1647,7 +1675,7 @@ def rpc(request):
         store = Store(request["root"])
         action = request["action"]
         if action == "create":
-            return {"ok": True, "result": create(store, request)}
+            return {"ok": True, "result": outgoing(create(store, request))}
         if action == "doctor":
             return {"ok": True, "result": doctor(store, request)}
         if action == "issues":
@@ -1661,13 +1689,13 @@ def rpc(request):
                 pushed = push_pull_request(store, task)
                 with store.locked():
                     task = store.read(request["id"])
-                return {"ok": True, "result": dict(task, pushed=pushed)}
+                return {"ok": True, "result": outgoing(dict(task, pushed=pushed))}
             pr = pull_request(store, task, request)
             with store.locked():
                 task = store.read(request["id"])
                 task["pr"] = pr
                 store.save(task)
-            return {"ok": True, "result": task}
+            return {"ok": True, "result": outgoing(task)}
         if action in ("retire", "merge"):
             # Ask GitHub without the lock; retire then trusts only this answer.
             with store.locked():
@@ -1697,7 +1725,7 @@ def rpc(request):
                 add_git_stats([t for t in result if t["id"] in full], pull_requests=False)
         elif action in ("retire", "merge") and result.pop("remoteCleanup", None):
             delete_remote_branch(result["repo"], result["branch"])
-        return {"ok": True, "result": result}
+        return {"ok": True, "result": outgoing(result)}
     except (RoostError, OSError, ValueError) as exc:
         return {"ok": False, "error": str(exc)}
     except Exception as exc:  # The protocol boundary reports, rather than prints, bugs.
