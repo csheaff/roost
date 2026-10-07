@@ -34,6 +34,8 @@
 (declare-function tmux-control-tiled-p "tmux-control" ())
 (declare-function tmux-control-buffer-host "tmux-control" ())
 (declare-function tmux-control-buffer-socket-name "tmux-control" ())
+(declare-function tmux-control-buffer-session "tmux-control" ())
+(declare-function tmux-control-disconnect "tmux-control" ())
 (declare-function tmux-control-active-pane "tmux-control" ())
 (declare-function tmux-control-window-id "tmux-control" ())
 (declare-function magit-status "magit-status" (&optional directory cache))
@@ -1587,9 +1589,36 @@ listed with gh on the project's host."
 
 ;;;; Task commands
 
+(defun roost--release-terminal (task)
+  "Disconnect the terminal showing TASK's own tmux session.
+A task's own session holds only its agent's window, so stopping,
+resuming, retiring or forgetting the task ends the session, and its
+terminal would then report a lost connection.  Opening the task again
+connects anew.  A session shared through `roost-session-name', or by
+tasks from before Roost gave each task one, outlives the task."
+  (let ((host (roost--field task 'host))
+        (socket (roost--field task 'socket))
+        (session (roost--field task 'session))
+        (id (roost--field task 'id)))
+    (when-let* (((fboundp 'tmux-control-disconnect))
+                ((fboundp 'tmux-control-buffer-session))
+                ((stringp session))
+                ((stringp id))
+                ((string-suffix-p (concat "-" (substring id 0 (min 6 (length id)))) session))
+                (terminal (seq-find (lambda (buffer)
+                                      (with-current-buffer buffer
+                                        (and (equal (tmux-control-buffer-session) session)
+                                             (equal (tmux-control-buffer-host) host)
+                                             (equal (tmux-control-buffer-socket-name) socket))))
+                                    (buffer-list))))
+      (with-current-buffer terminal
+        (tmux-control-disconnect)))))
+
 (defun roost--act (task action &optional parameters callback failure)
   "Run ACTION on TASK with PARAMETERS, then CALLBACK with the updated task.
 FAILURE, if given, receives the error message instead of Roost reporting it."
+  (when (member action '("stop" "resume" "retire" "merge" "forget"))
+    (roost--release-terminal task))
   (let ((host (roost--field task 'host)))
     (roost--request host action (cons (cons 'id (roost--field task 'id)) parameters)
                     (lambda (updated)

@@ -621,13 +621,18 @@ class Lifecycle(unittest.TestCase):
         path = roost.tmux(self.socket, "display-message", "-p", "-t", shell, "#{pane_current_path}").stdout.strip()
         self.assertEqual(Path(path).resolve(), Path(task["worktree"]).resolve())
         self.assertEqual(self.request("shell", id=task["id"])["result"]["shellPaneId"], shell)
-        self.assertEqual(len(roost.pane_inventory(self.socket)), 3)  # repo shell, agent, task shell
+        self.assertEqual(len(roost.pane_inventory(self.socket)), 2)  # agent and task shell
         self.assertTrue(self.request("stop", id=task["id"])["ok"])
         self.assertNotIn(shell, roost.pane_inventory(self.socket))
         self.assertFalse(self.request("shell", id=task["id"])["ok"])
         self.assertTrue(self.request("resume", id=task["id"])["ok"])
         self.wait(task, "ready")
-        self.assertNotEqual(self.request("shell", id=task["id"])["result"]["shellPaneId"], shell)
+        # Stopping ended the task's session, and with it this tmux server, so
+        # pane IDs start over; the ownership tag tells the new shell apart.
+        resumed = self.request("shell", id=task["id"])["result"]
+        pane = roost.pane_inventory(self.socket)[resumed["shellPaneId"]]
+        self.assertEqual((pane["task"], pane["dead"], pane["window"]), (task["id"], False, resumed["windowId"]))
+        self.assertNotEqual(resumed["shellPaneId"], resumed["paneId"])
 
     def test_shell_survives_agent_exit_but_refuses_lost_ownership(self):
         task = self.create()
@@ -811,14 +816,39 @@ class Lifecycle(unittest.TestCase):
             list(pool.map(write_event, tasks))
         self.assertEqual(len(self.request("list")["result"]), 2)
 
-    def test_failed_spawn_leaves_no_record_worktree_or_branch(self):
+    def test_failed_spawn_leaves_no_record_worktree_branch_or_session(self):
         before = self.git("worktree", "list", "--porcelain")
-        reply = self.request("create", directory=str(self.repo), name="bad session", socket=self.socket,
-                             session="bad:name.x", command=[sys.executable, str(FAKE)])
-        self.assertFalse(reply["ok"], reply)
+        with patch.object(roost, "enable_extended_keys", side_effect=roost.RoostError("tmux refused")):
+            reply = self.request("create", directory=str(self.repo), name="bad spawn", socket=self.socket,
+                                 command=[sys.executable, str(FAKE)])
+        self.assertEqual(reply, dict(ok=False, error="tmux refused"))
         self.assertEqual(self.request("list")["result"], [])
         self.assertEqual(self.git("worktree", "list", "--porcelain"), before)
         self.assertEqual(self.git("branch", "--list", "roost/*"), "")
+        self.assertEqual(roost.pane_inventory(self.socket), {})
+
+    def test_a_task_session_ends_with_the_task(self):
+        # A session per task held a spare shell window, so each retired task
+        # left its session behind.
+        first, second = self.create(name="first"), self.create(name="second")
+        sessions = lambda: set(roost.tmux(self.socket, "list-sessions", "-F", "#{session_name}",
+                                          check=False).stdout.split())
+        self.assertEqual(sessions(), {first["session"], second["session"]})
+        windows = roost.tmux(self.socket, "list-windows", "-t", "=" + first["session"], "-F", "#{window_id}")
+        self.assertEqual(windows.stdout.split(), [first["windowId"]])
+        self.assertTrue(self.request("retire", id=first["id"])["ok"])
+        self.assertEqual(sessions(), {second["session"]})
+        self.assertTrue(self.request("stop", id=second["id"])["ok"])
+        self.assertEqual(sessions(), set())
+        # Resuming starts its session again, under the same name.
+        self.assertTrue(self.request("resume", id=second["id"])["ok"])
+        self.assertEqual(self.wait(second, "ready")["session"], second["session"])
+        self.assertEqual(sessions(), {second["session"]})
+
+    def test_a_session_name_tmux_changes_is_recorded_as_tmux_named_it(self):
+        task = self.create(name="odd session", session="odd:name.x")
+        self.assertEqual(task["session"], "odd_name_x")
+        self.assertEqual(roost.pane_inventory(self.socket)[task["paneId"]]["session_name"], "odd_name_x")
 
     def test_detached_primary_task_retires_when_empty_and_forgets_when_not(self):
         self.git("checkout", "-q", "--detach")
