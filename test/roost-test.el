@@ -2529,7 +2529,7 @@ ssh: connect to host dev port 22: Operation timed out"
                   (with-current-buffer (generate-new-buffer " *terminal*")
                     (setq-local roost-test--tmux '(:host "dev" :socket "main" :session "roost-p-012345"))
                     (current-buffer))))
-          (answer nil) reconnected refusal)
+          (answer nil) window-gone reconnected refusal)
      (roost-test--with-tmux-buffers
       (cl-letf (((symbol-function 'tmux-control-buffer-session)
                  (lambda () (plist-get roost-test--tmux :session)))
@@ -2537,8 +2537,10 @@ ssh: connect to host dev port 22: Operation timed out"
                 ((symbol-function 'tmux-control-reconnect)
                  (lambda () (push (current-buffer) reconnected)))
                 ((symbol-function 'roost--request)
-                 (lambda (_host _action _parameters success failure)
-                   (if (stringp answer) (funcall failure answer) (funcall success task)))))
+                 (lambda (_host action _parameters success failure)
+                   (if (and (stringp answer) (or (not (equal action "inspect")) window-gone))
+                       (funcall failure answer)
+                     (funcall success task)))))
         (let ((terminal (funcall make)))
           (save-window-excursion
             (set-window-buffer (selected-window) terminal)
@@ -2552,7 +2554,11 @@ ssh: connect to host dev port 22: Operation timed out"
                 (roost--act task "retire" nil nil (lambda (err) (setq refusal err)))
                 (should (equal refusal "Task branch is not merged"))
                 (should (equal reconnected (list terminal)))
-                (should (buffer-live-p terminal)))
+                (should (buffer-live-p terminal))
+                ;; Reconnecting to an ended session would start an empty one.
+                (setq window-gone t reconnected nil)
+                (roost--act task "retire" nil nil #'ignore)
+                (should-not reconnected))
             (kill-buffer terminal))))))))
 
 (ert-deftest roost-the-sidebar-highlights-the-row-its-keys-act-on ()

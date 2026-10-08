@@ -1647,14 +1647,20 @@ outlives the task."
         (tmux-control-disconnect))
       terminals)))
 
-(defun roost--restore-terminal (terminals)
-  "Reconnect TERMINALS, released for an action the host then refused.
-Only where one is still shown; opening the task reconnects the rest."
-  (when-let* (((fboundp 'tmux-control-reconnect))
-              (window (seq-find (lambda (window) (memq (window-buffer window) terminals))
-                                (window-list-1 nil 'nomini t))))
-    (with-selected-window window
-      (tmux-control-reconnect))))
+(defun roost--restore-terminal (task terminals)
+  "Reconnect TERMINALS, released for an action on TASK the host refused.
+Only where one is still shown, and once the host confirms that TASK's
+window is still there: reconnecting to an ended session would start an
+empty one.  Opening the task reconnects the rest."
+  (when (and terminals (fboundp 'tmux-control-reconnect))
+    (roost--request (roost--field task 'host) "inspect" (list (cons 'id (roost--field task 'id)))
+                    (lambda (_)
+                      (when-let* ((window (seq-find (lambda (window)
+                                                      (memq (window-buffer window) terminals))
+                                                    (window-list-1 nil 'nomini t))))
+                        (with-selected-window window
+                          (tmux-control-reconnect))))
+                    #'ignore)))
 
 (defun roost--discard-terminal (terminals)
   "Kill TERMINALS, whose session ended, rather than leave them blank."
@@ -1686,7 +1692,7 @@ FAILURE, if given, receives the error message instead of Roost reporting it."
                     (lambda (err)
                       ;; Refused, as retiring unmerged work is: the agent runs on.
                       (when (roost--field task 'live)
-                        (roost--restore-terminal terminals))
+                        (roost--restore-terminal task terminals))
                       (if failure
                           (funcall failure err)
                         (message "Roost %s: %s" (roost--host-label host) err))))))
