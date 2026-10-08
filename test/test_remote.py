@@ -378,6 +378,46 @@ class Lifecycle(unittest.TestCase):
         self.git("worktree", "remove", "--force", str(wt))
         self.assertTrue(self.request("retire", id=task["id"])["ok"])
 
+    def test_merge_into_a_branch_the_primary_checkout_has_not_checked_out(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        (wt / "hello").write_text("changed\n")
+        self.git("commit", "-qam", "fix", cwd=wt)
+        # You are working on something else, with changes of your own.
+        self.git("checkout", "-q", "-b", "mine")
+        (self.repo / "hello").write_text("my own edit\n")
+        reply = self.request("merge", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(self.git("show", "main:hello"), "changed")
+        self.assertEqual(self.git("log", "-1", "--format=%P", "main").count(" "), 1)
+        self.assertEqual(self.git("symbolic-ref", "--short", "HEAD"), "mine")
+        self.assertEqual((self.repo / "hello").read_text(), "my own edit\n")
+        self.assertFalse(wt.exists())
+
+    def test_a_conflicting_merge_without_checkout_changes_nothing(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        (wt / "hello").write_text("task\n")
+        self.git("commit", "-qam", "task", cwd=wt)
+        (self.repo / "hello").write_text("main\n")
+        self.git("commit", "-qam", "main")
+        before = self.git("rev-parse", "main")
+        self.git("checkout", "-q", "-b", "mine")
+        error = self.request("merge", id=task["id"])["error"]
+        self.assertIn("conflicts with main in hello", error)
+        self.assertEqual(self.git("rev-parse", "main"), before)
+        self.assertTrue(wt.exists())
+
+    def test_merge_refuses_a_branch_checked_out_in_another_worktree(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        (wt / "hello").write_text("changed\n")
+        self.git("commit", "-qam", "fix", cwd=wt)
+        self.git("checkout", "-q", "-b", "mine")
+        other = self.root / "other"
+        self.git("worktree", "add", "-q", str(other), "main")
+        self.assertIn("is checked out in", self.request("merge", id=task["id"])["error"])
+
     def test_only_tracked_changes_in_the_primary_checkout_block_a_merge(self):
         task = self.create()
         wt = Path(task["worktree"])

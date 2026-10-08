@@ -1214,15 +1214,66 @@ def require_removable(worktree):
                          % (" (" + ", ".join(populated) + ")" if populated else "", shlex.quote(str(worktree))))
 
 
+MERGE_TREE_GIT = (2, 38)  # `git merge-tree --write-tree`
+
+
 def integration_branch(task):
+    """The task's integration branch, and whether the primary checkout has it
+    checked out. Otherwise Git merges into it without a working tree, which
+    needs Git 2.38, as long as no other worktree has it checked out."""
     branch = task.get("integrationBranch")
+    repo = task["repo"]
     if not branch:
         raise RoostError("The task has no integration branch (it was created from a detached HEAD); merge it manually, then retire")
-    if git(task["repo"], "symbolic-ref", "--short", "HEAD", check=False).stdout.strip() != branch:
-        raise RoostError("Check out %s in the primary repository %s before merging" % (branch, task["repo"]))
-    if git(task["repo"], "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0:
-        raise RoostError("The primary repository already has a merge in progress")
-    return branch
+    if git(repo, "symbolic-ref", "--short", "HEAD", check=False).stdout.strip() == branch:
+        if git(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0:
+            raise RoostError("The primary repository already has a merge in progress")
+        return branch, True
+    if not ref_exists(repo, branch):
+        raise RoostError("The integration branch %s no longer exists" % branch)
+    elsewhere = [path for path, ref in worktree_branches(repo) if ref == "refs/heads/" + branch]
+    if elsewhere:
+        raise RoostError("%s is checked out in %s; check it out in the primary repository %s to merge there"
+                         % (branch, elsewhere[0], repo))
+    if (version_of(git(repo, "--version").stdout) or (0, 0)) < MERGE_TREE_GIT:
+        raise RoostError("Check out %s in the primary repository %s before merging "
+                         "(Git 2.38 merges without it)" % (branch, repo))
+    return branch, False
+
+
+def worktree_branches(repo):
+    """(path, branch ref or None) for each worktree of REPO."""
+    pairs = []
+    for block in git(repo, "worktree", "list", "--porcelain").stdout.split("\n\n"):
+        lines = block.splitlines()
+        if lines and lines[0].startswith("worktree "):
+            ref = next((line[len("branch "):] for line in lines if line.startswith("branch ")), None)
+            pairs.append((lines[0][len("worktree "):], ref))
+    return pairs
+
+
+def merge_without_checkout(task, integration):
+    """Merge the task's branch into INTEGRATION, which no worktree has
+    checked out, as `git merge --no-ff` would, without a working tree: the
+    branch moves only if it is still where it was, and a conflict changes
+    nothing."""
+    repo = task["repo"]
+    ref = "refs/heads/" + integration
+    old = git(repo, "rev-parse", ref + "^{commit}").stdout.strip()
+    tip = git(repo, "rev-parse", "refs/heads/" + task["branch"] + "^{commit}").stdout.strip()
+    if git(repo, "merge-base", "--is-ancestor", tip, old, check=False).returncode == 0:
+        return  # Already there.
+    result = git(repo, "merge-tree", "--write-tree", "--name-only", "--no-messages", old, tip, check=False)
+    lines = result.stdout.splitlines()
+    if result.returncode == 1:
+        conflicts = [line for line in lines[1:] if line]
+        raise RoostError("%s conflicts with %s in %s. Nothing was changed; update the task from %s, then merge again"
+                         % (task["name"], integration, ", ".join(conflicts) or "some files", integration))
+    if result.returncode or not lines:
+        raise RoostError("Merge failed; task retained: " + (result.stderr.strip() or result.stdout.strip()))
+    commit = git(repo, "commit-tree", lines[0], "-p", old, "-p", tip,
+                 "-m", "Merge branch '%s' into %s" % (task["branch"], integration)).stdout.strip()
+    git(repo, "update-ref", "-m", "merge %s: Merge made by Roost" % task["branch"], ref, commit, old)
 
 
 def merged_pull_request_head(task):
@@ -1280,14 +1331,18 @@ def retire(store, task, merge=False, merged_head=None):
     if merge:
         if not branch_exists:
             raise RoostError("The task branch no longer exists; there is nothing to merge")
-        integration_branch(task)
+        integration, here = integration_branch(task)
         # Untracked files there are yours and stay: Git refuses a merge that
         # would overwrite one, and aborting a merge leaves them alone.
-        if git(repo, "status", "--porcelain", "--untracked-files=no").stdout.strip():
+        if here and git(repo, "status", "--porcelain", "--untracked-files=no").stdout.strip():
             raise RoostError("The primary checkout %s has uncommitted changes; commit or stash them before merging"
                              % repo)
-        result = git(repo, "merge", "--no-ff", "--no-edit", branch, check=False)
-        if result.returncode:
+        if not here:
+            merge_without_checkout(task, integration)
+            result = None
+        else:
+            result = git(repo, "merge", "--no-ff", "--no-edit", branch, check=False)
+        if result is not None and result.returncode:
             conflicts = conflicted_files(repo)
             if git(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0:
                 git(repo, "merge", "--abort")

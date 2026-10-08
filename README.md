@@ -312,9 +312,10 @@ never changes your global agent settings or answers prompts.
 A task's identity is its host and ID. A per-pane ownership tag keeps Roost from
 steering or killing an unrelated pane after a tmux restart, and hooks from an
 earlier run cannot overwrite a resumed one. Merging needs the task's worktree
-clean, and the primary checkout on the task's integration branch with nothing
-uncommitted; untracked files there stay. A conflicting merge is aborted and
-leaves nothing changed. Branches are deleted only if they still point at the
+clean. With the primary checkout on the task's integration branch, the merge
+happens there and needs nothing uncommitted (untracked files stay); with it on
+another branch, Git merges into the integration branch without touching your
+checkout (Git 2.38 or newer). A conflicting merge leaves nothing changed. Branches are deleted only if they still point at the
 commit Roost verified. Git will not remove a worktree with submodules checked
 out, since they may hold the only copy of commits made in them, so Roost
 refuses to retire one; once those commits are safe, remove it with
