@@ -1038,6 +1038,7 @@ from the buffer holding its connection, so that is where this is set."
                                   (not (tmux-control-tiled-p))
                                   (equal (tmux-control-buffer-host) (roost--field task 'host))
                                   (equal (tmux-control-buffer-socket-name) (roost--field task 'socket))
+                                  (equal (tmux-control-buffer-session) (roost--field task 'session))
                                   (equal (tmux-control-window-id) (roost--field task 'windowId)))))
                          (window-list))))
     (select-window window))

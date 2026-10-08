@@ -1263,7 +1263,7 @@
        (unwind-protect
            (progn
              (with-current-buffer terminal
-               (setq-local roost-test--tmux '(:socket "main" :window "@9" :pane "%12")))
+               (setq-local roost-test--tmux '(:socket "main" :session "roost-123456" :window "@9" :pane "%12")))
              (set-window-buffer origin code) (set-window-buffer other terminal)
              (dlet ((features (cons 'tmux-control features)))
                (roost-test--with-tmux-buffers
