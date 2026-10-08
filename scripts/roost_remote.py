@@ -816,7 +816,9 @@ def create(store, request):
     task = dict(id=task_id, name=name, task=prompt or name, repo=repo,
                 worktree=str(worktree), branch=branch, baseRef=base, baseCommit=commit,
                 integrationBranch=integration, socket=socket,
-                session=text(request.get("session")) or session_name(repo, task_id),
+                # tmux before 3.7 turned ":" and "." in a session's name into
+                # "_"; 3.7 keeps them, and then cannot find the session by name.
+                session=re.sub(r"[:.]", "_", text(request.get("session")) or "") or session_name(repo, task_id),
                 sessionShared=bool(text(request.get("session"))),
                 agent=agent_name, command=command, setup=setup, prompt=prompt,
                 status="starting", startedAt=now(), updatedAt=now(), claudeSession=None)

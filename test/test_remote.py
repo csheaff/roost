@@ -885,10 +885,14 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(self.wait(second, "ready")["session"], second["session"])
         self.assertEqual(sessions(), {second["session"]})
 
-    def test_a_session_name_tmux_changes_is_recorded_as_tmux_named_it(self):
+    def test_a_session_name_with_tmux_separators_is_one_tmux_can_find(self):
+        # tmux 3.7 keeps ":" and "." in a session's name, which earlier
+        # versions changed to "_", and then cannot find it by name.
         task = self.create(name="odd session", session="odd:name.x")
         self.assertEqual(task["session"], "odd_name_x")
         self.assertEqual(roost.pane_inventory(self.socket)[task["paneId"]]["session_name"], "odd_name_x")
+        other = self.create(name="other", session="odd:name.x")
+        self.assertEqual(roost.pane_inventory(self.socket)[other["paneId"]]["session_name"], "odd_name_x")
 
     def test_detached_primary_task_retires_when_empty_and_forgets_when_not(self):
         self.git("checkout", "-q", "--detach")
