@@ -1089,11 +1089,43 @@
 
 (ert-deftest roost-task-panel-flows-actions-in-a-narrow-window ()
   (with-temp-buffer
-    (roost--insert-narrow-actions 40)
+    (roost--insert-narrow-actions 40 roost--task-actions)
     (let ((lines (split-string (buffer-string) "\n" t)))
       (should (seq-every-p (lambda (line) (<= (string-width line) 40)) lines))
       (should (string-match-p "RET Agent · t Shell" (buffer-string)))
       (should (string-match-p "m Merge and retire" (buffer-string))))))
+
+(ert-deftest roost-a-task-offers-what-it-can-do-now ()
+  ;; A stopped task's panel offered Stop, Shell and Send, which its host refuses.
+  (roost-test--isolated
+   (let* ((applies (lambda (task) (mapcar #'cadr (seq-mapcat #'cdr (roost--applicable-actions task)))))
+          (stopped (roost--cache-task "dev" (append '((live)) (roost-test--task nil "stopped"))))
+          (working (roost--cache-task "dev" (append '((live . t) (ahead . 0) (dirty))
+                                                    (roost-test--task "1111111111111111" "running"))))
+          (finished (roost--cache-task "dev" (append '((live . t) (ahead . 2))
+                                                     (roost-test--task "2222222222222222" "ready"))))
+          (merged (roost--cache-task "dev" (append '((live . t) (ahead . 2) (prStatus (state . "MERGED")))
+                                                   (roost-test--task "3333333333333333" "ready")))))
+     (should (equal (funcall applies stopped) '("RET" "f" "r" "D" "u" "P" "m" "x" "X" "s")))
+     (should (string-match-p "resumes its conversation" (roost--next-step stopped)))
+     ;; At work: nothing to merge or retire, and no resuming it.
+     (should (equal (funcall applies working) '("RET" "t" "f" "e" "r" "D" "u" "X" "K")))
+     (should-not (roost--next-step working))
+     ;; Finished with commits: merge it, not retire it.
+     (should (member "m" (funcall applies finished)))
+     (should-not (member "x" (funcall applies finished)))
+     (should (string-match-p "merges it" (roost--next-step finished)))
+     ;; Merged on GitHub: retire it.
+     (should (member "x" (funcall applies merged)))
+     (should-not (member "m" (funcall applies merged)))
+     (should (string-match-p "retires it" (roost--next-step merged)))
+     ;; The menu greys out the same.
+     (let ((transient--original-buffer (current-buffer)))
+       (cl-letf (((symbol-function 'roost--task-at-point) (lambda () stopped)))
+         (should (let ((transient--pending-suffix (transient-suffix :command 'roost-stop)))
+                   (roost--dispatch-inapt-p)))
+         (should-not (let ((transient--pending-suffix (transient-suffix :command 'roost-resume)))
+                       (roost--dispatch-inapt-p))))))))
 
 (ert-deftest roost-sidebar-opens-in-a-live-window-when-the-main-area-is-split ()
   (roost-test--isolated

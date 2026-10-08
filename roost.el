@@ -2624,17 +2624,78 @@ keeps one process-wide registration per mode; a nil STATE removes it."
 
 (defvar transient--original-buffer)
 
-(defun roost--dispatch-task-description ()
-  "Heading for `roost-dispatch' naming the task its commands act on.
-Transient formats headings in a temporary buffer; the task comes from
+(defvar transient--pending-suffix)
+
+(defun roost--dispatch-task ()
+  "The task `roost-dispatch' acts on, or nil when it will ask.
+Transient formats the menu in a temporary buffer; the task comes from
 the buffer the menu was opened from."
-  (if-let* ((task (with-current-buffer (if (buffer-live-p transient--original-buffer)
-                                           transient--original-buffer
-                                         (current-buffer))
-                    (ignore-errors (roost--task-at-point)))))
+  (with-current-buffer (if (buffer-live-p transient--original-buffer)
+                           transient--original-buffer
+                         (current-buffer))
+    (ignore-errors (roost--task-at-point))))
+
+(defun roost--dispatch-task-description ()
+  "Heading for `roost-dispatch' naming the task its commands act on."
+  (if-let* ((task (roost--dispatch-task)))
       (format "Task %s (%s)" (propertize (roost--field task 'name) 'face 'roost-title)
               (roost--display-status task))
     "Task (chosen when needed)"))
+
+(defun roost--dispatch-inapt-p ()
+  "Whether the menu entry being drawn does not apply to the menu's task."
+  (when-let* (((bound-and-true-p transient--pending-suffix))
+              (command (ignore-errors (oref transient--pending-suffix command)))
+              (task (roost--dispatch-task)))
+    (not (roost--action-applies-p task command))))
+
+(defun roost--agent-running-p (task)
+  "Whether TASK's agent is running, as last seen."
+  (if (assq 'live task)
+      (roost--field task 'live)
+    (not (member (roost--field task 'status) '("stopped" "crashed" "exited")))))
+
+(defun roost--action-applies-p (task command)
+  "Whether COMMAND makes sense for TASK as last seen.
+Its host would refuse the rest, or there is nothing for them to do.
+Unknown Git statistics count as making sense."
+  (let ((worktree (not (roost--field task 'worktreeMissing)))
+        (ahead (roost--field task 'ahead))
+        (merged (equal (alist-get 'state (roost--field task 'prStatus)) "MERGED"))
+        ;; The host retires and merges only a task whose agent is not at work.
+        (active (member (roost--field task 'status) '("starting" "running" "permission" "background"))))
+    (pcase command
+      ('roost-shell (and worktree (not (member (roost--field task 'status) '("stopped" "crashed")))))
+      ((or 'roost-files 'roost-review 'roost-diff 'roost-update) worktree)
+      ((or 'roost-send 'roost-stop) (roost--agent-running-p task))
+      ('roost-resume (and worktree (not (roost--agent-running-p task))))
+      ('roost-pr (and worktree (or (roost--field task 'pr) (not (eql ahead 0)))))
+      ('roost-merge-retire (and (not merged) (not (eql ahead 0)) (not active)))
+      ('roost-retire (and (not active) (not (roost--field task 'dirty))
+                          (or merged (not (and (numberp ahead) (> ahead 0))))))
+      (_ t))))
+
+(defun roost--next-step (task)
+  "What to do next with TASK, as a line naming its key, or nil."
+  (let ((key (lambda (key) (propertize key 'face 'roost-key)))
+        (status (roost--attention-status task))
+        (pr (roost--field task 'prStatus)))
+    (cond
+     ((equal status "permission")
+      (concat "Answer it in its terminal: " (funcall key "RET")))
+     ((equal status "prompt")
+      (concat "It may be waiting at a startup prompt: " (funcall key "RET")))
+     ((not (roost--agent-running-p task))
+      (concat (funcall key "RET") " or " (funcall key "s") " resumes its conversation"))
+     ((member status '("running" "background" "starting")) nil)
+     ((roost--field task 'dirty)
+      (concat "Review and commit its changes in Magit: " (funcall key "r")))
+     ((equal (alist-get 'state pr) "MERGED")
+      (concat "Its pull request is merged; " (funcall key "x") " retires it"))
+     ((equal (alist-get 'state pr) "OPEN")
+      (concat (funcall key "P") " pushes new commits to its pull request"))
+     ((and (numberp (roost--field task 'ahead)) (> (roost--field task 'ahead) 0))
+      (concat (funcall key "m") " merges it, or " (funcall key "P") " opens a pull request")))))
 
 ;;;###autoload (autoload 'roost-dispatch "roost" nil t)
 (transient-define-prefix roost-dispatch ()
@@ -2643,23 +2704,23 @@ Task commands act on the task at point, in the dashboard, a task panel,
 terminal or worktree, or ask which task."
   [:description roost--dispatch-task-description
    ["Work"
-    ("RET" "Agent" roost-open-task)
-    ("t" "Shell" roost-shell)
-    ("f" "Files" roost-files)
-    ("e" "Send prompt" roost-send)
-    ("i" "Details" roost-task-info)]
+    ("RET" "Agent" roost-open-task :inapt-if roost--dispatch-inapt-p)
+    ("t" "Shell" roost-shell :inapt-if roost--dispatch-inapt-p)
+    ("f" "Files" roost-files :inapt-if roost--dispatch-inapt-p)
+    ("e" "Send prompt" roost-send :inapt-if roost--dispatch-inapt-p)
+    ("i" "Details" roost-task-info :inapt-if roost--dispatch-inapt-p)]
    ["Review"
-    ("r" "Magit" roost-review)
-    ("D" "Diff" roost-diff)
-    ("u" "Update from integration" roost-update)]
+    ("r" "Magit" roost-review :inapt-if roost--dispatch-inapt-p)
+    ("D" "Diff" roost-diff :inapt-if roost--dispatch-inapt-p)
+    ("u" "Update from integration" roost-update :inapt-if roost--dispatch-inapt-p)]
    ["Finish"
-    ("P" "Pull request" roost-pr)
-    ("m" "Merge and retire" roost-merge-retire)
-    ("x" "Retire" roost-retire)
-    ("X" "Forget" roost-forget)]
+    ("P" "Pull request" roost-pr :inapt-if roost--dispatch-inapt-p)
+    ("m" "Merge and retire" roost-merge-retire :inapt-if roost--dispatch-inapt-p)
+    ("x" "Retire" roost-retire :inapt-if roost--dispatch-inapt-p)
+    ("X" "Forget" roost-forget :inapt-if roost--dispatch-inapt-p)]
    ["Session"
-    ("K" "Stop" roost-stop)
-    ("s" "Resume" roost-resume)]]
+    ("K" "Stop" roost-stop :inapt-if roost--dispatch-inapt-p)
+    ("s" "Resume" roost-resume :inapt-if roost--dispatch-inapt-p)]]
   ["Roost"
    [("c" "New task" roost-new-task)
     ("n" "Next waiting" roost-next-waiting)
@@ -2734,10 +2795,19 @@ Status is the last observation from the task's host.
                       'action (lambda (button)
                                 (call-interactively (button-get button 'roost-command)))))
 
-(defun roost--insert-narrow-actions (width)
-  "Insert the task actions as KEY LABEL items flowing within WIDTH columns.
+(defun roost--applicable-actions (task)
+  "`roost--task-actions' that make sense for TASK, in their groups."
+  (delq nil (mapcar (lambda (group)
+                      (when-let* ((actions (seq-filter (lambda (action)
+                                                         (roost--action-applies-p task (nth 2 action)))
+                                                       (cdr group))))
+                        (cons (car group) actions)))
+                    roost--task-actions)))
+
+(defun roost--insert-narrow-actions (width groups)
+  "Insert GROUPS of task actions as KEY LABEL items flowing within WIDTH columns.
 For a panel in a narrow window, such as beside a task's terminal."
-  (dolist (group roost--task-actions)
+  (dolist (group groups)
     (insert "  ")
     (let ((first t))
       (dolist (action (cdr group))
@@ -2955,10 +3025,13 @@ Windows showing the panel keep their scroll position."
                 (insert "\n")
                 (put-text-property start (point) 'line-prefix "  ")))))
         (roost--insert-heading "Actions")
-        (let ((width (roost--task-info-width)))
+        (when-let* ((next (roost--next-step task)))
+          (roost--insert-indented next))
+        (let ((width (roost--task-info-width))
+              (groups (roost--applicable-actions task)))
           (if (< width 72)
-              (roost--insert-narrow-actions width)
-            (dolist (group roost--task-actions)
+              (roost--insert-narrow-actions width groups)
+            (dolist (group groups)
               (insert "  " (propertize (format "%-9s" (car group)) 'face 'roost-dim))
               (dolist (action (cdr group))
                 (roost--insert-action-button action)
