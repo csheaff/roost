@@ -2570,4 +2570,36 @@ ssh: connect to host dev port 22: Operation timed out"
        (should-not asked)
        (should (equal (car messages) "Roost dev: ssh: connect to host dev port 22: Operation timed out"))))))
 
+(ert-deftest roost-task-sessions-stay-out-of-tmux-controls-activity-corner ()
+  ;; The corner named every other task whose agent printed anything, and
+  ;; clicking it showed that terminal without switching task.
+  (roost-test--isolated
+   (let* ((task (roost--cache-task "dev" (append '((session . "roost-p-012345"))
+                                                 (roost-test--task "0123456789abcdef" "ready"))))
+          (buffers
+           (mapcar (lambda (spec)
+                     (with-current-buffer (generate-new-buffer " *terminal*")
+                       (setq-local roost-test--tmux (car spec))
+                       (when (cdr spec)
+                         (make-process :name "roost-test-connection" :buffer (current-buffer)
+                                       :command '("sleep" "30") :noquery t))
+                       (current-buffer)))
+                   ;; The task's connection, a window buffer of it, another session.
+                   '(((:host "dev" :socket "main" :session "roost-p-012345") . t)
+                     ((:host "dev" :socket "main" :session "roost-p-012345"))
+                     ((:host "dev" :socket "main" :session "notes") . t)))))
+     (unwind-protect
+         (roost-test--with-tmux-buffers
+          (cl-letf (((symbol-function 'tmux-control-buffer-session)
+                     (lambda () (plist-get roost-test--tmux :session))))
+            (roost--quiet-session-activity task)
+            (should (equal (mapcar (lambda (buffer)
+                                     (local-variable-p 'tmux-control-session-activity buffer))
+                                   buffers)
+                           '(t nil nil)))
+            (should-not (buffer-local-value 'tmux-control-session-activity (car buffers)))))
+       (dolist (buffer buffers)
+         (when (get-buffer-process buffer) (delete-process (get-buffer-process buffer)))
+         (kill-buffer buffer))))))
+
 (provide 'roost-test)

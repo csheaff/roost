@@ -58,6 +58,7 @@
 (defvar tmux-control-default-socket-name)
 (defvar tmux-control-remote-tmux-socket-setup)
 (defvar tmux-control-ssh-options)
+(defvar tmux-control-session-activity)
 (defvar persp-autokill-buffer-on-remove)
 (defvar persp-mode)
 (defvar persp-modestring-short)
@@ -998,6 +999,22 @@ Only while Emacs has focus, since otherwise nobody is looking."
 
 ;;;; Opening tasks
 
+(defun roost--quiet-session-activity (task)
+  "Keep TASK's tmux session out of tmux-control's activity corner.
+The corner names other sessions that printed anything, an agent at work
+included; Roost already says when an agent needs you, and its commands
+switch to the task, not only its terminal.  tmux-control flags a session
+from the buffer holding its connection, so that is where this is set."
+  (dolist (buffer (buffer-list))
+    (when (and (get-buffer-process buffer)
+               (fboundp 'tmux-control-buffer-session)
+               (with-current-buffer buffer
+                 (and (equal (tmux-control-buffer-session) (roost--field task 'session))
+                      (equal (tmux-control-buffer-host) (roost--field task 'host))
+                      (equal (tmux-control-buffer-socket-name) (roost--field task 'socket)))))
+      (with-current-buffer buffer
+        (setq-local tmux-control-session-activity nil)))))
+
 (defun roost--display-task (task &optional target-pane)
   "Display TASK after ownership validation, selecting TARGET-PANE if supplied."
   (require 'tmux-control)
@@ -1020,6 +1037,7 @@ Only while Emacs has focus, since otherwise nobody is looking."
     (select-window window))
   (tmux-control-connect-or-switch (roost--field task 'host) (roost--field task 'socket)
                                   (roost--field task 'session))
+  (roost--quiet-session-activity task)
   ;; Explicit window hop also works before the pane map arrives on connect.
   (let ((window (roost--field task 'windowId))
         (pane (or target-pane (roost--field task 'paneId))))

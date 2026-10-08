@@ -314,6 +314,11 @@ Things to know:
   shows `ready`, read from its transcript. Claude Code's other tools, and
   Codex and Pi tasks, may keep showing `permission` until the agent moves on.
   `e` asks before sending to a task in that state.
+- Roost's task sessions stay out of the corner where tmux-control names other
+  sessions with new output, and its terminals don't show that corner: it
+  lights up whenever an agent prints anything, and only shows its terminal.
+  Roost tells you when an agent needs you, and `n` or a click on `Roost:N`
+  switches to the task.
 - Claude Code now starts in auto mode for some accounts, approving most
   commands itself, so its tasks rarely ask. To be asked before each command,
   add `"--permission-mode" "manual"` to `roost-claude-command`.
