@@ -356,6 +356,29 @@ Things to know:
 
 ## Upgrading
 
+Since 0.8.1 (unreleased):
+
+- The sidebar (`b`) and the task panel beside each terminal. The panel lists
+  only what a task can do now and says what comes next; the command menu
+  greys out the rest.
+- Each task has a tmux session of its own, which ends with the task. Older
+  tasks move to their own when resumed. `roost-session-name` is gone.
+- `X` keeps or discards a task's worktree and branch (`roost-discard`), and
+  `m` merges while your checkout is on another branch (Git 2.38+).
+- Failed, crashed and exited agents count as waiting until you've seen them,
+  and what you've seen is kept on the task's host, for your other machines and
+  the next session.
+- Keys follow Magit's: `h` and `?` open the menu, `i` a task's details (`?`
+  before); `l` switches task. Roost polls every 15 s while Emacs isn't in
+  front (`roost-watch-unfocused-interval`).
+- `M-x roost-forget-host`; setup commands get the primary checkout in
+  `$ROOST_REPO`; a notification click opens its task (terminal-notifier).
+- Claude Code worktrees an agent makes for itself show in its task's panel.
+- `roost-claude-command` moved into `roost-agent-commands`, and
+  `roost-use-perspectives` into `roost-workspace`; both still work.
+- Agents keep using the helper they were started with: `s` gives a running
+  task the new behaviour.
+
 0.8 adds GitHub issues as a starting point (`C-c C-t` in the draft), the
 command menu (`h`, or `roost-dispatch` from anywhere), the mode-line count of
 waiting agents, links between Org entries and their tasks, and one shared SSH
