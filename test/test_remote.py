@@ -580,6 +580,26 @@ class Lifecycle(unittest.TestCase):
         self.request("resume", id=task["id"])
         self.assertEqual(self.wait(task, "ready")["session"], "renamed")
 
+    def test_a_task_from_a_repository_wide_session_resumes_in_its_own(self):
+        # Before each task had a session of its own, a project's tasks shared
+        # one named by the repository's hash, beside a shell window.
+        repo_hash = hashlib.sha256(str(self.repo.resolve()).encode()).hexdigest()[:10]
+        shared = "roost-" + repo_hash
+        roost.tmux(self.socket, "new-session", "-d", "-s", shared, "-n", "shell")
+        task = self.create(session=shared)
+        store = roost.Store(str(self.state))
+        record = store.read(task["id"])
+        record.pop("sessionShared", None)  # Its record, written then, has no such field.
+        store.save(record)
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        self.assertTrue(self.request("resume", id=task["id"])["ok"])
+        resumed = self.wait(task, "ready")
+        self.assertEqual(resumed["session"], roost.session_name(record["repo"], task["id"]))
+        self.assertEqual(roost.pane_inventory(self.socket)[resumed["paneId"]]["session_name"], resumed["session"])
+        # The old session stays, with whatever else it holds.
+        sessions = roost.tmux(self.socket, "list-sessions", "-F", "#{session_name}").stdout.split()
+        self.assertEqual(sorted(sessions), sorted([shared, resumed["session"]]))
+
     def test_new_tasks_default_to_primary_branch_and_explicit_head_forks(self):
         first = self.create()
         wt = Path(first["worktree"])
