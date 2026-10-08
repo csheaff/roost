@@ -757,16 +757,24 @@ it is ready and you have seen it since, rather than \"ready\"."
   "Record that you have seen TASK's agent as it is now."
   (puthash (roost--key task) (roost--field task 'updatedAt) roost--seen))
 
+(defun roost--terminal-shows-p (task panes)
+  "Whether the current terminal shows one of PANES in TASK's tmux session.
+tmux numbers panes afresh when its server restarts, so a task whose
+agent died with the server may still list a pane ID that now belongs
+to another task.  Each task has a session of its own."
+  (and (fboundp 'tmux-control-active-pane)
+       (member (tmux-control-active-pane) (delq nil panes))
+       (equal (roost--field task 'host) (tmux-control-buffer-host))
+       (equal (roost--field task 'socket) (tmux-control-buffer-socket-name))
+       (equal (roost--field task 'session) (tmux-control-buffer-session))))
+
 (defun roost--watched-task ()
   "The task whose agent's terminal is in the selected window, if any.
 Only while Emacs has focus, since otherwise nobody is looking."
   (when (and (frame-focus-state) (fboundp 'tmux-control-active-pane))
     (with-current-buffer (window-buffer (selected-window))
-      (when-let* ((pane (tmux-control-active-pane)))
-        (seq-find (lambda (task)
-                    (and (equal (roost--field task 'paneId) pane)
-                         (equal (roost--field task 'host) (tmux-control-buffer-host))
-                         (equal (roost--field task 'socket) (tmux-control-buffer-socket-name))))
+      (when (tmux-control-active-pane)
+        (seq-find (lambda (task) (roost--terminal-shows-p task (list (roost--field task 'paneId))))
                   (roost-tasks))))))
 
 (defun roost--note-watched-agent ()
@@ -851,13 +859,10 @@ Only while Emacs has focus, since otherwise nobody is looking."
       (or
        (when-let* ((id (ignore-errors (roost--org-linked-id))))
          (seq-find (lambda (task) (equal (roost--field task 'id) id)) tasks))
-       (when-let* ((pane (and (fboundp 'tmux-control-active-pane)
-                              (tmux-control-active-pane))))
+       (when (and (fboundp 'tmux-control-active-pane) (tmux-control-active-pane))
          (seq-find (lambda (task)
-                     (and (equal (roost--field task 'host) (tmux-control-buffer-host))
-                          (equal (roost--field task 'socket) (tmux-control-buffer-socket-name))
-                          (member pane (list (roost--field task 'paneId)
-                                             (roost--field task 'shellPaneId)))))
+                     (roost--terminal-shows-p task (list (roost--field task 'paneId)
+                                                         (roost--field task 'shellPaneId))))
                    tasks))
        (roost--task-in-directory default-directory tasks)
        (and workspace

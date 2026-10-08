@@ -31,6 +31,7 @@
   "Run BODY with tmux-control's buffer accessors reading `roost-test--tmux'."
   `(cl-letf (((symbol-function 'tmux-control-buffer-host) (lambda () (plist-get roost-test--tmux :host)))
              ((symbol-function 'tmux-control-buffer-socket-name) (lambda () (plist-get roost-test--tmux :socket)))
+             ((symbol-function 'tmux-control-buffer-session) (lambda () (plist-get roost-test--tmux :session)))
              ((symbol-function 'tmux-control-active-pane) (lambda () (plist-get roost-test--tmux :pane)))
              ((symbol-function 'tmux-control-window-id) (lambda () (plist-get roost-test--tmux :window))))
      ,@body))
@@ -295,7 +296,7 @@
            (focused t))
       (roost--cache-task "dev" (roost-test--task nil "running"))
       (with-temp-buffer
-        (setq-local roost-test--tmux '(:host "dev" :socket "main" :pane "%12"))
+        (setq-local roost-test--tmux '(:host "dev" :socket "main" :session "roost-123456" :pane "%12"))
         (save-window-excursion
           (set-window-buffer (selected-window) (current-buffer))
           (roost-test--with-tmux-buffers
@@ -525,9 +526,27 @@
   (roost-test--isolated
    (roost--cache-task "dev" (append '((shellPaneId . "%13")) (roost-test--task)))
    (with-temp-buffer
-     (setq-local roost-test--tmux '(:host "dev" :socket "main" :pane "%13"))
+     (setq-local roost-test--tmux '(:host "dev" :socket "main" :session "roost-123456" :pane "%13"))
      (roost-test--with-tmux-buffers
       (should (equal (roost--field (roost--task-at-point) 'host) "dev"))))))
+
+(ert-deftest roost-a-terminal-is-its-own-tasks-after-tmux-restarts ()
+  ;; A restarted tmux server numbers panes afresh, so an agent that died
+  ;; with the old one still lists the pane ID of a newer task's agent.
+  (roost-test--isolated
+   (roost--cache-task "dev" (append '((name . "alpha") (session . "roost-p-111111") (paneId . "%0")
+                                      (status . "crashed"))
+                                    (roost-test--task "1111111111111111")))
+   (roost--cache-task "dev" (append '((name . "beta") (session . "roost-p-222222") (paneId . "%0"))
+                                    (roost-test--task "2222222222222222")))
+   (with-temp-buffer
+     (setq-local roost-test--tmux '(:host "dev" :socket "main" :session "roost-p-222222" :pane "%0"))
+     (roost-test--with-tmux-buffers
+      (cl-letf (((symbol-function 'frame-focus-state) (lambda (&rest _) t)))
+        (should (equal (roost--field (roost--task-at-point) 'id) "2222222222222222"))
+        (save-window-excursion
+          (set-window-buffer (selected-window) (current-buffer))
+          (should (equal (roost--field (roost--watched-task) 'id) "2222222222222222"))))))))
 
 (ert-deftest roost-new-task-defaults-to-primary-checkout-and-prefix-forks ()
   (roost-test--isolated
