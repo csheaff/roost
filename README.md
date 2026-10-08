@@ -374,6 +374,8 @@ Since 0.8.1 (unreleased):
 - `M-x roost-forget-host`; setup commands get the primary checkout in
   `$ROOST_REPO`; a notification click opens its task (terminal-notifier).
 - Claude Code worktrees an agent makes for itself show in its task's panel.
+- With tmux-control newer than 0.7.2, switching sessions from a terminal
+  (`C-c C-s`, next and previous session) opens that task in its workspace.
 - `roost-claude-command` moved into `roost-agent-commands`, and
   `roost-use-perspectives` into `roost-workspace`; both still work.
 - An agent keeps the hooks it was started with, so one started before this
