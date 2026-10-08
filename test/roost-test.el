@@ -2530,7 +2530,7 @@ ssh: connect to host dev port 22: Operation timed out"
            (set-frame-parameter nil 'roost-task '("dev" "2222222222222222"))
            (set-window-buffer (selected-window) sidebar)
            (set-window-point (selected-window) 1)
-           (roost--sidebar-mark-selection)
+           (roost--sidebar-entered)
            (with-current-buffer sidebar
              (should (= (overlay-start roost--sidebar-selection) (funcall row "beta")))
              (should (eq (overlay-get roost--sidebar-selection 'window) (selected-window)))
@@ -2538,7 +2538,12 @@ ssh: connect to host dev port 22: Operation timed out"
              (goto-char (funcall row "alpha"))
              (roost--sidebar-mark-selection)
              (roost--render-sidebar)
-             (should (= (overlay-start roost--sidebar-selection) (funcall row "alpha"))))
+             (should (= (overlay-start roost--sidebar-selection) (funcall row "alpha")))
+             ;; Once in, point can rest on a project's heading, for `c'.
+             (goto-char (funcall row "dev · p"))
+             (roost--sidebar-mark-selection)
+             (should (= (point) (funcall row "dev · p")))
+             (should (= (overlay-start roost--sidebar-selection) (funcall row "dev · p"))))
            ;; Elsewhere, the sidebar shows no selection.
            (set-window-buffer (selected-window) (get-buffer-create " *elsewhere*"))
            (roost--sidebar-mark-selection)

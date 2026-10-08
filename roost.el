@@ -3296,7 +3296,7 @@ Task commands act on the task at point, as in the dashboard.
   (add-hook 'window-size-change-functions #'roost--sidebar-resized nil t)
   ;; With no cursor, a highlight shows which task its keys act on.
   (add-hook 'post-command-hook #'roost--sidebar-mark-selection nil t)
-  (add-hook 'window-selection-change-functions #'roost--sidebar-mark-selection nil t))
+  (add-hook 'window-selection-change-functions #'roost--sidebar-entered nil t))
 
 (defvar-local roost--sidebar-selection nil
   "Overlay on the sidebar row its keys act on, while its window is selected.")
@@ -3309,21 +3309,31 @@ Task commands act on the task at point, as in the dashboard.
     (when-let* ((match (text-property-search-forward 'roost-task key t)))
       (prop-match-beginning match))))
 
+(defun roost--sidebar-entered (&rest _)
+  "Start on a task when you enter the sidebar, then highlight it.
+Entering it anywhere but on a task starts on the task you are working
+on, or else the first.  Once in, point may also rest on a project's
+heading, where `c' starts a task in that project."
+  (when-let* ((buffer (get-buffer roost--sidebar-buffer))
+              (window (selected-window))
+              ((eq (window-buffer window) buffer)))
+    (with-current-buffer buffer
+      (unless (get-text-property (window-point window) 'roost-task)
+        (when-let* ((row (or (when-let* ((task (roost--frame-task)))
+                               (roost--task-row (roost--key task)))
+                             (text-property-not-all (point-min) (point-max) 'roost-task nil))))
+          (set-window-point window row)))))
+  (roost--sidebar-mark-selection))
+
 (defun roost--sidebar-mark-selection (&rest _)
-  "Highlight the sidebar row its keys act on, while you are in the sidebar.
-The sidebar shows no cursor.  Entering it anywhere but on a task starts
-on the task you are working on, or else the first."
+  "Highlight the sidebar line its keys act on, while you are in the sidebar.
+The sidebar shows no cursor."
   (when-let* ((buffer (get-buffer roost--sidebar-buffer)))
     (with-current-buffer buffer
       (let ((window (selected-window)))
         (if (not (eq (window-buffer window) buffer))
             (when roost--sidebar-selection
               (delete-overlay roost--sidebar-selection))
-          (unless (get-text-property (window-point window) 'roost-task)
-            (when-let* ((row (or (when-let* ((task (roost--frame-task)))
-                                   (roost--task-row (roost--key task)))
-                                 (text-property-not-all (point-min) (point-max) 'roost-task nil))))
-              (set-window-point window row)))
           (unless roost--sidebar-selection
             (setq roost--sidebar-selection (make-overlay 1 1))
             (overlay-put roost--sidebar-selection 'face 'roost-sidebar-selection))
