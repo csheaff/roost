@@ -1408,6 +1408,38 @@ def update(store, task):
     return task
 
 
+def discard(store, task, expect=None, dry_run=False):
+    """Delete a task's worktree, branch, window and record, whatever they
+    hold. With DRY_RUN, only say what would be lost: commits on no other
+    branch, and uncommitted or untracked files. Otherwise EXPECT is the
+    branch's commit when you were told, and a branch that has moved since
+    is not deleted."""
+    repo = task["repo"]
+    branch = task["branch"]
+    worktree = check_worktree(store, task)
+    worktree_exists = worktree.exists()
+    branch_exists = ref_exists(repo, branch)
+    ref = "refs/heads/" + branch
+    commit = git(repo, "rev-parse", ref + "^{commit}").stdout.strip() if branch_exists else None
+    if dry_run:
+        # --exclude applies to the --branches that follows it, by short name.
+        commits = int(git(repo, "rev-list", "--count", ref, "--not", "--exclude=" + branch,
+                          "--branches", "--remotes", "--tags").stdout) if branch_exists else 0
+        changes = len(read_git(worktree, "status", "--porcelain").stdout.splitlines()) if worktree_exists else 0
+        return dict(task, discard=dict(commits=commits, changes=changes, commit=commit))
+    if commit != (expect or None):
+        raise RoostError("The task's branch has moved since you were asked; look at it again before discarding")
+    stop(store, task)
+    if worktree_exists:
+        # Twice: also a worktree its agent locked.
+        git(repo, "worktree", "remove", "--force", "--force", str(worktree))
+    if branch_exists:
+        delete_branch(repo, branch, commit)
+    store.remove(task["id"])
+    task.update(status="discarded", updatedAt=now(), live=False)
+    return task
+
+
 def forget(store, task):
     """Drop Roost's record without touching Git, closing an ended task's window.
     The escape hatch for tasks Roost can no longer retire."""
@@ -1707,6 +1739,8 @@ TASK_ACTIONS = {
     "retire": lambda store, task, request: retire(store, task, merged_head=request.get("mergedHead")),
     "merge": lambda store, task, request: retire(store, task, merge=True, merged_head=request.get("mergedHead")),
     "forget": lambda store, task, request: forget(store, task),
+    "discard": lambda store, task, request: discard(store, task, request.get("expect"),
+                                                    request.get("dryRun") is True),
     "update": lambda store, task, request: update(store, task),
 }
 

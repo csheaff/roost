@@ -966,6 +966,42 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(self.request("retire", id=task["id"])["ok"])
         self.assertEqual(self.request("list")["result"], [])
 
+    def test_discard_says_what_it_would_lose_then_deletes_everything(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        (wt / "hello").write_text("changed\n")
+        self.git("commit", "-qam", "one", cwd=wt)
+        (wt / "hello").write_text("changed again\n")
+        (wt / "new").write_text("untracked\n")
+        told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+        self.assertEqual((told["commits"], told["changes"]), (1, 2))
+        # Nothing changed yet.
+        self.assertIn(task["paneId"], roost.pane_inventory(self.socket))
+        # A commit since then: refused.
+        self.git("commit", "-qam", "two", cwd=wt)
+        self.assertIn("moved", self.request("discard", id=task["id"], expect=told["commit"])["error"])
+        told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+        self.assertEqual((told["commits"], told["changes"]), (2, 1))
+        reply = self.request("discard", id=task["id"], expect=told["commit"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(reply["result"]["status"], "discarded")
+        self.assertFalse(wt.exists())
+        self.assertFalse(roost.ref_exists(self.repo, task["branch"]))
+        self.assertNotIn(task["paneId"], roost.pane_inventory(self.socket) or {})
+        self.assertEqual(self.request("list")["result"], [])
+        self.assertEqual(self.git("show", "HEAD:hello"), "base")
+
+    def test_discard_counts_only_commits_no_other_branch_holds(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        (wt / "hello").write_text("changed\n")
+        self.git("commit", "-qam", "kept elsewhere", cwd=wt)
+        self.git("branch", "keep", task["branch"])
+        told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+        self.assertEqual((told["commits"], told["changes"]), (0, 0))
+        self.assertTrue(self.request("discard", id=task["id"], expect=told["commit"])["ok"])
+        self.assertTrue(roost.ref_exists(self.repo, "keep"))
+
     def test_seen_is_recorded_for_every_emacs_until_the_next_event(self):
         task = self.create()
         record = self.wait(task, "ready")

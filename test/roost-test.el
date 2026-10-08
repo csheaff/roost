@@ -1095,6 +1095,41 @@
       (should (string-match-p "RET Agent · t Shell" (buffer-string)))
       (should (string-match-p "m Merge and retire" (buffer-string))))))
 
+(ert-deftest roost-discarding-says-what-is-lost-and-wants-the-name-to-lose-it ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (roost-test--task nil "ready")))
+         (told '((commits . 2) (changes . 1) (commit . "abc123")))
+         acted asked)
+     (cl-letf (((symbol-function 'roost--request-wait)
+                (lambda (_host action parameters &rest _)
+                  (should (equal action "discard"))
+                  (should (eq (alist-get 'dryRun parameters) t))
+                  `((discard ,@told))))
+               ((symbol-function 'roost--act)
+                (lambda (_task action parameters &rest _) (push (cons action parameters) acted)))
+               ((symbol-function 'read-string)
+                (lambda (prompt &rest _) (setq asked prompt) "fix auth")))
+       (roost-discard task)
+       (should (string-match-p "loses 2 commits no other branch has and 1 uncommitted file" asked))
+       (should (equal acted '(("discard" (expect . "abc123")))))
+       ;; Another name: nothing happens.
+       (setq acted nil)
+       (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "fix")))
+         (roost-discard task))
+       (should-not acted)
+       ;; Nothing to lose: a plain question.
+       (setq told '((commits . 0) (changes . 0) (commit . "abc123")))
+       (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t))
+                 ((symbol-function 'read-string) (lambda (&rest _) (error "Not asked to type"))))
+         (roost-discard task))
+       (should (equal acted '(("discard" (expect . "abc123")))))
+       ;; X asks whether to keep or discard.
+       (setq acted nil)
+       (cl-letf (((symbol-function 'read-multiple-choice) (lambda (&rest _) '(?d "discard")))
+                 ((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
+         (roost-forget task))
+       (should (equal (caar acted) "discard"))))))
+
 (ert-deftest roost-a-task-offers-what-it-can-do-now ()
   ;; A stopped task's panel offered Stop, Shell and Send, which its host refuses.
   (roost-test--isolated
@@ -1961,7 +1996,7 @@
                  (should (string-match-p "^fix auth   ● ready for" text))
                  (should (string-match-p "^Prompt\nfix authentication" text))
                  (should (string-match-p "^Changes\n1 file \\+2 −0" text))
-                 (should (string-match-p "Finish   Pull request P    Merge and retire m    Retire x    Forget X" text))
+                 (should (string-match-p "Finish   Pull request P    Merge and retire m    Retire x    Forget or discard X" text))
                  (should (string-match-p "Branch       codex/roost/fix-auth-123456, from main, merges into main" text))
                  (should (string-match-p "Worktree     ~/work/fix auth" text))
                  ;; Line counts keep their colors inside the indented section.
@@ -2002,7 +2037,8 @@
 (ert-deftest roost-forget-stops-a-running-agent-first ()
   (roost-test--isolated
    (let ((task (roost--cache-task "dev" (roost-test--task nil "ready"))) actions)
-     (cl-letf (((symbol-function 'yes-or-no-p) (lambda (prompt) (string-prefix-p "Stop " prompt)))
+     (cl-letf (((symbol-function 'read-multiple-choice)
+                (lambda (prompt &rest _) (should (string-prefix-p "Stop and forget " prompt)) '(?k "keep")))
                ((symbol-function 'roost--request)
                 (lambda (_host action _params success &optional _failure)
                   (push action actions)
@@ -2015,7 +2051,7 @@
 (ert-deftest roost-forget-removes-the-task-and-reports-what-remains ()
   (roost-test--isolated
    (let ((task (roost--cache-task "dev" (roost-test--task nil "stopped"))) messages)
-     (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_) t))
+     (cl-letf (((symbol-function 'read-multiple-choice) (lambda (&rest _) '(?k "keep")))
                ((symbol-function 'message) (lambda (format &rest args) (push (apply #'format format args) messages)))
                ((symbol-function 'roost--request)
                 (lambda (_host action _params success &optional _failure)

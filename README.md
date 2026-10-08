@@ -29,8 +29,9 @@ asks permission, `n` takes you to it, you answer, look at its changes and merge.
 - **Start from your notes.** An Org heading, a region of code or a GitHub issue
   becomes the prompt.
 - **Finish with the tools you know.** Try the work in a shell beside the agent,
-  review it in Magit, merge it or open a pull request. Roost never stages,
-  commits or force-removes anything for you.
+  review it in Magit, merge it or open a pull request. Roost never stages or
+  commits your work, and deletes it only when you discard a task and type its
+  name.
 
 ### Why not just run the agent in a terminal?
 
@@ -219,7 +220,7 @@ Magit is optional (review falls back to Dired).
 | `P` | `roost-pr` | Draft a pull request for the task; if it has one, push new commits and open it (`C-u`: open only) |
 | `m` | `roost-merge-retire` | Merge committed work, then retire the task |
 | `x` | `roost-retire` | Retire a task that is already merged or has no commits |
-| `X` | `roost-forget` | Drop Roost's record; keep the worktree and branch |
+| `X` | `roost-forget` | Drop the task from Roost, keeping its worktree and branch, or discarding them (`roost-discard`): Roost first says what would be lost, and to lose commits or files you type the task's name |
 | `K` | `roost-stop` | Stop the agent's window; keep all work |
 | `s` | `roost-resume` | Restart a stopped task in its recorded conversation |
 | `g` | `roost-refresh` | Refresh status and Git statistics |

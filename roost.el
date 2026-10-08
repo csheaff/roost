@@ -593,7 +593,7 @@ Call SUCCESS with the result, or FAILURE with an error message."
     (dolist (field '(diff dirty files ahead behind worktreeMissing prStatus lastMessage gitStamp))
       (unless (assoc field task)
         (when (assoc field old) (push (assoc field old) task))))
-    (if (member status '("retired" "forgotten"))
+    (if (member status '("retired" "forgotten" "discarded"))
         (remhash key roost--tasks)
       (puthash key task roost--tasks))
     ;; Record the status before notifying, which may cache this task again.
@@ -1721,7 +1721,7 @@ FAILURE, if given, receives the error message instead of Roost reporting it."
   (let* ((host (roost--field task 'host))
          ;; The host refuses to resume an agent still running, whose
          ;; terminal stays.
-         (terminals (when (or (member action '("stop" "retire" "merge" "forget"))
+         (terminals (when (or (member action '("stop" "retire" "merge" "forget" "discard"))
                               (and (equal action "resume") (not (roost--field task 'live))))
                       (roost--release-terminal task))))
     (roost--request host action (cons (cons 'id (roost--field task 'id)) parameters)
@@ -2315,9 +2315,10 @@ Dirty worktrees are refused; review and commit in Magit first."
 
 ;;;###autoload
 (defun roost-forget (&optional task)
-  "Drop TASK's record from Roost without touching its worktree or branch.
-For tasks Roost can no longer retire, such as one whose repository moved.
-A running agent must be stopped first."
+  "Drop TASK from Roost, keeping or discarding its worktree and branch.
+Keeping them is the way out for tasks Roost can no longer retire, such
+as one whose repository moved; discarding them is `roost-discard'.  A
+running agent is stopped first."
   (interactive)
   (setq task (roost--choose task))
   (let* ((name (roost--field task 'name))
@@ -2330,13 +2331,50 @@ A running agent must be stopped first."
                                  (when-let* ((left (roost--field forgotten 'leftBehind)))
                                    (message "Forgot %s; left in place: %s"
                                             name (string-join left ", "))))))))
-    (when (yes-or-no-p (format (if running
-                                   "Stop %s's agent and forget the task, leaving its worktree and branch as they are? "
-                                 "Forget %s, leaving its worktree and branch as they are? ")
-                               name))
-      (if running
-          (roost--act task "stop" nil forget)
-        (funcall forget)))))
+    (pcase (car (read-multiple-choice
+                 (format "%s %s: keep its worktree and branch, or discard them?"
+                         (if running "Stop and forget" "Forget") name)
+                 '((?k "keep" "Drop the task from Roost; its worktree and branch stay as they are")
+                   (?d "discard" "Also delete its worktree and branch, after saying what would be lost"))))
+      (?k (if running
+              (roost--act task "stop" nil forget)
+            (funcall forget)))
+      (?d (roost-discard task)))))
+
+;;;###autoload
+(defun roost-discard (&optional task)
+  "Delete TASK's worktree, branch and window, and drop it from Roost.
+First says what would be lost, commits no other branch holds and files
+not committed; to lose any, you type the task's name.  For an experiment
+you don't want; finished work is merged or retired instead."
+  (interactive)
+  (setq task (roost--choose task))
+  (let* ((name (roost--field task 'name))
+         (told (alist-get 'discard
+                          (roost--request-wait (roost--field task 'host) "discard"
+                                               (list (cons 'id (roost--field task 'id))
+                                                     (cons 'dryRun t)))))
+         (commits (or (alist-get 'commits told) 0))
+         (changes (or (alist-get 'changes told) 0))
+         (losses (delq nil (list (when (> commits 0)
+                                   (format "%d commit%s no other branch has"
+                                           commits (if (= commits 1) "" "s")))
+                                 (when (> changes 0)
+                                   (format "%d uncommitted file%s"
+                                           changes (if (= changes 1) "" "s")))))))
+    (if (not (if losses
+                 (equal (string-trim
+                         (read-string (format "Discarding %s loses %s.  Type its name to discard it: "
+                                              name (string-join losses " and "))))
+                        name)
+               (y-or-n-p (format "Discard %s, deleting its worktree and branch?  Nothing in them would be lost. "
+                                 name))))
+        (message "%s was not discarded" name)
+      (roost--act task "discard" (list (cons 'expect (alist-get 'commit told)))
+                  (lambda (discarded)
+                    (roost--retired-workspace discarded)
+                    (roost--kill-worktree-buffers discarded)
+                    (message "Discarded %s" name))))))
 
 (defun roost--kill-worktree-buffers (task)
   "Kill the Magit and Dired buffers left in TASK's removed worktree.
@@ -2610,6 +2648,7 @@ keeps one process-wide registration per mode; a nil STATE removes it."
     ["Merge and retire…" roost-merge-retire]
     ["Retire…" roost-retire]
     ["Forget…" roost-forget]
+    ["Discard…" roost-discard]
     "---"
     ["Stop…" roost-stop]
     ["Resume" roost-resume]
@@ -2717,7 +2756,7 @@ terminal or worktree, or ask which task."
     ("P" "Pull request" roost-pr :inapt-if roost--dispatch-inapt-p)
     ("m" "Merge and retire" roost-merge-retire :inapt-if roost--dispatch-inapt-p)
     ("x" "Retire" roost-retire :inapt-if roost--dispatch-inapt-p)
-    ("X" "Forget" roost-forget :inapt-if roost--dispatch-inapt-p)]
+    ("X" "Forget or discard" roost-forget :inapt-if roost--dispatch-inapt-p)]
    ["Session"
     ("K" "Stop" roost-stop :inapt-if roost--dispatch-inapt-p)
     ("s" "Resume" roost-resume :inapt-if roost--dispatch-inapt-p)]]
@@ -2784,7 +2823,7 @@ Status is the last observation from the task's host.
     ("Review" ("Magit" "r" roost-review) ("Diff" "D" roost-diff)
      ("Update" "u" roost-update))
     ("Finish" ("Pull request" "P" roost-pr) ("Merge and retire" "m" roost-merge-retire) ("Retire" "x" roost-retire)
-     ("Forget" "X" roost-forget))
+     ("Forget or discard" "X" roost-forget))
     ("Session" ("Stop" "K" roost-stop) ("Resume" "s" roost-resume)))
   "Task panel actions as (GROUP (LABEL KEY COMMAND)...).")
 
