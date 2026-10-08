@@ -1166,6 +1166,12 @@
            (should-not (member "old-box" (roost--hosts)))
            (should (member "dev" (roost--hosts)))
            (should-not (roost-tasks))
+           ;; A poll already on its way doesn't bring its tasks back.
+           (cl-letf (((symbol-function 'roost--request)
+                      (lambda (_host _action _params success &rest _)
+                        (funcall success (list (roost-test--task nil "ready"))))))
+             (roost--refresh-host "old-box" t))
+           (should-not (roost-tasks))
            ;; And stays forgotten after a restart.
            (setq roost--hosts-loaded nil roost--remembered-hosts nil)
            (should (equal (roost--hosts) '(nil "dev"))))

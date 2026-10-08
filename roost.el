@@ -729,8 +729,10 @@ those tasks."
        (lambda (tasks)
          (remhash host roost--failures)
          (remhash host roost--errors)
-         ;; A newer mutation must win over a stale list reply.
-         (when (= revision (gethash host roost--revisions 0))
+         ;; A newer mutation must win over a stale list reply, and a host
+         ;; forgotten meanwhile stays forgotten.
+         (when (and (= revision (gethash host roost--revisions 0))
+                    (member host (roost--hosts)))
            (let ((before (roost--task-states host)))
              (roost--apply-snapshot host tasks)
              ;; Quiet polls leave out Git statistics.  An agent that reported
@@ -2405,8 +2407,6 @@ merges it instead."
     (cond
      ((member (roost--field task 'status) '("starting" "running" "permission" "background"))
       (user-error "%s's agent is at work; stop it (K) first, or wait" name))
-     ((roost--agent-work-left task)
-      (funcall retire))               ; Refused, saying where that work is.
      ((roost--unmerged-work-p task)
       (funcall offer))
      ((yes-or-no-p (format "Retire %s, removing its merged worktree and branch? " name))
