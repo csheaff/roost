@@ -60,6 +60,9 @@
 (defvar tmux-control-remote-tmux-socket-setup)
 (defvar tmux-control-ssh-options)
 (defvar tmux-control-session-activity)
+(defvar server-process)
+(defvar server-socket-dir)
+(defvar server-name)
 (defvar persp-autokill-buffer-on-remove)
 (defvar persp-mode)
 (defvar persp-modestring-short)
@@ -97,7 +100,9 @@ Claude uses `roost-claude-command' unless overridden here."
 
 (defcustom roost-setup-command nil
   "Optional project setup shell command, run before the agent in new worktrees.
-May be set directory-locally.  Not rerun on resume."
+May be set directory-locally.  Not rerun on resume.  It runs in the
+worktree, with the project's primary checkout in $ROOST_REPO, so it can
+copy files Git doesn't track, such as cp \"$ROOST_REPO/.env\" ."
   :type '(choice (const nil) string))
 
 (defcustom roost-branch-prefix "roost/"
@@ -564,12 +569,48 @@ Call SUCCESS with the result, or FAILURE with an error message."
 
 ;;;; Status cache and notifications
 
-(defun roost--notify (title body)
-  "Display notification TITLE with BODY."
+(defun roost--emacsclient-command (expression)
+  "A shell command evaluating EXPRESSION in this Emacs, or nil without a server."
+  (when-let* (((bound-and-true-p server-process))
+              ((process-live-p server-process))
+              ((bound-and-true-p server-socket-dir))
+              (client (seq-find #'file-executable-p
+                                (list (expand-file-name "bin/emacsclient" invocation-directory)
+                                      (expand-file-name "emacsclient" invocation-directory)
+                                      (or (executable-find "emacsclient") "")))))
+    (mapconcat #'shell-quote-argument
+               (list client "--socket-name" (expand-file-name server-name server-socket-dir)
+                     "--no-wait" "--eval" (prin1-to-string expression))
+               " ")))
+
+(defun roost--open-from-notification (host id)
+  "Open the task with ID on HOST, from a click on its notification."
+  (when-let* ((task (gethash (list host id) roost--tasks)))
+    (select-frame-set-input-focus (selected-frame))
+    (roost-open-task task)))
+
+(defun roost--terminal-notifier-arguments (title body task)
+  "Arguments for terminal-notifier to show TITLE and BODY about TASK.
+A click opens TASK, given an Emacs server, and a newer notification about
+TASK replaces this one."
+  (append (list "-title" title "-message" body)
+          (when task
+            (append (list "-group" (concat "roost-" (or (roost--field task 'host) "local")
+                                           "-" (roost--field task 'id)))
+                    (when-let* ((command (roost--emacsclient-command
+                                          `(roost--open-from-notification
+                                            ,(roost--field task 'host) ,(roost--field task 'id)))))
+                      (list "-execute" command))))))
+
+(defun roost--notify (title body &optional task)
+  "Display notification TITLE with BODY, about TASK if given.
+With terminal-notifier and an Emacs server, a click on it opens TASK,
+and a newer notification about TASK replaces it."
   (cond ((functionp roost-notify-function)
          (funcall roost-notify-function title body))
         ((executable-find "terminal-notifier")
-         (call-process "terminal-notifier" nil 0 nil "-title" title "-message" body))
+         (apply #'call-process "terminal-notifier" nil 0 nil
+                (roost--terminal-notifier-arguments title body task)))
         ((eq system-type 'darwin)
          (call-process "osascript" nil 0 nil "-e"
                        (format "display notification %S with title %S" body title)))
@@ -618,7 +659,8 @@ finished or wants."
     (if (not (member status '("ready" "permission")))
         (roost--notify title (if-let* ((error (roost--field task 'error)))
                                  (concat label " · " (truncate-string-to-width error 160 nil nil "…"))
-                               label))
+                               label)
+                       task)
       (roost--request
        host "inspect" (list (cons 'id (roost--field task 'id)))
        (lambda (current)
@@ -628,8 +670,9 @@ finished or wants."
                         (if-let* ((reply (or (roost--permission-request current)
                                              (roost--last-message-summary current))))
                             (concat label " · " (truncate-string-to-width reply 160 nil nil "…"))
-                          label)))
-       (lambda (_error) (roost--notify title label))))))
+                          label)
+                        current))
+       (lambda (_error) (roost--notify title label task))))))
 
 (defun roost--apply-snapshot (host tasks)
   "Replace only HOST's cached tasks with a successful snapshot TASKS."
@@ -715,6 +758,35 @@ those tasks."
                     roost--failures))
          (roost--redraw)
          (funcall finish))))))
+
+;;;###autoload
+(defun roost-forget-host (host)
+  "Stop watching HOST, which Roost remembered when you first used it.
+Agents there keep running, and using the host again watches it again.
+Hosts in `roost-hosts' are watched until you take them out of it."
+  (interactive
+   (progn
+     (roost--hosts)
+     (let ((hosts (mapcar (lambda (host) (cons (roost--host-label host) host))
+                          (seq-remove (lambda (host) (member host roost-hosts))
+                                      roost--remembered-hosts))))
+       (unless hosts (user-error "Roost remembers no hosts beyond `roost-hosts'"))
+       (list (cdr (assoc (completing-read "Forget host: " hosts nil t) hosts))))))
+  (roost--hosts)
+  (let ((tasks (seq-filter (lambda (task) (equal (roost--field task 'host) host)) (roost-tasks))))
+    (when (or (null tasks)
+              (yes-or-no-p (format "%d task%s on %s will no longer show; their agents keep running.  Forget %s? "
+                                   (length tasks) (if (cdr tasks) "s" "")
+                                   (roost--host-label host) (roost--host-label host))))
+      (setq roost--remembered-hosts (delete host roost--remembered-hosts))
+      (roost--write-json-list roost-hosts-file roost--remembered-hosts)
+      (dolist (task tasks)
+        (remhash (roost--key task) roost--tasks)
+        (remhash (roost--key task) roost--statuses))
+      (remhash host roost--errors)
+      (remhash host roost--failures)
+      (roost--redraw)
+      (message "Roost no longer watches %s" (roost--host-label host)))))
 
 (defun roost-refresh (&optional quiet)
   "Refresh hosts asynchronously, including Git statistics.

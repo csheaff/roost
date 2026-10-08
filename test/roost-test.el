@@ -128,7 +128,7 @@
      (let (body)
        (cl-letf (((symbol-function 'roost--request)
                   (lambda (_host _action _params success _failure) (funcall success asking)))
-                 ((symbol-function 'roost--notify) (lambda (_title text) (setq body text))))
+                 ((symbol-function 'roost--notify) (lambda (_title text &rest _) (setq body text))))
          (roost--notify-attention "dev" asking "permission"))
        (should (equal body "dev · Asks to run make test"))))))
 
@@ -1129,6 +1129,60 @@
                  ((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
          (roost-forget task))
        (should (equal (caar acted) "discard"))))))
+
+(ert-deftest roost-a-forgotten-host-is-no-longer-watched ()
+  (roost-test--isolated
+   (let* ((roost-hosts '(nil))
+          (roost-hosts-file (make-temp-file "roost-hosts" nil ".json"))
+          (roost--hosts-loaded nil))
+     (unwind-protect
+         (progn
+           (roost--write-json-list roost-hosts-file '("old-box" "dev"))
+           (roost--cache-task "old-box" (roost-test--task nil "ready"))
+           (should (member "old-box" (roost--hosts)))
+           (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_) t)))
+             (roost-forget-host "old-box"))
+           (should-not (member "old-box" (roost--hosts)))
+           (should (member "dev" (roost--hosts)))
+           (should-not (roost-tasks))
+           ;; And stays forgotten after a restart.
+           (setq roost--hosts-loaded nil roost--remembered-hosts nil)
+           (should (equal (roost--hosts) '(nil "dev"))))
+       (delete-file roost-hosts-file)))))
+
+(defvar server-process)
+(defvar server-socket-dir)
+(defvar server-name)
+
+(ert-deftest roost-a-notification-click-opens-its-task ()
+  (roost-test--isolated
+   (let* ((task (roost--cache-task "dev" (roost-test--task nil "ready")))
+          (invocation-directory (file-name-as-directory (make-temp-file "roost-emacs" t)))
+          (client (expand-file-name "bin/emacsclient" invocation-directory))
+          (server-process (make-pipe-process :name "roost-test-server" :noquery t))
+          (server-socket-dir "/tmp/emacs501") (server-name "server")
+          opened)
+     (unwind-protect
+         (progn
+           (make-directory (file-name-directory client))
+           (write-region "" nil client nil 'silent)
+           (set-file-modes client #o755)
+           (let ((arguments (roost--terminal-notifier-arguments "Roost: fix auth — ready" "dev · done" task)))
+             (should (equal (seq-take arguments 4) '("-title" "Roost: fix auth — ready" "-message" "dev · done")))
+             (should (equal (cadr (member "-group" arguments)) "roost-dev-0123456789abcdef"))
+             (let ((command (split-string-shell-command (cadr (member "-execute" arguments)))))
+               (should (equal (seq-take command 4)
+                              (list client "--socket-name" "/tmp/emacs501/server" "--no-wait")))
+               ;; What the click evaluates opens the task.
+               (cl-letf (((symbol-function 'roost-open-task) (lambda (task) (setq opened task)))
+                         ((symbol-function 'select-frame-set-input-focus) #'ignore))
+                 (eval (read (car (last command))) t))))
+           (should (equal (roost--field opened 'id) "0123456789abcdef"))
+           ;; Without a server, a click can't reach Emacs.
+           (let ((server-process nil))
+             (should-not (member "-execute" (roost--terminal-notifier-arguments "t" "b" task)))))
+       (delete-process server-process)
+       (delete-directory invocation-directory t)))))
 
 (ert-deftest roost-a-task-offers-what-it-can-do-now ()
   ;; A stopped task's panel offered Stop, Shell and Send, which its host refuses.

@@ -1132,6 +1132,13 @@ class Lifecycle(unittest.TestCase):
         self.wait(task, "ready")
         self.assertEqual(marker.read_text().count("run"), 2)
 
+    def test_setup_can_copy_untracked_files_from_the_primary_checkout(self):
+        (self.repo / ".env").write_text("SECRET=1\n")
+        reply = self.request("create", directory=str(self.repo), name="env", socket=self.socket,
+                             setup='cp "$ROOST_REPO/.env" .', command=[sys.executable, str(FAKE)])
+        task = self.wait(reply["result"], "ready")
+        self.assertEqual((Path(task["worktree"]) / ".env").read_text(), "SECRET=1\n")
+
     def test_agent_path_keeps_inherited_precedence(self):
         path = roost.agent_path("/project/bin" + os.pathsep + "/usr/local/bin").split(os.pathsep)
         self.assertEqual(path[:2], ["/project/bin", "/usr/local/bin"])

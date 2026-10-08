@@ -1676,6 +1676,8 @@ def runner(root, task_id, run_id, resume_conversation=False):
     env["ROOST_TASK_ID"] = task_id
     env["ROOST_RUN_ID"] = run_id
     env["ROOST_STATE_DIRECTORY"] = str(store.root)
+    # The primary checkout, for a setup command copying files Git doesn't track.
+    env["ROOST_REPO"] = task["repo"]
     env["ROOST_HELPER"] = str(Path(__file__).resolve())
     env["ROOST_PYTHON"] = sys.executable
     env["PATH"] = agent_path(env.get("PATH", ""))

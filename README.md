@@ -245,7 +245,8 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
 ## Configuration
 
 - `roost-hosts`: hosts the dashboard watches (`nil` is local). Hosts and projects
-  you create tasks in are remembered in `roost-hosts-file` and `roost-projects-file`.
+  you create tasks in are remembered in `roost-hosts-file` and `roost-projects-file`;
+  `M-x roost-forget-host` stops watching one you no longer use.
 - `roost-default-agent`, `roost-claude-command`, `roost-agent-commands`: which
   agent new tasks use, and each CLI with extra arguments, such as
   `'("claude" "--model" "sonnet")`. Roost owns worktree, resume and hook flags and
@@ -253,7 +254,9 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
 - `roost-setup-command`: a shell command run once in a new worktree before the
   agent starts, such as `npm ci`. Set it in `.dir-locals.el` per project:
   `((nil . ((roost-setup-command . "npm ci"))))`. Emacs reads a remote
-  project's `.dir-locals.el` only with `enable-remote-dir-locals` on.
+  project's `.dir-locals.el` only with `enable-remote-dir-locals` on. A new
+  worktree lacks files Git doesn't track, such as `.env`; the command finds the
+  primary checkout in `$ROOST_REPO`: `cp "$ROOST_REPO/.env" . && npm ci`.
 - `roost-branch-prefix`: topic branches are `PREFIX<name>-<id>`; default `roost/`.
 - `roost-state-directory`: where each host keeps task records, the helper and
   worktrees; default `~/.local/share/roost`.
@@ -268,8 +271,13 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
   mode line of your own, set it to nil and place
   `(:eval (and (fboundp 'roost-mode-line-waiting) (roost-mode-line-waiting)))`
   where you want the count.
-- `roost-notify`, `roost-notify-function`,
-  `roost-watch-interval` (3 s), `roost-watch-unfocused-interval` (15 s),
+- `roost-notify`, `roost-notify-function`: notifications use
+  [terminal-notifier](https://github.com/julienXX/terminal-notifier) when it is
+  installed (`brew install terminal-notifier`), otherwise macOS's own or Emacs's
+  `notifications-notify`. With terminal-notifier and an Emacs server
+  (`server-start`), clicking one opens its task, and a newer one about the same
+  task replaces it.
+- `roost-watch-interval` (3 s), `roost-watch-unfocused-interval` (15 s),
   `roost-request-timeout` (60 s), `roost-ssh-share-connections`.
 
 Each poll is one SSH command per host. Roost shares one connection per host
