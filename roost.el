@@ -2387,20 +2387,28 @@ nothing else has, offer to discard it, saying what that loses; `m'
 merges it instead."
   (interactive)
   (setq task (roost--choose task))
-  (let ((name (roost--field task 'name))
-        (retire (lambda ()
-                  (roost--act task "retire" nil
-                              (lambda (retired)
-                                (roost--retired-workspace retired)
-                                (roost--kill-worktree-buffers retired))))))
+  (let* ((name (roost--field task 'name))
+         (offer (lambda ()
+                  (when (y-or-n-p (format "%s has work not merged into %s (m merges it).  Discard it? "
+                                          name (or (roost--field task 'integrationBranch) "its branch")))
+                    (roost-discard task))))
+         (retire (lambda ()
+                   (roost--act task "retire" nil
+                               (lambda (retired)
+                                 (roost--retired-workspace retired)
+                                 (roost--kill-worktree-buffers retired))
+                               (lambda (err)
+                                 ;; Git statistics newer than Roost's.
+                                 (if (string-match-p "\\`\\(Task branch has unmerged\\|Uncommitted or untracked\\)" err)
+                                     (funcall offer)
+                                   (message "Roost %s: %s" (roost--host-label (roost--field task 'host)) err)))))))
     (cond
      ((member (roost--field task 'status) '("starting" "running" "permission" "background"))
       (user-error "%s's agent is at work; stop it (K) first, or wait" name))
      ((roost--agent-work-left task)
       (funcall retire))               ; Refused, saying where that work is.
      ((roost--unmerged-work-p task)
-      (when (y-or-n-p (format "%s has work not merged anywhere (m merges it).  Discard it? " name))
-        (roost-discard task)))
+      (funcall offer))
      ((yes-or-no-p (format "Retire %s, removing its merged worktree and branch? " name))
       (funcall retire)))))
 
@@ -2438,7 +2446,7 @@ running agent is stopped first."
   (setq task (roost--choose task))
   (let* ((name (roost--field task 'name))
          ;; The host refuses while the agent runs, so stop it first.
-         (running (not (member (roost--field task 'status) '("stopped" "exited" "failed" "crashed"))))
+         (running (roost--agent-running-p task))
          (forget (lambda (&rest _)
                    (roost--act task "forget" nil
                                (lambda (forgotten)
@@ -2483,11 +2491,12 @@ finished work is merged or retired instead."
                   name)))
     (if (not (if losses
                  (equal (string-trim
-                         (read-string (format "Discarding %s loses %s.  Type its name to discard it: "
-                                              label (string-join losses " and "))))
+                         (read-string (format "Discarding %s loses %s%s.  Type its name to discard it: "
+                                              label (string-join losses " and ")
+                                              (if (roost--agent-running-p task) ", and stops its agent" ""))))
                         name)
-               (y-or-n-p (format "Discard %s, deleting its worktree and branch?  Nothing in them would be lost. "
-                                 label))))
+               (y-or-n-p (format "Discard %s, %sdeleting its worktree and branch?  Nothing in them would be lost. "
+                                 label (if (roost--agent-running-p task) "stopping its agent and " "")))))
         (message "%s was not discarded" name)
       (roost--act task "discard" (list (cons 'expect (alist-get 'commit told)))
                   (lambda (discarded)
@@ -2894,8 +2903,15 @@ Unknown Git statistics count as making sense."
       (concat "Answer it in its terminal: " (funcall key "RET")))
      ((equal status "prompt")
       (concat "It may be waiting at a startup prompt: " (funcall key "RET")))
-     ((not (roost--agent-running-p task))
+     ((roost--field task 'worktreeMissing)
+      (concat "Its worktree is gone: " (funcall key "x") " retires it if its work is merged, "
+              (funcall key "X") " forgets it"))
+     ((equal status "error")
+      (concat "Open it to try its last prompt again: " (funcall key "RET")))
+     ((member status '("stopped" "crashed"))
       (concat (funcall key "RET") " or " (funcall key "s") " resumes its conversation"))
+     ((not (roost--agent-running-p task))
+      (concat (funcall key "RET") " shows its last output; " (funcall key "s") " resumes its conversation"))
      ((member status '("running" "background" "starting")) nil)
      ((roost--field task 'dirty)
       (concat "Review and commit its changes in Magit: " (funcall key "r")))

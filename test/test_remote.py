@@ -1064,6 +1064,23 @@ class Lifecycle(unittest.TestCase):
         self.git("worktree", "remove", "--force", str(own))
         self.assertTrue(self.request("retire", id=task["id"])["ok"])
 
+    def test_discard_a_task_whose_agent_moved_to_another_branch(self):
+        # The case for throwing it away; it used to be refused.
+        task = self.create()
+        wt = Path(task["worktree"])
+        self.git("checkout", "-q", "-b", "agent-idea", cwd=wt)
+        (wt / "hello").write_text("idea\n")
+        self.git("commit", "-qam", "idea", cwd=wt)
+        self.git("checkout", "-q", "--detach", cwd=wt)
+        (wt / "hello").write_text("detached\n")
+        self.git("commit", "-qam", "detached", cwd=wt)
+        told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+        # The detached commit is lost; agent-idea keeps its own.
+        self.assertEqual(told["commits"], 1)
+        self.assertTrue(self.request("discard", id=task["id"], expect=told["commit"])["ok"])
+        self.assertFalse(wt.exists())
+        self.assertTrue(roost.ref_exists(self.repo, "agent-idea"))
+
     def test_discard_takes_the_agents_own_worktrees_with_it(self):
         task = self.create()
         store = roost.Store(str(self.state))

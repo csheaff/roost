@@ -1361,7 +1361,7 @@ def retire(store, task, merge=False, merged_head=None):
     if branch_exists:
         commit = git(repo, "rev-parse", "refs/heads/" + branch + "^{commit}").stdout.strip()
         if not safe_to_delete(task, commit, merged_head):
-            raise RoostError("Task branch has unmerged commits; merge it (m) before retiring, "
+            raise RoostError("Task branch has unmerged commits; merge it (m) first, discard it, "
                              "or forget the task to keep its branch")
         # A durable checkpoint permits retry after a disconnect or partial cleanup.
         task["retiringCommit"] = commit
@@ -1480,7 +1480,8 @@ def discard(store, task, expect=None, dry_run=False):
     is not deleted."""
     repo = task["repo"]
     branch = task["branch"]
-    worktree = check_worktree(store, task)
+    # Whatever branch its agent left the worktree on: that goes too.
+    worktree = check_worktree(store, task, branch=False)
     worktree_exists = worktree.exists()
     branch_exists = ref_exists(repo, branch)
     ref = "refs/heads/" + branch
@@ -1489,10 +1490,15 @@ def discard(store, task, expect=None, dry_run=False):
     work = agent_work(task)
     if dry_run:
         branches = ([branch] if branch_exists else []) + [entry["branch"] for entry in work if entry["branch"]]
+        # Commits on a detached HEAD there, too; another branch keeps its own.
+        heads = [head for head in [read_git(path, "rev-parse", "-q", "--verify", "HEAD").stdout.strip()
+                                   for path in ([worktree] if worktree_exists else [])
+                                   + [entry["path"] for entry in work]] if head]
+        tips = ["refs/heads/" + name for name in branches] + heads
         # --exclude applies to the --branches that follows it, by short name.
-        commits = int(git(repo, "rev-list", "--count", *("refs/heads/" + name for name in branches), "--not",
+        commits = int(git(repo, "rev-list", "--count", *tips, "--not",
                           *("--exclude=" + name for name in branches),
-                          "--branches", "--remotes", "--tags").stdout) if branches else 0
+                          "--branches", "--remotes", "--tags").stdout) if tips else 0
         changes = sum(len(read_git(path, "status", "--porcelain").stdout.splitlines())
                       for path in ([worktree] if worktree_exists else []) + [entry["path"] for entry in work])
         return dict(task, discard=dict(commits=commits, changes=changes, commit=commit,

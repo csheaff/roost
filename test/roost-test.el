@@ -1140,7 +1140,7 @@
          (cl-letf (((symbol-function 'y-or-n-p)
                     (lambda (prompt &rest _) (unless asked-first (setq asked-first prompt)) t)))
            (roost-retire unmerged))
-         (should (string-match-p "work not merged anywhere" asked-first)))
+         (should (string-match-p "work not merged into its branch" asked-first)))
        (should (equal (caar acted) "discard"))
        ;; With nothing to lose, x retires.
        (setq acted nil)
@@ -1248,6 +1248,45 @@
        (should-not (roost--switch-session "dev" "main" "notes"))
        (should-not (roost--switch-session nil "main" "roost-p-111111"))
        (should-not opened)))))
+
+(ert-deftest roost-the-next-step-fits-how-the-agent-ended ()
+  (roost-test--isolated
+   (should (string-match-p "RET or s resumes"
+                           (roost--next-step (roost--cache-task "dev" (append '((live)) (roost-test--task nil "stopped"))))))
+   ;; RET shows an exited agent's last output; it doesn't resume it.
+   (should (string-match-p "RET shows its last output; s resumes"
+                           (roost--next-step (roost--cache-task "dev" (append '((live)) (roost-test--task nil "exited"))))))
+   (should (string-match-p "try its last prompt again"
+                           (roost--next-step (roost--cache-task "dev" (append '((live . t)) (roost-test--task nil "failed"))))))
+   (should (string-match-p "worktree is gone"
+                           (roost--next-step (roost--cache-task "dev" (append '((live) (worktreeMissing . t))
+                                                                               (roost-test--task nil "stopped"))))))))
+
+(ert-deftest roost-forgetting-a-task-in-error-stops-its-agent-first ()
+  ;; Its agent waits after a failed turn; the host refuses to forget it running.
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (append '((live . t)) (roost-test--task nil "failed")))) actions)
+     (cl-letf (((symbol-function 'yes-or-no-p) (lambda (prompt) (string-prefix-p "Stop " prompt)))
+               ((symbol-function 'roost--request)
+                (lambda (_host action _params success &optional _failure)
+                  (push action actions)
+                  (funcall success (append `((status . ,(if (equal action "stop") "stopped" "forgotten")))
+                                           (roost-test--task))))))
+       (roost-forget task)
+       (should (equal (reverse actions) '("stop" "forget")))))))
+
+(ert-deftest roost-retire-offers-to-discard-when-the-host-knows-better ()
+  ;; Roost's Git statistics can lag: the host refuses, and x offers to discard.
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (roost-test--task nil "ready"))) discarded)
+     (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+               ((symbol-function 'y-or-n-p) (lambda (&rest _) t))
+               ((symbol-function 'roost-discard) (lambda (task) (setq discarded (roost--field task 'id))))
+               ((symbol-function 'roost--request)
+                (lambda (_host _action _params _success failure)
+                  (funcall failure "Task branch has unmerged commits; merge it (m) first, discard it, or forget the task to keep its branch"))))
+       (roost-retire task))
+     (should (equal discarded "0123456789abcdef")))))
 
 (ert-deftest roost-menus-offer-what-the-task-can-do-now ()
   ;; The right-click and menu-bar menus offered everything, as the panel did.
