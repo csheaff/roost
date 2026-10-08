@@ -817,6 +817,7 @@ def create(store, request):
                 worktree=str(worktree), branch=branch, baseRef=base, baseCommit=commit,
                 integrationBranch=integration, socket=socket,
                 session=text(request.get("session")) or session_name(repo, task_id),
+                sessionShared=bool(text(request.get("session"))),
                 agent=agent_name, command=command, setup=setup, prompt=prompt,
                 status="starting", startedAt=now(), updatedAt=now(), claudeSession=None)
     issue = request.get("issue")
@@ -1104,6 +1105,10 @@ def resume(store, task):
     check_worktree(store, task, branch=False)
     if pane:
         tmux(task["socket"], "kill-window", "-t", task["windowId"])
+    # A task begun in a repository-wide session moves to its own on resume,
+    # unless its session was chosen with roost-session-name.
+    if not task.get("sessionShared"):
+        task["session"] = session_name(task["repo"], task["id"])
     spawn(store, task, resume=True)
     return task
 
