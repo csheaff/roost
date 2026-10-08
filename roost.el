@@ -37,6 +37,7 @@
 (declare-function tmux-control-buffer-socket-name "tmux-control" ())
 (declare-function tmux-control-buffer-session "tmux-control" ())
 (declare-function tmux-control-disconnect "tmux-control" ())
+(declare-function tmux-control-reconnect "tmux-control" ())
 (declare-function tmux-control-active-pane "tmux-control" ())
 (declare-function tmux-control-window-id "tmux-control" ())
 (declare-function magit-status "magit-status" (&optional directory cache))
@@ -1621,11 +1622,12 @@ listed with gh on the project's host."
 
 (defun roost--release-terminal (task)
   "Disconnect the terminal showing TASK's own tmux session.
-A task's own session holds only its agent's window, so stopping,
-resuming, retiring or forgetting the task ends the session, and its
-terminal would then report a lost connection.  Opening the task again
-connects anew.  A session shared through `roost-session-name', or by
-tasks from before Roost gave each task one, outlives the task."
+Return its buffers.  A task's own session holds only its agent's
+window, so stopping, resuming, retiring or forgetting the task ends the
+session, and its terminal would then report a lost connection.  Opening
+the task again connects anew.  A session shared through
+`roost-session-name', or by tasks from before Roost gave each task one,
+outlives the task."
   (let ((host (roost--field task 'host))
         (socket (roost--field task 'socket))
         (session (roost--field task 'session))
@@ -1635,25 +1637,44 @@ tasks from before Roost gave each task one, outlives the task."
                 ((stringp session))
                 ((stringp id))
                 ((string-suffix-p (concat "-" (substring id 0 (min 6 (length id)))) session))
-                (terminal (seq-find (lambda (buffer)
-                                      (with-current-buffer buffer
-                                        (and (equal (tmux-control-buffer-session) session)
-                                             (equal (tmux-control-buffer-host) host)
-                                             (equal (tmux-control-buffer-socket-name) socket))))
-                                    (buffer-list))))
-      (with-current-buffer terminal
-        (tmux-control-disconnect)))))
+                (terminals (seq-filter (lambda (buffer)
+                                         (with-current-buffer buffer
+                                           (and (equal (tmux-control-buffer-session) session)
+                                                (equal (tmux-control-buffer-host) host)
+                                                (equal (tmux-control-buffer-socket-name) socket))))
+                                       (buffer-list))))
+      (with-current-buffer (car terminals)
+        (tmux-control-disconnect))
+      terminals)))
+
+(defun roost--restore-terminal (terminals)
+  "Reconnect TERMINALS, released for an action the host then refused.
+Only where one is still shown; opening the task reconnects the rest."
+  (when-let* (((fboundp 'tmux-control-reconnect))
+              (window (seq-find (lambda (window) (memq (window-buffer window) terminals))
+                                (window-list-1 nil 'nomini t))))
+    (with-selected-window window
+      (tmux-control-reconnect))))
+
+(defun roost--discard-terminal (terminals)
+  "Kill TERMINALS, whose session ended, rather than leave them blank."
+  (dolist (buffer terminals)
+    (when (buffer-live-p buffer)
+      (let ((kill-buffer-query-functions nil))
+        (kill-buffer buffer)))))
 
 (defun roost--act (task action &optional parameters callback failure)
   "Run ACTION on TASK with PARAMETERS, then CALLBACK with the updated task.
 FAILURE, if given, receives the error message instead of Roost reporting it."
-  ;; The host refuses to resume an agent still running, whose terminal stays.
-  (when (or (member action '("stop" "retire" "merge" "forget"))
-            (and (equal action "resume") (not (roost--field task 'live))))
-    (roost--release-terminal task))
-  (let ((host (roost--field task 'host)))
+  (let* ((host (roost--field task 'host))
+         ;; The host refuses to resume an agent still running, whose
+         ;; terminal stays.
+         (terminals (when (or (member action '("stop" "retire" "merge" "forget"))
+                              (and (equal action "resume") (not (roost--field task 'live))))
+                      (roost--release-terminal task))))
     (roost--request host action (cons (cons 'id (roost--field task 'id)) parameters)
                     (lambda (updated)
+                      (roost--discard-terminal terminals)
                       (cl-incf (gethash host roost--revisions 0))
                       ;; `pushed' is transient: the callback sees it, the cache does not.
                       (let ((pushed (assq 'pushed updated)))
@@ -1662,7 +1683,13 @@ FAILURE, if given, receives the error message instead of Roost reporting it."
                         (message "Roost %s: %s" (roost--field task 'name) action)
                         (when callback
                           (funcall callback (if pushed (cons pushed updated) updated)))))
-                    failure)))
+                    (lambda (err)
+                      ;; Refused, as retiring unmerged work is: the agent runs on.
+                      (when (roost--field task 'live)
+                        (roost--restore-terminal terminals))
+                      (if failure
+                          (funcall failure err)
+                        (message "Roost %s: %s" (roost--host-label host) err))))))
 
 ;;;###autoload
 (defun roost-resume (&optional task)

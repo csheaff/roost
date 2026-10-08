@@ -2518,6 +2518,43 @@ ssh: connect to host dev port 22: Operation timed out"
             (should (equal disconnected '("roost-p-012345")))))
        (mapc #'kill-buffer terminals)))))
 
+(ert-deftest roost-a-closed-terminal-goes-or-comes-back-with-the-hosts-answer ()
+  ;; Once the session has ended, its blank terminal goes.  When the host
+  ;; refuses, as it does to retire unmerged work, the agent runs on and
+  ;; the terminal you were watching reconnects.
+  (roost-test--isolated
+   (let* ((task (roost--cache-task "dev" (append '((session . "roost-p-012345") (live . t))
+                                                 (roost-test--task "0123456789abcdef" "ready"))))
+          (make (lambda ()
+                  (with-current-buffer (generate-new-buffer " *terminal*")
+                    (setq-local roost-test--tmux '(:host "dev" :socket "main" :session "roost-p-012345"))
+                    (current-buffer))))
+          (answer nil) reconnected refusal)
+     (roost-test--with-tmux-buffers
+      (cl-letf (((symbol-function 'tmux-control-buffer-session)
+                 (lambda () (plist-get roost-test--tmux :session)))
+                ((symbol-function 'tmux-control-disconnect) #'ignore)
+                ((symbol-function 'tmux-control-reconnect)
+                 (lambda () (push (current-buffer) reconnected)))
+                ((symbol-function 'roost--request)
+                 (lambda (_host _action _parameters success failure)
+                   (if (stringp answer) (funcall failure answer) (funcall success task)))))
+        (let ((terminal (funcall make)))
+          (save-window-excursion
+            (set-window-buffer (selected-window) terminal)
+            (roost--act task "stop"))
+          (should-not (buffer-live-p terminal)))
+        (let ((terminal (funcall make)))
+          (unwind-protect
+              (save-window-excursion
+                (set-window-buffer (selected-window) terminal)
+                (setq answer "Task branch is not merged")
+                (roost--act task "retire" nil nil (lambda (err) (setq refusal err)))
+                (should (equal refusal "Task branch is not merged"))
+                (should (equal reconnected (list terminal)))
+                (should (buffer-live-p terminal)))
+            (kill-buffer terminal))))))))
+
 (ert-deftest roost-the-sidebar-highlights-the-row-its-keys-act-on ()
   ;; It shows no cursor, so nothing said which task `s' would resume.
   (roost-test--isolated
