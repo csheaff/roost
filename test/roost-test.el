@@ -2547,4 +2547,27 @@ ssh: connect to host dev port 22: Operation timed out"
        (kill-buffer sidebar)
        (when (get-buffer " *elsewhere*") (kill-buffer " *elsewhere*"))))))
 
+(ert-deftest roost-opening-a-task-whose-window-is-gone-offers-to-resume-it ()
+  ;; After a crash, RET said only "resume the task".
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (roost-test--task nil "crashed")))
+         (reply "The agent's tmux window is gone; resume the task")
+         (answer t) asked resumed messages)
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host _action _params _success failure) (funcall failure reply)))
+               ((symbol-function 'y-or-n-p) (lambda (question) (push question asked) answer))
+               ((symbol-function 'roost-resume) (lambda (task) (push task resumed)))
+               ((symbol-function 'message) (lambda (format &rest args) (push (apply #'format format args) messages))))
+       (roost-open-task task)
+       (should (equal asked '("fix auth's agent isn't running.  Resume its conversation? ")))
+       (should (equal resumed (list task)))
+       (setq answer nil)
+       (roost-open-task task)
+       (should (= (length resumed) 1))
+       ;; Other failures are reported, not offered.
+       (setq reply "ssh: connect to host dev port 22: Operation timed out" asked nil)
+       (roost-open-task task)
+       (should-not asked)
+       (should (equal (car messages) "Roost dev: ssh: connect to host dev port 22: Operation timed out"))))))
+
 (provide 'roost-test)

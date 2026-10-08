@@ -203,7 +203,7 @@ Magit is optional (review falls back to Dired).
 | Key | Command | |
 | --- | --- | --- |
 | `h` | `roost-dispatch` | A Magit-style menu of every command below, naming the task they act on |
-| `RET` | `roost-open-task` | Open the task's agent terminal and workspace |
+| `RET` | `roost-open-task` | Open the task's agent terminal and workspace; for a stopped or crashed agent, offer to resume it |
 | `c` | `roost-new-task` | Draft a new task, from the region or Org entry if any (`C-u` forks the current task's commits) |
 | `n` | `roost-next-waiting` | Next task waiting for you, permission requests first |
 | `t` | `roost-shell` | Shell beside the agent, in the worktree (reused) |

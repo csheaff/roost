@@ -1050,7 +1050,16 @@ Only while Emacs has focus, since otherwise nobody is looking."
                         (when (and (assq 'live current) (not (roost--field current 'live)))
                           (message "%s's agent has %s; its last output is shown. Resume with `s'."
                                    (roost--field current 'name)
-                                   (roost--field current 'status))))))))
+                                   (roost--field current 'status)))))
+                    (lambda (err)
+                      ;; Stopped, or its tmux server gone, as after a crash:
+                      ;; resuming is the way to its terminal.
+                      (if (and (= generation roost--open-generation)
+                               (string-prefix-p "The agent's tmux window is gone" err))
+                          (when (y-or-n-p (format "%s's agent isn't running.  Resume its conversation? "
+                                                  (roost--field task 'name)))
+                            (roost-resume task))
+                        (message "Roost %s: %s" (roost--host-label (roost--field task 'host)) err))))))
 
 ;;;###autoload
 (defun roost-switch-task ()
