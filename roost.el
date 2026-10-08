@@ -2786,8 +2786,6 @@ keeps one process-wide registration per mode; a nil STATE removes it."
 
 (defvar transient--original-buffer)
 
-(defvar transient--pending-suffix)
-
 (defun roost--dispatch-task ()
   "The task `roost-dispatch' acts on, or nil when it will ask.
 Transient formats the menu in a temporary buffer; the task comes from
@@ -2804,12 +2802,19 @@ the buffer the menu was opened from."
               (roost--display-status task))
     "Task (chosen when needed)"))
 
-(defun roost--dispatch-inapt-p ()
-  "Whether the menu entry being drawn does not apply to the menu's task."
-  (when-let* (((bound-and-true-p transient--pending-suffix))
-              (command (ignore-errors (oref transient--pending-suffix command)))
-              (task (roost--dispatch-task)))
+(defun roost--dispatch-inapt-p (command)
+  "Whether COMMAND, in the menu, does not apply to the menu's task."
+  (when-let* ((task (roost--dispatch-task)))
     (not (roost--action-applies-p task command))))
+
+;; A predicate for each task entry of the menu, such as
+;; `roost--stop-inapt-p': older transient doesn't say which entry it asks about.
+(dolist (command '(roost-open-task roost-shell roost-files roost-send roost-task-info roost-review
+                   roost-diff roost-update roost-pr roost-merge-retire roost-retire roost-forget
+                   roost-stop roost-resume))
+  (defalias (intern (format "roost--%s-inapt-p" (string-remove-prefix "roost-" (symbol-name command))))
+    (lambda () (roost--dispatch-inapt-p command))
+    (format "Whether `%s' does not apply to the task of `roost-dispatch'." command)))
 
 (defun roost--agent-running-p (task)
   "Whether TASK's agent is running, as last seen."
@@ -2870,23 +2875,23 @@ Task commands act on the task at point, in the dashboard, a task panel,
 terminal or worktree, or ask which task."
   [:description roost--dispatch-task-description
    ["Work"
-    ("RET" "Agent" roost-open-task :inapt-if roost--dispatch-inapt-p)
-    ("t" "Shell" roost-shell :inapt-if roost--dispatch-inapt-p)
-    ("f" "Files" roost-files :inapt-if roost--dispatch-inapt-p)
-    ("e" "Send prompt" roost-send :inapt-if roost--dispatch-inapt-p)
-    ("i" "Details" roost-task-info :inapt-if roost--dispatch-inapt-p)]
+    ("RET" "Agent" roost-open-task :inapt-if roost--open-task-inapt-p)
+    ("t" "Shell" roost-shell :inapt-if roost--shell-inapt-p)
+    ("f" "Files" roost-files :inapt-if roost--files-inapt-p)
+    ("e" "Send prompt" roost-send :inapt-if roost--send-inapt-p)
+    ("i" "Details" roost-task-info :inapt-if roost--task-info-inapt-p)]
    ["Review"
-    ("r" "Magit" roost-review :inapt-if roost--dispatch-inapt-p)
-    ("D" "Diff" roost-diff :inapt-if roost--dispatch-inapt-p)
-    ("u" "Update from integration" roost-update :inapt-if roost--dispatch-inapt-p)]
+    ("r" "Magit" roost-review :inapt-if roost--review-inapt-p)
+    ("D" "Diff" roost-diff :inapt-if roost--diff-inapt-p)
+    ("u" "Update from integration" roost-update :inapt-if roost--update-inapt-p)]
    ["Finish"
-    ("P" "Pull request" roost-pr :inapt-if roost--dispatch-inapt-p)
-    ("m" "Merge and retire" roost-merge-retire :inapt-if roost--dispatch-inapt-p)
-    ("x" "Retire" roost-retire :inapt-if roost--dispatch-inapt-p)
-    ("X" "Forget or discard" roost-forget :inapt-if roost--dispatch-inapt-p)]
+    ("P" "Pull request" roost-pr :inapt-if roost--pr-inapt-p)
+    ("m" "Merge and retire" roost-merge-retire :inapt-if roost--merge-retire-inapt-p)
+    ("x" "Retire" roost-retire :inapt-if roost--retire-inapt-p)
+    ("X" "Forget or discard" roost-forget :inapt-if roost--forget-inapt-p)]
    ["Session"
-    ("K" "Stop" roost-stop :inapt-if roost--dispatch-inapt-p)
-    ("s" "Resume" roost-resume :inapt-if roost--dispatch-inapt-p)]]
+    ("K" "Stop" roost-stop :inapt-if roost--stop-inapt-p)
+    ("s" "Resume" roost-resume :inapt-if roost--resume-inapt-p)]]
   ["Roost"
    [("c" "New task" roost-new-task)
     ("n" "Next waiting" roost-next-waiting)

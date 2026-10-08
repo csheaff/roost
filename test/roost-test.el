@@ -1261,10 +1261,14 @@
      ;; The menu greys out the same.
      (let ((transient--original-buffer (current-buffer)))
        (cl-letf (((symbol-function 'roost--task-at-point) (lambda () stopped)))
-         (should (let ((transient--pending-suffix (transient-suffix :command 'roost-stop)))
-                   (roost--dispatch-inapt-p)))
-         (should-not (let ((transient--pending-suffix (transient-suffix :command 'roost-resume)))
-                       (roost--dispatch-inapt-p))))))))
+         (should (roost--stop-inapt-p))
+         (should-not (roost--resume-inapt-p))
+         ;; Every task entry of the menu has its predicate.
+         (should (seq-every-p #'fboundp
+                              (mapcar (lambda (action)
+                                        (intern (format "roost--%s-inapt-p"
+                                                        (string-remove-prefix "roost-" (symbol-name (nth 2 action))))))
+                                      (seq-mapcat #'cdr roost--task-actions)))))))))
 
 (ert-deftest roost-sidebar-opens-in-a-live-window-when-the-main-area-is-split ()
   (roost-test--isolated
