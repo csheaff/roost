@@ -2513,4 +2513,38 @@ ssh: connect to host dev port 22: Operation timed out"
             (should-not disconnected)))
        (mapc #'kill-buffer terminals)))))
 
+(ert-deftest roost-the-sidebar-highlights-the-row-its-keys-act-on ()
+  ;; It shows no cursor, so nothing said which task `s' would resume.
+  (roost-test--isolated
+   (dolist (spec '(("1111111111111111" "alpha" "1") ("2222222222222222" "beta" "2")))
+     (roost--cache-task "dev" (append `((repo . "/home/user/p") (startedAt . ,(nth 2 spec)) (name . ,(nth 1 spec)))
+                                      (roost-test--task (car spec) "ready"))))
+   (let ((roost-workspace nil)          ; The frame names the task you are in.
+         (sidebar (roost--sidebar-get-buffer))
+         (row (lambda (name) (with-current-buffer roost--sidebar-buffer
+                               (save-excursion (goto-char (point-min)) (search-forward name)
+                                               (line-beginning-position))))))
+     (unwind-protect
+         (save-window-excursion
+           ;; Entered at the top: the selection starts on the task you are in.
+           (set-frame-parameter nil 'roost-task '("dev" "2222222222222222"))
+           (set-window-buffer (selected-window) sidebar)
+           (set-window-point (selected-window) 1)
+           (roost--sidebar-mark-selection)
+           (with-current-buffer sidebar
+             (should (= (overlay-start roost--sidebar-selection) (funcall row "beta")))
+             (should (eq (overlay-get roost--sidebar-selection 'window) (selected-window)))
+             ;; It follows point, and outlasts a redraw.
+             (goto-char (funcall row "alpha"))
+             (roost--sidebar-mark-selection)
+             (roost--render-sidebar)
+             (should (= (overlay-start roost--sidebar-selection) (funcall row "alpha"))))
+           ;; Elsewhere, the sidebar shows no selection.
+           (set-window-buffer (selected-window) (get-buffer-create " *elsewhere*"))
+           (roost--sidebar-mark-selection)
+           (with-current-buffer sidebar
+             (should-not (overlay-buffer roost--sidebar-selection))))
+       (kill-buffer sidebar)
+       (when (get-buffer " *elsewhere*") (kill-buffer " *elsewhere*"))))))
+
 (provide 'roost-test)

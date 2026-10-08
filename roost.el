@@ -25,6 +25,7 @@
 (require 'parse-time)
 (require 'button)
 (require 'transient)
+(require 'hl-line)
 
 (declare-function tmux-control-connect-or-switch "tmux-control" (host socket-name session))
 (declare-function tmux-control-send-command "tmux-control" (command))
@@ -219,6 +220,8 @@ Ordinary perspectives retain their existing labels and click actions."
   "Face for a merged pull request." :group 'roost)
 (defface roost-pr-closed '((t :inherit error))
   "Face for a pull request closed without merging." :group 'roost)
+(defface roost-sidebar-selection '((t :inherit hl-line :extend t))
+  "The sidebar row its keys act on, shown while you are in the sidebar.")
 (defface roost-diff-added '((t :inherit success))
   "Inserted line counts.")
 (defface roost-diff-removed '((t :inherit error))
@@ -3162,11 +3165,7 @@ down.  With WIDTH, fit each line within it, leaving details to hover."
                         ;; Without `mouse-face', so each row lights up alone,
                         ;; but still the task's, for point and clicks there.
                         (apply #'propertize "\n" row))))))))
-    (let ((target (or (and key (save-excursion
-                                 (goto-char (point-min))
-                                 ;; Keys are lists, so compare with `equal'.
-                                 (when-let* ((match (text-property-search-forward 'roost-task key t)))
-                                   (prop-match-beginning match))))
+    (let ((target (or (and key (roost--task-row key))
                       (text-property-not-all (point-min) (point-max) 'roost-task nil)
                       (point-min))))
       (goto-char target)
@@ -3267,7 +3266,45 @@ Task commands act on the task at point, as in the dashboard.
               cursor-type nil
               cursor-in-non-selected-windows nil)
   (remove-hook 'window-size-change-functions #'roost--dashboard-resized t)
-  (add-hook 'window-size-change-functions #'roost--sidebar-resized nil t))
+  (add-hook 'window-size-change-functions #'roost--sidebar-resized nil t)
+  ;; With no cursor, a highlight shows which task its keys act on.
+  (add-hook 'post-command-hook #'roost--sidebar-mark-selection nil t)
+  (add-hook 'window-selection-change-functions #'roost--sidebar-mark-selection nil t))
+
+(defvar-local roost--sidebar-selection nil
+  "Overlay on the sidebar row its keys act on, while its window is selected.")
+
+(defun roost--task-row (key)
+  "Position of the row for the task with KEY in the current buffer, or nil."
+  (save-excursion
+    (goto-char (point-min))
+    ;; Keys are lists, so compare with `equal'.
+    (when-let* ((match (text-property-search-forward 'roost-task key t)))
+      (prop-match-beginning match))))
+
+(defun roost--sidebar-mark-selection (&rest _)
+  "Highlight the sidebar row its keys act on, while you are in the sidebar.
+The sidebar shows no cursor.  Entering it anywhere but on a task starts
+on the task you are working on, or else the first."
+  (when-let* ((buffer (get-buffer roost--sidebar-buffer)))
+    (with-current-buffer buffer
+      (let ((window (selected-window)))
+        (if (not (eq (window-buffer window) buffer))
+            (when roost--sidebar-selection
+              (delete-overlay roost--sidebar-selection))
+          (unless (get-text-property (window-point window) 'roost-task)
+            (when-let* ((row (or (when-let* ((task (roost--frame-task)))
+                                   (roost--task-row (roost--key task)))
+                                 (text-property-not-all (point-min) (point-max) 'roost-task nil))))
+              (set-window-point window row)))
+          (unless roost--sidebar-selection
+            (setq roost--sidebar-selection (make-overlay 1 1))
+            (overlay-put roost--sidebar-selection 'face 'roost-sidebar-selection))
+          (overlay-put roost--sidebar-selection 'window window)
+          (save-excursion
+            (goto-char (window-point window))
+            (move-overlay roost--sidebar-selection (line-beginning-position)
+                          (min (point-max) (1+ (line-end-position))) buffer)))))))
 
 (defun roost--sidebar-resized (window)
   "Reflow the sidebar after WINDOW is resized."
@@ -3353,12 +3390,10 @@ Task commands act on the task at point, as in the dashboard.
                              row)
                       ;; As in the dashboard: unhighlighted, still the task's.
                       (apply #'propertize "\n" row)))))))
-    (goto-char (or (and key (save-excursion
-                              (goto-char (point-min))
-                              (when-let* ((match (text-property-search-forward 'roost-task key t)))
-                                (prop-match-beginning match))))
-                   (point-min)))
-    (when window (set-window-point window (point)))))
+    (goto-char (or (and key (roost--task-row key)) (point-min)))
+    (when window (set-window-point window (point)))
+    ;; Redrawing removed the highlight with the text.
+    (roost--sidebar-mark-selection)))
 
 (defun roost--sidebar-get-buffer ()
   "The task sidebar buffer, rendered."
