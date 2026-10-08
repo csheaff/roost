@@ -2592,6 +2592,11 @@ ssh: connect to host dev port 22: Operation timed out"
              (roost--sidebar-mark-selection)
              (should (= (point) (funcall row "dev · p")))
              (should (= (overlay-start roost--sidebar-selection) (funcall row "dev · p"))))
+           ;; So may a click that enters the sidebar there.
+           (set-window-point (selected-window) (funcall row "dev · p"))
+           (let ((last-input-event `(mouse-1 (,(selected-window) ,(funcall row "dev · p") (0 . 0) 0))))
+             (roost--sidebar-entered))
+           (should (= (window-point) (funcall row "dev · p")))
            ;; Elsewhere, the sidebar shows no selection.
            (set-window-buffer (selected-window) (get-buffer-create " *elsewhere*"))
            (roost--sidebar-mark-selection)

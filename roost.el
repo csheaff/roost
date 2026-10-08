@@ -3348,12 +3348,13 @@ Task commands act on the task at point, as in the dashboard.
   "Start on a task when you enter the sidebar, then highlight it.
 Entering it anywhere but on a task starts on the task you are working
 on, or else the first.  Once in, point may also rest on a project's
-heading, where `c' starts a task in that project."
+heading, where `c' starts a task in that project; so may a click."
   (when-let* ((buffer (get-buffer roost--sidebar-buffer))
               (window (selected-window))
               ((eq (window-buffer window) buffer)))
     (with-current-buffer buffer
-      (unless (get-text-property (window-point window) 'roost-task)
+      (unless (or (mouse-event-p last-input-event)
+                  (get-text-property (window-point window) 'roost-task))
         (when-let* ((row (or (when-let* ((task (roost--frame-task)))
                                (roost--task-row (roost--key task)))
                              (text-property-not-all (point-min) (point-max) 'roost-task nil))))
