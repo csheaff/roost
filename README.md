@@ -340,6 +340,11 @@ Things to know:
   they can tell Shift+Return and Option+Return from Return (a new line in
   Claude's prompt rather than sending it). Programs that do not ask for
   extended keys see no difference. Agents started before it was on need `s`.
+- Claude Code can make worktrees of its own (`EnterWorktree`, isolated
+  subagents, `/batch`), in the primary checkout's `.claude/worktrees`. In a
+  task they start from the task's work, its panel lists them with what they
+  hold, each opening in Magit, and the task can't be merged or retired while
+  one holds work not on the task's branch.
 - Claude and Codex each ask once per repository to trust it; every task worktree
   of that repository is trusted after that.
 - Codex asks you to review Roost's observer hooks the first time. The hook

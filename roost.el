@@ -353,15 +353,17 @@ JSON null becomes nil."
 
 (defun roost--remote-directory (task)
   "TASK's worktree as a local or configured TRAMP path."
-  (let ((host (roost--field task 'host))
-        (path (roost--field task 'worktree)))
-    (if (not host)
-        (file-name-as-directory path)
-      (let* ((parts (split-string host "@"))
-             (user (and (> (length parts) 1) (car parts)))
-             (bare (car (last parts)))
-             (method (substring-no-properties (tramp-find-method nil user bare))))
-        (concat "/" method ":" host ":" (file-name-as-directory path))))))
+  (roost--host-directory (roost--field task 'host) (roost--field task 'worktree)))
+
+(defun roost--host-directory (host path)
+  "Directory PATH on HOST as a local or configured TRAMP path."
+  (if (not host)
+      (file-name-as-directory path)
+    (let* ((parts (split-string host "@"))
+           (user (and (> (length parts) 1) (car parts)))
+           (bare (car (last parts)))
+           (method (substring-no-properties (tramp-find-method nil user bare))))
+      (concat "/" method ":" host ":" (file-name-as-directory path)))))
 
 ;;;; Host RPC
 
@@ -631,7 +633,7 @@ and a newer notification about TASK replaces it."
                         (not (equal (roost--field task 'updatedAt)
                                     (roost--field old 'updatedAt))))))
     ;; Quiet polls skip Git and the latest reply; keep the last full refresh's.
-    (dolist (field '(diff dirty files ahead behind worktreeMissing prStatus lastMessage gitStamp))
+    (dolist (field '(diff dirty files ahead behind worktreeMissing prStatus lastMessage gitStamp agentWork))
       (unless (assoc field task)
         (when (assoc field old) (push (assoc field old) task))))
     (if (member status '("retired" "forgotten" "discarded"))
@@ -2587,6 +2589,38 @@ COMPACT abbreviates commits ahead of and behind the integration branch."
                 (- (length files) roost--changed-files-shown)))
        'roost-dim))))
 
+(defun roost--agent-work-left (task)
+  "The worktrees TASK's agent made that hold work not on the task's branch."
+  (seq-filter (lambda (entry)
+                (or (> (or (alist-get 'ahead entry) 0) 0) (alist-get 'dirty entry)))
+              (roost--field task 'agentWork)))
+
+(defun roost--insert-agent-work (task)
+  "List the worktrees TASK's agent made for itself, each opening in Magit.
+Claude Code makes them for its EnterWorktree tool and isolated subagents."
+  (when-let* ((work (roost--field task 'agentWork)))
+    (roost--insert-heading "Its agent's own worktrees")
+    (dolist (entry work)
+      (let ((path (alist-get 'path entry))
+            (ahead (or (alist-get 'ahead entry) 0)))
+        (insert "  ")
+        (insert-text-button (or (alist-get 'branch entry) (file-name-nondirectory path))
+                            'follow-link t 'face 'roost-field
+                            'help-echo (concat path "\nmouse-1: open it in Magit")
+                            'action (lambda (_)
+                                      (let ((directory (roost--host-directory (roost--field task 'host) path)))
+                                        (if (require 'magit nil t) (magit-status directory) (dired directory)))))
+        (insert "  "
+                (propertize (string-join
+                             (or (delq nil (list (when (> ahead 0)
+                                                   (format "%d commit%s not on this task's branch"
+                                                           ahead (if (= ahead 1) "" "s")))
+                                                 (when (alist-get 'dirty entry) "uncommitted changes")))
+                                 '("nothing new"))
+                             ", ")
+                            'face (if (or (> ahead 0) (alist-get 'dirty entry)) 'roost-status-permission 'roost-dim))
+                "\n")))))
+
 (defun roost--diff-file (task file)
   "Show how TASK has changed FILE, an entry of its `files'.
 An untracked file, with nothing to compare, is opened instead."
@@ -2782,8 +2816,10 @@ Unknown Git statistics count as making sense."
       ((or 'roost-send 'roost-stop) (roost--agent-running-p task))
       ('roost-resume (and worktree (not (roost--agent-running-p task))))
       ('roost-pr (and worktree (or (roost--field task 'pr) (not (eql ahead 0)))))
-      ('roost-merge-retire (and (not merged) (not (eql ahead 0)) (not active)))
+      ('roost-merge-retire (and (not merged) (not (eql ahead 0)) (not active)
+                                (not (roost--agent-work-left task))))
       ('roost-retire (and (not active) (not (roost--field task 'dirty))
+                          (not (roost--agent-work-left task))
                           (or merged (not (and (numberp ahead) (> ahead 0))))))
       (_ t))))
 
@@ -2802,6 +2838,8 @@ Unknown Git statistics count as making sense."
      ((member status '("running" "background" "starting")) nil)
      ((roost--field task 'dirty)
       (concat "Review and commit its changes in Magit: " (funcall key "r")))
+     ((roost--agent-work-left task)
+      "Its agent left work in a worktree of its own, below: merge it into this task in Magit, or remove it")
      ((equal (alist-get 'state pr) "MERGED")
       (concat "Its pull request is merged; " (funcall key "x") " retires it"))
      ((equal (alist-get 'state pr) "OPEN")
@@ -3097,6 +3135,7 @@ Windows showing the panel keep their scroll position."
             (format "%s has moved on; \\<roost-task-info-mode-map>\\[roost-update] merges it into this task before you merge the task back."
                     integration))
            'roost-dim))
+        (roost--insert-agent-work task)
         (pcase status
           ((and "failed" (guard (roost--field task 'live)))
            ;; A turn ended on an error, such as a usage limit, and the

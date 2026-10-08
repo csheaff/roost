@@ -30,7 +30,7 @@ ACTIVE = ("starting", "running", "permission", "background")
 ENDED = ("stopped", "exited", "failed", "crashed")
 # Computed per request and never persisted in a task record.
 TRANSIENT = ("live", "diff", "dirty", "files", "ahead", "behind", "update", "worktreeMissing",
-             "prStatus", "lastMessage", "gitStamp")
+             "prStatus", "lastMessage", "gitStamp", "agentWork")
 LAST_MESSAGE_TAIL = 256 * 1024
 LAST_MESSAGE_LIMIT = 2000
 INTERRUPT_TAIL = 64 * 1024
@@ -327,7 +327,10 @@ def claude_hook_settings(store, task):
     script = str(Path(__file__).resolve())
     command = shlex.join([sys.executable, script, "hook", str(store.root), task["id"], task["runId"]])
     settings = {"hooks": {event: [{"hooks": [{"type": "command", "command": command}]}]
-                          for event in CLAUDE_HOOK_EVENTS}}
+                          for event in CLAUDE_HOOK_EVENTS},
+                # A worktree the agent makes for itself starts from the
+                # task's work, not from the default branch.
+                "worktree": {"baseRef": "head"}}
     path = store.tasks_dir / (task["id"] + ".settings")
     atomic_json(path, settings)
     return str(path)
@@ -1056,6 +1059,8 @@ def add_git_stats(tasks, pull_requests=True):
         reply = last_message(task)
         if reply:
             task["lastMessage"] = reply
+        if task.get("agentWorktrees"):
+            task["agentWork"] = agent_work(task)
         if pull_requests and isinstance(task.get("pr"), dict) and task["pr"].get("number"):
             status = pr_status(task)
             if status:
@@ -1325,6 +1330,7 @@ def retire(store, task, merge=False, merged_head=None):
     if worktree_exists:
         require_clean(str(worktree))
         require_removable(worktree)
+    require_agent_work_kept(task)
     if merge:
         if not branch_exists:
             raise RoostError("The task branch no longer exists; there is nothing to merge")
@@ -1675,6 +1681,50 @@ def permission_request(payload, worktree=None):
     return "Asks to " + (verb + " " + detail if detail else "use " + tool)
 
 
+def agent_worktree(task, cwd):
+    """The worktree Claude Code made for TASK's agent that CWD is in, or
+    None. Claude makes them in the primary checkout's .claude/worktrees,
+    for --worktree, its EnterWorktree tool and isolated subagents."""
+    if not isinstance(cwd, str) or not cwd:
+        return None
+    try:
+        root = Path(task["repo"]).resolve() / ".claude" / "worktrees"
+        parts = Path(cwd).resolve().relative_to(root).parts
+    except (ValueError, OSError, KeyError, TypeError):
+        return None
+    return str(root / parts[0]) if parts else None
+
+
+def agent_work(task):
+    """The worktrees TASK's agent made, as it left them: branch, commits not
+    on the task's branch, and whether anything is uncommitted."""
+    work = []
+    for path in task.get("agentWorktrees") or []:
+        if not isinstance(path, str) or not Path(path).is_dir():
+            continue
+        branch = read_git(path, "symbolic-ref", "--short", "-q", "HEAD").stdout.strip()
+        ahead = read_git(path, "rev-list", "--count", "refs/heads/" + task["branch"] + "..HEAD", "--")
+        work.append(dict(path=path, branch=branch or None,
+                         ahead=int(ahead.stdout) if ahead.returncode == 0 else None,
+                         dirty=bool(read_git(path, "status", "--porcelain").stdout.strip())))
+    return work
+
+
+def require_agent_work_kept(task):
+    """Refuse to finish TASK while its agent's own worktrees hold work that
+    is not on the task's branch: nothing else would show it."""
+    left = [entry for entry in agent_work(task) if entry["ahead"] or entry["dirty"]]
+    if left:
+        entry = left[0]
+        what = ", ".join(filter(None, [
+            "%d commit%s not on the task's branch" % (entry["ahead"], "" if entry["ahead"] == 1 else "s")
+            if entry["ahead"] else None,
+            "uncommitted changes" if entry["dirty"] else None]))
+        raise RoostError("Its agent left work in its own worktree %s (%s%s). Merge it into the task, "
+                         "or remove it with git worktree remove --force --force, then try again"
+                         % (entry["path"], ("branch %s: " % entry["branch"]) if entry["branch"] else "", what))
+
+
 def update_hook(store, task_id, payload, run_id=None):
     with store.locked():
         task = store.read(task_id)
@@ -1683,6 +1733,10 @@ def update_hook(store, task_id, payload, run_id=None):
         if task["status"] in ("stopped", "retired"):
             return
         before = task["status"]
+        made = agent_worktree(task, payload.get("cwd"))
+        if made and made not in (task.get("agentWorktrees") or []):
+            task["agentWorktrees"] = (task.get("agentWorktrees") or []) + [made]
+            store.save(task)
         updates = agent_for(task).observe(payload, before)
         if updates:
             task.update(updates)

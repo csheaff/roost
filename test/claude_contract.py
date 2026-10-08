@@ -57,8 +57,8 @@ IGNORED_EVENTS = {
     "TaskCreated": "a task in the session's list was created",
     "TeammateIdle": "a teammate is idle; its permission prompts are notifications",
     "UserPromptExpansion": "a prompt was expanded, as by a slash command",
-    "WorktreeCreate": "Claude's own worktrees, which Roost's tasks do not use",
-    "WorktreeRemove": "Claude's own worktrees, which Roost's tasks do not use",
+    "WorktreeCreate": "Claude's own worktrees: Roost finds them by the cwd other hooks report",
+    "WorktreeRemove": "Claude's own worktrees: Roost finds them by the cwd other hooks report",
 }
 # Notification types Roost maps, and those it ignores.
 MAPPED_NOTIFICATIONS = ("permission_prompt", "worker_permission_prompt", "agent_needs_input", "idle_prompt")
@@ -69,7 +69,7 @@ SESSION_SOURCES = ("startup", "resume", "clear", "compact", "fork")
 # Payload fields the helper reads.
 PAYLOAD_FIELDS = ("session_id", "transcript_path", "hook_event_name", "last_assistant_message",
                   "background_tasks", "session_crons", "notification_type", "message", "tool_name",
-                  "tool_input", "error", "error_details", "source", "reason")
+                  "tool_input", "error", "error_details", "source", "reason", "cwd")
 
 
 def claude_program():
@@ -137,6 +137,10 @@ def static_check():
     wrapper = re.search(rb"`eval \$\{[\w$]+\}`.{0,80}pwd -P >\| ", data, re.S)
     report(bool(wrapper), "Bash commands run as eval 'COMMAND'" if wrapper
            else "no longer finds how Bash commands are run; check approved_command_running")
+    # Each task's settings start the worktrees its agent makes from the task's work.
+    base = re.search(rb'baseRef:[\w$]+\(\["fresh","head"\]\)', data)
+    report(bool(base), "worktree.baseRef takes \"head\"" if base
+           else "worktree.baseRef changed; check claude_hook_settings")
     # Transcripts are found by the path hooks report, else by Claude's folder naming.
     naming = re.search(rb'replace\(/\[\^a-zA-Z0-9\]/g,"-"\).{0,120}\.length<=', data, re.S)
     report(bool(naming), "transcript folders named as claude_project_folder expects" if naming

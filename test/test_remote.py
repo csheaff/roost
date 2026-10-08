@@ -1036,6 +1036,32 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(self.request("discard", id=task["id"], expect=told["commit"])["ok"])
         self.assertTrue(roost.ref_exists(self.repo, "keep"))
 
+    def test_work_in_a_worktree_the_agent_made_keeps_the_task_from_retiring(self):
+        task = self.create()
+        store = roost.Store(str(self.state))
+        settings = json.loads(store.path(task["id"]).with_suffix(".settings").read_text())
+        self.assertEqual(settings["worktree"], {"baseRef": "head"})
+        # Claude makes its own worktrees in the primary checkout's .claude/worktrees.
+        own = self.repo / ".claude" / "worktrees" / "probe"
+        self.git("worktree", "add", "-q", "-b", "worktree-probe", str(own), task["branch"])
+        roost.update_hook(store, task["id"], dict(hook_event_name="UserPromptSubmit", cwd=str(own / "src")),
+                          task["runId"])
+        roost.update_hook(store, task["id"], dict(hook_event_name="Stop", cwd=str(own)), task["runId"])
+        self.assertEqual(store.read(task["id"])["agentWorktrees"], [str(own.resolve())])
+        listed = self.request("list", full=True)["result"][0]
+        self.assertEqual(listed["agentWork"], [dict(path=str(own.resolve()), branch="worktree-probe",
+                                                    ahead=0, dirty=False)])
+        (own / "hello").write_text("made there\n")
+        self.git("commit", "-qam", "there", cwd=own)
+        listed = self.request("list", full=True)["result"][0]
+        self.assertEqual(listed["agentWork"][0]["ahead"], 1)
+        error = self.request("retire", id=task["id"])["error"]
+        self.assertIn("left work in its own worktree", error)
+        self.assertIn("1 commit not on the task's branch", error)
+        self.assertIn(task["paneId"], roost.pane_inventory(self.socket))
+        self.git("worktree", "remove", "--force", str(own))
+        self.assertTrue(self.request("retire", id=task["id"])["ok"])
+
     def test_seen_is_recorded_for_every_emacs_until_the_next_event(self):
         task = self.create()
         record = self.wait(task, "ready")

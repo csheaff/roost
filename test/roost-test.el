@@ -1190,6 +1190,33 @@
        (delete-process server-process)
        (delete-directory invocation-directory t)))))
 
+(ert-deftest roost-work-in-the-agents-own-worktree-shows-and-holds-the-task ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (append '((live . t) (ahead . 1) (diff . "")
+                                                  (agentWork ((path . "/repo/.claude/worktrees/probe")
+                                                              (branch . "worktree-probe")
+                                                              (ahead . 2) (dirty . t))))
+                                                (roost-test--task nil "ready"))))
+         opened)
+     (should-not (roost--action-applies-p task 'roost-merge-retire))
+     (should-not (roost--action-applies-p task 'roost-retire))
+     (should (string-match-p "worktree of its own" (roost--next-step task)))
+     ;; A quiet poll, without Git statistics, keeps it.
+     (roost--cache-task "dev" (append '((live . t)) (roost-test--task nil "ready")))
+     (with-temp-buffer
+       (roost-task-info-mode)
+       (setq roost--buffer-task-key (roost--key task))
+       (roost--render-task-info)
+       (should (string-match-p "^Its agent's own worktrees\n  worktree-probe  2 commits not on this task's branch, uncommitted changes$"
+                               (buffer-string)))
+       (goto-char (point-min))
+       (search-forward "worktree-probe")
+       (cl-letf (((symbol-function 'magit-status) (lambda (directory) (setq opened directory)))
+                 ((symbol-function 'require) (lambda (&rest _) t))
+                 ((symbol-function 'tramp-find-method) (lambda (&rest _) "ssh")))
+         (push-button (1- (point))))
+       (should (equal opened "/ssh:dev:/repo/.claude/worktrees/probe/"))))))
+
 (ert-deftest roost-a-task-offers-what-it-can-do-now ()
   ;; A stopped task's panel offered Stop, Shell and Send, which its host refuses.
   (roost-test--isolated
