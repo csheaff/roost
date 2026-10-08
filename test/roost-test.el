@@ -1995,6 +1995,9 @@
          (let ((task (roost--cache-task "dev" (roost-test--task nil status))))
            (should (roost--waiting-p task))
            (should (string-match-p "Roost:1" (roost--mode-line-count)))
+           ;; Counted in the colour of its row.
+           (should (eq (get-text-property 1 'face (roost--mode-line-count))
+                       (if (equal status "exited") 'roost-status-ready 'roost-status-failed)))
            (roost-next-waiting)
            (should (equal (car opened) "0123456789abcdef"))
            (roost--mark-seen task)

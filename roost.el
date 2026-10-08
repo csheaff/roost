@@ -3753,11 +3753,20 @@ The sidebar shows no cursor."
 
 (defun roost--sidebar-summary (tasks)
   "Short count of TASKS waiting for you, or nil."
-  (let ((waiting (seq-count #'roost--waiting-p tasks))
-        (blocked (seq-some #'roost--blocked-p tasks)))
+  (let ((waiting (seq-count #'roost--waiting-p tasks)))
     (when (> waiting 0)
-      (propertize (format "%d waiting" waiting)
-                  'face (if blocked 'roost-status-permission 'roost-status-ready)))))
+      (propertize (format "%d waiting" waiting) 'face (roost--waiting-face tasks)))))
+
+(defun roost--waiting-face (tasks)
+  "Face for a count of TASKS waiting: as for the most urgent of them.
+An agent asking, then one that failed, then one that finished."
+  (cond ((seq-some #'roost--blocked-p tasks) 'roost-status-permission)
+        ((seq-some (lambda (task)
+                     (and (roost--waiting-p task)
+                          (member (roost--attention-status task) '("error" "failed" "crashed"))))
+                   tasks)
+         'roost-status-failed)
+        (t 'roost-status-ready)))
 
 (defun roost--sidebar-row (task width)
   "TASK's sidebar line, within WIDTH columns."
@@ -4225,14 +4234,15 @@ when they hide minor modes, and only while some agent waits."
 (defun roost--mode-line-count ()
   "\"Roost:N\" for the agents waiting for you, or nil when none are.
 Agents asking permission or stuck at a startup prompt color the count."
-  (let ((blocked 0) (waiting 0))
+  (let ((blocked 0) (waiting 0) (tasks nil))
     (maphash (lambda (_key task)
+               (push task tasks)
                (cond ((roost--blocked-p task) (cl-incf blocked))
                      ((roost--waiting-p task) (cl-incf waiting))))
              roost--tasks)
     (when (> (+ blocked waiting) 0)
       (concat (propertize (format " Roost:%d" (+ blocked waiting))
-                          'face (if (> blocked 0) 'roost-status-permission 'roost-status-ready)
+                          'face (roost--waiting-face tasks)
                           'help-echo "Agents waiting for you; mouse-1 opens the next"
                           'mouse-face 'mode-line-highlight
                           'local-map (make-mode-line-mouse-map 'mouse-1 #'roost-next-waiting))
