@@ -1062,6 +1062,33 @@ class Lifecycle(unittest.TestCase):
         self.git("worktree", "remove", "--force", str(own))
         self.assertTrue(self.request("retire", id=task["id"])["ok"])
 
+    def test_discard_takes_the_agents_own_worktrees_with_it(self):
+        task = self.create()
+        store = roost.Store(str(self.state))
+        own = self.repo / ".claude" / "worktrees" / "probe"
+        self.git("worktree", "add", "-q", "-b", "worktree-probe", str(own), task["branch"])
+        self.git("worktree", "lock", "--reason", "claude session probe", str(own))
+        roost.update_hook(store, task["id"], dict(hook_event_name="Stop", cwd=str(own)), task["runId"])
+        (own / "hello").write_text("there\n")
+        self.git("commit", "-qam", "there", cwd=own)
+        (own / "scratch").write_text("untracked\n")
+        told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+        self.assertEqual((told["commits"], told["changes"], told["agentWorktrees"]), (1, 1, 1))
+        self.assertTrue(self.request("discard", id=task["id"], expect=told["commit"])["ok"])
+        self.assertFalse(own.exists())
+        self.assertFalse(roost.ref_exists(self.repo, "worktree-probe"))
+
+    def test_retiring_removes_the_agents_empty_worktrees(self):
+        task = self.create()
+        store = roost.Store(str(self.state))
+        own = self.repo / ".claude" / "worktrees" / "probe"
+        self.git("worktree", "add", "-q", "-b", "worktree-probe", str(own), task["branch"])
+        self.git("worktree", "lock", "--reason", "claude session probe", str(own))
+        roost.update_hook(store, task["id"], dict(hook_event_name="Stop", cwd=str(own)), task["runId"])
+        self.assertTrue(self.request("retire", id=task["id"])["ok"])
+        self.assertFalse(own.exists())
+        self.assertFalse(roost.ref_exists(self.repo, "worktree-probe"))
+
     def test_seen_is_recorded_for_every_emacs_until_the_next_event(self):
         task = self.create()
         record = self.wait(task, "ready")

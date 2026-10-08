@@ -82,9 +82,12 @@ permission, with the first line of its reply or what it asks (`Asks to run
 make test`), so you can tell from the notification whether it needs you now.
 The agent whose terminal you are looking at doesn't notify. The dashboard
 shows the same for every agent, and the mode line counts the agents waiting
-(`Roost:2`; click it for the next one). `n` jumps to the next agent waiting for you, permission requests
-first. Answer it in the terminal, then `n` again. A finished agent you have
-looked at stops counting, and turns grey, until it replies again.
+(`Roost:2`; click it for the next one). `n` jumps to the next agent waiting
+for you, permission requests first. Answer it in the terminal, then `n` again.
+A finished agent you have looked at stops counting, and turns grey, until it
+replies again; one that failed or stopped by itself stops counting once you've
+seen it. What you've seen is kept on the task's host, for your other machines
+and the next session.
 
 ![The Roost dashboard: four Claude Code tasks on two machines, one asking to run its tests, two finished with changes to review, one working](docs/images/roost-dashboard.jpg)
 
@@ -95,8 +98,9 @@ terminal.*
 compact task list at the left of every frame, through perspective and tab
 switches and `C-x 1`; add `(roost-sidebar-mode 1)` to your configuration to have
 it from the start. An open task also gets a panel at the right of its
-terminal: the agent's latest reply, the files it changed (each opens its diff)
-and the actions, kept current as the agent works. The panel steps aside when
+terminal: the agent's latest reply, the files it changed (each opens its diff),
+and what you can do with the task now, starting with the next step, kept
+current as the agent works. The panel steps aside when
 the terminal would drop below 80 columns; `q` in it turns it off, and `I` in the
 dashboard or sidebar turns it back on.
 
@@ -119,7 +123,8 @@ remote tasks. Stage, edit and commit as usual.
 task falling behind (`↓2`). `u` merges the integration branch into the task's
 own worktree. If that conflicts, Roost offers to have the task's agent resolve
 it, run the tests and commit. Then `m` merges the task into the branch it
-started from and removes its worktree, branch and window.
+started from and removes its worktree, branch and window. For work you don't
+want, `x` discards the task, first saying what that loses.
 
 **Or open a pull request.** To finish on GitHub instead, `P` drafts one: the first
 line is the title and the rest the body, prefilled from the agent's commit
@@ -224,8 +229,8 @@ Magit is optional (review falls back to Dired).
 | `u` | `roost-update` | Merge the integration branch into the task |
 | `P` | `roost-pr` | Draft a pull request for the task; if it has one, push new commits and open it (`C-u`: open only) |
 | `m` | `roost-merge-retire` | Merge committed work, then retire the task |
-| `x` | `roost-retire` | Retire a task that is already merged or has no commits |
-| `X` | `roost-forget` | Drop the task from Roost, keeping its worktree and branch, or discarding them (`roost-discard`): Roost first says what would be lost, and to lose commits or files you type the task's name |
+| `x` | `roost-retire` | Finish with a task: retire it when its work is merged or it has none, otherwise offer to discard it (`roost-discard`), first saying what would be lost; to lose commits or files you type its name |
+| `X` | `roost-forget` | Drop the task from Roost, leaving its worktree and branch as they are |
 | `K` | `roost-stop` | Stop the agent's window; keep all work |
 | `s` | `roost-resume` | Restart a stopped task in its recorded conversation |
 | `g` | `roost-refresh` | Refresh status and Git statistics |
@@ -309,7 +314,8 @@ never changes your global agent settings or answers prompts.
 | `ready` | The agent is waiting for your next prompt. Not "reviewed" or "done" |
 | `background` | Claude background work or Pi queued messages remain |
 | `starting` | Startup prompts may be showing; Codex reports status from its first turn |
-| `exited`, `failed` | The agent exited normally, or the CLI failed; `RET` shows its last output. A Claude Code turn ended by an API error, such as a usage limit, is also `failed`, with the agent waiting |
+| `error` | A turn ended on an API error, such as a usage limit, and the agent waits; `RET` opens it to try again |
+| `exited`, `failed` | The agent exited normally, or the CLI failed; `RET` shows its last output |
 | `crashed` | The agent's tmux pane disappeared |
 | `stopped` | Stopped with `K`; `s` resumes the conversation |
 
@@ -319,11 +325,12 @@ earlier run cannot overwrite a resumed one. Merging needs the task's worktree
 clean. With the primary checkout on the task's integration branch, the merge
 happens there and needs nothing uncommitted (untracked files stay); with it on
 another branch, Git merges into the integration branch without touching your
-checkout (Git 2.38 or newer). A conflicting merge leaves nothing changed. Branches are deleted only if they still point at the
-commit Roost verified. Git will not remove a worktree with submodules checked
-out, since they may hold the only copy of commits made in them, so Roost
-refuses to retire one; once those commits are safe, remove it with
-`git worktree remove --force` and retire again.
+checkout (Git 2.38 or newer). A conflicting merge leaves nothing changed.
+Branches are deleted only if they still point at the commit Roost verified.
+Git will not remove a worktree with submodules checked out, since they may
+hold the only copy of commits made in them, so Roost refuses to retire one;
+once those commits are safe, remove it with `git worktree remove --force` and
+retire again.
 
 Things to know:
 
@@ -368,9 +375,11 @@ Since 0.8.1 (unreleased):
   greys out the rest.
 - Each task has a tmux session of its own, which ends with the task. Older
   tasks move to their own when resumed. `roost-session-name` is gone.
-- `X` keeps or discards a task's worktree and branch (`roost-discard`), and
-  `m` merges while your checkout is on another branch (Git 2.38+).
-- Failed, crashed and exited agents count as waiting until you've seen them,
+- `x` finishes a task: it retires one whose work is merged, or discards one
+  whose work isn't (`roost-discard`), with the worktrees its agent made. `X`
+  only forgets. `m` merges while your checkout is on another branch (Git 2.38+).
+- A turn that failed while its agent waits shows as `error`. Errors, failed,
+  crashed and exited agents count as waiting until you've seen them,
   and what you've seen is kept on the task's host, for your other machines and
   the next session.
 - Keys follow Magit's: `h` and `?` open the menu, `i` a task's details (`?`

@@ -267,6 +267,7 @@
        (roost-task-info-mode)
        (setq roost--buffer-task-key (roost--key failed))
        (roost--render-task-info)
+       (should (string-match-p "^fix auth   ● error for" (buffer-string)))
        (should (string-match-p "Its last turn failed, and the agent waits. RET opens it to try again."
                                (buffer-string)))
        (should-not (string-match-p "resumes" (buffer-string)))
@@ -275,8 +276,11 @@
        (roost--cache-task "dev" (append '((live)) (roost-test--task nil "failed")))
        (roost--render-task-info)
        (should (string-match-p "The agent has failed. RET shows its last output; s resumes" (buffer-string))))
+     ;; Its status says the agent waits: an error, not a failure to resume.
+     (should (equal (roost--display-status failed) "error"))
+     (should (roost--waiting-p failed))
      (roost--notify-attention "dev" failed "failed")
-     (should (equal notices `(("Roost: fix auth — failed" ,(concat "dev · " error))))))))
+     (should (equal notices `(("Roost: fix auth — error" ,(concat "dev · " error))))))))
 
 (ert-deftest roost-notifies-once-and-not-on-initial-attachment ()
   (roost-test--isolated
@@ -1129,12 +1133,23 @@
                  ((symbol-function 'read-string) (lambda (&rest _) (error "Not asked to type"))))
          (roost-discard task))
        (should (equal acted '(("discard" (expect . "abc123")))))
-       ;; X asks whether to keep or discard.
+       ;; x on a task holding work merged nowhere offers to discard it.
        (setq acted nil)
-       (cl-letf (((symbol-function 'read-multiple-choice) (lambda (&rest _) '(?d "discard")))
-                 ((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
-         (roost-forget task))
-       (should (equal (caar acted) "discard"))))))
+       (let ((unmerged (roost--cache-task "dev" (append '((ahead . 1)) (roost-test--task nil "ready"))))
+             asked-first)
+         (cl-letf (((symbol-function 'y-or-n-p)
+                    (lambda (prompt &rest _) (unless asked-first (setq asked-first prompt)) t)))
+           (roost-retire unmerged))
+         (should (string-match-p "work not merged anywhere" asked-first)))
+       (should (equal (caar acted) "discard"))
+       ;; With nothing to lose, x retires.
+       (setq acted nil)
+       (let ((merged (roost--cache-task "dev" (append '((ahead . 0) (dirty)) (roost-test--task nil "ready")))))
+         (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+           (roost-retire merged)))
+       (should (equal (caar acted) "retire"))
+       ;; Not while its agent works.
+       (should-error (roost-retire (roost--cache-task "dev" (roost-test--task nil "running"))) :type 'user-error)))))
 
 (ert-deftest roost-a-forgotten-host-is-no-longer-watched ()
   (roost-test--isolated
@@ -1234,6 +1249,29 @@
        (should-not (roost--switch-session nil "main" "roost-p-111111"))
        (should-not opened)))))
 
+(ert-deftest roost-menus-offer-what-the-task-can-do-now ()
+  ;; The right-click and menu-bar menus offered everything, as the panel did.
+  (roost-test--isolated
+   (let ((stopped (roost--cache-task "dev" (append '((live)) (roost-test--task nil "stopped")))))
+     (cl-letf (((symbol-function 'roost--task-at-point) (lambda () stopped)))
+       (should-not (roost--menu-applies-p 'roost-stop))
+       (should (roost--menu-applies-p 'roost-resume)))
+     ;; No task at point: the command will ask which.
+     (cl-letf (((symbol-function 'roost--task-at-point) (lambda () (user-error "No task"))))
+       (should (roost--menu-applies-p 'roost-stop)))
+     (should (seq-every-p (lambda (item) (or (stringp item) (memq :active (append item nil))))
+                          roost--task-menu-items)))))
+
+(ert-deftest roost-doctor-says-how-it-notifies ()
+  (let ((roost-notify-function nil) (system-type 'darwin))
+    (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) nil)))
+      (let ((line (roost--doctor-notifications)))
+        (should (eq (nth 1 line) 'optional))
+        (should (string-match-p "brew install terminal-notifier" (nth 3 line)))))
+    (cl-letf (((symbol-function 'executable-find) (lambda (name &rest _) (equal name "terminal-notifier")))
+              ((symbol-function 'roost--emacsclient-command) (lambda (&rest _) "emacsclient")))
+      (should (eq (nth 1 (roost--doctor-notifications)) t)))))
+
 (ert-deftest roost-a-task-offers-what-it-can-do-now ()
   ;; A stopped task's panel offered Stop, Shell and Send, which its host refuses.
   (roost-test--isolated
@@ -1250,9 +1288,9 @@
      ;; At work: nothing to merge or retire, and no resuming it.
      (should (equal (funcall applies working) '("RET" "t" "f" "e" "r" "D" "u" "X" "K")))
      (should-not (roost--next-step working))
-     ;; Finished with commits: merge it, not retire it.
+     ;; Finished with commits: merge it, or discard it with x.
      (should (member "m" (funcall applies finished)))
-     (should-not (member "x" (funcall applies finished)))
+     (should (member "x" (funcall applies finished)))
      (should (string-match-p "merges it" (roost--next-step finished)))
      ;; Merged on GitHub: retire it.
      (should (member "x" (funcall applies merged)))
@@ -2104,7 +2142,7 @@
                  (should (string-match-p "^fix auth   ● ready for" text))
                  (should (string-match-p "^Prompt\nfix authentication" text))
                  (should (string-match-p "^Changes\n1 file \\+2 −0" text))
-                 (should (string-match-p "Finish   Pull request P    Merge and retire m    Retire x    Forget or discard X" text))
+                 (should (string-match-p "Finish   Pull request P    Merge and retire m    Retire or discard x    Forget X" text))
                  (should (string-match-p "Branch       codex/roost/fix-auth-123456, from main, merges into main" text))
                  (should (string-match-p "Worktree     ~/work/fix auth" text))
                  ;; Line counts keep their colors inside the indented section.
@@ -2145,8 +2183,7 @@
 (ert-deftest roost-forget-stops-a-running-agent-first ()
   (roost-test--isolated
    (let ((task (roost--cache-task "dev" (roost-test--task nil "ready"))) actions)
-     (cl-letf (((symbol-function 'read-multiple-choice)
-                (lambda (prompt &rest _) (should (string-prefix-p "Stop and forget " prompt)) '(?k "keep")))
+     (cl-letf (((symbol-function 'yes-or-no-p) (lambda (prompt) (string-prefix-p "Stop " prompt)))
                ((symbol-function 'roost--request)
                 (lambda (_host action _params success &optional _failure)
                   (push action actions)
@@ -2159,7 +2196,7 @@
 (ert-deftest roost-forget-removes-the-task-and-reports-what-remains ()
   (roost-test--isolated
    (let ((task (roost--cache-task "dev" (roost-test--task nil "stopped"))) messages)
-     (cl-letf (((symbol-function 'read-multiple-choice) (lambda (&rest _) '(?k "keep")))
+     (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_) t))
                ((symbol-function 'message) (lambda (format &rest args) (push (apply #'format format args) messages)))
                ((symbol-function 'roost--request)
                 (lambda (_host action _params success &optional _failure)

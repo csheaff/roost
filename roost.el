@@ -656,7 +656,8 @@ and a newer notification about TASK replaces it."
 A ready agent or one asking permission is inspected first, since quiet
 polls leave out its latest reply, so the notification can say what it
 finished or wants."
-  (let ((title (format "Roost: %s — %s" (roost--field task 'name) status))
+  (let ((title (format "Roost: %s — %s" (roost--field task 'name)
+                       (if (equal status "failed") (roost--status-name task) status)))
         (label (roost--host-label host)))
     (if (not (member status '("ready" "permission")))
         (roost--notify title (if-let* ((error (roost--field task 'error)))
@@ -813,7 +814,7 @@ recently failed."
 ;;;; Choosing a task
 
 (defconst roost--status-order
-  '("permission" "prompt" "ready" "failed" "crashed" "exited" "running" "background" "idle"
+  '("permission" "prompt" "ready" "error" "failed" "crashed" "exited" "running" "background" "idle"
     "starting" "stopped")
   "Attention statuses from most to least in need of attention.")
 
@@ -847,7 +848,7 @@ Its agent asks something, or finished, failed, crashed or exited since
 you last saw it."
   (let ((status (roost--attention-status task)))
     (or (member status '("permission" "prompt" "ready"))
-        (and (member status '("failed" "crashed" "exited"))
+        (and (member status '("error" "failed" "crashed" "exited"))
              (not (roost--seen-p task))))))
 
 (defun roost--mark-seen (task)
@@ -2369,16 +2370,36 @@ Without a status from GitHub yet, a recorded pull request counts as open."
     (roost--act task "stop")))
 
 ;;;###autoload
+(defun roost--unmerged-work-p (task)
+  "Whether TASK, as last seen, holds work that retiring it would refuse to lose.
+Commits not merged into its integration branch, or files not committed."
+  (or (roost--field task 'dirty)
+      (and (numberp (roost--field task 'ahead)) (> (roost--field task 'ahead) 0)
+           (not (equal (alist-get 'state (roost--field task 'prStatus)) "MERGED")))))
+
 (defun roost-retire (&optional task)
-  "Remove TASK's clean, merged worktree and branch, then stop its window."
+  "Finish with TASK: remove its worktree, branch and window.
+When its work is merged, or it has none, retire it.  When it holds work
+nothing else has, offer to discard it, saying what that loses; `m'
+merges it instead."
   (interactive)
   (setq task (roost--choose task))
-  (when (yes-or-no-p (format "Retire %s, removing its merged worktree and branch? "
-                             (roost--field task 'name)))
-    (roost--act task "retire" nil
-                (lambda (retired)
-                  (roost--retired-workspace retired)
-                  (roost--kill-worktree-buffers retired)))))
+  (let ((name (roost--field task 'name))
+        (retire (lambda ()
+                  (roost--act task "retire" nil
+                              (lambda (retired)
+                                (roost--retired-workspace retired)
+                                (roost--kill-worktree-buffers retired))))))
+    (cond
+     ((member (roost--field task 'status) '("starting" "running" "permission" "background"))
+      (user-error "%s's agent is at work; stop it (K) first, or wait" name))
+     ((roost--agent-work-left task)
+      (funcall retire))               ; Refused, saying where that work is.
+     ((roost--unmerged-work-p task)
+      (when (y-or-n-p (format "%s has work not merged anywhere (m merges it).  Discard it? " name))
+        (roost-discard task)))
+     ((yes-or-no-p (format "Retire %s, removing its merged worktree and branch? " name))
+      (funcall retire)))))
 
 ;;;###autoload
 (defun roost-merge-retire (&optional task)
@@ -2406,9 +2427,9 @@ Dirty worktrees are refused; review and commit in Magit first."
 
 ;;;###autoload
 (defun roost-forget (&optional task)
-  "Drop TASK from Roost, keeping or discarding its worktree and branch.
-Keeping them is the way out for tasks Roost can no longer retire, such
-as one whose repository moved; discarding them is `roost-discard'.  A
+  "Drop TASK from Roost, leaving its worktree and branch as they are.
+The way out for a task Roost can no longer retire, such as one whose
+repository moved; `roost-retire' finishes a task, or discards it.  A
 running agent is stopped first."
   (interactive)
   (setq task (roost--choose task))
@@ -2422,22 +2443,21 @@ running agent is stopped first."
                                  (when-let* ((left (roost--field forgotten 'leftBehind)))
                                    (message "Forgot %s; left in place: %s"
                                             name (string-join left ", "))))))))
-    (pcase (car (read-multiple-choice
-                 (format "%s %s: keep its worktree and branch, or discard them?"
-                         (if running "Stop and forget" "Forget") name)
-                 '((?k "keep" "Drop the task from Roost; its worktree and branch stay as they are")
-                   (?d "discard" "Also delete its worktree and branch, after saying what would be lost"))))
-      (?k (if running
-              (roost--act task "stop" nil forget)
-            (funcall forget)))
-      (?d (roost-discard task)))))
+    (when (yes-or-no-p (format (if running
+                                   "Stop %s's agent and forget the task, leaving its worktree and branch as they are? "
+                                 "Forget %s, leaving its worktree and branch as they are? ")
+                               name))
+      (if running
+          (roost--act task "stop" nil forget)
+        (funcall forget)))))
 
 ;;;###autoload
 (defun roost-discard (&optional task)
   "Delete TASK's worktree, branch and window, and drop it from Roost.
 First says what would be lost, commits no other branch holds and files
-not committed; to lose any, you type the task's name.  For an experiment
-you don't want; finished work is merged or retired instead."
+not committed, here and in worktrees its agent made, which go too; to
+lose any, you type the task's name.  For an experiment you don't want;
+finished work is merged or retired instead."
   (interactive)
   (setq task (roost--choose task))
   (let* ((name (roost--field task 'name))
@@ -2447,19 +2467,24 @@ you don't want; finished work is merged or retired instead."
                                                      (cons 'dryRun t)))))
          (commits (or (alist-get 'commits told) 0))
          (changes (or (alist-get 'changes told) 0))
+         (worktrees (or (alist-get 'agentWorktrees told) 0))
          (losses (delq nil (list (when (> commits 0)
                                    (format "%d commit%s no other branch has"
                                            commits (if (= commits 1) "" "s")))
                                  (when (> changes 0)
                                    (format "%d uncommitted file%s"
-                                           changes (if (= changes 1) "" "s")))))))
+                                           changes (if (= changes 1) "" "s"))))))
+         (label (if (> worktrees 0)
+                    (format "%s, with %d worktree%s its agent made,"
+                            name worktrees (if (= worktrees 1) "" "s"))
+                  name)))
     (if (not (if losses
                  (equal (string-trim
                          (read-string (format "Discarding %s loses %s.  Type its name to discard it: "
-                                              name (string-join losses " and "))))
+                                              label (string-join losses " and "))))
                         name)
                (y-or-n-p (format "Discard %s, deleting its worktree and branch?  Nothing in them would be lost. "
-                                 name))))
+                                 label))))
         (message "%s was not discarded" name)
       (roost--act task "discard" (list (cons 'expect (alist-get 'commit told)))
                   (lambda (discarded)
@@ -2519,9 +2544,16 @@ that failed, crashed or exited, in turn."
 
 ;;;; Shared display helpers
 
+(defun roost--status-name (task)
+  "TASK's status as Roost names it.
+That is its recorded status, except \"error\" for a turn that failed,
+as on a usage limit, while the agent waits: one that died has failed."
+  (let ((status (roost--field task 'status)))
+    (if (and (equal status "failed") (roost--field task 'live)) "error" status)))
+
 (defun roost--display-status (task)
   "TASK's status, or \"offline\" while its host is unreachable."
-  (if (gethash (roost--field task 'host) roost--errors) "offline" (roost--field task 'status)))
+  (if (gethash (roost--field task 'host) roost--errors) "offline" (roost--status-name task)))
 
 (defun roost--status-face (status)
   "Face for STATUS."
@@ -2529,7 +2561,7 @@ that failed, crashed or exited, in turn."
     ((or "permission" "prompt") 'roost-status-permission)
     ("ready" 'roost-status-ready)
     ((or "running" "background") 'roost-status-running)
-    ((or "failed" "crashed") 'roost-status-failed)
+    ((or "failed" "crashed" "error") 'roost-status-failed)
     (_ 'roost-status-inactive)))
 
 (defun roost--seconds-since (timestamp)
@@ -2757,25 +2789,31 @@ keeps one process-wide registration per mode; a nil STATE removes it."
       (visual-line-mode -1)
       (setq truncate-lines t))))
 
+(defun roost--menu-applies-p (command)
+  "Whether COMMAND applies to the task at point, for its menu entry.
+With no task at point, the command asks which, so it applies."
+  (let ((task (ignore-errors (roost--task-at-point))))
+    (or (null task) (roost--action-applies-p task command))))
+
 (defconst roost--task-menu-items
-  '(["Open agent terminal" roost-open-task]
-    ["Shell beside agent" roost-shell]
-    ["Browse files" roost-files]
-    ["Send prompt…" roost-send]
+  '(["Open agent terminal" roost-open-task :active (roost--menu-applies-p 'roost-open-task)]
+    ["Shell beside agent" roost-shell :active (roost--menu-applies-p 'roost-shell)]
+    ["Browse files" roost-files :active (roost--menu-applies-p 'roost-files)]
+    ["Send prompt…" roost-send :active (roost--menu-applies-p 'roost-send)]
     "---"
-    ["Review in Magit" roost-review]
-    ["Diff the task's changes" roost-diff]
-    ["Update from integration branch" roost-update]
+    ["Review in Magit" roost-review :active (roost--menu-applies-p 'roost-review)]
+    ["Diff the task's changes" roost-diff :active (roost--menu-applies-p 'roost-diff)]
+    ["Update from integration branch" roost-update :active (roost--menu-applies-p 'roost-update)]
     "---"
-    ["Pull request…" roost-pr]
-    ["Merge and retire…" roost-merge-retire]
-    ["Retire…" roost-retire]
-    ["Forget…" roost-forget]
-    ["Discard…" roost-discard]
+    ["Pull request…" roost-pr :active (roost--menu-applies-p 'roost-pr)]
+    ["Merge and retire…" roost-merge-retire :active (roost--menu-applies-p 'roost-merge-retire)]
+    ["Retire or discard…" roost-retire :active (roost--menu-applies-p 'roost-retire)]
+    ["Forget…" roost-forget :active (roost--menu-applies-p 'roost-forget)]
+    ["Discard…" roost-discard :active (roost--menu-applies-p 'roost-discard)]
     "---"
-    ["Stop…" roost-stop]
-    ["Resume" roost-resume]
-    ["Details" roost-task-info])
+    ["Stop…" roost-stop :active (roost--menu-applies-p 'roost-stop)]
+    ["Resume" roost-resume :active (roost--menu-applies-p 'roost-resume)]
+    ["Details" roost-task-info :active (roost--menu-applies-p 'roost-task-info)])
   "Menu items acting on the task at point.")
 
 (easy-menu-define roost-task-menu nil
@@ -2839,9 +2877,8 @@ Unknown Git statistics count as making sense."
       ('roost-pr (and worktree (or (roost--field task 'pr) (not (eql ahead 0)))))
       ('roost-merge-retire (and (not merged) (not (eql ahead 0)) (not active)
                                 (not (roost--agent-work-left task))))
-      ('roost-retire (and (not active) (not (roost--field task 'dirty))
-                          (not (roost--agent-work-left task))
-                          (or merged (not (and (numberp ahead) (> ahead 0))))))
+      ;; Retires the task, or discards work merged nowhere.
+      ('roost-retire (and (not active) (not (roost--agent-work-left task))))
       (_ t))))
 
 (defun roost--next-step (task)
@@ -2887,8 +2924,8 @@ terminal or worktree, or ask which task."
    ["Finish"
     ("P" "Pull request" roost-pr :inapt-if roost--pr-inapt-p)
     ("m" "Merge and retire" roost-merge-retire :inapt-if roost--merge-retire-inapt-p)
-    ("x" "Retire" roost-retire :inapt-if roost--retire-inapt-p)
-    ("X" "Forget or discard" roost-forget :inapt-if roost--forget-inapt-p)]
+    ("x" "Retire or discard" roost-retire :inapt-if roost--retire-inapt-p)
+    ("X" "Forget" roost-forget :inapt-if roost--forget-inapt-p)]
    ["Session"
     ("K" "Stop" roost-stop :inapt-if roost--stop-inapt-p)
     ("s" "Resume" roost-resume :inapt-if roost--resume-inapt-p)]]
@@ -2954,8 +2991,8 @@ Status is the last observation from the task's host.
      ("Files" "f" roost-files) ("Send prompt" "e" roost-send))
     ("Review" ("Magit" "r" roost-review) ("Diff" "D" roost-diff)
      ("Update" "u" roost-update))
-    ("Finish" ("Pull request" "P" roost-pr) ("Merge and retire" "m" roost-merge-retire) ("Retire" "x" roost-retire)
-     ("Forget or discard" "X" roost-forget))
+    ("Finish" ("Pull request" "P" roost-pr) ("Merge and retire" "m" roost-merge-retire) ("Retire or discard" "x" roost-retire)
+     ("Forget" "X" roost-forget))
     ("Session" ("Stop" "K" roost-stop) ("Resume" "s" roost-resume)))
   "Task panel actions as (GROUP (LABEL KEY COMMAND)...).")
 
@@ -3158,7 +3195,7 @@ Windows showing the panel keep their scroll position."
            'roost-dim))
         (roost--insert-agent-work task)
         (pcase status
-          ((and "failed" (guard (roost--field task 'live)))
+          ("error"
            ;; A turn ended on an error, such as a usage limit, and the
            ;; agent waits; it has not exited, so there is nothing to resume.
            (roost--insert-indented
@@ -3389,7 +3426,7 @@ Refreshes are asynchronous; rendering uses only cached state.
                      ("at a startup prompt" nil "prompt")
                      ("ready" nil "ready")
                      ("seen" nil "idle")
-                     ("failed" nil "failed" "crashed")
+                     ("failed" nil "error" "failed" "crashed")
                      ("running" nil "running" "background" "starting")
                      ("stopped" nil "stopped" "exited")
                      ("offline" nil "offline"))))
@@ -4039,7 +4076,24 @@ RESULT is `pending', a list of checks, or (error . MESSAGE).")
                   ('perspective "a perspective per task (perspective.el)")
                   ('tab-bar "a tab per task (tab-bar-mode)")
                   (_ "none; tasks open in the selected window (see `roost-workspace')"))
-                nil))))
+                nil)
+          (roost--doctor-notifications))))
+
+(defun roost--doctor-notifications ()
+  "The setup check's line on how Roost notifies you."
+  (cond ((functionp roost-notify-function)
+         (list "Notifications" 'info "through `roost-notify-function'" nil))
+        ((executable-find "terminal-notifier")
+         (if (roost--emacsclient-command nil)
+             (list "Notifications" t "terminal-notifier; a click opens the task" nil)
+           (list "Notifications" 'optional "terminal-notifier"
+                 "Optional: with an Emacs server (M-x server-start), a click opens the task")))
+        ((eq system-type 'darwin)
+         (list "Notifications" 'optional "macOS's, through osascript; a click can't open the task"
+               "Optional: brew install terminal-notifier, for notifications that open their task"))
+        ((fboundp 'notifications-notify)
+         (list "Notifications" 'info "the desktop's, through D-Bus" nil))
+        (t (list "Notifications" 'info "in the echo area" nil))))
 
 (defun roost--doctor-line (name ok detail hint &optional path)
   "Insert one check NAME with status OK, DETAIL and HINT; PATH is a tooltip."

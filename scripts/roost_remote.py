@@ -1364,6 +1364,9 @@ def retire(store, task, merge=False, merged_head=None):
         task["retiringCommit"] = commit
         store.save(task)
     stop(store, task, inventory)
+    # Worktrees its agent made that hold nothing beyond the task's branch.
+    remove_agent_worktrees(task, [entry for entry in agent_work(task)
+                                  if entry["ahead"] == 0 and not entry["dirty"]])
     if worktree_exists:
         require_clean(str(worktree))
         git(repo, "worktree", "remove", str(worktree))
@@ -1479,15 +1482,22 @@ def discard(store, task, expect=None, dry_run=False):
     branch_exists = ref_exists(repo, branch)
     ref = "refs/heads/" + branch
     commit = git(repo, "rev-parse", ref + "^{commit}").stdout.strip() if branch_exists else None
+    # The worktrees its agent made go with it.
+    work = agent_work(task)
     if dry_run:
+        branches = ([branch] if branch_exists else []) + [entry["branch"] for entry in work if entry["branch"]]
         # --exclude applies to the --branches that follows it, by short name.
-        commits = int(git(repo, "rev-list", "--count", ref, "--not", "--exclude=" + branch,
-                          "--branches", "--remotes", "--tags").stdout) if branch_exists else 0
-        changes = len(read_git(worktree, "status", "--porcelain").stdout.splitlines()) if worktree_exists else 0
-        return dict(task, discard=dict(commits=commits, changes=changes, commit=commit))
+        commits = int(git(repo, "rev-list", "--count", *("refs/heads/" + name for name in branches), "--not",
+                          *("--exclude=" + name for name in branches),
+                          "--branches", "--remotes", "--tags").stdout) if branches else 0
+        changes = sum(len(read_git(path, "status", "--porcelain").stdout.splitlines())
+                      for path in ([worktree] if worktree_exists else []) + [entry["path"] for entry in work])
+        return dict(task, discard=dict(commits=commits, changes=changes, commit=commit,
+                                       agentWorktrees=len(work)))
     if commit != (expect or None):
         raise RoostError("The task's branch has moved since you were asked; look at it again before discarding")
     stop(store, task)
+    remove_agent_worktrees(task, work)
     if worktree_exists:
         # Twice: also a worktree its agent locked.
         git(repo, "worktree", "remove", "--force", "--force", str(worktree))
@@ -1708,6 +1718,18 @@ def agent_work(task):
                          ahead=int(ahead.stdout) if ahead.returncode == 0 else None,
                          dirty=bool(read_git(path, "status", "--porcelain").stdout.strip())))
     return work
+
+
+def remove_agent_worktrees(task, entries):
+    """Remove ENTRIES of `agent_work`, worktrees TASK's agent made, and the
+    branches Claude made for them. Claude locks them, hence --force twice.
+    Best effort: what can't be removed stays where Git put it."""
+    for entry in entries:
+        branch = entry.get("branch")
+        commit = read_git(entry["path"], "rev-parse", "HEAD").stdout.strip() if branch else ""
+        git(task["repo"], "worktree", "remove", "--force", "--force", entry["path"], check=False)
+        if branch and commit:
+            git(task["repo"], "update-ref", "-d", "refs/heads/" + branch, commit, check=False)
 
 
 def require_agent_work_kept(task):
