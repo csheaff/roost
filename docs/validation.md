@@ -625,6 +625,37 @@ ones on macOS and on `claylien`. Left alone: renaming tasks, a log of
 retired ones, and polls that wait for a change, which slower polling
 while Emacs is in the background makes less needed.
 
+### A second design review and bug hunt, 2026-10-08
+
+Checked live with the fake agent on `claylien`, in the copy of Clay's
+configuration:
+
+- **x finishes a task.** On a task with an unmerged commit, `x` offered to
+  discard it, then named the commit and that the agent would be stopped,
+  and wanted the name typed; worktree, branch and window went. On a task
+  whose work was merged it retires, after asking.
+- **error.** A `StopFailure` (a usage limit) on a running agent showed
+  `error` in the sidebar, panel and notification, with "Open it to try its
+  last prompt again", and counted as waiting, in red.
+- **The agent's own worktrees.** Merging a task whose agent had left an
+  empty, locked worktree removed it and its branch. Discarding counts and
+  removes them; a task whose agent moved its worktree to a branch of its
+  own can be discarded, keeping that branch.
+- **A merge under way.** Declining to have the agent resolve an update's
+  conflict left it in the worktree; the panel now says so ("Merging main
+  into it conflicts in ledger.py") and leads with finishing it in Magit.
+- **Merging without a checkout** wrote "Merge branch 'roost/…'", as Git
+  2.51's own `git merge` does (from `git fmt-merge-msg`).
+- `roost-doctor` reported notifications through osascript and how to get
+  ones that open their task.
+
+Found in review and fixed: watching a working agent sent its host a `seen`
+request at nearly every poll; forgetting a task in `error` didn't stop its
+agent first, so the host refused; the next step told you RET resumes an
+exited agent; `x` could retire without asking; a poll in flight brought a
+forgotten host's tasks back. All 154 ERT and 107 Python tests pass, the
+Python ones on macOS and on `claylien`.
+
 ### Codex and Pi adapters
 
 Used another disposable remote `hello-service` project, an isolated registry and
