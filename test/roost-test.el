@@ -2514,15 +2514,23 @@ ssh: connect to host dev port 22: Operation timed out"
           (terminals (mapcar (lambda (session)
                                (with-current-buffer (generate-new-buffer " *terminal*")
                                  (setq-local roost-test--tmux `(:host "dev" :socket "main" :session ,session))
+                                 (make-pipe-process :name "roost-test-terminal" :buffer (current-buffer)
+                                                    :noquery t)
                                  (current-buffer)))
                              '("roost-p-012345" "roost-p-3f2a")))
+          ;; A scrollback view, more recent than the terminal, holds no connection.
+          (scrollback (with-current-buffer (generate-new-buffer " *scrollback*")
+                        (setq-local roost-test--tmux '(:host "dev" :socket "main" :session "roost-p-012345"))
+                        (mapc #'bury-buffer terminals)
+                        (current-buffer)))
           disconnected actions)
      (unwind-protect
          (roost-test--with-tmux-buffers
           (cl-letf (((symbol-function 'tmux-control-buffer-session)
                      (lambda () (plist-get roost-test--tmux :session)))
                     ((symbol-function 'tmux-control-disconnect)
-                     (lambda () (push (plist-get roost-test--tmux :session) disconnected)))
+                     (lambda () (when (get-buffer-process (current-buffer))
+                                  (push (plist-get roost-test--tmux :session) disconnected))))
                     ((symbol-function 'roost--request)
                      (lambda (_host action &rest _) (push (cons action disconnected) actions))))
             (roost--act own "send")
@@ -2539,7 +2547,7 @@ ssh: connect to host dev port 22: Operation timed out"
             (should-not disconnected)
             (roost--act (roost--cache-task "dev" (append '((live)) own)) "resume")
             (should (equal disconnected '("roost-p-012345")))))
-       (mapc #'kill-buffer terminals)))))
+       (mapc #'kill-buffer (cons scrollback terminals))))))
 
 (ert-deftest roost-a-closed-terminal-goes-or-comes-back-with-the-hosts-answer ()
   ;; Once the session has ended, its blank terminal goes.  When the host

@@ -1649,8 +1649,11 @@ outlives the task."
                                                 (equal (tmux-control-buffer-host) host)
                                                 (equal (tmux-control-buffer-socket-name) socket))))
                                        (buffer-list))))
-      (with-current-buffer (car terminals)
-        (tmux-control-disconnect))
+      ;; Through the buffer holding the connection: a scrollback view of
+      ;; it, say, holds none of its own.
+      (when-let* ((connection (seq-find #'get-buffer-process terminals)))
+        (with-current-buffer connection
+          (tmux-control-disconnect)))
       terminals)))
 
 (defun roost--restore-terminal (task terminals)
