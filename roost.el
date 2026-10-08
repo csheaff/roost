@@ -2839,7 +2839,7 @@ Unknown Git statistics count as making sense."
      ((roost--field task 'dirty)
       (concat "Review and commit its changes in Magit: " (funcall key "r")))
      ((roost--agent-work-left task)
-      "Its agent left work in a worktree of its own, below: merge it into this task in Magit, or remove it")
+      "Its agent left work in a worktree of its own: merge it into this task in Magit, or remove it")
      ((equal (alist-get 'state pr) "MERGED")
       (concat "Its pull request is merged; " (funcall key "x") " retires it"))
      ((equal (alist-get 'state pr) "OPEN")
