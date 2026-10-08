@@ -228,9 +228,10 @@ Magit is optional (review falls back to Dired).
 Outside the dashboard, commands act on the task of the current terminal,
 worktree file, Org entry or perspective, or ask. Bind the menu globally to reach
 Roost from anywhere, for example `(keymap-global-set "C-c r" #'roost-dispatch)`.
-Also available: `roost-switch-task` (searchable, waiting tasks first),
-`roost-send-region` (sends the selection with its file and lines), and
-`roost-watch-mode` (background polling).
+Also available: `roost-send-region` (sends the selection with its file and
+lines). Roost watches its hosts once you open the dashboard or sidebar or start
+a task: every 3 seconds while Emacs is in front, every 15 otherwise.
+`roost-watch-mode` turns that off and on.
 
 In the new task draft: `C-c C-c` creates, `C-c C-k` cancels, and `C-c C-p`,
 `C-c C-a`, `C-c C-b` and `C-c C-n` change the project, agent, starting ref and
@@ -267,8 +268,8 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
   `(:eval (and (fboundp 'roost-mode-line-waiting) (roost-mode-line-waiting)))`
   where you want the count.
 - `roost-notify`, `roost-notify-function`,
-  `roost-watch-interval` (3 s), `roost-request-timeout` (60 s),
-  `roost-ssh-share-connections`.
+  `roost-watch-interval` (3 s), `roost-watch-unfocused-interval` (15 s),
+  `roost-request-timeout` (60 s), `roost-ssh-share-connections`.
 
 Each poll is one SSH command per host. Roost shares one connection per host
 across them (OpenSSH `ControlMaster`, with its socket in the state directory and

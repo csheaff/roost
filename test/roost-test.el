@@ -761,7 +761,7 @@
 
 (ert-deftest roost-sidebar-lists-tasks-compactly ()
   (roost-test--isolated
-   (let ((roost--current-task nil))
+   (let ((roost--current-task nil) (roost-watch-mode t))
      (roost--cache-task "dev" (append '((name . "budget-alerts") (repo . "/srv/ledger"))
                                       (roost-test--task "1111111111111111" "permission")))
      (roost--cache-task "dev" (append '((name . "a-task-with-a-very-long-name-indeed") (repo . "/srv/ledger"))
@@ -772,6 +772,10 @@
        (roost--render-sidebar)
        (let ((lines (split-string (buffer-string) "\n")))
          (should (equal (substring-no-properties (car lines)) "Roost  1 waiting"))
+         (let ((roost-watch-mode nil))
+           (roost--render-sidebar)
+           (should (string-prefix-p "Roost  1 waiting  paused\n" (buffer-string))))
+         (roost--render-sidebar)
          ;; Each project's heading ends with a + that starts a task in it.
          (should (member (concat "dev · ledger" (make-string 17 ?\s) "+") lines))
          ;; The current task is marked; statuses are right-aligned.
@@ -1738,6 +1742,26 @@
                                                    (updatedAt . "2026-10-03T20:05:00+00:00"))
                                                  (roost-test--task nil "ready"))))
      (should (roost--waiting-p task)))))
+
+(ert-deftest roost-watching-slows-down-while-emacs-is-not-in-front ()
+  (roost-test--isolated
+   (let ((refreshes 0) (focused nil) (now 1000.0) (roost--last-watch 0))
+     (cl-letf (((symbol-function 'roost-refresh) (lambda (&rest _) (cl-incf refreshes)))
+               ((symbol-function 'frame-focus-state) (lambda (&rest _) focused))
+               ((symbol-function 'float-time) (lambda (&rest _) now)))
+       (roost--watch-tick)
+       (should (= refreshes 1))
+       ;; Three seconds later, with no frame in front: not yet.
+       (setq now 1003.0)
+       (roost--watch-tick)
+       (should (= refreshes 1))
+       (setq now 1015.0)
+       (roost--watch-tick)
+       (should (= refreshes 2))
+       ;; In front again: every tick.
+       (setq focused t now 1018.0)
+       (roost--watch-tick)
+       (should (= refreshes 3))))))
 
 (ert-deftest roost-background-polls-back-off-from-unreachable-hosts ()
   (roost-test--isolated

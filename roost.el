@@ -124,6 +124,11 @@ are answered, so a long start usually needs you."
   "Seconds between asynchronous status refreshes."
   :type 'number)
 
+(defcustom roost-watch-unfocused-interval 15
+  "Seconds between status refreshes while no Emacs frame has focus.
+Notifications can then come that much later; nothing waits on screen."
+  :type 'number)
+
 (defcustom roost-request-timeout 60
   "Maximum seconds for a host operation."
   :type 'number)
@@ -2660,8 +2665,7 @@ terminal or worktree, or ask which task."
     ("n" "Next waiting" roost-next-waiting)
     ("l" "Switch task" roost-switch-task)]
    [("S" "Dashboard" roost-status)
-    ("g" "Refresh" roost-refresh)
-    ("w" "Watch hosts" roost-watch-mode)]
+    ("g" "Refresh" roost-refresh)]
    [("b" "Sidebar" roost-sidebar-mode)
     ("I" "Task panel" roost-task-panel-mode)
     ("!" "Setup check" roost-doctor)]])
@@ -3076,7 +3080,6 @@ Tasks with the same name on the same host are told apart by their IDs."
     ["Next task needing attention" roost-next-waiting]
     ["Switch task…" roost-switch-task]
     ["Refresh" roost-refresh]
-    ["Watch hosts" roost-watch-mode :style toggle :selected roost-watch-mode]
     ["Sidebar" roost-sidebar-mode :style toggle :selected roost-sidebar-mode]
     ["Task panel beside terminal" roost-task-panel-mode
      :style toggle :selected roost-task-panel-mode]
@@ -3475,6 +3478,8 @@ The sidebar shows no cursor."
     (erase-buffer)
     (insert (propertize "Roost" 'face 'roost-title)
             (if-let* ((summary (roost--sidebar-summary tasks))) (concat "  " summary) "")
+            ;; Nothing here changes until it watches again.
+            (if roost-watch-mode "" (propertize "  paused" 'face 'roost-dim))
             "\n")
     (roost--insert-unreachable-hosts tasks width)
     (if (null tasks)
@@ -3917,7 +3922,10 @@ to `mode-line-format'."
 (define-minor-mode roost-watch-mode
   "Watch tasks asynchronously, retaining cached records during disconnects.
 While watching, the mode line counts the agents waiting for you; see
-`roost-mode-line-count'."
+`roost-mode-line-count'.  Opening the dashboard or sidebar, or starting
+a task, turns this on; it refreshes every `roost-watch-interval' seconds
+while Emacs has focus, and every `roost-watch-unfocused-interval'
+otherwise.  Turning it off leaves the sidebar marked paused."
   :global t
   (when roost--watch-timer
     (cancel-timer roost--watch-timer)
@@ -3928,8 +3936,18 @@ While watching, the mode line counts the agents waiting for you; see
     (setq global-mode-string (append global-mode-string (list roost--mode-line-entry)))
     (add-hook 'after-save-hook #'roost--file-saved)
     (setq roost--watch-timer
-          (run-with-timer roost-watch-interval roost-watch-interval
-                          (lambda () (roost-refresh t))))))
+          (run-with-timer roost-watch-interval roost-watch-interval #'roost--watch-tick))))
+
+(defvar roost--last-watch 0
+  "When the last background refresh started, as `float-time'.")
+
+(defun roost--watch-tick ()
+  "Refresh in the background; less often while no frame has focus.
+See `roost-watch-unfocused-interval'."
+  (when (or (seq-some #'frame-focus-state (frame-list))
+            (>= (- (float-time) roost--last-watch) roost-watch-unfocused-interval))
+    (setq roost--last-watch (float-time))
+    (roost-refresh t)))
 
 (defalias 'roost-list #'roost-switch-task)
 (defalias 'roost-kill #'roost-stop)
