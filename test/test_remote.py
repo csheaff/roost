@@ -390,6 +390,8 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(reply["ok"], reply)
         self.assertEqual(self.git("show", "main:hello"), "changed")
         self.assertEqual(self.git("log", "-1", "--format=%P", "main").count(" "), 1)
+        # As `git merge` would say it.
+        self.assertEqual(self.git("log", "-1", "--format=%s", "main"), "Merge branch '%s'" % task["branch"])
         self.assertEqual(self.git("symbolic-ref", "--short", "HEAD"), "mine")
         self.assertEqual((self.repo / "hello").read_text(), "my own edit\n")
         self.assertFalse(wt.exists())

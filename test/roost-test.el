@@ -1941,7 +1941,13 @@
            ;; Still shown as what it is.
            (should (equal (roost--attention-status task) status))))
        ;; Stopped by you, it never waits.
-       (should-not (roost--waiting-p (roost--cache-task "dev" (roost-test--task "1111111111111111" "stopped"))))))))
+       (should-not (roost--waiting-p (roost--cache-task "dev" (roost-test--task "1111111111111111" "stopped"))))
+       ;; Watching an agent at work sends its host nothing on each event.
+       (setq recorded nil)
+       (dolist (minute '("01" "02" "03"))
+         (roost--mark-seen (roost--cache-task "dev" (append `((updatedAt . ,(format "2026-10-03T20:%s:00+00:00" minute)))
+                                                            (roost-test--task "2222222222222222" "running")))))
+       (should-not recorded)))))
 
 (ert-deftest roost-an-agent-seen-in-another-emacs-is-seen-here ()
   ;; The host keeps what you saw, so another machine, or the next session, agrees.

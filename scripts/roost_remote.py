@@ -1273,8 +1273,11 @@ def merge_without_checkout(task, integration):
                          % (task["name"], integration, ", ".join(conflicts) or "some files", integration))
     if result.returncode or not lines:
         raise RoostError("Merge failed; task retained: " + (result.stderr.strip() or result.stdout.strip()))
-    commit = git(repo, "commit-tree", lines[0], "-p", old, "-p", tip,
-                 "-m", "Merge branch '%s' into %s" % (task["branch"], integration)).stdout.strip()
+    # The message `git merge` would write, which names INTEGRATION unless
+    # it is main or master (merge.suppressDest).
+    message = execute(["git", "-C", repo, "fmt-merge-msg", "--into-name", integration],
+                      input="%s\t\tbranch '%s' of .\n" % (tip, task["branch"])).stdout
+    commit = git(repo, "commit-tree", lines[0], "-p", old, "-p", tip, "-m", message.strip()).stdout.strip()
     git(repo, "update-ref", "-m", "merge %s: Merge made by Roost" % task["branch"], ref, commit, old)
 
 

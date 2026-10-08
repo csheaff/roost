@@ -858,7 +858,10 @@ Its host records it too, for your other Emacs and the next session."
         (updated (roost--field task 'updatedAt)))
     (unless (or (null updated) (roost--seen-p task))
       (puthash key updated roost--seen)
-      (roost--record-seen task updated))))
+      ;; Only where seeing it stops it waiting: a working agent's every
+      ;; event would otherwise send its host a request.
+      (when (member (roost--status-name task) '("ready" "error" "failed" "crashed" "exited"))
+        (roost--record-seen task updated)))))
 
 (defun roost--record-seen (task updated)
   "Record on TASK's host that you saw its agent as of UPDATED."
