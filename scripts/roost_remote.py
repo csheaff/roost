@@ -717,7 +717,8 @@ def spawn(store, task, resume=False):
         # or retiring the task, which closes that window, ends the session.
         result = tmux(socket, "new-session", "-d", "-s", session, *window_options)
     else:
-        # A shared session (roost-session-name), or one from before.
+        # Its session is there already, as when a terminal reconnecting
+        # after it ended started it again.
         result = tmux(socket, "new-window", "-d", "-t", session + ":", *window_options)
     # Noted at once, so a failure from here on closes the window. tmux may
     # have changed the session's name, as it does ":" and ".".
