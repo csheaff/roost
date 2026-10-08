@@ -11,6 +11,11 @@ host. It tells you which agents need you, and you review and merge their work
 with Magit. If you've used Orca or Conductor, it's that idea, inside the Emacs
 you already use.
 
+Roost is built and tested around Claude Code: it's the agent Roost is used with
+day to day, and each Claude Code release is checked against what Roost reads
+from it. Codex and Pi tasks work, with less: Codex asks before each commit and
+reports nothing until its first turn, and Pi is experimental.
+
 ![Three agents, one on another machine, which the sidebar shows asking permission; n opens its terminal over SSH beside the task's panel; the answer lets it finish; its changed file opens in Magit; m merges it](docs/images/roost-loop.gif)
 
 *Real Claude Code agents in a plain Emacs, one of them on another machine: it
