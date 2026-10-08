@@ -589,6 +589,42 @@ Not Roost's: after its session ends, a tmux-control terminal says both "tmux
 session ended" and "connection lost … C-c C-r reconnects", and that
 reconnect would start an empty session of the same name.
 
+### After a design review, 2026-10-08
+
+A review of Roost as a whole found actions offered that the host would
+refuse, attention that forgot agents and restarts, and gaps around ending a
+task. Changed and checked in the copy of Clay's configuration, with the fake
+agent on `claylien` (tmux 3.7c, Git 2.51) and the Mac (tmux 3.6a, Git 2.54):
+
+- **What a task can do now.** The panel lists only actions that apply and
+  leads with the next step; a stopped task's offered "RET or s resumes its
+  conversation" and Resume, without Shell, Send or Stop. The command menu,
+  with Clay's transient 20261001, greyed out Stop, Send and Shell for it.
+- **Waiting and seen.** Failed, crashed and exited agents count as waiting
+  until seen. Opening a remote task recorded `seen` in its record on
+  `claylien`; with Emacs's own record of it cleared, as after a restart or
+  on another machine, it still counted as seen.
+- **Ending a task.** Discarding a task holding a commit and an untracked
+  file named both and wanted the name typed; its window, worktree and branch
+  went. With `claylien`'s checkout on another branch and an edit in it,
+  merging a task put a merge commit on `main` and left the checkout and the
+  edit alone.
+- **An agent's own worktrees.** Claude Code 2.1.293 made a worktree with
+  `--worktree` in the primary checkout's `.claude/worktrees`, from the
+  default branch; with `worktree.baseRef` "head" in `--settings`, from the
+  task's commit; its hooks reported that worktree as `cwd`. On `claylien`,
+  a hook from such a worktree listed it in the task's panel with its commit,
+  and retiring was refused, naming it.
+- **Getting there.** Running a notification's click command opened its task
+  in its workspace. With tmux-control#165, "next session" from one task's
+  terminal opened the other task, in its own workspace.
+
+`make contract` passes with Claude Code 2.1.293 and checks `cwd` and
+`worktree.baseRef` too. All 148 ERT and 103 Python tests pass, the Python
+ones on macOS and on `claylien`. Left alone: renaming tasks, a log of
+retired ones, and polls that wait for a change, which slower polling
+while Emacs is in the background makes less needed.
+
 ### Codex and Pi adapters
 
 Used another disposable remote `hello-service` project, an isolated registry and
