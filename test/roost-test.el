@@ -1294,6 +1294,26 @@
        (roost-retire task))
      (should (equal discarded "0123456789abcdef")))))
 
+(ert-deftest roost-a-merge-under-way-in-a-task-says-so-until-it-is-done ()
+  ;; Declining to have the agent resolve an update's conflicts left them,
+  ;; while the panel still said the integration branch had moved on.
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (append '((live . t) (behind . 1) (dirty . t) (integrationBranch . "main")
+                                                  (merging (conflicts "ledger.py")))
+                                                (roost-test--task nil "ready")))))
+     (should (string-match-p "Finish merging main" (roost--next-step task)))
+     (with-temp-buffer
+       (roost-task-info-mode)
+       (setq roost--buffer-task-key (roost--key task))
+       (roost--render-task-info)
+       (should (string-match-p "Merging main into it conflicts in ledger.py" (buffer-string)))
+       (should-not (string-match-p "has moved on" (buffer-string)))
+       ;; A quiet poll keeps it; a full one that finds none clears it.
+       (roost--cache-task "dev" (append '((live . t)) (roost-test--task nil "ready")))
+       (should (roost--field (gethash (roost--key task) roost--tasks) 'merging))
+       (roost--cache-task "dev" (append '((live . t) (merging)) (roost-test--task nil "ready")))
+       (should-not (roost--field (gethash (roost--key task) roost--tasks) 'merging))))))
+
 (ert-deftest roost-menus-offer-what-the-task-can-do-now ()
   ;; The right-click and menu-bar menus offered everything, as the panel did.
   (roost-test--isolated

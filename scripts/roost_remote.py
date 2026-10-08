@@ -30,7 +30,7 @@ ACTIVE = ("starting", "running", "permission", "background")
 ENDED = ("stopped", "exited", "failed", "crashed")
 # Computed per request and never persisted in a task record.
 TRANSIENT = ("live", "diff", "dirty", "files", "ahead", "behind", "update", "worktreeMissing",
-             "prStatus", "lastMessage", "gitStamp", "agentWork")
+             "prStatus", "lastMessage", "gitStamp", "agentWork", "merging")
 LAST_MESSAGE_TAIL = 256 * 1024
 LAST_MESSAGE_LIMIT = 2000
 INTERRUPT_TAIL = 64 * 1024
@@ -1075,6 +1075,12 @@ def add_git_stats(tasks, pull_requests=True):
         task["diff"] = stats.stdout.strip()
         task["dirty"] = bool(dirty.stdout)
         task["files"] = changed_files(worktree, base)
+        # A merge under way, as when an update conflicted, with its files in
+        # conflict; null otherwise, so Emacs forgets one that has finished.
+        task["merging"] = (dict(conflicts=read_git(worktree, "diff", "--name-only",
+                                                   "--diff-filter=U").stdout.splitlines())
+                           if read_git(worktree, "rev-parse", "-q", "--verify", "MERGE_HEAD").returncode == 0
+                           else None)
         integration = task.get("integrationBranch")
         if integration:
             # Ahead counts the task's own commits, not merges from updates.

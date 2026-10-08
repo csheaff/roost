@@ -633,7 +633,7 @@ and a newer notification about TASK replaces it."
                         (not (equal (roost--field task 'updatedAt)
                                     (roost--field old 'updatedAt))))))
     ;; Quiet polls skip Git and the latest reply; keep the last full refresh's.
-    (dolist (field '(diff dirty files ahead behind worktreeMissing prStatus lastMessage gitStamp agentWork))
+    (dolist (field '(diff dirty files ahead behind worktreeMissing prStatus lastMessage gitStamp agentWork merging))
       (unless (assoc field task)
         (when (assoc field old) (push (assoc field old) task))))
     (if (member status '("retired" "forgotten" "discarded"))
@@ -2913,6 +2913,9 @@ Unknown Git statistics count as making sense."
      ((not (roost--agent-running-p task))
       (concat (funcall key "RET") " shows its last output; " (funcall key "s") " resumes its conversation"))
      ((member status '("running" "background" "starting")) nil)
+     ((roost--field task 'merging)
+      (concat "Finish merging " (or (roost--field task 'integrationBranch) "its branch")
+              " into it in Magit: " (funcall key "r")))
      ((roost--field task 'dirty)
       (concat "Review and commit its changes in Magit: " (funcall key "r")))
      ((roost--agent-work-left task)
@@ -3206,12 +3209,21 @@ Windows showing the panel keep their scroll position."
                ((string-empty-p changes) (propertize "No changes yet" 'face 'roost-dim))
                (t (roost--fontify-changes changes))))
         (roost--insert-changed-files task width)
-        (when (> (or (roost--field task 'behind) 0) 0)
-          (roost--insert-indented
+        (if-let* ((merging (roost--field task 'merging)))
+            (roost--insert-indented
+             (substitute-command-keys
+              (if-let* ((conflicts (alist-get 'conflicts merging)))
+                  (format "Merging %s into it conflicts in %s: resolve them and commit in Magit (\\<roost-task-info-mode-map>\\[roost-review]), or ask its agent to (\\[roost-send])."
+                          integration (string-join conflicts ", "))
+                (format "A merge of %s is under way in it: commit it in Magit (\\<roost-task-info-mode-map>\\[roost-review])."
+                        integration)))
+             'roost-status-permission)
+          (when (> (or (roost--field task 'behind) 0) 0)
+            (roost--insert-indented
            (substitute-command-keys
             (format "%s has moved on; \\<roost-task-info-mode-map>\\[roost-update] merges it into this task before you merge the task back."
                     integration))
-           'roost-dim))
+           'roost-dim)))
         (roost--insert-agent-work task)
         (pcase status
           ("error"

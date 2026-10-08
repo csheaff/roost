@@ -505,6 +505,21 @@ class Lifecycle(unittest.TestCase):
                 self.assertFalse(self.request("create", directory=str(self.repo), name=name,
                                               socket=self.socket)["ok"])
 
+    def test_a_merge_under_way_in_a_task_is_listed_until_it_is_done(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        (wt / "hello").write_text("task\n")
+        self.git("commit", "-qam", "task", cwd=wt)
+        (self.repo / "hello").write_text("main\n")
+        self.git("commit", "-qam", "main")
+        self.assertEqual(self.request("update", id=task["id"])["result"]["update"]["conflicts"], ["hello"])
+        self.assertEqual(self.request("list", full=True)["result"][0]["merging"], dict(conflicts=["hello"]))
+        (wt / "hello").write_text("both\n")
+        self.git("add", "hello", cwd=wt)
+        self.assertEqual(self.request("list", full=True)["result"][0]["merging"], dict(conflicts=[]))
+        self.git("commit", "-q", "--no-edit", cwd=wt)
+        self.assertIsNone(self.request("list", full=True)["result"][0]["merging"])
+
     def test_merge_conflict_aborts_and_keeps_task(self):
         task = self.create()
         wt = Path(task["worktree"])
