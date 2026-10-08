@@ -358,6 +358,26 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual((self.repo / "hello").read_text(), "changed\n")
         self.assertFalse(wt.exists())
 
+    def test_retire_refuses_checked_out_submodules_before_stopping_the_agent(self):
+        # Git will not remove such a worktree; retiring used to stop the
+        # agent first and then fail.
+        library = self.root / "library"
+        roost.git(self.root, "init", "-q", "-b", "main", str(library))
+        roost.git(library, "-c", "user.name=T", "-c", "user.email=t@example.invalid",
+                  "commit", "-q", "--allow-empty", "-m", "library")
+        self.git("-c", "protocol.file.allow=always", "submodule", "add", "-q", str(library), "lib")
+        self.git("commit", "-qm", "library")
+        task = self.create()
+        wt = Path(task["worktree"])
+        self.git("-c", "protocol.file.allow=always", "submodule", "update", "-q", "--init", cwd=wt)
+        reply = self.request("retire", id=task["id"])
+        self.assertIn("submodules checked out (lib)", reply["error"])
+        self.assertIn("git worktree remove --force", reply["error"])
+        self.assertIn(task["paneId"], roost.pane_inventory(self.socket))
+        self.request("stop", id=task["id"])
+        self.git("worktree", "remove", "--force", str(wt))
+        self.assertTrue(self.request("retire", id=task["id"])["ok"])
+
     def test_only_tracked_changes_in_the_primary_checkout_block_a_merge(self):
         task = self.create()
         wt = Path(task["worktree"])

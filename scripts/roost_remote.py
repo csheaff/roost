@@ -1188,6 +1188,21 @@ def require_clean(repo):
         raise RoostError("Uncommitted or untracked files remain; review and commit in Magit first")
 
 
+def require_removable(worktree):
+    """Git will not remove a worktree with submodules checked out, as an
+    agent does to build: their repositories, perhaps holding the only copy
+    of commits made in them, live in the worktree's Git directory. Refuse
+    before stopping the agent rather than fail halfway through retiring."""
+    modules = read_git(worktree, "rev-parse", "--git-path", "modules").stdout.strip()
+    populated = [line[1:].split()[1] for line in
+                 read_git(worktree, "submodule", "status").stdout.splitlines()
+                 if line[:1] != "-" and len(line[1:].split()) > 1]
+    if populated or (modules and (worktree / modules).is_dir()):
+        raise RoostError("Git will not remove a worktree with submodules checked out%s. Once any commits made "
+                         "in them are safe, run git worktree remove --force %s, then retire again"
+                         % (" (" + ", ".join(populated) + ")" if populated else "", shlex.quote(str(worktree))))
+
+
 def integration_branch(task):
     branch = task.get("integrationBranch")
     if not branch:
@@ -1250,6 +1265,7 @@ def retire(store, task, merge=False, merged_head=None):
     branch_exists = ref_exists(repo, branch)
     if worktree_exists:
         require_clean(str(worktree))
+        require_removable(worktree)
     if merge:
         if not branch_exists:
             raise RoostError("The task branch no longer exists; there is nothing to merge")
