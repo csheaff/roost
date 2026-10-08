@@ -2510,7 +2510,12 @@ ssh: connect to host dev port 22: Operation timed out"
             (should (equal (car actions) '("stop" "roost-p-012345")))
             (setq disconnected nil)
             (roost--act shared "retire")
-            (should-not disconnected)))
+            (should-not disconnected)
+            ;; The host refuses to resume an agent still running.
+            (roost--act (roost--cache-task "dev" (append '((live . t)) own)) "resume")
+            (should-not disconnected)
+            (roost--act (roost--cache-task "dev" (append '((live)) own)) "resume")
+            (should (equal disconnected '("roost-p-012345")))))
        (mapc #'kill-buffer terminals)))))
 
 (ert-deftest roost-the-sidebar-highlights-the-row-its-keys-act-on ()

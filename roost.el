@@ -1647,7 +1647,9 @@ tasks from before Roost gave each task one, outlives the task."
 (defun roost--act (task action &optional parameters callback failure)
   "Run ACTION on TASK with PARAMETERS, then CALLBACK with the updated task.
 FAILURE, if given, receives the error message instead of Roost reporting it."
-  (when (member action '("stop" "resume" "retire" "merge" "forget"))
+  ;; The host refuses to resume an agent still running, whose terminal stays.
+  (when (or (member action '("stop" "retire" "merge" "forget"))
+            (and (equal action "resume") (not (roost--field task 'live))))
     (roost--release-terminal task))
   (let ((host (roost--field task 'host)))
     (roost--request host action (cons (cons 'id (roost--field task 'id)) parameters)
