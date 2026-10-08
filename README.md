@@ -376,8 +376,8 @@ Since 0.8.1 (unreleased):
 - Claude Code worktrees an agent makes for itself show in its task's panel.
 - `roost-claude-command` moved into `roost-agent-commands`, and
   `roost-use-perspectives` into `roost-workspace`; both still work.
-- Agents keep using the helper they were started with: `s` gives a running
-  task the new behaviour.
+- An agent keeps the hooks it was started with, so one started before this
+  notices its own worktrees only after `K` and `s`.
 
 0.8 adds GitHub issues as a starting point (`C-c C-t` in the draft), the
 command menu (`h`, or `roost-dispatch` from anywhere), the mode-line count of
