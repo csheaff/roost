@@ -3190,10 +3190,11 @@ down.  With WIDTH, fit each line within it, leaving details to hover."
                   (string-join (mapcar #'roost--host-label (roost--hosts)) ", "))))
 
 (defun roost--render-dashboard ()
-  "Render the dashboard from cached state, keeping point on the same task."
+  "Render the dashboard from cached state, keeping point on the same row."
   (let* ((window (get-buffer-window (current-buffer) t))
          (position (if window (window-point window) (point)))
          (key (get-text-property position 'roost-task))
+         (heading (unless key (get-text-property position 'roost-directory)))
          (start-line (when window (line-number-at-pos (window-start window))))
          ;; Without fringes, as in a terminal, a full line would lose its last
          ;; column to the truncation mark; this leaves room for it.
@@ -3228,6 +3229,7 @@ down.  With WIDTH, fit each line within it, leaving details to hover."
                         ;; but still the task's, for point and clicks there.
                         (apply #'propertize "\n" row))))))))
     (let ((target (or (and key (roost--task-row key))
+                      (and heading (roost--heading-row heading))
                       (text-property-not-all (point-min) (point-max) 'roost-task nil)
                       (point-min))))
       (goto-char target)
@@ -3344,6 +3346,13 @@ Task commands act on the task at point, as in the dashboard.
     (when-let* ((match (text-property-search-forward 'roost-task key t)))
       (prop-match-beginning match))))
 
+(defun roost--heading-row (directory)
+  "Position of the heading for the project in DIRECTORY, or nil."
+  (save-excursion
+    (goto-char (point-min))
+    (when-let* ((match (text-property-search-forward 'roost-directory directory t)))
+      (prop-match-beginning match))))
+
 (defun roost--sidebar-entered (&rest _)
   "Start on a task when you enter the sidebar, then highlight it.
 Entering it anywhere but on a task starts on the task you are working
@@ -3417,10 +3426,12 @@ The sidebar shows no cursor."
                       (propertize label 'face face))))))
 
 (defun roost--render-sidebar ()
-  "Render the task sidebar from cached state, keeping point on its task."
+  "Render the task sidebar from cached state, keeping point on its row."
   (let* ((window (get-buffer-window (current-buffer) t))
          (width (max 12 (if window (roost--usable-width window) roost-sidebar-width)))
-         (key (get-text-property (point) 'roost-task))
+         (position (if window (window-point window) (point)))
+         (key (get-text-property position 'roost-task))
+         (heading (unless key (get-text-property position 'roost-directory)))
          (tasks (roost-tasks))
          (inhibit-read-only t))
     (erase-buffer)
@@ -3463,7 +3474,9 @@ The sidebar shows no cursor."
                              row)
                       ;; As in the dashboard: unhighlighted, still the task's.
                       (apply #'propertize "\n" row)))))))
-    (goto-char (or (and key (roost--task-row key)) (point-min)))
+    (goto-char (or (and key (roost--task-row key))
+                   (and heading (roost--heading-row heading))
+                   (point-min)))
     (when window (set-window-point window (point)))
     ;; Redrawing removed the highlight with the text.
     (roost--sidebar-mark-selection)))

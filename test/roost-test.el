@@ -1721,9 +1721,13 @@
      (should (equal (roost--field (roost--task-at-point) 'id) "3333333333333333"))
      (roost-dashboard-next-task)
      (should (equal (roost--field (roost--task-at-point) 'id) "3333333333333333"))
-     ;; A redraw keeps point on the same task.
+     ;; A redraw keeps point on the same task, or project heading.
      (roost--render-dashboard)
-     (should (equal (roost--field (roost--task-at-point) 'id) "3333333333333333")))
+     (should (equal (roost--field (roost--task-at-point) 'id) "3333333333333333"))
+     (goto-char (point-min))
+     (search-forward "local · site")
+     (roost--render-dashboard)
+     (should (looking-at-p "local · site")))
    ;; A quiet poll omits Git fields; the last full refresh's remain.
    (roost--apply-snapshot "dev" (list (append '((repo . "/home/user/ledger")) (roost-test--task "1111111111111111"))
                                       (append '((repo . "/home/user/ledger")) (roost-test--task "2222222222222222"))))
@@ -2587,9 +2591,11 @@ ssh: connect to host dev port 22: Operation timed out"
              (roost--sidebar-mark-selection)
              (roost--render-sidebar)
              (should (= (overlay-start roost--sidebar-selection) (funcall row "alpha")))
-             ;; Once in, point can rest on a project's heading, for `c'.
+             ;; Once in, point can rest on a project's heading, for `c',
+             ;; and stays there through a redraw.
              (goto-char (funcall row "dev · p"))
              (roost--sidebar-mark-selection)
+             (roost--render-sidebar)
              (should (= (point) (funcall row "dev · p")))
              (should (= (overlay-start roost--sidebar-selection) (funcall row "dev · p"))))
            ;; So may a click that enters the sidebar there.
