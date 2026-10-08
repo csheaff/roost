@@ -1115,6 +1115,15 @@ def resume(store, task):
     return task
 
 
+def seen(store, task, updated):
+    """Record that you saw TASK's agent as of UPDATED, its `updatedAt` then,
+    for every Emacs. The agent's next event moves `updatedAt` past it."""
+    if isinstance(updated, str) and updated:
+        task["seen"] = updated
+        store.save(task)
+    return task
+
+
 def inspect(store, task):
     """Validate ownership before Emacs displays the task. A dead pane is still
     shown: it holds the agent's last output, such as a startup error."""
@@ -1694,6 +1703,7 @@ TASK_ACTIONS = {
     "send": lambda store, task, request: send(task, request["text"], request.get("force") is True),
     "shell": lambda store, task, request: shell(store, task),
     "inspect": lambda store, task, request: inspect(store, task),
+    "seen": lambda store, task, request: seen(store, task, request.get("updatedAt")),
     "retire": lambda store, task, request: retire(store, task, merged_head=request.get("mergedHead")),
     "merge": lambda store, task, request: retire(store, task, merge=True, merged_head=request.get("mergedHead")),
     "forget": lambda store, task, request: forget(store, task),

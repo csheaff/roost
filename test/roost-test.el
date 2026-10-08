@@ -21,8 +21,10 @@
          (roost--hosts-loaded t) (roost--remembered-hosts nil)
          (roost--requests nil) (roost-notify nil) (roost--current-task nil))
      (set-frame-parameter nil 'roost-task nil)
-     (unwind-protect (progn ,@body)
-       (set-frame-parameter nil 'roost-task nil))))
+     ;; Seeing an agent is recorded on its host too; tests that check it say so.
+     (cl-letf (((symbol-function 'roost--record-seen) #'ignore))
+       (unwind-protect (progn ,@body)
+         (set-frame-parameter nil 'roost-task nil)))))
 
 (defvar-local roost-test--tmux nil
   "Plist of the stubbed tmux-control identity of the current buffer.")
@@ -1696,6 +1698,46 @@
      (roost--mark-seen (roost--cache-task "dev" (roost-test--task nil "running")))
      (should (equal (roost--attention-status (roost--cache-task "dev" (roost-test--task nil "running")))
                     "running")))))
+
+(ert-deftest roost-a-failed-or-crashed-agent-waits-until-you-have-seen-it ()
+  ;; A usage limit or a crash notified you, then dropped out of `n' and the count.
+  (roost-test--isolated
+   (let ((roost-mode-line-count t) recorded opened)
+     (cl-letf (((symbol-function 'roost--record-seen)
+                (lambda (task updated) (push (list (roost--field task 'id) updated) recorded)))
+               ((symbol-function 'roost-open-task) (lambda (task) (push (roost--field task 'id) opened))))
+       (dolist (status '("failed" "crashed" "exited"))
+         (clrhash roost--tasks)
+         (clrhash roost--seen)
+         (setq recorded nil)
+         (let ((task (roost--cache-task "dev" (roost-test--task nil status))))
+           (should (roost--waiting-p task))
+           (should (string-match-p "Roost:1" (roost--mode-line-count)))
+           (roost-next-waiting)
+           (should (equal (car opened) "0123456789abcdef"))
+           (roost--mark-seen task)
+           (roost--mark-seen task)
+           ;; Recorded on its host, once.
+           (should (equal recorded '(("0123456789abcdef" "2026-10-03T20:00:00+00:00"))))
+           (should-not (roost--waiting-p task))
+           (should-not (roost--mode-line-count))
+           ;; Still shown as what it is.
+           (should (equal (roost--attention-status task) status))))
+       ;; Stopped by you, it never waits.
+       (should-not (roost--waiting-p (roost--cache-task "dev" (roost-test--task "1111111111111111" "stopped"))))))))
+
+(ert-deftest roost-an-agent-seen-in-another-emacs-is-seen-here ()
+  ;; The host keeps what you saw, so another machine, or the next session, agrees.
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (append '((seen . "2026-10-03T20:00:00+00:00"))
+                                                (roost-test--task nil "ready")))))
+     (should (equal (roost--attention-status task) "idle"))
+     (should-not (roost--waiting-p task))
+     ;; Its next reply waits again.
+     (setq task (roost--cache-task "dev" (append '((seen . "2026-10-03T20:00:00+00:00")
+                                                   (updatedAt . "2026-10-03T20:05:00+00:00"))
+                                                 (roost-test--task nil "ready"))))
+     (should (roost--waiting-p task)))))
 
 (ert-deftest roost-background-polls-back-off-from-unreachable-hosts ()
   (roost-test--isolated

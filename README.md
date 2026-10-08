@@ -125,7 +125,7 @@ branch. Needs `gh` on the task's host, and Git credentials there that can push.
 
 ![A task's panel: the agent's latest reply, its changes, the prompt, the actions and the details](docs/images/roost-task-panel.jpg)
 
-*`?` shows a task's panel: what the agent said, what changed, and what you can
+*`i` shows a task's panel: what the agent said, what changed, and what you can
 do next.*
 
 ## Install
@@ -202,7 +202,7 @@ Magit is optional (review falls back to Dired).
 
 | Key | Command | |
 | --- | --- | --- |
-| `h` | `roost-dispatch` | A Magit-style menu of every command below, naming the task they act on |
+| `h`, `?` | `roost-dispatch` | A Magit-style menu of every command below, naming the task they act on |
 | `RET` | `roost-open-task` | Open the task's agent terminal and workspace; for a stopped or crashed agent, offer to resume it |
 | `c` | `roost-new-task` | Draft a new task, from the region or Org entry if any (`C-u` forks the current task's commits) |
 | `n` | `roost-next-waiting` | Next task waiting for you, permission requests first |
@@ -211,7 +211,8 @@ Magit is optional (review falls back to Dired).
 | `r` | `roost-review` | Magit in the worktree |
 | `D` | `roost-diff` | Diff the task's own changes, including uncommitted ones |
 | `e` | `roost-send` | Paste a prompt into the agent and press Enter |
-| `?` | `roost-task-info` | Prompt, changes, actions and details |
+| `i` | `roost-task-info` | Prompt, changes, actions and details |
+| `l` | `roost-switch-task` | Choose a task by name, waiting tasks first |
 | `b` | `roost-sidebar-mode` | Keep the task list at the left of every frame |
 | `I` | `roost-task-panel-mode` | Dock the open task's panel beside its terminal |
 | `u` | `roost-update` | Merge the integration branch into the task |

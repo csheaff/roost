@@ -966,6 +966,17 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(self.request("retire", id=task["id"])["ok"])
         self.assertEqual(self.request("list")["result"], [])
 
+    def test_seen_is_recorded_for_every_emacs_until_the_next_event(self):
+        task = self.create()
+        record = self.wait(task, "ready")
+        reply = self.request("seen", id=task["id"], updatedAt=record["updatedAt"])
+        self.assertTrue(reply["ok"], reply)
+        listed = self.request("list")["result"][0]
+        self.assertEqual(listed["seen"], record["updatedAt"])
+        self.assertEqual(listed["updatedAt"], record["updatedAt"])
+        # Not an event of the agent's: nothing else changes.
+        self.assertEqual(listed["status"], "ready")
+
     def test_forget_refuses_a_running_agent_and_never_touches_git(self):
         task = self.create()
         self.assertIn("stop", self.request("forget", id=task["id"])["error"])

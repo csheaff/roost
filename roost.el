@@ -734,9 +734,16 @@ recently failed."
 ;;;; Choosing a task
 
 (defconst roost--status-order
-  '("permission" "prompt" "ready" "failed" "crashed" "running" "background" "idle"
-    "starting" "exited" "stopped")
+  '("permission" "prompt" "ready" "failed" "crashed" "exited" "running" "background" "idle"
+    "starting" "stopped")
   "Attention statuses from most to least in need of attention.")
+
+(defun roost--seen-p (task)
+  "Whether you have seen TASK's agent since its last event.
+Here or in another Emacs: the task's host records it too."
+  (when-let* ((updated (roost--field task 'updatedAt)))
+    (or (equal (gethash (roost--key task) roost--seen) updated)
+        (equal (roost--field task 'seen) updated))))
 
 (defun roost--attention-status (task)
   "TASK's status for attention.
@@ -747,15 +754,37 @@ it is ready and you have seen it since, rather than \"ready\"."
                 (> (or (roost--seconds-since (roost--field task 'updatedAt)) 0)
                    roost-startup-grace))
            "prompt")
-          ((and (equal status "ready")
-                (equal (gethash (roost--key task) roost--seen) (roost--field task 'updatedAt))
-                (roost--field task 'updatedAt))
+          ((and (equal status "ready") (roost--seen-p task))
            "idle")
           (t status))))
 
+(defun roost--blocked-p (task)
+  "Whether TASK's agent can't go on without you: it asks, or is stuck starting."
+  (member (roost--attention-status task) '("permission" "prompt")))
+
+(defun roost--waiting-p (task)
+  "Whether TASK waits for you.
+Its agent asks something, or finished, failed, crashed or exited since
+you last saw it."
+  (let ((status (roost--attention-status task)))
+    (or (member status '("permission" "prompt" "ready"))
+        (and (member status '("failed" "crashed" "exited"))
+             (not (roost--seen-p task))))))
+
 (defun roost--mark-seen (task)
-  "Record that you have seen TASK's agent as it is now."
-  (puthash (roost--key task) (roost--field task 'updatedAt) roost--seen))
+  "Record that you have seen TASK's agent as it is now.
+Its host records it too, for your other Emacs and the next session."
+  (let ((key (roost--key task))
+        (updated (roost--field task 'updatedAt)))
+    (unless (or (null updated) (roost--seen-p task))
+      (puthash key updated roost--seen)
+      (roost--record-seen task updated))))
+
+(defun roost--record-seen (task updated)
+  "Record on TASK's host that you saw its agent as of UPDATED."
+  (roost--request (roost--field task 'host) "seen"
+                  (list (cons 'id (roost--field task 'id)) (cons 'updatedAt updated))
+                  #'ignore #'ignore))
 
 (defun roost--terminal-shows-p (task panes)
   "Whether the current terminal shows one of PANES in TASK's tmux session.
@@ -1081,8 +1110,11 @@ from the buffer holding its connection, so that is where this is set."
                       ;; resuming is the way to its terminal.
                       (if (and (= generation roost--open-generation)
                                (string-prefix-p "The agent's tmux window is gone" err))
-                          (when (y-or-n-p (format "%s's agent isn't running.  Resume its conversation? "
-                                                  (roost--field task 'name)))
+                          (when (progn
+                                  ;; You know now; `n' moves on to the next.
+                                  (roost--mark-seen (or (gethash (roost--key task) roost--tasks) task))
+                                  (y-or-n-p (format "%s's agent isn't running.  Resume its conversation? "
+                                                  (roost--field task 'name))))
                             (roost-resume task))
                         (message "Roost %s: %s" (roost--host-label (roost--field task 'host)) err))))))
 
@@ -2326,12 +2358,10 @@ File buffers stay, since they may hold unsaved edits."
 (defun roost-next-waiting ()
   "Open the next task whose agent is waiting for you.
 Permission requests and agents stuck at a startup prompt come first,
-since they block their agent; then tasks ready for a prompt, in turn."
+since they block their agent; then tasks ready for a prompt, and those
+that failed, crashed or exited, in turn."
   (interactive)
-  (let* ((waiting (sort (seq-filter (lambda (task)
-                                      (member (roost--attention-status task)
-                                              '("permission" "prompt" "ready")))
-                                    (roost-tasks))
+  (let* ((waiting (sort (seq-filter #'roost--waiting-p (roost-tasks))
                         (lambda (a b) (< (roost--attention-rank a) (roost--attention-rank b)))))
          (keys (mapcar #'roost--key waiting))
          ;; The task you are looking at, which is never the dashboard's row:
@@ -2340,7 +2370,7 @@ since they block their agent; then tasks ready for a prompt, in turn."
                     (when-let* ((task (ignore-errors (roost--task-at-point))))
                       (roost--key task))))
          (blocked (seq-find (lambda (task)
-                              (and (member (roost--attention-status task) '("permission" "prompt"))
+                              (and (roost--blocked-p task)
                                    (not (equal (roost--key task) viewing))))
                             waiting))
          (key (if blocked
@@ -2639,6 +2669,7 @@ terminal or worktree, or ask which task."
 (defvar-keymap roost-task-info-mode-map
   :doc "Actions on the task shown in this buffer."
   "h" #'roost-dispatch
+  "?" #'roost-dispatch
   "RET" #'roost-open-task
   "r" #'roost-review
   "D" #'roost-diff
@@ -2655,6 +2686,7 @@ terminal or worktree, or ask which task."
   "I" #'roost-task-panel-mode
   ;; Commands beyond this task, as in the dashboard and sidebar.
   "n" #'roost-next-waiting
+  "l" #'roost-switch-task
   "c" #'roost-new-task
   "b" #'roost-sidebar-mode
   "S" #'roost-status
@@ -3014,14 +3046,13 @@ Tasks with the same name on the same host are told apart by their IDs."
   "<backtab>" #'roost-dashboard-previous-task
   "j" #'roost-dashboard-next-task
   "k" #'roost-dashboard-previous-task
-  "d" #'roost-new-task
   "c" #'roost-new-task
   "r" #'roost-review
   "D" #'roost-diff
   "i" #'roost-task-info
   "I" #'roost-task-panel-mode
   "b" #'roost-sidebar-mode
-  "?" #'roost-task-info
+  "l" #'roost-switch-task
   "f" #'roost-files
   "t" #'roost-shell
   "e" #'roost-send
@@ -3033,7 +3064,9 @@ Tasks with the same name on the same host are told apart by their IDs."
   "X" #'roost-forget
   "u" #'roost-update
   "n" #'roost-next-waiting
+  ;; As in Magit, `h' and `?' show every command.
   "h" #'roost-dispatch
+  "?" #'roost-dispatch
   "g" #'roost-refresh)
 
 (easy-menu-define roost-dashboard-menu roost-dashboard-mode-map
@@ -3404,12 +3437,8 @@ The sidebar shows no cursor."
 
 (defun roost--sidebar-summary (tasks)
   "Short count of TASKS waiting for you, or nil."
-  (let ((waiting (seq-count (lambda (task)
-                              (member (roost--attention-status task) '("permission" "prompt" "ready")))
-                            tasks))
-        (blocked (seq-some (lambda (task)
-                             (member (roost--attention-status task) '("permission" "prompt")))
-                           tasks)))
+  (let ((waiting (seq-count #'roost--waiting-p tasks))
+        (blocked (seq-some #'roost--blocked-p tasks)))
     (when (> waiting 0)
       (propertize (format "%d waiting" waiting)
                   'face (if blocked 'roost-status-permission 'roost-status-ready)))))
@@ -3860,14 +3889,13 @@ when they hide minor modes, and only while some agent waits."
 (defun roost--mode-line-count ()
   "\"Roost:N\" for the agents waiting for you, or nil when none are.
 Agents asking permission or stuck at a startup prompt color the count."
-  (let ((blocked 0) (ready 0))
+  (let ((blocked 0) (waiting 0))
     (maphash (lambda (_key task)
-               (pcase (roost--attention-status task)
-                 ((or "permission" "prompt") (cl-incf blocked))
-                 ("ready" (cl-incf ready))))
+               (cond ((roost--blocked-p task) (cl-incf blocked))
+                     ((roost--waiting-p task) (cl-incf waiting))))
              roost--tasks)
-    (when (> (+ blocked ready) 0)
-      (concat (propertize (format " Roost:%d" (+ blocked ready))
+    (when (> (+ blocked waiting) 0)
+      (concat (propertize (format " Roost:%d" (+ blocked waiting))
                           'face (if (> blocked 0) 'roost-status-permission 'roost-status-ready)
                           'help-echo "Agents waiting for you; mouse-1 opens the next"
                           'mouse-face 'mode-line-highlight
