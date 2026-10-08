@@ -82,18 +82,19 @@
   "Host-side directory for task records, helper, settings, and worktrees."
   :type 'string)
 
-(defcustom roost-claude-command '("claude")
-  "Claude executable and extra arguments, evaluated on the task host."
-  :type '(repeat string))
+(defvar roost-claude-command '("claude")
+  "Claude executable and extra arguments; see `roost-agent-commands'.")
+(make-obsolete-variable 'roost-claude-command 'roost-agent-commands "0.9")
 
 (defcustom roost-default-agent "claude"
   "Default agent offered when creating a task.
 Existing tasks retain their agent."
   :type '(choice (const "claude") (const "codex") (const "pi")))
 
-(defcustom roost-agent-commands '(("codex" "codex") ("pi" "pi"))
+(defcustom roost-agent-commands '(("claude" "claude") ("codex" "codex") ("pi" "pi"))
   "Executable and extra arguments for each agent, evaluated on the task host.
-Claude uses `roost-claude-command' unless overridden here."
+Such as (\"claude\" \"claude\" \"--model\" \"sonnet\") for Claude Code.
+Roost owns worktree, resume and hook flags, and refuses ones that clash."
   :type '(alist :key-type string :value-type (repeat string)))
 
 (defconst roost--agents '("claude" "codex" "pi"))
@@ -114,10 +115,9 @@ Existing tasks keep their branch."
   "Tmux socket, or nil to use tmux-control's configured default."
   :type '(choice (const nil) string))
 
-(defcustom roost-session-name nil
-  "Tmux session to place new task windows in, or nil for one per task.
-Those are named after the project and task, such as \"roost-notes-3f2a1b\"."
-  :type '(choice (const nil) string))
+(defvar roost-session-name nil
+  "Ignored: each task has a tmux session of its own.")
+(make-obsolete-variable 'roost-session-name "each task has a tmux session of its own" "0.9")
 
 (defcustom roost-startup-grace 15
   "Seconds after which a task still starting is taken to be waiting at a prompt.
@@ -171,9 +171,9 @@ leaves your windows alone.  `auto' uses perspective.el when
                  (const :tag "A tab per task" tab-bar)
                  (const :tag "None" nil)))
 
-(defcustom roost-use-perspectives t
-  "Allow `roost-workspace' to use perspective.el."
-  :type 'boolean)
+(defvar roost-use-perspectives t
+  "Allow `roost-workspace' to use perspective.el.")
+(make-obsolete-variable 'roost-use-perspectives 'roost-workspace "0.9")
 
 (defcustom roost-evil-state 'emacs
   "Evil state for the dashboard and task panels, or nil for Evil's default.
@@ -1028,7 +1028,7 @@ Only while Emacs has focus, since otherwise nobody is looking."
 
 (defun roost--compact-perspective-mode-line (original)
   "Collapse task perspectives in ORIGINAL without changing their identity."
-  (if (not (and original roost-compact-mode-line roost-use-perspectives
+  (if (not (and original roost-compact-mode-line (with-no-warnings roost-use-perspectives)
                 (bound-and-true-p persp-mode)))
       original
     (let* ((current (persp-current-name))
@@ -1056,7 +1056,7 @@ Only while Emacs has focus, since otherwise nobody is looking."
 
 (defun roost--workspace-backend ()
   "The workspace mechanism in use: `perspective', `tab-bar' or nil."
-  (let ((perspective (and roost-use-perspectives (bound-and-true-p persp-mode)
+  (let ((perspective (and (with-no-warnings roost-use-perspectives) (bound-and-true-p persp-mode)
                           (fboundp 'persp-current-name))))
     (pcase roost-workspace
       ('auto (cond (perspective 'perspective)
@@ -1279,8 +1279,11 @@ a word, within 40 characters."
 
 (defun roost--agent-command (agent)
   "Executable and arguments for AGENT."
-  (or (cdr (assoc agent roost-agent-commands))
-      (and (equal agent "claude") roost-claude-command)
+  (or (with-no-warnings
+        ;; Set before `roost-agent-commands' had Claude's.
+        (and (equal agent "claude") (not (equal roost-claude-command '("claude")))
+             roost-claude-command))
+      (cdr (assoc agent roost-agent-commands))
       (list agent)))
 
 (defun roost--create-task (directory name base prompt agent &optional on-success on-failure extra)
@@ -1308,7 +1311,6 @@ EXTRA is an alist of further request fields, such as the GitHub issue."
            ,(cons 'socket (or roost-socket-name
                               (bound-and-true-p tmux-control-default-socket-name)
                               "main"))
-           ,(cons 'session roost-session-name)
            . ,extra)
      (lambda (task)
        (cl-incf (gethash host roost--revisions 0))
@@ -1740,9 +1742,8 @@ listed with gh on the project's host."
 Return its buffers.  A task's own session holds only its agent's
 window, so stopping, resuming, retiring or forgetting the task ends the
 session, and its terminal would then report a lost connection.  Opening
-the task again connects anew.  A session shared through
-`roost-session-name', or by tasks from before Roost gave each task one,
-outlives the task."
+the task again connects anew.  A session shared by tasks from before
+Roost gave each task one outlives the task."
   (let ((host (roost--field task 'host))
         (socket (roost--field task 'socket))
         (session (roost--field task 'session))
@@ -4133,8 +4134,8 @@ See `roost-watch-unfocused-interval'."
     (setq roost--last-watch (float-time))
     (roost-refresh t)))
 
-(defalias 'roost-list #'roost-switch-task)
-(defalias 'roost-kill #'roost-stop)
+(define-obsolete-function-alias 'roost-list #'roost-switch-task "0.9")
+(define-obsolete-function-alias 'roost-kill #'roost-stop "0.9")
 
 (provide 'roost)
 ;;; roost.el ends here

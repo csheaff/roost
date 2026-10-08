@@ -247,10 +247,9 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
 - `roost-hosts`: hosts the dashboard watches (`nil` is local). Hosts and projects
   you create tasks in are remembered in `roost-hosts-file` and `roost-projects-file`;
   `M-x roost-forget-host` stops watching one you no longer use.
-- `roost-default-agent`, `roost-claude-command`, `roost-agent-commands`: which
-  agent new tasks use, and each CLI with extra arguments, such as
-  `'("claude" "--model" "sonnet")`. Roost owns worktree, resume and hook flags and
-  rejects conflicting ones.
+- `roost-default-agent`, `roost-agent-commands`: which agent new tasks use, and
+  each CLI with extra arguments, such as `("claude" "claude" "--model" "sonnet")`.
+  Roost owns worktree, resume and hook flags and rejects conflicting ones.
 - `roost-setup-command`: a shell command run once in a new worktree before the
   agent starts, such as `npm ci`. Set it in `.dir-locals.el` per project:
   `((nil . ((roost-setup-command . "npm ci"))))`. Emacs reads a remote
@@ -260,8 +259,8 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
 - `roost-branch-prefix`: topic branches are `PREFIX<name>-<id>`; default `roost/`.
 - `roost-state-directory`: where each host keeps task records, the helper and
   worktrees; default `~/.local/share/roost`.
-- `roost-socket-name`, `roost-session-name`: tmux socket (default tmux-control's)
-  and session (default one per task, named after its project and task; set it to share one session).
+- `roost-socket-name`: the tmux socket (default tmux-control's). Each task has a
+  session of its own, named after its project and task.
 - `roost-sidebar-width` (30), `roost-task-panel-width` (44): the sidebar and
   the panel docked beside a task's terminal.
 - `roost-workspace`, `roost-compact-mode-line`: how tasks get their own windows
@@ -336,7 +335,7 @@ Things to know:
   switches to the task.
 - Claude Code now starts in auto mode for some accounts, approving most
   commands itself, so its tasks rarely ask. To be asked before each command,
-  add `"--permission-mode" "manual"` to `roost-claude-command`.
+  add `"--permission-mode" "manual"` to Claude's entry in `roost-agent-commands`.
 - Roost turns on tmux's `extended-keys` on the server it starts agents on, so
   they can tell Shift+Return and Option+Return from Return (a new line in
   Claude's prompt rather than sending it). Programs that do not ask for
@@ -378,8 +377,7 @@ draft buffer; called from Lisp with arguments, it still creates the task
 directly. Retired task records are now deleted. Codex tasks started after
 upgrading ask for one final hook review.
 
-0.4 added Codex and Pi. 0.3 replaced the 0.2 Pi orchestrator registry; old
-aliases `roost-list` and `roost-kill` still work.
+0.4 added Codex and Pi. 0.3 replaced the 0.2 Pi orchestrator registry.
 
 ## Development
 

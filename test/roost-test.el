@@ -447,6 +447,12 @@
        (should (equal (alist-get 'command (car requests)) ["codex" "--model" "test-model"]))
        (roost-new-task "/tmp/" "claude" nil nil "claude")
        (should (equal (alist-get 'command (car requests)) ["claude" "--model" "sonnet"]))
+       ;; Claude's command now lives with the others; the older setting still wins.
+       (let ((roost-claude-command '("claude"))
+             (roost-agent-commands '(("claude" "claude" "--model" "opus"))))
+         (roost-new-task "/tmp/" "claude" nil nil "claude")
+         (should (equal (alist-get 'command (car requests)) ["claude" "--model" "opus"]))
+         (should-not (assq 'session (pop requests))))
        (should-error (roost-new-task "/tmp/" "unknown" nil nil "unknown") :type 'user-error)
        (should (= (length requests) 3))))))
 

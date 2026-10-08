@@ -630,15 +630,13 @@ class Lifecycle(unittest.TestCase):
         roost.tmux(self.socket, "new-session", "-d", "-s", "roost-" + repo_hash)
         self.assertNotEqual(self.create(name="newer")["session"], "roost-" + repo_hash)
 
-    def test_existing_session_and_rename_survive_resume(self):
-        roost.tmux(self.socket, "new-session", "-d", "-s", "existing")
-        task = self.create(session="existing")
-        self.assertEqual(task["session"], "existing")
-        roost.tmux(self.socket, "rename-session", "-t", "existing", "renamed")
+    def test_a_renamed_session_is_followed_until_the_task_resumes(self):
+        task = self.create()
+        roost.tmux(self.socket, "rename-session", "-t", task["session"], "renamed")
         self.assertEqual(self.request("inspect", id=task["id"])["result"]["session"], "renamed")
         self.request("stop", id=task["id"])
         self.request("resume", id=task["id"])
-        self.assertEqual(self.wait(task, "ready")["session"], "renamed")
+        self.assertEqual(self.wait(task, "ready")["session"], roost.session_name(task["repo"], task["id"]))
 
     def test_a_task_from_a_repository_wide_session_resumes_in_its_own(self):
         # Before each task had a session of its own, a project's tasks shared
@@ -646,12 +644,12 @@ class Lifecycle(unittest.TestCase):
         repo_hash = hashlib.sha256(str(self.repo.resolve()).encode()).hexdigest()[:10]
         shared = "roost-" + repo_hash
         roost.tmux(self.socket, "new-session", "-d", "-s", shared, "-n", "shell")
-        task = self.create(session=shared)
+        task = self.create()
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
         store = roost.Store(str(self.state))
         record = store.read(task["id"])
-        record.pop("sessionShared", None)  # Its record, written then, has no such field.
+        record["session"] = shared
         store.save(record)
-        self.assertTrue(self.request("stop", id=task["id"])["ok"])
         self.assertTrue(self.request("resume", id=task["id"])["ok"])
         resumed = self.wait(task, "ready")
         self.assertEqual(resumed["session"], roost.session_name(record["repo"], task["id"]))
@@ -925,14 +923,10 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(self.wait(second, "ready")["session"], second["session"])
         self.assertEqual(sessions(), {second["session"]})
 
-    def test_a_session_name_with_tmux_separators_is_one_tmux_can_find(self):
-        # tmux 3.7 keeps ":" and "." in a session's name, which earlier
-        # versions changed to "_", and then cannot find it by name.
+    def test_a_session_an_older_emacs_asks_for_is_its_own_anyway(self):
+        # roost-session-name used to put tasks in one session; each now has its own.
         task = self.create(name="odd session", session="odd:name.x")
-        self.assertEqual(task["session"], "odd_name_x")
-        self.assertEqual(roost.pane_inventory(self.socket)[task["paneId"]]["session_name"], "odd_name_x")
-        other = self.create(name="other", session="odd:name.x")
-        self.assertEqual(roost.pane_inventory(self.socket)[other["paneId"]]["session_name"], "odd_name_x")
+        self.assertEqual(task["session"], roost.session_name(task["repo"], task["id"]))
 
     def test_detached_primary_task_retires_when_empty_and_forgets_when_not(self):
         self.git("checkout", "-q", "--detach")

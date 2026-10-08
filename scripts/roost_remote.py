@@ -816,10 +816,7 @@ def create(store, request):
     task = dict(id=task_id, name=name, task=prompt or name, repo=repo,
                 worktree=str(worktree), branch=branch, baseRef=base, baseCommit=commit,
                 integrationBranch=integration, socket=socket,
-                # tmux before 3.7 turned ":" and "." in a session's name into
-                # "_"; 3.7 keeps them, and then cannot find the session by name.
-                session=re.sub(r"[:.]", "_", text(request.get("session")) or "") or session_name(repo, task_id),
-                sessionShared=bool(text(request.get("session"))),
+                session=session_name(repo, task_id),
                 agent=agent_name, command=command, setup=setup, prompt=prompt,
                 status="starting", startedAt=now(), updatedAt=now(), claudeSession=None)
     issue = request.get("issue")
@@ -1107,10 +1104,10 @@ def resume(store, task):
     check_worktree(store, task, branch=False)
     if pane:
         tmux(task["socket"], "kill-window", "-t", task["windowId"])
-    # A task begun in a repository-wide session moves to its own on resume,
-    # unless its session was chosen with roost-session-name.
-    if not task.get("sessionShared"):
-        task["session"] = session_name(task["repo"], task["id"])
+    # A task begun in a shared session, as before each had its own, moves to
+    # its own on resume.
+    task["session"] = session_name(task["repo"], task["id"])
+    task.pop("sessionShared", None)
     spawn(store, task, resume=True)
     return task
 
