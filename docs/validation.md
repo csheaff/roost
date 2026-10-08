@@ -544,6 +544,51 @@ projects with slow remotes can outlast its 60-second request; approvals of
 Claude's other tools, and of Codex and Pi, still show `permission` until the
 agent moves on.
 
+### A session per task, 2026-10-07
+
+Each task now has a tmux session of its own, `roost-PROJECT-ID`, holding
+only its agent's window (and the shell beside it), so stopping or retiring
+the task ends the session and, with the last one, the tmux server. Checked
+in the copy of Clay's configuration against `claylien` (tmux 3.7c) and the
+Mac (tmux 3.6a) with the fake agent, which runs Claude's hook commands:
+
+- **Closing terminals.** Roost disconnects a task's terminal before asking
+  its host to stop, resume, retire or merge it, as the session would end
+  under it. A stopped task then left a blank, disconnected terminal on
+  screen; it now goes once the host has acted. When the host refused, as
+  it does to retire unmerged work, the agent ran on behind a dead
+  terminal; that terminal now reconnects, once the host confirms the
+  agent's window is still there (tmux-control attaches with
+  `new-session -A`, so reconnecting to an ended session would start an
+  empty one). Live: a refused retire reconnected with the agent's output;
+  stop, merge and retire left no terminal, no message and no tmux server.
+  Roost also disconnected through a scrollback view, if that came first,
+  which holds no connection of its own.
+- **Crashes and lost links.** Killing `claylien`'s tmux server marked the
+  task `crashed` with a notification; RET offered to resume it, and `y`
+  resumed the same conversation. Killing a terminal's ssh, as a sleeping
+  laptop does, left a terminal that RET reconnected. tmux numbers panes
+  afresh after its server restarts, so a crashed task still listed the pane
+  ID of a newer task's agent: commands run from the newer terminal could act
+  on the crashed task. Terminals are now matched to tasks by session too.
+- **The sidebar.** Point may rest on a project's heading, where `c` starts
+  a task; a redraw, which follows every poll, moved it to the top (and the
+  dashboard's to its first task), and a click on a heading jumped to a task.
+- **Git.** An agent that checked out submodules, as one does to build,
+  left a worktree Git will not remove; retiring stopped the agent and then
+  failed. It now refuses first, saying how to remove the worktree.
+- **tmux 3.7** keeps `:` and `.` in a session's name, which 3.6 turned into
+  `_`, and then cannot find the session by name; a chosen session name
+  (`roost-session-name`) is now changed as before.
+
+Claude Code 2.1.293 (Mac) and 2.1.289 (`claylien`) pass `make contract`.
+All 139 ERT and 95 Python tests pass, the Python ones on macOS and on
+`claylien`.
+
+Not Roost's: after its session ends, a tmux-control terminal says both "tmux
+session ended" and "connection lost … C-c C-r reconnects", and that
+reconnect would start an empty session of the same name.
+
 ### Codex and Pi adapters
 
 Used another disposable remote `hello-service` project, an isolated registry and
