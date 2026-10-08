@@ -1217,6 +1217,23 @@
          (push-button (1- (point))))
        (should (equal opened "/ssh:dev:/repo/.claude/worktrees/probe/"))))))
 
+(ert-deftest roost-switching-to-a-tasks-session-opens-the-task ()
+  ;; tmux-control's session switcher showed it inside the workspace you were in.
+  (roost-test--isolated
+   (let (opened)
+     (roost--cache-task "dev" (append '((session . "roost-p-111111")) (roost-test--task "1111111111111111")))
+     (roost--cache-task "dev" (append '((session . "roost-shared")) (roost-test--task "2222222222222222")))
+     (roost--cache-task "dev" (append '((session . "roost-shared")) (roost-test--task "3333333333333333")))
+     (cl-letf (((symbol-function 'roost-open-task) (lambda (task) (setq opened (roost--field task 'id)))))
+       (should (roost--switch-session "dev" "main" "roost-p-111111"))
+       (should (equal opened "1111111111111111"))
+       ;; Not a task's own: tmux-control switches as usual.
+       (setq opened nil)
+       (should-not (roost--switch-session "dev" "main" "roost-shared"))
+       (should-not (roost--switch-session "dev" "main" "notes"))
+       (should-not (roost--switch-session nil "main" "roost-p-111111"))
+       (should-not opened)))))
+
 (ert-deftest roost-a-task-offers-what-it-can-do-now ()
   ;; A stopped task's panel offered Stop, Shell and Send, which its host refuses.
   (roost-test--isolated

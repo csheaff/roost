@@ -1129,9 +1129,25 @@ from the buffer holding its connection, so that is where this is set."
       (with-current-buffer buffer
         (setq-local tmux-control-session-activity nil)))))
 
+(defun roost--switch-session (host socket session)
+  "Open the task whose own tmux session is SESSION on HOST and SOCKET.
+For `tmux-control-switch-session-functions': switching to a task's
+session from a terminal opens the task, in its workspace and beside its
+panel, rather than inside the workspace of the task you were in."
+  (let ((tasks (seq-filter (lambda (task)
+                             (and (equal (roost--field task 'host) host)
+                                  (equal (roost--field task 'socket) socket)
+                                  (equal (roost--field task 'session) session)))
+                           (roost-tasks))))
+    ;; A session shared by tasks from before each had its own is no one's.
+    (when (and tasks (null (cdr tasks)))
+      (roost-open-task (car tasks))
+      t)))
+
 (defun roost--display-task (task &optional target-pane)
   "Display TASK after ownership validation, selecting TARGET-PANE if supplied."
   (require 'tmux-control)
+  (add-hook 'tmux-control-switch-session-functions #'roost--switch-session)
   (roost--leave-side-window)
   (roost--activate-workspace task)
   (roost--leave-side-window)
@@ -3945,6 +3961,7 @@ Beside a terminal, that turns off `roost-task-panel-mode'."
 
 (defun roost-unload-function ()
   "Remove Roost's hooks, advice and side windows for `unload-feature'."
+  (remove-hook 'tmux-control-switch-session-functions #'roost--switch-session)
   (when roost-sidebar-mode (roost-sidebar-mode -1))
   (dolist (frame (frame-list))
     (with-selected-frame frame
