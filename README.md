@@ -304,7 +304,10 @@ earlier run cannot overwrite a resumed one. Merging needs the task's worktree
 clean, and the primary checkout on the task's integration branch with nothing
 uncommitted; untracked files there stay. A conflicting merge is aborted and
 leaves nothing changed. Branches are deleted only if they still point at the
-commit Roost verified.
+commit Roost verified. Git will not remove a worktree with submodules checked
+out, since they may hold the only copy of commits made in them, so Roost
+refuses to retire one; once those commits are safe, remove it with
+`git worktree remove --force` and retire again.
 
 Things to know:
 
