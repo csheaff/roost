@@ -19,6 +19,8 @@
          (roost--full-refresh-pending (make-hash-table :test 'equal))
          (roost--failures (make-hash-table :test 'equal))
          (roost--hosts-loaded t) (roost--remembered-hosts nil)
+         (roost-notes-file (expand-file-name "notes.json" (make-temp-file "roost-notes" t)))
+         (roost--notes nil) (roost--notes-loaded t)
          (roost--requests nil) (roost-notify nil) (roost--current-task nil))
      (set-frame-parameter nil 'roost-task nil)
      ;; Seeing an agent is recorded on its host too; tests that check it say so.
@@ -3045,5 +3047,301 @@ ssh: connect to host dev port 22: Operation timed out"
        (dolist (buffer buffers)
          (when (get-buffer-process buffer) (delete-process (get-buffer-process buffer)))
          (kill-buffer buffer))))))
+
+;;;; Review notes
+
+(defun roost-test--note (id task-id &rest fields)
+  "A review note ID for the task TASK-ID on host dev, with FIELDS."
+  (append `((id . ,id) (host . "dev") (task . ,task-id)) fields))
+
+(ert-deftest roost-notes-quote-their-lines-for-the-agent ()
+  (should (equal (roost--format-note '((file . "a.py") (line . 3) (end . 4)
+                                       (quote "+one" " two") (text . "Why?")))
+                 "a.py:3-4\n> +one\n>  two\nWhy?"))
+  (should (equal (roost--format-note '((file . "a.py") (line . 7) (end . 7) (removed . t)
+                                       (quote "-gone") (text . "Keep it")))
+                 "a.py:7 (a removed line)\n> -gone\nKeep it"))
+  (should (equal (roost--format-note '((file . "README.md") (text . "Mention the key")))
+                 "README.md\nMention the key"))
+  (let ((long (roost--format-note `((file . "b") (line . 1) (end . 10)
+                                    (quote ,@(make-list 10 "+x")) (text . "t")))))
+    (should (string-suffix-p "> …\nt" long))
+    (should (= (cl-count ?> long) 9))))
+
+(ert-deftest roost-notes-survive-a-restart ()
+  (roost-test--isolated
+   (let ((notes (list (roost-test--note "1" "t1" '(file . "a.py") '(line . 2) '(end . 3)
+                                        '(removed . t) '(quote "-a" "-b") '(text . "x"))
+                      '((id . "2") (task . "t2") (file . "b.py") (text . "whole")))))
+     (setq roost--notes (copy-tree notes))
+     (roost--save-notes)
+     (setq roost--notes nil roost--notes-loaded nil)
+     (should (equal (roost--notes) notes)))))
+
+(ert-deftest roost-a-sent-draft-delivers-and-clears-its-notes ()
+  (roost-test--isolated
+   (roost-test--with-send-buffers
+    (let* ((task (roost--cache-task "dev" (roost-test--task)))
+           (id (roost--field task 'id))
+           sent)
+      (setq roost--notes
+            (list (roost-test--note "n1" id '(file . "a.py") '(line . 2) '(end . 2)
+                                    '(quote "+x = 1") '(text . "Name it"))
+                  (roost-test--note "n2" "another task" '(file . "b.py") '(text . "Not mine"))))
+      (cl-letf (((symbol-function 'pop-to-buffer) #'set-buffer)
+                ((symbol-function 'roost--refresh-host) #'ignore)
+                ((symbol-function 'roost--redraw) #'ignore)
+                ((symbol-function 'roost--request)
+                 (lambda (_host _action params success &rest _)
+                   (setq sent params)
+                   (funcall success (roost-test--task)))))
+        (roost--send-draft task)
+        (should (equal (buffer-string) "\n\na.py:2\n> +x = 1\nName it"))
+        (should (= (point) (point-min)))
+        ;; A note written while the draft is open joins it, once.
+        (setq roost--notes (append roost--notes
+                                   (list (roost-test--note "n3" id '(file . "c.py") '(text . "Also")))))
+        (roost--send-draft task)
+        (roost--send-draft task)
+        (should (equal (buffer-string) "\n\na.py:2\n> +x = 1\nName it\n\nc.py\nAlso"))
+        (goto-char (point-min))
+        (insert "Please:")
+        (roost-send-submit)
+        (should (equal (alist-get 'text sent) "Please:\n\na.py:2\n> +x = 1\nName it\n\nc.py\nAlso"))
+        (should (equal (mapcar (lambda (note) (alist-get 'id note)) roost--notes) '("n2")))
+        (with-temp-buffer
+          (insert-file-contents roost-notes-file)
+          (should-not (string-match-p "n1\\|n3" (buffer-string)))))))))
+
+(ert-deftest roost-notes-stay-until-a-draft-holding-them-is-sent ()
+  (roost-test--isolated
+   (roost-test--with-send-buffers
+    (let* ((task (roost--cache-task "dev" (roost-test--task))) sent)
+      (setq roost--notes (list (roost-test--note "n1" (roost--field task 'id)
+                                                 '(file . "a.py") '(text . "Why?"))))
+      (cl-letf (((symbol-function 'pop-to-buffer) #'set-buffer)
+                ((symbol-function 'roost--refresh-host) #'ignore)
+                ((symbol-function 'roost--redraw) #'ignore)
+                ((symbol-function 'roost--request)
+                 (lambda (_host _action params success &rest _)
+                   (setq sent params)
+                   (funcall success (roost-test--task)))))
+        (roost--send-draft task)
+        ;; Emptied by hand, the draft takes its notes back.
+        (erase-buffer)
+        (roost--send-draft task)
+        (should (equal (buffer-string) "\n\na.py\nWhy?"))
+        ;; A discarded draft leaves them.
+        (kill-buffer)
+        (should (= (length roost--notes) 1))
+        (roost--send-draft task)
+        (roost-send-submit)
+        ;; Sent as written, without the blank lines left for an introduction.
+        (should (equal (alist-get 'text sent) "a.py\nWhy?"))
+        (should-not roost--notes))))))
+
+(ert-deftest roost-send-region-adds-to-a-draft-already-begun ()
+  (roost-test--isolated
+   (roost-test--with-send-buffers
+    (let ((task (roost--cache-task "dev" (roost-test--task))))
+      (cl-letf (((symbol-function 'pop-to-buffer) #'set-buffer)
+                ((symbol-function 'roost--directory-host) (lambda (_) "dev")))
+        (roost--send-draft task)
+        (insert "Look at these:")
+        (with-temp-buffer
+          (setq buffer-file-name "/home/user/work/fix auth/src/a.py")
+          (insert "x\n")
+          (set-buffer-modified-p nil)
+          (roost-send-region (point-min) (point-max)))
+        (with-current-buffer "*roost send: fix auth*"
+          (should (equal (buffer-string) "Look at these:\n\nsrc/a.py:1-1\n\nx\n"))))))))
+
+(ert-deftest roost-notes-go-with-their-task ()
+  (roost-test--isolated
+   (roost--cache-task "dev" (roost-test--task "a"))
+   (roost--cache-task "dev" (roost-test--task "b"))
+   (setq roost--notes (list (roost-test--note "1" "a" '(file . "x") '(text . "t"))
+                            (roost-test--note "2" "b" '(file . "x") '(text . "t"))
+                            '((id . "3") (host . "other") (task . "b") (file . "x") (text . "t"))))
+   (should (equal (roost--notes-summary (gethash '("dev" "b") roost--tasks))
+                  "1 review note for the agent; e sends it"))
+   (roost--cache-task "dev" (roost-test--task "a" "retired"))
+   (should (equal (mapcar (lambda (note) (alist-get 'id note)) roost--notes) '("2" "3")))
+   ;; A task gone from its host's listing, as when retired elsewhere.
+   (roost--apply-snapshot "dev" nil)
+   (should (equal (mapcar (lambda (note) (alist-get 'id note)) roost--notes) '("3")))))
+
+(ert-deftest roost-discarding-notes-asks-and-keeps-other-tasks-notes ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (roost-test--task "a"))) answer)
+     (setq roost--notes (list (roost-test--note "1" "a" '(file . "x") '(text . "t"))
+                              (roost-test--note "2" "b" '(file . "x") '(text . "t"))))
+     (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_) answer))
+               ((symbol-function 'roost--redraw) #'ignore))
+       (roost-discard-notes task)
+       (should (= (length roost--notes) 2))
+       (setq answer t)
+       (roost-discard-notes task)
+       (should (equal (mapcar (lambda (note) (alist-get 'id note)) roost--notes) '("2")))
+       (should-error (roost-discard-notes task) :type 'user-error)))))
+
+;;;; Review notes in Magit, on a real repository
+
+(defmacro roost-test--with-magit-task (&rest body)
+  "Run BODY with `task', a local task whose worktree `dir' is a Git repository.
+Its a.txt has ten lines, committed.  Skipped without Magit."
+  (declare (indent 0))
+  `(progn
+     (skip-unless (and (executable-find "git") (require 'magit nil t)))
+     (roost-test--isolated
+      (let* ((dir (file-name-as-directory (file-truename (make-temp-file "roost-magit" t))))
+             (default-directory dir)
+             (process-environment (append '("GIT_AUTHOR_NAME=Roost" "GIT_AUTHOR_EMAIL=r@example.com"
+                                            "GIT_COMMITTER_NAME=Roost" "GIT_COMMITTER_EMAIL=r@example.com"
+                                            "GIT_CONFIG_GLOBAL=/dev/null")
+                                          process-environment))
+             (task (roost--cache-task nil (append `((worktree . ,(directory-file-name dir))
+                                                    (lastMessage . "Renamed the lines.\n\nAll tests pass."))
+                                                  (roost-test--task)))))
+        (ignore task)
+        (unwind-protect
+            (cl-letf (((symbol-function 'roost--redraw) #'ignore))
+              (call-process "git" nil nil nil "init" "-q")
+              (roost-test--write-lines "a.txt" (number-sequence 1 10))
+              (call-process "git" nil nil nil "add" ".")
+              (call-process "git" nil nil nil "commit" "-qm" "Start")
+              (roost--magit-setup)
+              ,@body)
+          (dolist (buffer (buffer-list))
+            (when (provided-mode-derived-p (buffer-local-value 'major-mode buffer) 'magit-mode)
+              (kill-buffer buffer)))
+          (roost--magit-teardown)
+          (delete-directory dir t))))))
+
+(defun roost-test--write-lines (file numbers &optional extra)
+  "Write FILE with a line for each of NUMBERS, then EXTRA after line 4."
+  (with-temp-file file
+    (dolist (number numbers)
+      (insert (format "line %d\n" number))
+      (when (and extra (= number 4)) (insert extra)))))
+
+(defun roost-test--goto-line-text (text)
+  "Move to the start of the diff line whose text after its marker is TEXT."
+  (goto-char (point-min))
+  (re-search-forward (concat "^[-+ ]" (regexp-quote text) "$"))
+  (beginning-of-line))
+
+(defun roost-test--shown-notes ()
+  "The notes shown in this buffer, as (TEXT-OF-LINE . NOTE-TEXT), in order."
+  (seq-mapcat (lambda (overlay)
+                (let ((line (buffer-substring-no-properties
+                             (save-excursion (goto-char (overlay-start overlay))
+                                             (line-beginning-position))
+                             (overlay-start overlay))))
+                  (mapcar (lambda (note) (cons line (alist-get 'text note)))
+                          (overlay-get overlay 'roost-notes))))
+              (sort (copy-sequence roost--note-overlays)
+                    (lambda (a b) (< (overlay-start a) (overlay-start b))))))
+
+(ert-deftest roost-notes-are-written-on-diff-lines-in-magit ()
+  (roost-test--with-magit-task
+    (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")
+    (magit-diff-unstaged)
+    (with-current-buffer (magit-get-mode-buffer 'magit-diff-mode)
+      (should roost-magit-mode)
+      (let (answer)
+        (cl-letf (((symbol-function 'read-string) (lambda (_prompt &optional initial) (or answer initial ""))))
+          ;; An added line.
+          (roost-test--goto-line-text "new line")
+          (setq answer "Name it")
+          (roost-note)
+          ;; A context line and the added one, as a region.
+          (roost-test--goto-line-text "line 4")
+          (set-mark (point))
+          (forward-line 2)
+          (activate-mark)
+          (setq answer "These two")
+          (roost-note)
+          (should-not (use-region-p))
+          ;; The whole file, from its name.
+          (goto-char (point-min))
+          (re-search-forward "^modified +a.txt")
+          (setq answer "Whole file")
+          (roost-note)
+          (should (equal (mapcar (lambda (note) (roost--format-note note)) roost--notes)
+                         '("a.txt:5\n> +new line\nName it"
+                           "a.txt:4-5\n>  line 4\n> +new line\nThese two"
+                           "a.txt\nWhole file")))
+          (should (equal (roost-test--shown-notes)
+                         '(("modified   a.txt" . "Whole file")
+                           ("+new line" . "Name it")
+                           ("+new line" . "These two"))))
+          ;; On a noted line, the note is edited; left empty, removed.
+          (roost-test--goto-line-text "new line")
+          (setq answer nil)
+          (cl-letf (((symbol-function 'read-string) (lambda (_prompt &optional initial)
+                                                      (should (equal initial "Name it"))
+                                                      "")))
+            (roost-note))
+          (should (equal (mapcar (lambda (note) (alist-get 'text note)) roost--notes)
+                         '("These two" "Whole file"))))))))
+
+(ert-deftest roost-notes-follow-their-line-when-the-agent-edits-above-it ()
+  (roost-test--with-magit-task
+    (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")
+    (magit-diff-unstaged)
+    (with-current-buffer (magit-get-mode-buffer 'magit-diff-mode)
+      (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "Removed?")))
+        ;; A removed line keeps the old version's numbers.
+        (roost-test--write-lines "a.txt" (append '(1 2 3 4) (number-sequence 6 10)) "new line\n")
+        (magit-refresh)
+        (roost-test--goto-line-text "line 5")
+        (roost-note)
+        (should (equal (roost--format-note (car roost--notes))
+                       "a.txt:5 (a removed line)\n> -line 5\nRemoved?")))
+      ;; The agent adds two lines at the top: the note moves with its line.
+      (roost-test--write-lines "a.txt" (append '(0 0 1 2 3 4) (number-sequence 6 10)) "new line\n")
+      (magit-refresh)
+      (should (equal (roost-test--shown-notes) '(("-line 5" . "Removed?")))))))
+
+(ert-deftest roost-magit-status-names-the-task-and-shows-notes ()
+  (roost-test--with-magit-task
+    (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")
+    (setq roost--notes (list `((id . "1") (task . ,(roost--field task 'id)) (file . "a.txt")
+                               (line . 5) (end . 5) (quote "+new line") (text . "Name it"))))
+    (magit-status-setup-buffer dir)
+    (with-current-buffer (magit-get-mode-buffer 'magit-status-mode)
+      (should roost-magit-mode)
+      (should (string-match-p "^Task: +fix auth ● ready$" (buffer-string)))
+      (goto-char (point-min))
+      (re-search-forward "^Agent's latest reply  Renamed the lines\\.$")
+      (should (eieio-oref (magit-current-section) 'hidden))
+      (should (equal (roost-test--shown-notes) '(("+new line" . "Name it")))))
+    ;; Elsewhere Magit is left alone.
+    (let ((other (file-name-as-directory (make-temp-file "roost-other" t))))
+      (unwind-protect
+          (let ((default-directory other))
+            (call-process "git" nil nil nil "init" "-q")
+            (magit-status-setup-buffer other)
+            (with-current-buffer (magit-get-mode-buffer 'magit-status-mode)
+              (should-not roost-magit-mode)
+              (should-not (string-match-p "^Task:" (buffer-string)))))
+        (delete-directory other t)))))
+
+(ert-deftest roost-whole-file-diffs-keep-staging ()
+  (roost-test--with-magit-task
+    (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")
+    (magit-status-setup-buffer dir)
+    (with-current-buffer (magit-get-mode-buffer 'magit-status-mode)
+      (goto-char (point-min))
+      (re-search-forward "^modified +a.txt")
+      (roost-diff-whole-file))
+    (with-current-buffer (magit-get-mode-buffer 'magit-diff-mode)
+      (should (member "-U1000000" magit-buffer-diff-args))
+      (should (equal magit-buffer-diff-files '("a.txt")))
+      (should (eq (magit-diff-type) 'unstaged))
+      ;; Every line of the file is there.
+      (dolist (number (number-sequence 1 10))
+        (roost-test--goto-line-text (format "line %d" number))))))
 
 (provide 'roost-test)

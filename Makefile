@@ -1,9 +1,13 @@
 EMACS ?= emacs
 
+# Extra -L arguments for the ERT run, such as Magit and its dependencies;
+# without Magit, the tests of Roost in Magit are skipped.
+TEST_LOAD_PATH ?=
+
 # Elisp protocol/UI tests plus real isolated Git/tmux lifecycle tests.
 .PHONY: test
 test:
-	$(EMACS) -Q --batch -L . -L test \
+	$(EMACS) -Q --batch -L . -L test $(TEST_LOAD_PATH) \
 	  -l test/roost-test.el -f ert-run-tests-batch-and-exit
 	python3 -m unittest discover -s test -p 'test_*.py' -v
 

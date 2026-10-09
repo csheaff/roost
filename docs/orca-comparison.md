@@ -88,12 +88,40 @@ Orca's Source Control does, and each opens its diff in Magit.
 What Orca still does better, in order of how much it matters day to day:
 
 1. **Diffs in place.** Orca shows a file's diff inside the right column;
-   Roost opens it in the main area, in Magit, where it can be staged.
+   Roost opens it in the main area, in Magit, where it can be staged (and,
+   since 2026-10-09, annotated for the agent; see below).
 2. **Width.** Three columns need about 156 columns. On a laptop frame Roost's
    panel steps aside, which keeps the terminal usable but loses the third
    column; Orca's toggles have the same limit.
 3. **Automations and usage limits.** Orca runs agents on a schedule and shows
    Claude and Codex usage in its status bar. Roost has neither.
+
+## Review notes and staging, in Magit
+
+Two things in Orca's right column came up as reasons people like it (Orca
+1.4.219's bundled code, read on 2026-10-09):
+
+- **Staged and unstaged files side by side**, staged with a click. Staging
+  doubles as approval: once a file is staged, anything its agent changes
+  later shows as unstaged on top. Orca stages whole files and folders only.
+- **Notes on diff lines** ("Add note for the AI"), on a line, a range or a
+  file, kept per worktree until sent. Sending pastes them into the
+  worktree's agent as `File:`, `Line:` and `User comment:` blocks, after
+  waiting for the agent to be idle and never into a permission prompt.
+
+Roost does both in Magit, where you review anyway, rather than in a column of
+its own. Magit already shows staged, unstaged and untracked changes and
+stages hunks and single lines, not only files. A docked Magit would have to
+refresh itself while the agent works, and a refresh starts 12 to 56 Git
+processes (276 ms for a full status locally), each a round trip over TRAMP;
+summoned with `r`, it refreshes only when you ask.
+
+| Orca | Roost |
+| --- | --- |
+| Source Control: staged, unstaged and untracked files, stage per file | Magit's status (`r`), staging files, hunks or lines; it names the task and folds in the agent's latest reply |
+| Notes on a line, a range or a file | `;` in Magit on a task: on the line at point, the region's lines, or a file's name. Notes show under their lines in every Magit buffer on the task, follow their line when the agent edits above it, and survive restarts |
+| Send notes: this file, or all unsent | `@` (or `e`) drafts a prompt holding every unsent note, quoting the lines they are about; sending it clears them |
+| The diff of a whole file in the editor area | `=` shows the whole file with its changes, as a Magit diff you can still stage from |
 
 Mobile access, embedded browsers, trackers other than GitHub, workflow boards
 and sparse checkouts remain outside Roost. Emacs already supplies

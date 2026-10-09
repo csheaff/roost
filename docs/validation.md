@@ -656,6 +656,34 @@ exited agent; `x` could retire without asking; a poll in flight brought a
 forgotten host's tasks back. All 154 ERT and 107 Python tests pass, the
 Python ones on macOS and on `claylien`.
 
+### Review notes in Magit, 2026-10-09
+
+Checked live in the copy of Clay's configuration, on a local task with the
+fake agent (`claylien` was down, so not yet over TRAMP):
+
+- **Notes.** `;` on an added line, a file's name and the last line of a hunk
+  wrote notes that show under those lines, in their own face rather than the
+  diff line's colours, and fold away with their hunk. One written in the
+  whole-file diff showed in the status too.
+- **Sending.** `@` drafted a prompt with the three notes in the order written,
+  each quoting its line, with a line free at the top. With a few words added,
+  `C-c C-c` pasted it all into the agent, closed the draft and cleared the
+  notes, on disk too.
+- **The whole file.** `=` on `greet.py` in the status opened its unstaged diff
+  as one hunk of all 28 lines, in the other window, as Clay's
+  `magit-display-buffer-function` puts diffs.
+- **The status** named the task and folded the agent's reply into one line
+  that fits the window. The panel said "1 review note for the agent; e sends
+  it".
+
+Found while checking it: two notes ending on one line came out in no
+particular order (now one overlay, oldest first); a note placed after its
+line took that line's background, and its bar came out slanted in an italic
+face. Typed keys in the QA Emacs went to xah-fly-keys' command mode after the
+first note's prompt closed, as after any prompt in Clay's configuration; Magit
+keys need insert mode there anyway. All 165 ERT tests pass with Magit on the
+load path; without it the four Magit ones are skipped.
+
 ### Codex and Pi adapters
 
 Used another disposable remote `hello-service` project, an isolated registry and

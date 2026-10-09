@@ -115,7 +115,16 @@ worktree. Run the tests, start the app, poke at it.
 ![The agent's summary beside a shell in the same worktree, trying the new --tag filter by hand](docs/images/roost-workspace.jpg)
 
 **Review in Magit.** `r` opens Magit on the task's worktree, through TRAMP for
-remote tasks. Stage, edit and commit as usual.
+remote tasks. Stage, edit and commit as usual. The status names the task and
+keeps the agent's latest reply folded at the top.
+
+Staging doubles as approval: stage what you have checked, and whatever the
+agent changes after that shows up as unstaged, on its own. To ask for changes,
+put point on a line and press `;` to write a note for the agent there (on the
+region's lines, or on a file's name for the whole file). Notes show under their
+lines, and `@` drafts a prompt holding all of them; sending it clears them. `=`
+on a file shows the whole file with its changes marked, and you can still
+stage there.
 
 ![Magit on the task's worktree, showing the agent's uncommitted change](docs/images/roost-review.jpg)
 
@@ -239,10 +248,21 @@ Magit is optional (review falls back to Dired).
 Outside the dashboard, commands act on the task of the current terminal,
 worktree file, Org entry or perspective, or ask. Bind the menu globally to reach
 Roost from anywhere, for example `(keymap-global-set "C-c r" #'roost-dispatch)`.
-Also available: `roost-send-region` (sends the selection with its file and
-lines). Roost watches its hosts once you open the dashboard or sidebar or start
+Also available: `roost-send-region` (adds the selection, with its file and
+lines, to the prompt you are drafting). Roost watches its hosts once you open the dashboard or sidebar or start
 a task: every 3 seconds while Emacs is in front, every 15 otherwise.
 `roost-watch-mode` turns that off and on.
+
+In Magit on a task's worktree, Roost adds a few keys, and a Roost menu:
+
+| Key | Command | |
+| --- | --- | --- |
+| `;` | `roost-note` | Write a note for the agent on the line at point, the region's lines, or the file; on a noted line, edit its note (empty removes it) |
+| `@` | `roost-send` | Draft a prompt to the agent, holding your notes |
+| `=` | `roost-diff-whole-file` | Show the whole file with its changes; staging still works (`0` goes back to hunks) |
+
+`M-x roost-discard-notes` drops a task's notes unsent. In a task's panel, `e`
+also drafts a prompt holding them.
 
 In the new task draft: `C-c C-c` creates, `C-c C-k` cancels, and `C-c C-p`,
 `C-c C-a`, `C-c C-b` and `C-c C-n` change the project, agent, starting ref and
@@ -266,6 +286,7 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
   project's `.dir-locals.el` only with `enable-remote-dir-locals` on. A new
   worktree lacks files Git doesn't track, such as `.env`; the command finds the
   primary checkout in `$ROOST_REPO`: `cp "$ROOST_REPO/.env" . && npm ci`.
+- `roost-notes-file`: review notes not yet sent, kept across sessions.
 - `roost-branch-prefix`: topic branches are `PREFIX<name>-<id>`; default `roost/`.
 - `roost-state-directory`: where each host keeps task records, the helper and
   worktrees; default `~/.local/share/roost`.
@@ -388,6 +409,10 @@ Since 0.8.1 (unreleased):
 - `M-x roost-forget-host`; setup commands get the primary checkout in
   `$ROOST_REPO`; a notification click opens its task (terminal-notifier).
 - Claude Code worktrees an agent makes for itself show in its task's panel.
+- Review notes: in Magit on a task, `;` writes a note for the agent on a
+  line and `@` sends your notes; `=` shows a whole file's diff. The status
+  names the task and folds in the agent's latest reply. A draft prompt
+  (`e`, or `roost-send-region`) now keeps what you have written and adds to it.
 - With tmux-control newer than 0.7.2, switching sessions from a terminal
   (`C-c C-s`, next and previous session) opens that task in its workspace.
 - `roost-claude-command` moved into `roost-agent-commands`, and
@@ -428,7 +453,9 @@ upgrading ask for one final hook review.
 `make test compile` runs the ERT suite, the Python lifecycle tests against real
 Git and isolated tmux sockets (fixture agents drive the actual hook commands,
 without model calls), and a warning-free byte-compile. CI runs it on Emacs 29.1
-and 30.1.
+and 30.1. The tests of Roost in Magit need Magit and its dependencies on the
+load path, as `make test TEST_LOAD_PATH="-L …/magit/lisp -L …"`; without them
+they are skipped.
 
 Claude Code updates itself often, and Roost relies on what it reports and
 does. `make contract` scans the installed Claude Code for the hook events,
