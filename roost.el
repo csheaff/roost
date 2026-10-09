@@ -42,12 +42,25 @@
 (declare-function tmux-control-window-id "tmux-control" ())
 (declare-function magit-status "magit-status" (&optional directory cache))
 (declare-function magit-diff-working-tree "magit-diff" (&optional rev args files))
+(declare-function magit-diff-dwim "magit-diff" (&optional args files))
+(declare-function magit-diff-arguments "magit-diff" (&optional mode))
+(declare-function magit-diff-type "magit-diff" (&optional section))
+(declare-function magit-file-at-point "magit-git" (&optional expand assert))
+(declare-function magit-toplevel "magit-git" (&optional directory))
+(declare-function magit-current-section "magit-section" ())
+(declare-function eieio-oref "eieio-core" (obj slot))
+(declare-function magit-section-match "magit-section" (condition &optional section))
+(declare-function magit-map-sections "magit-section" (function &optional section))
+(declare-function magit-insert-heading "magit-section" (&rest args))
+(declare-function magit-add-section-hook "magit-section" (hook function &optional at append local))
 (declare-function persp-switch "perspective" (name))
 (declare-function persp-kill "perspective" (name))
 (declare-function persp-current-name "perspective" ())
 (declare-function persp-names "perspective" ())
 (declare-function persp-format-name "perspective" (name))
 (declare-function evil-set-initial-state "evil-core" (mode state))
+(declare-function evil-define-minor-mode-key "evil-core" (state mode key def &rest bindings))
+(declare-function evil-normalize-keymaps "evil-core" (&optional state))
 (declare-function org-back-to-heading "org" (&optional invisible-ok))
 (declare-function org-before-first-heading-p "org" ())
 (declare-function org-end-of-meta-data "org" (&optional full))
@@ -57,6 +70,10 @@
 (declare-function org-entry-put "org" (epom property value))
 
 (defvar tmux-control-default-socket-name)
+(defvar magit-root-section)
+(defvar magit-status-headers-hook)
+(defvar magit-status-sections-hook)
+(defvar magit-refresh-buffer-hook)
 (defvar tmux-control-remote-tmux-socket-setup)
 (defvar tmux-control-ssh-options)
 (defvar tmux-control-session-activity)
@@ -202,6 +219,17 @@ Ordinary perspectives retain their existing labels and click actions."
   "Local file remembering project checkouts used for tasks."
   :type 'file)
 
+(defcustom roost-magit-status-sections t
+  "Whether Magit's status of a task's worktree names the task.
+It then also shows the agent's latest reply, folded.  Review notes and
+Roost's keys in Magit do not depend on this."
+  :type 'boolean)
+
+(defcustom roost-notes-file (locate-user-emacs-file "roost/notes.json")
+  "Local file keeping review notes not yet sent to an agent.
+See `roost-note'."
+  :type 'file)
+
 ;;;; Faces
 
 (defface roost-title '((t :inherit bold :height 1.1))
@@ -238,6 +266,8 @@ Ordinary perspectives retain their existing labels and click actions."
   "Inserted line counts.")
 (defface roost-diff-removed '((t :inherit error))
   "Deleted line counts.")
+(defface roost-note '((t :inherit font-lock-doc-face))
+  "Review notes, shown in Magit under the lines they are about.")
 
 ;;;; State
 
@@ -636,9 +666,10 @@ and a newer notification about TASK replaces it."
     (dolist (field '(diff dirty files ahead behind worktreeMissing prStatus lastMessage gitStamp agentWork merging))
       (unless (assoc field task)
         (when (assoc field old) (push (assoc field old) task))))
-    (if (member status '("retired" "forgotten" "discarded"))
-        (remhash key roost--tasks)
-      (puthash key task roost--tasks))
+    (if (not (member status '("retired" "forgotten" "discarded")))
+        (puthash key task roost--tasks)
+      (remhash key roost--tasks)
+      (roost--remove-notes (lambda (note) (equal (roost--note-key note) key))))
     ;; Record the status before notifying, which may cache this task again.
     (puthash key status roost--statuses)
     (when (and roost-notify previous
@@ -684,7 +715,8 @@ finished or wants."
                (when (and (equal (car key) host) (not (member key keys)))
                  (remhash key roost--tasks)
                  (remhash key roost--statuses)
-                 (remhash key roost--seen)))
+                 (remhash key roost--seen)
+                 (roost--remove-notes (lambda (note) (equal (roost--note-key note) key)))))
              roost--tasks)
     (mapc (lambda (task) (roost--cache-task host task)) tasks)
     (remhash host roost--errors)))
@@ -1849,7 +1881,8 @@ FAILURE, if given, receives the error message instead of Roost reporting it."
 ;;;###autoload
 (defun roost-send (&optional task text)
   "Send TEXT as a literal pasted prompt to TASK's agent pane.
-Interactively, write the prompt in a draft buffer; \\<roost-send-mode-map>\\[roost-send-submit] sends it.
+Interactively, write the prompt in a draft buffer, which holds your
+review notes for the agent (see `roost-note'); \\<roost-send-mode-map>\\[roost-send-submit] sends it.
 While Roost last saw a startup or permission prompt, ask first: the
 paste could answer that menu, but agents report no event when a
 permission is declined in the terminal."
@@ -1879,6 +1912,8 @@ CALLBACK and FAILURE are passed to `roost--act'."
   "The task a follow-up draft will be sent to.")
 (defvar-local roost--send-sending nil
   "Non-nil while the drafted follow-up is being sent.")
+(defvar-local roost--send-notes nil
+  "Identifiers of the review notes in this draft; sending it clears them.")
 
 (defvar-keymap roost-send-mode-map
   :doc "Keys for drafting a follow-up prompt."
@@ -1899,21 +1934,33 @@ CALLBACK and FAILURE are passed to `roost--act'."
            (roost--field task 'name))))
 
 (defun roost--send-draft (task &optional initial)
-  "Open a draft buffer for a follow-up to TASK, starting with INITIAL.
-An existing draft for TASK is reused, and kept as written unless it is empty."
-  (let* ((name (format "*roost send: %s*" (roost--field task 'name)))
-         (buffer (get-buffer-create name)))
+  "Open a draft buffer for a follow-up to TASK, adding INITIAL.
+An existing draft for TASK is reused and kept as written, with INITIAL
+after it.  TASK's review notes not yet in the draft follow; sending the
+draft clears them (see `roost-note')."
+  (let ((buffer (roost--draft-buffer "send" 'roost--send-task task)))
     (with-current-buffer buffer
       (unless (derived-mode-p 'roost-send-mode) (roost-send-mode))
       (setq roost--send-task task
             header-line-format (roost--send-header task))
-      (when (and initial (string-empty-p (string-trim (buffer-string))))
-        (erase-buffer)
-        (insert initial)
-        ;; Leave point above the quoted text, ready for a note.
-        (goto-char (point-min)))
-      (unless (and initial (bobp))
-        (goto-char (point-max))))
+      (let* ((empty (string-blank-p (buffer-string)))
+             (notes (progn
+                      ;; Notes deleted with the rest of the text come back.
+                      (when empty (setq roost--send-notes nil))
+                      (seq-remove (lambda (note) (member (alist-get 'id note) roost--send-notes))
+                                  (roost--task-notes task))))
+             (addition (string-join (delq nil (cons initial (mapcar #'roost--format-note notes)))
+                                    "\n\n")))
+        (setq roost--send-notes (append roost--send-notes
+                                        (mapcar (lambda (note) (alist-get 'id note)) notes)))
+        (unless (string-empty-p addition)
+          (when empty (erase-buffer))
+          (goto-char (point-max))
+          (delete-region (progn (skip-chars-backward " \t\n") (point)) (point-max))
+          (insert "\n\n" addition))
+        ;; In a new draft, leave point above the quoted text, ready for a
+        ;; few words of your own.
+        (goto-char (if (and empty (not (string-empty-p addition))) (point-min) (point-max)))))
     (pop-to-buffer buffer)))
 
 (defun roost-send-cancel ()
@@ -1924,10 +1971,12 @@ An existing draft for TASK is reused, and kept as written unless it is empty."
     (quit-window t)))
 
 (defun roost-send-submit ()
-  "Send the drafted follow-up.  The draft is kept if sending fails."
+  "Send the drafted follow-up.  The draft is kept if sending fails.
+Review notes in it are cleared once it is sent."
   (interactive)
-  (let ((text (string-trim-right (buffer-string)))
+  (let ((text (replace-regexp-in-string "\\`\\([ \t]*\n\\)+" "" (string-trim-right (buffer-string))))
         (task roost--send-task)
+        (notes roost--send-notes)
         (buffer (current-buffer)))
     (when (string-empty-p (string-trim text))
       (user-error "Write a prompt first"))
@@ -1938,6 +1987,8 @@ An existing draft for TASK is reused, and kept as written unless it is empty."
         (roost--send-text
          task text
          (lambda (_task)
+           (when (roost--remove-notes (lambda (note) (member (alist-get 'id note) notes)))
+             (roost--redraw))
            (when (buffer-live-p buffer)
              (quit-windows-on buffer t)
              (when (buffer-live-p buffer) (kill-buffer buffer))))
@@ -1955,19 +2006,508 @@ An existing draft for TASK is reused, and kept as written unless it is empty."
 (defun roost-send-region (start end)
   "Draft a prompt quoting region START to END with its file and lines.
 Inside a task's worktree the prompt goes to that task, otherwise to a
-chosen one."
+chosen one.  A draft already begun keeps its text, and the quote follows."
   (interactive "r")
   (let* ((last (if (and (> end start) (eq (char-before end) ?\n)) (1- end) end))
          (task (or (and buffer-file-name (roost--task-in-directory buffer-file-name))
                    (roost--read-task "Send region to task: "))))
     (roost--send-draft
      task
-     (format "\n\n%s:%d-%d\n\n%s"
+     (format "%s:%d-%d\n\n%s"
              (cond ((and buffer-file-name (roost--worktree-relative task buffer-file-name)))
                    (buffer-file-name (file-local-name buffer-file-name))
                    (t (buffer-name)))
              (line-number-at-pos start) (line-number-at-pos last)
              (buffer-substring-no-properties start end)))))
+
+;;;; Review notes
+
+(defvar roost--notes nil
+  "Review notes not yet sent to an agent, oldest first; see `roost-note'.
+Each is an alist: `id'; `host' and `task' name its task; `file' is
+relative to the task's worktree; `line' and `end' are the first and last
+lines noted, absent for the whole file; `removed' means they number the
+old version's lines; `quote' holds the noted diff lines; `text' is the
+note.")
+(defvar roost--notes-loaded nil
+  "Non-nil once `roost-notes-file' has been read.")
+
+(defun roost--notes ()
+  "All review notes not yet sent, read from `roost-notes-file' once."
+  (unless roost--notes-loaded
+    (setq roost--notes-loaded t
+          roost--notes (seq-filter #'consp (roost--read-json-list roost-notes-file))))
+  roost--notes)
+
+(defun roost--save-notes ()
+  "Write the review notes to `roost-notes-file'."
+  (roost--write-json-list
+   roost-notes-file
+   (mapcar (lambda (note)
+             ;; JSON has no nil: absent fields stay out, and lists are arrays.
+             (seq-keep (lambda (field)
+                         (when (cdr field)
+                           (cons (car field)
+                                 (if (consp (cdr field)) (vconcat (cdr field)) (cdr field)))))
+                       note))
+           roost--notes)))
+
+(defun roost--note-key (note)
+  "The key of NOTE's task."
+  (list (alist-get 'host note) (alist-get 'task note)))
+
+(defun roost--task-notes (task)
+  "TASK's review notes not yet sent, oldest first."
+  (let ((key (roost--key task)))
+    (seq-filter (lambda (note) (equal (roost--note-key note) key)) (roost--notes))))
+
+(defun roost--remove-notes (predicate)
+  "Remove the review notes PREDICATE accepts; return non-nil if any were.
+Drafts holding them lose them too."
+  (when-let* ((removed (seq-filter predicate (roost--notes))))
+    (setq roost--notes (seq-difference roost--notes removed #'eq))
+    (roost--save-notes)
+    (dolist (note removed) (roost--update-drafts note nil))
+    (roost--show-notes-everywhere)
+    t))
+
+(defun roost--edit-note (note text)
+  "Make TEXT the text of review NOTE, in the drafts holding it too."
+  (let ((before (copy-tree note)))
+    (setf (alist-get 'text note) text)
+    (roost--save-notes)
+    (roost--update-drafts before note)))
+
+(defun roost--update-drafts (old new)
+  "Replace note OLD with NEW in the drafts holding it; nil NEW removes it.
+A draft in which you have changed the note's text keeps your text, and
+no longer counts the note as its own, so sending it leaves the note."
+  (let ((id (alist-get 'id old))
+        (before (roost--format-note old))
+        (case-fold-search nil))
+    (dolist (buffer (buffer-list))
+      (with-current-buffer buffer
+        (when (and (derived-mode-p 'roost-send-mode) (member id roost--send-notes))
+          (save-excursion
+            (goto-char (point-min))
+            ;; The note as it was drafted, on lines of its own.
+            (cond ((not (re-search-forward
+                         (concat "^\\(" (regexp-quote before) "\\)\\(?:\n\\|\\'\\)")
+                         nil t))
+                   (setq roost--send-notes (delete id roost--send-notes)))
+                  (new (replace-match (roost--format-note new) t t nil 1))
+                  (t
+                   (replace-match "" t t nil 1)
+                   (goto-char (match-beginning 1))
+                   (setq roost--send-notes (delete id roost--send-notes))
+                   ;; One blank line between the notes either side.
+                   (delete-region (progn (skip-chars-backward "\n") (point))
+                                  (progn (skip-chars-forward "\n") (point)))
+                   (unless (eobp) (insert "\n\n"))))))))))
+
+(defun roost--note-location (note)
+  "Where NOTE is: its file, then its lines if it is not about the whole file."
+  (let ((line (alist-get 'line note))
+        (end (alist-get 'end note)))
+    (concat (alist-get 'file note)
+            (when line
+              (concat (if (equal line end) (format ":%d" line) (format ":%d-%d" line end))
+                      (when (alist-get 'removed note)
+                        (if (equal line end) " (a removed line)" " (removed lines)")))))))
+
+(defconst roost--note-quote-lines 8
+  "How many of its lines a note quotes to the agent.")
+
+(defun roost--format-note (note)
+  "NOTE as its agent reads it: where it is, the lines quoted, then the note."
+  (let ((quote (alist-get 'quote note)))
+    (concat (roost--note-location note) "\n"
+            (mapconcat (lambda (line) (concat "> " line "\n"))
+                       (seq-take quote roost--note-quote-lines) "")
+            (when (length> quote roost--note-quote-lines) "> …\n")
+            (alist-get 'text note))))
+
+(defun roost--notes-summary (task)
+  "How many review notes TASK has, and the key that sends them, or nil."
+  (when-let* ((notes (roost--task-notes task)))
+    (substitute-command-keys
+     (format "%d review note%s for the agent; \\<roost-task-info-mode-map>\\[roost-send] sends %s"
+             (length notes) (if (cdr notes) "s" "") (if (cdr notes) "them" "it")))))
+
+;;;###autoload
+(defun roost-discard-notes (&optional task)
+  "Discard TASK's review notes without sending them."
+  (interactive)
+  (setq task (roost--choose task))
+  (let ((count (length (roost--task-notes task))))
+    (when (zerop count)
+      (user-error "%s has no review notes" (roost--field task 'name)))
+    (when (yes-or-no-p (format "Discard %d review note%s for %s? "
+                               count (if (= count 1) "" "s") (roost--field task 'name)))
+      (roost--remove-notes (lambda (note) (equal (roost--note-key note) (roost--key task))))
+      (roost--redraw)
+      (message "Discarded the review notes for %s" (roost--field task 'name)))))
+
+;;;; Review in Magit
+
+(defvar-keymap roost-magit-mode-map
+  :doc "Roost's keys in Magit on a task's worktree."
+  ";" #'roost-note
+  "=" #'roost-diff-whole-file
+  "@" #'roost-send)
+
+(easy-menu-define roost-magit-menu roost-magit-mode-map
+  "Menu for Roost in Magit on a task's worktree."
+  '("Roost"
+    ["Note on This Line…" roost-note]
+    ["Whole-File Diff" roost-diff-whole-file]
+    ["Send to the Agent…" roost-send]
+    ["Discard Notes…" roost-discard-notes]
+    "---"
+    ["Agent's Terminal" roost-open-task]
+    ["Task Panel" roost-task-info]))
+
+(defvar roost--magit-evil-keys nil
+  "Non-nil once Roost's keys in Magit have Evil bindings.")
+
+(define-minor-mode roost-magit-mode
+  "Notes for the agent and other Roost keys, in Magit on a task's worktree.
+Roost turns it on in Magit buffers whose repository is a task's worktree.
+With Evil, the keys work in normal and visual state too, except that
+the whole file's diff is on `g=', since evil-collection gives `=' to
+less diff context.
+\\{roost-magit-mode-map}"
+  :lighter nil
+  (when (and roost-magit-mode (fboundp 'evil-define-minor-mode-key))
+    (unless roost--magit-evil-keys
+      (setq roost--magit-evil-keys t)
+      (evil-define-minor-mode-key '(normal visual motion) 'roost-magit-mode
+        ";" #'roost-note
+        "@" #'roost-send
+        "g=" #'roost-diff-whole-file))
+    (evil-normalize-keymaps)))
+
+(defvar-local roost--note-overlays nil
+  "Overlays showing review notes in this Magit buffer.")
+
+(defun roost--magit-setup ()
+  "Add Roost's notes, keys and task header to Magit on task worktrees."
+  (add-hook 'magit-refresh-buffer-hook #'roost--magit-buffer-refreshed)
+  (magit-add-section-hook 'magit-status-headers-hook #'roost--magit-insert-task-header nil t)
+  (magit-add-section-hook 'magit-status-sections-hook #'roost--magit-insert-reply
+                          'magit-insert-status-headers t))
+
+(defun roost--magit-teardown ()
+  "Remove what `roost--magit-setup' added, from Magit and its buffers."
+  ;; Removing from a hook Magit has not defined yet would define it empty.
+  (when (featurep 'magit)
+    (remove-hook 'magit-refresh-buffer-hook #'roost--magit-buffer-refreshed)
+    (remove-hook 'magit-status-headers-hook #'roost--magit-insert-task-header)
+    (remove-hook 'magit-status-sections-hook #'roost--magit-insert-reply))
+  (dolist (buffer (buffer-list))
+    (when (buffer-local-value 'roost-magit-mode buffer)
+      (with-current-buffer buffer
+        (mapc #'delete-overlay roost--note-overlays)
+        (setq roost--note-overlays nil)
+        (roost-magit-mode -1)))))
+
+(defun roost--magit-buffer-refreshed ()
+  "Give a Magit buffer on a task's worktree Roost's keys and its notes.
+Run from Magit's hook, so an error only reports itself."
+  (with-demoted-errors "Roost: %S"
+    (let ((task (roost--task-in-directory default-directory)))
+      (unless (eq (not task) (not roost-magit-mode))
+        (roost-magit-mode (if task 1 -1)))
+      (roost--show-notes-here task))))
+
+(defun roost--magit-insert-task-header ()
+  "In Magit's status of a task's worktree, insert a header naming the task.
+See `roost-magit-status-sections'."
+  (when-let* ((roost-magit-status-sections)
+              (task (roost--task-in-directory default-directory)))
+    (roost--magit-insert-section
+     'roost-task (roost--key task) nil
+     (lambda () (roost--insert-task-header task)))))
+
+(defun roost--insert-task-header (task)
+  "Insert the line naming TASK in Magit's status of its worktree.
+Like the rest of the status, it holds until Magit refreshes, so it leaves
+out the agent's status, which changes while you read."
+  (let ((integration (roost--field task 'integrationBranch)))
+    (insert (format "%-10s" "Task: ")
+            (propertize (roost--field task 'name) 'font-lock-face 'bold)
+            (if integration
+                (propertize (format ", merges into %s" integration) 'font-lock-face 'roost-dim)
+              "")
+            "\n")))
+
+(defun roost--magit-insert-reply ()
+  "In Magit's status of a task's worktree, insert the agent's latest reply.
+It starts folded, showing its first line.  See `roost-magit-status-sections'."
+  (when-let* ((roost-magit-status-sections)
+              (task (roost--task-in-directory default-directory))
+              (reply (roost--last-message task)))
+    (roost--magit-insert-section
+     'roost-reply nil t
+     (lambda ()
+       ;; With faces of its own, the heading is inserted as it is.  It
+       ;; has to fit on one line.
+       (let* ((title "Agent's latest reply")
+              (window (get-buffer-window nil t))
+              (room (- (if window (window-body-width window) 80) (length title) 3)))
+         (magit-insert-heading
+           (propertize title 'face 'magit-section-heading)
+           (when (> room 10)
+             (propertize (concat "  " (truncate-string-to-width
+                                       (or (roost--last-message-summary task) "") room nil nil "…"))
+                         'face 'roost-dim))))
+       (insert (replace-regexp-in-string "^" "  " reply) "\n\n")))))
+
+(defun roost--magit-insert-section (type value hide insert)
+  "Insert a Magit section of TYPE with VALUE, folded if HIDE, using INSERT.
+Magit is optional, so its section macro is expanded only once it is in
+use."
+  (eval `(magit-insert-section (,type ',value ,hide) (funcall ',insert)) t))
+
+(defun roost--slot (section slot)
+  "SLOT of Magit's SECTION.
+Magit is optional, so its section classes are unknown when Roost is
+compiled."
+  (eieio-oref section slot))
+
+(defun roost--hunk-lines (hunk)
+  "The lines of Magit's HUNK section, each as (POSITION SIDE NUMBER TEXT).
+SIDE is `old' for a removed line and `new' for any other, and NUMBER is
+its line number on that side.  TEXT leaves out the diff marker.
+A combined diff, of a merge with conflicts, has none."
+  (let ((from (roost--slot hunk 'from-range))
+        (to (roost--slot hunk 'to-range)))
+    (when (and from to (not (roost--slot hunk 'combined)))
+      (save-excursion
+        (goto-char (roost--slot hunk 'content))
+        (let ((old (car from)) (new (car to)) (end (roost--slot hunk 'end)) lines)
+          (while (< (point) end)
+            (let ((text (buffer-substring-no-properties
+                         (min (1+ (point)) (line-end-position)) (line-end-position))))
+              (pcase (char-after)
+                (?- (push (list (point) 'old old text) lines) (cl-incf old))
+                (?+ (push (list (point) 'new new text) lines) (cl-incf new))
+                (?\s (push (list (point) 'new new text) lines) (cl-incf old) (cl-incf new))))
+            (forward-line))
+          (nreverse lines))))))
+
+(defun roost--magit-note-place ()
+  "What a note written at point would be about, as part of a note.
+In a hunk that is the line at point, the lines in the region, or on its
+heading the whole hunk; on a file's name, the whole file.  A region
+must stay within one hunk."
+  (let ((section (magit-current-section)))
+    (when (and (use-region-p)
+               (not (and (magit-section-match 'hunk section)
+                         (<= (roost--slot section 'start) (region-beginning))
+                         (<= (region-end) (roost--slot section 'end)))))
+      (user-error "Select lines within one hunk; write a note for each hunk"))
+    (cond
+     ((magit-section-match 'hunk section)
+      (let* ((lines (or (roost--hunk-lines section)
+                        (user-error "Roost cannot place notes in a combined diff")))
+             (from (save-excursion
+                     (goto-char (if (use-region-p) (region-beginning) (point)))
+                     (line-beginning-position)))
+             (to (if (not (use-region-p))
+                     (line-end-position)
+                   ;; A region ending where a line starts leaves that line out.
+                   (let ((end (region-end)))
+                     (if (and (> end from) (save-excursion (goto-char end) (bolp)))
+                         (1- end)
+                       end))))
+             (chosen (or (seq-filter (lambda (line) (<= from (car line) to)) lines)
+                         lines))
+             (numbered (or (seq-remove (lambda (line) (eq (nth 1 line) 'old)) chosen)
+                           chosen)))
+        `((file . ,(roost--slot (roost--slot section 'parent) 'value))
+          (line . ,(nth 2 (car numbered)))
+          (end . ,(nth 2 (car (last numbered))))
+          ,@(when (eq (nth 1 (car numbered)) 'old) '((removed . t)))
+          ;; The note shows under the last line chosen, though that may be
+          ;; a removed line after lines numbered in the new version.
+          (anchorLine . ,(nth 2 (car (last chosen))))
+          ,@(when (eq (nth 1 (car (last chosen))) 'old) '((anchorOld . t)))
+          (quote . ,(mapcar (lambda (line)
+                              (save-excursion
+                                (goto-char (car line))
+                                (buffer-substring-no-properties (point) (line-end-position))))
+                            chosen)))))
+     ((magit-section-match 'file section)
+      `((file . ,(roost--slot section 'value))))
+     (t (user-error "Put point on a changed line, or a file's name, in a diff")))))
+
+(defun roost--note-anchor (note)
+  "The line NOTE shows under, as (SIDE NUMBER TEXT) like `roost--hunk-lines'.
+Notes written before `anchorLine' was recorded show under their last
+line on the side they are numbered by."
+  (let* ((old (if (alist-get 'anchorLine note)
+                  (alist-get 'anchorOld note)
+                (alist-get 'removed note)))
+         (line (car (last (seq-filter (lambda (line) (eq (string-prefix-p "-" line) (and old t)))
+                                      (alist-get 'quote note))))))
+    (list (if old 'old 'new)
+          (or (alist-get 'anchorLine note) (alist-get 'end note))
+          (and line (substring line (min 1 (length line)))))))
+
+(defun roost--note-positions (note headings lines)
+  "Where this buffer shows NOTE: line ends after which it goes.
+A note on a whole file goes after each of HEADINGS, the ends of its
+file's headings.  Otherwise it goes after its last line among LINES, its
+file's lines from `roost--hunk-lines'.  When that line has moved, as
+when the agent has edited the file since, the nearest line with the same
+text stands in for it."
+  (if (not (alist-get 'line note))
+      headings
+    (pcase-let* ((`(,side ,end ,text) (roost--note-anchor note))
+                 (same (seq-filter (lambda (line) (and (eq (nth 1 line) side) (equal (nth 3 line) text)))
+                                   lines))
+                 (exact (seq-filter (lambda (line) (= (nth 2 line) end)) same))
+                 (nearest (car (sort same (lambda (a b) (< (abs (- (nth 2 a) end))
+                                                           (abs (- (nth 2 b) end))))))))
+      (mapcar (lambda (line) (save-excursion (goto-char (car line)) (line-end-position)))
+              (or exact (and nearest (list nearest)))))))
+
+(defun roost--note-overlay (position notes)
+  "An overlay showing NOTES after the line ending at POSITION.
+It holds the line's newline, so the notes fold away with the line."
+  (let ((overlay (make-overlay position (min (1+ position) (point-max))))
+        (text (mapconcat
+               (lambda (note)
+                 (mapconcat (lambda (line)
+                              ;; The note's own faces, rather than those of
+                              ;; the diff line it is shown before.
+                              (concat (propertize "  ┃ " 'face '((:slant normal) roost-note default))
+                                      (propertize line 'face '(roost-note default))
+                                      "\n"))
+                            (split-string (with-temp-buffer
+                                            (insert (alist-get 'text note))
+                                            (let ((fill-column 72))
+                                              (fill-region (point-min) (point-max)))
+                                            (buffer-string))
+                                          "\n")
+                            ""))
+               notes "")))
+    (overlay-put overlay 'roost-notes notes)
+    (overlay-put overlay 'after-string text)
+    overlay))
+
+(defun roost--show-notes-here (task)
+  "Show TASK's review notes in this Magit buffer, under their lines."
+  (mapc #'delete-overlay roost--note-overlays)
+  (setq roost--note-overlays nil)
+  (when-let* ((notes (and task (roost--task-notes task)))
+              ((bound-and-true-p magit-root-section)))
+    ;; For each file in the diffs here: its headings' ends, and its lines.
+    (let (files)
+      (magit-map-sections
+       (lambda (section)
+         (when (magit-section-match '(file hunk) section)
+           (let* ((hunk (magit-section-match 'hunk section))
+                  (file (roost--slot (if hunk (roost--slot section 'parent) section) 'value))
+                  (entry (or (assoc file files) (car (push (list file nil nil) files)))))
+             (if hunk
+                 (setf (nth 2 entry) (append (nth 2 entry) (roost--hunk-lines section)))
+               (push (save-excursion (goto-char (roost--slot section 'start)) (line-end-position))
+                     (nth 1 entry)))))))
+      (let (shown)
+        (dolist (note notes)
+          (when-let* ((entry (assoc (alist-get 'file note) files)))
+            (dolist (position (roost--note-positions note (nth 1 entry) (nth 2 entry)))
+              (push note (alist-get position shown)))))
+        (pcase-dolist (`(,position . ,notes) shown)
+          (push (roost--note-overlay position (reverse notes)) roost--note-overlays))))))
+
+(defun roost--show-notes-everywhere ()
+  "Show the current review notes in every Magit buffer on a task."
+  (dolist (buffer (buffer-list))
+    (when (buffer-local-value 'roost-magit-mode buffer)
+      (with-current-buffer buffer
+        (roost--show-notes-here (roost--task-in-directory default-directory))))))
+
+(defun roost--notes-at-point ()
+  "The review notes shown under the line at point."
+  (seq-mapcat (lambda (overlay) (overlay-get overlay 'roost-notes))
+              (overlays-in (line-end-position) (1+ (line-end-position)))))
+
+(defun roost--note-id ()
+  "A new review note's identifier."
+  (format "%08x%08x" (random (ash 1 32)) (random (ash 1 32))))
+
+;;;###autoload
+(defun roost-note ()
+  "Write a note for the agent on the diff line at point, or the region's lines.
+A region stays within one hunk.  On a file's name the note is about the
+whole file, and on a hunk's heading about the whole hunk.  On a line
+already noted, edit its note; leave it empty to remove it.  Notes show
+under their lines in Magit, and go to the agent with your next prompt
+to it: \\<roost-magit-mode-map>\\[roost-send] opens one."
+  (interactive)
+  (unless (derived-mode-p 'magit-mode)
+    (user-error "Write notes in Magit, on a task's changes"))
+  (roost--magit-setup)
+  (let* ((task (or (roost--task-in-directory default-directory)
+                   (user-error "This repository is not a Roost task's worktree")))
+         (shown (unless (use-region-p) (roost--notes-at-point)))
+         (place (roost--magit-note-place))
+         (old (seq-find
+               (lambda (note)
+                 (and (equal (roost--note-key note) (roost--key task))
+                      (or (seq-every-p (lambda (field)
+                                         (equal (alist-get field note) (alist-get field place)))
+                                       '(file line end removed))
+                          ;; The one note shown here, though its line has moved.
+                          (and (not (cdr shown))
+                               (equal (alist-get 'id note) (alist-get 'id (car shown)))))))
+               (roost--notes)))
+         (text (string-trim
+                (read-string (format "Note on %s: " (roost--note-location (or old place)))
+                             (alist-get 'text old)))))
+    (deactivate-mark)
+    (cond ((and old (string-empty-p text))
+           (roost--remove-notes (lambda (note) (eq note old))))
+          ((string-empty-p text))
+          (old (roost--edit-note old text))
+          (t
+           (setq roost--notes
+                 (append (roost--notes)
+                         (list (append `((id . ,(roost--note-id))
+                                         (host . ,(roost--field task 'host))
+                                         (task . ,(roost--field task 'id)))
+                                       place
+                                       `((text . ,text))))))
+           (roost--save-notes)))
+    (roost--show-notes-everywhere)
+    (roost--redraw)
+    (let ((count (length (roost--task-notes task))))
+      (message "%s" (substitute-command-keys
+                     (if (zerop count)
+                         (format "%s has no review notes" (roost--field task 'name))
+                       (format "%d review note%s for %s; \\<roost-magit-mode-map>\\[roost-send] sends %s"
+                               count (if (= count 1) "" "s") (roost--field task 'name)
+                               (if (= count 1) "it" "them"))))))))
+
+;;;###autoload
+(defun roost-diff-whole-file ()
+  "Show the whole of the file at point with its changes marked.
+The diff compares what the diff at point compares, such as unstaged
+changes, so you can still stage there; select lines to stage only those,
+and \\<magit-diff-mode-map>\\[magit-diff-default-context] goes back to the usual hunks.  A new file, with
+nothing to compare, opens as it is; stage it from Magit's status."
+  (interactive)
+  (unless (derived-mode-p 'magit-mode)
+    (user-error "Use this in Magit, on a changed file"))
+  (let ((file (or (magit-file-at-point) (user-error "Put point on a changed file")))
+        (args (seq-remove (lambda (arg) (string-match-p "\\`-U[0-9]*\\'" arg))
+                          (car (magit-diff-arguments)))))
+    (if (eq (magit-diff-type) 'untracked)
+        (find-file (expand-file-name file (magit-toplevel)))
+      (magit-diff-dwim (cons "-U1000000" args) (list file)))))
 
 ;;;###autoload
 (defun roost-review (&optional task)
@@ -1978,6 +2518,7 @@ chosen one."
   (if (not (require 'magit nil t))
       (dired (roost--remote-directory task))
     (add-hook 'magit-post-refresh-hook #'roost--magit-refreshed)
+    (roost--magit-setup)
     (magit-status (roost--remote-directory task))))
 
 (defun roost--measure-task-in (directory)
@@ -2064,6 +2605,7 @@ stamp, so polls would not notice it."
   (interactive)
   (setq task (roost--choose task))
   (require 'magit)
+  (roost--magit-setup)
   (roost--activate-workspace task)
   (let ((default-directory (roost--remote-directory task)))
     (magit-diff-working-tree (roost--fork-point task))))
@@ -2192,7 +2734,7 @@ closes it."
 (defun roost--pr-draft (task)
   "Open a draft buffer for TASK's pull request.
 An existing draft for TASK is reused, and kept as written unless it is empty."
-  (let* ((buffer (get-buffer-create (format "*roost pr: %s*" (roost--field task 'name)))))
+  (let ((buffer (roost--draft-buffer "pr" 'roost--pr-task task)))
     (with-current-buffer buffer
       (unless (derived-mode-p 'roost-pr-mode) (roost-pr-mode))
       (setq roost--pr-task task
@@ -2688,7 +3230,8 @@ An untracked file, with nothing to compare, is opened instead."
   (let ((default-directory (roost--remote-directory task))
         (path (alist-get 'path file)))
     (if (and (not (alist-get 'untracked file)) (require 'magit nil t))
-        (magit-diff-working-tree (roost--fork-point task) nil (list path))
+        (progn (roost--magit-setup)
+               (magit-diff-working-tree (roost--fork-point task) nil (list path)))
       (find-file (expand-file-name path)))))
 
 (defun roost--fontify-changes (changes)
@@ -3209,6 +3752,8 @@ Windows showing the panel keep their scroll position."
                ((string-empty-p changes) (propertize "No changes yet" 'face 'roost-dim))
                (t (roost--fontify-changes changes))))
         (roost--insert-changed-files task width)
+        (when-let* ((notes (roost--notes-summary task)))
+          (roost--insert-indented notes))
         (if-let* ((merging (roost--field task 'merging)))
             (roost--insert-indented
              (substitute-command-keys
@@ -3309,18 +3854,33 @@ Windows showing the panel keep their scroll position."
     (goto-char (min position (point-max)))
     (roost--restore-window-places places)))
 
-(defun roost--task-info-buffer-name (task)
-  "Buffer name for TASK's panel, qualified by host when names collide.
+(defun roost--task-label (task)
+  "TASK's name, qualified by host when names collide.
 Tasks with the same name on the same host are told apart by their IDs."
   (let* ((name (roost--field task 'name))
          (host (roost--field task 'host))
          (twins (seq-filter (lambda (other) (equal (roost--field other 'name) name))
                             (roost-tasks))))
-    (cond ((length< twins 2) (format "*roost: %s*" name))
+    (cond ((length< twins 2) name)
           ((length< (seq-filter (lambda (other) (equal (roost--field other 'host) host)) twins) 2)
-           (format "*roost: %s on %s*" name (roost--host-label host)))
-          (t (format "*roost: %s on %s (%s)*" name (roost--host-label host)
+           (format "%s on %s" name (roost--host-label host)))
+          (t (format "%s on %s (%s)" name (roost--host-label host)
                      (substring (roost--field task 'id) 0 6))))))
+
+(defun roost--task-info-buffer-name (task)
+  "Buffer name for TASK's panel; see `roost--task-label'."
+  (format "*roost: %s*" (roost--task-label task)))
+
+(defun roost--draft-buffer (kind variable task)
+  "TASK's draft buffer of KIND, whose buffer-local VARIABLE holds its task.
+A draft is found by its task rather than its name, so tasks with the
+same name keep drafts of their own."
+  (let ((key (roost--key task)))
+    (or (seq-find (lambda (buffer)
+                    (when-let* ((other (buffer-local-value variable buffer)))
+                      (equal (roost--key other) key)))
+                  (buffer-list))
+        (generate-new-buffer (format "*roost %s: %s*" kind (roost--task-label task))))))
 
 ;;;###autoload
 (defun roost-task-info (&optional task)
@@ -4008,11 +4568,11 @@ than `roost-sidebar-width' plus 80 columns go without."
 The panel shows the agent's latest reply, its changes and the actions.
 It docks while the terminal keeps at least 80 columns, and steps aside
 when a split or a narrower frame would squeeze it.  With workspaces, it
-shows the task whose workspace is current.  \\<roost-task-info-mode-map>\\[roost-task-info-quit] in the panel
-turns the mode off, and \\<roost-dashboard-mode-map>\\[roost-task-panel-mode] in the dashboard or sidebar
-turns it back on."
+shows the task whose workspace is current.  \\<roost-dashboard-mode-map>\\[roost-task-panel-mode] in the dashboard or sidebar
+turns it on, and \\<roost-task-info-mode-map>\\[roost-task-info-quit] in the panel turns it off.  It is off until
+you turn it on, since it claims a column beside every task; to have it
+from the start, add `(roost-task-panel-mode 1)' to your configuration."
   :global t
-  :init-value t
   (roost--watch-layout)
   (roost--sync-all-frames)
   (when-let* ((roost-task-panel-mode)
@@ -4026,7 +4586,7 @@ turns it back on."
   "Say whether the task panel is visible, and if not, why."
   (message (cond ((not roost-task-panel-mode)
                   (substitute-command-keys
-                   "Task panel off; \\<roost-dashboard-mode-map>\\[roost-task-panel-mode] in the dashboard or sidebar turns it back on"))
+                   "Task panel off; \\<roost-dashboard-mode-map>\\[roost-task-panel-mode] in the dashboard or sidebar turns it on"))
                  ((roost--task-panel-window) "Task panel on")
                  ((roost--frame-task) "Task panel on, once the terminal has room beside it")
                  (t "Task panel on; it shows beside an open task"))))
@@ -4052,6 +4612,7 @@ Beside a terminal, that turns off `roost-task-panel-mode'."
   (remove-hook 'window-configuration-change-hook #'roost--layout-changed)
   (when (timerp roost--layout-timer) (cancel-timer roost--layout-timer))
   (remove-hook 'magit-post-refresh-hook #'roost--magit-refreshed)
+  (roost--magit-teardown)
   (when roost-watch-mode (roost-watch-mode -1))
   (advice-remove 'persp-mode-line #'roost--compact-perspective-mode-line)
   ;; Continue with the standard unloading.
@@ -4276,6 +4837,8 @@ otherwise.  Turning it off leaves the sidebar marked paused."
   (when roost-watch-mode
     (setq global-mode-string (append global-mode-string (list roost--mode-line-entry)))
     (add-hook 'after-save-hook #'roost--file-saved)
+    ;; Magit on a task's worktree gets notes, keys and a task header.
+    (with-eval-after-load 'magit (roost--magit-setup))
     (setq roost--watch-timer
           (run-with-timer roost-watch-interval roost-watch-interval #'roost--watch-tick))))
 

@@ -37,6 +37,24 @@ jobs:
           sudo apt-get install -y -q tmux
           tmux -V
 
+      # Magit and Evil from MELPA, for the tests of Roost in Magit and of its
+      # Evil keys there. Without them those tests are skipped, so an
+      # unreachable MELPA doesn't fail the run.
+      - name: Install Magit and Evil
+        continue-on-error: true
+        run: |
+          cat > "$RUNNER_TEMP/magit.el" <<'EOF'
+          (require 'package)
+          (setq package-user-dir (expand-file-name "elpa" (getenv "RUNNER_TEMP")))
+          (add-to-list 'package-archives '("melpa" . "https://melpa.org/packages/") t)
+          (package-initialize)
+          (package-refresh-contents)
+          (package-install 'magit)
+          (package-install 'evil-collection)
+          EOF
+          emacs -Q --batch -l "$RUNNER_TEMP/magit.el"
+          echo "TEST_LOAD_PATH=$(find "$RUNNER_TEMP/elpa" -mindepth 1 -maxdepth 1 -type d -printf '-L %p ')" >> "$GITHUB_ENV"
+
       # ERT (protocol and UI, with tmux-control stubbed), the Python lifecycle
       # tests, and a byte-compile.
       - name: Test and compile
