@@ -3140,6 +3140,41 @@ ssh: connect to host dev port 22: Operation timed out"
         (should (equal (alist-get 'text sent) "a.py\nWhy?"))
         (should-not roost--notes))))))
 
+(ert-deftest roost-drafts-follow-notes-edited-or-removed-after-them ()
+  (roost-test--isolated
+   (roost-test--with-send-buffers
+    (let* ((task (roost--cache-task "dev" (roost-test--task)))
+           (id (roost--field task 'id))
+           sent)
+      (setq roost--notes (list (roost-test--note "1" id '(file . "a.py") '(text . "One"))
+                               (roost-test--note "2" id '(file . "b.py") '(text . "Two"))
+                               (roost-test--note "3" id '(file . "c.py") '(text . "Three"))))
+      (cl-letf (((symbol-function 'pop-to-buffer) #'set-buffer)
+                ((symbol-function 'roost--refresh-host) #'ignore)
+                ((symbol-function 'roost--redraw) #'ignore)
+                ((symbol-function 'roost--request)
+                 (lambda (_host _action params success &rest _)
+                   (setq sent params)
+                   (funcall success (roost-test--task)))))
+        (roost--send-draft task)
+        (let ((draft (current-buffer)))
+          ;; Edited, a note changes in the draft too.
+          (roost--edit-note (nth 0 roost--notes) "One, edited")
+          (should (equal (buffer-string) "\n\na.py\nOne, edited\n\nb.py\nTwo\n\nc.py\nThree"))
+          ;; Removed, it leaves the draft, and its neighbours one blank line apart.
+          (roost--remove-notes (lambda (note) (equal (alist-get 'id note) "2")))
+          (should (equal (buffer-string) "\n\na.py\nOne, edited\n\nc.py\nThree"))
+          ;; A note you changed in the draft stays as you wrote it there, and
+          ;; once sent the note itself is kept, edited.
+          (goto-char (point-max))
+          (insert " for sure")
+          (roost--edit-note (nth 1 roost--notes) "Three, edited")
+          (should (string-suffix-p "c.py\nThree for sure" (buffer-string)))
+          (with-current-buffer draft (roost-send-submit))
+          (should (equal (alist-get 'text sent) "a.py\nOne, edited\n\nc.py\nThree for sure"))
+          (should (equal (mapcar (lambda (note) (alist-get 'text note)) roost--notes)
+                         '("Three, edited")))))))))
+
 (ert-deftest roost-send-region-adds-to-a-draft-already-begun ()
   (roost-test--isolated
    (roost-test--with-send-buffers

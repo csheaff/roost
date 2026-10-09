@@ -2062,13 +2062,48 @@ note.")
     (seq-filter (lambda (note) (equal (roost--note-key note) key)) (roost--notes))))
 
 (defun roost--remove-notes (predicate)
-  "Remove the review notes PREDICATE accepts; return non-nil if any were."
-  (let ((kept (seq-remove predicate (roost--notes))))
-    (unless (length= kept (length roost--notes))
-      (setq roost--notes kept)
-      (roost--save-notes)
-      (roost--show-notes-everywhere)
-      t)))
+  "Remove the review notes PREDICATE accepts; return non-nil if any were.
+Drafts holding them lose them too."
+  (when-let* ((removed (seq-filter predicate (roost--notes))))
+    (setq roost--notes (seq-difference roost--notes removed #'eq))
+    (roost--save-notes)
+    (dolist (note removed) (roost--update-drafts note nil))
+    (roost--show-notes-everywhere)
+    t))
+
+(defun roost--edit-note (note text)
+  "Make TEXT the text of review NOTE, in the drafts holding it too."
+  (let ((before (copy-tree note)))
+    (setf (alist-get 'text note) text)
+    (roost--save-notes)
+    (roost--update-drafts before note)))
+
+(defun roost--update-drafts (old new)
+  "Replace note OLD with NEW in the drafts holding it; nil NEW removes it.
+A draft in which you have changed the note's text keeps your text, and
+no longer counts the note as its own, so sending it leaves the note."
+  (let ((id (alist-get 'id old))
+        (before (roost--format-note old))
+        (case-fold-search nil))
+    (dolist (buffer (buffer-list))
+      (with-current-buffer buffer
+        (when (and (derived-mode-p 'roost-send-mode) (member id roost--send-notes))
+          (save-excursion
+            (goto-char (point-min))
+            ;; The note as it was drafted, on lines of its own.
+            (cond ((not (re-search-forward
+                         (concat "^\\(" (regexp-quote before) "\\)\\(?:\n\\|\\'\\)")
+                         nil t))
+                   (setq roost--send-notes (delete id roost--send-notes)))
+                  (new (replace-match (roost--format-note new) t t nil 1))
+                  (t
+                   (replace-match "" t t nil 1)
+                   (goto-char (match-beginning 1))
+                   (setq roost--send-notes (delete id roost--send-notes))
+                   ;; One blank line between the notes either side.
+                   (delete-region (progn (skip-chars-backward "\n") (point))
+                                  (progn (skip-chars-forward "\n") (point)))
+                   (unless (eobp) (insert "\n\n"))))))))))
 
 (defun roost--note-location (note)
   "Where NOTE is: its file, then its lines if it is not about the whole file."
@@ -2429,9 +2464,7 @@ to it: \\<roost-magit-mode-map>\\[roost-send] opens one."
     (cond ((and old (string-empty-p text))
            (roost--remove-notes (lambda (note) (eq note old))))
           ((string-empty-p text))
-          (old
-           (setf (alist-get 'text old) text)
-           (roost--save-notes))
+          (old (roost--edit-note old text))
           (t
            (setq roost--notes
                  (append (roost--notes)
