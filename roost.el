@@ -2400,9 +2400,10 @@ It holds the line's newline, so the notes fold away with the line."
 (defun roost-note ()
   "Write a note for the agent on the diff line at point, or the region's lines.
 A region stays within one hunk.  On a file's name the note is about the
-whole file, and on a hunk's heading about the whole hunk.  On a line already noted, edit its note;
-leave it empty to remove it.  Notes show under their lines in Magit, and
-go to the agent with your next prompt to it: \\<roost-magit-mode-map>\\[roost-send] opens one."
+whole file, and on a hunk's heading about the whole hunk.  On a line
+already noted, edit its note; leave it empty to remove it.  Notes show
+under their lines in Magit, and go to the agent with your next prompt
+to it: \\<roost-magit-mode-map>\\[roost-send] opens one."
   (interactive)
   (unless (derived-mode-p 'magit-mode)
     (user-error "Write notes in Magit, on a task's changes"))
