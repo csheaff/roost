@@ -1938,8 +1938,7 @@ CALLBACK and FAILURE are passed to `roost--act'."
 An existing draft for TASK is reused and kept as written, with INITIAL
 after it.  TASK's review notes not yet in the draft follow; sending the
 draft clears them (see `roost-note')."
-  (let* ((name (format "*roost send: %s*" (roost--field task 'name)))
-         (buffer (get-buffer-create name)))
+  (let ((buffer (roost--draft-buffer "send" 'roost--send-task task)))
     (with-current-buffer buffer
       (unless (derived-mode-p 'roost-send-mode) (roost-send-mode))
       (setq roost--send-task task
@@ -2686,7 +2685,7 @@ closes it."
 (defun roost--pr-draft (task)
   "Open a draft buffer for TASK's pull request.
 An existing draft for TASK is reused, and kept as written unless it is empty."
-  (let* ((buffer (get-buffer-create (format "*roost pr: %s*" (roost--field task 'name)))))
+  (let ((buffer (roost--draft-buffer "pr" 'roost--pr-task task)))
     (with-current-buffer buffer
       (unless (derived-mode-p 'roost-pr-mode) (roost-pr-mode))
       (setq roost--pr-task task
@@ -3806,18 +3805,33 @@ Windows showing the panel keep their scroll position."
     (goto-char (min position (point-max)))
     (roost--restore-window-places places)))
 
-(defun roost--task-info-buffer-name (task)
-  "Buffer name for TASK's panel, qualified by host when names collide.
+(defun roost--task-label (task)
+  "TASK's name, qualified by host when names collide.
 Tasks with the same name on the same host are told apart by their IDs."
   (let* ((name (roost--field task 'name))
          (host (roost--field task 'host))
          (twins (seq-filter (lambda (other) (equal (roost--field other 'name) name))
                             (roost-tasks))))
-    (cond ((length< twins 2) (format "*roost: %s*" name))
+    (cond ((length< twins 2) name)
           ((length< (seq-filter (lambda (other) (equal (roost--field other 'host) host)) twins) 2)
-           (format "*roost: %s on %s*" name (roost--host-label host)))
-          (t (format "*roost: %s on %s (%s)*" name (roost--host-label host)
+           (format "%s on %s" name (roost--host-label host)))
+          (t (format "%s on %s (%s)" name (roost--host-label host)
                      (substring (roost--field task 'id) 0 6))))))
+
+(defun roost--task-info-buffer-name (task)
+  "Buffer name for TASK's panel; see `roost--task-label'."
+  (format "*roost: %s*" (roost--task-label task)))
+
+(defun roost--draft-buffer (kind variable task)
+  "TASK's draft buffer of KIND, whose buffer-local VARIABLE holds its task.
+A draft is found by its task rather than its name, so tasks with the
+same name keep drafts of their own."
+  (let ((key (roost--key task)))
+    (or (seq-find (lambda (buffer)
+                    (when-let* ((other (buffer-local-value variable buffer)))
+                      (equal (roost--key other) key)))
+                  (buffer-list))
+        (generate-new-buffer (format "*roost %s: %s*" kind (roost--task-label task))))))
 
 ;;;###autoload
 (defun roost-task-info (&optional task)

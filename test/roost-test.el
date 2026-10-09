@@ -2367,8 +2367,7 @@
   (roost-test--isolated
    (roost-test--with-send-buffers
     (let ((task (roost--cache-task "dev" (roost-test--task))) asked)
-      (ignore task)
-      (cl-letf (((symbol-function 'roost--read-task) (lambda (_) (setq asked t) (roost-test--task)))
+      (cl-letf (((symbol-function 'roost--read-task) (lambda (_) (setq asked t) task))
                 ((symbol-function 'pop-to-buffer) #'set-buffer)
                 ((symbol-function 'roost--directory-host) (lambda (_) "dev")))
         (with-temp-buffer
@@ -3156,6 +3155,34 @@ ssh: connect to host dev port 22: Operation timed out"
           (roost-send-region (point-min) (point-max)))
         (with-current-buffer "*roost send: fix auth*"
           (should (equal (buffer-string) "Look at these:\n\nsrc/a.py:1-1\n\nx\n"))))))))
+
+(ert-deftest roost-tasks-with-one-name-keep-drafts-and-notes-of-their-own ()
+  (roost-test--isolated
+   (roost-test--with-send-buffers
+    (let* ((here (roost--cache-task "dev" (roost-test--task "a")))
+           (there (roost--cache-task "other" (roost-test--task "b")))
+           sent)
+      (setq roost--notes (list (roost-test--note "1" "a" '(file . "x.py") '(text . "Here"))
+                               '((id . "2") (host . "other") (task . "b") (file . "y.py")
+                                 (text . "There"))))
+      (cl-letf (((symbol-function 'pop-to-buffer) #'set-buffer)
+                ((symbol-function 'roost--refresh-host) #'ignore)
+                ((symbol-function 'roost--redraw) #'ignore)
+                ((symbol-function 'roost--request)
+                 (lambda (host _action params success &rest _)
+                   (setq sent (cons host params))
+                   (funcall success (roost-test--task)))))
+        (roost--send-draft here)
+        (should (equal (buffer-name) "*roost send: fix auth on dev*"))
+        (roost--send-draft there)
+        (should (equal (buffer-name) "*roost send: fix auth on other*"))
+        (should (equal (buffer-string) "\n\ny.py\nThere"))
+        (roost-send-submit)
+        (should (equal sent '("other" (id . "b") (text . "y.py\nThere"))))
+        ;; The other task's draft and note are as they were.
+        (should (equal (mapcar (lambda (note) (alist-get 'id note)) roost--notes) '("1")))
+        (roost--send-draft here)
+        (should (equal (buffer-string) "\n\nx.py\nHere")))))))
 
 (ert-deftest roost-notes-go-with-their-task ()
   (roost-test--isolated
