@@ -4,6 +4,7 @@
 (defvar persp-mode nil)
 (defvar persp-modestring-short nil)
 (defvar persp-modestring-dividers nil)
+(defvar evil-want-keybinding)
 
 (defmacro roost-test--isolated (&rest body)
   `(let ((roost--tasks (make-hash-table :test 'equal))
@@ -3201,6 +3202,7 @@ Its a.txt has ten lines, committed.  Skipped without Magit."
                                             "GIT_CONFIG_GLOBAL=/dev/null")
                                           process-environment))
              (task (roost--cache-task nil (append `((worktree . ,(directory-file-name dir))
+                                                    (integrationBranch . "main")
                                                     (lastMessage . "Renamed the lines.\n\nAll tests pass."))
                                                   (roost-test--task)))))
         (ignore task)
@@ -3312,11 +3314,18 @@ Its a.txt has ten lines, committed.  Skipped without Magit."
     (magit-status-setup-buffer dir)
     (with-current-buffer (magit-get-mode-buffer 'magit-status-mode)
       (should roost-magit-mode)
-      (should (string-match-p "^Task: +fix auth ● ready$" (buffer-string)))
+      ;; Without the agent's status, which would go stale before a refresh.
+      (should (string-match-p "^Task: +fix auth, merges into main$" (buffer-string)))
       (goto-char (point-min))
       (re-search-forward "^Agent's latest reply  Renamed the lines\\.$")
       (should (eieio-oref (magit-current-section) 'hidden))
       (should (equal (roost-test--shown-notes) '(("+new line" . "Name it")))))
+    ;; They can be turned off; notes still show.
+    (let ((roost-magit-status-sections nil))
+      (with-current-buffer (magit-get-mode-buffer 'magit-status-mode)
+        (magit-refresh-buffer)
+        (should-not (string-match-p "^Task:\\|^Agent's latest reply" (buffer-string)))
+        (should (equal (roost-test--shown-notes) '(("+new line" . "Name it"))))))
     ;; Elsewhere Magit is left alone.
     (let ((other (file-name-as-directory (make-temp-file "roost-other" t))))
       (unwind-protect
@@ -3327,6 +3336,29 @@ Its a.txt has ten lines, committed.  Skipped without Magit."
               (should-not roost-magit-mode)
               (should-not (string-match-p "^Task:" (buffer-string)))))
         (delete-directory other t)))))
+
+(ert-deftest roost-evil-users-get-roosts-keys-in-magit ()
+  (skip-unless (or (featurep 'evil)
+                   (progn (setq evil-want-keybinding nil) (require 'evil nil t))))
+  (roost-test--with-magit-task
+    (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")
+    (let ((collection (and (require 'evil-collection nil t)
+                           (progn (evil-collection-init 'magit) t))))
+      (unwind-protect
+          (progn
+            (evil-mode 1)
+            (magit-diff-unstaged)
+            (with-current-buffer (magit-get-mode-buffer 'magit-diff-mode)
+              (evil-normal-state)
+              (roost-test--goto-line-text "new line")
+              (should (eq (key-binding ";") #'roost-note))
+              (should (eq (key-binding "@") #'roost-send))
+              (should (eq (key-binding "g=") #'roost-diff-whole-file))
+              ;; evil-collection's own keys are left as they are.
+              (when collection
+                (should (eq (key-binding "=") #'magit-diff-less-context))
+                (should (eq (key-binding "gr") #'magit-refresh)))))
+        (evil-mode -1)))))
 
 (ert-deftest roost-whole-file-diffs-keep-staging ()
   (roost-test--with-magit-task

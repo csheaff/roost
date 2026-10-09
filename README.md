@@ -97,12 +97,12 @@ terminal.*
 **Keep them in view.** `b` in the dashboard, or `M-x roost-sidebar-mode`, keeps a
 compact task list at the left of every frame, through perspective and tab
 switches and `C-x 1`; add `(roost-sidebar-mode 1)` to your configuration to have
-it from the start. An open task also gets a panel at the right of its
-terminal: the agent's latest reply, the files it changed (each opens its diff),
-and what you can do with the task now, starting with the next step, kept
-current as the agent works. The panel steps aside when
-the terminal would drop below 80 columns; `q` in it turns it off, and `I` in the
-dashboard or sidebar turns it back on.
+it from the start. `I` docks a panel at the right of an open task's terminal:
+the agent's latest reply, the files it changed (each opens its diff), and what
+you can do with the task now, starting with the next step, kept current as the
+agent works. Add `(roost-task-panel-mode 1)` to have it from the start. The
+panel steps aside when the terminal would drop below 80 columns, and `q` in it
+turns it off. `i` shows the same panel in the main area whenever you want it.
 
 ![Claude Code on claylien asking to create budgets.json, in its own terminal inside Emacs](docs/images/roost-terminal.jpg)
 
@@ -205,7 +205,8 @@ Magit is optional (review falls back to Dired).
   `roost-workspace` to choose.
 - **Evil.** Roost's dashboard and panels start in Emacs state so their keys work
   (`roost-evil-state`); `j`/`k` move between tasks. Drafts start in insert
-  state. tmux-control starts agent terminals in insert state, so typing reaches
+  state. In Magit, Roost's keys work in normal state, with the whole file's
+  diff on `g=` (evil-collection uses `=`). tmux-control starts agent terminals in insert state, so typing reaches
   the agent; ESC returns to normal state.
 - **Other modal setups** (Meow, xah-fly-keys): put `roost-dashboard-mode`,
   `roost-task-info-mode` and `roost-doctor-mode`, and the drafts
@@ -259,7 +260,7 @@ In Magit on a task's worktree, Roost adds a few keys, and a Roost menu:
 | --- | --- | --- |
 | `;` | `roost-note` | Write a note for the agent on the line at point, the region's lines, or the file; on a noted line, edit its note (empty removes it) |
 | `@` | `roost-send` | Draft a prompt to the agent, holding your notes |
-| `=` | `roost-diff-whole-file` | Show the whole file with its changes; staging still works (`0` goes back to hunks) |
+| `=` | `roost-diff-whole-file` | Show the whole file with its changes; staging still works (`0` goes back to hunks). With Evil, `g=` |
 
 `M-x roost-discard-notes` drops a task's notes unsent. In a task's panel, `e`
 also drafts a prompt holding them.
@@ -287,6 +288,8 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
   worktree lacks files Git doesn't track, such as `.env`; the command finds the
   primary checkout in `$ROOST_REPO`: `cp "$ROOST_REPO/.env" . && npm ci`.
 - `roost-notes-file`: review notes not yet sent, kept across sessions.
+- `roost-magit-status-sections` (t): whether Magit's status of a task's
+  worktree names the task and folds in its agent's latest reply.
 - `roost-branch-prefix`: topic branches are `PREFIX<name>-<id>`; default `roost/`.
 - `roost-state-directory`: where each host keeps task records, the helper and
   worktrees; default `~/.local/share/roost`.
@@ -391,9 +394,10 @@ Things to know:
 
 Since 0.8.1 (unreleased):
 
-- The sidebar (`b`) and the task panel beside each terminal. The panel lists
-  only what a task can do now and says what comes next; the command menu
-  greys out the rest.
+- The sidebar (`b`) and the task panel beside each terminal (`I`). The panel
+  lists only what a task can do now and says what comes next; the command
+  menu greys out the rest. Like the sidebar, the panel is off until you turn
+  it on: add `(roost-task-panel-mode 1)` to your configuration to keep it.
 - Each task has a tmux session of its own, which ends with the task. Older
   tasks move to their own when resumed. `roost-session-name` is gone.
 - `x` finishes a task: it retires one whose work is merged, or discards one
@@ -454,8 +458,8 @@ upgrading ask for one final hook review.
 Git and isolated tmux sockets (fixture agents drive the actual hook commands,
 without model calls), and a warning-free byte-compile. CI runs it on Emacs 29.1
 and 30.1. The tests of Roost in Magit need Magit and its dependencies on the
-load path, as `make test TEST_LOAD_PATH="-L …/magit/lisp -L …"`; without them
-they are skipped.
+load path, as `make test TEST_LOAD_PATH="-L …/magit/lisp -L …"`, and Evil
+and evil-collection for its Evil keys there; without them they are skipped.
 
 Claude Code updates itself often, and Roost relies on what it reports and
 does. `make contract` scans the installed Claude Code for the hook events,

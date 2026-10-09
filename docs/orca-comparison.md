@@ -70,7 +70,7 @@ tasks were then taken from creation to merge in it (see
 | --- | --- |
 | Left sidebar: projects and their workspaces, each with a status dot and an unread marker | `roost-sidebar-mode` (`b`): tasks grouped by host and project, a status dot, how many wait for you; a finished agent you have seen turns grey |
 | Always there by default | Opt-in, since an Emacs package that claims a column of every frame should be asked to; one line in your configuration keeps it |
-| Right sidebar: Source Control with the changed files and their diffs, live | The task panel: the agent's latest reply, the changed files, kept current, each opening its diff in Magit, commits ahead and behind, the pull request's review and checks, and every action. Staging and committing stay in Magit (`r`) |
+| Right sidebar: Source Control with the changed files and their diffs, live | The task panel (`I`, opt-in like the sidebar since 2026-10-09): the agent's latest reply, the changed files, kept current, each opening its diff in Magit, commits ahead and behind, the pull request's review and checks, and every action. Staging and committing stay in Magit (`r`) |
 | Checks tab | Pull request checks as passing, failing and pending counts in the panel |
 | Agents tab: past sessions to resume | `s` resumes the task's own conversation; there is no history browser |
 | Panels collapse by hand | The panel steps aside by itself when the terminal would drop below 80 columns, and comes back with room; `q` and `I` turn it off and on |
@@ -121,7 +121,7 @@ summoned with `r`, it refreshes only when you ask.
 | Source Control: staged, unstaged and untracked files, stage per file | Magit's status (`r`), staging files, hunks or lines; it names the task and folds in the agent's latest reply |
 | Notes on a line, a range or a file | `;` in Magit on a task: on the line at point, the region's lines, or a file's name. Notes show under their lines in every Magit buffer on the task, follow their line when the agent edits above it, and survive restarts |
 | Send notes: this file, or all unsent | `@` (or `e`) drafts a prompt holding every unsent note, quoting the lines they are about; sending it clears them |
-| The diff of a whole file in the editor area | `=` shows the whole file with its changes, as a Magit diff you can still stage from |
+| The diff of a whole file in the editor area | `=` (`g=` with Evil) shows the whole file with its changes, as a Magit diff you can still stage from |
 
 Mobile access, embedded browsers, trackers other than GitHub, workflow boards
 and sparse checkouts remain outside Roost. Emacs already supplies

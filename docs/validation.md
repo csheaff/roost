@@ -684,6 +684,16 @@ first note's prompt closed, as after any prompt in Clay's configuration; Magit
 keys need insert mode there anyway. All 165 ERT tests pass with Magit on the
 load path; without it the four Magit ones are skipped.
 
+Then, for what most Emacs users would expect: the task panel became opt-in,
+like the sidebar; the status's task line lost the agent's status, which went
+stale between refreshes, and says what the task merges into instead;
+`roost-magit-status-sections` turns the task line and the reply off; and with
+Evil the keys work in normal state, the whole-file diff on `g=` because
+evil-collection binds `=` to less context. A test loads Evil (MELPA,
+2026-07-28) and evil-collection's Magit bindings and checks each key, and
+that `=` and `gr` stay evil-collection's. 166 ERT tests pass with Magit and
+Evil, 165 with Magit alone (the Evil one skipped), 161 with neither.
+
 ### Codex and Pi adapters
 
 Used another disposable remote `hello-service` project, an isolated registry and

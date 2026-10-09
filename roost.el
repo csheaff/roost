@@ -59,6 +59,8 @@
 (declare-function persp-names "perspective" ())
 (declare-function persp-format-name "perspective" (name))
 (declare-function evil-set-initial-state "evil-core" (mode state))
+(declare-function evil-define-minor-mode-key "evil-core" (state mode key def &rest bindings))
+(declare-function evil-normalize-keymaps "evil-core" (&optional state))
 (declare-function org-back-to-heading "org" (&optional invisible-ok))
 (declare-function org-before-first-heading-p "org" ())
 (declare-function org-end-of-meta-data "org" (&optional full))
@@ -216,6 +218,12 @@ Ordinary perspectives retain their existing labels and click actions."
 (defcustom roost-projects-file (locate-user-emacs-file "roost/projects.json")
   "Local file remembering project checkouts used for tasks."
   :type 'file)
+
+(defcustom roost-magit-status-sections t
+  "Whether Magit's status of a task's worktree names the task.
+It then also shows the agent's latest reply, folded.  Review notes and
+Roost's keys in Magit do not depend on this."
+  :type 'boolean)
 
 (defcustom roost-notes-file (locate-user-emacs-file "roost/notes.json")
   "Local file keeping review notes not yet sent to an agent.
@@ -2125,11 +2133,25 @@ note.")
     ["Agent's Terminal" roost-open-task]
     ["Task Panel" roost-task-info]))
 
+(defvar roost--magit-evil-keys nil
+  "Non-nil once Roost's keys in Magit have Evil bindings.")
+
 (define-minor-mode roost-magit-mode
   "Notes for the agent and other Roost keys, in Magit on a task's worktree.
 Roost turns it on in Magit buffers whose repository is a task's worktree.
+With Evil, the keys work in normal and visual state too, except that
+the whole file's diff is on `g=', since evil-collection gives `=' to
+less diff context.
 \\{roost-magit-mode-map}"
-  :lighter nil)
+  :lighter nil
+  (when (and roost-magit-mode (fboundp 'evil-define-minor-mode-key))
+    (unless roost--magit-evil-keys
+      (setq roost--magit-evil-keys t)
+      (evil-define-minor-mode-key '(normal visual motion) 'roost-magit-mode
+        ";" #'roost-note
+        "@" #'roost-send
+        "g=" #'roost-diff-whole-file))
+    (evil-normalize-keymaps)))
 
 (defvar-local roost--note-overlays nil
   "Overlays showing review notes in this Magit buffer.")
@@ -2165,40 +2187,31 @@ Run from Magit's hook, so an error only reports itself."
       (roost--show-notes-here task))))
 
 (defun roost--magit-insert-task-header ()
-  "In Magit's status of a task's worktree, insert a header naming the task."
-  (when-let* ((task (roost--task-in-directory default-directory)))
+  "In Magit's status of a task's worktree, insert a header naming the task.
+See `roost-magit-status-sections'."
+  (when-let* ((roost-magit-status-sections)
+              (task (roost--task-in-directory default-directory)))
     (roost--magit-insert-section
      'roost-task (roost--key task) nil
      (lambda () (roost--insert-task-header task)))))
 
 (defun roost--insert-task-header (task)
-  "Insert the line naming TASK in Magit's status of its worktree."
-  (let* ((status (roost--display-status task))
-         (integration (roost--field task 'integrationBranch))
-         (ahead (or (roost--field task 'ahead) 0))
-         (behind (or (roost--field task 'behind) 0)))
+  "Insert the line naming TASK in Magit's status of its worktree.
+Like the rest of the status, it holds until Magit refreshes, so it leaves
+out the agent's status, which changes while you read."
+  (let ((integration (roost--field task 'integrationBranch)))
     (insert (format "%-10s" "Task: ")
             (propertize (roost--field task 'name) 'font-lock-face 'bold)
-            " "
-            (propertize (concat "● " status) 'font-lock-face
-                        (roost--status-face (roost--attention-status task)))
-            (if (and integration (or (> ahead 0) (> behind 0)))
-                (propertize
-                 (format " · %s"
-                         (string-join
-                          (delq nil (list (when (> ahead 0) (format "%d ahead of %s" ahead integration))
-                                          (when (> behind 0)
-                                            (format (if (> ahead 0) "%d behind" "%d behind %s")
-                                                    behind integration))))
-                          ", "))
-                 'font-lock-face 'roost-dim)
+            (if integration
+                (propertize (format ", merges into %s" integration) 'font-lock-face 'roost-dim)
               "")
             "\n")))
 
 (defun roost--magit-insert-reply ()
   "In Magit's status of a task's worktree, insert the agent's latest reply.
-It starts folded, showing its first line."
-  (when-let* ((task (roost--task-in-directory default-directory))
+It starts folded, showing its first line.  See `roost-magit-status-sections'."
+  (when-let* ((roost-magit-status-sections)
+              (task (roost--task-in-directory default-directory))
               (reply (roost--last-message task)))
     (roost--magit-insert-section
      'roost-reply nil t
@@ -4492,11 +4505,11 @@ than `roost-sidebar-width' plus 80 columns go without."
 The panel shows the agent's latest reply, its changes and the actions.
 It docks while the terminal keeps at least 80 columns, and steps aside
 when a split or a narrower frame would squeeze it.  With workspaces, it
-shows the task whose workspace is current.  \\<roost-task-info-mode-map>\\[roost-task-info-quit] in the panel
-turns the mode off, and \\<roost-dashboard-mode-map>\\[roost-task-panel-mode] in the dashboard or sidebar
-turns it back on."
+shows the task whose workspace is current.  \\<roost-dashboard-mode-map>\\[roost-task-panel-mode] in the dashboard or sidebar
+turns it on, and \\<roost-task-info-mode-map>\\[roost-task-info-quit] in the panel turns it off.  It is off until
+you turn it on, since it claims a column beside every task; to have it
+from the start, add `(roost-task-panel-mode 1)' to your configuration."
   :global t
-  :init-value t
   (roost--watch-layout)
   (roost--sync-all-frames)
   (when-let* ((roost-task-panel-mode)
@@ -4510,7 +4523,7 @@ turns it back on."
   "Say whether the task panel is visible, and if not, why."
   (message (cond ((not roost-task-panel-mode)
                   (substitute-command-keys
-                   "Task panel off; \\<roost-dashboard-mode-map>\\[roost-task-panel-mode] in the dashboard or sidebar turns it back on"))
+                   "Task panel off; \\<roost-dashboard-mode-map>\\[roost-task-panel-mode] in the dashboard or sidebar turns it on"))
                  ((roost--task-panel-window) "Task panel on")
                  ((roost--frame-task) "Task panel on, once the terminal has room beside it")
                  (t "Task panel on; it shows beside an open task"))))
