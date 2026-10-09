@@ -659,7 +659,9 @@ Python ones on macOS and on `claylien`.
 ### Review notes in Magit, 2026-10-09
 
 Checked live in the copy of Clay's configuration, on a local task with the
-fake agent (`claylien` was down, so not yet over TRAMP):
+fake agent, and later the same on `claylien` over tramp-rpc, the TRAMP method
+Clay's configuration uses. There `r` opened the remote status in 1.3 s and
+a refresh took 0.36 to 0.38 s; notes, `@` and `=` behaved as below:
 
 - **Notes.** `;` on an added line, a file's name and the last line of a hunk
   wrote notes that show under those lines, in their own face rather than the

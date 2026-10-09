@@ -19,7 +19,7 @@ tmux-control socket. The terminals' shell prompt is the author's.
 | `roost-terminal.jpg` | The `budget-alerts` agent's own terminal on `claylien`, opened with `RET`, asking before it creates a file |
 | `roost-menu.jpg` | `h`'s command menu below the dashboard, naming the task its commands act on |
 | `roost-workspace.jpg` | The `tags` agent's summary beside the task shell (`t`), where the new `--tag` filter was tried by hand |
-| `roost-review.jpg` | Magit on the `tags` worktree (`r`), expanding the agent's uncommitted change |
+| `roost-review.jpg` | Magit on the `skip duplicates` worktree on `claylien` (`r`), with two review notes (`;`) under the agent's change. Retaken on 2026-10-09 in the same configuration, after Claude Code 2.1.289 (Haiku 4.5) made the change, asking before its edits and test runs |
 | `roost-task-panel.jpg` | The `search` task's panel (`?`): its reply, a commit ahead of `main`, the prompt, actions and details |
 
 ## Try the same workflow

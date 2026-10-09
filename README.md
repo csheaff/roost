@@ -34,7 +34,8 @@ asks permission, `n` takes you to it, you answer, look at its changes and merge.
 - **Start from your notes.** An Org heading, a region of code or a GitHub issue
   becomes the prompt.
 - **Finish with the tools you know.** Try the work in a shell beside the agent,
-  review it in Magit, merge it or open a pull request. Roost never stages or
+  review it in Magit, with notes on its lines sent back to the agent, then
+  merge it or open a pull request. Roost never stages or
   commits your work, and deletes it only when you discard a task and type its
   name.
 
@@ -126,7 +127,7 @@ lines, and `@` drafts a prompt holding all of them; sending it clears them. `=`
 on a file shows the whole file with its changes marked, and you can still
 stage there.
 
-![Magit on the task's worktree, showing the agent's uncommitted change](docs/images/roost-review.jpg)
+![Magit on a task's worktree on claylien: the task, the agent's reply folded, and two notes for the agent under the lines of its change they are about](docs/images/roost-review.jpg)
 
 **Catch up and finish.** When other tasks land first, the dashboard shows the
 task falling behind (`↓2`). `u` merges the integration branch into the task's

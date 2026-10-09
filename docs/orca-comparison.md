@@ -113,8 +113,9 @@ Roost does both in Magit, where you review anyway, rather than in a column of
 its own. Magit already shows staged, unstaged and untracked changes and
 stages hunks and single lines, not only files. A docked Magit would have to
 refresh itself while the agent works, and a refresh starts 12 to 56 Git
-processes (276 ms for a full status locally), each a round trip over TRAMP;
-summoned with `r`, it refreshes only when you ask.
+processes (276 ms for a full status locally), each a round trip over TRAMP: a
+remote status took 0.4 s to refresh over tramp-rpc, with Emacs waiting.
+Summoned with `r`, it refreshes only when you ask.
 
 | Orca | Roost |
 | --- | --- |
