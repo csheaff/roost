@@ -3315,6 +3315,30 @@ Its a.txt has ten lines, committed.  Skipped without Magit."
           (should (equal (mapcar (lambda (note) (alist-get 'text note)) roost--notes)
                          '("These two" "Whole file"))))))))
 
+(ert-deftest roost-a-note-on-a-region-stays-within-one-hunk ()
+  (roost-test--with-magit-task
+    ;; Changes at the first and last lines make two hunks.
+    (roost-test--write-lines "a.txt" (append '(0) (number-sequence 2 9) '(11)))
+    (magit-diff-unstaged)
+    (with-current-buffer (magit-get-mode-buffer 'magit-diff-mode)
+      (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "Why?")))
+        (dolist (forward '(t nil))
+          (roost-test--goto-line-text (if forward "line 0" "line 11"))
+          (set-mark (point))
+          (roost-test--goto-line-text (if forward "line 11" "line 0"))
+          (activate-mark)
+          (should-error (roost-note) :type 'user-error)
+          (deactivate-mark))
+        (should-not roost--notes)
+        ;; Within one hunk, a region is fine.
+        (roost-test--goto-line-text "line 1")
+        (set-mark (point))
+        (forward-line 2)
+        (activate-mark)
+        (roost-note)
+        (should (equal (roost--format-note (car roost--notes))
+                       "a.txt:1\n> -line 1\n> +line 0\nWhy?"))))))
+
 (ert-deftest roost-notes-follow-their-line-when-the-agent-edits-above-it ()
   (roost-test--with-magit-task
     (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")

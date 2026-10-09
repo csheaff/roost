@@ -2264,8 +2264,14 @@ A combined diff, of a merge with conflicts, has none."
 (defun roost--magit-note-place ()
   "What a note written at point would be about, as part of a note.
 In a hunk that is the line at point, the lines in the region, or on its
-heading the whole hunk; on a file's name, the whole file."
+heading the whole hunk; on a file's name, the whole file.  A region
+must stay within one hunk."
   (let ((section (magit-current-section)))
+    (when (and (use-region-p)
+               (not (and (magit-section-match 'hunk section)
+                         (<= (roost--slot section 'start) (region-beginning))
+                         (<= (region-end) (roost--slot section 'end)))))
+      (user-error "Select lines within one hunk; write a note for each hunk"))
     (cond
      ((magit-section-match 'hunk section)
       (let* ((lines (or (roost--hunk-lines section)
@@ -2393,8 +2399,8 @@ It holds the line's newline, so the notes fold away with the line."
 ;;;###autoload
 (defun roost-note ()
   "Write a note for the agent on the diff line at point, or the region's lines.
-On a file's name the note is about the whole file, and on a hunk's
-heading about the whole hunk.  On a line already noted, edit its note;
+A region stays within one hunk.  On a file's name the note is about the
+whole file, and on a hunk's heading about the whole hunk.  On a line already noted, edit its note;
 leave it empty to remove it.  Notes show under their lines in Magit, and
 go to the agent with your next prompt to it: \\<roost-magit-mode-map>\\[roost-send] opens one."
   (interactive)
