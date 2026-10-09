@@ -3374,6 +3374,22 @@ Its a.txt has ten lines, committed.  Skipped without Magit."
         (should (equal (roost--format-note (car roost--notes))
                        "a.txt:1\n> -line 1\n> +line 0\nWhy?"))))))
 
+(ert-deftest roost-a-note-shows-under-the-last-line-chosen ()
+  (roost-test--with-magit-task
+    (roost-test--write-lines "a.txt" (append (number-sequence 1 4) (number-sequence 6 10)))
+    (magit-diff-unstaged)
+    (with-current-buffer (magit-get-mode-buffer 'magit-diff-mode)
+      (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "Keep this")))
+        ;; An unchanged line, then the removed one after it.
+        (roost-test--goto-line-text "line 4")
+        (set-mark (point))
+        (forward-line 2)
+        (activate-mark)
+        (roost-note))
+      (should (equal (roost--format-note (car roost--notes))
+                     "a.txt:4\n>  line 4\n> -line 5\nKeep this"))
+      (should (equal (roost-test--shown-notes) '(("-line 5" . "Keep this")))))))
+
 (ert-deftest roost-notes-follow-their-line-when-the-agent-edits-above-it ()
   (roost-test--with-magit-task
     (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")

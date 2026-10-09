@@ -2329,6 +2329,10 @@ must stay within one hunk."
           (line . ,(nth 2 (car numbered)))
           (end . ,(nth 2 (car (last numbered))))
           ,@(when (eq (nth 1 (car numbered)) 'old) '((removed . t)))
+          ;; The note shows under the last line chosen, though that may be
+          ;; a removed line after lines numbered in the new version.
+          (anchorLine . ,(nth 2 (car (last chosen))))
+          ,@(when (eq (nth 1 (car (last chosen))) 'old) '((anchorOld . t)))
           (quote . ,(mapcar (lambda (line)
                               (save-excursion
                                 (goto-char (car line))
@@ -2339,11 +2343,17 @@ must stay within one hunk."
      (t (user-error "Put point on a changed line, or a file's name, in a diff")))))
 
 (defun roost--note-anchor (note)
-  "The text of NOTE's last line, without its diff marker."
-  (let* ((removed (and (alist-get 'removed note) t))
-         (line (car (last (seq-filter (lambda (line) (eq (string-prefix-p "-" line) removed))
+  "The line NOTE shows under, as (SIDE NUMBER TEXT) like `roost--hunk-lines'.
+Notes written before `anchorLine' was recorded show under their last
+line on the side they are numbered by."
+  (let* ((old (if (alist-get 'anchorLine note)
+                  (alist-get 'anchorOld note)
+                (alist-get 'removed note)))
+         (line (car (last (seq-filter (lambda (line) (eq (string-prefix-p "-" line) (and old t)))
                                       (alist-get 'quote note))))))
-    (and line (substring line (min 1 (length line))))))
+    (list (if old 'old 'new)
+          (or (alist-get 'anchorLine note) (alist-get 'end note))
+          (and line (substring line (min 1 (length line)))))))
 
 (defun roost--note-positions (note headings lines)
   "Where this buffer shows NOTE: line ends after which it goes.
@@ -2354,14 +2364,12 @@ when the agent has edited the file since, the nearest line with the same
 text stands in for it."
   (if (not (alist-get 'line note))
       headings
-    (let* ((side (if (alist-get 'removed note) 'old 'new))
-           (text (roost--note-anchor note))
-           (end (alist-get 'end note))
-           (same (seq-filter (lambda (line) (and (eq (nth 1 line) side) (equal (nth 3 line) text)))
-                             lines))
-           (exact (seq-filter (lambda (line) (= (nth 2 line) end)) same))
-           (nearest (car (sort same (lambda (a b) (< (abs (- (nth 2 a) end))
-                                                     (abs (- (nth 2 b) end))))))))
+    (pcase-let* ((`(,side ,end ,text) (roost--note-anchor note))
+                 (same (seq-filter (lambda (line) (and (eq (nth 1 line) side) (equal (nth 3 line) text)))
+                                   lines))
+                 (exact (seq-filter (lambda (line) (= (nth 2 line) end)) same))
+                 (nearest (car (sort same (lambda (a b) (< (abs (- (nth 2 a) end))
+                                                           (abs (- (nth 2 b) end))))))))
       (mapcar (lambda (line) (save-excursion (goto-char (car line)) (line-end-position)))
               (or exact (and nearest (list nearest)))))))
 
@@ -2489,7 +2497,8 @@ to it: \\<roost-magit-mode-map>\\[roost-send] opens one."
   "Show the whole of the file at point with its changes marked.
 The diff compares what the diff at point compares, such as unstaged
 changes, so you can still stage there; select lines to stage only those,
-and \\<magit-diff-mode-map>\\[magit-diff-default-context] goes back to the usual hunks."
+and \\<magit-diff-mode-map>\\[magit-diff-default-context] goes back to the usual hunks.  A new file, with
+nothing to compare, opens as it is; stage it from Magit's status."
   (interactive)
   (unless (derived-mode-p 'magit-mode)
     (user-error "Use this in Magit, on a changed file"))
