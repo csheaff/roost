@@ -297,6 +297,22 @@
      (roost--cache-task "dev" (roost-test--task nil "permission"))
      (should (= (length notices) 1))))))
 
+(ert-deftest roost-notifies-when-a-starting-agent-asks-or-fails ()
+  ;; Polls 15 seconds apart, with Emacs in the background, can see an
+  ;; agent go from starting to asking without the turn in between.
+  (roost-test--isolated
+   (roost-test--without-inspect
+    (let* ((roost-notify t) notices
+           (roost-notify-function (lambda (title _body) (push title notices))))
+      (roost--cache-task "dev" (roost-test--task nil "starting"))
+      (roost--cache-task "dev" (roost-test--task nil "ready"))
+      (should-not notices)
+      (roost--cache-task "dev" (roost-test--task "1123456789abcdef" "starting"))
+      (roost--cache-task "dev" (roost-test--task "1123456789abcdef" "permission"))
+      (roost--cache-task "dev" (roost-test--task "2123456789abcdef" "starting"))
+      (roost--cache-task "dev" (roost-test--task "2123456789abcdef" "failed"))
+      (should (equal notices '("Roost: fix auth — failed" "Roost: fix auth — permission")))))))
+
 (ert-deftest roost-does-not-notify-about-the-agent-you-are-watching ()
   (roost-test--isolated
    (roost-test--without-inspect
@@ -1652,16 +1668,49 @@
    (let ((task (roost--cache-task nil (roost-test--task)))
          (buffer (get-buffer-create " *roost-test-info*")) (original (current-buffer)))
      (unwind-protect
-         (progn
+         (save-window-excursion
            (with-current-buffer buffer
              (roost-task-info-mode) (setq roost--buffer-task-key (roost--key task))
              (roost--render-task-info) (should (eq (roost--task-at-point) task)))
+           (set-window-buffer (selected-window) buffer)
            (setf (alist-get 'status task) "stopped")
            (roost--redraw) (should (eq original (current-buffer)))
            (with-current-buffer buffer
              (should (string-match-p "stopped" (buffer-string))))
            (remhash (roost--key task) roost--tasks) (roost--redraw)
            (with-current-buffer buffer (should-error (roost--task-at-point) :type 'user-error)))
+       (kill-buffer buffer)))))
+
+(ert-deftest roost-redraws-keep-the-selection-and-wait-for-hidden-panels ()
+  ;; Each poll's redraw moved the mark to the top of the panel, so copying
+  ;; part of the agent's reply copied the panel's heading with it.
+  (roost-test--isolated
+   (let ((task (roost--cache-task nil (append '((lastMessage . "Fixed the login bug.")) (roost-test--task))))
+         (buffer (get-buffer-create " *roost-test-info*")))
+     (unwind-protect
+         (save-window-excursion
+           (with-current-buffer buffer
+             (roost-task-info-mode) (setq roost--buffer-task-key (roost--key task))
+             (roost--render-task-info))
+           (set-window-buffer (selected-window) buffer)
+           (with-current-buffer buffer
+             (goto-char (point-min)) (search-forward "Fixed ")
+             (push-mark (point) t t) (forward-word 2)
+             (should (equal (buffer-substring-no-properties (region-beginning) (region-end)) "the login")))
+           (roost--redraw)
+           (with-current-buffer buffer
+             (should (equal (buffer-substring-no-properties (region-beginning) (region-end)) "the login")))
+           ;; A panel no window shows is redrawn once one does.
+           (set-window-buffer (selected-window) (get-buffer-create "*scratch*"))
+           (setf (alist-get 'status task) "stopped")
+           (roost--redraw)
+           (with-current-buffer buffer
+             (should-not (string-match-p "stopped" (buffer-string)))
+             (should (memq #'roost--shown window-buffer-change-functions)))
+           (set-window-buffer (selected-window) buffer)
+           (roost--shown (selected-window))
+           (with-current-buffer buffer
+             (should (string-match-p "stopped" (buffer-string)))))
        (kill-buffer buffer)))))
 
 (ert-deftest roost-next-attention-cycles-across-hosts-and-skips-offline ()

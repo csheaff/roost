@@ -682,7 +682,10 @@ and a newer notification about TASK replaces it."
     (puthash key status roost--statuses)
     (when (and roost-notify previous
                (or (not (equal previous status)) new-stop)
-               (or (not (equal previous "starting")) new-stop)
+               ;; An agent that has just started waits for a prompt, which
+               ;; is no news; one that asks or fails at once is, and polls
+               ;; while Emacs is in the background may see only that.
+               (or (not (equal previous "starting")) (not (equal status "ready")) new-stop)
                (member status '("ready" "permission" "failed" "crashed" "exited"))
                ;; Not when you are looking at it already.
                (not (when-let* ((watched (roost--watched-task)))
@@ -2958,7 +2961,6 @@ Without a status from GitHub yet, a recorded pull request counts as open."
                              (roost--field task 'name)))
     (roost--act task "stop")))
 
-;;;###autoload
 (defun roost--unmerged-work-p (task)
   "Whether TASK, as last seen, holds work that retiring it would refuse to lose.
 Commits not merged into its integration branch, or files not committed."
@@ -2966,6 +2968,7 @@ Commits not merged into its integration branch, or files not committed."
       (and (numberp (roost--field task 'ahead)) (> (roost--field task 'ahead) 0)
            (not (equal (alist-get 'state (roost--field task 'prStatus)) "MERGED")))))
 
+;;;###autoload
 (defun roost-retire (&optional task)
   "Finish with TASK: remove its worktree, branch and window.
 When its work is merged, or it has none, retire it.  When it holds work
@@ -2982,7 +2985,8 @@ merges it instead."
                    (roost--act task "retire" nil
                                (lambda (retired)
                                  (roost--retired-workspace retired)
-                                 (roost--kill-worktree-buffers retired))
+                                 (roost--kill-worktree-buffers retired)
+                                 (message "Retired %s, and removed its worktree and branch" name))
                                (lambda (err)
                                  ;; Git statistics newer than Roost's.
                                  (if (string-match-p "\\`\\(Task branch has unmerged\\|Uncommitted or untracked\\)" err)
@@ -3605,6 +3609,7 @@ Status is the last observation from the task's host.
                                            (default-value 'fringe-indicator-alist)))
   (add-hook 'after-change-major-mode-hook #'roost--quiet-display 90 t)
   (add-hook 'window-size-change-functions #'roost--task-info-resized nil t)
+  (add-hook 'window-buffer-change-functions #'roost--shown nil t)
   (roost--evil-state 'roost-task-info-mode roost-evil-state)
   (roost--quiet-display))
 
@@ -3762,12 +3767,49 @@ Pass the result to `roost--restore-window-places' after redrawing."
         ;; In the selected window, this moves point too.
         (set-window-point window point)))))
 
+(defun roost--mark-place ()
+  "Where the mark is, as (LINE . COLUMN), or nil without one.
+Pass it to `roost--restore-mark' after redrawing, so a selection, say of
+the agent's reply to copy, survives the redraws polls make."
+  (when-let* ((mark (mark t)))
+    (save-excursion (goto-char mark) (cons (line-number-at-pos) (current-column)))))
+
+(defun roost--restore-mark (place)
+  "Put the mark back at PLACE, from `roost--mark-place'."
+  (when place
+    (save-excursion
+      (goto-char (point-min))
+      (forward-line (1- (car place)))
+      (move-to-column (cdr place))
+      (set-marker (mark-marker) (point)))))
+
+(defvar-local roost--stale nil
+  "The function redrawing this buffer, when it changed while no window showed it.")
+
+(defun roost--render-visible (render)
+  "Call RENDER to redraw the current buffer if a window shows it.
+Otherwise call it once one does: polls redraw every few seconds, and
+the panels of tasks you have looked at stay around."
+  (if (not (get-buffer-window nil t))
+      (setq roost--stale render)
+    (setq roost--stale nil)
+    (funcall render)))
+
+(defun roost--shown (window)
+  "Redraw the Roost buffer WINDOW now shows, if it changed meanwhile.
+For `window-buffer-change-functions'."
+  (with-current-buffer (window-buffer window)
+    (when-let* ((render roost--stale))
+      (setq roost--stale nil)
+      (funcall render))))
+
 (defun roost--render-task-info ()
   "Update the current task panel from the cache, without changing focus.
-Windows showing the panel keep their scroll position."
+Windows showing the panel keep their scroll position, and the mark stays."
   (let ((task (gethash roost--buffer-task-key roost--tasks))
         (inhibit-read-only t)
         (position (point))
+        (mark (roost--mark-place))
         (places (roost--window-places)))
     (erase-buffer)
     (if (not task)
@@ -3909,6 +3951,7 @@ Windows showing the panel keep their scroll position."
                                      'face 'roost-dim)
                     "\n")))))
     (goto-char (min position (point-max)))
+    (roost--restore-mark mark)
     (roost--restore-window-places places)))
 
 (defun roost--task-label (task)
@@ -4032,6 +4075,7 @@ Refreshes are asynchronous; rendering uses only cached state.
          " \\<roost-dashboard-mode-map>\\[roost-open-task] open · \\[roost-new-task] new · \\[roost-next-waiting] next waiting · \\[roost-shell] shell · \\[roost-review] review · \\[roost-merge-retire] merge · \\[roost-task-info] details · \\[roost-dispatch] all commands"))
   (add-hook 'after-change-major-mode-hook #'roost--quiet-display 90 t)
   (add-hook 'window-size-change-functions #'roost--dashboard-resized nil t)
+  (add-hook 'window-buffer-change-functions #'roost--shown nil t)
   (roost--evil-state 'roost-dashboard-mode roost-evil-state)
   (roost--quiet-display))
 
@@ -4166,11 +4210,13 @@ down.  With WIDTH, fit each line within it, leaving details to hover."
                   (string-join (mapcar #'roost--host-label (roost--hosts)) ", "))))
 
 (defun roost--render-dashboard ()
-  "Render the dashboard from cached state, keeping point on the same row."
+  "Render the dashboard from cached state, keeping point on the same row.
+The mark stays where it was."
   (let* ((window (get-buffer-window (current-buffer) t))
          (position (if window (window-point window) (point)))
          (key (get-text-property position 'roost-task))
          (heading (unless key (get-text-property position 'roost-directory)))
+         (mark (roost--mark-place))
          (start-line (when window (line-number-at-pos (window-start window))))
          ;; Without fringes, as in a terminal, a full line would lose its last
          ;; column to the truncation mark; this leaves room for it.
@@ -4209,6 +4255,7 @@ down.  With WIDTH, fit each line within it, leaving details to hover."
                       (text-property-not-all (point-min) (point-max) 'roost-task nil)
                       (point-min))))
       (goto-char target)
+      (roost--restore-mark mark)
       (when window
         (set-window-start window (save-excursion (goto-char (point-min))
                                                  (forward-line (1- start-line))
@@ -4262,18 +4309,18 @@ down.  With WIDTH, fit each line within it, leaving details to hover."
   (when-let* ((buffer (get-buffer "*roost*")))
     (with-current-buffer buffer
       (when (derived-mode-p 'roost-dashboard-mode)
-        (roost--render-dashboard))))
+        (roost--render-visible #'roost--render-dashboard))))
   (when-let* ((buffer (get-buffer roost--sidebar-buffer)))
     (with-current-buffer buffer
       (when (derived-mode-p 'roost-sidebar-list-mode)
-        (roost--render-sidebar))))
+        (roost--render-visible #'roost--render-sidebar))))
   ;; Data that just arrived can name the task a restored workspace shows.
   (when (memq #'roost--layout-changed (default-value 'window-configuration-change-hook))
     (roost--sync-side-windows))
   (dolist (buffer (buffer-list))
     (with-current-buffer buffer
       (when (derived-mode-p 'roost-task-info-mode)
-        (roost--render-task-info)))))
+        (roost--render-visible #'roost--render-task-info)))))
 
 ;;;###autoload
 (defun roost-status ()
