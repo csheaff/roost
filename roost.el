@@ -4440,7 +4440,9 @@ On a live task's message, task commands such as those in
 Every word of QUERY must be in one message, written by you or by the
 agent; tool output is not searched.  Each host searches the Claude Code
 conversations of its tasks, including tasks since retired, whose
-conversations Claude keeps.  RET on a live task's message opens it."
+conversations Claude keeps, newest first and for at most 20 seconds.
+RET on a live task's message opens it; TAB shows more of a message,
+up to its first 1,500 characters."
   (interactive (list (read-string "Search sessions: " nil 'roost-search-history)))
   (when (string-blank-p query)
     (user-error "Search for at least one word"))
@@ -4564,9 +4566,14 @@ A word longer than WIDTH, such as a URL, is broken within."
       (insert (propertize (format "Searching %s…\n" (mapconcat #'roost--host-label pending ", "))
                           'face 'roost-dim)))
     (pcase-dolist (`(,host . ,reply) (reverse roost--search-replies))
-      (when (eq (car-safe reply) :error)
-        (insert (propertize (format "Could not search %s: %s\n" (roost--host-label host) (cadr reply))
-                            'face 'roost-status-failed))))
+      (cond ((eq (car-safe reply) :error)
+             (insert (propertize (format "Could not search %s: %s\n" (roost--host-label host) (cadr reply))
+                                 'face 'roost-status-failed)))
+            ;; A host searches its newest conversations first, for so long.
+            ((alist-get 'incomplete reply)
+             (insert (propertize (format "%s ran out of time; it searched its newest conversations only\n"
+                                         (roost--host-label host))
+                                 'face 'roost-dim)))))
     ;; A host that failed was not searched, so say nothing of it.
     (let ((searched (mapcar #'car (seq-remove (lambda (reply) (eq (car-safe (cdr reply)) :error))
                                               (reverse roost--search-replies)))))
@@ -4649,7 +4656,7 @@ IDs are lists made afresh by each redraw, so compare them with `equal'."
   (get-text-property (point) 'roost-search-hit))
 
 (defun roost-search-open ()
-  "Open the live task of the message on this line, or show the whole message."
+  "Open the live task of the message on this line, or show more of the message."
   (interactive)
   (let ((key (get-text-property (line-beginning-position) 'roost-task)))
     (cond ((and key (gethash key roost--tasks))
@@ -4662,7 +4669,8 @@ IDs are lists made afresh by each redraw, so compare them with `equal'."
           (t (user-error "Put point on a message")))))
 
 (defun roost-search-toggle ()
-  "Show or hide the whole message on this line."
+  "Show or hide more of the message on this line.
+Hosts send a message's first 1,500 characters."
   (interactive)
   (let ((id (or (get-text-property (point) 'roost-search-id)
                 (user-error "Put point on a message"))))

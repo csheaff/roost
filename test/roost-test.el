@@ -969,10 +969,14 @@
              (roost-search "zebra")
              (set-buffer roost--search-buffer)
              (funcall (nth 2 (assoc "dev" requests)) "ssh: no route")
-             (funcall (nth 1 (assoc "box" requests)) '((tasks) (moreTasks . 0)))
-             (funcall (nth 1 (assoc nil requests)) '((tasks) (moreTasks . 0)))
+             (funcall (nth 1 (assoc "box" requests)) '((tasks) (moreTasks . 0) (incomplete . t)))
+             (funcall (nth 1 (assoc nil requests)) '((tasks) (moreTasks . 0) (incomplete)))
              (should (string-match-p "^No message in your tasks' conversations on box, local contains every word\\.$"
                                      (buffer-string)))
+             ;; A host that ran out of time says so.
+             (should (string-match-p "^box ran out of time; it searched its newest conversations only$"
+                                     (buffer-string)))
+             (should-not (string-match-p "^local ran out" (buffer-string)))
              ;; A host added meanwhile was not asked, so it is not awaited.
              (setq roost-hosts (cons "new" roost-hosts))
              (roost--render-search)

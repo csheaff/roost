@@ -24,6 +24,7 @@ import sys
 import tempfile
 import termios
 import threading
+import time
 import tty
 import unicodedata
 import uuid
@@ -1676,6 +1677,12 @@ SEARCH_TASK_LIMIT = 50
 SEARCH_HITS_PER_TASK = 10
 SEARCH_SNIPPET = 160
 SEARCH_TEXT_LIMIT = 1500
+# Well within Emacs's wait for a reply, which a host does not notice.
+SEARCH_SECONDS = 20
+
+
+class SearchTimeUp(Exception):
+    """A search has used its time."""
 
 
 def conversation_text(entry):
@@ -1719,17 +1726,20 @@ def snippet(found, patterns):
     return ("…" if start else "") + flat[start:end].rstrip() + ("…" if end < len(flat) else "")
 
 
-def search_transcript(path, words, owner):
+def search_transcript(path, words, owner, deadline=None):
     """Messages in the transcript at PATH containing every one of WORDS (in
     lower case), as (TASK, BRANCH, HIT), one at a time: TASK is what OWNER
     says of the directory Claude recorded the message in, and messages for
-    which it says None are left out."""
+    which it says None are left out. Past DEADLINE, a `time.monotonic'
+    value, it raises SearchTimeUp."""
     # JSON escapes only quotes, backslashes and control characters, so a
     # line that lacks a word's escaped form cannot contain the word.
     needles = [json.dumps(word, ensure_ascii=False)[1:-1] for word in words]
     patterns = word_patterns(words)
     with open(path, encoding="utf-8", errors="replace") as handle:
         for number, line in enumerate(handle, 1):
+            if deadline and number % 1024 == 0 and time.monotonic() > deadline:
+                raise SearchTimeUp
             lower = line.lower()
             if not all(needle in lower for needle in needles):
                 continue
@@ -1803,21 +1813,39 @@ def search(store, request):
     folders.update(projects / claude_project_folder(task["worktree"]) for task in tasks)
     # Each task keeps only its newest messages as they are found, so a
     # broad search of long conversations holds no more than it returns.
+    # Subagents' conversations are in subfolders; only the task's own are
+    # searched. The newest go first, so that a search cut short by its
+    # time has looked at the conversations most likely wanted.
+    transcripts = []
+    for folder in folders:
+        with contextlib.suppress(OSError):
+            for path in folder.glob("*.jsonl"):
+                with contextlib.suppress(OSError):
+                    transcripts.append((path.stat().st_mtime, str(path), path))
+    transcripts.sort(reverse=True)
     groups = {}
     order = lambda hit: (hit["at"] or "", hit["session"], hit["line"])
-    for folder in sorted(folders):
-        # Subagents' conversations are in subfolders; only the task's own are searched.
-        for path in sorted(folder.glob("*.jsonl")) if folder.is_dir() else []:
-            with contextlib.suppress(OSError):
-                for task, branch, hit in search_transcript(path, words, owner):
-                    group = groups.setdefault(task, dict(hits=[], count=0, branch=None))
-                    group["count"] += 1
-                    group["branch"] = group["branch"] or branch
-                    entry = (order(hit), group["count"], hit)
-                    if len(group["hits"]) < SEARCH_HITS_PER_TASK:
-                        heapq.heappush(group["hits"], entry)
-                    else:
-                        heapq.heappushpop(group["hits"], entry)
+    deadline = time.monotonic() + SEARCH_SECONDS
+    incomplete = False
+    for _, _, path in transcripts:
+        if time.monotonic() > deadline:
+            incomplete = True
+            break
+        try:
+            for task, branch, hit in search_transcript(path, words, owner, deadline):
+                group = groups.setdefault(task, dict(hits=[], count=0, branch=None))
+                group["count"] += 1
+                group["branch"] = group["branch"] or branch
+                entry = (order(hit), group["count"], hit)
+                if len(group["hits"]) < SEARCH_HITS_PER_TASK:
+                    heapq.heappush(group["hits"], entry)
+                else:
+                    heapq.heappushpop(group["hits"], entry)
+        except SearchTimeUp:
+            incomplete = True
+            break
+        except OSError:
+            pass
     # Transcripts were read without the registry lock, so tasks may have
     # been retired or created meanwhile: their records now say which are live.
     by_id = {task["id"]: task for task in tasks}
@@ -1843,7 +1871,8 @@ def search(store, request):
         result.update(hits=hits, more=group["count"] - len(hits))
         results.append(result)
     results.sort(key=lambda result: result["hits"][-1]["at"] or "", reverse=True)
-    return dict(tasks=results[:SEARCH_TASK_LIMIT], moreTasks=max(0, len(results) - SEARCH_TASK_LIMIT))
+    return dict(tasks=results[:SEARCH_TASK_LIMIT], moreTasks=max(0, len(results) - SEARCH_TASK_LIMIT),
+                incomplete=incomplete)
 
 
 def version_of(text):

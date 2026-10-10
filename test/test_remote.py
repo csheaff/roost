@@ -2314,6 +2314,42 @@ class Search(unittest.TestCase):
                          (None, True, self.repo_hash + "/retiring-666666"))
         self.assertEqual((found["Arriving"]["id"], found["Arriving"].get("past")), ("7777777777777777", None))
 
+    def test_newest_conversations_are_searched_first_within_a_time(self):
+        older = self.state / "worktrees" / self.repo_hash / "older-888888"
+        newer = self.state / "worktrees" / self.repo_hash / "newer-999999"
+        for worktree, when in ((older, 1000), (newer, 2000)):
+            folder = self.conversation(worktree, "s", [self.said("user", "heron", 1)])
+            os.utime(folder / "s.jsonl", (when, when))
+        self.assertFalse(self.search("heron")["incomplete"])
+        read = []
+        scan = roost.search_transcript
+
+        def reading(path, *args):
+            read.append(path.parent.name.rsplit("-", 2)[-2])
+            return scan(path, *args)
+
+        with patch.object(roost, "search_transcript", reading):
+            self.search("heron")
+        self.assertEqual(read, ["newer", "older"])
+        # Out of time, a host says its results may be incomplete.
+        with patch.object(roost, "SEARCH_SECONDS", -1):
+            result = self.search("heron")
+        self.assertEqual((result["tasks"], result["incomplete"]), ([], True))
+        # Time can also run out within a long conversation, which keeps
+        # what it found until then.
+        self.conversation(newer, "s", [self.said("user", "heron %d" % n, 1) for n in range(3000)])
+        calls = []
+
+        def clock():
+            # The search starts, and its first conversation begins, in time.
+            calls.append(None)
+            return 0 if len(calls) <= 2 else 1000
+
+        with patch.object(roost.time, "monotonic", clock):
+            result = self.search("heron")
+        self.assertTrue(result["incomplete"])
+        self.assertEqual(len(result["tasks"][0]["hits"]) + result["tasks"][0]["more"], 1023)
+
     def test_an_empty_query_is_refused(self):
         reply = roost.rpc(dict(root=str(self.state), action="search", query="  "))
         self.assertEqual(reply, {"ok": False, "error": "Search for at least one word"})
