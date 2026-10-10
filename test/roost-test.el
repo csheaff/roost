@@ -1248,6 +1248,9 @@
      (should-not (roost--action-applies-p task 'roost-merge-retire))
      (should-not (roost--action-applies-p task 'roost-retire))
      (should (string-match-p "worktree of its own" (roost--next-step task)))
+     ;; The menu, away from the panel's buttons, names the key that shows them.
+     (should-not (string-match-p "shows it" (roost--next-step task)))
+     (should (string-suffix-p "or remove it; i shows it" (roost--next-step task t)))
      ;; A quiet poll, without Git statistics, keeps it.
      (roost--cache-task "dev" (append '((live . t)) (roost-test--task nil "ready")))
      (with-temp-buffer
