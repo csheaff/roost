@@ -236,7 +236,7 @@ Magit is optional (review falls back to Dired).
 
 | Key | Command | |
 | --- | --- | --- |
-| `h`, `?` | `roost-dispatch` | A Magit-style menu of every command below, naming the task they act on |
+| `h`, `?` | `roost-dispatch` | A Magit-style menu of every command below, naming the task they act on and what to do next |
 | `RET` | `roost-open-task` | Open the task's agent terminal and workspace; for a stopped or crashed agent, offer to resume it |
 | `c` | `roost-new-task` | Draft a new task, from the region or Org entry if any (`C-u` forks the current task's commits) |
 | `n` | `roost-next-waiting` | Next task waiting for you, permission requests first |
@@ -412,8 +412,9 @@ Since 0.8.1 (unreleased):
 
 - The sidebar (`b`) and the task panel beside each terminal (`I`). The panel
   lists only what a task can do now and says what comes next; the command
-  menu greys out the rest. Like the sidebar, the panel is off until you turn
-  it on: add `(roost-task-panel-mode 1)` to your configuration to keep it.
+  menu says so too, and greys out the rest. Like the sidebar, the panel is
+  off until you turn it on: add `(roost-task-panel-mode 1)` to your
+  configuration to keep it.
 - Each task has a tmux session of its own, which ends with the task. Older
   tasks move to their own when resumed. `roost-session-name` is gone.
 - `x` finishes a task: it retires one whose work is merged, or discards one

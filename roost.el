@@ -3446,10 +3446,14 @@ the buffer the menu was opened from."
     (ignore-errors (roost--task-at-point))))
 
 (defun roost--dispatch-task-description ()
-  "Heading for `roost-dispatch' naming the task its commands act on."
+  "Heading for `roost-dispatch' naming the task its commands act on.
+Below it, as in the task panel, what to do next, naming the key that
+does it in this menu."
   (if-let* ((task (roost--dispatch-task)))
-      (format "Task %s (%s)" (propertize (roost--field task 'name) 'face 'roost-title)
-              (roost--display-status task))
+      (concat (format "Task %s (%s)" (propertize (roost--field task 'name) 'face 'roost-title)
+                      (roost--display-status task))
+              (when-let* ((next (roost--next-step task)))
+                (concat "\n" next)))
     "Task (chosen when needed)"))
 
 (defun roost--dispatch-inapt-p (command)

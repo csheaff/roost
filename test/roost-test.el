@@ -752,7 +752,14 @@
        (let ((transient--original-buffer (current-buffer)))
          (with-temp-buffer
            (should (string-match-p "\\`Task fix auth (ready)\\'"
-                                   (substring-no-properties (roost--dispatch-task-description))))))))
+                                   (substring-no-properties (roost--dispatch-task-description)))))))
+     ;; What to do next shows below, as in the task panel.
+     (roost--cache-task "dev" (append '((dirty . 2)) (roost-test--task)))
+     (with-temp-buffer
+       (setq roost--buffer-task-key (roost--key task))
+       (let ((transient--original-buffer (current-buffer)))
+         (should (equal (substring-no-properties (roost--dispatch-task-description))
+                        "Task fix auth (ready)\nReview and commit its changes in Magit: r")))))
    (let ((transient--original-buffer nil))
      (with-temp-buffer
        (should (equal (roost--dispatch-task-description) "Task (chosen when needed)"))))
