@@ -3609,7 +3609,6 @@ Status is the last observation from the task's host.
                                            (default-value 'fringe-indicator-alist)))
   (add-hook 'after-change-major-mode-hook #'roost--quiet-display 90 t)
   (add-hook 'window-size-change-functions #'roost--task-info-resized nil t)
-  (add-hook 'window-buffer-change-functions #'roost--shown nil t)
   (roost--evil-state 'roost-task-info-mode roost-evil-state)
   (roost--quiet-display))
 
@@ -3790,10 +3789,11 @@ the agent's reply to copy, survives the redraws polls make."
   "Call RENDER to redraw the current buffer if a window shows it.
 Otherwise call it once one does: polls redraw every few seconds, and
 the panels of tasks you have looked at stay around."
-  (if (not (get-buffer-window nil t))
-      (setq roost--stale render)
-    (setq roost--stale nil)
-    (funcall render)))
+  (if (get-buffer-window nil t)
+      (progn (setq roost--stale nil)
+             (funcall render))
+    (setq roost--stale render)
+    (add-hook 'window-buffer-change-functions #'roost--shown nil t)))
 
 (defun roost--shown (window)
   "Redraw the Roost buffer WINDOW now shows, if it changed meanwhile.
@@ -4075,7 +4075,6 @@ Refreshes are asynchronous; rendering uses only cached state.
          " \\<roost-dashboard-mode-map>\\[roost-open-task] open · \\[roost-new-task] new · \\[roost-next-waiting] next waiting · \\[roost-shell] shell · \\[roost-review] review · \\[roost-merge-retire] merge · \\[roost-task-info] details · \\[roost-dispatch] all commands"))
   (add-hook 'after-change-major-mode-hook #'roost--quiet-display 90 t)
   (add-hook 'window-size-change-functions #'roost--dashboard-resized nil t)
-  (add-hook 'window-buffer-change-functions #'roost--shown nil t)
   (roost--evil-state 'roost-dashboard-mode roost-evil-state)
   (roost--quiet-display))
 
