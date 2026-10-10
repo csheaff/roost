@@ -874,6 +874,10 @@
                  ;; A word longer than the width, such as a URL, is broken within.
                  (should (equal (roost--search-wrap (concat "see " (make-string 50 ?x)) 20)
                                 (concat "see\n" (make-string 20 ?x) "\n" (make-string 20 ?x) "\n" (make-string 10 ?x))))
+                 ;; Widths are columns: a CJK character takes two.
+                 (let ((wrapped (roost--search-wrap (make-string 30 ?漢) 40)))
+                   (should (seq-every-p (lambda (line) (<= (string-width line) 40)) (split-string wrapped "\n")))
+                   (should (equal (string-replace "\n" "" wrapped) (make-string 30 ?漢))))
                  (roost-search-toggle)
                  (should-not (string-match-p "in quotes" (buffer-string))))
                ;; One not fetched yet can't open until it is, and Roost fetches it.

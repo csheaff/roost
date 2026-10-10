@@ -1774,6 +1774,9 @@ def search(store, request):
     words = (text(request.get("query")) or "").lower().split()
     if not words:
         raise RoostError("Search for at least one word")
+    # The time covers finding conversations too, on a slow disk say.
+    deadline = time.monotonic() + SEARCH_SECONDS
+    incomplete = False
     tasks = [task for task in store.all() if isinstance(task.get("worktree"), str)]
     projects = Path.home() / ".claude" / "projects"
     worktrees = store.root / "worktrees"
@@ -1807,10 +1810,14 @@ def search(store, request):
     # Folders of directories in the worktrees begin so; Claude cuts long
     # names, and so the start of this one, at the same length.
     prefix = (claude_project_folder(str(worktrees), whole=True) + "-")[:CLAUDE_FOLDER_LIMIT]
-    folders = set()
+    folders = {projects / claude_project_folder(task["worktree"]) for task in tasks}
     with contextlib.suppress(OSError):
-        folders.update(folder for folder in projects.iterdir() if folder.name[:CLAUDE_FOLDER_LIMIT].startswith(prefix))
-    folders.update(projects / claude_project_folder(task["worktree"]) for task in tasks)
+        for folder in projects.iterdir():
+            if time.monotonic() > deadline:
+                incomplete = True
+                break
+            if folder.name[:CLAUDE_FOLDER_LIMIT].startswith(prefix):
+                folders.add(folder)
     # Each task keeps only its newest messages as they are found, so a
     # broad search of long conversations holds no more than it returns.
     # Subagents' conversations are in subfolders; only the task's own are
@@ -1820,13 +1827,14 @@ def search(store, request):
     for folder in folders:
         with contextlib.suppress(OSError):
             for path in folder.glob("*.jsonl"):
+                if time.monotonic() > deadline:
+                    incomplete = True
+                    break
                 with contextlib.suppress(OSError):
                     transcripts.append((path.stat().st_mtime, str(path), path))
     transcripts.sort(reverse=True)
     groups = {}
     order = lambda hit: (hit["at"] or "", hit["session"], hit["line"])
-    deadline = time.monotonic() + SEARCH_SECONDS
-    incomplete = False
     for _, _, path in transcripts:
         if time.monotonic() > deadline:
             incomplete = True

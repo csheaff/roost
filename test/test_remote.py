@@ -2338,15 +2338,27 @@ class Search(unittest.TestCase):
         # Time can also run out within a long conversation, which keeps
         # what it found until then.
         self.conversation(newer, "s", [self.said("user", "heron %d" % n, 1) for n in range(3000)])
-        calls = []
+        begun = []
 
-        def clock():
-            # The search starts, and its first conversation begins, in time.
-            calls.append(None)
-            return 0 if len(calls) <= 2 else 1000
+        def reading_then_late(path, *args):
+            begun.append(path)
+            return scan(path, *args)
 
-        with patch.object(roost.time, "monotonic", clock):
+        # Time runs out once reading has begun, so within the first conversation.
+        with patch.object(roost, "search_transcript", reading_then_late), \
+             patch.object(roost.time, "monotonic", lambda: 1000 if begun else 0):
             result = self.search("heron")
+        self.assertEqual(len(begun), 1)
+        # The time covers finding conversations, on a slow disk say.
+        now = [0]
+        listing = Path.iterdir
+
+        def slow_listing(folder):
+            now[0] = 30
+            return listing(folder)
+
+        with patch.object(roost.Path, "iterdir", slow_listing), patch.object(roost.time, "monotonic", lambda: now[0]):
+            self.assertTrue(self.search("heron")["incomplete"])
         self.assertTrue(result["incomplete"])
         self.assertEqual(len(result["tasks"][0]["hits"]) + result["tasks"][0]["more"], 1023)
 

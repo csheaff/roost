@@ -4514,23 +4514,28 @@ Hosts match words so: \"test\" finds \"tests\", but not \"latest\"."
           (setq start (match-end 1)))))))
 
 (defun roost--search-wrap (text width)
-  "TEXT with each line longer than WIDTH broken between words.
-A word longer than WIDTH, such as a URL, is broken within."
+  "TEXT with each line wider than WIDTH columns broken between words.
+A word wider than WIDTH, such as a URL, is broken within, as in
+`roost--reply-preview'."
   (with-temp-buffer
-    (insert text)
-    (let ((fill-column width))
-      (goto-char (point-min))
-      (while (not (eobp))
-        (when (> (- (line-end-position) (line-beginning-position)) width)
-          (fill-region (line-beginning-position) (line-end-position) nil t))
-        (forward-line 1))
-      ;; Filling leaves such words whole.
-      (goto-char (point-min))
-      (while (not (eobp))
-        (if (> (- (line-end-position) (line-beginning-position)) width)
-            (progn (forward-char width) (insert "\n"))
-          (forward-line 1))))
-    (buffer-string)))
+    (let ((fill-column width) wrapped)
+      ;; Keep its own line breaks, as in lists and code.
+      (dolist (source-line (split-string text "\n"))
+        (if (<= (string-width source-line) width)
+            (push source-line wrapped)
+          (erase-buffer)
+          (insert source-line)
+          (fill-region (point-min) (point-max) nil t)
+          (dolist (line (split-string (buffer-string) "\n"))
+            ;; Filling leaves such words whole.
+            (while (> (string-width line) width)
+              (let ((part (truncate-string-to-width line width)))
+                (when (string-empty-p part)
+                  (setq part (substring line 0 1)))
+                (push part wrapped)
+                (setq line (substring line (length part)))))
+            (push line wrapped))))
+      (string-join (nreverse wrapped) "\n"))))
 
 (defun roost--search-time (timestamp)
   "TIMESTAMP as a local date and time, or blanks if it is unreadable."
