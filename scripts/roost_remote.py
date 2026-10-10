@@ -1340,6 +1340,8 @@ def squash_merge(task, integration, here):
                          % (task["name"], integration, ", ".join(conflicts) or "some files", integration))
     if result.returncode or not lines:
         raise RoostError("Merge failed; task retained: " + (result.stderr.strip() or result.stdout.strip()))
+    if lines[0] == git(repo, "rev-parse", old + "^{tree}").stdout.strip():
+        return tip  # The task's work was there already, as after a squash whose cleanup failed.
     commit = git(repo, "commit-tree", lines[0], "-p", old, "-m", message).stdout.strip()
     git(repo, "update-ref", "-m", "merge %s: Squashed by Roost" % task["branch"], ref, commit, old)
     return tip

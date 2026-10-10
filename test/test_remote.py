@@ -438,19 +438,38 @@ class Lifecycle(unittest.TestCase):
         self.assertFalse(wt.exists())
 
     def test_a_squash_merge_retires_a_task_whose_pull_request_merged_earlier(self):
+        self.github()
         task = self.create()
+        merged_earlier = self.commit_in(task)
+        self.assertTrue(self.request("pr", id=task["id"], title="Earlier")["ok"])
+        # GitHub merged the pull request; the task went on to commit again.
+        (self.gh_dir / "view.json").write_text(json.dumps(dict(state="MERGED", headRefOid=merged_earlier)))
         wt = Path(task["worktree"])
-        (wt / "hello").write_text("one\n")
-        self.git("commit", "-qam", "First", cwd=wt)
-        merged_earlier = self.git("rev-parse", "HEAD", cwd=wt)
         (wt / "hello").write_text("two\n")
         self.git("commit", "-qam", "Second", cwd=wt)
-        reply = self.request("merge", id=task["id"], style="squash", mergedHead=merged_earlier)
+        reply = self.request("merge", id=task["id"], style="squash")
         self.assertTrue(reply["ok"], reply)
         self.assertEqual((self.repo / "hello").read_text(), "two\n")
         self.assertFalse(wt.exists())
         # The branch on GitHub is not this task's last commit: left alone.
         self.assertNotIn("remoteCleanup", reply["result"])
+
+    def test_squashing_again_adds_no_empty_commit(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        # Two commits, so the squashed one differs from the task's own.
+        (wt / "hello").write_text("changed\n")
+        self.git("commit", "-qam", "Fix", cwd=wt)
+        (wt / "hello").write_text("changed again\n")
+        self.git("commit", "-qam", "Fix again", cwd=wt)
+        self.git("checkout", "-q", "-b", "mine")
+        record = dict(repo=os.path.realpath(self.repo), branch=task["branch"], name=task["name"])
+        tip = self.git("rev-parse", "HEAD", cwd=wt)
+        self.assertEqual(roost.squash_merge(record, "main", False), tip)
+        squashed = self.git("rev-parse", "main")
+        # As when the merge went through but retiring the task did not.
+        self.assertEqual(roost.squash_merge(record, "main", False), tip)
+        self.assertEqual(self.git("rev-parse", "main"), squashed)
 
     def test_a_conflicting_squash_merge_changes_nothing(self):
         task = self.create()
