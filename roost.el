@@ -312,8 +312,12 @@ sidebar's keys act on this row.")
   "Hosts with a list request in flight.")
 (defvar roost--revisions (make-hash-table :test 'equal)
   "Per-host mutation counter, used to discard stale list replies.")
+(defvar roost--list-requests (make-hash-table :test 'equal)
+  "How many task lists Roost has asked each host for.")
 (defvar roost--snapshots (make-hash-table :test 'equal)
-  "How many task lists each host has sent, so a view can tell one has since.")
+  "For each host, the request, counted in `roost--list-requests', whose
+task list Roost holds, or the newest of them; so a view can tell that a
+list asked for after some moment has arrived.")
 (defvar roost--errors (make-hash-table :test 'equal)
   "Last refresh error for each unreachable host.")
 (defvar roost--statuses (make-hash-table :test 'equal)
@@ -736,8 +740,10 @@ finished or wants."
                         current))
        (lambda (_error) (roost--notify title label task))))))
 
-(defun roost--apply-snapshot (host tasks)
-  "Replace only HOST's cached tasks with a successful snapshot TASKS."
+(defun roost--apply-snapshot (host tasks &optional request)
+  "Replace only HOST's cached tasks with a successful snapshot TASKS.
+REQUEST is the number of the list request that TASKS answers, as counted
+in `roost--list-requests'; without one, TASKS count as asked for now."
   (let ((keys (mapcar (lambda (task) (list host (roost--field task 'id))) tasks)))
     (maphash (lambda (key _)
                (when (and (equal (car key) host) (not (member key keys)))
@@ -747,7 +753,9 @@ finished or wants."
                  (roost--remove-notes (lambda (note) (equal (roost--note-key note) key)))))
              roost--tasks)
     (mapc (lambda (task) (roost--cache-task host task)) tasks)
-    (puthash host (1+ (gethash host roost--snapshots 0)) roost--snapshots)
+    (puthash host (max (or request (puthash host (1+ (gethash host roost--list-requests 0)) roost--list-requests))
+                       (gethash host roost--snapshots 0))
+             roost--snapshots)
     (remhash host roost--errors)))
 
 (defun roost--task-states (host)
@@ -779,7 +787,8 @@ those tasks."
           (puthash host (if (or (null ids) (eq pending t)) t (seq-union pending ids))
                    roost--full-refresh-pending)))
     (puthash host t roost--refreshing)
-    (let ((revision (gethash host roost--revisions 0))
+    (let ((request (puthash host (1+ (gethash host roost--list-requests 0)) roost--list-requests))
+          (revision (gethash host roost--revisions 0))
           (finish (lambda ()
                     (remhash host roost--refreshing)
                     (when-let* ((pending (gethash host roost--full-refresh-pending)))
@@ -795,7 +804,7 @@ those tasks."
          (when (and (= revision (gethash host roost--revisions 0))
                     (member host (roost--hosts)))
            (let ((before (roost--task-states host)))
-             (roost--apply-snapshot host tasks)
+             (roost--apply-snapshot host tasks request)
              ;; Quiet polls leave out Git statistics.  An agent that reported
              ;; something, such as finishing an edit, may have changed files,
              ;; and a commit moves the task's Git stamp: measure those tasks
@@ -4401,7 +4410,9 @@ The mark stays where it was."
 (defvar-local roost--search-expanded nil
   "Identities of the results whose whole message is shown.")
 (defvar-local roost--search-baseline nil
-  "For each host that replied: (HOST . task lists it had sent by then).")
+  "For each host that replied: (HOST . task lists asked of it by then).")
+(defvar-local roost--search-hosts nil
+  "The hosts this search asked.")
 
 (defvar-keymap roost-search-mode-map
   :doc "Keys in Roost's search results."
@@ -4454,8 +4465,9 @@ conversations Claude keeps.  RET on a live task's message opens it."
     (let ((generation (cl-incf roost--search-generation))
           (query roost--search-query))
       (setq roost--search-replies nil
-            roost--search-baseline nil)
-      (dolist (host (roost--hosts))
+            roost--search-baseline nil
+            roost--search-hosts (roost--hosts))
+      (dolist (host roost--search-hosts)
         (roost--request host "search" (list (cons 'query query))
                         (lambda (result) (roost--search-arrived buffer generation host result))
                         (lambda (err) (roost--search-arrived buffer generation host (list :error err)))))
@@ -4468,20 +4480,21 @@ conversations Claude keeps.  RET on a live task's message opens it."
       (when (= generation roost--search-generation)
         (push (cons host reply) roost--search-replies)
         (unless (eq (car-safe reply) :error)
-          (setf (alist-get host roost--search-baseline nil nil #'equal) (gethash host roost--snapshots 0)))
+          (setf (alist-get host roost--search-baseline nil nil #'equal) (gethash host roost--list-requests 0)))
         (roost--render-search)
         ;; A result with an ID is a task the host still has; one Roost has
-        ;; not fetched, as before it first watches, is fetched now, and the
-        ;; redraw that follows shows it.
-        (when (seq-some (lambda (result)
-                          (when-let* ((id (alist-get 'id result)))
-                            (not (gethash (list host id) roost--tasks))))
-                        (and (not (eq (car-safe reply) :error)) (alist-get 'tasks reply)))
-          (roost--refresh-host host t))))))
+        ;; not fetched, as before it first watches, is fetched now, after
+        ;; any list already on its way, and the redraw that follows shows it.
+        (when-let* ((missing (seq-keep (lambda (result)
+                                         (when-let* ((id (alist-get 'id result)))
+                                           (unless (gethash (list host id) roost--tasks) id)))
+                                       (and (not (eq (car-safe reply) :error)) (alist-get 'tasks reply)))))
+          (roost--refresh-host host nil missing))))))
 
 (defun roost--search-gone-p (host)
-  "Whether HOST has sent a task list since it replied to the search.
-A live task such a list lacks has since been retired."
+  "Whether Roost holds a task list asked of HOST after it replied to the search.
+A live task such a list lacks has since been retired; one asked before
+may predate the task."
   (when-let* ((replied (assoc host roost--search-baseline)))
     (> (gethash host roost--snapshots 0) (cdr replied))))
 
@@ -4499,7 +4512,8 @@ Hosts match words so: \"test\" finds \"tests\", but not \"latest\"."
           (setq start (match-end 1)))))))
 
 (defun roost--search-wrap (text width)
-  "TEXT with each line longer than WIDTH broken between words."
+  "TEXT with each line longer than WIDTH broken between words.
+A word longer than WIDTH, such as a URL, is broken within."
   (with-temp-buffer
     (insert text)
     (let ((fill-column width))
@@ -4507,7 +4521,13 @@ Hosts match words so: \"test\" finds \"tests\", but not \"latest\"."
       (while (not (eobp))
         (when (> (- (line-end-position) (line-beginning-position)) width)
           (fill-region (line-beginning-position) (line-end-position) nil t))
-        (forward-line 1)))
+        (forward-line 1))
+      ;; Filling leaves such words whole.
+      (goto-char (point-min))
+      (while (not (eobp))
+        (if (> (- (line-end-position) (line-beginning-position)) width)
+            (progn (forward-char width) (insert "\n"))
+          (forward-line 1))))
     (buffer-string)))
 
 (defun roost--search-time (timestamp)
@@ -4522,7 +4542,7 @@ Hosts match words so: \"test\" finds \"tests\", but not \"latest\"."
          (places (roost--window-places))
          (mark (roost--mark-place))
          (words (split-string (downcase roost--search-query)))
-         (pending (seq-remove (lambda (host) (assoc host roost--search-replies)) (roost--hosts)))
+         (pending (seq-remove (lambda (host) (assoc host roost--search-replies)) roost--search-hosts))
          (groups nil)
          (more 0)
          ;; Lines stay unwrapped, so each message is one line; a whole
@@ -4635,7 +4655,7 @@ IDs are lists made afresh by each redraw, so compare them with `equal'."
     (cond ((and key (gethash key roost--tasks))
            (roost-open-task (gethash key roost--tasks)))
           (key
-           (roost--refresh-host (car key) t)
+           (roost--refresh-host (car key) nil (cdr key))
            (user-error "Roost is still fetching the tasks on %s; try again in a moment"
                        (roost--host-label (car key))))
           ((roost--search-hit) (roost-search-toggle))

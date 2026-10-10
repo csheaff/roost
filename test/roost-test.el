@@ -18,6 +18,7 @@
          (roost--refreshing (make-hash-table :test 'equal))
          (roost--revisions (make-hash-table :test 'equal))
          (roost--snapshots (make-hash-table :test 'equal))
+         (roost--list-requests (make-hash-table :test 'equal))
          (roost--full-refresh-pending (make-hash-table :test 'equal))
          (roost--failures (make-hash-table :test 'equal))
          (roost--hosts-loaded t) (roost--remembered-hosts nil)
@@ -358,6 +359,10 @@
        (dolist (callback callbacks) (funcall (nth 1 callback) (list (roost-test--task))))
        (should-not (gethash '("a" "0123456789abcdef") roost--tasks))
        (should (gethash '("b" "0123456789abcdef") roost--tasks))
+       ;; Each list request is counted, and Roost notes which one the list it
+       ;; holds answers: b's first, while its second measures the new task.
+       (should (equal (list (gethash "a" roost--list-requests) (gethash "b" roost--list-requests)) '(1 2)))
+       (should (equal (list (gethash "a" roost--snapshots) (gethash "b" roost--snapshots)) '(nil 1)))
        ;; Only b, which has a new task, goes on to fetch its Git statistics.
        (should (equal (hash-table-keys roost--refreshing) '("b")))
        (should (equal (car (car callbacks)) "b"))))))
@@ -866,6 +871,9 @@
                  ;; A long line of it is wrapped, which the buffer's lines are not.
                  (should (equal (roost--search-wrap (concat (make-string 30 ?a) " " (make-string 30 ?b) "\nshort") 40)
                                 (concat (make-string 30 ?a) "\n" (make-string 30 ?b) "\nshort")))
+                 ;; A word longer than the width, such as a URL, is broken within.
+                 (should (equal (roost--search-wrap (concat "see " (make-string 50 ?x)) 20)
+                                (concat "see\n" (make-string 20 ?x) "\n" (make-string 20 ?x) "\n" (make-string 10 ?x))))
                  (roost-search-toggle)
                  (should-not (string-match-p "in quotes" (buffer-string))))
                ;; One not fetched yet can't open until it is, and Roost fetches it.
@@ -941,6 +949,11 @@
              ;; Roost had the task, so nothing was fetched.
              (should-not fetched)
              (should (string-match-p "^fix auth  dev · shop  ready$" (buffer-string)))
+             ;; A list asked for before the reply may predate the task.
+             (roost--apply-snapshot "dev" nil (gethash "dev" roost--list-requests 0))
+             (roost--redraw)
+             (should (string-match-p "^fix auth  dev · shop$" (buffer-string)))
+             ;; One asked for after it lacks the task: retired since.
              (roost--apply-snapshot "dev" nil)
              (roost--redraw)
              (should (string-match-p "^fix auth  dev · shop  past task$" (buffer-string))))
@@ -960,6 +973,10 @@
              (funcall (nth 1 (assoc nil requests)) '((tasks) (moreTasks . 0)))
              (should (string-match-p "^No message in your tasks' conversations on box, local contains every word\\.$"
                                      (buffer-string)))
+             ;; A host added meanwhile was not asked, so it is not awaited.
+             (setq roost-hosts (cons "new" roost-hosts))
+             (roost--render-search)
+             (should-not (string-match-p "Searching" (buffer-string)))
              ;; With every host failing, nothing was searched.
              (setq requests nil)
              (roost-search-again)
