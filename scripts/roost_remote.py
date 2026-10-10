@@ -842,6 +842,10 @@ def create(store, request):
     repo_hash = hashlib.sha256(repo.encode()).hexdigest()[:10]
     worktree = store.root / "worktrees" / repo_hash / (slug + "-" + task_id[:6])
     worktree.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # Searching a retired task's conversations names its repository from here.
+    marker = worktree.parent / REPOSITORY_MARKER
+    if not marker.is_file() or marker.read_text().strip() != repo:
+        atomic_text(marker, repo + "\n")
     socket = text(request.get("socket")) or "main"
     prompt = text(request.get("prompt"))
     # The prompt is one argument to the agent, and Linux refuses one of 128 KB.
@@ -1643,6 +1647,140 @@ def forget(store, task):
     store.remove(task["id"])
     task.update(status="forgotten", updatedAt=now(), leftBehind=left, live=False)
     return task
+
+
+REPOSITORY_MARKER = ".repository"
+SEARCH_TASK_LIMIT = 50
+SEARCH_HITS_PER_TASK = 10
+SEARCH_SNIPPET = 160
+SEARCH_TEXT_LIMIT = 1500
+
+
+def conversation_text(entry):
+    """(role, text) of what you or Claude wrote in transcript ENTRY, or None
+    for tool calls and their output, thinking, and Claude Code's own notes."""
+    if not isinstance(entry, dict) or entry.get("type") not in ("user", "assistant"):
+        return None
+    if entry.get("isMeta") or entry.get("isCompactSummary"):
+        return None
+    message = entry.get("message")
+    if not isinstance(message, dict) or message.get("role") not in ("user", "assistant"):
+        return None
+    found = message_text(message.get("content"))
+    # Claude Code records slash commands, their output, shell-mode commands
+    # and background task notices as tagged messages from you.
+    if not found or CLAUDE_NOTE.match(found):
+        return None
+    return message["role"], found
+
+
+CLAUDE_NOTE = re.compile(r"<(command-[a-z-]+|local-command-[a-z-]+|bash-[a-z]+|task-notification"
+                         r"|system-reminder|user-prompt-submit-hook)>")
+
+
+def word_patterns(words):
+    """Patterns for WORDS (in lower case) where they start: "test" finds
+    "tests", but not "latest"."""
+    return [re.compile((r"(?<!\w)" if re.match(r"\w", word) else "") + re.escape(word)) for word in words]
+
+
+def snippet(found, patterns):
+    """One line of FOUND, starting a little before the first match of PATTERNS."""
+    flat = " ".join(found.split())
+    lower = flat.lower()
+    at = min([match.start() for match in (pattern.search(lower) for pattern in patterns) if match] or [0])
+    start = max(0, at - SEARCH_SNIPPET // 3)
+    if start:
+        space = flat.find(" ", start, at)
+        start = space + 1 if space >= 0 else start
+    end = start + SEARCH_SNIPPET
+    return ("…" if start else "") + flat[start:end].rstrip() + ("…" if end < len(flat) else "")
+
+
+def search_transcript(path, words):
+    """Messages in the transcript at PATH containing every one of WORDS (in
+    lower case), and the Git branch Claude recorded with them."""
+    # JSON escapes only quotes, backslashes and control characters, so a
+    # line that lacks a word's escaped form cannot contain the word.
+    needles = [json.dumps(word, ensure_ascii=False)[1:-1] for word in words]
+    patterns = word_patterns(words)
+    hits, branch = [], None
+    with open(path, encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            lower = line.lower()
+            if not all(needle in lower for needle in needles):
+                continue
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            found = conversation_text(entry)
+            if not found:
+                continue
+            lower = found[1].lower()
+            if not all(pattern.search(lower) for pattern in patterns):
+                continue
+            branch = text(entry.get("gitBranch")) or branch
+            body = found[1]
+            hits.append(dict(at=text(entry.get("timestamp")), role=found[0], session=path.stem,
+                             snippet=snippet(body, patterns),
+                             text=body if len(body) <= SEARCH_TEXT_LIMIT
+                             else body[:SEARCH_TEXT_LIMIT].rstrip() + "…"))
+    return hits, branch
+
+
+def search(store, request):
+    """Messages in the Claude conversations of the store's tasks, live and
+    retired, that contain every word of the request's query; tasks with the
+    newest such message first. Retiring a task deletes its record and
+    worktree, but Claude keeps its conversations, in a folder named after
+    the worktree's path."""
+    words = (text(request.get("query")) or "").lower().split()
+    if not words:
+        raise RoostError("Search for at least one word")
+    tasks = store.all()
+    projects = Path.home() / ".claude" / "projects"
+    worktrees = store.root / "worktrees"
+    prefix = claude_project_folder(str(worktrees)) + "-"
+    repos = {}
+    with contextlib.suppress(OSError):
+        for marker in worktrees.glob("*/" + REPOSITORY_MARKER):
+            repos[marker.parent.name] = marker.read_text().strip()
+    for task in tasks:
+        if isinstance(task.get("repo"), str):
+            repos[hashlib.sha256(task["repo"].encode()).hexdigest()[:10]] = task["repo"]
+    folders = {}
+    with contextlib.suppress(OSError):
+        for folder in projects.iterdir():
+            if folder.name.startswith(prefix):
+                folders[folder] = None
+    for task in tasks:
+        if isinstance(task.get("worktree"), str):
+            folders[projects / claude_project_folder(task["worktree"])] = task
+    results = []
+    for folder, task in folders.items():
+        hits, branch = [], None
+        # Subagents' conversations are in subfolders; only the task's own are searched.
+        for path in sorted(folder.glob("*.jsonl")) if folder.is_dir() else []:
+            with contextlib.suppress(OSError):
+                found, found_branch = search_transcript(path, words)
+                hits += found
+                branch = found_branch or branch
+        if not hits:
+            continue
+        hits.sort(key=lambda hit: hit["at"] or "")
+        if task:
+            result = dict(id=task["id"], name=task.get("name"), repo=task.get("repo"), branch=task.get("branch"))
+        else:
+            # The folder name ends in the worktree's: REPO-HASH-SLUG-ID.
+            match = re.fullmatch(r"([0-9a-f]{10})-(.+)-([0-9a-f]{6})", folder.name[len(prefix):])
+            result = (dict(name=match.group(2).replace("-", " "), repo=repos.get(match.group(1)))
+                      if match else dict(name=folder.name[len(prefix):]))
+            result.update(past=True, branch=branch)
+        result.update(hits=hits[-SEARCH_HITS_PER_TASK:], more=max(0, len(hits) - SEARCH_HITS_PER_TASK))
+        results.append(result)
+    results.sort(key=lambda result: result["hits"][-1]["at"] or "", reverse=True)
+    return dict(tasks=results[:SEARCH_TASK_LIMIT], moreTasks=max(0, len(results) - SEARCH_TASK_LIMIT))
 
 
 def version_of(text):
@@ -2470,6 +2608,10 @@ def rpc(request):
             return {"ok": True, "result": doctor(store, request)}
         if action == "issues":
             return {"ok": True, "result": issues(request)}
+        if action == "search":
+            # Records are written whole, and reading transcripts takes a
+            # while: hooks must not wait on the registry lock meanwhile.
+            return {"ok": True, "result": search(store, request)}
         if action == "pr":
             with store.locked():
                 task = store.read(request["id"])

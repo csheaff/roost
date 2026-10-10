@@ -284,6 +284,8 @@ See `roost-note'."
 Their windows have no mode line to show that you are, and the
 sidebar's keys act on this row.")
 (define-obsolete-face-alias 'roost-sidebar-selection 'roost-selection "0.9")
+(defface roost-search-match '((t :inherit match))
+  "The words searched for, in search results.")
 (defface roost-diff-added '((t :inherit success))
   "Inserted line counts.")
 (defface roost-diff-removed '((t :inherit error))
@@ -1019,7 +1021,8 @@ Only while Emacs has focus, since otherwise nobody is looking."
 (defun roost--task-at-point ()
   "Task selected in the dashboard, terminal, linked Org entry, or workspace."
   (cond
-   ((derived-mode-p 'roost-dashboard-mode)
+   ;; A search result of a live task is marked like a dashboard row.
+   ((derived-mode-p 'roost-dashboard-mode 'roost-search-mode)
     (roost--dashboard-task))
    (roost--buffer-task-key
     (or (gethash roost--buffer-task-key roost--tasks)
@@ -3583,7 +3586,8 @@ terminal or worktree, or ask which task."
   ["Roost"
    [("c" "New task" roost-new-task)
     ("n" "Next waiting" roost-next-waiting)
-    ("l" "Switch task" roost-switch-task)]
+    ("l" "Switch task" roost-switch-task)
+    ("/" "Search sessions" roost-search)]
    [("S" "Dashboard" roost-status)
     ("g" "Refresh" roost-refresh)]
    [("b" "Sidebar" roost-sidebar-mode)
@@ -3611,6 +3615,7 @@ terminal or worktree, or ask which task."
   ;; Commands beyond this task, as in the dashboard and sidebar.
   "n" #'roost-next-waiting
   "l" #'roost-switch-task
+  "/" #'roost-search
   "c" #'roost-new-task
   "b" #'roost-sidebar-mode
   "S" #'roost-status
@@ -4073,6 +4078,7 @@ same name keep drafts of their own."
   "X" #'roost-forget
   "u" #'roost-update
   "n" #'roost-next-waiting
+  "/" #'roost-search
   ;; As in Magit, `h' and `?' show every command.
   "h" #'roost-dispatch
   "?" #'roost-dispatch
@@ -4366,6 +4372,241 @@ The mark stays where it was."
     (roost--redraw))
   (roost-watch-mode 1)
   (roost-refresh))
+
+;;;; Searching conversations
+
+(defvar roost-search-history nil
+  "Queries given to `roost-search'.")
+
+(defconst roost--search-buffer "*roost search*"
+  "Name of the buffer that shows search results.")
+
+(defvar-local roost--search-query nil
+  "The query this buffer shows results for.")
+(defvar-local roost--search-replies nil
+  "Each host's reply so far: (HOST . RESULT), or (HOST :error MESSAGE).")
+(defvar-local roost--search-generation 0
+  "Counts searches in this buffer, so that replies to an older one are ignored.")
+(defvar-local roost--search-expanded nil
+  "Identities of the results whose whole message is shown.")
+
+(defvar-keymap roost-search-mode-map
+  :doc "Keys in Roost's search results."
+  "RET" #'roost-search-open
+  "TAB" #'roost-search-toggle
+  "n" #'roost-search-next
+  "p" #'roost-search-previous
+  "g" #'roost-search-again
+  "/" #'roost-search
+  "h" #'roost-dispatch
+  "?" #'roost-dispatch)
+
+(define-derived-mode roost-search-mode special-mode "Roost Search"
+  "Messages in your tasks' conversations that match a search.
+On a live task's message, task commands such as those in
+\\[roost-dispatch] act on that task.
+\\{roost-search-mode-map}"
+  (setq-local truncate-lines t
+              revert-buffer-function (lambda (&rest _) (roost-search-again)))
+  (roost--evil-state 'roost-search-mode roost-evil-state))
+
+;;;###autoload
+(defun roost-search (query)
+  "Show the messages in your tasks' conversations that contain QUERY.
+Every word of QUERY must be in one message, written by you or by the
+agent; tool output is not searched.  Each host searches the Claude Code
+conversations of its tasks, including tasks since retired, whose
+conversations Claude keeps.  RET on a live task's message opens it."
+  (interactive (list (read-string "Search sessions: " nil 'roost-search-history)))
+  (when (string-blank-p query)
+    (user-error "Search for at least one word"))
+  (let ((buffer (get-buffer-create roost--search-buffer)))
+    (with-current-buffer buffer
+      (unless (derived-mode-p 'roost-search-mode) (roost-search-mode))
+      (setq roost--search-query (string-trim query)
+            roost--search-expanded nil))
+    (roost--search-start buffer)
+    ;; In the window you are in, like the dashboard; q gives it back.
+    (roost--leave-side-window)
+    (pop-to-buffer buffer '((display-buffer-reuse-window display-buffer-same-window)))))
+
+(defun roost-search-again ()
+  "Search every host again for this buffer's query."
+  (interactive)
+  (roost--search-start (current-buffer)))
+
+(defun roost--search-start (buffer)
+  "Ask every host for BUFFER's query, and show the replies as they come."
+  (with-current-buffer buffer
+    (let ((generation (cl-incf roost--search-generation))
+          (query roost--search-query))
+      (setq roost--search-replies nil)
+      (dolist (host (roost--hosts))
+        (roost--request host "search" (list (cons 'query query))
+                        (lambda (result) (roost--search-arrived buffer generation host result))
+                        (lambda (err) (roost--search-arrived buffer generation host (list :error err)))))
+      (roost--render-search))))
+
+(defun roost--search-arrived (buffer generation host reply)
+  "Show HOST's REPLY in BUFFER, unless it answers a search before GENERATION."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when (= generation roost--search-generation)
+        (push (cons host reply) roost--search-replies)
+        (roost--render-search)))))
+
+(defun roost--search-highlight (string words)
+  "STRING with each of WORDS in it highlighted where a word starts, ignoring case.
+Hosts match words so: \"test\" finds \"tests\", but not \"latest\"."
+  (let ((string (copy-sequence string))
+        (case-fold-search t))
+    (dolist (word words string)
+      (let ((regexp (concat (if (string-match-p "\\`[[:alnum:]_]" word) "\\(?:\\`\\|[^[:alnum:]_]\\)" "")
+                            "\\(" (regexp-quote word) "\\)"))
+            (start 0))
+        (while (string-match regexp string start)
+          (add-face-text-property (match-beginning 1) (match-end 1) 'roost-search-match nil string)
+          (setq start (match-end 1)))))))
+
+(defun roost--search-wrap (text width)
+  "TEXT with each line longer than WIDTH broken between words."
+  (with-temp-buffer
+    (insert text)
+    (let ((fill-column width))
+      (goto-char (point-min))
+      (while (not (eobp))
+        (when (> (- (line-end-position) (line-beginning-position)) width)
+          (fill-region (line-beginning-position) (line-end-position) nil t))
+        (forward-line 1)))
+    (buffer-string)))
+
+(defun roost--search-time (timestamp)
+  "TIMESTAMP as a local date and time, or blanks if it is unreadable."
+  (or (ignore-errors (format-time-string "%Y-%m-%d %H:%M" (date-to-time timestamp)))
+      (make-string 16 ?\s)))
+
+(defun roost--render-search ()
+  "Draw the current search buffer from the replies received so far."
+  (let* ((inhibit-read-only t)
+         (place (get-text-property (line-beginning-position) 'roost-search-id))
+         (words (split-string (downcase roost--search-query)))
+         (pending (seq-remove (lambda (host) (assoc host roost--search-replies)) (roost--hosts)))
+         (groups nil)
+         (more 0)
+         ;; Lines stay unwrapped, so each message is one line; a whole
+         ;; message is wrapped to the window, inside its indentation.
+         (window (get-buffer-window (current-buffer)))
+         (width (max 40 (- (if window (window-body-width window) 80) 8))))
+    (pcase-dolist (`(,host . ,reply) roost--search-replies)
+      (unless (eq (car-safe reply) :error)
+        (setq more (+ more (or (alist-get 'moreTasks reply) 0)))
+        (dolist (result (alist-get 'tasks reply))
+          (push (cons host result) groups))))
+    (setq groups (sort groups (lambda (a b)
+                                (string> (or (alist-get 'at (car (last (alist-get 'hits (cdr a))))) "")
+                                         (or (alist-get 'at (car (last (alist-get 'hits (cdr b))))) "")))))
+    (erase-buffer)
+    (insert (propertize "Messages containing " 'face 'roost-dim)
+            (propertize roost--search-query 'face 'roost-heading) "\n")
+    (when pending
+      (insert (propertize (format "Searching %s…\n" (mapconcat #'roost--host-label pending ", "))
+                          'face 'roost-dim)))
+    (pcase-dolist (`(,host . ,reply) (reverse roost--search-replies))
+      (when (eq (car-safe reply) :error)
+        (insert (propertize (format "Could not search %s: %s\n" (roost--host-label host) (cadr reply))
+                            'face 'roost-status-failed))))
+    (when (and (not groups) (not pending))
+      (insert "\nNo message in your tasks' conversations contains every word.\n"))
+    (pcase-dolist (`(,host . ,result) groups)
+      (let* ((key (when-let* ((id (alist-get 'id result))) (list host id)))
+             (task (and key (gethash key roost--tasks)))
+             (status (if task (roost--display-status task) "past task"))
+             (row (and task (list 'roost-task key)))
+             (start (point)))
+        (insert "\n" (propertize (or (alist-get 'name result) "?") 'face 'roost-heading) "  "
+                ;; A task retired before hosts recorded its repository has none.
+                (propertize (if-let* ((repo (alist-get 'repo result)))
+                                (format "%s · %s" (roost--host-label host)
+                                        (file-name-nondirectory (directory-file-name repo)))
+                              (roost--host-label host))
+                            'face 'roost-dim)
+                "  " (propertize status 'face (if task (roost--status-face (roost--attention-status task)) 'roost-dim))
+                "\n")
+        (add-text-properties start (point) row)
+        (when (> (or (alist-get 'more result) 0) 0)
+          (insert (apply #'propertize
+                         (format "  %d earlier messages match too\n" (alist-get 'more result))
+                         'face 'roost-dim row)))
+        (dolist (hit (alist-get 'hits result))
+          (let* ((id (list host (alist-get 'name result) (alist-get 'session hit) (alist-get 'at hit)))
+                 (properties (append (list 'roost-search-id id 'roost-search-hit (list host result hit)) row))
+                 (who (if (equal (alist-get 'role hit) "user") "You" "Claude")))
+            (insert (apply #'propertize
+                           (concat "  " (roost--search-time (alist-get 'at hit)) "  "
+                                   (format "%-7s" who)
+                                   (roost--search-highlight (or (alist-get 'snippet hit) "") words)
+                                   "\n")
+                           'roost-search-line t properties))
+            (when (member id roost--search-expanded)
+              (let ((body-start (point)))
+                (insert (roost--search-highlight (roost--search-wrap (or (alist-get 'text hit) "") width)
+                                                 words)
+                        "\n")
+                (add-text-properties body-start (point) properties)
+                (put-text-property body-start (point) 'line-prefix "      ")
+                (put-text-property body-start (point) 'wrap-prefix "      ")
+                (put-text-property body-start (point) 'roost-search-body t)))))))
+    (when (> more 0)
+      (insert (propertize (format "\n%d more tasks match; add a word to narrow the search.\n" more)
+                          'face 'roost-dim)))
+    (goto-char (point-min))
+    (if-let* ((found (and place (text-property-any (point-min) (point-max) 'roost-search-id place))))
+        (goto-char found)
+      (when-let* ((first (text-property-not-all (point-min) (point-max) 'roost-search-line nil)))
+        (goto-char first)))
+    (dolist (window (get-buffer-window-list (current-buffer) nil t))
+      (set-window-point window (point)))))
+
+(defun roost--search-hit ()
+  "The result on this line: (HOST RESULT HIT), or nil."
+  (get-text-property (point) 'roost-search-hit))
+
+(defun roost-search-open ()
+  "Open the live task of the message on this line, or show the whole message."
+  (interactive)
+  (if-let* ((task (roost--dashboard-task)))
+      (roost-open-task task)
+    (if (roost--search-hit)
+        (roost-search-toggle)
+      (user-error "Put point on a message"))))
+
+(defun roost-search-toggle ()
+  "Show or hide the whole message on this line."
+  (interactive)
+  (let ((id (or (get-text-property (point) 'roost-search-id)
+                (user-error "Put point on a message"))))
+    (setq roost--search-expanded (if (member id roost--search-expanded)
+                                     (delete id roost--search-expanded)
+                                   (cons id roost--search-expanded)))
+    (roost--render-search)))
+
+(defun roost-search-next (&optional count)
+  "Move to the next message, or COUNT messages on."
+  (interactive "p")
+  (let ((step (if (< (or count 1) 0) -1 1)))
+    (dotimes (_ (abs (or count 1)))
+      (let ((found (save-excursion
+                     (beginning-of-line)
+                     (catch 'found
+                       (while (zerop (forward-line step))
+                         (when (get-text-property (point) 'roost-search-line)
+                           (throw 'found (point))))))))
+        (if found (goto-char found) (user-error "No more messages"))))))
+
+(defun roost-search-previous (&optional count)
+  "Move to the previous message, or COUNT messages back."
+  (interactive "p")
+  (roost-search-next (- (or count 1))))
 
 ;;;; Sidebar
 

@@ -247,6 +247,7 @@ Magit is optional (review falls back to Dired).
 | `e` | `roost-send` | Paste a prompt into the agent and press Enter |
 | `i` | `roost-task-info` | Prompt, changes, actions and details |
 | `l` | `roost-switch-task` | Choose a task by name, waiting tasks first |
+| `/` | `roost-search` | Find messages in your tasks' conversations, retired tasks' too; `RET` opens a live task, `TAB` shows a whole message |
 | `b` | `roost-sidebar-mode` | Keep the task list at the left of every frame |
 | `I` | `roost-task-panel-mode` | Dock the open task's panel beside its terminal |
 | `u` | `roost-update` | Merge the integration branch into the task; for uncommitted changes or conflicts, offers to have its agent do it |
@@ -425,6 +426,11 @@ Since 0.8.1 (unreleased):
   it shows the cursor (with its modal-editing shape) and highlights the line
   you are on in face `roost-selection`, which replaces
   `roost-sidebar-selection`.
+- `/` searches the conversations of your tasks on every host, including
+  tasks retired since: every word must be in one message, yours or the
+  agent's, and tool output is left out. Claude Code tasks only, for now.
+  Hosts record each repository beside its worktrees, so a task retired
+  after this release is shown under its project.
 - Each task has a tmux session of its own, which ends with the task. Older
   tasks move to their own when resumed. `roost-session-name` is gone.
 - `x` finishes a task: it retires one whose work is merged, or discards one

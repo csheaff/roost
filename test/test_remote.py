@@ -1851,6 +1851,23 @@ elif args[:2] == ["auth", "status"]:
         self.assertTrue(checks["GitHub CLI"]["optional"])
         self.assertIn("install gh", checks["GitHub CLI"]["hint"])
 
+    def test_search_finds_a_retired_tasks_conversation_under_its_project(self):
+        task = self.create(name="fix parser")
+        record = roost.Store(str(self.state)).read(task["id"])
+        home = self.root / "home"
+        folder = home / ".claude/projects" / claude_folder(task["worktree"])
+        folder.mkdir(parents=True)
+        (folder / (record["agentSession"] + ".jsonl")).write_text(json.dumps(
+            {"type": "user", "timestamp": "2026-10-01T10:00:00Z",
+             "message": {"role": "user", "content": "Fix the parser"}}) + "\n")
+        self.request("stop", id=task["id"])
+        self.wait_for_pane_exit(task)
+        self.assertTrue(self.request("retire", id=task["id"])["ok"])
+        with patch.dict(os.environ, HOME=str(home)):
+            found = self.request("search", query="parser")["result"]["tasks"]
+        self.assertEqual([(t["name"], t["repo"], t.get("past")) for t in found],
+                         [("fix parser", task["repo"], True)])
+
     def test_list_and_inspect_show_the_agents_latest_reply_without_saving_it(self):
         task = self.create()
         record = roost.Store(str(self.state)).read(task["id"])
@@ -2113,6 +2130,120 @@ class PermissionRequest(unittest.TestCase):
         self.assertEqual(ask("AskUserQuestion", questions="odd"), "Asks you a question")
         self.assertEqual(ask("ExitPlanMode", plan="1. Do it"), "Asks you to approve its plan")
         self.assertIsNone(roost.permission_request(dict(hook_event_name="Notification")))
+
+
+class Search(unittest.TestCase):
+    """Searching the Claude conversations of a store's tasks, from a fake HOME."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.home = Path(self.temp.name) / "home"
+        self.state = Path(self.temp.name) / "state"
+        patcher = patch.dict(os.environ, HOME=str(self.home))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(self.temp.cleanup)
+        self.store = roost.Store(str(self.state))
+        self.repo = "/work/shop"
+        self.repo_hash = hashlib.sha256(self.repo.encode()).hexdigest()[:10]
+
+    def conversation(self, worktree, session, entries):
+        folder = self.home / ".claude/projects" / roost.claude_project_folder(str(worktree))
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / (session + ".jsonl")).write_text("".join(json.dumps(entry) + "\n" for entry in entries))
+        return folder
+
+    @staticmethod
+    def said(role, content, minute, **fields):
+        return dict(type=role, timestamp="2026-10-0%dT10:%02d:00.000Z" % (1 + minute // 60, minute % 60),
+                    gitBranch="roost/x", message=dict(role=role, content=content), **fields)
+
+    def search(self, query):
+        reply = roost.rpc(dict(root=str(self.state), action="search", query=query))
+        self.assertTrue(reply["ok"], reply)
+        return reply["result"]
+
+    def test_live_and_retired_tasks_are_searched_and_nothing_else(self):
+        live = self.state / "worktrees" / self.repo_hash / "fix-csv-quoting-0a1b2c"
+        self.store.save(dict(id="0a1b2c3d4e5f6a7b", name="fix CSV quoting", repo=self.repo,
+                             worktree=str(live), branch="roost/fix-csv-quoting-0a1b2c", status="ready"))
+        self.conversation(live, "s1", [
+            self.said("user", "Quote CSV fields that contain commas", 1),
+            self.said("assistant", [{"type": "thinking", "thinking": "csv commas"},
+                                    {"type": "text", "text": "Done: the CSV writer now quotes commas."}], 2),
+            # Tool calls and their output are not what anyone wrote.
+            self.said("assistant", [{"type": "tool_use", "name": "Bash", "input": {"command": "grep csv commas"}}], 3),
+            self.said("user", [{"type": "tool_result", "content": "csv commas everywhere"}], 4),
+            # Nor are slash commands, their output, or Claude Code's notes.
+            self.said("user", "<command-name>/csv commas</command-name>", 5),
+            self.said("user", "<task-notification>csv commas done</task-notification>", 6),
+            self.said("user", "csv commas", 7, isMeta=True),
+        ])
+        # Retired: no record, but the conversation stays, named after the worktree.
+        (self.state / "worktrees" / self.repo_hash).mkdir(parents=True, exist_ok=True)
+        retired = self.state / "worktrees" / self.repo_hash / "csv-import-9f8e7d"
+        self.conversation(retired, "s2", [self.said("user", "Import CSV with commas in quotes", 120)])
+        # A subagent's conversation, and a session outside Roost.
+        folder = self.conversation(live, "s3", [])
+        (folder / "s3" / "subagents").mkdir(parents=True)
+        (folder / "s3" / "subagents" / "a.jsonl").write_text(json.dumps(self.said("user", "csv commas", 9)) + "\n")
+        self.conversation("/elsewhere/project", "s4", [self.said("user", "csv commas", 200)])
+
+        result = self.search("COMMAS csv")
+        self.assertEqual(result["moreTasks"], 0)
+        first, second = result["tasks"]
+        # Newest first. A retired task is named from its worktree's folder,
+        # and its project from a live task's in the same repository.
+        self.assertEqual((first["name"], first["past"], first["repo"], first["branch"]),
+                         ("csv import", True, self.repo, "roost/x"))
+        self.assertNotIn("id", first)
+        self.assertEqual((second["id"], second["name"], second["repo"]), ("0a1b2c3d4e5f6a7b", "fix CSV quoting", self.repo))
+        self.assertEqual([(hit["role"], hit["text"]) for hit in second["hits"]],
+                         [("user", "Quote CSV fields that contain commas"),
+                          ("assistant", "Done: the CSV writer now quotes commas.")])
+        self.assertEqual(second["hits"][0]["session"], "s1")
+        self.assertEqual(second["hits"][0]["at"], "2026-10-01T10:01:00.000Z")
+        # Every word must be in one message, where a word starts.
+        self.assertEqual(self.search("writer contain")["tasks"], [])
+        self.assertEqual(len(self.search("comma")["tasks"]), 2)
+        self.assertEqual(self.search("ommas")["tasks"], [])
+        self.assertEqual([task["name"] for task in self.search("writer")["tasks"]], ["fix CSV quoting"])
+        # With no live task there, a repository marker names the project.
+        (self.state / "worktrees" / self.repo_hash / roost.REPOSITORY_MARKER).write_text(self.repo + "\n")
+        self.store.remove("0a1b2c3d4e5f6a7b")
+        names = {task["name"]: task for task in self.search("csv")["tasks"]}
+        self.assertEqual((names["fix csv quoting"]["repo"], names["csv import"]["repo"]), (self.repo, self.repo))
+        self.assertTrue(names["fix csv quoting"]["past"])
+
+    def test_words_with_quotes_match_and_snippets_show_the_word(self):
+        worktree = self.state / "worktrees" / self.repo_hash / "t-111111"
+        long = "word " * 200 + "the \"needle\" here " + "tail " * 200
+        self.conversation(worktree, "s", [self.said("assistant", [{"type": "text", "text": long}], 1)])
+        hit = self.search('"needle"')["tasks"][0]["hits"][0]
+        self.assertIn('the "needle" here', hit["snippet"])
+        self.assertTrue(hit["snippet"].startswith("…") and hit["snippet"].endswith("…"))
+        self.assertLessEqual(len(hit["snippet"]), roost.SEARCH_SNIPPET + 2)
+        self.assertTrue(hit["text"].endswith("…"))
+        self.assertLessEqual(len(hit["text"]), roost.SEARCH_TEXT_LIMIT + 1)
+        # No live task or marker names this repository.
+        self.assertIsNone(self.search("needle")["tasks"][0]["repo"])
+
+    def test_results_are_capped(self):
+        worktree = self.state / "worktrees" / self.repo_hash / "t-222222"
+        self.conversation(worktree, "s", [self.said("user", "ping %d" % n, n) for n in range(15)])
+        task = self.search("ping")["tasks"][0]
+        # The newest messages, oldest first.
+        self.assertEqual([hit["text"] for hit in task["hits"]], ["ping %d" % n for n in range(5, 15)])
+        self.assertEqual(task["more"], 5)
+        for n in range(roost.SEARCH_TASK_LIMIT + 2):
+            self.conversation(self.state / "worktrees" / self.repo_hash / ("p-%06d" % n), "s",
+                              [self.said("user", "pong", n)])
+        result = self.search("pong")
+        self.assertEqual((len(result["tasks"]), result["moreTasks"]), (roost.SEARCH_TASK_LIMIT, 2))
+
+    def test_an_empty_query_is_refused(self):
+        reply = roost.rpc(dict(root=str(self.state), action="search", query="  "))
+        self.assertEqual(reply, {"ok": False, "error": "Search for at least one word"})
 
 
 class LastMessage(unittest.TestCase):

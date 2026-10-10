@@ -786,6 +786,91 @@
    (should (eq (lookup-key roost-dashboard-mode-map "h") 'roost-dispatch))
    (should (eq (lookup-key roost-task-info-mode-map "h") 'roost-dispatch))))
 
+(ert-deftest roost-search-shows-each-hosts-messages-and-opens-live-tasks ()
+  (roost-test--isolated
+   (let ((roost-hosts '("dev" "box")) requests opened)
+     (roost--cache-task "dev" (roost-test--task))
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (host action params success failure)
+                  (push (list host action params success failure) requests)))
+               ((symbol-function 'roost-open-task) (lambda (task) (setq opened task))))
+       (unwind-protect
+           (save-window-excursion
+             (roost-search "  csv COMMAS ")
+             (set-buffer roost--search-buffer)
+             (should (equal (mapcar (lambda (r) (list (nth 0 r) (nth 1 r) (nth 2 r))) (reverse requests))
+                            '(("dev" "search" ((query . "csv COMMAS")))
+                              ("box" "search" ((query . "csv COMMAS"))))))
+             (should (string-match-p "Searching dev, box…" (buffer-string)))
+             (let ((dev (assoc "dev" requests)) (box (assoc "box" requests)))
+               (funcall (nth 3 dev)
+                        '((tasks ((id . "0123456789abcdef") (name . "fix auth") (repo . "/home/user/shop")
+                                  (hits ((at . "2026-10-01T10:01:00Z") (role . "user") (session . "s1")
+                                         (snippet . "Quote CSV fields with commas")
+                                         (text . "Quote CSV fields with commas, please."))
+                                        ((at . "2026-10-01T10:02:00Z") (role . "assistant") (session . "s1")
+                                         (snippet . "Done: CSV commas quoted") (text . "Done: CSV commas quoted.")))
+                                  (more . 0))
+                                 ((past . t) (name . "csv import") (repo)
+                                  (hits ((at . "2026-10-03T10:00:00Z") (role . "user") (session . "s2")
+                                         (snippet . "Import CSV with commas")
+                                         (text . "Import CSV with commas\nin quotes")))
+                                  (more . 3)))
+                          (moreTasks . 0)))
+               (should (string-match-p "Searching box…" (buffer-string)))
+               (funcall (nth 4 box) "ssh: no route")
+               (let ((shown (buffer-string)))
+                 (should-not (string-match-p "Searching" shown))
+                 (should (string-match-p "^Could not search box: ssh: no route$" shown))
+                 ;; The task with the newest message first; a past task has no status.
+                 (should (string-match-p (concat "csv import  dev  past task\n"
+                                                 "  3 earlier messages match too\n"
+                                                 "  2026-10-0.*You    Import CSV with commas\n"
+                                                 "\nfix auth  dev · shop  ready\n"
+                                                 "  2026-10-0.*You    Quote CSV fields with commas\n"
+                                                 "  2026-10-0.*Claude Done: CSV commas quoted\n")
+                                         shown)))
+               ;; The words searched for are highlighted where a word starts.
+               (goto-char (point-min))
+               (search-forward "Quote CSV")
+               (should (memq 'roost-search-match (ensure-list (get-text-property (1- (point)) 'face))))
+               (let ((shown (roost--search-highlight "latest tests" '("test"))))
+                 (should-not (get-text-property 3 'face shown))
+                 (should (memq 'roost-search-match (ensure-list (get-text-property 7 'face shown)))))
+               ;; Point starts on the first message: a past task's, which shows
+               ;; its whole message rather than opening anything.
+               (goto-char (point-min))
+               (roost--render-search)
+               (should (string-match-p "Import CSV" (thing-at-point 'line)))
+               (should-not (roost--task-at-point))
+               (let ((id (get-text-property (point) 'roost-search-id)))
+                 (roost-search-open)
+                 (should (equal (get-text-property (point) 'roost-search-id) id))
+                 (should (string-match-p "with commas\nin quotes\n" (buffer-string)))
+                 ;; A long line of it is wrapped, which the buffer's lines are not.
+                 (should (equal (roost--search-wrap (concat (make-string 30 ?a) " " (make-string 30 ?b) "\nshort") 40)
+                                (concat (make-string 30 ?a) "\n" (make-string 30 ?b) "\nshort")))
+                 (roost-search-toggle)
+                 (should-not (string-match-p "in quotes" (buffer-string))))
+               ;; A live task's message opens the task, and task commands act on it.
+               (roost-search-next)
+               (should (string-match-p "Quote CSV" (thing-at-point 'line)))
+               (should (equal (roost--key (roost--task-at-point)) '("dev" "0123456789abcdef")))
+               (roost-search-open)
+               (should (equal (roost--key opened) '("dev" "0123456789abcdef")))
+               (roost-search-previous)
+               (should (string-match-p "Import CSV" (thing-at-point 'line)))
+               (should-error (roost-search-previous) :type 'user-error)
+               ;; Searching again ignores replies to the search before.
+               (roost-search-again)
+               (funcall (nth 3 dev) '((tasks) (moreTasks . 0)))
+               (should (string-match-p "Searching dev, box…" (buffer-string)))))
+         (when (get-buffer roost--search-buffer) (kill-buffer roost--search-buffer)))))
+   (should-error (roost-search " ") :type 'user-error)
+   (should (eq (lookup-key roost-dashboard-mode-map "/") 'roost-search))
+   (should (eq (lookup-key roost-sidebar-list-mode-map "/") 'roost-search))
+   (should (eq (lookup-key roost-task-info-mode-map "/") 'roost-search))))
+
 (ert-deftest roost-mode-line-counts-agents-waiting ()
   (roost-test--isolated
    (should-not (roost--mode-line-count))
