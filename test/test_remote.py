@@ -396,6 +396,62 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual((self.repo / "hello").read_text(), "my own edit\n")
         self.assertFalse(wt.exists())
 
+    def test_a_squash_merge_adds_one_commit_with_the_tasks_messages(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        (wt / "hello").write_text("one\n")
+        self.git("commit", "-qam", "First change\n\nWhy it was needed.", cwd=wt)
+        # The task was brought up to date along the way.
+        (self.repo / "other").write_text("main moved\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "main moved")
+        self.assertTrue(self.request("update", id=task["id"])["ok"])
+        (wt / "hello").write_text("two\n")
+        self.git("commit", "-qam", "Second change", cwd=wt)
+        before = self.git("rev-parse", "main")
+        reply = self.request("merge", id=task["id"], style="squash")
+        self.assertTrue(reply["ok"], reply)
+        # One commit on main, with only main as its parent.
+        self.assertEqual(self.git("rev-parse", "main~1"), before)
+        self.assertEqual(self.git("log", "-1", "--format=%P", "main"), before)
+        self.assertEqual(self.git("log", "-1", "--format=%B", "main"),
+                         "First change\n\n* First change\n* Second change")
+        self.assertEqual((self.repo / "hello").read_text(), "two\n")
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        self.assertFalse(wt.exists())
+        self.assertNotIn(task["branch"], self.git("branch", "--list", task["branch"]))
+        self.assertNotIn("remoteCleanup", reply["result"])
+
+    def test_a_squash_merge_without_checkout_keeps_a_single_commits_message(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        (wt / "hello").write_text("changed\n")
+        self.git("commit", "-qam", "Fix the greeting\n\nIt said hello twice.", cwd=wt)
+        self.git("checkout", "-q", "-b", "mine")
+        before = self.git("rev-parse", "main")
+        reply = self.request("merge", id=task["id"], style="squash")
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(self.git("log", "-1", "--format=%P", "main"), before)
+        self.assertEqual(self.git("log", "-1", "--format=%B", "main"), "Fix the greeting\n\nIt said hello twice.")
+        self.assertEqual(self.git("show", "main:hello"), "changed")
+        self.assertEqual(self.git("symbolic-ref", "--short", "HEAD"), "mine")
+        self.assertFalse(wt.exists())
+
+    def test_a_conflicting_squash_merge_changes_nothing(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        (wt / "hello").write_text("task\n")
+        self.git("commit", "-qam", "task", cwd=wt)
+        (self.repo / "hello").write_text("main\n")
+        self.git("commit", "-qam", "main")
+        before = self.git("rev-parse", "main")
+        error = self.request("merge", id=task["id"], style="squash")["error"]
+        self.assertIn("conflicts with main in hello", error)
+        self.assertEqual(self.git("rev-parse", "main"), before)
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        self.assertEqual((self.repo / "hello").read_text(), "main\n")
+        self.assertTrue(wt.exists())
+
     def test_a_conflicting_merge_without_checkout_changes_nothing(self):
         task = self.create()
         wt = Path(task["worktree"])

@@ -696,6 +696,48 @@ evil-collection binds `=` to less context. A test loads Evil (MELPA,
 that `=` and `gr` stay evil-collection's. 166 ERT tests pass with Magit and
 Evil, 165 with Magit alone (the Evil one skipped), 161 with neither.
 
+### A hands-on design review, 2026-10-09
+
+Used as an Emacs user who already runs Claude Code in a terminal would: a
+plain configuration (Vertico, Marginalia, Orderless, which-key, Magit,
+`modus-vivendi`), Roost set up as the README says, and three real Claude Code
+tasks (Haiku) taken from prompt to merge, one on `claylien` over TRAMP's
+default `scp` method, with an update that conflicted and an Emacs restart.
+
+What sped the work up: a task running 6 s after `C-c C-c` (10 s remote); a
+notification naming the command an agent wanted to run, and `n` landing on
+its prompt; a declined prompt turning the task `ready` within seconds; the
+agent's reply, with the choices it made, above its diff in Magit; two notes
+sent with `@` and fixed in 8 s; `m` merging and removing the worktree and
+branch in about 6 s, and reverting the open file; the agents still there 6 s
+after restarting Emacs.
+
+What got in the way, and what changed:
+
+- **A new task ignored where you were.** The draft worked out its default
+  project after switching to its own buffer, so it offered "Choose a
+  project…" from inside a checkout, and from a region in one project it
+  defaulted to another on `claylien`. It now looks where you are, in Dired
+  or a shell too, and the picker adds `project.el`'s projects.
+- **An interrupted turn looked finished.** It showed `ready`, with the
+  agent's last words ("Next I'll check…"). It is now `interrupted`, and the
+  next step says to tell the agent what to do instead.
+- **`u` stopped at uncommitted changes.** It now offers to have the agent
+  commit and update, as it did for conflicts; told so by hand, the agent
+  committed, merged `main`, resolved the conflicts and ran the tests in 25 s.
+- **Merge commits piled up.** `roost-merge-style` set to `squash` brings a
+  task in as one commit, with the task's commit messages.
+- **Remote review is slow over TRAMP's shell methods.** Magit took 3.6 s to
+  open the remote task (19.6 s on a cold connection) and 1.7 s to refresh or
+  stage, against 0.4 s with tramp-rpc. `roost-doctor` now names the method
+  and the README says what to expect.
+- With no tasks, the menus offered task commands; they are greyed out.
+
+Left as they are: Claude Code's folder-trust prompt, once per project and
+host, defaulting to "No, exit"; Magit's "Error showing commit diff" when
+committing over `scp`, which the commit survived. 177 ERT tests pass with
+Magit and Evil, and 110 Python tests.
+
 ### Codex and Pi adapters
 
 Used another disposable remote `hello-service` project, an isolated registry and

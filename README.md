@@ -214,7 +214,15 @@ Magit is optional (review falls back to Dired).
   `roost-compose-mode`, `roost-send-mode` and `roost-pr-mode`, in your insert or
   Emacs-state list so their keys work.
 - **Completion.** Prompts use `completing-read`, so Vertico, Ivy, Helm and the
-  default UI all work.
+  default UI all work. A new task's project picker offers the projects Roost
+  has used, then those `project.el` knows.
+- **Remote review.** Magit reaches a remote task through TRAMP, where every Git
+  command is a round trip, and a refresh runs a dozen or more. With TRAMP's
+  default `scp` method on a host on the same network, Magit took 3.6 s to open
+  a task and 1.7 s to refresh or stage a file; with
+  [tramp-rpc](https://github.com/ArthurHeymans/emacs-tramp-rpc), which runs
+  commands through a small server on the host, 0.4 s. `roost-doctor` names the
+  method each host uses.
 
 ## Commands
 
@@ -237,9 +245,9 @@ Magit is optional (review falls back to Dired).
 | `l` | `roost-switch-task` | Choose a task by name, waiting tasks first |
 | `b` | `roost-sidebar-mode` | Keep the task list at the left of every frame |
 | `I` | `roost-task-panel-mode` | Dock the open task's panel beside its terminal |
-| `u` | `roost-update` | Merge the integration branch into the task |
+| `u` | `roost-update` | Merge the integration branch into the task; for uncommitted changes or conflicts, offers to have its agent do it |
 | `P` | `roost-pr` | Draft a pull request for the task; if it has one, push new commits and open it (`C-u`: open only) |
-| `m` | `roost-merge-retire` | Merge committed work, then retire the task |
+| `m` | `roost-merge-retire` | Merge committed work, then retire the task (as one commit with `roost-merge-style` set to `squash`) |
 | `x` | `roost-retire` | Finish with a task: retire it when its work is merged or it has none, otherwise offer to discard it (`roost-discard`), first saying what would be lost; to lose commits or files you type its name |
 | `X` | `roost-forget` | Drop the task from Roost, leaving its worktree and branch as they are |
 | `K` | `roost-stop` | Stop the agent's window; keep all work |
@@ -288,6 +296,9 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
   project's `.dir-locals.el` only with `enable-remote-dir-locals` on. A new
   worktree lacks files Git doesn't track, such as `.env`; the command finds the
   primary checkout in `$ROOST_REPO`: `cp "$ROOST_REPO/.env" . && npm ci`.
+- `roost-merge-style`: `merge` (the default) brings a task in with a merge
+  commit; `squash` adds one commit holding all its work, with a message made
+  from its commits.
 - `roost-notes-file`: review notes not yet sent, kept across sessions.
 - `roost-magit-status-sections` (t): whether Magit's status of a task's
   worktree names the task and folds in its agent's latest reply.
@@ -418,6 +429,12 @@ Since 0.8.1 (unreleased):
   line and `@` sends your notes; `=` shows a whole file's diff. The status
   names the task and folds in the agent's latest reply. A draft prompt
   (`e`, or `roost-send-region`) now keeps what you have written and adds to it.
+- A new task's project is the one you are in again, also in Dired or a
+  shell; the picker adds `project.el`'s projects. A turn you interrupted, or
+  whose permission you declined, shows as `interrupted` rather than `ready`.
+  `u` on a task with uncommitted changes offers to have its agent commit and
+  update, and `roost-merge-style` can squash a task into one commit. With no
+  tasks yet, the menus grey out the task commands.
 - With tmux-control newer than 0.7.2, switching sessions from a terminal
   (`C-c C-s`, next and previous session) opens that task in its workspace.
 - `roost-claude-command` moved into `roost-agent-commands`, and

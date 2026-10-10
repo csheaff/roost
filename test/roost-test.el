@@ -3048,6 +3048,119 @@ ssh: connect to host dev port 22: Operation timed out"
          (when (get-buffer-process buffer) (delete-process (get-buffer-process buffer)))
          (kill-buffer buffer))))))
 
+;;;; From a hands-on design review
+
+(ert-deftest roost-a-new-task-starts-in-the-project-you-are-in ()
+  (roost-test--isolated
+   (let* ((repo (file-name-as-directory (file-truename (make-temp-file "roost-here" t))))
+          (sub (expand-file-name "src/" repo)))
+     (unwind-protect
+         (progn
+           (let ((default-directory repo)) (call-process "git" nil nil nil "init" "-q"))
+           (make-directory sub)
+           ;; A project Roost knows of, on another host, must not stand in.
+           (roost--cache-task "dev" (append '((repo . "/home/user/repo")) (roost-test--task)))
+           (save-window-excursion
+             (with-temp-buffer
+               (setq default-directory sub)
+               (roost--compose)
+               (with-current-buffer roost--compose-buffer
+                 (should (equal (plist-get roost--compose-fields :directory) repo))))))
+       (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer))
+       (delete-directory repo t)))))
+
+(ert-deftest roost-the-project-picker-offers-project-el-checkouts ()
+  (roost-test--isolated
+   (let ((repo (file-name-as-directory (file-truename (make-temp-file "roost-known" t))))
+         (plain (file-name-as-directory (file-truename (make-temp-file "roost-plain" t)))))
+     (unwind-protect
+         (progn
+           (make-directory (expand-file-name ".git" repo))
+           (roost--cache-task "dev" (append '((repo . "/home/user/repo")) (roost-test--task)))
+           ;; Loaded first, so that it does not replace the stand-in.
+           (require 'project)
+           (cl-letf (((symbol-function 'project-known-project-roots)
+                      (lambda () (list repo plain "/ssh:other:/srv/app/"))))
+             (let ((choices (roost--project-choices)))
+               (should (string-suffix-p ":/home/user/repo/" (car choices)))
+               (should (member repo choices))
+               (should (member "/ssh:other:/srv/app/" choices))
+               (should-not (member plain choices)))))
+       (delete-directory repo t)
+       (delete-directory plain t)))))
+
+(ert-deftest roost-an-interrupted-turn-says-so ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (append '((lastEvent . "Interrupt") (live . t)) (roost-test--task)))))
+     (should (equal (roost--display-status task) "interrupted"))
+     (should (roost--waiting-p task))
+     (should (equal (roost--status-face "interrupted") 'roost-status-ready))
+     (should (equal (substring-no-properties (roost--next-step task))
+                    "You stopped its last turn; tell it what to do instead: e"))
+     (should (equal (substring-no-properties (roost--summary (list task))) "1 interrupted"))
+     ;; Once seen it waits no longer, as a finished turn would.
+     (puthash (roost--key task) (roost--field task 'updatedAt) roost--seen)
+     (should (equal (roost--attention-status task) "idle"))
+     (should-not (roost--waiting-p task))
+     ;; A turn that finishes is ready again.
+     (setq task (roost--cache-task "dev" (append '((lastEvent . "Stop") (live . t)
+                                                   (updatedAt . "2026-10-03T21:00:00+00:00"))
+                                                 (roost-test--task))))
+     (should (equal (roost--display-status task) "ready")))))
+
+(ert-deftest roost-update-offers-the-agent-uncommitted-changes ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (append '((integrationBranch . "main")) (roost-test--task))))
+         sent answer shown)
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host action params _success failure)
+                  (if (equal action "update")
+                      (funcall failure "Commit the task's changes before updating it from main")
+                    (setq sent (alist-get 'text params)))))
+               ((symbol-function 'yes-or-no-p) (lambda (_) answer))
+               ((symbol-function 'message)
+                (lambda (format &rest args) (setq shown (apply #'format-message format args)))))
+       (roost-update task)
+       (should-not sent)
+       (should (string-match-p "\\`Commit fix auth.s changes in Magit (r), then update it again" shown))
+       (setq answer t)
+       (roost-update task)
+       (should (string-prefix-p "Commit your changes, then merge main into this branch." sent))))))
+
+(ert-deftest roost-merge-style-squash-asks-the-host-to-squash ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (roost-test--task))) params question)
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host action request &rest _)
+                  (when (equal action "merge") (setq params request))))
+               ((symbol-function 'yes-or-no-p) (lambda (prompt) (setq question prompt) t))
+               ((symbol-function 'roost--release-terminal) #'ignore))
+       (roost-merge-retire task)
+       (should (assq 'id params))
+       (should-not (assq 'style params))
+       (let ((roost-merge-style 'squash))
+         (roost-merge-retire task))
+       (should (equal (alist-get 'style params) "squash"))
+       (should (string-prefix-p "Squash committed work from fix auth into one commit" question))))))
+
+(ert-deftest roost-task-commands-are-greyed-out-with-no-tasks ()
+  (roost-test--isolated
+   (with-temp-buffer
+     (should (roost--dispatch-inapt-p 'roost-shell))
+     (should-not (roost--menu-applies-p 'roost-shell))
+     (roost--cache-task "dev" (roost-test--task))
+     ;; With tasks but none at point, the command asks which.
+     (should-not (roost--dispatch-inapt-p 'roost-shell))
+     (should (roost--menu-applies-p 'roost-shell)))))
+
+(ert-deftest roost-doctor-says-how-magit-reaches-a-host ()
+  (let ((tramp-default-method "scp"))
+    (pcase-let ((`(,name ,ok ,detail ,hint) (roost--doctor-review-check "dev")))
+      (should (equal name "Magit"))
+      (should (eq ok 'optional))
+      (should (equal detail "over TRAMP's scp method"))
+      (should (string-match-p "Remote review" hint)))))
+
 ;;;; Review notes
 
 (defun roost-test--note (id task-id &rest fields)

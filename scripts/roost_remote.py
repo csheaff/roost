@@ -1288,6 +1288,62 @@ def merge_without_checkout(task, integration):
     git(repo, "update-ref", "-m", "merge %s: Merge made by Roost" % task["branch"], ref, commit, old)
 
 
+def squash_message(task, old, tip):
+    """The message for the task's work as one commit: its one commit's
+    message, or the first one's subject and every subject as a list. The
+    task's updates from its integration branch are left out."""
+    log = git(task["repo"], "log", "--no-merges", "--reverse", "--format=%B%x00", old + ".." + tip).stdout
+    messages = [message.strip() for message in log.split("\0") if message.strip()]
+    if not messages:
+        return "Add " + task["name"]
+    if len(messages) == 1:
+        return messages[0]
+    subjects = [message.splitlines()[0] for message in messages]
+    return subjects[0] + "\n\n" + "\n".join("* " + subject for subject in subjects)
+
+
+def squash_merge(task, integration, here):
+    """Put the task's work onto INTEGRATION as one commit. HERE says the
+    primary checkout has INTEGRATION checked out; otherwise no working tree
+    is involved. A conflict changes nothing. Return the task branch's tip,
+    which the new commit stands for, or None when there was nothing to add."""
+    repo = task["repo"]
+    ref = "refs/heads/" + integration
+    old = git(repo, "rev-parse", ref + "^{commit}").stdout.strip()
+    tip = git(repo, "rev-parse", "refs/heads/" + task["branch"] + "^{commit}").stdout.strip()
+    if git(repo, "merge-base", "--is-ancestor", tip, old, check=False).returncode == 0:
+        return None  # Already there.
+    message = squash_message(task, old, tip)
+    if here:
+        result = git(repo, "merge", "--squash", tip, check=False)
+        if result.returncode:
+            conflicts = conflicted_files(repo)
+            # A squash leaves no MERGE_HEAD to abort; this undoes it alike.
+            git(repo, "reset", "-q", "--merge")
+            if conflicts:
+                raise RoostError("%s conflicts with %s in %s. Nothing was changed; update the task from %s, then merge again"
+                                 % (task["name"], integration, ", ".join(conflicts), integration))
+            raise RoostError("Merge failed; task retained: " + (result.stderr.strip() or result.stdout.strip()))
+        if not git(repo, "diff", "--cached", "--quiet", check=False).returncode:
+            return tip  # The task's work was there already.
+        execute(["git", "-C", repo, "commit", "-q", "-F", "-"], input=message)
+        return tip
+    if (version_of(git(repo, "--version").stdout) or (0, 0)) < MERGE_TREE_GIT:
+        raise RoostError("Check out %s in the primary repository %s before merging "
+                         "(Git 2.38 merges without it)" % (integration, repo))
+    result = git(repo, "merge-tree", "--write-tree", "--name-only", "--no-messages", old, tip, check=False)
+    lines = result.stdout.splitlines()
+    if result.returncode == 1:
+        conflicts = [line for line in lines[1:] if line]
+        raise RoostError("%s conflicts with %s in %s. Nothing was changed; update the task from %s, then merge again"
+                         % (task["name"], integration, ", ".join(conflicts) or "some files", integration))
+    if result.returncode or not lines:
+        raise RoostError("Merge failed; task retained: " + (result.stderr.strip() or result.stdout.strip()))
+    commit = git(repo, "commit-tree", lines[0], "-p", old, "-m", message).stdout.strip()
+    git(repo, "update-ref", "-m", "merge %s: Squashed by Roost" % task["branch"], ref, commit, old)
+    return tip
+
+
 def merged_pull_request_head(task):
     """The branch tip GitHub merged for the task's pull request, or None when
     there is no recorded pull request, it is not MERGED, or gh cannot say.
@@ -1324,9 +1380,10 @@ def safe_to_delete(task, commit, merged_head=None):
     return merged_head is not None and merged_head == commit
 
 
-def retire(store, task, merge=False, merged_head=None):
+def retire(store, task, merge=False, merged_head=None, squash=False):
     """Remove a finished task's worktree, branch, window and record.
-    Never discards uncommitted files or unmerged commits."""
+    Never discards uncommitted files or unmerged commits. With MERGE, merge
+    the task first, as one commit with SQUASH."""
     inventory = inventory_for(task)
     pane = owned_pane(task, inventory)
     require_finished(task, pane)
@@ -1341,6 +1398,7 @@ def retire(store, task, merge=False, merged_head=None):
         require_clean(str(worktree))
         require_removable(worktree)
     require_agent_work_kept(task)
+    squashed = None
     if merge:
         if not branch_exists:
             raise RoostError("The task branch no longer exists; there is nothing to merge")
@@ -1350,7 +1408,10 @@ def retire(store, task, merge=False, merged_head=None):
         if here and git(repo, "status", "--porcelain", "--untracked-files=no").stdout.strip():
             raise RoostError("The primary checkout %s has uncommitted changes; commit or stash them before merging"
                              % repo)
-        if not here:
+        if squash:
+            squashed = squash_merge(task, integration, here)
+            result = None
+        elif not here:
             merge_without_checkout(task, integration)
             result = None
         else:
@@ -1367,7 +1428,9 @@ def retire(store, task, merge=False, merged_head=None):
     commit = None
     if branch_exists:
         commit = git(repo, "rev-parse", "refs/heads/" + branch + "^{commit}").stdout.strip()
-        if not safe_to_delete(task, commit, merged_head):
+        # A squashed branch's commits stay unmerged to Git, as after a
+        # pull request's squash merge, but its tip is in the new commit.
+        if not safe_to_delete(task, commit, merged_head or squashed):
             raise RoostError("Task branch has unmerged commits; merge it (m) first, discard it, "
                              "or forget the task to keep its branch")
         # A durable checkpoint permits retry after a disconnect or partial cleanup.
@@ -1883,7 +1946,8 @@ TASK_ACTIONS = {
     "inspect": lambda store, task, request: inspect(store, task),
     "seen": lambda store, task, request: seen(store, task, request.get("updatedAt")),
     "retire": lambda store, task, request: retire(store, task, merged_head=request.get("mergedHead")),
-    "merge": lambda store, task, request: retire(store, task, merge=True, merged_head=request.get("mergedHead")),
+    "merge": lambda store, task, request: retire(store, task, merge=True, merged_head=request.get("mergedHead"),
+                                                 squash=request.get("style") == "squash"),
     "forget": lambda store, task, request: forget(store, task),
     "discard": lambda store, task, request: discard(store, task, request.get("expect"),
                                                     request.get("dryRun") is True),
