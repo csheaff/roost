@@ -1858,7 +1858,7 @@ elif args[:2] == ["auth", "status"]:
         folder = home / ".claude/projects" / claude_folder(task["worktree"])
         folder.mkdir(parents=True)
         (folder / (record["agentSession"] + ".jsonl")).write_text(json.dumps(
-            {"type": "user", "timestamp": "2026-10-01T10:00:00Z",
+            {"type": "user", "timestamp": "2026-10-01T10:00:00Z", "cwd": task["worktree"],
              "message": {"role": "user", "content": "Fix the parser"}}) + "\n")
         self.request("stop", id=task["id"])
         self.wait_for_pane_exit(task)
@@ -2148,9 +2148,11 @@ class Search(unittest.TestCase):
         self.repo_hash = hashlib.sha256(self.repo.encode()).hexdigest()[:10]
 
     def conversation(self, worktree, session, entries):
+        """Write a conversation Claude ran in WORKTREE, as Claude names and records it."""
         folder = self.home / ".claude/projects" / roost.claude_project_folder(str(worktree))
         folder.mkdir(parents=True, exist_ok=True)
-        (folder / (session + ".jsonl")).write_text("".join(json.dumps(entry) + "\n" for entry in entries))
+        (folder / (session + ".jsonl")).write_text(
+            "".join(json.dumps(dict(dict(cwd=str(worktree)), **entry)) + "\n" for entry in entries))
         return folder
 
     @staticmethod
@@ -2240,6 +2242,30 @@ class Search(unittest.TestCase):
                               [self.said("user", "pong", n)])
         result = self.search("pong")
         self.assertEqual((len(result["tasks"]), result["moreTasks"]), (roost.SEARCH_TASK_LIMIT, 2))
+
+    def test_only_messages_recorded_in_the_worktrees_count(self):
+        live = self.state / "worktrees" / self.repo_hash / "live-333333"
+        self.store.save(dict(id="3333333333333333", name="live", repo=self.repo, worktree=str(live), status="ready"))
+        self.conversation(live, "s", [self.said("user", "zebra from the task", 1),
+                                      self.said("user", "zebra from elsewhere", 2, cwd="/elsewhere")])
+        # Claude's folder names are lossy: this unrelated directory's starts
+        # like those of directories in the worktrees.
+        lookalike = Path(str(self.state / "worktrees") + "-evil") / "abc"
+        self.assertTrue(roost.claude_project_folder(str(lookalike)).startswith(
+            roost.claude_project_folder(str(self.state / "worktrees")) + "-"))
+        self.conversation(lookalike, "s", [self.said("user", "zebra lookalike", 3)])
+        result = self.search("zebra")["tasks"]
+        self.assertEqual([(task["name"], [hit["text"] for hit in task["hits"]]) for task in result],
+                         [("live", ["zebra from the task"])])
+
+    def test_a_long_state_path_still_finds_retired_tasks(self):
+        # Claude cuts names over 200 characters and adds a hash of the whole path.
+        state = Path(self.temp.name) / ("d" * 70) / ("e" * 70) / ("f" * 70) / "state"
+        worktree = state / "worktrees" / self.repo_hash / "old-task-444444"
+        self.assertGreater(len(os.path.realpath(state / "worktrees")), 200)
+        self.conversation(worktree, "s", [self.said("user", "yak shaving", 1)])
+        reply = roost.rpc(dict(root=str(state), action="search", query="yak"))
+        self.assertEqual([(task["name"], task["past"]) for task in reply["result"]["tasks"]], [("old task", True)])
 
     def test_an_empty_query_is_refused(self):
         reply = roost.rpc(dict(root=str(self.state), action="search", query="  "))

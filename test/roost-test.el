@@ -788,11 +788,12 @@
 
 (ert-deftest roost-search-shows-each-hosts-messages-and-opens-live-tasks ()
   (roost-test--isolated
-   (let ((roost-hosts '("dev" "box")) requests opened)
+   (let ((roost-hosts '("dev" "box")) requests opened fetched)
      (roost--cache-task "dev" (roost-test--task))
      (cl-letf (((symbol-function 'roost--request)
                 (lambda (host action params success failure)
                   (push (list host action params success failure) requests)))
+               ((symbol-function 'roost--refresh-host) (lambda (host &rest _) (push host fetched)))
                ((symbol-function 'roost-open-task) (lambda (task) (setq opened task))))
        (unwind-protect
            (save-window-excursion
@@ -811,6 +812,11 @@
                                         ((at . "2026-10-01T10:02:00Z") (role . "assistant") (session . "s1")
                                          (snippet . "Done: CSV commas quoted") (text . "Done: CSV commas quoted.")))
                                   (more . 0))
+                                 ;; Live, but not fetched yet, as before Roost first watches.
+                                 ((id . "1111111111111111") (name . "fresh task") (repo . "/home/user/shop")
+                                  (hits ((at . "2026-10-02T10:00:00Z") (role . "user") (session . "s3")
+                                         (snippet . "Fresh CSV commas") (text . "Fresh CSV commas")))
+                                  (more . 0))
                                  ((past . t) (name . "csv import") (repo)
                                   (hits ((at . "2026-10-03T10:00:00Z") (role . "user") (session . "s2")
                                          (snippet . "Import CSV with commas")
@@ -818,6 +824,8 @@
                                   (more . 3)))
                           (moreTasks . 0)))
                (should (string-match-p "Searching box…" (buffer-string)))
+               ;; Roost fetches the tasks of a host that has one it lacks.
+               (should (equal fetched '("dev")))
                (funcall (nth 4 box) "ssh: no route")
                (let ((shown (buffer-string)))
                  (should-not (string-match-p "Searching" shown))
@@ -826,6 +834,8 @@
                  (should (string-match-p (concat "csv import  dev  past task\n"
                                                  "  3 earlier messages match too\n"
                                                  "  2026-10-0.*You    Import CSV with commas\n"
+                                                 "\nfresh task  dev · shop\n"
+                                                 "  2026-10-0.*You    Fresh CSV commas\n"
                                                  "\nfix auth  dev · shop  ready\n"
                                                  "  2026-10-0.*You    Quote CSV fields with commas\n"
                                                  "  2026-10-0.*Claude Done: CSV commas quoted\n")
@@ -852,13 +862,29 @@
                                 (concat (make-string 30 ?a) "\n" (make-string 30 ?b) "\nshort")))
                  (roost-search-toggle)
                  (should-not (string-match-p "in quotes" (buffer-string))))
+               ;; One not fetched yet can't open until it is, and Roost fetches it.
+               (roost-search-next)
+               (should (string-match-p "Fresh CSV" (thing-at-point 'line)))
+               (setq fetched nil)
+               (should-error (roost-search-open) :type 'user-error)
+               (should (equal fetched '("dev")))
+               (roost--cache-task "dev" (append '((name . "fresh task")) (roost-test--task "1111111111111111" "running")))
+               (roost--redraw)
+               (should (string-match-p "^fresh task  dev · shop  running$" (buffer-string)))
+               (should (string-match-p "Fresh CSV" (thing-at-point 'line)))
                ;; A live task's message opens the task, and task commands act on it.
                (roost-search-next)
+               (should (string-match-p "Quote CSV" (thing-at-point 'line)))
+               ;; Showing a whole message keeps point on it, wherever it is.
+               (roost-search-toggle)
+               (should (string-match-p "Quote CSV" (thing-at-point 'line)))
+               (should (string-match-p "commas, please\\.\n" (buffer-string)))
+               (roost-search-toggle)
                (should (string-match-p "Quote CSV" (thing-at-point 'line)))
                (should (equal (roost--key (roost--task-at-point)) '("dev" "0123456789abcdef")))
                (roost-search-open)
                (should (equal (roost--key opened) '("dev" "0123456789abcdef")))
-               (roost-search-previous)
+               (roost-search-previous 2)
                (should (string-match-p "Import CSV" (thing-at-point 'line)))
                (should-error (roost-search-previous) :type 'user-error)
                ;; Searching again ignores replies to the search before.
