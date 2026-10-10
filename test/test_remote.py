@@ -1002,13 +1002,34 @@ class Lifecycle(unittest.TestCase):
         self.assertFalse(Path(task["worktree"]).exists())
         self.assertEqual(self.request("list")["result"], [])
 
-    def test_a_removal_whose_request_died_can_be_finished(self):
+    def test_a_removal_holds_while_a_command_it_started_runs(self):
+        # Emacs kills a local request it gave up waiting for, but not the
+        # Git deleting files for it, and a retry must not race that Git.
+        git = roost.git
+        task = self.create()
+
+        def removing(repo, *args, **kwargs):
+            if args[:2] == ("worktree", "remove"):
+                roost.execute(["sh", "-c", "sleep 1.5 > /dev/null 2>&1 &"])
+                raise roost.RoostError("simulated end of the request")
+            return git(repo, *args, **kwargs)
+
+        with patch.object(roost, "git", side_effect=removing):
+            self.assertFalse(self.request("retire", id=task["id"])["ok"])
+        self.assertIn("still removing", self.request("retire", id=task["id"])["error"])
+        deadline = time.monotonic() + 8
+        while not self.request("retire", id=task["id"])["ok"]:
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(0.2)
+        self.assertEqual(self.request("list")["result"], [])
+
+    def test_a_removal_that_stopped_short_can_be_finished(self):
         task = self.create()
         self.request("stop", id=task["id"])
         store = roost.Store(str(self.state))
         record = store.read(task["id"])
-        # The same process ID, started at another time: another process.
-        record["removing"] = dict(pid=os.getpid(), started="long ago")
+        # Marked as going, with nothing holding its lock.
+        record["removing"] = "an earlier request"
         store.save(record)
         self.assertIn("when it stopped", self.request("resume", id=task["id"])["error"])
         self.assertTrue(self.request("retire", id=task["id"])["ok"])
