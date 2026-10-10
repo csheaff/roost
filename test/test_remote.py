@@ -437,6 +437,21 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(self.git("symbolic-ref", "--short", "HEAD"), "mine")
         self.assertFalse(wt.exists())
 
+    def test_a_squash_merge_retires_a_task_whose_pull_request_merged_earlier(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        (wt / "hello").write_text("one\n")
+        self.git("commit", "-qam", "First", cwd=wt)
+        merged_earlier = self.git("rev-parse", "HEAD", cwd=wt)
+        (wt / "hello").write_text("two\n")
+        self.git("commit", "-qam", "Second", cwd=wt)
+        reply = self.request("merge", id=task["id"], style="squash", mergedHead=merged_earlier)
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual((self.repo / "hello").read_text(), "two\n")
+        self.assertFalse(wt.exists())
+        # The branch on GitHub is not this task's last commit: left alone.
+        self.assertNotIn("remoteCleanup", reply["result"])
+
     def test_a_conflicting_squash_merge_changes_nothing(self):
         task = self.create()
         wt = Path(task["worktree"])
@@ -882,7 +897,9 @@ class Lifecycle(unittest.TestCase):
 
     def test_pi_queued_work_is_background_and_codex_interrupt_is_ready(self):
         self.assertEqual(roost.PiAgent().observe(dict(event="agent_end", pending=True))["status"], "background")
-        self.assertEqual(roost.CodexAgent().observe(dict(hook_event_name="Interrupt"))["status"], "ready")
+        # Ready, and named as an interruption, so Emacs shows it interrupted.
+        interrupted = roost.CodexAgent().observe(dict(hook_event_name="Interrupt"))
+        self.assertEqual((interrupted["status"], interrupted["lastEvent"]), ("ready", "Interrupt"))
         self.assertIsNone(roost.PiAgent().observe(dict(event="unknown")))
         self.assertIsNone(roost.CodexAgent().observe(dict(hook_event_name="SubagentStop")))
 

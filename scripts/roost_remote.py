@@ -590,7 +590,8 @@ class CodexAgent:
                   "Stop": "ready", "Interrupt": "ready"}.get(event)
         if not status:
             return None
-        updates = dict(status=status, updatedAt=now(), lastEvent="Stop" if event == "Interrupt" else event)
+        # An interrupted turn keeps its name, so it shows as interrupted.
+        updates = dict(status=status, updatedAt=now(), lastEvent=event)
         if payload.get("session_id"):
             updates["agentSession"] = payload["session_id"]
         return updates
@@ -1429,8 +1430,9 @@ def retire(store, task, merge=False, merged_head=None, squash=False):
     if branch_exists:
         commit = git(repo, "rev-parse", "refs/heads/" + branch + "^{commit}").stdout.strip()
         # A squashed branch's commits stay unmerged to Git, as after a
-        # pull request's squash merge, but its tip is in the new commit.
-        if not safe_to_delete(task, commit, merged_head or squashed):
+        # pull request's squash merge, but its tip is in the new commit:
+        # proof for this merge, where a pull request merged earlier is not.
+        if not safe_to_delete(task, commit, squashed or merged_head):
             raise RoostError("Task branch has unmerged commits; merge it (m) first, discard it, "
                              "or forget the task to keep its branch")
         # A durable checkpoint permits retry after a disconnect or partial cleanup.
