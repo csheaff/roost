@@ -1698,17 +1698,18 @@ def snippet(found, patterns):
     return ("…" if start else "") + flat[start:end].rstrip() + ("…" if end < len(flat) else "")
 
 
-def search_transcript(path, words, where):
+def search_transcript(path, words, owner):
     """Messages in the transcript at PATH containing every one of WORDS (in
-    lower case), recorded in a directory for which WHERE is true; the Git
-    branch and directory Claude recorded with the first."""
+    lower case), as (TASK, BRANCH, HIT): TASK is what OWNER says of the
+    directory Claude recorded the message in, and messages for which it
+    says None are left out."""
     # JSON escapes only quotes, backslashes and control characters, so a
     # line that lacks a word's escaped form cannot contain the word.
     needles = [json.dumps(word, ensure_ascii=False)[1:-1] for word in words]
     patterns = word_patterns(words)
-    hits, branch, directory = [], None, None
+    found_hits = []
     with open(path, encoding="utf-8", errors="replace") as handle:
-        for line in handle:
+        for number, line in enumerate(handle, 1):
             lower = line.lower()
             if not all(needle in lower for needle in needles):
                 continue
@@ -1717,19 +1718,19 @@ def search_transcript(path, words, where):
             except ValueError:
                 continue
             found = conversation_text(entry)
-            if not found:
+            if not found or not all(pattern.search(found[1].lower()) for pattern in patterns):
                 continue
-            lower = found[1].lower()
-            if not all(pattern.search(lower) for pattern in patterns) or not where(entry.get("cwd")):
+            task = owner(entry.get("cwd"))
+            if not task:
                 continue
-            branch = branch or text(entry.get("gitBranch"))
-            directory = directory or text(entry.get("cwd"))
             body = found[1]
-            hits.append(dict(at=text(entry.get("timestamp")), role=found[0], session=path.stem,
-                             snippet=snippet(body, patterns),
-                             text=body if len(body) <= SEARCH_TEXT_LIMIT
-                             else body[:SEARCH_TEXT_LIMIT].rstrip() + "…"))
-    return hits, branch, directory
+            # The session and line name the message, even where times are equal or missing.
+            found_hits.append((task, text(entry.get("gitBranch")),
+                               dict(at=text(entry.get("timestamp")), role=found[0], session=path.stem,
+                                    line=number, snippet=snippet(body, patterns),
+                                    text=body if len(body) <= SEARCH_TEXT_LIMIT
+                                    else body[:SEARCH_TEXT_LIMIT].rstrip() + "…")))
+    return found_hits
 
 
 def search(store, request):
@@ -1738,31 +1739,34 @@ def search(store, request):
     newest such message first. Retiring a task deletes its record and
     worktree, but Claude keeps its conversations, in a folder named after
     the worktree's path. That naming is lossy ("/a/b" and "/a-b" share a
-    name), so each message must also have been recorded in a directory of
-    the task's worktree, or of the store's worktrees for a retired task."""
+    name), so messages are told apart by the directory Claude recorded
+    with each: a live task's worktree, or a retired task's, which was
+    WORKTREES/REPO-HASH/SLUG-ID."""
     words = (text(request.get("query")) or "").lower().split()
     if not words:
         raise RoostError("Search for at least one word")
-    tasks = store.all()
+    tasks = [task for task in store.all() if isinstance(task.get("worktree"), str)]
     projects = Path.home() / ".claude" / "projects"
     worktrees = store.root / "worktrees"
-    # Folders of directories in the worktrees begin so; Claude cuts long
-    # names, and so the start of this one, at the same length.
-    prefix = (claude_project_folder(str(worktrees), whole=True) + "-")[:CLAUDE_FOLDER_LIMIT]
-    real = {}
+    root = os.path.realpath(worktrees)
+    worktree_of = {task["id"]: os.path.realpath(task["worktree"]) for task in tasks}
+    owners = {}
 
-    def within(directory, unrecorded):
-        """Whether a message recorded in a directory is in DIRECTORY;
-        UNRECORDED says for one that names none."""
-        directory = os.path.realpath(directory)
-
-        def check(cwd):
-            if not isinstance(cwd, str):
-                return unrecorded
-            if cwd not in real:
-                real[cwd] = os.path.realpath(cwd)
-            return real[cwd] == directory or real[cwd].startswith(directory.rstrip(os.sep) + os.sep)
-        return check
+    def owner(cwd):
+        """("task", ID) or ("past", REPO-HASH, DIRECTORY) for a message
+        recorded in CWD, or None for one recorded elsewhere, or nowhere."""
+        if not isinstance(cwd, str):
+            return None
+        if cwd not in owners:
+            path = os.path.realpath(cwd)
+            owners[cwd] = next((("task", task_id) for task_id, worktree in worktree_of.items()
+                                if path == worktree or path.startswith(worktree.rstrip(os.sep) + os.sep)),
+                               None)
+            parts = Path(os.path.relpath(path, root)).parts
+            if (not owners[cwd] and len(parts) > 1 and re.fullmatch(r"[0-9a-f]{10}", parts[0])
+                    and re.fullmatch(r".+-[0-9a-f]{6}", parts[1])):
+                owners[cwd] = ("past",) + parts[:2]
+        return owners[cwd]
 
     repos = {}
     with contextlib.suppress(OSError):
@@ -1771,36 +1775,32 @@ def search(store, request):
     for task in tasks:
         if isinstance(task.get("repo"), str):
             repos[hashlib.sha256(task["repo"].encode()).hexdigest()[:10]] = task["repo"]
-    folders = {}
+    # Folders of directories in the worktrees begin so; Claude cuts long
+    # names, and so the start of this one, at the same length.
+    prefix = (claude_project_folder(str(worktrees), whole=True) + "-")[:CLAUDE_FOLDER_LIMIT]
+    folders = set()
     with contextlib.suppress(OSError):
-        for folder in projects.iterdir():
-            if folder.name[:CLAUDE_FOLDER_LIMIT].startswith(prefix):
-                folders[folder] = None
-    for task in tasks:
-        if isinstance(task.get("worktree"), str):
-            folders[projects / claude_project_folder(task["worktree"])] = task
-    results = []
-    for folder, task in folders.items():
-        hits, branch, directory = [], None, None
-        where = within(task["worktree"], True) if task else within(str(worktrees), False)
+        folders.update(folder for folder in projects.iterdir() if folder.name[:CLAUDE_FOLDER_LIMIT].startswith(prefix))
+    folders.update(projects / claude_project_folder(task["worktree"]) for task in tasks)
+    groups = {}
+    for folder in sorted(folders):
         # Subagents' conversations are in subfolders; only the task's own are searched.
         for path in sorted(folder.glob("*.jsonl")) if folder.is_dir() else []:
             with contextlib.suppress(OSError):
-                found, found_branch, found_directory = search_transcript(path, words, where)
-                hits += found
-                branch = branch or found_branch
-                directory = directory or found_directory
-        if not hits:
-            continue
-        hits.sort(key=lambda hit: hit["at"] or "")
-        if task:
+                for task, branch, hit in search_transcript(path, words, owner):
+                    group = groups.setdefault(task, dict(hits=[], branch=None))
+                    group["hits"].append(hit)
+                    group["branch"] = group["branch"] or branch
+    by_id = {task["id"]: task for task in tasks}
+    results = []
+    for key, group in groups.items():
+        hits = sorted(group["hits"], key=lambda hit: (hit["at"] or "", hit["session"], hit["line"]))
+        if key[0] == "task":
+            task = by_id[key[1]]
             result = dict(id=task["id"], name=task.get("name"), repo=task.get("repo"), branch=task.get("branch"))
         else:
-            # The worktree was WORKTREES/REPO-HASH/SLUG-ID.
-            parts = Path(os.path.relpath(real[directory], os.path.realpath(worktrees))).parts
-            match = re.fullmatch(r"(.+)-[0-9a-f]{6}", parts[1]) if len(parts) > 1 else None
-            result = dict(name=(match.group(1) if match else parts[-1]).replace("-", " "),
-                          repo=repos.get(parts[0]), past=True, branch=branch)
+            result = dict(key=key[1] + "/" + key[2], name=key[2][:-7].replace("-", " "),
+                          repo=repos.get(key[1]), past=True, branch=group["branch"])
         result.update(hits=hits[-SEARCH_HITS_PER_TASK:], more=max(0, len(hits) - SEARCH_HITS_PER_TASK))
         results.append(result)
     results.sort(key=lambda result: result["hits"][-1]["at"] or "", reverse=True)

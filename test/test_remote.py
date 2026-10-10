@@ -2220,7 +2220,13 @@ class Search(unittest.TestCase):
     def test_words_with_quotes_match_and_snippets_show_the_word(self):
         worktree = self.state / "worktrees" / self.repo_hash / "t-111111"
         long = "word " * 200 + "the \"needle\" here " + "tail " * 200
-        self.conversation(worktree, "s", [self.said("assistant", [{"type": "text", "text": long}], 1)])
+        self.conversation(worktree, "s", [self.said("assistant", [{"type": "text", "text": long}], 1),
+                                          self.said("user", "needle again", 1), self.said("user", "needle and", 1)])
+        task = self.search("needle")["tasks"][0]
+        # A retired task is told apart by its worktree, and messages by
+        # session and line, even where their times are equal.
+        self.assertEqual(task["key"], self.repo_hash + "/t-111111")
+        self.assertEqual([(hit["session"], hit["line"]) for hit in task["hits"]], [("s", 1), ("s", 2), ("s", 3)])
         hit = self.search('"needle"')["tasks"][0]["hits"][0]
         self.assertIn('the "needle" here', hit["snippet"])
         self.assertTrue(hit["snippet"].startswith("…") and hit["snippet"].endswith("…"))
@@ -2247,7 +2253,10 @@ class Search(unittest.TestCase):
         live = self.state / "worktrees" / self.repo_hash / "live-333333"
         self.store.save(dict(id="3333333333333333", name="live", repo=self.repo, worktree=str(live), status="ready"))
         self.conversation(live, "s", [self.said("user", "zebra from the task", 1),
-                                      self.said("user", "zebra from elsewhere", 2, cwd="/elsewhere")])
+                                      self.said("user", "zebra from elsewhere", 2, cwd="/elsewhere"),
+                                      self.said("user", "zebra from nowhere", 3, cwd=None)])
+        # A session run in a repository's folder of worktrees is no task's.
+        self.conversation(self.state / "worktrees" / self.repo_hash, "s", [self.said("user", "zebra in between", 4)])
         # Claude's folder names are lossy: this unrelated directory's starts
         # like those of directories in the worktrees.
         lookalike = Path(str(self.state / "worktrees") + "-evil") / "abc"

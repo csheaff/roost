@@ -312,6 +312,8 @@ sidebar's keys act on this row.")
   "Hosts with a list request in flight.")
 (defvar roost--revisions (make-hash-table :test 'equal)
   "Per-host mutation counter, used to discard stale list replies.")
+(defvar roost--snapshots (make-hash-table :test 'equal)
+  "How many task lists each host has sent, so a view can tell one has since.")
 (defvar roost--errors (make-hash-table :test 'equal)
   "Last refresh error for each unreachable host.")
 (defvar roost--statuses (make-hash-table :test 'equal)
@@ -745,6 +747,7 @@ finished or wants."
                  (roost--remove-notes (lambda (note) (equal (roost--note-key note) key)))))
              roost--tasks)
     (mapc (lambda (task) (roost--cache-task host task)) tasks)
+    (puthash host (1+ (gethash host roost--snapshots 0)) roost--snapshots)
     (remhash host roost--errors)))
 
 (defun roost--task-states (host)
@@ -4336,7 +4339,6 @@ The mark stays where it was."
 
 ;; Defined with searching, below.
 (defvar roost--search-buffer)
-(defvar roost--search-unresolved)
 
 (defun roost--redraw ()
   "Refresh an existing dashboard and task panels without changing focus."
@@ -4355,11 +4357,11 @@ The mark stays where it was."
     (with-current-buffer buffer
       (when (derived-mode-p 'roost-sidebar-list-mode)
         (roost--render-visible #'roost--render-sidebar))))
-  ;; Search results show live tasks once Roost has them.
+  ;; Search results show their live tasks as they are now.
   (when-let* ((buffer (get-buffer roost--search-buffer)))
     (with-current-buffer buffer
-      (when (and (derived-mode-p 'roost-search-mode) roost--search-unresolved)
-        (roost--render-search))))
+      (when (derived-mode-p 'roost-search-mode)
+        (roost--render-visible #'roost--render-search))))
   ;; Data that just arrived can name the task a restored workspace shows.
   (when (memq #'roost--layout-changed (default-value 'window-configuration-change-hook))
     (roost--sync-side-windows))
@@ -4398,8 +4400,8 @@ The mark stays where it was."
   "Counts searches in this buffer, so that replies to an older one are ignored.")
 (defvar-local roost--search-expanded nil
   "Identities of the results whose whole message is shown.")
-(defvar-local roost--search-unresolved nil
-  "Non-nil while results show live tasks that Roost has not fetched yet.")
+(defvar-local roost--search-fetching nil
+  "Hosts whose tasks a search asked for: (HOST . task lists they had sent).")
 
 (defvar-keymap roost-search-mode-map
   :doc "Keys in Roost's search results."
@@ -4472,7 +4474,18 @@ conversations Claude keeps.  RET on a live task's message opens it."
                           (when-let* ((id (alist-get 'id result)))
                             (not (gethash (list host id) roost--tasks))))
                         (and (not (eq (car-safe reply) :error)) (alist-get 'tasks reply)))
-          (roost--refresh-host host t))))))
+          (roost--search-fetch host))))))
+
+(defun roost--search-fetch (host)
+  "Fetch HOST's tasks for the results, noting how many lists it had sent."
+  (setf (alist-get host roost--search-fetching nil nil #'equal) (gethash host roost--snapshots 0))
+  (roost--refresh-host host t))
+
+(defun roost--search-gone-p (host)
+  "Whether HOST has sent a task list since the results asked for one.
+A live task such a list lacks has since been retired."
+  (when-let* ((asked (assoc host roost--search-fetching)))
+    (> (gethash host roost--snapshots 0) (cdr asked))))
 
 (defun roost--search-highlight (string words)
   "STRING with each of WORDS in it highlighted where a word starts, ignoring case.
@@ -4509,6 +4522,7 @@ Hosts match words so: \"test\" finds \"tests\", but not \"latest\"."
   (let* ((inhibit-read-only t)
          (place (get-text-property (line-beginning-position) 'roost-search-id))
          (places (roost--window-places))
+         (mark (roost--mark-place))
          (words (split-string (downcase roost--search-query)))
          (pending (seq-remove (lambda (host) (assoc host roost--search-replies)) (roost--hosts)))
          (groups nil)
@@ -4525,7 +4539,6 @@ Hosts match words so: \"test\" finds \"tests\", but not \"latest\"."
     (setq groups (sort groups (lambda (a b)
                                 (string> (or (alist-get 'at (car (last (alist-get 'hits (cdr a))))) "")
                                          (or (alist-get 'at (car (last (alist-get 'hits (cdr b))))) "")))))
-    (setq roost--search-unresolved nil)
     (erase-buffer)
     (insert (propertize "Messages containing " 'face 'roost-dim)
             (propertize roost--search-query 'face 'roost-heading) "\n")
@@ -4541,11 +4554,10 @@ Hosts match words so: \"test\" finds \"tests\", but not \"latest\"."
     (pcase-dolist (`(,host . ,result) groups)
       (let* ((key (when-let* ((id (alist-get 'id result))) (list host id)))
              (task (and key (gethash key roost--tasks)))
+             (key (unless (and key (not task) (roost--search-gone-p host)) key))
              (status (cond (task (roost--display-status task)) ((not key) "past task")))
              (row (and key (list 'roost-task key)))
              (start (point)))
-        (when (and key (not task))
-          (setq roost--search-unresolved t))
         (insert "\n" (propertize (or (alist-get 'name result) "?") 'face 'roost-heading) "  "
                 ;; A task retired before hosts recorded its repository has none.
                 (propertize (if-let* ((repo (alist-get 'repo result)))
@@ -4565,7 +4577,8 @@ Hosts match words so: \"test\" finds \"tests\", but not \"latest\"."
                          (format "  %d earlier messages match too\n" (alist-get 'more result))
                          'face 'roost-dim row)))
         (dolist (hit (alist-get 'hits result))
-          (let* ((id (list host (alist-get 'name result) (alist-get 'session hit) (alist-get 'at hit)))
+          (let* ((id (list host (or (alist-get 'id result) (alist-get 'key result))
+                           (alist-get 'session hit) (alist-get 'line hit)))
                  (properties (append (list 'roost-search-id id 'roost-search-hit (list host result hit)) row))
                  (who (if (equal (alist-get 'role hit) "user") "You" "Claude")))
             (insert (apply #'propertize
@@ -4586,8 +4599,9 @@ Hosts match words so: \"test\" finds \"tests\", but not \"latest\"."
     (when (> more 0)
       (insert (propertize (format "\n%d more tasks match; add a word to narrow the search.\n" more)
                           'face 'roost-dim)))
-    ;; Windows keep their scroll; point stays on its message.
+    ;; Windows keep their scroll, and the mark stays; point stays on its message.
     (roost--restore-window-places places)
+    (roost--restore-mark mark)
     (goto-char (point-min))
     (if-let* ((found (and place (roost--search-find place))))
         (goto-char found)
@@ -4617,7 +4631,7 @@ IDs are lists made afresh by each redraw, so compare them with `equal'."
     (cond ((and key (gethash key roost--tasks))
            (roost-open-task (gethash key roost--tasks)))
           (key
-           (roost--refresh-host (car key) t)
+           (roost--search-fetch (car key))
            (user-error "Roost is still fetching the tasks on %s; try again in a moment"
                        (roost--host-label (car key))))
           ((roost--search-hit) (roost-search-toggle))
