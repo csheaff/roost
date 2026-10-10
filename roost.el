@@ -4432,7 +4432,14 @@ On a live task's message, task commands such as those in
 \\{roost-search-mode-map}"
   (setq-local truncate-lines t
               revert-buffer-function (lambda (&rest _) (roost-search-again)))
+  (add-hook 'window-size-change-functions #'roost--search-resized nil t)
   (roost--evil-state 'roost-search-mode roost-evil-state))
+
+(defun roost--search-resized (window)
+  "Wrap the messages shown in full again after WINDOW is resized."
+  (with-current-buffer (window-buffer window)
+    (when roost--search-expanded
+      (roost--render-search))))
 
 ;;;###autoload
 (defun roost-search (query)
@@ -4554,8 +4561,8 @@ A word wider than WIDTH, such as a URL, is broken within, as in
          (more 0)
          ;; Lines stay unwrapped, so each message is one line; a whole
          ;; message is wrapped to the window, inside its indentation.
-         (window (get-buffer-window (current-buffer)))
-         (width (max 40 (- (if window (window-body-width window) 80) 8))))
+         (window (get-buffer-window (current-buffer) t))
+         (width (max 10 (- (if window (window-body-width window) 80) 8))))
     (pcase-dolist (`(,host . ,reply) roost--search-replies)
       (unless (eq (car-safe reply) :error)
         (setq more (+ more (or (alist-get 'moreTasks reply) 0)))

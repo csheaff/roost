@@ -1732,9 +1732,11 @@ def search_transcript(path, words, owner, deadline=None):
     says of the directory Claude recorded the message in, and messages for
     which it says None are left out. Past DEADLINE, a `time.monotonic'
     value, it raises SearchTimeUp."""
-    # JSON escapes only quotes, backslashes and control characters, so a
-    # line that lacks a word's escaped form cannot contain the word.
-    needles = [json.dumps(word, ensure_ascii=False)[1:-1] for word in words]
+    # JSON escapes quotes, backslashes and control characters, and may
+    # escape any non-ASCII character, as Python's does: so a line that
+    # lacks an ASCII word's escaped form cannot contain it, while other
+    # words are left to the parsed message.
+    needles = [json.dumps(word)[1:-1] for word in words if word.isascii()]
     patterns = word_patterns(words)
     with open(path, encoding="utf-8", errors="replace") as handle:
         for number, line in enumerate(handle, 1):

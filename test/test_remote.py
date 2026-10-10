@@ -2231,6 +2231,11 @@ class Search(unittest.TestCase):
         # session and line, even where their times are equal.
         self.assertEqual(task["key"], self.repo_hash + "/t-111111")
         self.assertEqual([(hit["session"], hit["line"]) for hit in task["hits"]], [("s", 1), ("s", 2), ("s", 3)])
+        # JSON may escape non-ASCII characters, as this test's writer does.
+        self.conversation(worktree, "u", [self.said("user", "Café crème", 9)])
+        self.assertIn("\\u00e9", (self.home / ".claude/projects" / roost.claude_project_folder(str(worktree))
+                                   / "u.jsonl").read_text())
+        self.assertEqual([hit["text"] for hit in self.search("CAFÉ")["tasks"][0]["hits"]], ["Café crème"])
         hit = self.search('"needle"')["tasks"][0]["hits"][0]
         self.assertIn('the "needle" here', hit["snippet"])
         self.assertTrue(hit["snippet"].startswith("…") and hit["snippet"].endswith("…"))

@@ -909,6 +909,13 @@
                (roost-search-toggle)
                (should (string-match-p "Quote CSV" (thing-at-point 'line)))
                (should (string-match-p "commas, please\\.\n" (buffer-string)))
+               ;; It wraps to the window, also once the window is resized.
+               (should (memq #'roost--search-resized window-size-change-functions))
+               (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 28)))
+                 (roost--search-resized (selected-window))
+                 ;; Within its indentation of 8 columns.
+                 (should (string-match-p "^Quote CSV fields\nwith commas, please\\.$" (buffer-string))))
+               (roost--render-search)
                (roost-search-toggle)
                (should (string-match-p "Quote CSV" (thing-at-point 'line)))
                (should (equal (roost--key (roost--task-at-point)) '("dev" "0123456789abcdef")))
