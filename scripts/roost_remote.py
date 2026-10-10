@@ -1829,15 +1829,31 @@ def remove_agent_worktrees(task, entries):
             git(task["repo"], "update-ref", "-d", "refs/heads/" + branch, commit, check=False)
 
 
+def process_started(pid):
+    """When process PID started, as ps says, or None if it has ended.
+    With its ID, it names a process: IDs are reused, start times not."""
+    result = execute(["ps", "-o", "lstart=", "-p", str(pid)], check=False)
+    return (result.stdout.strip() or None) if result.returncode == 0 else None
+
+
+def removal_running(marker):
+    """Whether the request that set the removal MARKER still runs."""
+    if not isinstance(marker, dict) or not isinstance(marker.get("pid"), int) or not marker.get("started"):
+        return False
+    return process_started(marker["pid"]) == marker["started"]
+
+
 def remove_worktrees(store, task, worktree, agents, force=False):
     """Remove TASK's WORKTREE, if any, and AGENTS, entries of `agent_work`.
     Without the registry lock: a worktree with dependencies installed can
     hold hundreds of thousands of files, and every agent's hooks wait on
-    the lock meanwhile. Until then the record says the worktree is going,
-    so nothing starts in it. Without FORCE, changes there are refused."""
+    the lock. Meanwhile the record says this request is removing it, so
+    nothing else acts on the task. Without FORCE, changes there are
+    refused."""
     if not worktree and not agents:
         return
-    task["removing"] = now()
+    marker = dict(pid=os.getpid(), started=process_started(os.getpid()))
+    task["removing"] = marker
     store.save(task)
     try:
         with store.released():
@@ -1848,10 +1864,14 @@ def remove_worktrees(store, task, worktree, agents, force=False):
             elif worktree:
                 require_clean(str(worktree))
                 git(task["repo"], "worktree", "remove", str(worktree))
-    except Exception:
+    finally:
+        # The record may have changed meanwhile: clear only this mark.
         task.pop("removing", None)
-        store.save(task)
-        raise
+        with contextlib.suppress(RoostError):
+            current = store.read(task["id"])
+            if current.get("removing") == marker:
+                del current["removing"]
+                store.save(current)
 
 
 def require_agent_work_kept(task):
@@ -1969,10 +1989,17 @@ def runner(root, task_id, run_id, resume_conversation=False):
 
 
 def require_not_removing(task, action):
-    """Refuse ACTION on a task whose worktree is being removed, other than
-    finishing it, as a retry after a lost connection does."""
-    if task.get("removing") and action not in ("retire", "merge", "discard", "forget", "seen", "inspect"):
-        raise RoostError("Roost is removing this task's worktree")
+    """Refuse ACTION on a task whose worktree is being removed. While the
+    request removing it runs, refuse all but looking: a retry after Emacs
+    gave up waiting would race it. Once that request has died, the worktree
+    may be partly gone, so refuse all but finishing the task."""
+    marker = task.get("removing")
+    if not marker or action in ("seen", "inspect"):
+        return
+    if removal_running(marker):
+        raise RoostError("Roost is still removing this task's worktree; refresh in a moment")
+    if action not in ("retire", "merge", "discard", "forget"):
+        raise RoostError("Roost was removing this task's worktree when it stopped; retire, discard or forget the task")
 
 
 # Kept in task records for the helper's own use, and not sent to Emacs.

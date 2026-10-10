@@ -963,7 +963,7 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(self.request("retire", id=task["id"])["ok"])
         self.assertEqual(self.request("list")["result"], [])
 
-    def test_removing_a_worktree_lets_hooks_in_but_not_the_agent(self):
+    def test_removing_a_worktree_lets_hooks_in_but_nothing_else(self):
         # A worktree with dependencies installed takes seconds to delete,
         # and every agent's hooks wait on the registry lock.
         git = roost.git
@@ -975,25 +975,43 @@ class Lifecycle(unittest.TestCase):
                 with open(self.state / "registry.lock", "a") as lock:
                     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)  # Free, or this raises.
                     fcntl.flock(lock, fcntl.LOCK_UN)
-                during.append(self.request("resume", id=task["id"]))
+                # A retry after Emacs gave up waiting, or a resume, waits its
+                # turn; seeing the agent is recorded.
+                during.append([self.request(action, id=task["id"])["error"]
+                               for action in ("resume", "retire", "discard", "forget")])
+                self.assertTrue(self.request("seen", id=task["id"], updatedAt="seen meanwhile")["ok"])
                 if failing:
                     raise roost.RoostError("simulated failure")
             return git(repo, *args, **kwargs)
 
-        # Should it fail, the task can be started again.
+        # Should it fail, the task can be started again, and what was
+        # recorded meanwhile stays.
         failing = True
         with patch.object(roost, "git", side_effect=removing):
             self.assertFalse(self.request("retire", id=task["id"])["ok"])
-        self.assertIn("removing", during[0]["error"])
-        self.assertNotIn("removing", roost.Store(str(self.state)).read(task["id"]))
+        self.assertTrue(all("still removing" in error for error in during[0]), during)
+        record = roost.Store(str(self.state)).read(task["id"])
+        self.assertNotIn("removing", record)
+        self.assertEqual(record["seen"], "seen meanwhile")
         self.assertTrue(self.request("resume", id=task["id"])["ok"])
         self.wait(task, "ready")
         failing = False
         with patch.object(roost, "git", side_effect=removing):
             reply = self.request("retire", id=task["id"])
         self.assertTrue(reply["ok"], reply)
-        self.assertIn("removing", during[1]["error"])
         self.assertFalse(Path(task["worktree"]).exists())
+        self.assertEqual(self.request("list")["result"], [])
+
+    def test_a_removal_whose_request_died_can_be_finished(self):
+        task = self.create()
+        self.request("stop", id=task["id"])
+        store = roost.Store(str(self.state))
+        record = store.read(task["id"])
+        # The same process ID, started at another time: another process.
+        record["removing"] = dict(pid=os.getpid(), started="long ago")
+        store.save(record)
+        self.assertIn("when it stopped", self.request("resume", id=task["id"])["error"])
+        self.assertTrue(self.request("retire", id=task["id"])["ok"])
         self.assertEqual(self.request("list")["result"], [])
 
     def test_conflicting_claude_flags_are_rejected_before_worktree_creation(self):

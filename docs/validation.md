@@ -769,8 +769,9 @@ Found and fixed:
   at every event. A worktree with 30,000 ignored files (117 MB, as
   `node_modules`) held it 1.3 s; dependencies ten times that size would
   hold the agents ten times as long, and Codex gives a hook 3 s. Worktrees
-  are now removed without the lock (0.17 s), the record saying so
-  meanwhile so nothing starts in it.
+  are now removed without the lock (0.17 s). Meanwhile the record names
+  the request removing it, and nothing else acts on the task, not even a
+  retry after Emacs gave up waiting, until that request ends.
 - **An agent that asked at once didn't notify.** From `starting`, only a
   finished turn notified. With Emacs in the background, polls are 15 s
   apart, and a task started with a prompt usually asks within that: the
