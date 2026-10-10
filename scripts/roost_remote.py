@@ -2011,11 +2011,14 @@ PROGRAM_STATUS_STATES = ("idle", "working", "blocked", "done", "error", "clear")
 PROGRAM_STATUS_END = re.compile(rb"[\x07\x1b]")
 # How long a byte that may start a sequence waits for the rest.
 RELAY_HOLD = 0.05
-# How often an idle relay checks that the agent still runs, when something
-# else, such as a command it left in the background, keeps its terminal open.
+# How long an idle relay waits before it checks again that the agent still
+# runs: something else, such as a command it left in the background, may
+# keep its terminal open.
 RELAY_POLL = 0.5
 RELAY_CHUNK = 65536
 RELAY_BUFFER = 1 << 20
+# Reports waiting to be recorded; past that, the relay waits for the recorder.
+PROGRAM_STATUS_QUEUE = 1000
 
 
 def parse_program_status(body):
@@ -2178,7 +2181,7 @@ def program_status_recorder(store, task_id, run_id):
     never waits on the registry lock. FINISH records what is queued. The
     thread starts with the first report, after the agent has: `relay`
     starts it from a process with no other thread."""
-    reports = queue.Queue()
+    reports = queue.Queue(PROGRAM_STATUS_QUEUE)
     store = Store(store.root)  # Its own, as `released` keeps the lock it holds.
 
     def record():
@@ -2276,6 +2279,8 @@ def relay(argv, cwd, env, report):
             fcntl.ioctl(master, termios.TIOCSWINSZ, fcntl.ioctl(0, termios.TIOCGWINSZ, bytes(8)))
 
     previous = signal.signal(signal.SIGWINCH, resize)
+    # The pane may have changed size since the agent's terminal took it.
+    resize()
     to_agent, to_pane = bytearray(), bytearray()
     statuses = ProgramStatusFilter(to_agent.extend, report)
     pane = True  # Whether the pane is still there.
@@ -2315,12 +2320,16 @@ def relay(argv, cwd, env, report):
                 to_pane.clear()
             if not readable and not writable:
                 to_pane += statuses.flush()
-                if process.poll() is not None:
-                    break
-        while True:
+            # It may end while something it left behind keeps its terminal busy.
+            if process.poll() is not None:
+                break
+        # What it wrote before it ended, but not what goes on after it.
+        drained = 0
+        while drained < RELAY_BUFFER:
             data = read_some(master)
             if not data:
                 break
+            drained += len(data)
             to_pane += statuses.feed(data)
         to_pane += statuses.flush(everything=True)
         os.set_blocking(1, True)

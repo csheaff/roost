@@ -2308,6 +2308,34 @@ class ProgramStatus(unittest.TestCase):
             os.close(pane)
             os.close(terminal)
 
+    def test_the_relay_ends_with_its_agent_whatever_it_left_writing(self):
+        pane, terminal = os.openpty()
+        # A command left running in the background, which outlives the
+        # agent's hangup, as with nohup, and writes until its terminal goes.
+        writer = ("import signal, sys\nsignal.signal(signal.SIGHUP, signal.SIG_IGN)\n"
+                  "while True:\n    sys.stdout.write('x' * 100 + '\\n')\n    sys.stdout.flush()\n")
+        # The agent ends once the command ignores the hangup its end sends.
+        agent = "import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', %r]); time.sleep(1)" % writer
+        relay = ("import importlib.util, os, sys\n"
+                 "spec = importlib.util.spec_from_file_location('roost_remote', sys.argv[1])\n"
+                 "roost = importlib.util.module_from_spec(spec)\n"
+                 "spec.loader.exec_module(roost)\n"
+                 "sys.exit(roost.relay([sys.executable, '-c', sys.argv[2]], '.', dict(os.environ),"
+                 " lambda fields: None))\n")
+        process = subprocess.Popen([sys.executable, "-c", relay, str(SOURCE), agent],
+                                   stdin=terminal, stdout=terminal, stderr=terminal)
+        try:
+            deadline = time.monotonic() + 10
+            while process.poll() is None and time.monotonic() < deadline:
+                if select.select([pane], [], [], 0.1)[0]:
+                    os.read(pane, 65536)
+            self.assertEqual(process.poll(), 0)
+        finally:
+            if process.poll() is None:
+                process.kill()
+            os.close(pane)
+            os.close(terminal)
+
     def test_reading_a_report(self):
         parse = roost.parse_program_status
         self.assertIsNone(parse(b"state=sleeping"))
