@@ -7,6 +7,7 @@ import datetime
 import errno
 import fcntl
 import hashlib
+import heapq
 import json
 import os
 from pathlib import Path
@@ -244,8 +245,14 @@ class Store:
                     {key: value for key, value in task.items() if key not in TRANSIENT})
 
     def remove(self, task_id):
-        """Delete a task's record and hook settings. Conversations are kept."""
+        """Delete a task's record and hook settings. Conversations are kept,
+        and found by searching under the repository noted beside the worktrees,
+        also for tasks created before Roost noted it."""
         path = self.path(task_id)
+        with contextlib.suppress(OSError, ValueError, AttributeError):
+            repo = json.loads(path.read_text()).get("repo")
+            if isinstance(repo, str):
+                remember_repository(self, repo)
         for stale in (path, path.with_suffix(".settings"), path.with_suffix(".removing")):
             with contextlib.suppress(FileNotFoundError):
                 stale.unlink()
@@ -843,10 +850,7 @@ def create(store, request):
     repo_hash = hashlib.sha256(repo.encode()).hexdigest()[:10]
     worktree = store.root / "worktrees" / repo_hash / (slug + "-" + task_id[:6])
     worktree.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    # Searching a retired task's conversations names its repository from here.
-    marker = worktree.parent / REPOSITORY_MARKER
-    if not marker.is_file() or marker.read_text().strip() != repo:
-        atomic_text(marker, repo + "\n")
+    remember_repository(store, repo)
     socket = text(request.get("socket")) or "main"
     prompt = text(request.get("prompt"))
     # The prompt is one argument to the agent, and Linux refuses one of 128 KB.
@@ -1651,6 +1655,17 @@ def forget(store, task):
 
 
 REPOSITORY_MARKER = ".repository"
+
+
+def remember_repository(store, repo):
+    """Note REPO beside its worktrees: searching a retired task's
+    conversations names its project from there."""
+    folder = store.root / "worktrees" / hashlib.sha256(repo.encode()).hexdigest()[:10]
+    marker = folder / REPOSITORY_MARKER
+    if not marker.is_file() or marker.read_text().strip() != repo:
+        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        atomic_text(marker, repo + "\n")
+
 SEARCH_TASK_LIMIT = 50
 SEARCH_HITS_PER_TASK = 10
 SEARCH_SNIPPET = 160
@@ -1700,14 +1715,13 @@ def snippet(found, patterns):
 
 def search_transcript(path, words, owner):
     """Messages in the transcript at PATH containing every one of WORDS (in
-    lower case), as (TASK, BRANCH, HIT): TASK is what OWNER says of the
-    directory Claude recorded the message in, and messages for which it
-    says None are left out."""
+    lower case), as (TASK, BRANCH, HIT), one at a time: TASK is what OWNER
+    says of the directory Claude recorded the message in, and messages for
+    which it says None are left out."""
     # JSON escapes only quotes, backslashes and control characters, so a
     # line that lacks a word's escaped form cannot contain the word.
     needles = [json.dumps(word, ensure_ascii=False)[1:-1] for word in words]
     patterns = word_patterns(words)
-    found_hits = []
     with open(path, encoding="utf-8", errors="replace") as handle:
         for number, line in enumerate(handle, 1):
             lower = line.lower()
@@ -1725,12 +1739,11 @@ def search_transcript(path, words, owner):
                 continue
             body = found[1]
             # The session and line name the message, even where times are equal or missing.
-            found_hits.append((task, text(entry.get("gitBranch")),
-                               dict(at=text(entry.get("timestamp")), role=found[0], session=path.stem,
-                                    line=number, snippet=snippet(body, patterns),
-                                    text=body if len(body) <= SEARCH_TEXT_LIMIT
-                                    else body[:SEARCH_TEXT_LIMIT].rstrip() + "…")))
-    return found_hits
+            yield (task, text(entry.get("gitBranch")),
+                   dict(at=text(entry.get("timestamp")), role=found[0], session=path.stem,
+                        line=number, snippet=snippet(body, patterns),
+                        text=body if len(body) <= SEARCH_TEXT_LIMIT
+                        else body[:SEARCH_TEXT_LIMIT].rstrip() + "…"))
 
 
 def search(store, request):
@@ -1782,26 +1795,34 @@ def search(store, request):
     with contextlib.suppress(OSError):
         folders.update(folder for folder in projects.iterdir() if folder.name[:CLAUDE_FOLDER_LIMIT].startswith(prefix))
     folders.update(projects / claude_project_folder(task["worktree"]) for task in tasks)
+    # Each task keeps only its newest messages as they are found, so a
+    # broad search of long conversations holds no more than it returns.
     groups = {}
+    order = lambda hit: (hit["at"] or "", hit["session"], hit["line"])
     for folder in sorted(folders):
         # Subagents' conversations are in subfolders; only the task's own are searched.
         for path in sorted(folder.glob("*.jsonl")) if folder.is_dir() else []:
             with contextlib.suppress(OSError):
                 for task, branch, hit in search_transcript(path, words, owner):
-                    group = groups.setdefault(task, dict(hits=[], branch=None))
-                    group["hits"].append(hit)
+                    group = groups.setdefault(task, dict(hits=[], count=0, branch=None))
+                    group["count"] += 1
                     group["branch"] = group["branch"] or branch
+                    entry = (order(hit), group["count"], hit)
+                    if len(group["hits"]) < SEARCH_HITS_PER_TASK:
+                        heapq.heappush(group["hits"], entry)
+                    else:
+                        heapq.heappushpop(group["hits"], entry)
     by_id = {task["id"]: task for task in tasks}
     results = []
     for key, group in groups.items():
-        hits = sorted(group["hits"], key=lambda hit: (hit["at"] or "", hit["session"], hit["line"]))
+        hits = [hit for _, _, hit in sorted(group["hits"])]
         if key[0] == "task":
             task = by_id[key[1]]
             result = dict(id=task["id"], name=task.get("name"), repo=task.get("repo"), branch=task.get("branch"))
         else:
             result = dict(key=key[1] + "/" + key[2], name=key[2][:-7].replace("-", " "),
                           repo=repos.get(key[1]), past=True, branch=group["branch"])
-        result.update(hits=hits[-SEARCH_HITS_PER_TASK:], more=max(0, len(hits) - SEARCH_HITS_PER_TASK))
+        result.update(hits=hits, more=group["count"] - len(hits))
         results.append(result)
     results.sort(key=lambda result: result["hits"][-1]["at"] or "", reverse=True)
     return dict(tasks=results[:SEARCH_TASK_LIMIT], moreTasks=max(0, len(results) - SEARCH_TASK_LIMIT))

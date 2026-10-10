@@ -2210,9 +2210,13 @@ class Search(unittest.TestCase):
         self.assertEqual(len(self.search("comma")["tasks"]), 2)
         self.assertEqual(self.search("ommas")["tasks"], [])
         self.assertEqual([task["name"] for task in self.search("writer")["tasks"]], ["fix CSV quoting"])
-        # With no live task there, a repository marker names the project.
-        (self.state / "worktrees" / self.repo_hash / roost.REPOSITORY_MARKER).write_text(self.repo + "\n")
+        # With no live task there, the repository noted beside the worktrees
+        # names the project: removing a record notes it, also for a task
+        # created before hosts noted repositories.
+        self.assertFalse((self.state / "worktrees" / self.repo_hash / roost.REPOSITORY_MARKER).exists())
         self.store.remove("0a1b2c3d4e5f6a7b")
+        self.assertEqual((self.state / "worktrees" / self.repo_hash / roost.REPOSITORY_MARKER).read_text(),
+                         self.repo + "\n")
         names = {task["name"]: task for task in self.search("csv")["tasks"]}
         self.assertEqual((names["fix csv quoting"]["repo"], names["csv import"]["repo"]), (self.repo, self.repo))
         self.assertTrue(names["fix csv quoting"]["past"])
@@ -2239,10 +2243,12 @@ class Search(unittest.TestCase):
     def test_results_are_capped(self):
         worktree = self.state / "worktrees" / self.repo_hash / "t-222222"
         self.conversation(worktree, "s", [self.said("user", "ping %d" % n, n) for n in range(15)])
+        # Another session of the task, partly older and partly newer.
+        self.conversation(worktree, "r", [self.said("user", "ping %d" % n, n) for n in (3, 20)])
         task = self.search("ping")["tasks"][0]
-        # The newest messages, oldest first.
-        self.assertEqual([hit["text"] for hit in task["hits"]], ["ping %d" % n for n in range(5, 15)])
-        self.assertEqual(task["more"], 5)
+        # The newest messages of all its sessions, oldest first.
+        self.assertEqual([hit["text"] for hit in task["hits"]], ["ping %d" % n for n in [*range(6, 15), 20]])
+        self.assertEqual(task["more"], 7)
         for n in range(roost.SEARCH_TASK_LIMIT + 2):
             self.conversation(self.state / "worktrees" / self.repo_hash / ("p-%06d" % n), "s",
                               [self.said("user", "pong", n)])

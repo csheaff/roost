@@ -4400,8 +4400,8 @@ The mark stays where it was."
   "Counts searches in this buffer, so that replies to an older one are ignored.")
 (defvar-local roost--search-expanded nil
   "Identities of the results whose whole message is shown.")
-(defvar-local roost--search-fetching nil
-  "Hosts whose tasks a search asked for: (HOST . task lists they had sent).")
+(defvar-local roost--search-baseline nil
+  "For each host that replied: (HOST . task lists it had sent by then).")
 
 (defvar-keymap roost-search-mode-map
   :doc "Keys in Roost's search results."
@@ -4453,7 +4453,8 @@ conversations Claude keeps.  RET on a live task's message opens it."
   (with-current-buffer buffer
     (let ((generation (cl-incf roost--search-generation))
           (query roost--search-query))
-      (setq roost--search-replies nil)
+      (setq roost--search-replies nil
+            roost--search-baseline nil)
       (dolist (host (roost--hosts))
         (roost--request host "search" (list (cons 'query query))
                         (lambda (result) (roost--search-arrived buffer generation host result))
@@ -4466,6 +4467,8 @@ conversations Claude keeps.  RET on a live task's message opens it."
     (with-current-buffer buffer
       (when (= generation roost--search-generation)
         (push (cons host reply) roost--search-replies)
+        (unless (eq (car-safe reply) :error)
+          (setf (alist-get host roost--search-baseline nil nil #'equal) (gethash host roost--snapshots 0)))
         (roost--render-search)
         ;; A result with an ID is a task the host still has; one Roost has
         ;; not fetched, as before it first watches, is fetched now, and the
@@ -4474,18 +4477,13 @@ conversations Claude keeps.  RET on a live task's message opens it."
                           (when-let* ((id (alist-get 'id result)))
                             (not (gethash (list host id) roost--tasks))))
                         (and (not (eq (car-safe reply) :error)) (alist-get 'tasks reply)))
-          (roost--search-fetch host))))))
-
-(defun roost--search-fetch (host)
-  "Fetch HOST's tasks for the results, noting how many lists it had sent."
-  (setf (alist-get host roost--search-fetching nil nil #'equal) (gethash host roost--snapshots 0))
-  (roost--refresh-host host t))
+          (roost--refresh-host host t))))))
 
 (defun roost--search-gone-p (host)
-  "Whether HOST has sent a task list since the results asked for one.
+  "Whether HOST has sent a task list since it replied to the search.
 A live task such a list lacks has since been retired."
-  (when-let* ((asked (assoc host roost--search-fetching)))
-    (> (gethash host roost--snapshots 0) (cdr asked))))
+  (when-let* ((replied (assoc host roost--search-baseline)))
+    (> (gethash host roost--snapshots 0) (cdr replied))))
 
 (defun roost--search-highlight (string words)
   "STRING with each of WORDS in it highlighted where a word starts, ignoring case.
@@ -4549,8 +4547,14 @@ Hosts match words so: \"test\" finds \"tests\", but not \"latest\"."
       (when (eq (car-safe reply) :error)
         (insert (propertize (format "Could not search %s: %s\n" (roost--host-label host) (cadr reply))
                             'face 'roost-status-failed))))
-    (when (and (not groups) (not pending))
-      (insert "\nNo message in your tasks' conversations contains every word.\n"))
+    ;; A host that failed was not searched, so say nothing of it.
+    (let ((searched (mapcar #'car (seq-remove (lambda (reply) (eq (car-safe (cdr reply)) :error))
+                                              (reverse roost--search-replies)))))
+      (when (and (not groups) (not pending) searched)
+        (insert (if (= (length searched) (length roost--search-replies))
+                    "\nNo message in your tasks' conversations contains every word.\n"
+                  (format "\nNo message in your tasks' conversations on %s contains every word.\n"
+                          (mapconcat #'roost--host-label searched ", "))))))
     (pcase-dolist (`(,host . ,result) groups)
       (let* ((key (when-let* ((id (alist-get 'id result))) (list host id)))
              (task (and key (gethash key roost--tasks)))
@@ -4631,7 +4635,7 @@ IDs are lists made afresh by each redraw, so compare them with `equal'."
     (cond ((and key (gethash key roost--tasks))
            (roost-open-task (gethash key roost--tasks)))
           (key
-           (roost--search-fetch (car key))
+           (roost--refresh-host (car key) t)
            (user-error "Roost is still fetching the tasks on %s; try again in a moment"
                        (roost--host-label (car key))))
           ((roost--search-hit) (roost-search-toggle))

@@ -905,6 +905,12 @@
                (roost-search-previous 2)
                (should (string-match-p "Import CSV" (thing-at-point 'line)))
                (should-error (roost-search-previous) :type 'user-error)
+               ;; A task Roost had when the reply came, and whose host's next
+               ;; list lacks it, has been retired since too.
+               (roost--apply-snapshot "dev" (list (append '((name . "fresh task"))
+                                                          (roost-test--task "1111111111111111" "ready"))))
+               (roost--redraw)
+               (should (string-match-p "^fix auth  dev · shop  past task$" (buffer-string)))
                ;; Searching again ignores replies to the search before.
                (roost-search-again)
                (funcall (nth 3 dev) '((tasks) (moreTasks . 0)))
@@ -914,6 +920,59 @@
    (should (eq (lookup-key roost-dashboard-mode-map "/") 'roost-search))
    (should (eq (lookup-key roost-sidebar-list-mode-map "/") 'roost-search))
    (should (eq (lookup-key roost-task-info-mode-map "/") 'roost-search))))
+
+(ert-deftest roost-search-shows-a-task-retired-after-its-reply-as-past ()
+  (roost-test--isolated
+   (let ((roost-hosts '("dev")) requests fetched)
+     (roost--cache-task "dev" (roost-test--task))
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (host _action _params success _failure) (push (list host success) requests)))
+               ((symbol-function 'roost--refresh-host) (lambda (host &rest _) (push host fetched))))
+       (unwind-protect
+           (save-window-excursion
+             (roost-search "csv")
+             (set-buffer roost--search-buffer)
+             (funcall (nth 1 (car requests))
+                      '((tasks ((id . "0123456789abcdef") (name . "fix auth") (repo . "/home/user/shop")
+                                (hits ((at . "2026-10-01T10:01:00Z") (role . "user") (session . "s1") (line . 1)
+                                       (snippet . "Quote CSV") (text . "Quote CSV")))
+                                (more . 0)))
+                        (moreTasks . 0)))
+             ;; Roost had the task, so nothing was fetched.
+             (should-not fetched)
+             (should (string-match-p "^fix auth  dev · shop  ready$" (buffer-string)))
+             (roost--apply-snapshot "dev" nil)
+             (roost--redraw)
+             (should (string-match-p "^fix auth  dev · shop  past task$" (buffer-string))))
+         (when (get-buffer roost--search-buffer) (kill-buffer roost--search-buffer)))))))
+
+(ert-deftest roost-search-says-no-message-only-of-hosts-it-searched ()
+  (roost-test--isolated
+   (let ((roost-hosts '("dev" "box" nil)) requests)
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (host _action _params success failure) (push (list host success failure) requests))))
+       (unwind-protect
+           (save-window-excursion
+             (roost-search "zebra")
+             (set-buffer roost--search-buffer)
+             (funcall (nth 2 (assoc "dev" requests)) "ssh: no route")
+             (funcall (nth 1 (assoc "box" requests)) '((tasks) (moreTasks . 0)))
+             (funcall (nth 1 (assoc nil requests)) '((tasks) (moreTasks . 0)))
+             (should (string-match-p "^No message in your tasks' conversations on box, local contains every word\\.$"
+                                     (buffer-string)))
+             ;; With every host failing, nothing was searched.
+             (setq requests nil)
+             (roost-search-again)
+             (dolist (request requests) (funcall (nth 2 request) "down"))
+             (should (string-match-p "^Could not search local: down$" (buffer-string)))
+             (should-not (string-match-p "No message" (buffer-string)))
+             ;; With every host searched, no host need be named.
+             (setq requests nil)
+             (roost-search-again)
+             (dolist (request requests) (funcall (nth 1 request) '((tasks) (moreTasks . 0))))
+             (should (string-match-p "^No message in your tasks' conversations contains every word\\.$"
+                                     (buffer-string))))
+         (when (get-buffer roost--search-buffer) (kill-buffer roost--search-buffer)))))))
 
 (ert-deftest roost-mode-line-counts-agents-waiting ()
   (roost-test--isolated
