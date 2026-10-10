@@ -1968,6 +1968,7 @@ def update_hook(store, task_id, payload, run_id=None):
             request = permission_request(payload, task.get("worktree")) if asks else None
             if request:
                 task["request"] = request
+                task.pop("requestFrom", None)
                 # Its command, to see it start once you approve; the start
                 # identifies it, and a heredoc can be long.
                 arguments = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
@@ -2150,16 +2151,19 @@ def apply_program_status(task, fields, run_id):
             task["error"] = "Its turn ended on an error" + (": " + fields["msg"][:REQUEST_LIMIT]
                                                              if fields.get("msg") else "")
     if task["status"] == "permission":
-        # A hook's request names the tool; failing that, the agent's own words.
-        if not task.get("request"):
-            task["request"] = (fields.get("msg") or {"question": "Asks you a question",
-                                                     "auth": "Asks you to sign in"}.get(fields.get("kind")))
-            if not task["request"]:
-                del task["request"]
+        # A hook's request names the tool; failing that, the agent's own
+        # words, which its next report replaces, as it may ask again at once.
+        if state == "blocked" and (not task.get("request") or task.get("requestFrom") == "report"):
+            words = (fields.get("msg") or {"question": "Asks you a question",
+                                           "auth": "Asks you to sign in"}.get(fields.get("kind")))
+            task.update(request=words, requestFrom="report")
+            if not words:
+                del task["request"], task["requestFrom"]
     elif status == "permission" or task["status"] != "running":
         # A hook may name a request just before the agent says it waits.
         task.pop("request", None)
         task.pop("requestCommand", None)
+        task.pop("requestFrom", None)
     if task["status"] == "running" and state == "working" and fields.get("msg"):
         task["activity"] = fields["msg"][:REQUEST_LIMIT]
     else:
@@ -2279,7 +2283,8 @@ def relay(argv, cwd, env, report):
         os.set_blocking(fd, False)
     try:
         while True:
-            readers = [master] if len(to_pane) < RELAY_BUFFER else []
+            # Each probe read queues an answer, so both buffers bound reading.
+            readers = [master] if max(len(to_pane), len(to_agent)) < RELAY_BUFFER else []
             if pane and len(to_agent) < RELAY_BUFFER:
                 readers.append(0)
             writers = ([master] if to_agent else []) + ([1] if pane and to_pane else [])
@@ -2417,7 +2422,7 @@ def require_not_removing(store, task, action):
 
 
 # Kept in task records for the helper's own use, and not sent to Emacs.
-PRIVATE = ("lastReply", "transcript")
+PRIVATE = ("lastReply", "transcript", "requestFrom")
 
 
 def outgoing(result):

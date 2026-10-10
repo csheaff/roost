@@ -2351,6 +2351,23 @@ class ProgramStatus(unittest.TestCase):
                          "Asks to run make")
         self.assertEqual(self.apply(dict(status="running"), "blocked", kind="question")["request"],
                          "Asks you a question")
+        # The agent's own words give way to its next request, and to a hook's.
+        with tempfile.TemporaryDirectory() as root:
+            store = roost.Store(root)
+            task = dict(id="0" * 16, agent="claude", worktree="/w", status="running", runId="run",
+                        programStatusRun="run")
+            self.assertEqual(self.apply(task, "blocked", kind="permission", msg="approve Bash: ls")["request"],
+                             "approve Bash: ls")
+            self.assertEqual(self.apply(task, "blocked", kind="permission", msg="approve Bash: make")["request"],
+                             "approve Bash: make")
+            store.save(task)
+            roost.update_hook(store, task["id"], dict(hook_event_name="PermissionRequest", tool_name="Bash",
+                                                      tool_input=dict(command="make")), "run")
+            task = store.read(task["id"])
+            self.assertEqual((task["status"], task["request"]), ("permission", "Asks to run make"))
+            self.assertEqual(self.apply(task, "blocked", kind="permission", msg="approve Bash: make")["request"],
+                             "Asks to run make")
+            self.assertNotIn("requestFrom", roost.outgoing(task))
         self.assertEqual(self.apply(dict(status="background"), "done")["status"], "background")
         # Each report replaces the last: a step's description goes with it.
         self.assertIsNone(self.apply(dict(status="running", activity="Reading notes.py"), "working")["activity"])
