@@ -794,6 +794,42 @@ rather than the one after it; the dashboard, in Emacs state, has no `/`
 or `:`.
 179 ERT tests pass with Magit and Evil, and 113 Python tests.
 
+### Agents that report their status, 2026-10-10
+
+Claude Code 2.1.295 added the Program Status Protocol (OSC 7501): it tells
+a terminal that answers its probe whether it works, waits on you or is
+done. Inside tmux it tells nothing, since tmux answers only the device
+attributes query sent after the probe (Claude Code 2.1.296, tmux 3.7c;
+tmux/tmux#5713 asks for support, and its maintainer would rather wait).
+With `roost-program-status` on, the runner relays the agent's terminal and
+answers.
+
+One Haiku task on the Linux host, manual permissions, with each report and
+hook logged with its time:
+
+- An approved `touch … && sleep 6` showed `running` 0.17 s after Return;
+  hooks said nothing until the command ended, 6 s later.
+- A request declined with Esc, and a long reply stopped with Esc, showed
+  `interrupted` within a second, with no hook and no transcript read.
+- Reports came 20 to 70 ms ahead of the matching hook, but the Stop hook
+  came 20 ms before `done`. So while an agent reports, hooks no longer set
+  its status, only what they know besides: the conversation, transcript and
+  reply, the request's wording, work left in the background, an API error.
+- Claude's own words for a request ("approve Bash: touch relay-proof.txt
+  && …") are used when no hook names it; its description of the step under
+  way is recorded as `activity`.
+- Resizing (64 and 100 columns), Shift+Return, stop (no process left
+  behind), resume and `/exit` (exited, 0) work as before. Nothing is
+  reported while Claude asks whether to trust the folder.
+- The runner used 0.09 s of CPU in two minutes in which Claude used 6.5 s.
+  Relaying 21 MB of `seq` output took 0.87 s of CPU, and no longer than
+  tmux alone.
+
+Left: Codex reports nothing yet, and Pi says it will in its next release;
+records Claude keeps for subagents are ignored. The ERT tests (Magit and
+Evil ones skipped here) and 125 Python tests pass on macOS and the Linux
+host.
+
 ### Codex and Pi adapters
 
 Used another disposable remote `hello-service` project, an isolated registry and

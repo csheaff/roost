@@ -456,6 +456,23 @@
        (roost-resume (gethash '("dev" "0123456789abcdef") roost--tasks))
        (should (equal (roost--field opened 'host) "dev"))))))
 
+(ert-deftest roost-new-and-resumed-tasks-say-whether-to-relay-agent-status ()
+  (roost-test--isolated
+   (let (requests)
+     (cl-letf (((symbol-function 'hack-dir-local-variables-non-file-buffer) #'ignore)
+               ((symbol-function 'roost--remember-host) #'ignore)
+               ((symbol-function 'roost-watch-mode) #'ignore)
+               ((symbol-function 'roost-open-task) #'ignore)
+               ((symbol-function 'roost--request)
+                (lambda (_host action params success &optional _failure)
+                  (push (cons action (alist-get 'programStatus params)) requests)
+                  (funcall success (roost-test--task)))))
+       (roost-new-task "/ssh:dev:/repo/" "plain")
+       (let ((roost-program-status t))
+         (roost-new-task "/ssh:dev:/repo/" "relayed")
+         (roost-resume (gethash '("dev" "0123456789abcdef") roost--tasks)))
+       (should (equal (reverse requests) '(("create" . :false) ("create" . t) ("resume" . t))))))))
+
 (ert-deftest roost-creation-selects-agent-command-and-preserves-claude-configuration ()
   (roost-test--isolated
    (let ((roost-claude-command '("claude" "--model" "sonnet"))

@@ -233,6 +233,17 @@ made from its commits, so small tasks keep the history straight."
   :type '(choice (const :tag "Merge commit" merge)
                  (const :tag "One squashed commit" squash)))
 
+(defcustom roost-program-status nil
+  "Whether Roost reads the status an agent reports to its terminal.
+Claude Code 2.1.295 and later reports whether it works, waits on you,
+or is done, by the Program Status Protocol (OSC 7501), but only to a
+terminal that answers its probe, which tmux does not.  With this on, a
+task's agent gets a terminal of its own, relayed to its tmux pane, that
+answers.  Its status then shows at once when you press Esc, decline a
+request or approve one, which its hooks don't report.  New tasks, and
+tasks you resume, follow this."
+  :type 'boolean)
+
 (defcustom roost-notes-file (locate-user-emacs-file "roost/notes.json")
   "Local file keeping review notes not yet sent to an agent.
 See `roost-note'."
@@ -1389,6 +1400,7 @@ EXTRA is an alist of further request fields, such as the GitHub issue."
            ,(cons 'command (vconcat (roost--agent-command agent)))
            ,(cons 'setup setup)
            ,(cons 'branchPrefix roost-branch-prefix)
+           ,(cons 'programStatus (if roost-program-status t :false))
            ,(cons 'socket (or roost-socket-name
                               (bound-and-true-p tmux-control-default-socket-name)
                               "main"))
@@ -1907,7 +1919,9 @@ FAILURE, if given, receives the error message instead of Roost reporting it."
 (defun roost-resume (&optional task)
   "Restart TASK, resuming its recorded agent conversation."
   (interactive)
-  (roost--act (roost--choose task) "resume" nil #'roost-open-task))
+  (roost--act (roost--choose task) "resume"
+              `((programStatus . ,(if roost-program-status t :false)))
+              #'roost-open-task))
 
 ;;;###autoload
 (defun roost-send (&optional task text)

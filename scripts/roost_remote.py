@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """Roost's host-side task manager. Standard library only; JSON over stdin/stdout."""
 
+import base64
 import contextlib
 import datetime
+import errno
 import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path
+import pty
+import queue
 import re
+import select
 import shlex
 import shutil
 import signal
@@ -16,6 +21,9 @@ import socket
 import subprocess
 import sys
 import tempfile
+import termios
+import threading
+import tty
 import unicodedata
 import uuid
 
@@ -854,6 +862,8 @@ def create(store, request):
                              url=text(issue.get("url")))
     if setup:
         task["setupComplete"] = False
+    if request.get("programStatus") is True:
+        task["programStatus"] = True
     git(repo, "-c", "branch.autoSetupMerge=false", "worktree", "add", "-b", branch,
         str(worktree), commit)
     with store.locked():
@@ -971,6 +981,8 @@ def list_tasks(store, request):
             task.update(session=pane["session_name"], windowIndex=pane["index"])
             changed = True
         task["live"] = bool(pane and not pane["dead"])
+        # An agent that reports its status to its terminal needs no guessing.
+        guess = task["live"] and task.get("programStatusRun") != task.get("runId")
         if task["live"] and task["status"] == "crashed":
             # An earlier poll missed a pane that is in fact alive.
             task.update(status=task.pop("statusBeforeCrash", None) or "ready", updatedAt=now())
@@ -978,13 +990,13 @@ def list_tasks(store, request):
         elif not task["live"] and task["status"] not in ENDED:
             task.update(status="crashed", statusBeforeCrash=task["status"], updatedAt=now())
             changed = True
-        elif task["live"] and task["status"] in ("running", "permission") and was_interrupted(task):
+        elif guess and task["status"] in ("running", "permission") and was_interrupted(task):
             # Stopped by you, so waiting for you; it reports no event of its own.
             task.update(status="ready", updatedAt=now(), lastEvent="Interrupt")
             task.pop("request", None)
             task.pop("requestCommand", None)
             changed = True
-        elif task["live"] and task["status"] == "permission" and task.get("requestCommand"):
+        elif guess and task["status"] == "permission" and task.get("requestCommand"):
             if table is None:
                 table = processes()
             if approved_command_running(task, pane, table):
@@ -1133,7 +1145,7 @@ def stop(store, task, inventory=None):
     return task
 
 
-def resume(store, task):
+def resume(store, task, program_status=None):
     inventory = inventory_for(task)
     pane = owned_pane(task, inventory)
     if pane and not pane["dead"]:
@@ -1147,6 +1159,9 @@ def resume(store, task):
     # its own on resume.
     task["session"] = session_name(task["repo"], task["id"])
     task.pop("sessionShared", None)
+    # Whether its runner relays the agent's terminal, as Emacs says now.
+    if isinstance(program_status, bool):
+        task["programStatus"] = program_status
     spawn(store, task, resume=True)
     return task
 
@@ -1919,6 +1934,18 @@ def require_agent_work_kept(task):
                          % (entry["path"], ("branch %s: " % entry["branch"]) if entry["branch"] else "", what))
 
 
+def beside_program_status(updates, before):
+    """What of a hook's UPDATES to record, for an agent whose status was
+    BEFORE, that reports its status to its terminal: all but the status,
+    which its reports give sooner and surer, unless the hook knows more:
+    that its turn ended with work left in the background, or on an API error."""
+    status = updates.get("status")
+    if status == "failed" or status == "background" and before in ("running", "ready"):
+        return updates
+    return {key: value for key, value in updates.items()
+            if key not in ("status", "updatedAt", "lastEvent", "error")}
+
+
 def update_hook(store, task_id, payload, run_id=None):
     with store.locked():
         task = store.read(task_id)
@@ -1933,9 +1960,12 @@ def update_hook(store, task_id, payload, run_id=None):
             store.save(task)
         updates = agent_for(task).observe(payload, before)
         if updates:
+            asks = updates.get("status", before) == "permission"
+            relayed = task.get("programStatusRun") == task.get("runId")
+            if relayed:
+                updates = beside_program_status(updates, before)
             task.update(updates)
-            request = (permission_request(payload, task.get("worktree"))
-                       if task["status"] == "permission" else None)
+            request = permission_request(payload, task.get("worktree")) if asks else None
             if request:
                 task["request"] = request
                 # Its command, to see it start once you approve; the start
@@ -1946,9 +1976,10 @@ def update_hook(store, task_id, payload, run_id=None):
                     task["requestCommand"] = command[:APPROVAL_MARKER_LIMIT]
                 else:
                     task.pop("requestCommand", None)
-            elif task["status"] != "permission" or before != "permission":
+            elif not relayed and (task["status"] != "permission" or before != "permission"):
                 # The notification that follows a request names no tool:
-                # keep the request it follows, and only that one.
+                # keep the request it follows, and only that one. The agent's
+                # status reports clear it, for one that sends them.
                 task.pop("request", None)
                 task.pop("requestCommand", None)
             store.save(task)
@@ -1964,6 +1995,327 @@ def agent_path(inherited):
                  "/opt/homebrew/bin", "/usr/local/bin", *(str(path) for path in nvm_bins)]
     entries = [entry for entry in inherited.split(os.pathsep) if entry]
     return os.pathsep.join(entries + [entry for entry in fallbacks if entry not in entries])
+
+
+# The Program Status Protocol, OSC 7501, by which a program tells its
+# terminal whether it works, waits on you, or is done:
+# https://www.superlogical.com/rex/docs/build/program-status. Claude Code
+# reports only once its terminal answers a probe, which tmux does not, and
+# tmux drops reports. So for a task that asks for it, the runner gives the
+# agent a terminal of its own, relays it to and from the pane, and reads them.
+PROGRAM_STATUS = b"\x1b]7501;"
+PROGRAM_STATUS_REPLY = b"\x1b]7501;?\x1b\\"
+PROGRAM_STATUS_LIMIT = 4096  # The longest sequence the protocol allows.
+PROGRAM_STATUS_STATES = ("idle", "working", "blocked", "done", "error", "clear")
+PROGRAM_STATUS_END = re.compile(rb"[\x07\x1b]")
+# How long a byte that may start a sequence waits for the rest.
+RELAY_HOLD = 0.05
+# How often an idle relay checks that the agent still runs, when something
+# else, such as a command it left in the background, keeps its terminal open.
+RELAY_POLL = 0.5
+RELAY_CHUNK = 65536
+RELAY_BUFFER = 1 << 20
+
+
+def parse_program_status(body):
+    """The fields of OSC 7501 report BODY, or None for one to ignore. Its
+    msg and title are decoded, on one line; one that does not decode is
+    left out, since what matters here is the state."""
+    try:
+        pairs = body.decode("ascii").split(":")
+    except UnicodeDecodeError:
+        return None
+    fields = {}
+    for pair in pairs:
+        key, separator, value = pair.partition("=")
+        if separator:
+            fields[key] = value
+    if fields.get("state") not in PROGRAM_STATUS_STATES:
+        return None
+    for key in ("msg", "title"):
+        if key in fields:
+            try:
+                value = base64.b64decode(fields.pop(key), validate=True).decode()
+            except ValueError:
+                continue
+            # Control characters, bidi and invisible formatting are no part of a line.
+            value = "".join(" " if unicodedata.category(c) == "Cc" else c for c in value
+                            if unicodedata.category(c) != "Cf")
+            fields[key] = " ".join(value.split()) or None
+    return fields
+
+
+class ProgramStatusFilter:
+    """Takes OSC 7501 out of a program's output: answers its probe with
+    REPLY, a function that writes to the program, and hands the fields of
+    each report to REPORT. All else passes on as it is; a sequence split
+    across reads is held until it is whole."""
+
+    def __init__(self, reply, report):
+        self.reply = reply
+        self.report = report
+        self.held = b""
+
+    def feed(self, data):
+        """What of the program's output DATA to pass on now."""
+        data = self.held + data
+        self.held = b""
+        shown = []
+        start = 0
+        while True:
+            found = data.find(PROGRAM_STATUS, start)
+            if found < 0:
+                # An ESC near the end may start one.
+                tail = data.rfind(b"\x1b", max(start, len(data) - len(PROGRAM_STATUS) + 1))
+                if tail >= 0 and PROGRAM_STATUS.startswith(data[tail:]):
+                    self.held = data[tail:]
+                    shown.append(data[start:tail])
+                else:
+                    shown.append(data[start:])
+                return b"".join(shown)
+            shown.append(data[start:found])
+            body = found + len(PROGRAM_STATUS)
+            end = PROGRAM_STATUS_END.search(data, body)
+            if end is None or end.end() == len(data) and data[end.start()] == 0x1b:
+                if len(data) - found < PROGRAM_STATUS_LIMIT:
+                    self.held = data[found:]
+                else:
+                    shown.append(data[found:])
+                return b"".join(shown)
+            stop = end.start()
+            if data[stop] == 0x07:
+                start = stop + 1
+            elif data[stop + 1] == ord("\\"):
+                start = stop + 2
+            else:
+                # Cut short by another sequence: not one to read.
+                shown.append(data[found:stop])
+                start = stop
+                continue
+            self.read(data[body:stop])
+
+    @property
+    def waiting(self):
+        """Whether output is held that may yet not be a sequence to read."""
+        return bool(self.held) and not self.held.startswith(PROGRAM_STATUS)
+
+    def flush(self, everything=False):
+        """What is held, to pass on when no more output comes; all of it
+        with EVERYTHING, else only what may not be a sequence to read."""
+        if not (everything or self.waiting):
+            return b""
+        held, self.held = self.held, b""
+        return held
+
+    def read(self, body):
+        if body == b"?":
+            self.reply(PROGRAM_STATUS_REPLY)
+        else:
+            fields = parse_program_status(body)
+            if fields:
+                self.report(fields)
+
+
+def apply_program_status(task, fields, run_id):
+    """Record report FIELDS from TASK's agent, of run RUN_ID, in TASK, and
+    say whether TASK changed. The agent's own word on whether it works,
+    waits on you or is done covers what its hooks miss: Esc, a declined
+    request, an approval. Its records with an id, such as a subagent's,
+    are left out."""
+    if "id" in fields:
+        return False
+    before = dict(task)
+    state, status = fields["state"], task["status"]
+    task["programStatusRun"] = run_id
+    changes = None
+    if state == "working" and status != "running":
+        changes = dict(status="running", lastEvent="Approved" if status == "permission" else "Working")
+    elif state == "blocked" and status != "permission":
+        changes = dict(status="permission", lastEvent="Blocked")
+    elif state == "done" and status in ("starting", "running", "permission"):
+        # Work left in the background, which a hook says, stays as it is.
+        changes = dict(status="ready", lastEvent="Stop")
+    elif state == "idle" and status in ("running", "permission"):
+        # Stopped by you, with Esc or by declining a request.
+        changes = dict(status="ready", lastEvent="Interrupt")
+    elif state == "idle" and status == "starting":
+        changes = dict(status="ready", lastEvent="SessionStart")
+    elif state == "error" and status != "failed":
+        changes = dict(status="failed", lastEvent="Error")
+    if changes:
+        task.update(changes, updatedAt=now(), error=None)
+        if state == "error":
+            task["error"] = "Its turn ended on an error" + (": " + fields["msg"][:REQUEST_LIMIT]
+                                                             if fields.get("msg") else "")
+    if task["status"] == "permission":
+        # A hook's request names the tool; failing that, the agent's own words.
+        if not task.get("request"):
+            task["request"] = (fields.get("msg") or {"question": "Asks you a question",
+                                                     "auth": "Asks you to sign in"}.get(fields.get("kind")))
+            if not task["request"]:
+                del task["request"]
+    elif status == "permission" or task["status"] != "running":
+        # A hook may name a request just before the agent says it waits.
+        task.pop("request", None)
+        task.pop("requestCommand", None)
+    if task["status"] == "running" and state == "working" and fields.get("msg"):
+        task["activity"] = fields["msg"][:REQUEST_LIMIT]
+    elif task["status"] != "running":
+        task.pop("activity", None)
+    return task != before
+
+
+def program_status_recorder(store, task_id, run_id):
+    """REPORT and FINISH for `relay`. REPORT queues a report from the agent
+    of TASK_ID's run RUN_ID, which a thread records, so the agent's output
+    never waits on the registry lock. FINISH records what is queued."""
+    reports = queue.Queue()
+    store = Store(store.root)  # Its own, as `released` keeps the lock it holds.
+
+    def record():
+        finished = False
+        while not finished:
+            batch = [reports.get()]
+            with contextlib.suppress(queue.Empty):
+                while True:
+                    batch.append(reports.get_nowait())
+            finished = None in batch
+            batch = [fields for fields in batch if fields is not None]
+            if not batch:
+                continue
+            with contextlib.suppress(OSError, ValueError, RoostError), store.locked():
+                task = store.read(task_id)
+                if task.get("runId") == run_id and task["status"] not in ("stopped", "retired"):
+                    if any([apply_program_status(task, fields, run_id) for fields in batch]):
+                        store.save(task)
+
+    thread = threading.Thread(target=record, daemon=True)
+    thread.start()
+
+    def finish():
+        reports.put(None)
+        thread.join(5)
+
+    return reports.put, finish
+
+
+def read_some(fd):
+    """What FD has to read: None if nothing yet, and b"" once it ends."""
+    try:
+        return os.read(fd, RELAY_CHUNK)
+    except BlockingIOError:
+        return None
+    except OSError as exc:
+        # A terminal whose other side closed.
+        if exc.errno == errno.EIO:
+            return b""
+        raise
+
+
+def write_some(fd, data):
+    """How much of DATA FD took, or None if it is gone."""
+    try:
+        return os.write(fd, data)
+    except BlockingIOError:
+        return 0
+    except OSError as exc:
+        if exc.errno in (errno.EIO, errno.EPIPE):
+            return None
+        raise
+
+
+def relay(argv, cwd, env, report):
+    """Run ARGV in CWD with ENV on a terminal of its own, relayed to and
+    from this one, the pane's, and return its exit status as
+    `subprocess.call` does. The relay answers its OSC 7501 probe and hands
+    its reports to REPORT, instead of to tmux."""
+    master, slave = pty.openpty()
+    with contextlib.suppress(OSError, termios.error):
+        termios.tcsetattr(slave, termios.TCSANOW, termios.tcgetattr(0))
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, fcntl.ioctl(0, termios.TIOCGWINSZ, bytes(8)))
+
+    def take_terminal():
+        with contextlib.suppress(OSError):
+            fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+
+    try:
+        process = subprocess.Popen(argv, cwd=cwd, env=env, stdin=slave, stdout=slave, stderr=slave,
+                                   start_new_session=True, preexec_fn=take_terminal)
+    except BaseException:
+        os.close(master)
+        raise
+    finally:
+        os.close(slave)
+    pane_modes = None
+    with contextlib.suppress(termios.error):
+        pane_modes = termios.tcgetattr(0)
+        # What you type, C-c included, goes to the agent's terminal as it is.
+        tty.setraw(0)
+
+    def resize(*_):
+        with contextlib.suppress(OSError):
+            fcntl.ioctl(master, termios.TIOCSWINSZ, fcntl.ioctl(0, termios.TIOCGWINSZ, bytes(8)))
+
+    previous = signal.signal(signal.SIGWINCH, resize)
+    to_agent, to_pane = bytearray(), bytearray()
+    statuses = ProgramStatusFilter(to_agent.extend, report)
+    pane = True  # Whether the pane is still there.
+    for fd in (0, 1, master):
+        os.set_blocking(fd, False)
+    try:
+        while True:
+            readers = [master] if len(to_pane) < RELAY_BUFFER else []
+            if pane and len(to_agent) < RELAY_BUFFER:
+                readers.append(0)
+            writers = ([master] if to_agent else []) + ([1] if pane and to_pane else [])
+            readable, writable, _ = select.select(readers, writers, [],
+                                                  RELAY_HOLD if statuses.waiting else RELAY_POLL)
+            if master in readable:
+                data = read_some(master)
+                if data == b"":
+                    break
+                to_pane += statuses.feed(data or b"")
+            if 0 in readable:
+                data = read_some(0)
+                if data == b"":
+                    pane = False
+                to_agent += data or b""
+            # The agent gets the probe's answer before tmux gets what follows the probe.
+            if master in writable:
+                taken = write_some(master, to_agent)
+                del to_agent[:len(to_agent) if taken is None else taken]
+            if 1 in writable:
+                taken = write_some(1, to_pane)
+                if taken is None:
+                    pane = False
+                del to_pane[:len(to_pane) if taken is None else taken]
+            if not pane:
+                to_pane.clear()
+            if not readable and not writable:
+                to_pane += statuses.flush()
+                if process.poll() is not None:
+                    break
+        while True:
+            data = read_some(master)
+            if not data:
+                break
+            to_pane += statuses.feed(data)
+        to_pane += statuses.flush(everything=True)
+        os.set_blocking(1, True)
+        while pane and to_pane:
+            taken = write_some(1, to_pane)
+            pane = taken is not None
+            del to_pane[:taken or len(to_pane)]
+    finally:
+        signal.signal(signal.SIGWINCH, previous)
+        for fd in (0, 1):
+            with contextlib.suppress(OSError):
+                os.set_blocking(fd, True)
+        if pane_modes:
+            with contextlib.suppress(termios.error):
+                termios.tcsetattr(0, termios.TCSADRAIN, pane_modes)
+        os.close(master)
+    return process.wait()
 
 
 def runner(root, task_id, run_id, resume_conversation=False):
@@ -2004,7 +2356,14 @@ def runner(root, task_id, run_id, resume_conversation=False):
                 if current.get("runId") == run_id:
                     current["setupComplete"] = True
                     store.save(current)
-        code = subprocess.call(argv, cwd=task["worktree"], env=env)
+        if task.get("programStatus") and os.isatty(0):
+            report, finish = program_status_recorder(store, task_id, run_id)
+            try:
+                code = relay(argv, task["worktree"], env, report)
+            finally:
+                finish()
+        else:
+            code = subprocess.call(argv, cwd=task["worktree"], env=env)
     except (OSError, RoostError, subprocess.CalledProcessError) as exc:
         error = str(exc)
         print("Roost: " + error, file=sys.stderr)
@@ -2054,7 +2413,7 @@ def outgoing(result):
 
 
 TASK_ACTIONS = {
-    "resume": lambda store, task, request: resume(store, task),
+    "resume": lambda store, task, request: resume(store, task, request.get("programStatus")),
     "stop": lambda store, task, request: stop(store, task),
     "send": lambda store, task, request: send(task, request["text"], request.get("force") is True),
     "shell": lambda store, task, request: shell(store, task),

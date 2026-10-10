@@ -303,6 +303,12 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
 - `roost-merge-style`: `merge` (the default) brings a task in with a merge
   commit; `squash` adds one commit holding all its work, with a message made
   from its commits.
+- `roost-program-status` (nil, experimental): let the agent say what it is
+  doing. Claude Code 2.1.295 and later reports whether it works, waits on you
+  or is done (OSC 7501), but only to a terminal that answers its probe, which
+  tmux doesn't. With this on, the agent of each new or resumed task runs on a
+  terminal of Roost's own, relayed to its tmux pane, that does: an approval, a
+  declined request and Esc then show at once.
 - `roost-notes-file`: review notes not yet sent, kept across sessions.
 - `roost-magit-status-sections` (t): whether Magit's status of a task's
   worktree names the task and folds in its agent's latest reply.
@@ -379,7 +385,8 @@ Things to know:
   poll, once Roost sees it start; declined, or stopped with Esc, the task
   shows `ready`, read from its transcript. Claude Code's other tools, and
   Codex and Pi tasks, may keep showing `permission` until the agent moves on.
-  `e` asks before sending to a task in that state.
+  `e` asks before sending to a task in that state. With `roost-program-status`
+  on, Claude Code says so itself, at once.
 - Roost's task sessions stay out of the corner where tmux-control names other
   sessions with new output, and its terminals don't show that corner: it
   lights up whenever an agent prints anything, and only shows its terminal.
