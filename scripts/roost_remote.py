@@ -2092,7 +2092,9 @@ class ProgramStatusFilter:
                 shown.append(data[found:stop])
                 start = stop
                 continue
-            self.read(data[body:stop])
+            # One longer than the protocol allows is discarded whole.
+            if start - found <= PROGRAM_STATUS_LIMIT:
+                self.read(data[body:stop])
 
     @property
     def waiting(self):
@@ -2160,7 +2162,8 @@ def apply_program_status(task, fields, run_id):
         task.pop("requestCommand", None)
     if task["status"] == "running" and state == "working" and fields.get("msg"):
         task["activity"] = fields["msg"][:REQUEST_LIMIT]
-    elif task["status"] != "running":
+    else:
+        # Each report replaces the last, so one without a message clears it.
         task.pop("activity", None)
     return task != before
 
@@ -2199,9 +2202,11 @@ def program_status_recorder(store, task_id, run_id):
         reports.put(fields)
 
     def finish():
+        # However long: a report recorded after the runner records the
+        # agent's end would undo it, and the runner waits on the same lock.
         if thread.ident is not None:
             reports.put(None)
-            thread.join(5)
+            thread.join()
 
     return report, finish
 
@@ -2258,8 +2263,9 @@ def relay(argv, cwd, env, report):
     pane_modes = None
     with contextlib.suppress(termios.error):
         pane_modes = termios.tcgetattr(0)
-        # What you type, C-c included, goes to the agent's terminal as it is.
-        tty.setraw(0)
+        # What you type, C-c included, goes to the agent's terminal as it
+        # is, keys typed while it started up included.
+        tty.setraw(0, termios.TCSANOW)
 
     def resize(*_):
         with contextlib.suppress(OSError):
@@ -2324,7 +2330,7 @@ def relay(argv, cwd, env, report):
                 os.set_blocking(fd, True)
         if pane_modes:
             with contextlib.suppress(termios.error):
-                termios.tcsetattr(0, termios.TCSADRAIN, pane_modes)
+                termios.tcsetattr(0, termios.TCSANOW, pane_modes)
         os.close(master)
     return process.wait()
 

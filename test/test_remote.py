@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import select
 import shlex
 import signal
 from pathlib import Path
@@ -2254,6 +2255,10 @@ class ProgramStatus(unittest.TestCase):
 
     def test_what_is_not_a_report_passes_on_as_it_is(self):
         statuses = self.filter()
+        # One longer than the protocol allows is not read.
+        huge = b"\x1b]7501;state=done:msg=" + base64.b64encode(b"x" * 3100) + b"\x1b\\"
+        self.assertGreater(len(huge), roost.PROGRAM_STATUS_LIMIT)
+        self.assertEqual(statuses.feed(huge), b"")
         cut = b"\x1b]7501;state=working\x1b[31mred"
         self.assertEqual(statuses.feed(cut) + statuses.flush(everything=True), cut)
         # An ESC at the end waits a moment for what may follow; a sequence
@@ -2281,6 +2286,27 @@ class ProgramStatus(unittest.TestCase):
             self.assertEqual(threading.active_count(), before + 1)
             finish()
             self.assertEqual(threading.active_count(), before)
+
+    def test_keys_typed_before_the_relay_starts_reach_the_agent(self):
+        pane, terminal = os.openpty()
+        os.write(pane, b"typed early\r")
+        relay = ("import importlib.util, os, sys\n"
+                 "spec = importlib.util.spec_from_file_location('roost_remote', sys.argv[1])\n"
+                 "roost = importlib.util.module_from_spec(spec)\n"
+                 "spec.loader.exec_module(roost)\n"
+                 "sys.exit(roost.relay([sys.executable, '-c', 'print(\"GOT \" + input())'], '.',"
+                 " dict(os.environ), lambda fields: None))\n")
+        try:
+            done = subprocess.run([sys.executable, "-c", relay, str(SOURCE)], stdin=terminal, stdout=terminal,
+                                  stderr=terminal, timeout=10)
+            self.assertEqual(done.returncode, 0)
+            shown = b""
+            while select.select([pane], [], [], 0.2)[0]:
+                shown += os.read(pane, 65536)
+            self.assertIn(b"GOT typed early", shown)
+        finally:
+            os.close(pane)
+            os.close(terminal)
 
     def test_reading_a_report(self):
         parse = roost.parse_program_status
@@ -2326,6 +2352,8 @@ class ProgramStatus(unittest.TestCase):
         self.assertEqual(self.apply(dict(status="running"), "blocked", kind="question")["request"],
                          "Asks you a question")
         self.assertEqual(self.apply(dict(status="background"), "done")["status"], "background")
+        # Each report replaces the last: a step's description goes with it.
+        self.assertIsNone(self.apply(dict(status="running", activity="Reading notes.py"), "working")["activity"])
         self.assertFalse(roost.apply_program_status(dict(status="running", programStatusRun="run"),
                                                     dict(state="blocked", id="subagent"), "run"))
         beside = roost.beside_program_status
