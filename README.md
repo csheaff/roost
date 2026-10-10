@@ -421,7 +421,10 @@ Since 0.8.1 (unreleased):
   lists only what a task can do now and says what comes next; the command
   menu says so too, and greys out the rest. Like the sidebar, the panel is
   off until you turn it on: add `(roost-task-panel-mode 1)` to your
-  configuration to keep it.
+  configuration to keep it. Neither has a mode line: while you are in one,
+  it shows the cursor (with its modal-editing shape) and highlights the line
+  you are on in face `roost-selection`, which replaces
+  `roost-sidebar-selection`.
 - Each task has a tmux session of its own, which ends with the task. Older
   tasks move to their own when resumed. `roost-session-name` is gone.
 - `x` finishes a task: it retires one whose work is merged, or discards one

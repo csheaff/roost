@@ -279,8 +279,11 @@ See `roost-note'."
   "Face for a merged pull request." :group 'roost)
 (defface roost-pr-closed '((t :inherit error))
   "Face for a pull request closed without merging." :group 'roost)
-(defface roost-sidebar-selection '((t :inherit hl-line :extend t))
-  "The sidebar row its keys act on, shown while you are in the sidebar.")
+(defface roost-selection '((t :inherit completions-highlight :extend t))
+  "The line you are on in the sidebar or a task panel, while you are in it.
+Their windows have no mode line to show that you are, and the
+sidebar's keys act on this row.")
+(define-obsolete-face-alias 'roost-sidebar-selection 'roost-selection "0.9")
 (defface roost-diff-added '((t :inherit success))
   "Inserted line counts.")
 (defface roost-diff-removed '((t :inherit error))
@@ -3628,7 +3631,12 @@ Status is the last observation from the task's host.
               word-wrap t
               ;; As in `visual-line-mode', wrapped lines need no fringe arrows.
               fringe-indicator-alist (cons '(continuation nil nil)
-                                           (default-value 'fringe-indicator-alist)))
+                                           (default-value 'fringe-indicator-alist))
+              ;; Docked, it has no mode line: the cursor and a highlight
+              ;; show only while you are in it.
+              cursor-in-non-selected-windows nil)
+  (add-hook 'post-command-hook #'roost--mark-selection nil t)
+  (add-hook 'window-selection-change-functions #'roost--selection-changed nil t)
   (add-hook 'after-change-major-mode-hook #'roost--quiet-display 90 t)
   (add-hook 'window-size-change-functions #'roost--task-info-resized nil t)
   (roost--evil-state 'roost-task-info-mode roost-evil-state)
@@ -3974,7 +3982,9 @@ Windows showing the panel keep their scroll position, and the mark stays."
                     "\n")))))
     (goto-char (min position (point-max)))
     (roost--restore-mark mark)
-    (roost--restore-window-places places)))
+    (roost--restore-window-places places)
+    ;; Redrawing removed the highlight with the text.
+    (roost--mark-selection)))
 
 (defun roost--task-label (task)
   "TASK's name, qualified by host when names collide.
@@ -4371,16 +4381,38 @@ Task commands act on the task at point, as in the dashboard.
 \\{roost-sidebar-list-mode-map}"
   (setq-local header-line-format nil
               mode-line-format nil
-              cursor-type nil
+              ;; The cursor shows only while you are in the sidebar, as
+              ;; does the highlight; modal editing shows its state with it.
               cursor-in-non-selected-windows nil)
   (remove-hook 'window-size-change-functions #'roost--dashboard-resized t)
   (add-hook 'window-size-change-functions #'roost--sidebar-resized nil t)
-  ;; With no cursor, a highlight shows which task its keys act on.
-  (add-hook 'post-command-hook #'roost--sidebar-mark-selection nil t)
+  (add-hook 'post-command-hook #'roost--mark-selection nil t)
   (add-hook 'window-selection-change-functions #'roost--sidebar-entered nil t))
 
-(defvar-local roost--sidebar-selection nil
-  "Overlay on the sidebar row its keys act on, while its window is selected.")
+(defvar-local roost--selection nil
+  "Overlay on the line you are on, while this buffer's window is selected.")
+
+(defun roost--mark-selection (&rest _)
+  "Highlight the line at point while the selected window shows this buffer.
+The sidebar and task panels have no mode line, so this shows that you
+are in one."
+  (let ((window (selected-window)))
+    (if (not (eq (window-buffer window) (current-buffer)))
+        (when roost--selection
+          (delete-overlay roost--selection))
+      (unless roost--selection
+        (setq roost--selection (make-overlay 1 1))
+        (overlay-put roost--selection 'face 'roost-selection))
+      (overlay-put roost--selection 'window window)
+      (save-excursion
+        (goto-char (window-point window))
+        (move-overlay roost--selection (line-beginning-position)
+                      (min (point-max) (1+ (line-end-position))) (current-buffer))))))
+
+(defun roost--selection-changed (window)
+  "Highlight, or stop highlighting, the line you are on in WINDOW's buffer."
+  (with-current-buffer (window-buffer window)
+    (roost--mark-selection)))
 
 (defun roost--task-row (key)
   "Position of the row for the task with KEY in the current buffer, or nil."
@@ -4415,22 +4447,10 @@ heading, where `c' starts a task in that project; so may a click."
   (roost--sidebar-mark-selection))
 
 (defun roost--sidebar-mark-selection (&rest _)
-  "Highlight the sidebar line its keys act on, while you are in the sidebar.
-The sidebar shows no cursor."
+  "Highlight the sidebar line its keys act on, while you are in the sidebar."
   (when-let* ((buffer (get-buffer roost--sidebar-buffer)))
     (with-current-buffer buffer
-      (let ((window (selected-window)))
-        (if (not (eq (window-buffer window) buffer))
-            (when roost--sidebar-selection
-              (delete-overlay roost--sidebar-selection))
-          (unless roost--sidebar-selection
-            (setq roost--sidebar-selection (make-overlay 1 1))
-            (overlay-put roost--sidebar-selection 'face 'roost-sidebar-selection))
-          (overlay-put roost--sidebar-selection 'window window)
-          (save-excursion
-            (goto-char (window-point window))
-            (move-overlay roost--sidebar-selection (line-beginning-position)
-                          (min (point-max) (1+ (line-end-position))) buffer)))))))
+      (roost--mark-selection))))
 
 (defun roost--sidebar-resized (window)
   "Reflow the sidebar after WINDOW is resized."

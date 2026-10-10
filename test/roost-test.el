@@ -3024,7 +3024,8 @@ ssh: connect to host dev port 22: Operation timed out"
             (kill-buffer terminal))))))))
 
 (ert-deftest roost-the-sidebar-highlights-the-row-its-keys-act-on ()
-  ;; It shows no cursor, so nothing said which task `s' would resume.
+  ;; It has no mode line, so nothing said you were in it, or which task
+  ;; `s' would resume.
   (roost-test--isolated
    (dolist (spec '(("1111111111111111" "alpha" "1") ("2222222222222222" "beta" "2")))
      (roost--cache-task "dev" (append `((repo . "/home/user/p") (startedAt . ,(nth 2 spec)) (name . ,(nth 1 spec)))
@@ -3042,31 +3043,67 @@ ssh: connect to host dev port 22: Operation timed out"
            (set-window-point (selected-window) 1)
            (roost--sidebar-entered)
            (with-current-buffer sidebar
-             (should (= (overlay-start roost--sidebar-selection) (funcall row "beta")))
-             (should (eq (overlay-get roost--sidebar-selection 'window) (selected-window)))
+             (should (= (overlay-start roost--selection) (funcall row "beta")))
+             (should (eq (overlay-get roost--selection 'window) (selected-window)))
              ;; It follows point, and outlasts a redraw.
              (goto-char (funcall row "alpha"))
              (roost--sidebar-mark-selection)
              (roost--render-sidebar)
-             (should (= (overlay-start roost--sidebar-selection) (funcall row "alpha")))
+             (should (= (overlay-start roost--selection) (funcall row "alpha")))
              ;; Once in, point can rest on a project's heading, for `c',
              ;; and stays there through a redraw.
              (goto-char (funcall row "dev · p"))
              (roost--sidebar-mark-selection)
              (roost--render-sidebar)
              (should (= (point) (funcall row "dev · p")))
-             (should (= (overlay-start roost--sidebar-selection) (funcall row "dev · p"))))
+             (should (= (overlay-start roost--selection) (funcall row "dev · p"))))
            ;; So may a click that enters the sidebar there.
            (set-window-point (selected-window) (funcall row "dev · p"))
            (let ((last-input-event `(mouse-1 (,(selected-window) ,(funcall row "dev · p") (0 . 0) 0))))
              (roost--sidebar-entered))
            (should (= (window-point) (funcall row "dev · p")))
-           ;; Elsewhere, the sidebar shows no selection.
+           ;; Elsewhere, the sidebar shows no selection, and no cursor.
            (set-window-buffer (selected-window) (get-buffer-create " *elsewhere*"))
            (roost--sidebar-mark-selection)
            (with-current-buffer sidebar
-             (should-not (overlay-buffer roost--sidebar-selection))))
+             (should-not (overlay-buffer roost--selection))
+             (should-not cursor-in-non-selected-windows)
+             ;; In it, the cursor is the frame's: modal editing shows its state with it.
+             (should-not (local-variable-p 'cursor-type))))
        (kill-buffer sidebar)
+       (when (get-buffer " *elsewhere*") (kill-buffer " *elsewhere*"))))))
+
+(ert-deftest roost-a-task-panel-highlights-the-line-you-are-on-while-you-are-in-it ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (roost-test--task)))
+         (panel (get-buffer-create " *roost-test-panel*")))
+     (unwind-protect
+         (save-window-excursion
+           (with-current-buffer panel
+             (roost-task-info-mode)
+             (setq roost--buffer-task-key (roost--key task))
+             (roost--render-task-info))
+           ;; Not in it: no highlight.
+           (with-current-buffer panel
+             (should-not (and roost--selection (overlay-buffer roost--selection))))
+           (set-window-buffer (selected-window) panel)
+           (roost--selection-changed (selected-window))
+           (with-current-buffer panel
+             (should (eq (overlay-get roost--selection 'window) (selected-window)))
+             (should (= (overlay-start roost--selection) (line-beginning-position)))
+             ;; It follows point, and outlasts a redraw.
+             (forward-line 1)
+             (set-window-point (selected-window) (point))
+             (roost--mark-selection)
+             (roost--render-task-info)
+             (should (= (overlay-start roost--selection)
+                        (save-excursion (goto-char (point-min)) (line-beginning-position 2)))))
+           ;; Leaving it removes the highlight.
+           (set-window-buffer (selected-window) (get-buffer-create " *elsewhere*"))
+           (with-current-buffer panel
+             (roost--mark-selection)
+             (should-not (overlay-buffer roost--selection))))
+       (kill-buffer panel)
        (when (get-buffer " *elsewhere*") (kill-buffer " *elsewhere*"))))))
 
 (ert-deftest roost-opening-a-task-whose-window-is-gone-offers-to-resume-it ()
