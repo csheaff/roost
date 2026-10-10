@@ -1662,9 +1662,15 @@ def remember_repository(store, repo):
     conversations names its project from there."""
     folder = store.root / "worktrees" / hashlib.sha256(repo.encode()).hexdigest()[:10]
     marker = folder / REPOSITORY_MARKER
-    if not marker.is_file() or marker.read_text().strip() != repo:
+    if not marker.is_file() or read_repository(marker) != repo:
         folder.mkdir(mode=0o700, parents=True, exist_ok=True)
         atomic_text(marker, repo + "\n")
+
+
+def read_repository(marker):
+    """The repository noted in MARKER: its text but the newline written after
+    it, since a directory's name may end in a space."""
+    return marker.read_text().removesuffix("\n")
 
 SEARCH_TASK_LIMIT = 50
 SEARCH_HITS_PER_TASK = 10
@@ -1784,7 +1790,7 @@ def search(store, request):
     repos = {}
     with contextlib.suppress(OSError):
         for marker in worktrees.glob("*/" + REPOSITORY_MARKER):
-            repos[marker.parent.name] = marker.read_text().strip()
+            repos[marker.parent.name] = read_repository(marker)
     for task in tasks:
         if isinstance(task.get("repo"), str):
             repos[hashlib.sha256(task["repo"].encode()).hexdigest()[:10]] = task["repo"]
@@ -1812,13 +1818,25 @@ def search(store, request):
                         heapq.heappush(group["hits"], entry)
                     else:
                         heapq.heappushpop(group["hits"], entry)
+    # Transcripts were read without the registry lock, so tasks may have
+    # been retired or created meanwhile: their records now say which are live.
     by_id = {task["id"]: task for task in tasks}
+    current = {task["id"]: task for task in store.all() if isinstance(task.get("worktree"), str)}
+    layout = lambda task: Path(os.path.relpath(os.path.realpath(task["worktree"]), root)).parts
+    live_at = {layout(task): task for task in current.values()}
+    live = lambda task: dict(id=task["id"], name=task.get("name"), repo=task.get("repo"), branch=task.get("branch"))
     results = []
     for key, group in groups.items():
         hits = [hit for _, _, hit in sorted(group["hits"])]
-        if key[0] == "task":
-            task = by_id[key[1]]
-            result = dict(id=task["id"], name=task.get("name"), repo=task.get("repo"), branch=task.get("branch"))
+        if key[0] == "task" and key[1] in current:
+            result = live(current[key[1]])
+        elif key[0] == "task":
+            gone = by_id[key[1]]
+            parts = layout(gone)
+            result = dict(key="/".join(parts) if len(parts) == 2 else "task/" + gone["id"], name=gone.get("name"),
+                          repo=gone.get("repo"), past=True, branch=gone.get("branch"))
+        elif key[1:] in live_at:
+            result = live(live_at[key[1:]])
         else:
             result = dict(key=key[1] + "/" + key[2], name=key[2][:-7].replace("-", " "),
                           repo=repos.get(key[1]), past=True, branch=group["branch"])

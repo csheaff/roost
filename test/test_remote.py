@@ -2282,6 +2282,38 @@ class Search(unittest.TestCase):
         reply = roost.rpc(dict(root=str(state), action="search", query="yak"))
         self.assertEqual([(task["name"], task["past"]) for task in reply["result"]["tasks"]], [("old task", True)])
 
+    def test_a_repository_whose_name_ends_in_a_space_keeps_it(self):
+        repo = "/work/shop "
+        repo_hash = hashlib.sha256(repo.encode()).hexdigest()[:10]
+        worktree = self.state / "worktrees" / repo_hash / "spaced-555555"
+        self.store.save(dict(id="5555555555555555", name="spaced", repo=repo, worktree=str(worktree), status="ready"))
+        self.store.remove("5555555555555555")
+        self.conversation(worktree, "s", [self.said("user", "walrus", 1)])
+        self.assertEqual(self.search("walrus")["tasks"][0]["repo"], repo)
+
+    def test_tasks_retired_or_created_during_a_search_are_shown_as_they_are_now(self):
+        retiring = self.state / "worktrees" / self.repo_hash / "retiring-666666"
+        arriving = self.state / "worktrees" / self.repo_hash / "arriving-777777"
+        self.store.save(dict(id="6666666666666666", name="retiring", repo=self.repo, worktree=str(retiring),
+                             branch="roost/retiring-666666", status="ready"))
+        self.conversation(retiring, "s", [self.said("user", "otter one", 1)])
+        self.conversation(arriving, "s", [self.said("user", "otter two", 2)])
+        scan = roost.search_transcript
+
+        def meanwhile(*args):
+            # Search reads transcripts without the registry lock.
+            if self.store.path("6666666666666666").exists():
+                self.store.remove("6666666666666666")
+                self.store.save(dict(id="7777777777777777", name="Arriving", repo=self.repo,
+                                     worktree=str(arriving), status="starting"))
+            return scan(*args)
+
+        with patch.object(roost, "search_transcript", meanwhile):
+            found = {task["name"]: task for task in self.search("otter")["tasks"]}
+        self.assertEqual((found["retiring"].get("id"), found["retiring"]["past"], found["retiring"]["key"]),
+                         (None, True, self.repo_hash + "/retiring-666666"))
+        self.assertEqual((found["Arriving"]["id"], found["Arriving"].get("past")), ("7777777777777777", None))
+
     def test_an_empty_query_is_refused(self):
         reply = roost.rpc(dict(root=str(self.state), action="search", query="  "))
         self.assertEqual(reply, {"ok": False, "error": "Search for at least one word"})
