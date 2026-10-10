@@ -396,6 +396,96 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual((self.repo / "hello").read_text(), "my own edit\n")
         self.assertFalse(wt.exists())
 
+    def test_a_squash_merge_adds_one_commit_with_the_tasks_messages(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        (wt / "hello").write_text("one\n")
+        self.git("commit", "-qam", "First change\n\nWhy it was needed.", cwd=wt)
+        # The task was brought up to date along the way.
+        (self.repo / "other").write_text("main moved\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "main moved")
+        self.assertTrue(self.request("update", id=task["id"])["ok"])
+        (wt / "hello").write_text("two\n")
+        self.git("commit", "-qam", "Second change", cwd=wt)
+        before = self.git("rev-parse", "main")
+        reply = self.request("merge", id=task["id"], style="squash")
+        self.assertTrue(reply["ok"], reply)
+        # One commit on main, with only main as its parent.
+        self.assertEqual(self.git("rev-parse", "main~1"), before)
+        self.assertEqual(self.git("log", "-1", "--format=%P", "main"), before)
+        self.assertEqual(self.git("log", "-1", "--format=%B", "main"),
+                         "First change\n\n* First change\n* Second change")
+        self.assertEqual((self.repo / "hello").read_text(), "two\n")
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        self.assertFalse(wt.exists())
+        self.assertNotIn(task["branch"], self.git("branch", "--list", task["branch"]))
+        self.assertNotIn("remoteCleanup", reply["result"])
+
+    def test_a_squash_merge_without_checkout_keeps_a_single_commits_message(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        (wt / "hello").write_text("changed\n")
+        self.git("commit", "-qam", "Fix the greeting\n\nIt said hello twice.", cwd=wt)
+        self.git("checkout", "-q", "-b", "mine")
+        before = self.git("rev-parse", "main")
+        reply = self.request("merge", id=task["id"], style="squash")
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(self.git("log", "-1", "--format=%P", "main"), before)
+        self.assertEqual(self.git("log", "-1", "--format=%B", "main"), "Fix the greeting\n\nIt said hello twice.")
+        self.assertEqual(self.git("show", "main:hello"), "changed")
+        self.assertEqual(self.git("symbolic-ref", "--short", "HEAD"), "mine")
+        self.assertFalse(wt.exists())
+
+    def test_a_squash_merge_retires_a_task_whose_pull_request_merged_earlier(self):
+        self.github()
+        task = self.create()
+        merged_earlier = self.commit_in(task)
+        self.assertTrue(self.request("pr", id=task["id"], title="Earlier")["ok"])
+        # GitHub merged the pull request; the task went on to commit again.
+        (self.gh_dir / "view.json").write_text(json.dumps(dict(state="MERGED", headRefOid=merged_earlier)))
+        wt = Path(task["worktree"])
+        (wt / "hello").write_text("two\n")
+        self.git("commit", "-qam", "Second", cwd=wt)
+        reply = self.request("merge", id=task["id"], style="squash")
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual((self.repo / "hello").read_text(), "two\n")
+        self.assertFalse(wt.exists())
+        # The branch on GitHub is not this task's last commit: left alone.
+        self.assertNotIn("remoteCleanup", reply["result"])
+
+    def test_squashing_again_adds_no_empty_commit(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        # Two commits, so the squashed one differs from the task's own.
+        (wt / "hello").write_text("changed\n")
+        self.git("commit", "-qam", "Fix", cwd=wt)
+        (wt / "hello").write_text("changed again\n")
+        self.git("commit", "-qam", "Fix again", cwd=wt)
+        self.git("checkout", "-q", "-b", "mine")
+        record = dict(repo=os.path.realpath(self.repo), branch=task["branch"], name=task["name"])
+        tip = self.git("rev-parse", "HEAD", cwd=wt)
+        self.assertEqual(roost.squash_merge(record, "main", False), tip)
+        squashed = self.git("rev-parse", "main")
+        # As when the merge went through but retiring the task did not.
+        self.assertEqual(roost.squash_merge(record, "main", False), tip)
+        self.assertEqual(self.git("rev-parse", "main"), squashed)
+
+    def test_a_conflicting_squash_merge_changes_nothing(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        (wt / "hello").write_text("task\n")
+        self.git("commit", "-qam", "task", cwd=wt)
+        (self.repo / "hello").write_text("main\n")
+        self.git("commit", "-qam", "main")
+        before = self.git("rev-parse", "main")
+        error = self.request("merge", id=task["id"], style="squash")["error"]
+        self.assertIn("conflicts with main in hello", error)
+        self.assertEqual(self.git("rev-parse", "main"), before)
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        self.assertEqual((self.repo / "hello").read_text(), "main\n")
+        self.assertTrue(wt.exists())
+
     def test_a_conflicting_merge_without_checkout_changes_nothing(self):
         task = self.create()
         wt = Path(task["worktree"])
@@ -826,7 +916,9 @@ class Lifecycle(unittest.TestCase):
 
     def test_pi_queued_work_is_background_and_codex_interrupt_is_ready(self):
         self.assertEqual(roost.PiAgent().observe(dict(event="agent_end", pending=True))["status"], "background")
-        self.assertEqual(roost.CodexAgent().observe(dict(hook_event_name="Interrupt"))["status"], "ready")
+        # Ready, and named as an interruption, so Emacs shows it interrupted.
+        interrupted = roost.CodexAgent().observe(dict(hook_event_name="Interrupt"))
+        self.assertEqual((interrupted["status"], interrupted["lastEvent"]), ("ready", "Interrupt"))
         self.assertIsNone(roost.PiAgent().observe(dict(event="unknown")))
         self.assertIsNone(roost.CodexAgent().observe(dict(hook_event_name="SubagentStop")))
 

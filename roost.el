@@ -225,6 +225,14 @@ It then also shows the agent's latest reply, folded.  Review notes and
 Roost's keys in Magit do not depend on this."
   :type 'boolean)
 
+(defcustom roost-merge-style 'merge
+  "How `roost-merge-retire' brings a task's work into its integration branch.
+`merge' makes a merge commit, keeping the task's commits as they are.
+`squash' adds one commit holding all the task's work, with a message
+made from its commits, so small tasks keep the history straight."
+  :type '(choice (const :tag "Merge commit" merge)
+                 (const :tag "One squashed commit" squash)))
+
 (defcustom roost-notes-file (locate-user-emacs-file "roost/notes.json")
   "Local file keeping review notes not yet sent to an agent.
 See `roost-note'."
@@ -687,8 +695,7 @@ and a newer notification about TASK replaces it."
 A ready agent or one asking permission is inspected first, since quiet
 polls leave out its latest reply, so the notification can say what it
 finished or wants."
-  (let ((title (format "Roost: %s — %s" (roost--field task 'name)
-                       (if (equal status "failed") (roost--status-name task) status)))
+  (let ((title (format "Roost: %s — %s" (roost--field task 'name) (roost--status-name task)))
         (label (roost--host-label host)))
     (if (not (member status '("ready" "permission")))
         (roost--notify title (if-let* ((error (roost--field task 'error)))
@@ -848,7 +855,8 @@ recently failed."
 ;;;; Choosing a task
 
 (defconst roost--status-order
-  '("permission" "prompt" "ready" "error" "failed" "crashed" "exited" "running" "background" "idle"
+  '("permission" "prompt" "ready" "interrupted" "error" "failed" "crashed" "exited" "running"
+    "background" "idle"
     "starting" "stopped")
   "Attention statuses from most to least in need of attention.")
 
@@ -868,7 +876,7 @@ it is ready and you have seen it since, rather than \"ready\"."
                 (> (or (roost--seconds-since (roost--field task 'updatedAt)) 0)
                    roost-startup-grace))
            "prompt")
-          ((and (equal status "ready") (roost--seen-p task))
+          ((and (member status '("ready" "interrupted")) (roost--seen-p task))
            "idle")
           (t status))))
 
@@ -881,7 +889,7 @@ it is ready and you have seen it since, rather than \"ready\"."
 Its agent asks something, or finished, failed, crashed or exited since
 you last saw it."
   (let ((status (roost--attention-status task)))
-    (or (member status '("permission" "prompt" "ready"))
+    (or (member status '("permission" "prompt" "ready" "interrupted"))
         (and (member status '("error" "failed" "crashed" "exited"))
              (not (roost--seen-p task))))))
 
@@ -894,7 +902,7 @@ Its host records it too, for your other Emacs and the next session."
       (puthash key updated roost--seen)
       ;; Only where seeing it stops it waiting: a working agent's every
       ;; event would otherwise send its host a request.
-      (when (member (roost--status-name task) '("ready" "error" "failed" "crashed" "exited"))
+      (when (member (roost--status-name task) '("ready" "interrupted" "error" "failed" "crashed" "exited"))
         (roost--record-seen task updated)))))
 
 (defun roost--record-seen (task updated)
@@ -1280,6 +1288,20 @@ panel, rather than inside the workspace of the task you were in."
   (delete-dups (append roost--remembered-projects
                        (mapcar #'roost--project-directory (roost-tasks)))))
 
+(defun roost--project-choices ()
+  "Projects to offer for a new task: Roost's own, then those project.el knows.
+A local one from project.el must be a Git checkout; a remote one is
+offered as it is, since checking it would open a connection."
+  (delete-dups
+   (append (roost--known-projects)
+           (delq nil (mapcar (lambda (root)
+                               (if (file-remote-p root)
+                                   (file-name-as-directory root)
+                                 (let ((root (file-name-as-directory (expand-file-name root))))
+                                   (when (file-exists-p (expand-file-name ".git" root)) root))))
+                             (when (require 'project nil t)
+                               (ignore-errors (project-known-project-roots))))))))
+
 (defun roost--host-projects (host)
   "Paths on HOST of the projects Roost has used there."
   (delq nil (mapcar (lambda (directory)
@@ -1444,6 +1466,9 @@ On a project's heading in the dashboard or sidebar, that project."
   (cond (task (if fork (roost--remote-directory task) (roost--project-directory task)))
         ((get-text-property (point) 'roost-directory))
         ((ignore-errors (vc-root-dir)))
+        ;; Buffers VC does not track, such as Dired or a shell, in a checkout.
+        ((when-let* ((root (ignore-errors (locate-dominating-file default-directory ".git"))))
+           (file-name-as-directory (expand-file-name root))))
         ((car (roost--known-projects)))))
 
 (defun roost--compose-seed ()
@@ -1524,6 +1549,8 @@ Planning lines and drawers are left out."
          (fork (and fork task))
          (seed (roost--compose-seed))
          (org (and seed (not (use-region-p)) (roost--org-marker)))
+         ;; Where you are, before the draft becomes the current buffer.
+         (directory (roost--compose-default-directory task fork))
          (buffer (get-buffer roost--compose-buffer))
          (fresh (not buffer)))
     (setq buffer (or buffer (get-buffer-create roost--compose-buffer)))
@@ -1534,7 +1561,7 @@ Planning lines and drawers are left out."
       ;; An untouched draft follows the current context; a written one is kept.
       (when (or fresh fork (string-empty-p (roost--compose-prompt)))
         (setq roost--compose-fields
-              (list :directory (roost--compose-default-directory task fork)
+              (list :directory directory
                     :agent roost-default-agent
                     :base (when fork "HEAD")
                     :source (when fork (roost--field task 'name)))))
@@ -1641,11 +1668,12 @@ A mouse click shows a menu at the pointer; the keyboard uses the minibuffer."
     (cdr (assoc (completing-read prompt choices nil t nil nil default) choices))))
 
 (defun roost-compose-set-project ()
-  "Choose the draft's project from known checkouts, or any directory."
+  "Choose the draft's project from known checkouts, or any directory.
+The checkouts are those Roost has used, then those project.el knows."
   (interactive)
   (let* ((other "Other directory…")
          (choices (append (mapcar (lambda (dir) (cons (roost--project-label dir) dir))
-                                  (roost--known-projects))
+                                  (roost--project-choices))
                           (list (cons other 'other))))
          (choice (roost--choose-from "Project: " choices)))
     (when (eq choice 'other)
@@ -2615,7 +2643,8 @@ stamp, so polls would not notice it."
   "Merge TASK's integration branch into its worktree.
 This brings a task that fell behind up to date before merging it, and
 resolves conflicts in the task rather than the primary checkout.  On
-conflicts, offer to have the task's agent resolve them."
+conflicts, or changes not yet committed, offer to have the task's
+agent do it."
   (interactive)
   (setq task (roost--choose task))
   (roost--act
@@ -2636,7 +2665,20 @@ conflicts, offer to have the task's agent resolve them."
                          name)))
              ((alist-get 'changed result)
               (message "%s now includes the latest %s" name branch))
-             (t (message "%s is already up to date with %s" name branch)))))))
+             (t (message "%s is already up to date with %s" name branch)))))
+   (lambda (err)
+     (if (not (string-prefix-p "Commit the task's changes before updating" err))
+         (message "Roost %s: %s" (roost--host-label (roost--field task 'host)) err)
+       (let ((name (roost--field task 'name))
+             (branch (roost--field task 'integrationBranch)))
+         (if (yes-or-no-p (format "%s has changes not yet committed. Ask its agent to commit them and merge %s? "
+                                  name branch))
+             (roost-send task
+                         (format "Commit your changes, then merge %s into this branch. If that conflicts, resolve the conflicts so the changes from both sides keep working. Run the tests, and commit the merge."
+                                 branch))
+           (message "%s" (substitute-command-keys
+                          (format "Commit %s's changes in Magit (\\<roost-task-info-mode-map>\\[roost-review]), then update it again"
+                             name)))))))))
 
 ;;;; Pull requests
 
@@ -2957,7 +2999,8 @@ merges it instead."
 ;;;###autoload
 (defun roost-merge-retire (&optional task)
   "Merge TASK's committed work into its recorded integration branch and retire.
-Dirty worktrees are refused; review and commit in Magit first."
+Dirty worktrees are refused; review and commit in Magit first.  The work
+comes in as a merge commit, or one squashed commit; see `roost-merge-style'."
   (interactive)
   (setq task (roost--choose task))
   (cond
@@ -2966,15 +3009,19 @@ Dirty worktrees are refused; review and commit in Magit first."
     (when (y-or-n-p (format "%s has uncommitted changes to commit first.  Open Magit? "
                             (roost--field task 'name)))
       (roost-review task)))
-   ((yes-or-no-p (format "Merge committed work from %s and retire it? "
+   ((yes-or-no-p (format (if (eq roost-merge-style 'squash)
+                             "Squash committed work from %s into one commit and retire it? "
+                           "Merge committed work from %s and retire it? ")
                          (roost--field task 'name)))
-    (roost--act task "merge" nil
+    (roost--act task "merge" (when (eq roost-merge-style 'squash) '((style . "squash")))
                 (lambda (merged)
                   (roost--retired-workspace merged)
                   (roost--kill-worktree-buffers merged)
                   ;; The other tasks are measured against the branch that moved.
                   (roost--refresh-host (roost--field merged 'host) nil)
-                  (message "Merged %s into %s, and removed its worktree and branch"
+                  (message (if (eq roost-merge-style 'squash)
+                               "Squashed %s into %s, and removed its worktree and branch"
+                             "Merged %s into %s, and removed its worktree and branch")
                            (roost--field task 'name)
                            (or (roost--field task 'integrationBranch) "its branch")))))))
 
@@ -3101,9 +3148,14 @@ that failed, crashed or exited, in turn."
 (defun roost--status-name (task)
   "TASK's status as Roost names it.
 That is its recorded status, except \"error\" for a turn that failed,
-as on a usage limit, while the agent waits: one that died has failed."
+as on a usage limit, while the agent waits: one that died has failed.
+A turn you interrupted, or whose permission prompt you declined, is
+\"interrupted\" rather than \"ready\": its agent stopped mid-way."
   (let ((status (roost--field task 'status)))
-    (if (and (equal status "failed") (roost--field task 'live)) "error" status)))
+    (cond ((and (equal status "failed") (roost--field task 'live)) "error")
+          ((and (equal status "ready") (equal (roost--field task 'lastEvent) "Interrupt"))
+           "interrupted")
+          (t status))))
 
 (defun roost--display-status (task)
   "TASK's status, or \"offline\" while its host is unreachable."
@@ -3113,7 +3165,7 @@ as on a usage limit, while the agent waits: one that died has failed."
   "Face for STATUS."
   (pcase status
     ((or "permission" "prompt") 'roost-status-permission)
-    ("ready" 'roost-status-ready)
+    ((or "ready" "interrupted") 'roost-status-ready)
     ((or "running" "background") 'roost-status-running)
     ((or "failed" "crashed" "error") 'roost-status-failed)
     (_ 'roost-status-inactive)))
@@ -3346,9 +3398,10 @@ keeps one process-wide registration per mode; a nil STATE removes it."
 
 (defun roost--menu-applies-p (command)
   "Whether COMMAND applies to the task at point, for its menu entry.
-With no task at point, the command asks which, so it applies."
+With no task at point, the command asks which, so it applies, unless
+there are no tasks at all."
   (let ((task (ignore-errors (roost--task-at-point))))
-    (or (null task) (roost--action-applies-p task command))))
+    (if task (roost--action-applies-p task command) (and (roost-tasks) t))))
 
 (defconst roost--task-menu-items
   '(["Open agent terminal" roost-open-task :active (roost--menu-applies-p 'roost-open-task)]
@@ -3396,9 +3449,11 @@ the buffer the menu was opened from."
     "Task (chosen when needed)"))
 
 (defun roost--dispatch-inapt-p (command)
-  "Whether COMMAND, in the menu, does not apply to the menu's task."
-  (when-let* ((task (roost--dispatch-task)))
-    (not (roost--action-applies-p task command))))
+  "Whether COMMAND, in the menu, does not apply to the menu's task.
+With no task at all, none of the task commands do."
+  (if-let* ((task (roost--dispatch-task)))
+      (not (roost--action-applies-p task command))
+    (null (roost-tasks))))
 
 ;; A predicate for each task entry of the menu, such as
 ;; `roost--stop-inapt-p': older transient doesn't say which entry it asks about.
@@ -3456,6 +3511,8 @@ Unknown Git statistics count as making sense."
      ((not (roost--agent-running-p task))
       (concat (funcall key "RET") " shows its last output; " (funcall key "s") " resumes its conversation"))
      ((member status '("running" "background" "starting")) nil)
+     ((equal (roost--status-name task) "interrupted")
+      (concat "You stopped its last turn; tell it what to do instead: " (funcall key "e")))
      ((roost--field task 'merging)
       (concat "Finish merging " (or (roost--field task 'integrationBranch) "its branch")
               " into it in Magit: " (funcall key "r")))
@@ -4016,6 +4073,7 @@ Refreshes are asynchronous; rendering uses only cached state.
                    '(("awaiting permission" nil "permission")
                      ("at a startup prompt" nil "prompt")
                      ("ready" nil "ready")
+                     ("interrupted" nil "interrupted")
                      ("seen" nil "idle")
                      ("failed" nil "error" "failed" "crashed")
                      ("running" nil "running" "background" "starting")
@@ -4696,6 +4754,16 @@ RESULT is `pending', a list of checks, or (error . MESSAGE).")
          (list "Notifications" 'info "the desktop's, through D-Bus" nil))
         (t (list "Notifications" 'info "in the echo area" nil))))
 
+(defun roost--doctor-review-check (host)
+  "How Magit reaches HOST's tasks, as a check for `roost--doctor-line'.
+TRAMP's shell methods make every Git command a round trip, which a
+refresh of Magit's status does a dozen times or more."
+  (let ((method (ignore-errors
+                  (tramp-file-name-method (tramp-dissect-file-name (roost--host-directory host "/"))))))
+    (list "Magit" (if (equal method "rpc") t 'optional)
+          (format "over TRAMP's %s method" (or method "default"))
+          "Each Git command is a round trip; see \"Remote review\" in Roost's README for a faster method")))
+
 (defun roost--doctor-line (name ok detail hint &optional path)
   "Insert one check NAME with status OK, DETAIL and HINT; PATH is a tooltip."
   (insert "  "
@@ -4734,7 +4802,9 @@ RESULT is `pending', a list of checks, or (error . MESSAGE).")
                 (roost--doctor-line (if (car entry) "SSH and Python" "Python") nil (cdr result)
                                     (and hint (string-replace "HOST" (or (car entry) "localhost") hint)))))
              (t
-              (when (car entry) (roost--doctor-line "SSH" t "connected" nil))
+              (when (car entry)
+                (roost--doctor-line "SSH" t "connected" nil)
+                (apply #'roost--doctor-line (roost--doctor-review-check (car entry))))
               (dolist (check result)
                 (let* ((name (alist-get 'name check))
                        ;; Agents you don't use by default are optional.
