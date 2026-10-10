@@ -225,6 +225,10 @@ class Lifecycle(unittest.TestCase):
         output = roost.tmux(self.socket, "capture-pane", "-p", "-t", task["paneId"]).stdout
         self.assertIn("FAKE_CLAUDE_READY", output)
 
+    def test_the_probe_is_answered_behind_output_still_going_to_tmux(self):
+        task = self.create(programStatus=True, command=[sys.executable, str(FAKE), "--noise"])
+        self.wait_for(task, lambda record: record.get("programStatusRun") == record["runId"])
+
     def test_a_relayed_agent_follows_its_panes_size_and_gets_c_c(self):
         task = self.create(programStatus=True)
         roost.tmux(self.socket, "resize-window", "-t", task["windowId"], "-x", "91", "-y", "23")
@@ -2264,6 +2268,19 @@ class ProgramStatus(unittest.TestCase):
         endless = b"\x1b]7501;state=wo" + b"x" * roost.PROGRAM_STATUS_LIMIT
         self.assertEqual(statuses.feed(b"x" * roost.PROGRAM_STATUS_LIMIT), endless)
         self.assertEqual(self.reports, [])
+
+    def test_recording_starts_no_thread_before_the_first_report(self):
+        # The agent's process starts from the runner's before any report;
+        # its terminal is set up between fork and exec, unsafe with threads.
+        with tempfile.TemporaryDirectory() as root:
+            before = threading.active_count()
+            report, finish = roost.program_status_recorder(roost.Store(root), "0" * 16, "run")
+            self.assertEqual(threading.active_count(), before)
+            finish()
+            report(dict(state="idle"))
+            self.assertEqual(threading.active_count(), before + 1)
+            finish()
+            self.assertEqual(threading.active_count(), before)
 
     def test_reading_a_report(self):
         parse = roost.parse_program_status

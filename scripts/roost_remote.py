@@ -2168,7 +2168,9 @@ def apply_program_status(task, fields, run_id):
 def program_status_recorder(store, task_id, run_id):
     """REPORT and FINISH for `relay`. REPORT queues a report from the agent
     of TASK_ID's run RUN_ID, which a thread records, so the agent's output
-    never waits on the registry lock. FINISH records what is queued."""
+    never waits on the registry lock. FINISH records what is queued. The
+    thread starts with the first report, after the agent has: `relay`
+    starts it from a process with no other thread."""
     reports = queue.Queue()
     store = Store(store.root)  # Its own, as `released` keeps the lock it holds.
 
@@ -2190,13 +2192,18 @@ def program_status_recorder(store, task_id, run_id):
                         store.save(task)
 
     thread = threading.Thread(target=record, daemon=True)
-    thread.start()
+
+    def report(fields):
+        if thread.ident is None:
+            thread.start()
+        reports.put(fields)
 
     def finish():
-        reports.put(None)
-        thread.join(5)
+        if thread.ident is not None:
+            reports.put(None)
+            thread.join(5)
 
-    return reports.put, finish
+    return report, finish
 
 
 def read_some(fd):
@@ -2234,6 +2241,8 @@ def relay(argv, cwd, env, report):
         termios.tcsetattr(slave, termios.TCSANOW, termios.tcgetattr(0))
         fcntl.ioctl(slave, termios.TIOCSWINSZ, fcntl.ioctl(0, termios.TIOCGWINSZ, bytes(8)))
 
+    # Safe to run between fork and exec only while this process has a single
+    # thread, as it does until the agent's first report.
     def take_terminal():
         with contextlib.suppress(OSError):
             fcntl.ioctl(0, termios.TIOCSCTTY, 0)
@@ -2280,7 +2289,9 @@ def relay(argv, cwd, env, report):
                 if data == b"":
                     pane = False
                 to_agent += data or b""
-            # The agent gets the probe's answer before tmux gets what follows the probe.
+            # The probe's answer is queued for the agent before tmux is sent
+            # the query that follows it, so tmux's answer, read after, comes
+            # after it, as Claude Code needs.
             if master in writable:
                 taken = write_some(master, to_agent)
                 del to_agent[:len(to_agent) if taken is None else taken]

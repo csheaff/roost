@@ -44,6 +44,10 @@ def probe():
     return reply.startswith(b"\x1b]7501;?")
 
 
+if "--noise" in sys.argv:
+    # Much output still on its way to tmux when the probe is sent.
+    sys.stdout.write(("noise " * 20 + "\n") * 5000)
+    sys.stdout.flush()
 reports = probe()
 
 
