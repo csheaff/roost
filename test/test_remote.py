@@ -1017,11 +1017,78 @@ class Lifecycle(unittest.TestCase):
         with patch.object(roost, "git", side_effect=removing):
             self.assertFalse(self.request("retire", id=task["id"])["ok"])
         self.assertIn("still removing", self.request("retire", id=task["id"])["error"])
+        # Nor may a push for a pull request start there.
+        self.assertIn("still removing", self.request("pr", id=task["id"], title="Meanwhile")["error"])
         deadline = time.monotonic() + 8
         while not self.request("retire", id=task["id"])["ok"]:
             self.assertLess(time.monotonic(), deadline)
             time.sleep(0.2)
         self.assertEqual(self.request("list")["result"], [])
+
+    def test_finishing_a_task_waits_for_its_pull_request(self):
+        # Pushing and asking GitHub take seconds without the registry lock.
+        # Finishing the task meanwhile would delete the worktree under the
+        # push, or the record the pull request is then saved in.
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        head = self.git("rev-parse", "HEAD")
+        remote_git = roost.remote_git
+        during = []
+
+        def pushing(repo, *args, **kwargs):
+            if args[:1] == ("push",):
+                during.append([self.request(action, id=task["id"], expect=tip).get("error", "")
+                               for action in ("retire", "merge", "discard", "forget")])
+            return remote_git(repo, *args, **kwargs)
+
+        # Opening the pull request, then pushing to it.
+        with patch.object(roost, "remote_git", side_effect=pushing):
+            reply = self.request("pr", id=task["id"], title="Fix it")
+            self.assertTrue(reply["ok"], reply)
+            tip = self.commit_in(task, "more")
+            reply = self.request("pr", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(reply["result"]["pushed"], 1)
+        self.assertEqual(len(during), 2)
+        self.assertTrue(all("busy" in error for errors in during for error in errors), during)
+        # Nothing was merged or stopped, and the pull request was recorded.
+        self.assertEqual(self.git("rev-parse", "HEAD"), head)
+        self.assertEqual(self.wait(task, "ready")["pr"]["number"], 7)
+        self.assertEqual(self.git("rev-parse", "refs/heads/" + task["branch"], cwd=self.origin), tip)
+        # Then the task can be finished.
+        self.assertTrue(self.request("discard", id=task["id"], dryRun=True)["ok"])
+
+    def test_a_pull_request_holds_while_a_command_it_started_runs(self):
+        # Emacs gives up on a request after a minute, and a push may take
+        # longer; finishing the task must wait for it all the same.
+        self.github()
+        task = self.create()
+        self.commit_in(task)
+
+        def held():
+            self.assertIn("busy", self.request("retire", id=task["id"])["error"])
+            deadline = time.monotonic() + 8
+            while "busy" in self.request("retire", id=task["id"])["error"]:
+                self.assertLess(time.monotonic(), deadline)
+                time.sleep(0.2)
+
+        # What gh started, as it opened the pull request...
+        (self.gh_dir / "linger").touch()
+        reply = self.request("pr", id=task["id"], title="Slow")
+        self.assertTrue(reply["ok"], reply)
+        held()
+        (self.gh_dir / "linger").unlink()
+        # ...and what Git started, as it pushed to it.
+        hooks = self.root / "hooks"
+        hooks.mkdir()
+        (hooks / "pre-push").write_text("#!/bin/sh\nsleep 1.5 > /dev/null 2>&1 &\n")
+        (hooks / "pre-push").chmod(0o755)
+        self.git("config", "core.hooksPath", str(hooks))
+        self.commit_in(task, "more")
+        reply = self.request("pr", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        held()
 
     def test_a_removal_that_stopped_short_can_be_finished(self):
         task = self.create()
@@ -1479,6 +1546,8 @@ def canned(name, default=None):
 if args[:2] == ["pr", "list"]:
     canned("list.json", "[]")
 elif args[:2] == ["pr", "create"]:
+    if os.path.exists(os.path.join(directory, "linger")):
+        os.system("sleep 1.5 > /dev/null 2>&1 &")
     print("https://github.com/octo/repo/pull/7")
 elif args[:2] == ["pr", "view"]:
     canned("view.json")

@@ -56,8 +56,8 @@ def text(value):
     return value if isinstance(value, str) and value else None
 
 
-# Descriptors the commands Roost runs inherit, as Git does the lock a
-# worktree's removal holds; see `remove_worktrees`.
+# Descriptors the commands Roost runs inherit, as Git does the lock held
+# on a worktree while it is removed or pushed; see `holding_worktree`.
 INHERITED = []
 
 
@@ -94,7 +94,8 @@ def run_detached(argv, timeout, env=None):
     timeout the whole process group is killed, so helpers such as ssh or a
     credential helper die with it, and TimeoutExpired is raised."""
     process = subprocess.Popen(argv, text=True, errors="replace", stdin=subprocess.DEVNULL, start_new_session=True,
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+                               pass_fds=tuple(INHERITED))
     try:
         stdout, stderr = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -134,7 +135,7 @@ def gh(cwd, *args, timeout=60):
     try:
         result = subprocess.run([executable, *args], cwd=cwd, text=True, errors="replace", timeout=timeout,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                env=dict(os.environ, PATH=path))
+                                env=dict(os.environ, PATH=path), pass_fds=tuple(INHERITED))
     except subprocess.TimeoutExpired:
         raise RoostError("gh timed out: " + shlex.join(args[:2]))
     if result.returncode:
@@ -1834,18 +1835,40 @@ def remove_agent_worktrees(task, entries):
             git(task["repo"], "update-ref", "-d", "refs/heads/" + branch, commit, check=False)
 
 
-def removal_running(store, task):
-    """Whether a removal of TASK's worktree still runs. Its lock is held
-    for as long as the request removing it, or any command it started,
-    runs: Git goes on deleting files after a request Emacs gave up on."""
+@contextlib.contextmanager
+def holding_worktree(store, task, operation, refusal):
+    """Hold TASK's worktree lock, as OPERATION: LOCK_EX to remove the
+    worktree, or LOCK_SH to keep it while slow work on it, such as a push,
+    runs without the registry lock. Raise REFUSAL if it is not free. The
+    lock is held for as long as the request holding it, or any command it
+    started, runs: Git goes on after a request Emacs gave up on."""
+    with store.path(task["id"]).with_suffix(".removing").open("a") as lock:
+        try:
+            fcntl.flock(lock, operation | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RoostError(refusal)
+        INHERITED.append(lock.fileno())
+        try:
+            yield
+        finally:
+            INHERITED.remove(lock.fileno())
+
+
+def worktree_holder(store, task):
+    """What holds TASK's worktree lock, if anything: "removal" while its
+    worktree is removed, or "work" while work that keeps it runs."""
     try:
-        with store.path(task["id"]).with_suffix(".removing").open() as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        lock = store.path(task["id"]).with_suffix(".removing").open()
     except FileNotFoundError:
-        return False
-    except BlockingIOError:
-        return True
-    return False
+        return None
+    with lock:
+        # Only a removal's exclusive hold refuses a shared one.
+        for operation, holder in ((fcntl.LOCK_SH, "removal"), (fcntl.LOCK_EX, "work")):
+            try:
+                fcntl.flock(lock, operation | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return holder
+    return None
 
 
 def remove_worktrees(store, task, worktree, agents, force=False):
@@ -1857,15 +1880,11 @@ def remove_worktrees(store, task, worktree, agents, force=False):
     acts on the task. Without FORCE, changes there are refused."""
     if not worktree and not agents:
         return
-    with store.path(task["id"]).with_suffix(".removing").open("a") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise RoostError("Roost is still removing this task's worktree; refresh in a moment")
+    with holding_worktree(store, task, fcntl.LOCK_EX,
+                          "Roost is busy with this task's worktree; refresh in a moment"):
         marker = uuid.uuid4().hex
         task["removing"] = marker
         store.save(task)
-        INHERITED.append(lock.fileno())
         try:
             with store.released():
                 remove_agent_worktrees(task, agents)
@@ -1876,7 +1895,6 @@ def remove_worktrees(store, task, worktree, agents, force=False):
                     require_clean(str(worktree))
                     git(task["repo"], "worktree", "remove", str(worktree))
         finally:
-            INHERITED.remove(lock.fileno())
             # The record may have changed meanwhile: clear only this mark.
             task.pop("removing", None)
             with contextlib.suppress(RoostError):
@@ -2000,18 +2018,26 @@ def runner(root, task_id, run_id, resume_conversation=False):
     return code
 
 
+FINISHING = ("retire", "merge", "discard", "forget")
+
+
 def require_not_removing(store, task, action):
     """Refuse ACTION on a task whose worktree is being removed. While that
     runs, refuse all but looking: a retry after Emacs gave up waiting would
     race it. Once it has stopped short, the worktree may be partly gone, so
-    refuse all but finishing the task."""
-    if not task.get("removing") or action in ("seen", "inspect"):
+    refuse all but finishing the task. And while work keeps the worktree,
+    such as a push for its pull request, refuse to finish the task, before
+    its agent is stopped or its branch merged."""
+    if action in ("seen", "inspect") or not (task.get("removing") or action in FINISHING):
         return
-    if removal_running(store, task):
+    holder = worktree_holder(store, task)
+    if holder == "removal":
         raise RoostError("Roost is still removing this task's worktree; refresh in a moment")
-    if action not in ("retire", "merge", "discard", "forget"):
+    if action not in FINISHING:
         raise RoostError("Roost was removing this task's worktree when it stopped; "
                          "merge, retire, discard or forget the task")
+    if holder:
+        raise RoostError("Roost is busy with this task's worktree; refresh in a moment")
 
 
 # Kept in task records for the helper's own use, and not sent to Emacs.
@@ -2060,16 +2086,20 @@ def rpc(request):
                 if task["status"] == "retired":
                     raise RoostError("Task is retired")
                 require_not_removing(store, task, action)
-            if isinstance(task.get("pr"), dict) and task["pr"].get("number"):
-                pushed = push_pull_request(store, task)
-                with store.locked():
+                # Pushing and asking GitHub are slow, so they run without the
+                # registry lock, but keep the worktree, and the record the pull
+                # request is saved in, until done: finishing the task waits.
+                with holding_worktree(store, task, fcntl.LOCK_SH,
+                                      "Roost is still removing this task's worktree; refresh in a moment"):
+                    if isinstance(task.get("pr"), dict) and task["pr"].get("number"):
+                        with store.released():
+                            pushed = push_pull_request(store, task)
+                        return {"ok": True, "result": outgoing(dict(store.read(request["id"]), pushed=pushed))}
+                    with store.released():
+                        pr = pull_request(store, task, request)
                     task = store.read(request["id"])
-                return {"ok": True, "result": outgoing(dict(task, pushed=pushed))}
-            pr = pull_request(store, task, request)
-            with store.locked():
-                task = store.read(request["id"])
-                task["pr"] = pr
-                store.save(task)
+                    task["pr"] = pr
+                    store.save(task)
             return {"ok": True, "result": outgoing(task)}
         if action in ("retire", "merge"):
             # Ask GitHub without the lock; retire then trusts only this answer.

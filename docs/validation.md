@@ -772,6 +772,12 @@ Found and fixed:
   are now removed without the lock (0.17 s). Meanwhile a lock of the
   task's own, which Git inherits, keeps everything else off the task, a
   retry after Emacs gave up waiting included, until Git is done.
+- **Finishing a task could pull its worktree from under a push.** `P`
+  pushes and asks GitHub without the lock, for seconds; a retire, merge or
+  discard meanwhile deleted the worktree the push was running in, or the
+  record the new pull request was then saved in (Copilot's review found
+  it). `P` now holds the task's own lock too, shared, as do the Git and gh
+  it starts, and finishing the task waits, before its agent is stopped.
 - **An agent that asked at once didn't notify.** From `starting`, only a
   finished turn notified. With Emacs in the background, polls are 15 s
   apart, and a task started with a prompt usually asks within that: the
