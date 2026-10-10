@@ -1,6 +1,7 @@
 """Real Git/tmux lifecycle tests. Isolated sockets; no API calls or user config."""
 import concurrent.futures
 import datetime
+import fcntl
 import http.server
 import importlib.util
 import hashlib
@@ -960,6 +961,39 @@ class Lifecycle(unittest.TestCase):
         self.assertFalse(Path(task["worktree"]).exists())
         self.assertFalse(roost.ref_exists(self.repo, task["branch"]))
         self.assertTrue(self.request("retire", id=task["id"])["ok"])
+        self.assertEqual(self.request("list")["result"], [])
+
+    def test_removing_a_worktree_lets_hooks_in_but_not_the_agent(self):
+        # A worktree with dependencies installed takes seconds to delete,
+        # and every agent's hooks wait on the registry lock.
+        git = roost.git
+        task = self.create()
+        during = []
+
+        def removing(repo, *args, **kwargs):
+            if args[:2] == ("worktree", "remove"):
+                with open(self.state / "registry.lock", "a") as lock:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)  # Free, or this raises.
+                    fcntl.flock(lock, fcntl.LOCK_UN)
+                during.append(self.request("resume", id=task["id"]))
+                if failing:
+                    raise roost.RoostError("simulated failure")
+            return git(repo, *args, **kwargs)
+
+        # Should it fail, the task can be started again.
+        failing = True
+        with patch.object(roost, "git", side_effect=removing):
+            self.assertFalse(self.request("retire", id=task["id"])["ok"])
+        self.assertIn("removing", during[0]["error"])
+        self.assertNotIn("removing", roost.Store(str(self.state)).read(task["id"]))
+        self.assertTrue(self.request("resume", id=task["id"])["ok"])
+        self.wait(task, "ready")
+        failing = False
+        with patch.object(roost, "git", side_effect=removing):
+            reply = self.request("retire", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertIn("removing", during[1]["error"])
+        self.assertFalse(Path(task["worktree"]).exists())
         self.assertEqual(self.request("list")["result"], [])
 
     def test_conflicting_claude_flags_are_rejected_before_worktree_creation(self):
