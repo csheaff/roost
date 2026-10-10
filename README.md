@@ -207,8 +207,12 @@ Magit is optional (review falls back to Dired).
 - **Evil.** Roost's dashboard and panels start in Emacs state so their keys work
   (`roost-evil-state`); `j`/`k` move between tasks. Drafts start in insert
   state. In Magit, Roost's keys work in normal state, with the whole file's
-  diff on `g=` (evil-collection uses `=`). tmux-control starts agent terminals in insert state, so typing reaches
-  the agent; ESC returns to normal state.
+  diff on `g=` (evil-collection uses `=`). tmux-control starts agent
+  terminals in insert state, so typing reaches the agent; ESC returns to
+  normal state. To stop an agent's turn, which Claude Code does on ESC,
+  press `C-c C-c` (Ctrl-C stops it too). With evil-collection, `C-c C-z` in
+  normal state switches ESC between the agents and Evil; setting
+  `tmux-control-evil-state` to `emacs` sends it to the agents always.
 - **Other modal setups** (Meow, xah-fly-keys): put `roost-dashboard-mode`,
   `roost-task-info-mode` and `roost-doctor-mode`, and the drafts
   `roost-compose-mode`, `roost-send-mode` and `roost-pr-mode`, in your insert or

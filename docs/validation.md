@@ -738,6 +738,55 @@ host, defaulting to "No, exit"; Magit's "Error showing commit diff" when
 committing over `scp`, which the commit survived. 177 ERT tests pass with
 Magit and Evil, and 110 Python tests.
 
+### A code read, and an Evil user with twenty tasks, 2026-10-10
+
+A read of all of `roost.el` and the host helper, then a plain Evil
+configuration (evil-collection, Vertico, `tab-bar-mode`, Roost loaded
+uncompiled, as in the author's Emacs) driven with real key events: twenty
+fake-agent tasks in two projects, and one Claude Code task (Haiku 4.5,
+2.1.293, manual permissions) to check a notification. `make contract`
+found Claude Code reporting what Roost reads.
+
+What worked: `j`/`k` and `RET` in the dashboard; typing straight into the
+agent (insert state); the menu from a terminal on a global key, naming its
+task; `n` across tabs; `x` on a task with no work, closing its tab;
+twenty tasks readable in the dashboard and sidebar; a full refresh of
+twenty in 1.7 s on the host, a quiet poll in 0.1 s.
+
+Found and fixed:
+
+- **A selection didn't survive the next poll.** Every poll redrew the
+  task panels and the dashboard, which moved the mark to the top: a
+  selection of part of the agent's reply became the panel from its
+  heading down, and copying it copied that. The mark now stays where it
+  was.
+- **Panels nobody saw were redrawn too.** Every panel opened with `i`
+  stays, and each was redrawn at every poll, 3 seconds apart: 25 ms with
+  seventeen tasks, uncompiled. A panel or dashboard no window shows is
+  now redrawn once one does: 10 ms, with the sidebar and one panel shown.
+- **Retiring held up every agent on the host.** Retire, merge and discard
+  removed the worktree while holding the lock each agent's hooks wait on
+  at every event. A worktree with 30,000 ignored files (117 MB, as
+  `node_modules`) held it 1.3 s; dependencies ten times that size would
+  hold the agents ten times as long, and Codex gives a hook 3 s. Worktrees
+  are now removed without the lock (0.17 s), the record saying so
+  meanwhile so nothing starts in it.
+- **An agent that asked at once didn't notify.** From `starting`, only a
+  finished turn notified. With Emacs in the background, polls are 15 s
+  apart, and a task started with a prompt usually asks within that: the
+  first poll saw `permission` and said nothing. It now notifies, as it
+  does for a CLI that fails at once; the real task's notification read
+  "Asks to run python3 contract_check.py".
+- `x` now says what it removed, `M-x roost-retire` is autoloaded, and the
+  README says how an Evil user stops an agent's turn, which Claude Code
+  does on ESC: `C-c C-c`, or evil-collection's `C-c C-z`.
+
+Left as they are: a task `n` opens stops counting as waiting once you
+have seen it, so the next `n` starts again from the most urgent task
+rather than the one after it; the dashboard, in Emacs state, has no `/`
+or `:`.
+179 ERT tests pass with Magit and Evil, and 113 Python tests.
+
 ### Codex and Pi adapters
 
 Used another disposable remote `hello-service` project, an isolated registry and
