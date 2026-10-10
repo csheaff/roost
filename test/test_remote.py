@@ -1,11 +1,13 @@
 """Real Git/tmux lifecycle tests. Isolated sockets; no API calls or user config."""
 import concurrent.futures
+import contextlib
 import datetime
 import http.server
 import importlib.util
 import hashlib
 import json
 import os
+import queue
 import re
 import shlex
 import signal
@@ -1733,6 +1735,166 @@ elif args[:2] == ["auth", "status"]:
         self.assertTrue(response["ok"])
         self.wait(response["result"], "failed")
         self.assertEqual(self.git("status", "--porcelain"), "")
+
+
+FAKE_STREAM = Path(__file__).with_name("fake_stream_claude.py")
+
+
+class Attached:
+    """An Emacs attached to a conversation task, as `attach' serves it."""
+
+    def __init__(self, state, task_id):
+        self.process = subprocess.Popen([sys.executable, str(SOURCE), "attach", str(state), task_id],
+                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        self.lines = queue.Queue()
+        threading.Thread(target=self.read, daemon=True).start()
+
+    def read(self):
+        for line in self.process.stdout:
+            self.lines.put(json.loads(line))
+
+    def send(self, **message):
+        self.process.stdin.write(json.dumps(message) + "\n")
+        self.process.stdin.flush()
+
+    def expect(self, predicate, timeout=8):
+        """The first message satisfying PREDICATE, and those before it."""
+        seen = []
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                message = self.lines.get(timeout=max(0.01, deadline - time.monotonic()))
+            except queue.Empty:
+                raise AssertionError("Not received; had %s" % seen)
+            seen.append(message)
+            if predicate(message):
+                return message, seen
+
+    def close(self):
+        self.process.terminate()
+        self.process.wait()
+        for pipe in (self.process.stdin, self.process.stdout):
+            with contextlib.suppress(OSError):
+                pipe.close()
+
+
+def kind(name, **fields):
+    return lambda message: message.get("type") == name and all(message.get(key) == value
+                                                                for key, value in fields.items())
+
+
+def says(text):
+    return lambda message: (message.get("type") == "assistant"
+                            and message["message"]["content"][0].get("text") == text)
+
+
+class Conversation(unittest.TestCase):
+    """Conversation tasks: Claude Code under a holder Emacs attaches to."""
+
+    setUp, tearDown = Lifecycle.setUp, Lifecycle.tearDown
+    git, request, wait = Lifecycle.git, Lifecycle.request, Lifecycle.wait
+
+    def create(self, **args):
+        return Lifecycle.create(self, interface="chat", command=[sys.executable, str(FAKE_STREAM)], **args)
+
+    def attach(self, task):
+        client = Attached(self.state, task["id"])
+        self.addCleanup(client.close)
+        return client
+
+    def test_every_emacs_attached_sees_the_conversation_and_it_outlives_them(self):
+        task = self.create(name="talk")
+        first = self.attach(task)
+        hello, _ = first.expect(kind("roost_attached"))
+        self.assertFalse(hello["working"])
+        # Claude started up with the holder; each Emacs gets that answer.
+        first.send(type="control_request", request_id="emacs-1", request=dict(subtype="initialize"))
+        started, _ = first.expect(kind("control_response"))
+        self.assertEqual(started["response"]["request_id"], "emacs-1")
+        self.assertEqual(started["response"]["response"]["models"], [dict(value="haiku")])
+        second = self.attach(task)
+        second.expect(kind("roost_attached"))
+        first.send(type="user", message=dict(role="user", content="hello"))
+        for client in (first, second):
+            client.expect(kind("user", isReplay=True))
+            client.expect(says("echo: hello"))
+        first.close()
+        second.close()
+        self.wait(task, "ready")
+        # With nothing attached, Claude goes on; a new Emacs gets it all.
+        third = self.attach(task)
+        _, history = third.expect(kind("roost_attached"))
+        entries = [message["entry"] for message in history if message["type"] == "roost_history"]
+        self.assertEqual([entry["type"] for entry in entries], ["user", "assistant"])
+        third.send(type="user", message=dict(role="user", content="again"))
+        third.expect(says("echo: again"))
+
+    def test_a_request_waits_for_an_answer_from_any_emacs_and_the_answer_is_kept(self):
+        task = self.create(name="ask")
+        first = self.attach(task)
+        first.send(type="user", message=dict(role="user", content="permission"))
+        asked, _ = first.expect(kind("control_request"))
+        record = self.wait(task, "permission")
+        self.assertIn("echo hi", record["request"])
+        # An Emacs attaching later is asked too.
+        second = self.attach(task)
+        second.expect(kind("control_request"))
+        second.send(type="control_response", roost_note="Allowed",
+                    response=dict(subtype="success", request_id=asked["request_id"],
+                                  response=dict(behavior="allow", updatedInput=asked["request"]["input"])))
+        tool = asked["request"]["tool_use_id"]
+        answered, _ = first.expect(kind("roost_answer"))
+        self.assertEqual((answered["tool_use_id"], answered["note"]), (tool, "Allowed"))
+        second.expect(says("done: allow"))
+        # A second answer to the same request goes nowhere.
+        first.send(type="control_response", response=dict(subtype="success", request_id=asked["request_id"],
+                                                          response=dict(behavior="deny")))
+        self.wait(task, "ready")
+        # The transcript has no word of it, so the holder keeps it.
+        third = self.attach(task)
+        _, history = third.expect(kind("roost_attached"))
+        self.assertIn(dict(type="roost_answer", tool_use_id=tool, note="Allowed"), history)
+        self.assertNotIn("control_request", [message["type"] for message in history])
+
+    def test_a_model_chosen_in_emacs_is_kept_for_when_the_task_resumes(self):
+        task = self.create(name="model")
+        client = self.attach(task)
+        client.send(type="control_request", request_id="emacs-2",
+                    request=dict(subtype="set_model", model="sonnet"))
+        client.expect(kind("control_response"))
+        deadline = time.monotonic() + 8
+        while roost.Store(str(self.state)).read(task["id"]).get("chatModel") != "sonnet":
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(0.05)
+        self.assertEqual(roost.with_model(["claude", "--model", "haiku", "-v", "--model=opus"], "sonnet"),
+                         ["claude", "-v", "--model", "sonnet"])
+        self.assertEqual(roost.with_model(["claude", "-v"], None), ["claude", "-v"])
+
+    def test_only_claude_tasks_can_be_conversations(self):
+        reply = self.request("create", directory=str(self.repo), name="codex chat", socket=self.socket,
+                             agent="codex", interface="chat", command=["codex"])
+        self.assertEqual(reply, dict(ok=False, error="Only Claude Code tasks can show as a conversation"))
+
+    def test_attaching_to_a_task_that_shows_a_terminal_is_refused(self):
+        task = Lifecycle.create(self, name="terminal", command=[sys.executable, str(FAKE)])
+        attached = subprocess.run([sys.executable, str(SOURCE), "attach", str(self.state), task["id"]],
+                                  capture_output=True, text=True, timeout=10)
+        self.assertEqual(json.loads(attached.stdout),
+                         dict(type="roost_detached", error="This task's agent runs in a terminal"))
+
+    def test_the_diagram_tool_says_the_diagram_is_shown(self):
+        requests = [dict(jsonrpc="2.0", id=1, method="initialize", params=dict(protocolVersion="2025-06-18")),
+                    dict(jsonrpc="2.0", method="notifications/initialized"),
+                    dict(jsonrpc="2.0", id=2, method="tools/list"),
+                    dict(jsonrpc="2.0", id=3, method="tools/call",
+                         params=dict(name="show_diagram", arguments=dict(format="svg", code="<svg/>")))]
+        served = subprocess.run([sys.executable, str(SOURCE), "diagram"], capture_output=True, text=True,
+                                input="".join(json.dumps(request) + "\n" for request in requests), timeout=10)
+        replies = [json.loads(line) for line in served.stdout.splitlines()]
+        self.assertEqual([reply["id"] for reply in replies], [1, 2, 3])
+        self.assertEqual(replies[0]["result"]["protocolVersion"], "2025-06-18")
+        self.assertEqual(replies[1]["result"]["tools"][0]["name"], "show_diagram")
+        self.assertIn("Shown", replies[2]["result"]["content"][0]["text"])
 
 
 class RemoteGit(unittest.TestCase):

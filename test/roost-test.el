@@ -3591,4 +3591,67 @@ Its a.txt has ten lines, committed.  Skipped without Magit."
       (dolist (number (number-sequence 1 10))
         (roost-test--goto-line-text (format "line %d" number))))))
 
+;;;; Conversation tasks
+
+(ert-deftest roost-new-claude-tasks-are-conversations-when-chosen ()
+  (roost-test--isolated
+   (let (requests)
+     (cl-letf (((symbol-function 'hack-dir-local-variables-non-file-buffer) #'ignore)
+               ((symbol-function 'roost--request) (lambda (_host _action params &rest _) (push params requests))))
+       (let ((roost-chat-tasks t))
+         (roost-new-task "/tmp/" "talk" nil nil "claude")
+         (should (equal (alist-get 'interface (car requests)) "chat"))
+         ;; Only Claude Code shows as a conversation.
+         (roost-new-task "/tmp/" "codex" nil nil "codex")
+         (should-not (alist-get 'interface (car requests))))
+       (let ((roost-chat-tasks nil))
+         (roost-new-task "/tmp/" "terminal" nil nil "claude")
+         (should-not (alist-get 'interface (car requests))))))))
+
+(ert-deftest roost-a-conversation-task-opens-and-takes-prompts-in-its-conversation ()
+  (roost-test--isolated
+   (let ((task (append '((interface . "chat") (host . "dev")) (roost-test--task)))
+         shown sent acted)
+     (cl-letf (((symbol-function 'roost-chat-task) (lambda (task) (setq shown task)))
+               ((symbol-function 'roost-chat-send-to-task) (lambda (task text) (setq sent (list task text))))
+               ((symbol-function 'roost--act) (lambda (&rest args) (setq acted args)))
+               ((symbol-function 'roost--activate-workspace) #'ignore)
+               ((symbol-function 'roost--sync-side-windows) #'ignore)
+               ((symbol-function 'tmux-control-connect-or-switch)
+                (lambda (&rest _) (error "A conversation task has no terminal to show"))))
+       (roost--display-task task)
+       (should (eq shown task))
+       (roost--send-text task "review notes" (lambda (sent-to) (should (eq sent-to task))))
+       (should (equal sent (list task "review notes")))
+       ;; Nothing was typed into its pane.
+       (should-not acted)
+       ;; A task showing a terminal still gets the text in its pane.
+       (roost--send-text (roost-test--task) "hello")
+       (should (equal (car acted) (roost-test--task)))
+       (should (equal (cadr acted) "send"))))))
+
+(ert-deftest roost-the-typeset-sidebar-says-what-each-agent-does ()
+  (roost-test--isolated
+   (let ((roost--current-task nil) (roost-watch-mode t) (roost-sidebar-style 'typeset))
+     (roost--cache-task "dev" (append '((name . "budget-alerts") (repo . "/srv/ledger")
+                                        (request . "Asks to run make test"))
+                                      (roost-test--task "1111111111111111" "permission")))
+     (roost--cache-task "dev" (append '((name . "reports") (repo . "/srv/ledger"))
+                                      (roost-test--task "2222222222222222" "running")))
+     (with-temp-buffer
+       (roost-sidebar-list-mode)
+       (roost--render-sidebar)
+       (let ((text (substring-no-properties (buffer-string))))
+         (should (string-match-p "Roost +1 waiting" text))
+         (should (string-match-p "LEDGER · DEV" text))
+         (should (string-match-p "budget-alerts\n +Asks to run make test" text))
+         (should (string-match-p "reports\n +Working · " text)))
+       ;; Both lines of a row are the task's, for its commands and its highlight.
+       (goto-char (point-min))
+       (search-forward "Asks to run")
+       (should (equal (roost--field (roost--task-at-point) 'id) "1111111111111111"))
+       (should (equal (roost--sidebar-detail (roost-test--task "3" "stopped")) "Stopped"))
+       (should (equal (roost--fit-pixels "short" 10000) "short"))
+       (should (string-suffix-p "…" (roost--fit-pixels (make-string 200 ?x) 100)))))))
+
 (provide 'roost-test)

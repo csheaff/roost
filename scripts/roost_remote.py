@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import selectors
 import shlex
 import shutil
 import signal
@@ -16,6 +17,8 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unicodedata
 import uuid
 
@@ -214,7 +217,7 @@ class Store:
     def remove(self, task_id):
         """Delete a task's record and hook settings. Conversations are kept."""
         path = self.path(task_id)
-        for stale in (path, path.with_suffix(".settings")):
+        for stale in (path, path.with_suffix(".settings"), path.with_suffix(".answers")):
             with contextlib.suppress(FileNotFoundError):
                 stale.unlink()
 
@@ -430,6 +433,11 @@ class ClaudeAgent:
             raise RoostError("Roost owns worktrees, conversation resume, and hook settings; remove conflicting Claude flags")
 
     def launch(self, store, task, resume_conversation):
+        if task.get("interface") == "chat":
+            # A holder runs Claude Code exchanging messages, for Emacs to show.
+            argv = [sys.executable, str(Path(__file__).resolve()), "hold", str(store.root), task["id"],
+                    task["runId"]]
+            return argv + (["resume"] if resume_conversation else [])
         argv = task["command"] + ["--settings", claude_hook_settings(store, task)]
         session = task.get("agentSession") or task.get("claudeSession")
         if resume_conversation and session:
@@ -818,12 +826,17 @@ def create(store, request):
                          "and send the rest once it runs" % (-(-len(prompt.encode()) // 1024),
                                                              PROMPT_ARGUMENT_LIMIT // 1024))
     setup = text(request.get("setup"))
+    interface = text(request.get("interface"))
+    if interface not in (None, "terminal", "chat") or (interface == "chat" and agent_name != "claude"):
+        raise RoostError("Only Claude Code tasks can show as a conversation")
     task = dict(id=task_id, name=name, task=prompt or name, repo=repo,
                 worktree=str(worktree), branch=branch, baseRef=base, baseCommit=commit,
                 integrationBranch=integration, socket=socket,
                 session=session_name(repo, task_id),
                 agent=agent_name, command=command, setup=setup, prompt=prompt,
                 status="starting", startedAt=now(), updatedAt=now(), claudeSession=None)
+    if interface == "chat":
+        task["interface"] = "chat"
     issue = request.get("issue")
     if isinstance(issue, dict) and isinstance(issue.get("number"), int) and not isinstance(issue["number"], bool):
         task["issue"] = dict(number=issue["number"], title=text(issue.get("title")),
@@ -1929,6 +1942,365 @@ def runner(root, task_id, run_id, resume_conversation=False):
     return code
 
 
+# Conversation tasks.  Claude Code runs as Anthropic's desktop app runs it,
+# exchanging JSON messages on its standard input and output, under a holder
+# that keeps it going while no Emacs is attached.  Emacs attaches through a
+# socket, as often as it likes, from this computer or another.
+
+CHAT_FLAGS = ["--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+              "--include-partial-messages", "--replay-user-messages", "--permission-prompt-tool", "stdio"]
+HOLD_INITIALIZE = "roost-hold-initialize"
+DIAGRAM_TOOL = "mcp__roost__show_diagram"
+
+
+def chat_socket(task_id):
+    """Where a conversation task's holder listens: a short path, since a Unix
+    socket's is limited to about 100 bytes."""
+    return Path(tempfile.gettempdir()) / ("roost-%d" % os.getuid()) / (task_id + ".sock")
+
+
+def with_model(command, model):
+    """COMMAND choosing MODEL instead of any model it names."""
+    if not model:
+        return list(command)
+    kept, skip = [], False
+    for arg in command:
+        if skip:
+            skip = False
+        elif arg == "--model":
+            skip = True
+        elif not arg.startswith("--model="):
+            kept.append(arg)
+    return kept + ["--model", model]
+
+
+def chat_command(store, task, resume_conversation):
+    """Claude Code's argv for conversation TASK."""
+    diagrams = {"mcpServers": {"roost": {"command": sys.executable,
+                                         "args": [str(Path(__file__).resolve()), "diagram"]}}}
+    command = with_model(task["command"], text(task.get("chatModel")))
+    argv = command + CHAT_FLAGS + ["--settings", claude_hook_settings(store, task),
+                                           "--mcp-config", json.dumps(diagrams),
+                                           "--allowedTools", DIAGRAM_TOOL]
+    session = task.get("agentSession") or task.get("claudeSession")
+    if resume_conversation and session:
+        argv += ["--resume", session]
+    return argv
+
+
+class Holder:
+    """Relays between Claude Code and the Emacs sessions attached to it."""
+
+    def __init__(self, store, task, run_id, agent, listener):
+        self.store, self.task, self.run_id = store, task, run_id
+        self.agent, self.listener = agent, listener
+        self.clients = {}  # Socket -> [bytes read but not handled, bytes not yet sent].
+        self.pending = {}  # Request ID -> a request Claude awaits an answer to.
+        self.initialized = None
+        self.awaiting_initialize = []
+        self.working = False
+        self.selector = selectors.DefaultSelector()
+
+    def to_agent(self, message):
+        with contextlib.suppress(OSError, ValueError):
+            self.agent.stdin.write((json.dumps(message) + "\n").encode())
+            self.agent.stdin.flush()
+
+    def to_client(self, client, message):
+        data = message if isinstance(message, bytes) else (json.dumps(message) + "\n").encode()
+        self.clients[client][1] += data
+        self.selector.modify(client, selectors.EVENT_READ | selectors.EVENT_WRITE, "client")
+
+    def broadcast(self, message, but=None):
+        for client in list(self.clients):
+            if client is not but:
+                self.to_client(client, message)
+
+    def observe(self, event, **payload):
+        """Record what Claude is doing, as its hooks would."""
+        payload.update(hook_event_name=event, cwd=self.task.get("worktree"))
+        with contextlib.suppress(OSError, ValueError, KeyError, RoostError):
+            update_hook(self.store, self.task["id"], payload, self.run_id)
+
+    def answer_initialize(self, client, request_id):
+        self.to_client(client, {"type": "control_response",
+                                "response": dict(self.initialized, request_id=request_id)})
+
+    def from_agent(self, line):
+        try:
+            message = json.loads(line)
+        except ValueError:
+            return
+        kind = message.get("type")
+        if kind == "control_response" and (message.get("response") or {}).get("request_id") == HOLD_INITIALIZE:
+            self.initialized = message["response"]
+            for client, request_id in self.awaiting_initialize:
+                if client in self.clients:
+                    self.answer_initialize(client, request_id)
+            self.awaiting_initialize = []
+            return
+        if kind == "control_request":
+            self.pending[message.get("request_id")] = line
+            request = message.get("request") or {}
+            if request.get("subtype") == "can_use_tool":
+                self.observe("PermissionRequest", tool_name=request.get("tool_name"),
+                             tool_input=request.get("input"))
+        elif kind == "control_cancel_request":
+            self.pending.pop(message.get("request_id"), None)
+        elif kind == "user" and message.get("isReplay"):
+            self.working = True
+        elif kind == "result":
+            self.working = False
+        self.broadcast(line)
+
+    def from_client(self, client, line):
+        try:
+            message = json.loads(line)
+        except ValueError:
+            return
+        kind = message.get("type")
+        if kind == "control_request" and (message.get("request") or {}).get("subtype") == "initialize":
+            # Claude started up once, with the holder; each Emacs gets its answer.
+            if self.initialized:
+                self.answer_initialize(client, message.get("request_id"))
+            else:
+                self.awaiting_initialize.append((client, message.get("request_id")))
+            return
+        if kind == "control_response":
+            request_id = (message.get("response") or {}).get("request_id")
+            if request_id not in self.pending:
+                return  # Answered from another Emacs already.
+            asked = json.loads(self.pending.pop(request_id))
+            # How you answered, said in words, which Claude's transcript leaves out.
+            note = text(message.pop("roost_note", None))
+            tool = ((asked.get("request") or {}).get("tool_use_id"))
+            if note and tool:
+                self.record_answer(tool, note)
+                self.broadcast({"type": "roost_answer", "tool_use_id": tool, "note": note}, but=client)
+            else:
+                self.broadcast({"type": "control_cancel_request", "request_id": request_id}, but=client)
+            self.observe("PreToolUse")
+        elif kind == "control_request" and (message.get("request") or {}).get("subtype") == "set_model":
+            self.remember_model((message.get("request") or {}).get("model"))
+        elif kind == "user":
+            self.working = True
+        self.to_agent(message)
+
+    def record_answer(self, tool, note):
+        with contextlib.suppress(OSError):
+            with (self.store.tasks_dir / (self.task["id"] + ".answers")).open("a") as answers:
+                answers.write(json.dumps({"tool_use_id": tool, "note": note}) + "\n")
+
+    def remember_model(self, model):
+        """Keep MODEL, chosen in Emacs, for when the task resumes."""
+        with contextlib.suppress(OSError, ValueError, RoostError), self.store.locked():
+            task = self.store.read(self.task["id"])
+            if task.get("runId") == self.run_id:
+                task["chatModel"] = text(model)
+                self.store.save(task)
+
+    def attach(self, client):
+        client.setblocking(False)
+        self.clients[client] = [b"", b""]
+        self.selector.register(client, selectors.EVENT_READ, "client")
+        with contextlib.suppress(RoostError, OSError, ValueError):
+            self.task = self.store.read(self.task["id"])
+        # "answers": this holder keeps how you answered, given as roost_note.
+        self.to_client(client, {"type": "roost_attached", "working": self.working,
+                                "session": self.task.get("agentSession"), "answers": True})
+        for line in self.pending.values():
+            self.to_client(client, line)
+
+    def detach(self, client):
+        self.selector.unregister(client)
+        del self.clients[client]
+        client.close()
+
+    def serve(self, client, events):
+        buffers = self.clients[client]
+        if events & selectors.EVENT_WRITE and buffers[1]:
+            try:
+                buffers[1] = buffers[1][client.send(buffers[1]):]
+            except BlockingIOError:
+                pass
+            except OSError:
+                return self.detach(client)
+            if not buffers[1]:
+                self.selector.modify(client, selectors.EVENT_READ, "client")
+        if events & selectors.EVENT_READ:
+            try:
+                data = client.recv(65536)
+            except BlockingIOError:
+                return None
+            except OSError:
+                data = b""
+            if not data:
+                return self.detach(client)
+            buffers[0] += data
+            *lines, buffers[0] = buffers[0].split(b"\n")
+            for line in lines:
+                if line.strip():
+                    self.from_client(client, line)
+        return None
+
+    def run(self):
+        """Relay until Claude Code exits; return its exit code."""
+        output = self.agent.stdout.fileno()
+        self.selector.register(output, selectors.EVENT_READ, "agent")
+        self.selector.register(self.listener, selectors.EVENT_READ, "listener")
+        unread = b""
+        while True:
+            for key, events in self.selector.select():
+                if key.data == "agent":
+                    data = os.read(output, 65536)
+                    if not data:
+                        return self.agent.wait()
+                    *lines, unread = (unread + data).split(b"\n")
+                    for line in lines:
+                        if line.strip():
+                            self.from_agent(line + b"\n")
+                elif key.data == "listener":
+                    self.attach(self.listener.accept()[0])
+                elif key.fileobj in self.clients:
+                    self.serve(key.fileobj, events)
+
+
+def hold(root, task_id, run_id, resume_conversation=False):
+    """Run conversation task TASK_ID's Claude Code for Emacs to attach to, and
+    return its exit code for the runner to record."""
+    store = Store(root)
+    with store.locked():
+        task = store.read(task_id)
+        argv = chat_command(store, task, resume_conversation)
+    path = chat_socket(task_id)
+    path.parent.mkdir(mode=0o700, exist_ok=True)
+    with contextlib.suppress(FileNotFoundError):
+        path.unlink()
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(path))
+    os.chmod(path, 0o600)
+    listener.listen()
+    agent = subprocess.Popen(argv, cwd=task["worktree"], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    holder = Holder(store, task, run_id, agent, listener)
+    holder.to_agent({"type": "control_request", "request_id": HOLD_INITIALIZE,
+                     "request": {"subtype": "initialize", "hooks": None}})
+    prompt = text(task.get("prompt"))
+    if prompt and not resume_conversation:
+        holder.working = True
+        holder.to_agent({"type": "user", "message": {"role": "user", "content": prompt},
+                         "parent_tool_use_id": None, "session_id": "default"})
+    print("Roost: Claude Code runs here as a conversation; open the task in Emacs to see it.",
+          file=sys.stderr)
+    try:
+        return holder.run()
+    finally:
+        for client in list(holder.clients):
+            client.close()
+        listener.close()
+        with contextlib.suppress(FileNotFoundError):
+            path.unlink()
+
+
+def attach(root, task_id):
+    """Relay between Emacs, on standard input and output, and conversation task
+    TASK_ID's holder, after the conversation so far from its transcript."""
+    store = Store(root)
+    if store.read(task_id).get("interface") != "chat":
+        raise RoostError("This task's agent runs in a terminal")
+    connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    for attempt in range(40):  # A holder just started takes a moment to listen.
+        try:
+            connection.connect(str(chat_socket(task_id)))
+            break
+        except OSError:
+            if attempt == 39:
+                raise RoostError("The task's agent isn't running; resume it")
+            time.sleep(0.25)
+    out = sys.stdout.buffer
+    # Read once connected, so nothing falls between; Emacs drops repeats.
+    path = AGENTS["claude"].transcript(store.read(task_id))
+    if path and path.exists():
+        with path.open("rb") as transcript:
+            for line in transcript:
+                with contextlib.suppress(ValueError):
+                    out.write((json.dumps({"type": "roost_history", "entry": json.loads(line)}) + "\n").encode())
+    answers = store.tasks_dir / (task_id + ".answers")
+    if answers.exists():
+        for line in answers.read_text().splitlines():
+            with contextlib.suppress(ValueError):
+                out.write((json.dumps(dict(json.loads(line), type="roost_answer")) + "\n").encode())
+    out.flush()
+
+    def upstream():
+        with contextlib.suppress(OSError):
+            for line in sys.stdin.buffer:
+                connection.sendall(line)
+            connection.shutdown(socket.SHUT_WR)
+
+    threading.Thread(target=upstream, daemon=True).start()
+    while True:
+        data = connection.recv(65536)
+        if not data:
+            return 0
+        out.write(data)
+        out.flush()
+
+
+DIAGRAM_TOOL_DEFINITION = {
+    "name": "show_diagram",
+    "description": (
+        "Show the user a diagram inline, right where you are in your explanation. "
+        "Use it when a picture explains better than words: architecture, data flow, "
+        "state machines, timelines, data structures. The diagram appears exactly where "
+        "you call this tool, so call it in the middle of your answer, not before it: "
+        "first write the paragraph that introduces the diagram, then call the tool, then "
+        "go on writing. Formats: 'svg' (preferred: a self-contained SVG with explicit "
+        "colors, drawn on a light card, about 680 px wide), 'mermaid' (flowcharts, "
+        "sequence and state diagrams), or 'html' (a small self-contained interactive "
+        "widget, only when interaction helps)."),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string", "description": "A short title for the diagram."},
+            "format": {"type": "string", "enum": ["svg", "mermaid", "html"]},
+            "code": {"type": "string", "description": "The SVG, Mermaid or HTML source."},
+        },
+        "required": ["format", "code"],
+    },
+}
+
+
+def diagram_server():
+    """A minimal MCP server giving Claude the show_diagram tool. A call only
+    answers that the diagram is shown: Emacs draws it from the call itself."""
+    def reply(request_id, result=None, error=None):
+        message = {"jsonrpc": "2.0", "id": request_id}
+        message.update({"error": error} if error else {"result": result})
+        sys.stdout.write(json.dumps(message) + "\n")
+        sys.stdout.flush()
+
+    for line in sys.stdin:
+        with contextlib.suppress(ValueError):
+            message = json.loads(line)
+            method, request_id = message.get("method"), message.get("id")
+            if request_id is None:
+                continue  # A notification, such as notifications/initialized.
+            if method == "initialize":
+                reply(request_id, {"protocolVersion": (message.get("params") or {}).get("protocolVersion",
+                                                                                          "2025-06-18"),
+                                   "capabilities": {"tools": {}},
+                                   "serverInfo": {"name": "roost", "version": "1"}})
+            elif method == "tools/list":
+                reply(request_id, {"tools": [DIAGRAM_TOOL_DEFINITION]})
+            elif method == "tools/call":
+                reply(request_id, {"content": [{"type": "text", "text": "Shown inline in the user's Emacs."}]})
+            elif method == "ping":
+                reply(request_id, {})
+            else:
+                reply(request_id, error={"code": -32601, "message": "Unknown method"})
+    return 0
+
+
 # Kept in task records for the helper's own use, and not sent to Emacs.
 PRIVATE = ("lastReply", "transcript")
 
@@ -2038,6 +2410,16 @@ def main():
             pass
     elif mode == "run":
         return runner(sys.argv[2], sys.argv[3], sys.argv[4], len(sys.argv) > 5)
+    elif mode == "hold":
+        return hold(sys.argv[2], sys.argv[3], sys.argv[4], len(sys.argv) > 5)
+    elif mode == "attach":
+        try:
+            return attach(sys.argv[2], sys.argv[3])
+        except RoostError as exc:
+            print(json.dumps({"type": "roost_detached", "error": str(exc)}), flush=True)
+            return 1
+    elif mode == "diagram":
+        return diagram_server()
     else:
         raise RoostError("Unknown mode")
     return 0

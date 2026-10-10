@@ -173,6 +173,22 @@ commands run on the entry, or on its agenda line, act on that task."
   "Width in columns of the task sidebar; see `roost-sidebar-mode'."
   :type 'natnum)
 
+(defcustom roost-sidebar-style 'compact
+  "How the task sidebar looks.
+`compact' shows each task on one line in the default face; `typeset'
+sets the sidebar in `roost-sidebar-typeset', with a second line saying
+what each task's agent is doing."
+  :type '(choice (const :tag "One line per task" compact)
+                 (const :tag "Typeset, with what each agent is doing" typeset)))
+
+(defcustom roost-chat-tasks nil
+  "Whether new Claude Code tasks show as a typeset conversation.
+Their agent runs as Claude's desktop app runs it, under a holder on the
+task host that keeps it going while no Emacs is attached.  Opening such
+a task shows its conversation, with a field to write in, instead of a
+terminal.  Needs roost-chat.el."
+  :type 'boolean)
+
 (defcustom roost-task-panel-width 44
   "Width in columns of the task panel beside a task's terminal.
 See `roost-task-panel-mode'."
@@ -270,6 +286,12 @@ See `roost-note'."
   "Face for a pull request closed without merging." :group 'roost)
 (defface roost-sidebar-selection '((t :inherit hl-line :extend t))
   "The sidebar row its keys act on, shown while you are in the sidebar.")
+(defface roost-sidebar-typeset '((t :family "Charter" :height 150))
+  "The text of the sidebar when `roost-sidebar-style' is `typeset'.")
+(defface roost-sidebar-detail '((t :inherit shadow :height 0.8))
+  "What a task's agent is doing, under its name in the typeset sidebar.")
+(defface roost-sidebar-project '((t :inherit shadow :weight bold :height 0.75))
+  "A project's heading in the typeset sidebar.")
 (defface roost-diff-added '((t :inherit success))
   "Inserted line counts.")
 (defface roost-diff-removed '((t :inherit error))
@@ -1190,8 +1212,39 @@ panel, rather than inside the workspace of the task you were in."
       (roost-open-task (car tasks))
       t)))
 
+(declare-function roost-chat-task "roost-chat" (task))
+
+(defun roost--chat-task-p (task)
+  "Whether TASK's agent shows as a conversation rather than a terminal."
+  (equal (roost--field task 'interface) "chat"))
+
+(defun roost--attach-command (task)
+  "Argv attaching to conversation TASK's agent on its host.
+It prints the conversation so far, then relays messages both ways."
+  (let ((filename (car (roost--helper)))
+        (root roost-state-directory))
+    (roost--python-command
+     (roost--field task 'host)
+     (format "import os,runpy,sys; r=os.path.expanduser(%s); p=os.path.join(r,%s); sys.argv=[p,'attach',r,%s]; runpy.run_path(p,run_name='__main__')"
+             (json-serialize root) (json-serialize filename)
+             (json-serialize (roost--field task 'id))))))
+
 (defun roost--display-task (task &optional target-pane)
-  "Display TASK after ownership validation, selecting TARGET-PANE if supplied."
+  "Display TASK after ownership validation, selecting TARGET-PANE if supplied.
+A conversation task shows its conversation; any other, its terminal."
+  (if (and (roost--chat-task-p task) (fboundp 'roost-chat-task))
+      (progn
+        (roost--leave-side-window)
+        (roost--activate-workspace task)
+        (roost--leave-side-window)
+        (roost-chat-task task)
+        (roost--mark-seen (or (gethash (roost--key task) roost--tasks) task))
+        (roost--watch-layout)
+        (roost--sync-side-windows))
+    (roost--display-terminal task target-pane)))
+
+(defun roost--display-terminal (task &optional target-pane)
+  "Display TASK's terminal, selecting TARGET-PANE if supplied."
   (require 'tmux-control)
   (add-hook 'tmux-control-switch-session-functions #'roost--switch-session)
   (roost--leave-side-window)
@@ -1384,6 +1437,7 @@ EXTRA is an alist of further request fields, such as the GitHub issue."
            ,(cons 'agent agent)
            ,(cons 'prompt (unless (string-empty-p (string-trim (or prompt ""))) prompt))
            ,(cons 'command (vconcat (roost--agent-command agent)))
+           ,(cons 'interface (and roost-chat-tasks (equal agent "claude") "chat"))
            ,(cons 'setup setup)
            ,(cons 'branchPrefix roost-branch-prefix)
            ,(cons 'socket (or roost-socket-name
@@ -1920,8 +1974,25 @@ permission is declined in the terminal."
       (roost--send-draft task)
     (roost--send-text task (or text (read-string (format "Send to %s: " (roost--field task 'name)))))))
 
+(declare-function roost-chat-send-to-task "roost-chat" (task text))
+
 (defun roost--send-text (task text &optional callback failure)
   "Send TEXT to TASK's agent, confirming first if it may be at a prompt.
+CALLBACK and FAILURE are passed to `roost--act'.  A conversation task
+gets TEXT in its conversation, where Claude takes it when it is ready."
+  (if (and (roost--chat-task-p task) (fboundp 'roost-chat-send-to-task))
+      (condition-case err
+          (progn
+            (roost-chat-send-to-task task text)
+            (message "Sent to %s" (roost--field task 'name))
+            (when callback (funcall callback task)))
+        (error (if failure
+                   (funcall failure (error-message-string err))
+                 (signal (car err) (cdr err)))))
+    (roost--send-to-pane task text callback failure)))
+
+(defun roost--send-to-pane (task text callback failure)
+  "Paste TEXT into TASK's agent pane, confirming first if it may be at a prompt.
 CALLBACK and FAILURE are passed to `roost--act'."
   (let* ((status (roost--field task 'status))
          (force (when (member status '("starting" "permission"))
@@ -4305,6 +4376,9 @@ Task commands act on the task at point, as in the dashboard.
               mode-line-format nil
               cursor-type nil
               cursor-in-non-selected-windows nil)
+  (when (eq roost-sidebar-style 'typeset)
+    (buffer-face-set 'roost-sidebar-typeset)
+    (setq-local line-spacing 0.3))
   (remove-hook 'window-size-change-functions #'roost--dashboard-resized t)
   (add-hook 'window-size-change-functions #'roost--sidebar-resized nil t)
   ;; With no cursor, a highlight shows which task its keys act on.
@@ -4361,8 +4435,14 @@ The sidebar shows no cursor."
           (overlay-put roost--sidebar-selection 'window window)
           (save-excursion
             (goto-char (window-point window))
-            (move-overlay roost--sidebar-selection (line-beginning-position)
-                          (min (point-max) (1+ (line-end-position))) buffer)))))))
+            ;; All of a task's row, which the typeset sidebar sets on two lines.
+            (if (get-text-property (point) 'roost-task)
+                (move-overlay roost--sidebar-selection
+                              (or (previous-single-property-change (1+ (point)) 'roost-task) (point-min))
+                              (next-single-property-change (point) 'roost-task nil (point-max))
+                              buffer)
+              (move-overlay roost--sidebar-selection (line-beginning-position)
+                            (min (point-max) (1+ (line-end-position))) buffer))))))))
 
 (defun roost--sidebar-resized (window)
   "Reflow the sidebar after WINDOW is resized."
@@ -4406,8 +4486,128 @@ An agent asking, then one that failed, then one that finished."
               (concat (make-string (max 1 (- room (string-width name) (string-width label))) ?\s)
                       (propertize label 'face face))))))
 
+(defun roost--sidebar-pixels (string)
+  "STRING's width in pixels, set as the typeset sidebar sets it."
+  (let ((string (copy-sequence string)))
+    (add-face-text-property 0 (length string) 'roost-sidebar-typeset t string)
+    (string-pixel-width string)))
+
+(defun roost--fit-pixels (string pixels)
+  "STRING, cut with an ellipsis if need be to fit PIXELS in the typeset sidebar."
+  (if (<= (roost--sidebar-pixels string) pixels)
+      string
+    (let ((low 0) (high (length string)))
+      ;; The longest start of STRING that fits with its ellipsis.
+      (while (< low high)
+        (let ((middle (/ (+ low high 1) 2)))
+          (if (<= (roost--sidebar-pixels (concat (substring string 0 middle) "…")) pixels)
+              (setq low middle)
+            (setq high (1- middle)))))
+      (concat (string-trim-right (substring string 0 low)) "…"))))
+
+(defun roost--sidebar-detail (task)
+  "What TASK's agent is doing, briefly, for the typeset sidebar."
+  (let ((since (roost--elapsed (roost--field task 'updatedAt))))
+    (pcase (roost--attention-status task)
+      ("permission" (or (roost--permission-request task) "Asks you something"))
+      ("prompt" "Waiting to start")
+      ("running" (concat "Working · " since))
+      ("background" (concat "Working in the background · " since))
+      ("ready" (concat "Your turn · finished " since " ago"))
+      ("idle" (concat "Idle · " since))
+      ("interrupted" "Stopped mid-way")
+      ("error" "A turn failed")
+      ("failed" "Failed")
+      ("crashed" "Crashed")
+      ("exited" "Exited")
+      ("starting" "Starting…")
+      ("stopped" "Stopped")
+      ("offline" "Its host is offline")
+      (status (capitalize status)))))
+
+(defun roost--insert-typeset-row (task width)
+  "Insert TASK's two lines in the typeset sidebar, WIDTH pixels wide."
+  (let* ((current (if (roost--workspace-backend)
+                      (equal (roost--workspace-name task) (roost--current-workspace))
+                    (equal (roost--key task) roost--current-task)))
+         (face (roost--status-face (roost--attention-status task)))
+         (indent (roost--sidebar-pixels " ●  "))
+         (room (- width indent 8))
+         (row (list 'roost-task (roost--key task) 'keymap roost--dashboard-row-map
+                    'mouse-face 'highlight
+                    'help-echo (format "%s\nmouse-1: open · mouse-3: actions"
+                                       (roost--field task 'name)))))
+    (insert (apply #'propertize
+                   (concat " " (propertize "●" 'face face)
+                           (propertize " " 'display `(space :align-to (,indent)))
+                           (propertize (roost--fit-pixels (roost--field task 'name) room)
+                                       'face (if current 'bold 'default))
+                           "\n"
+                           (propertize " " 'display `(space :align-to (,indent)))
+                           (propertize (roost--fit-pixels (roost--sidebar-detail task)
+                                                          (* room 1.2))
+                                       'face (if (roost--waiting-p task)
+                                                 `(roost-sidebar-detail ,face)
+                                               'roost-sidebar-detail))
+                           "\n")
+                   row))))
+
+(defun roost--render-typeset-sidebar (window tasks)
+  "Render the typeset task sidebar for TASKS, shown in WINDOW if any."
+  (let ((width (if window (window-body-width window t) 300)))
+    (insert "\n " (propertize "Roost" 'face '(:weight bold :height 1.3))
+            (if-let* ((summary (roost--sidebar-summary tasks)))
+                (concat "   " (propertize summary 'face (list 'roost-sidebar-detail
+                                                             (roost--waiting-face tasks))))
+              "")
+            (if roost-watch-mode "" (propertize "   paused" 'face 'roost-sidebar-detail))
+            "\n")
+    (roost--insert-unreachable-hosts tasks 30)
+    (if (null tasks)
+        (insert "\n " (propertize (substitute-command-keys
+                                   "No tasks.  \\<roost-sidebar-list-mode-map>\\[roost-new-task] starts one.")
+                                  'face 'roost-sidebar-detail)
+                "\n")
+      (dolist (group (roost--task-groups tasks))
+        (let* ((host (caar group)) (repo (cadar group)) (start (1+ (point))))
+          (insert "\n " (propertize (upcase (format "%s · %s"
+                                                   (file-name-nondirectory (directory-file-name (or repo "?")))
+                                                   (roost--host-label host)))
+                                   'face (if (gethash host roost--errors)
+                                             '(roost-sidebar-project roost-status-failed)
+                                           'roost-sidebar-project))
+                  (propertize " " 'display '(space :align-to (- right 3))))
+          (insert-text-button "+" 'face 'roost-sidebar-project 'follow-link t
+                              'help-echo (format "New task in %s" (or repo "this project"))
+                              'action (lambda (button)
+                                        (goto-char (button-start button))
+                                        (call-interactively #'roost-new-task)))
+          (insert "\n")
+          (when repo
+            (put-text-property start (point) 'roost-directory
+                               (roost--project-directory (cadr group))))
+          (dolist (task (cdr group))
+            (roost--insert-typeset-row task width)))))))
+
 (defun roost--render-sidebar ()
   "Render the task sidebar from cached state, keeping point on its row."
+  (if (eq roost-sidebar-style 'typeset)
+      (let* ((window (get-buffer-window (current-buffer) t))
+             (position (if window (window-point window) (point)))
+             (key (get-text-property position 'roost-task))
+             (heading (unless key (get-text-property position 'roost-directory)))
+             (inhibit-read-only t))
+        (erase-buffer)
+        (roost--render-typeset-sidebar window (roost-tasks))
+        (goto-char (or (and key (roost--task-row key))
+                       (and heading (roost--heading-row heading))
+                       (point-min)))
+        (when window (set-window-point window (point)))
+        (roost--sidebar-mark-selection))
+    (roost--render-compact-sidebar)))
+
+(defun roost--render-compact-sidebar ()
+  "Render the task sidebar, one line per task, keeping point on its row."
   (let* ((window (get-buffer-window (current-buffer) t))
          (width (max 12 (if window (roost--usable-width window) roost-sidebar-width)))
          (position (if window (window-point window) (point)))
