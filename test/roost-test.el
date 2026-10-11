@@ -4393,6 +4393,8 @@ With INITIAL, the box must start out holding it."
             (progn
               (should (= left-margin-width 2))
               (should (overlayp roost--note-hover))
+              ;; Windows that show the buffer later are set up then.
+              (should (memq #'roost--note-margins-shown window-buffer-change-functions))
               (roost-test--goto-line-text "new line")
               (let ((line (point)))
                 (roost--note-hover-echo (selected-window) roost--note-hover (+ line 2))
@@ -4406,6 +4408,7 @@ With INITIAL, the box must start out holding it."
               (roost-magit-mode -1)
               (should (= left-margin-width 0))
               (should-not roost--note-hover)
+              (should-not (memq #'roost--note-margins-shown window-buffer-change-functions))
               ;; A wider margin of the buffer's own stays, and comes back.
               (setq left-margin-width 3)
               (roost-magit-mode 1)
@@ -4526,6 +4529,30 @@ With INITIAL, the box must start out holding it."
                      '("a.txt:5\n> +new line\nRename it")))
       (should (= (length (seq-filter (lambda (field) (eq (car-safe field) 'id)) (car roost--notes)))
                  1)))))
+
+(ert-deftest roost-the-room-for-a-note-box-is-in-its-window-only ()
+  (roost-test--with-magit-task
+    (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")
+    (magit-diff-unstaged)
+    (with-current-buffer (magit-get-mode-buffer 'magit-diff-mode)
+      (roost-test--goto-line-text "new line")
+      (roost-test--write-note "Name it")
+      (unwind-protect
+          (progn
+            ;; As a box in a child frame would be, for another note here.
+            (setq roost--note-box (list :source (current-buffer) :frame 'shown :room 40
+                                        :window (selected-window)
+                                        :place (roost--magit-note-place)))
+            (roost--show-notes-here task)
+            (let ((room (seq-find (lambda (overlay) (overlay-get overlay 'roost-note-box))
+                                  roost--note-overlays))
+                  (notes (seq-find (lambda (overlay) (overlay-get overlay 'roost-notes))
+                                   roost--note-overlays)))
+              (should (eq (overlay-get room 'window) (selected-window)))
+              ;; After the line's notes.
+              (should (= (overlay-start room) (overlay-end notes)))
+              (should-not (string-match-p "\n.*\n" (overlay-get notes 'after-string)))))
+        (setq roost--note-box nil)))))
 
 (ert-deftest roost-a-note-box-belongs-to-the-window-it-opens-from ()
   (roost-test--with-magit-task

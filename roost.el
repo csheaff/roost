@@ -2549,11 +2549,10 @@ text stands in for it."
       (mapcar (lambda (line) (save-excursion (goto-char (car line)) (line-end-position)))
               (or exact (and nearest (list nearest)))))))
 
-(defun roost--note-overlay (position notes &optional room)
+(defun roost--note-overlay (position notes)
   "An overlay showing NOTES after the line ending at POSITION.
 It holds the line's newline, so the notes fold away with the line.
-Thin rules in the notes' color set each note apart from the diff.  With
-ROOM, it leaves that many pixels after them, for the note box."
+Thin rules in the notes' color set each note apart from the diff."
   (let* ((overlay (make-overlay position (min (1+ position) (point-max))))
          (color (face-foreground 'roost-note nil t))
          (last (car (last notes)))
@@ -2594,10 +2593,20 @@ ROOM, it leaves that many pixels after them, for the note box."
                      'help-echo "mouse-1: edit, send or discard this note")))
                 notes "")))
     (overlay-put overlay 'roost-notes notes)
-    (when room
-      (overlay-put overlay 'roost-note-box room)
-      (setq text (concat text (propertize " " 'display `(space :width (1) :height (,room))) "\n")))
     (overlay-put overlay 'after-string text)
+    overlay))
+
+(defun roost--note-room-overlay (position height window)
+  "An overlay leaving HEIGHT pixels for the note box, under the line at POSITION.
+POSITION is the line's end.  The room comes after the line's notes, and
+only in WINDOW, where the box is: other windows showing the buffer
+leave none."
+  (let ((overlay (make-overlay (min (1+ position) (point-max)) (min (1+ position) (point-max)))))
+    (overlay-put overlay 'roost-note-box height)
+    (overlay-put overlay 'roost-note-anchor position)
+    (overlay-put overlay 'window window)
+    (overlay-put overlay 'before-string
+                 (concat (propertize " " 'display `(space :width (1) :height (,height))) "\n"))
     overlay))
 
 (defun roost--show-notes-here (task)
@@ -2627,16 +2636,15 @@ in place of the note it edits."
           (when-let* ((entry (assoc (alist-get 'file note) files)))
             (dolist (position (roost--note-positions note (nth 1 entry) (nth 2 entry)))
               (push note (alist-get position shown)))))
+        (pcase-dolist (`(,position . ,notes) shown)
+          (push (roost--note-overlay position (reverse notes)) roost--note-overlays))
         ;; The box goes after the notes already under its line.
         (when-let* ((place (plist-get box :place))
                     (entry (assoc (alist-get 'file place) files)))
           (setq room (car (roost--note-positions place (nth 1 entry) (nth 2 entry))))
-          (when (and room (not (assq room shown)))
-            (push (list room) shown)))
-        (pcase-dolist (`(,position . ,notes) shown)
-          (push (roost--note-overlay position (reverse notes)
-                                     (and (eql position room) (plist-get box :room)))
-                roost--note-overlays))))))
+          (when room
+            (push (roost--note-room-overlay room (plist-get box :room) (plist-get box :window))
+                  roost--note-overlays)))))))
 
 (defun roost--show-notes-everywhere ()
   "Show the current review notes in every Magit buffer on a task."
@@ -2961,7 +2969,8 @@ in the window it was opened from."
                              (seq-find (lambda (overlay) (overlay-get overlay 'roost-note-box))
                                        roost--note-overlays)))
                   (room (overlay-get overlay 'roost-note-box))
-                  (line (posn-at-point (overlay-start overlay) window))
+                  ((progn (overlay-put overlay 'window window) t))
+                  (line (posn-at-point (overlay-get overlay 'roost-note-anchor) window))
                   (below (cdr (posn-x-y line)))
                   ;; The room is the first row that tall below its line,
                   ;; and has to be in sight whole.  Each row is given by
@@ -3037,9 +3046,13 @@ any does."
 (defun roost--note-hover-setup ()
   "Make room for the note button in this Magit buffer, and follow the mouse.
 Emacs calls the help-echo of text as the mouse moves over it, so an
-overlay across the buffer has `roost--note-hover-echo' as its help-echo."
+overlay across the buffer has `roost--note-hover-echo' as its help-echo.
+A window that shows the buffer later is set up then."
   (let ((on (roost--note-margin-p))
         (had roost--note-margin))
+    (if (and roost-magit-mode (derived-mode-p 'magit-status-mode 'magit-diff-mode))
+        (add-hook 'window-buffer-change-functions #'roost--note-margins-shown nil t)
+      (remove-hook 'window-buffer-change-functions #'roost--note-margins-shown t))
     ;; A margin at least as wide is kept, and the one the buffer had comes
     ;; back once the button is off.
     (cond ((and on (not had))
@@ -3065,6 +3078,13 @@ overlay across the buffer has `roost--note-hover-echo' as its help-echo."
           ((overlayp roost--note-hover)
            (delete-overlay roost--note-hover)
            (setq roost--note-hover nil)))))
+
+(defun roost--note-margins-shown (window)
+  "Set up the note button for WINDOW, if it has started showing this buffer.
+The hook runs, with this buffer current, for a window that stopped
+showing it too; that one is left alone."
+  (when (eq (window-buffer window) (current-buffer))
+    (roost--note-hover-setup)))
 
 (defun roost--note-line-start (position)
   "Where the diff line at POSITION starts, if notes can be written on it."
