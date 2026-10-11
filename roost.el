@@ -2163,6 +2163,11 @@ child frames, the box is `:frame', over `:room' pixels left for it.")
   "<mouse-1>" #'roost-note-mouse-menu
   "<down-mouse-3>" #'roost-note-mouse-menu)
 
+(defvar roost--note-button nil
+  "Overlay showing the note button beside the line under the mouse.")
+(defvar roost--note-mouse-timer nil
+  "Timer moving the note button with the mouse, where the text cannot.")
+
 (defun roost--notes ()
   "All review notes not yet sent, read from `roost-notes-file' once."
   (unless roost--notes-loaded
@@ -2352,6 +2357,11 @@ less diff context.
     (remove-hook 'magit-status-sections-hook #'roost--magit-insert-reply)
     (remove-hook 'magit-status-sections-hook #'roost--magit-insert-unmerged))
   (roost--note-box-close)
+  (when (timerp roost--note-mouse-timer)
+    (cancel-timer roost--note-mouse-timer)
+    (setq roost--note-mouse-timer nil))
+  (when (overlayp roost--note-button)
+    (delete-overlay roost--note-button))
   (dolist (buffer (buffer-list))
     (when (buffer-local-value 'roost-magit-mode buffer)
       (with-current-buffer buffer
@@ -2575,10 +2585,10 @@ Thin rules in the notes' color set each note apart from the diff."
                                                 `(:underline (:color ,color :position t)))))))
                           ;; The note's own faces, rather than those of the
                           ;; diff line it is shown before.
-                          ;; Rules set notes apart in graphic frames; a
-                          ;; terminal, which draws no line over text, gets a bar.
-                          (concat (propertize (if (display-graphic-p) "    " "  ┃ ")
-                                              'face `(,rule (:slant normal) roost-note default))
+                          ;; The same in every frame showing the buffer: a
+                          ;; terminal may draw no rule over the note, but
+                          ;; shows its color and the one under it.
+                          (concat (propertize "    " 'face `(,rule (:slant normal) roost-note default))
                                   (propertize line 'face `(,rule roost-note default))
                                   ;; Rules go across the window, as the note's
                                   ;; background does, whatever the next line is.
@@ -3048,10 +3058,6 @@ Its foreground fills the button.")
 
 (defvar-local roost--note-hover nil
   "Overlay across this Magit buffer through which Emacs reports the mouse.")
-(defvar roost--note-button nil
-  "Overlay showing the note button beside the line under the mouse.")
-(defvar roost--note-mouse-timer nil
-  "Timer moving the note button with the mouse, where the text cannot.")
 (defvar roost--note-button-images nil
   "The note button's image, made for the colors and sizes in its key.")
 
@@ -3151,7 +3157,7 @@ hide the button."
          (unless (and (eq (overlay-buffer roost--note-button) (current-buffer))
                       (eql (overlay-start roost--note-button) start)
                       (eq (overlay-get roost--note-button 'window) window))
-           (overlay-put roost--note-button 'before-string (roost--note-button-string))
+           (overlay-put roost--note-button 'before-string (roost--note-button-string window))
            (overlay-put roost--note-button 'window window)
            (move-overlay roost--note-button start start (current-buffer)))
          (unless (timerp roost--note-mouse-timer)
@@ -3197,9 +3203,12 @@ rested there; while it rests, the looks slow down."
           ((and (/= interval roost--note-mouse-interval) (zerop (cadr state)))
            (roost--note-watch-mouse roost--note-mouse-interval state)))))
 
-(defun roost--note-button-string ()
-  "The note button, as a string to show in the left margin."
-  (propertize "+" 'display `((margin left-margin) ,(roost--note-button-image))
+(defun roost--note-button-string (&optional window)
+  "The note button, as a string to show in the left margin of WINDOW."
+  (propertize "+" 'display `((margin left-margin)
+                             ,(if (window-live-p window)
+                                  (with-selected-window window (roost--note-button-image))
+                                (roost--note-button-image)))
               'help-echo "mouse-1: write a note on this line; drag for more lines"
               'pointer 'hand))
 

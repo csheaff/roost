@@ -4595,6 +4595,25 @@ With INITIAL, the box must start out holding it."
               (cancel-timer roost--note-mouse-timer)
               (setq roost--note-mouse-timer nil))))))))
 
+(ert-deftest roost-unloading-stops-following-the-mouse ()
+  (roost-test--with-magit-task
+    (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")
+    (cl-letf (((symbol-function 'display-graphic-p) #'always)
+              ((symbol-function 'display-images-p) #'ignore))
+      (magit-diff-unstaged)
+      (with-current-buffer (magit-get-mode-buffer 'magit-diff-mode)
+        (roost-test--goto-line-text "new line")
+        (unwind-protect
+            (progn
+              (roost--note-hover-echo (selected-window) roost--note-hover (point))
+              (should (timerp roost--note-mouse-timer))
+              (roost--magit-teardown)
+              (should-not roost--note-mouse-timer)
+              (should-not (overlay-buffer roost--note-button)))
+          (when (timerp roost--note-mouse-timer)
+            (cancel-timer roost--note-mouse-timer)
+            (setq roost--note-mouse-timer nil)))))))
+
 (ert-deftest roost-a-whole-file-note-shown-twice-is-edited-where-clicked ()
   (roost-test--with-magit-task
     ;; Staged, and changed again since: the file is under both headings.

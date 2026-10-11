@@ -274,8 +274,9 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
   terminal of Roost's own, relayed to its tmux pane, that does: an approval, a
   declined request and Esc then show at once.
 - `roost-notes-file`: review notes not yet sent, kept across sessions.
-  `roost-note-box-lines` (4): how many lines of text the box for writing one
-  shows. Faces `roost-note` and `roost-note-button` color the notes and the `+`.
+- `roost-note-box-lines` (4): how many lines of text the box for writing a
+  note shows. Faces `roost-note` and `roost-note-button` color the notes and
+  the `+`.
 - `roost-magit-status-sections` (t): whether Magit's status of a task's
   worktree names the task and folds in its agent's latest reply.
 - `roost-branch-prefix`: topic branches are `PREFIX<name>-<id>`; default `roost/`.
