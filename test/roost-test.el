@@ -3018,10 +3018,12 @@
 (ert-deftest roost-send-draft-sends-multi-line-text-and-closes ()
   (roost-test--isolated
    (roost-test--with-send-buffers
-    (let ((task (roost--cache-task "dev" (roost-test--task))) sent buffer)
+    (let ((task (roost--cache-task "dev" (roost-test--task))) sent buffer said)
       (cl-letf (((symbol-function 'pop-to-buffer) #'set-buffer)
                 ((symbol-function 'roost--refresh-host) #'ignore)
                 ((symbol-function 'roost--redraw) #'ignore)
+                ((symbol-function 'message)
+                 (lambda (format &rest args) (when format (setq said (apply #'format-message format args)))))
                 ((symbol-function 'roost--request)
                  (lambda (_host _action params success &rest _)
                    (setq sent params)
@@ -3032,6 +3034,8 @@
         (insert "first\nsecond\n")
         (roost-send-submit)
         (should (equal (alist-get 'text sent) "first\nsecond"))
+        ;; Said in a sentence, not as "Roost fix auth: send".
+        (should (equal said "Sent to fix auth"))
         (should-not (buffer-live-p buffer)))))))
 
 (ert-deftest roost-send-draft-survives-failure-and-declined-confirmation ()

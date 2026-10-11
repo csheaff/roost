@@ -1925,6 +1925,12 @@ empty one.  Opening the task reconnects the rest."
       (let ((kill-buffer-query-functions nil))
         (kill-buffer buffer)))))
 
+(defconst roost--action-messages
+  '(("send" . "Sent to %s") ("stop" . "Stopped %s") ("resume" . "Resumed %s")
+    ("shell" . "Opened a shell in %s's worktree"))
+  "What `roost--act' says once each action is done, for a task's name.
+The other actions say more themselves when they finish.")
+
 (defun roost--act (task action &optional parameters callback failure)
   "Run ACTION on TASK with PARAMETERS, then CALLBACK with the updated task.
 FAILURE, if given, receives the error message instead of Roost reporting it."
@@ -1942,7 +1948,8 @@ FAILURE, if given, receives the error message instead of Roost reporting it."
                       (let ((pushed (assq 'pushed updated)))
                         (setq updated (roost--cache-task host updated))
                         (roost--redraw)
-                        (message "Roost %s: %s" (roost--field task 'name) action)
+                        (when-let* ((said (cdr (assoc action roost--action-messages))))
+                          (message said (roost--field task 'name)))
                         (when callback
                           (funcall callback (if pushed (cons pushed updated) updated)))))
                     (lambda (err)
