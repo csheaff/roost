@@ -4126,59 +4126,98 @@ you otherwise, and is dim the rest of the time."
 (defconst roost--gap (propertize "\n" 'face '(:height 0.5))
   "A blank line half as tall as the rest, between groups and sections.")
 
+(defun roost--table-lines (lines)
+  "The indices of LINES that belong to Markdown tables.
+A table is found by its delimiter row, such as \"--- | :---:\", with the
+header row above it and the rows below that have a pipe."
+  (let ((rows nil))
+    (dotimes (index (length lines))
+      (let ((line (aref lines index)))
+        (when (and (string-search "|" line)
+                   (string-match-p "\\`[ \t]*|?\\(?:[ \t]*:?-+:?[ \t]*|\\)*[ \t]*:?-+:?[ \t]*|?[ \t]*\\'"
+                                   line))
+          (when (and (> index 0) (string-search "|" (aref lines (1- index))))
+            (push (1- index) rows))
+          (push index rows)
+          (let ((next (1+ index)))
+            (while (and (< next (length lines)) (string-search "|" (aref lines next)))
+              (push next rows)
+              (setq next (1+ next)))))))
+    rows))
+
 (defun roost--prose (text)
   "TEXT with `roost-prose' on what reads as prose.
-Lines laid out by column keep their font: Markdown tables, code between
-fences, and lines indented as code."
-  (let ((text (copy-sequence text))
-        (start 0)
-        (fenced nil))
-    (dolist (line (split-string text "\n"))
-      (let ((end (+ start (length line))))
-        (cond ((string-match-p "\\`[ \t]*\\(?:```\\|~~~\\)" line)
-               (setq fenced (not fenced)))
-              ((or fenced (string-match-p "\\`\\(?:[ \t]*|\\|    \\|\t\\)" line)))
+Lines laid out by column keep their font: Markdown tables, fenced code,
+and lines indented as code."
+  (let* ((text (copy-sequence text))
+         (lines (vconcat (split-string text "\n")))
+         (tables (roost--table-lines lines))
+         (start 0)
+         ;; The run of backticks or tildes that opened the code block
+         ;; under way; only as long a run of the same closes it.
+         (fence nil))
+    (dotimes (index (length lines))
+      (let* ((line (aref lines index))
+             (end (+ start (length line))))
+        (cond (fence
+               (when (string-match-p (format "\\`[ \t]*%s\\{%d,\\}[ \t]*\\'"
+                                             (regexp-quote (substring fence 0 1)) (length fence))
+                                     line)
+                 (setq fence nil)))
+              ((string-match "\\`[ \t]*\\(`\\{3,\\}\\|~\\{3,\\}\\)" line)
+               (setq fence (match-string 1 line)))
+              ((or (memq index tables) (string-match-p "\\`\\(?:[ \t]*|\\|    \\|\t\\)" line)))
               (t (add-face-text-property start end 'roost-prose t text)))
         (setq start (1+ end))))
     text))
 
-(defun roost--pixel-width (string)
-  "STRING's width in pixels, as the current buffer would show it.
-That is in the selected frame, as `default-font-width' measures a
-column; in a text frame, as in batch, a pixel is a column."
-  ;; Since Emacs 30, the buffer's face remapping, as by
-  ;; `text-scale-adjust', counts too.
-  (if (eql (cdr (func-arity #'string-pixel-width)) 1)
-      (string-pixel-width string)
-    (with-suppressed-warnings ((callargs string-pixel-width))
-      (string-pixel-width string (current-buffer)))))
+(defun roost--text-width (string)
+  "STRING's width in columns, as the windows showing this buffer show it.
+Measured in pixels, so proportional text counts for what it takes up;
+where frames show the buffer in different fonts, the widest measure
+counts.  In a text frame, as in batch, this is STRING's width in columns."
+  (let ((windows (or (seq-uniq (get-buffer-window-list nil nil t)
+                               (lambda (a b) (eq (window-frame a) (window-frame b))))
+                     (list (selected-window))))
+        (remapping face-remapping-alist))
+    (with-current-buffer (get-buffer-create " *roost text width*")
+      ;; As `text-scale-adjust' leaves it in the buffer measured for, and
+      ;; with no line numbers, which a global mode may have turned on.
+      (setq-local face-remapping-alist remapping
+                  display-line-numbers nil)
+      (erase-buffer)
+      (insert string)
+      (apply #'max (mapcar (lambda (window)
+                             (/ (float (car (buffer-text-pixel-size nil window t)))
+                                (window-font-width window)))
+                           windows)))))
 
-(defun roost--fit-pixels (string pixels)
-  "The longest start of STRING no wider than PIXELS, as shown."
-  (if (<= (roost--pixel-width string) pixels)
+(defun roost--fit-width (string columns)
+  "The longest start of STRING no wider than COLUMNS, as shown."
+  (if (<= (roost--text-width string) columns)
       string
     (let ((low 0) (high (1- (length string))))
       (while (< low high)
         (let ((middle (/ (+ low high 1) 2)))
-          (if (<= (roost--pixel-width (substring string 0 middle)) pixels)
+          (if (<= (roost--text-width (substring string 0 middle)) columns)
               (setq low middle)
             (setq high (1- middle)))))
       (substring string 0 low))))
 
-(defun roost--truncate-pixels (string pixels)
-  "STRING cut with an ellipsis to fit PIXELS, as shown.
+(defun roost--truncate-width (string columns)
+  "STRING cut with an ellipsis to fit COLUMNS, as shown.
 The ellipsis takes the face of the text it follows."
-  (if (<= (roost--pixel-width string) pixels)
+  (if (<= (roost--text-width string) columns)
       string
     (let* ((ellipsis (propertize "…" 'face (get-text-property 0 'face string)))
            (start (string-trim-right
-                   (roost--fit-pixels string (- pixels (roost--pixel-width ellipsis))))))
+                   (roost--fit-width string (- columns (roost--text-width ellipsis))))))
       (concat start ellipsis))))
 
-(defun roost--wrap-pixels (text pixels &optional most)
-  "TEXT's lines broken at spaces to fit PIXELS each, as shown.
+(defun roost--wrap-width (text columns &optional most)
+  "TEXT's lines broken at spaces to fit COLUMNS each, as shown.
 TEXT's own line breaks are kept, as in lists and code.  A word wider
-than PIXELS, such as a URL, is broken within.  With MOST, stop after
+than COLUMNS, such as a URL, is broken within.  With MOST, stop after
 more than MOST lines.  Return the lines."
   (let ((lines nil))
     (catch 'enough
@@ -4190,12 +4229,12 @@ more than MOST lines.  Return the lines."
           (let ((line nil))
             (dolist (word (split-string source " "))
               (let ((longer (if line (concat line " " word) word)))
-                (if (or (null line) (<= (roost--pixel-width longer) pixels))
+                (if (or (null line) (<= (roost--text-width longer) columns))
                     (setq line longer)
                   (funcall add line)
                   (setq line word)))
-              (while (> (roost--pixel-width line) pixels)
-                (let ((part (roost--fit-pixels line pixels)))
+              (while (> (roost--text-width line) columns)
+                (let ((part (roost--fit-width line columns)))
                   (when (string-empty-p part) (setq part (substring line 0 1)))
                   (funcall add part)
                   (setq line (substring line (length part))))))
@@ -5042,15 +5081,15 @@ A different reply starts collapsed when it arrives.")
   "The first six lines of REPLY as shown wrapped in WIDTH columns.
 Return short replies unchanged.  Faces in REPLY, as from `roost--prose',
 count in its width."
-  (let* ((pixels (* (max 12 (- width 2)) (default-font-width)))
-         (lines (roost--wrap-pixels reply pixels 6)))
+  (let* ((columns (max 12 (- width 2)))
+         (lines (roost--wrap-width reply columns 6)))
     (if (<= (length lines) 6)
         reply
       (let ((last (string-trim-right (nth 5 lines))))
         (concat (string-join (seq-take lines 5) "\n") "\n"
-                (roost--truncate-pixels
+                (roost--truncate-width
                  (concat last (propertize "…" 'face (get-text-property (max 0 (1- (length last))) 'face last)))
-                 pixels))))))
+                 columns))))))
 
 (defun roost--prompt-preview (prompt)
   "The start of PROMPT for the task panel.
@@ -5528,8 +5567,7 @@ The changes column shrinks first, then the agent column is dropped."
                                                 (roost--last-message-summary task)
                                                 (roost--prompt-text task)))
                            (* 3 room))))
-                (roost--truncate-pixels (propertize text 'face '(roost-dim roost-prose))
-                                        (* room (default-font-width))))))))
+                (roost--truncate-width (propertize text 'face '(roost-dim roost-prose)) room))))))
 
 (defun roost--insert-unreachable-hosts (tasks &optional width)
   "Name each host Roost cannot reach that has none of TASKS to show.
@@ -5831,7 +5869,7 @@ Hosts match words so: \"test\" finds \"tests\", but not \"latest\"."
   "TEXT with each line wider than WIDTH columns broken between words.
 Its prose is in `roost-prose', and widths are as shown.  A word wider
 than WIDTH, such as a URL, is broken within, as in `roost--reply-preview'."
-  (string-join (roost--wrap-pixels (roost--prose text) (* width (default-font-width))) "\n"))
+  (string-join (roost--wrap-width (roost--prose text) width) "\n"))
 
 (defun roost--search-time (timestamp)
   "TIMESTAMP as a local date and time, or blanks if it is unreadable."
