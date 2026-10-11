@@ -2638,6 +2638,23 @@
        (should (= attempts 2))
        (should (= (car (gethash "dev" roost--failures)) 2))))))
 
+(ert-deftest roost-a-view-that-fails-to-draw-stops-no-polls ()
+  ;; Drawing a reply that failed, here in a broken search buffer, left the
+  ;; host marked as refreshing, so it was never polled again, and called
+  ;; the host offline with Roost's own error.
+  (roost-test--isolated
+   (let ((roost-hosts '("dev")) (attempts 0) (broken t))
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host _action _params success _failure)
+                  (cl-incf attempts) (funcall success nil)))
+               ((symbol-function 'roost--redraw)
+                (lambda () (when broken (error "Broken view")))))
+       (should-error (roost-refresh t))
+       (should-not (gethash "dev" roost--refreshing))
+       (setq broken nil)
+       (roost-refresh t)
+       (should (= attempts 2))))))
+
 (ert-deftest roost-dashboard-groups-by-project-and-summarizes-attention ()
   (roost-test--isolated
    (roost--cache-task "dev" (append '((repo . "/home/user/ledger") (startedAt . "1")

@@ -545,23 +545,28 @@ Call SUCCESS with the result or FAILURE with an error message."
                      (while (accept-process-output stderr-pipe 0 nil t))
                      (delete-process stderr-pipe)
                      (unwind-protect
-                         (let ((stdout (with-current-buffer buffer (buffer-string)))
-                               (stderr (with-current-buffer errors
-                                         (string-trim (buffer-string)))))
-                           (condition-case parse-error
-                               (if (= (process-exit-status proc) 0)
-                                   (let ((response (roost--decode-response stdout)))
-                                     (if (alist-get 'ok response)
-                                         (funcall success (alist-get 'result response))
-                                       (funcall failure (or (alist-get 'error response)
-                                                            "Host operation failed"))))
-                                 (funcall failure
-                                          (cond (timed-out
-                                                 (format "No reply after %ss; the operation may still finish on the host, so refresh before retrying"
-                                                         roost-request-timeout))
-                                                ((string-empty-p stderr) "Host operation failed")
-                                                (t stderr))))
-                             (error (funcall failure (error-message-string parse-error)))))
+                         (let* ((stdout (with-current-buffer buffer (buffer-string)))
+                                (stderr (with-current-buffer errors
+                                          (string-trim (buffer-string))))
+                                ;; What the host said, decided before either
+                                ;; callback runs: an error in one is Roost's,
+                                ;; not the host's.
+                                (outcome
+                                 (condition-case parse-error
+                                     (if (= (process-exit-status proc) 0)
+                                         (let ((response (roost--decode-response stdout)))
+                                           (if (alist-get 'ok response)
+                                               (list success (alist-get 'result response))
+                                             (list failure (or (alist-get 'error response)
+                                                               "Host operation failed"))))
+                                       (list failure
+                                             (cond (timed-out
+                                                    (format "No reply after %ss; the operation may still finish on the host, so refresh before retrying"
+                                                            roost-request-timeout))
+                                                   ((string-empty-p stderr) "Host operation failed")
+                                                   (t stderr))))
+                                   (error (list failure (error-message-string parse-error))))))
+                           (funcall (car outcome) (cadr outcome)))
                        (kill-buffer buffer)
                        (kill-buffer errors))))))
           (push process roost--requests)
@@ -805,43 +810,49 @@ those tasks."
                       (roost--refresh-host host nil (unless (eq pending t) pending))))))
       (roost--request
        host "list" (list (cons 'full (cond (quiet :false) (ids (vconcat ids)) (t t))))
+       ;; Each ends the refresh even if drawing what it found fails, or
+       ;; the host would never be asked again.
        (lambda (tasks)
-         (remhash host roost--failures)
-         (remhash host roost--errors)
-         ;; A newer mutation must win over a stale list reply, and a host
-         ;; forgotten meanwhile stays forgotten.
-         (when (and (= revision (gethash host roost--revisions 0))
-                    (member host (roost--hosts)))
-           (let ((before (roost--task-states host)))
-             (roost--apply-snapshot host tasks request)
-             ;; Quiet polls leave out Git statistics.  An agent that reported
-             ;; something, such as finishing an edit, may have changed files,
-             ;; and a commit moves the task's Git stamp: measure those tasks
-             ;; once this poll is done.
-             (when-let* ((quiet)
-                         (changed (seq-keep (lambda (state)
-                                              (unless (equal state (assoc (car state) before))
-                                                (car state)))
-                                            (roost--task-states host))))
-               (roost--refresh-host host nil changed))))
-         (roost--redraw)
-         (funcall finish))
+         (unwind-protect
+             (progn
+               (remhash host roost--failures)
+               (remhash host roost--errors)
+               ;; A newer mutation must win over a stale list reply, and a host
+               ;; forgotten meanwhile stays forgotten.
+               (when (and (= revision (gethash host roost--revisions 0))
+                          (member host (roost--hosts)))
+                 (let ((before (roost--task-states host)))
+                   (roost--apply-snapshot host tasks request)
+                   ;; Quiet polls leave out Git statistics.  An agent that reported
+                   ;; something, such as finishing an edit, may have changed files,
+                   ;; and a commit moves the task's Git stamp: measure those tasks
+                   ;; once this poll is done.
+                   (when-let* ((quiet)
+                               (changed (seq-keep (lambda (state)
+                                                    (unless (equal state (assoc (car state) before))
+                                                      (car state)))
+                                                  (roost--task-states host))))
+                     (roost--refresh-host host nil changed))))
+               (roost--redraw))
+           (funcall finish)))
        (lambda (err)
-         ;; Once per outage: ssh words a sleeping host's failure differently
-         ;; from one poll to the next, and the sidebar shows it meanwhile.
-         ;; Its last line says what failed; ssh's earlier ones say less, such
-         ;; as that a shared connection broke.  The sidebar's tooltip has all.
-         (unless (gethash host roost--errors)
-           (message "Roost %s: %s (M-x roost-doctor checks this host)" (roost--host-label host)
-                    (car (last (split-string err "\n" t "[ \t\r]+")))))
-         (puthash host err roost--errors)
-         ;; Back off from unreachable hosts, up to a minute between attempts.
-         (let ((count (1+ (or (car (gethash host roost--failures)) 0))))
-           (puthash host (cons count (+ (float-time)
-                                        (min 60 (* roost-watch-interval (expt 2 (1- count))))))
-                    roost--failures))
-         (roost--redraw)
-         (funcall finish))))))
+         (unwind-protect
+             (progn
+               ;; Once per outage: ssh words a sleeping host's failure differently
+               ;; from one poll to the next, and the sidebar shows it meanwhile.
+               ;; Its last line says what failed; ssh's earlier ones say less, such
+               ;; as that a shared connection broke.  The sidebar's tooltip has all.
+               (unless (gethash host roost--errors)
+                 (message "Roost %s: %s (M-x roost-doctor checks this host)" (roost--host-label host)
+                          (car (last (split-string err "\n" t "[ \t\r]+")))))
+               (puthash host err roost--errors)
+               ;; Back off from unreachable hosts, up to a minute between attempts.
+               (let ((count (1+ (or (car (gethash host roost--failures)) 0))))
+                 (puthash host (cons count (+ (float-time)
+                                              (min 60 (* roost-watch-interval (expt 2 (1- count))))))
+                          roost--failures))
+               (roost--redraw))
+           (funcall finish)))))))
 
 ;;;###autoload
 (defun roost-forget-host (host)
