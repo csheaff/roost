@@ -3333,10 +3333,12 @@ for the mode line."
     (unless (and light
                  (= width (plist-get (cdr (plist-get light :image)) :data-width))
                  (= height (plist-get (cdr (plist-get light :image)) :data-height)))
-      ;; `create-image' names each canvas itself.
+      ;; `create-image' names each canvas itself.  It is drawn a pixel
+      ;; for a pixel: scaled, it would outgrow its columns, and Emacs
+      ;; draws only part of a scaled canvas.
       (setq light (list :image (create-image (make-vector (* width height) back) 'canvas t
                                              :data-width width :data-height height
-                                             :ascent 'center)
+                                             :scale 1 :ascent 'center)
                         :motion nil :color nil :background nil :buffer nil :phase nil))
       (puthash id light roost--lights))
     (let ((changed (not (and (eql color (plist-get light :color))
@@ -4579,7 +4581,7 @@ The mark stays where it was."
   (roost--note-watched-agent)
   ;; Mode lines are redrawn with their windows, so a terminal you are not
   ;; typing in would keep showing an old count.
-  (let ((count (roost--mode-line-count)))
+  (let ((count (roost--mode-line-count t)))
     (unless (equal count roost--shown-mode-line-count)
       (setq roost--shown-mode-line-count count)
       (force-mode-line-update t)))
@@ -5520,9 +5522,10 @@ The count appears in `global-mode-string', which mode lines keep even
 when they hide minor modes, and only while some agent waits."
   :type 'boolean)
 
-(defun roost--mode-line-count ()
+(defun roost--mode-line-count (&optional plain)
   "\"Roost:N\" for the agents waiting for you, or nil when none are.
-Agents asking permission or stuck at a startup prompt color the count."
+Agents asking permission or stuck at a startup prompt color the count.
+PLAIN leaves out the status light, for a count no mode line shows."
   (let ((blocked 0) (waiting 0) (tasks nil))
     (maphash (lambda (_key task)
                (push task tasks)
@@ -5535,7 +5538,7 @@ Agents asking permission or stuck at a startup prompt color the count."
     (when (> (+ blocked waiting) 0)
       ;; A canvas has one background, so the light shows only in the
       ;; selected window's mode line.
-      (concat (when (and (roost--animations-p) (mode-line-window-selected-p))
+      (concat (when (and (not plain) (roost--animations-p) (mode-line-window-selected-p))
                 (propertize " " 'display
                             (roost--light 'mode-line 'waiting (if (> blocked 0) "permission" "ready")
                                           (roost--waiting-face tasks)
@@ -5571,6 +5574,8 @@ otherwise.  Turning it off leaves the sidebar marked paused."
     (cancel-timer roost--watch-timer)
     (setq roost--watch-timer nil))
   (setq global-mode-string (delete roost--mode-line-entry (ensure-list global-mode-string)))
+  ;; The mode line asks for its light again if it still shows it.
+  (remhash '(mode-line . waiting) roost--lights)
   (remove-hook 'after-save-hook #'roost--file-saved)
   (when roost-watch-mode
     (setq global-mode-string (append global-mode-string (list roost--mode-line-entry)))

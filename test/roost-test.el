@@ -2271,7 +2271,10 @@
          (roost-test--refreshed 0))
      (cl-letf (((symbol-function 'roost--animations-p) (lambda () ,on))
                ((symbol-function 'create-image)
-                (lambda (data _type _data-p &rest props) `(image :type canvas :data ,data ,@props)))
+                (lambda (data _type _data-p &rest props)
+                  ;; Scaled, Emacs would draw only part of a canvas.
+                  (should (eql (plist-get props :scale) 1))
+                  `(image :type canvas :data ,data ,@props)))
                ((symbol-function 'canvas-refresh) (lambda (&rest _) (cl-incf roost-test--refreshed)))
                ((symbol-function 'frame-focus-state) (lambda (&rest _) t))
                ((symbol-function 'mode-line-window-selected-p) (lambda () roost-test--selected)))
@@ -2308,7 +2311,8 @@
     (let* ((width 6) (height 8)
            (pixels-at (lambda (motion phase)
                         (let ((light (list :image (create-image (make-vector (* width height) 0) 'canvas t
-                                                                :data-width width :data-height height)
+                                                                :data-width width :data-height height
+                                                                :scale 1)
                                            :motion motion :color #xFFAA66FF :background #xFF1E1E1E)))
                           (roost--light-draw light phase)
                           (plist-get (cdr (plist-get light :image)) :data)))))
@@ -2348,6 +2352,15 @@
            (should (eq (car (get-text-property 0 'display (roost--mode-line-count))) 'image))
            (let ((roost-test--selected nil))
              (should-not (get-text-property 0 'display (roost--mode-line-count))))
+           ;; Comparing counts makes no light, and watching no more drops it.
+           (remhash '(mode-line . waiting) roost--lights)
+           (should-not (get-text-property 0 'display (roost--mode-line-count t)))
+           (should-not (gethash '(mode-line . waiting) roost--lights))
+           (roost--mode-line-count)
+           (let ((roost-watch-interval 3600))
+             (roost-watch-mode -1))
+           (should-not (gethash '(mode-line . waiting) roost--lights))
+           (roost--mode-line-count)
            ;; Lights of tasks no longer listed are forgotten, only at their place.
            (roost--lights-forget 'sidebar (list (roost--key asking)))
            (should (= (hash-table-count roost--lights) 3))
