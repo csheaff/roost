@@ -2302,11 +2302,20 @@
      (should-not roost--lights-timer))))
 
 (ert-deftest roost-status-lights-move-only-while-an-agent-waits ()
-  ;; Motion means an agent needs you: one at work rests.
-  (should (eq (roost--light-motion "permission") 'pulse))
-  (should (eq (roost--light-motion "ready") 'glow))
-  (dolist (status '("running" "idle" "failed" "stopped"))
-    (should-not (roost--light-motion status)))
+  ;; Motion means an agent needs you, as it counts in the mode line: one
+  ;; at work rests, and so does one you have seen since it stopped.
+  (roost-test--isolated
+   (let ((motion (lambda (status &optional seen)
+                   (let ((task (roost--cache-task "dev" (roost-test--task nil status))))
+                     (when seen (puthash (roost--key task) (roost--field task 'updatedAt) roost--seen))
+                     (prog1 (roost--light-motion task)
+                       (remhash (roost--key task) roost--seen))))))
+     (should (eq (funcall motion "permission") 'pulse))
+     (dolist (status '("ready" "interrupted" "error" "failed" "crashed" "exited"))
+       (should (eq (funcall motion status) 'glow))
+       (should-not (funcall motion status t)))
+     (dolist (status '("running" "stopped"))
+       (should-not (funcall motion status)))))
   (roost-test--with-canvases t
     (let* ((width 6) (height 8)
            (pixels-at (lambda (motion phase)
@@ -2390,13 +2399,21 @@
            (let ((before roost-test--refreshed))
              (roost--lights-tick)
              (should (= roost-test--refreshed (1+ before))))
-           ;; The lights get a margin, which goes when they are turned off.
-           (roost--light-margins)
-           (should (= left-margin-width 2))
-           (setq on nil)
-           (roost--light-margins)
-           (should (= left-margin-width 0))
-           (setq on t))
+           ;; The lights get a margin, which goes when they are turned off;
+           ;; a text frame's window, which shows the dots, keeps its own.
+           (save-window-excursion
+             (set-window-buffer nil (current-buffer))
+             (roost--light-margins)
+             (should (= left-margin-width 2))
+             (should-not (car (window-margins)))
+             (setq on nil)
+             (roost--light-margins)
+             (should (= left-margin-width 0))
+             (setq on t))
+           ;; A sidebar row whose light is in the margin has the dot's column
+           ;; for its name: 31 characters, one of them not shown.
+           (should (= (string-width (roost--sidebar-row asking 30 t)) 31))
+           (should (= (string-width (roost--sidebar-row asking 30)) 30)))
          ;; A margin the buffer had is kept, and there again after.
          (with-temp-buffer
            (setq left-margin-width 3)
@@ -2409,6 +2426,14 @@
            (roost--light-margins)
            (should (= left-margin-width 1))
            (setq on t))
+         ;; A mode line that shows the light asks for it whenever polls
+         ;; make mode lines redraw; one nobody asks for goes.
+         (roost--mode-line-count)
+         (roost--mode-line-light-check)
+         (should (gethash '(mode-line . waiting) roost--lights))
+         (plist-put (gethash '(mode-line . waiting) roost--lights) :asked (- (float-time) 3600))
+         (roost--mode-line-light-check)
+         (should-not (gethash '(mode-line . waiting) roost--lights))
          ;; Once nobody waits, the mode line's light goes.
          (roost--cache-task "dev" (roost-test--task "1111111111111111" "running"))
          (should-not (roost--mode-line-count))

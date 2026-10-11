@@ -3210,8 +3210,9 @@ A turn you interrupted, or whose permission prompt you declined, is
 
 (defcustom roost-animations nil
   "Whether the status lights of agents waiting for you move.
-One asking you something pulses, and one whose turn ended unseen glows
-slowly; the rest stay still, so motion always means an agent needs you.
+One asking you something pulses, and one that finished, failed, crashed
+or exited since you saw it glows slowly; the rest stay still, so motion
+always means an agent needs you.
 This needs Emacs 32's canvas images; without them the lights stay the
 dots they are.  The motion pauses while no Emacs frame has focus."
   :type 'boolean)
@@ -3222,7 +3223,8 @@ dots they are.  The motion pauses while no Emacs frame has focus."
   "Status lights drawn on canvases, by (PLACE . KEY).
 Each is a plist: :image, the canvas; :motion, as from
 `roost--light-motion'; :color and :background, pixels; :buffer, where
-it shows, or nil for the mode line.")
+it shows, or nil for the mode line; :phase, the step last drawn; and
+:asked, when it was last asked for, as `float-time'.")
 
 (defvar roost--lights-timer nil
   "Timer moving the status lights.")
@@ -3231,16 +3233,17 @@ it shows, or nil for the mode line.")
   "Seconds each motion of a status light takes.")
 
 (defun roost--animations-p ()
-  "Whether status lights can move here: on, in a graphical frame, on canvases."
-  (and roost-animations (display-graphic-p) (fboundp 'canvas-refresh)
-       (image-type-available-p 'canvas)))
+  "Whether status lights can move: on, with canvases and a frame to show them.
+A text frame showing the same buffer shows each light's dot instead."
+  (and roost-animations (fboundp 'canvas-refresh) (image-type-available-p 'canvas)
+       (seq-some #'display-graphic-p (frame-list))))
 
-(defun roost--light-motion (status)
-  "How the light of a task with attention STATUS moves, or nil if it rests.
-Only an agent waiting for you moves; one at work rests, like one done."
-  (pcase status
-    ((or "permission" "prompt") 'pulse)
-    ((or "ready" "interrupted") 'glow)))
+(defun roost--light-motion (task)
+  "How TASK's light moves, or nil if it rests.
+Only an agent waiting for you moves, as `roost--waiting-p' has it: one
+that can't go on without you pulses, and the others glow."
+  (cond ((roost--blocked-p task) 'pulse)
+        ((roost--waiting-p task) 'glow)))
 
 (defun roost--light-pixel (color)
   "COLOR, a name or #RRGGBB, as an opaque ARGB32 pixel; mid-gray if unknown."
@@ -3318,9 +3321,9 @@ Emacs redisplay its window, so fewer steps cost less.")
     (/ (float (floor (* roost--light-steps (/ (mod (float-time) period) period))))
        roost--light-steps)))
 
-(defun roost--light (place key status face background &optional buffer)
+(defun roost--light (place key motion face background &optional buffer)
   "The canvas showing the status light of KEY at PLACE, made or updated.
-STATUS is the task's attention status, FACE its status face and
+MOTION is as from `roost--light-motion', FACE the status face and
 BACKGROUND the color behind the light.  BUFFER is where it shows, nil
 for the mode line."
   (let* ((id (cons place key))
@@ -3328,8 +3331,7 @@ for the mode line."
          (width (* 2 (frame-char-width)))
          (height (max 8 (default-line-height)))
          (color (roost--light-pixel (face-foreground face nil t)))
-         (back (roost--light-pixel background))
-         (motion (roost--light-motion status)))
+         (back (roost--light-pixel background)))
     (unless (and light
                  (= width (plist-get (cdr (plist-get light :image)) :data-width))
                  (= height (plist-get (cdr (plist-get light :image)) :data-height)))
@@ -3339,7 +3341,7 @@ for the mode line."
       (setq light (list :image (create-image (make-vector (* width height) back) 'canvas t
                                              :data-width width :data-height height
                                              :scale 1 :ascent 'center)
-                        :motion nil :color nil :background nil :buffer nil :phase nil))
+                        :motion nil :color nil :background nil :buffer nil :phase nil :asked nil))
       (puthash id light roost--lights))
     (let ((changed (not (and (eql color (plist-get light :color))
                              (eql back (plist-get light :background))
@@ -3348,6 +3350,7 @@ for the mode line."
       (plist-put light :background back)
       (plist-put light :motion motion)
       (plist-put light :buffer buffer)
+      (plist-put light :asked (float-time))
       (when changed
         (plist-put light :phase (roost--light-phase motion))
         (roost--light-draw light (plist-get light :phase))))
@@ -3364,13 +3367,14 @@ dot.  Otherwise this is the dot, in TASK's status face."
     (if (not (roost--animations-p))
         (propertize "●" 'face face)
       ;; The margin has a face of its own since Emacs 31.
-      (let ((image (roost--light place (roost--key task) status face
+      (let ((image (roost--light place (roost--key task) (roost--light-motion task) face
                                  (face-background (if (and (not inline) (facep 'margin)) 'margin 'default)
                                                   nil t)
                                  (current-buffer))))
+        ;; The dot keeps its face for a text frame, which shows no image.
         (if inline
-            (propertize "●" 'display image 'roost-light (cons place (roost--key task)))
-          (propertize "●" 'display `((margin left-margin) ,image)))))))
+            (propertize "●" 'face face 'display image 'roost-light (cons place (roost--key task)))
+          (propertize "●" 'face face 'display `((margin left-margin) ,image)))))))
 
 (defun roost--light-behind (id background)
   "Paint the light ID over BACKGROUND, a color, if it isn't already."
@@ -3379,6 +3383,16 @@ dot.  Otherwise this is the dot, in TASK's status face."
               ((not (eql back (plist-get light :background)))))
     (plist-put light :background back)
     (roost--light-draw light (or (plist-get light :phase) 0.0))))
+
+(defun roost--mode-line-light-check ()
+  "Forget the mode line's light once no mode line has asked for it lately.
+Redraws don't evaluate mode lines again, so while the light is there
+they are made to, and one that shows it asks for it."
+  (when-let* ((light (gethash '(mode-line . waiting) roost--lights)))
+    (if (> (- (float-time) (plist-get light :asked))
+           (* 2 (max roost-watch-interval roost-watch-unfocused-interval)))
+        (remhash '(mode-line . waiting) roost--lights)
+      (force-mode-line-update t))))
 
 (defun roost--lights-forget (place keys)
   "Forget the lights at PLACE of tasks other than KEYS."
@@ -3405,10 +3419,14 @@ once the lights are off."
             ((not on)
              (setq left-margin-width had
                    roost--light-margin nil)))
-      (let ((width (and (> left-margin-width 0) left-margin-width)))
-        (dolist (window (get-buffer-window-list nil nil t))
+      (dolist (window (get-buffer-window-list nil nil t))
+        ;; A text frame shows no lights, so its windows keep the margin.
+        (let* ((left (if (and on (not (display-graphic-p (window-frame window))))
+                         roost--light-margin
+                       left-margin-width))
+               (width (and (> left 0) left)))
           (unless (eql (car (window-margins window)) width)
-            (set-window-margins window left-margin-width (cdr (window-margins window)))))))))
+            (set-window-margins window left (cdr (window-margins window)))))))))
 
 (defun roost--lights-start ()
   "Start moving the status lights, if they aren't."
@@ -4595,6 +4613,7 @@ The mark stays where it was."
     (unless (equal count roost--shown-mode-line-count)
       (setq roost--shown-mode-line-count count)
       (force-mode-line-update t)))
+  (roost--mode-line-light-check)
   (when-let* ((buffer (get-buffer "*roost*")))
     (with-current-buffer buffer
       (when (derived-mode-p 'roost-dashboard-mode)
@@ -5062,15 +5081,16 @@ An agent asking, then one that failed, then one that finished."
          'roost-status-failed)
         (t 'roost-status-ready)))
 
-(defun roost--sidebar-row (task width)
-  "TASK's sidebar line, within WIDTH columns."
+(defun roost--sidebar-row (task width &optional margin)
+  "TASK's sidebar line, within WIDTH columns.
+MARGIN says that its status light shows in the margin, taking no column."
   (let* ((current (if (roost--workspace-backend)
                       (equal (roost--workspace-name task) (roost--current-workspace))
                     (equal (roost--key task) roost--current-task)))
          (status (roost--display-status task))
          (face (roost--status-face (roost--attention-status task)))
          ;; The marker, the dot unless it shows in the margin, and a space.
-         (room (- width (if (roost--animations-p) 2 3)))
+         (room (- width (if margin 2 3)))
          (name (roost--field task 'name))
          (label (when (>= room (+ (min (string-width name) 12) 1 (string-width status)))
                   status))
@@ -5087,6 +5107,10 @@ An agent asking, then one that failed, then one that finished."
   "Render the task sidebar from cached state, keeping point on its row."
   (let* ((window (get-buffer-window (current-buffer) t))
          (width (max 12 (if window (roost--usable-width window) roost-sidebar-width)))
+         ;; Lines fit the window they are measured in; a text frame's has
+         ;; no lights in its margin.
+         (margin (and (roost--animations-p)
+                      (or (null window) (display-graphic-p (window-frame window)))))
          (position (if window (window-point window) (point)))
          (key (get-text-property position 'roost-task))
          (heading (unless key (get-text-property position 'roost-directory)))
@@ -5125,7 +5149,7 @@ An agent asking, then one that failed, then one that finished."
                                (roost--project-directory (cadr group))))
           (dolist (task (cdr group))
             (let ((row (list 'roost-task (roost--key task) 'keymap roost--dashboard-row-map)))
-              (insert (apply #'propertize (roost--sidebar-row task width)
+              (insert (apply #'propertize (roost--sidebar-row task width margin)
                              'mouse-face 'highlight
                              'help-echo (format "%s\n%s · %s\nmouse-1: open · mouse-3: actions"
                                                 (roost--field task 'name)
@@ -5560,7 +5584,7 @@ PLAIN leaves out the status light, for a count no mode line shows."
       ;; selected window's mode line.
       (concat (when (and (not plain) (roost--animations-p) (mode-line-window-selected-p))
                 (propertize " " 'display
-                            (roost--light 'mode-line 'waiting (if (> blocked 0) "permission" "ready")
+                            (roost--light 'mode-line 'waiting (if (> blocked 0) 'pulse 'glow)
                                           (roost--waiting-face tasks)
                                           (face-background 'mode-line-active nil t))))
               (propertize (format " Roost:%d" (+ blocked waiting))
