@@ -515,9 +515,15 @@ Call SUCCESS with the result or FAILURE with an error message."
          (errors (generate-new-buffer " *roost-rpc-errors*"))
          (default-directory temporary-file-directory)
          (command (roost--python-command host code))
-         input-file process finished timed-out)
+         input-file process stderr-pipe finished timed-out)
     (condition-case err
         (progn
+          ;; A pipe of our own for stderr: the one `make-process' makes for a
+          ;; buffer notes "Process roost-rpc stderr finished" in it, which
+          ;; Emacs 32 does before this sentinel reads it.
+          (setq stderr-pipe (make-pipe-process :name "roost-rpc stderr" :buffer errors
+                                               :noquery t :coding 'utf-8-unix
+                                               :sentinel #'ignore))
           (when (> (string-bytes input) roost--pipe-input-limit)
             (setq input-file (make-temp-file "roost-input-"))
             (let ((coding-system-for-write 'utf-8-unix))
@@ -525,7 +531,7 @@ Call SUCCESS with the result or FAILURE with an error message."
             (setq command (append (list "/bin/sh" "-c" "exec \"$@\" < \"$0\"" input-file) command)))
           (setq process
                 (make-process
-                 :name "roost-rpc" :buffer buffer :stderr errors :noquery t
+                 :name "roost-rpc" :buffer buffer :stderr stderr-pipe :noquery t
                  :coding 'utf-8-unix :connection-type 'pipe
                  :command command
                  :sentinel
@@ -536,6 +542,8 @@ Call SUCCESS with the result or FAILURE with an error message."
                      (when-let* ((timer (process-get proc 'roost-timer)))
                        (cancel-timer timer))
                      (when input-file (ignore-errors (delete-file input-file)))
+                     (while (accept-process-output stderr-pipe 0 nil t))
+                     (delete-process stderr-pipe)
                      (unwind-protect
                          (let ((stdout (with-current-buffer buffer (buffer-string)))
                                (stderr (with-current-buffer errors
@@ -569,6 +577,7 @@ Call SUCCESS with the result or FAILURE with an error message."
        (when-let* ((timer (and process (process-get process 'roost-timer))))
          (cancel-timer timer))
        (when (and process (process-live-p process)) (delete-process process))
+       (when stderr-pipe (delete-process stderr-pipe))
        (when (buffer-live-p buffer) (kill-buffer buffer))
        (when (buffer-live-p errors) (kill-buffer errors))
        (when input-file (ignore-errors (delete-file input-file)))
