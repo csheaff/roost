@@ -62,8 +62,10 @@ IGNORED_EVENTS = {
 }
 # Notification types Roost maps, and those it ignores.
 MAPPED_NOTIFICATIONS = ("permission_prompt", "worker_permission_prompt", "agent_needs_input", "idle_prompt")
+# plugin_notification (2.1.296) is a plugin's message to you, through its ui.notify.
 IGNORED_NOTIFICATIONS = ("agent_completed", "auth_storage_failure", "auth_success", "computer_use_enter",
-                         "computer_use_exit", "elicitation_complete", "elicitation_response", "push_notification")
+                         "computer_use_exit", "elicitation_complete", "elicitation_response", "plugin_notification",
+                         "push_notification")
 # SessionStart sources: compact and clear are handled specially, the rest are a fresh start.
 SESSION_SOURCES = ("startup", "resume", "clear", "compact", "fork")
 # Payload fields the helper reads.
