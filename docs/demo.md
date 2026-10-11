@@ -20,7 +20,7 @@ shows `~/.local/share/roost` and your tmux-control socket.
 | `roost-hero.png` | Five agents on two machines: the sidebar, the terminal of `budget-alerts` on `claylien` asking to run `python3 -m unittest`, and that task's panel |
 | `roost-new-task.png` | A draft opened on an Org heading in `plans.org`: the heading and its notes are the prompt, with the derived name |
 | `roost-dashboard.png` | The dashboard a little later, with a sixth task, `export`, just started |
-| `roost-review.png` | Magit on the `skip-duplicates` worktree on `claylien` (`r`), with two review notes (`;`) under the agent's change |
+| `roost-review.png` | Magit on the `skip-duplicates` task (`r`), with a review note under the agent's change and the box for another, opened from the `+` beside a line |
 
 ## Try the same workflow
 
@@ -41,3 +41,8 @@ shows `~/.local/share/roost` and your tmux-control socket.
    agent resolve any conflicts), then `m` to merge it and clean up.
 
 The disposable projects, tasks and capture state were removed afterwards.
+`roost-review.png` was retaken on 2026-10-11 for the note box: since the
+`ledger` project was gone, its `skip-duplicates` change, as the agent had
+made it and as the first capture shows, was written again into a local
+repository, for a task record of Roost's own whose reply begins as the
+agent's did, in the same configuration.

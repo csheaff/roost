@@ -54,10 +54,10 @@ opens its terminal.
 
 **Review, and reply in place.** `r` opens Magit on the task's worktree, over
 TRAMP for a remote one, with the agent's latest reply at the top. Stage what
-you've checked; `;` writes a note for the agent on a line, and `@` sends it
-your notes.
+you've checked; `;`, or the `+` beside a line, writes a note for the agent
+on it, and `@` sends it your notes.
 
-<p align="center"><img src="docs/images/roost-review.png" width="600" alt="Magit on a task's worktree on claylien: the task, the agent's reply folded, and two notes for the agent under the lines of its change they are about"></p>
+<p align="center"><img src="docs/images/roost-review.png" width="600" alt="Magit on a task's worktree: the task, the agent's reply folded, a note for the agent under a line of its change, and the box for another, opened from the + beside a line further down"></p>
 
 **Finish.** `m` squashes the task into the branch it started from and removes
 its worktree, branch and terminal. `u` brings it up to date first, with its
