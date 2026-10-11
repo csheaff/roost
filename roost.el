@@ -3435,9 +3435,13 @@ they are made to, and one that shows it asks for it."
 (defun roost--light-margins ()
   "Give the windows showing this buffer a margin for status lights.
 A margin at least as wide is kept, and the one the buffer had comes back
-once the lights are off."
+once the lights are off.  A window that shows the buffer later gets its
+margin then."
   (let ((on (roost--animations-p))
         (had roost--light-margin))
+    (if on
+        (add-hook 'window-buffer-change-functions #'roost--light-margins-shown nil t)
+      (remove-hook 'window-buffer-change-functions #'roost--light-margins-shown t))
     (when (or on had)
       (cond ((and on (not had))
              (setq roost--light-margin left-margin-width
@@ -3464,6 +3468,11 @@ change when they show."
     (setq roost--lights-timer nil))
   (roost--redraw)
   (force-mode-line-update t))
+
+(defun roost--light-margins-shown (window)
+  "Give WINDOW, which has just started showing its buffer, the margin for lights."
+  (with-current-buffer (window-buffer window)
+    (roost--light-margins)))
 
 (defun roost--lights-start ()
   "Start moving the status lights, if they aren't."

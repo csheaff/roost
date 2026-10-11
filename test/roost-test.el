@@ -2288,19 +2288,20 @@
 (defvar roost-test--graphic t)
 
 (ert-deftest roost-status-lights-stay-dots-without-canvases ()
-  ;; Off, or where Emacs has no canvases, a task's light is its dot.
+  ;; Off, or with no frame that shows canvases, a task's light is its dot.
   (roost-test--isolated
    (let ((task (roost--cache-task "dev" (roost-test--task nil "running")))
          (roost--lights (make-hash-table :test 'equal))
          (roost--lights-timer nil))
-     (dolist (roost-animations '(nil t))
-       (with-temp-buffer
-         (let ((dot (roost--status-light task 'sidebar)))
-           (should (equal dot "●"))
-           (should (eq (get-text-property 0 'face dot) 'roost-status-running))
-           (should-not (get-text-property 0 'display dot)))
-         (roost--light-margins)
-         (should (= left-margin-width 0))))
+     (cl-letf (((symbol-function 'roost--light-frame-p) #'ignore))
+       (dolist (roost-animations '(nil t))
+         (with-temp-buffer
+           (let ((dot (roost--status-light task 'sidebar)))
+             (should (equal dot "●"))
+             (should (eq (get-text-property 0 'face dot) 'roost-status-running))
+             (should-not (get-text-property 0 'display dot)))
+           (roost--light-margins)
+           (should (= left-margin-width 0)))))
      (should (zerop (hash-table-count roost--lights)))
      (should-not roost--lights-timer))))
 
@@ -2421,9 +2422,16 @@
                (roost--light-margins)
                (should (= left-margin-width 2))
                (should-not (car (window-margins)))
+               ;; A text frame's window that shows the buffer later, taking
+               ;; its 2 columns, gets its own back as it starts showing it.
+               (should (memq #'roost--light-margins-shown window-buffer-change-functions))
+               (set-window-margins nil 2)
+               (roost--light-margins-shown (selected-window))
+               (should-not (car (window-margins)))
                (setq on nil)
                (roost--light-margins)
                (should (= left-margin-width 0))
+               (should-not (memq #'roost--light-margins-shown window-buffer-change-functions))
                (setq on t)))
            ;; A sidebar row whose light is in the margin has the dot's column
            ;; for its name: 31 characters, one of them not shown.
