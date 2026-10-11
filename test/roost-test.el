@@ -2448,6 +2448,13 @@
            (setq left-margin-width 1)
            (roost--light-margins)
            (should (= left-margin-width 1))
+           ;; No margin at all, said with nil, comes back as nil.
+           (setq left-margin-width nil on t)
+           (roost--light-margins)
+           (should (= left-margin-width 2))
+           (setq on nil)
+           (roost--light-margins)
+           (should-not left-margin-width)
            (setq on t))
          ;; A mode line that shows the light asks for it whenever polls
          ;; make mode lines redraw; one nobody asks for goes.

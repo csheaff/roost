@@ -3430,7 +3430,8 @@ they are made to, and one that shows it asks for it."
     (dolist (id stale) (remhash id roost--lights))))
 
 (defvar-local roost--light-margin nil
-  "The left margin this buffer had before status lights widened it, or nil.")
+  "A list of the left margin this buffer had before status lights widened it.
+Nil while they haven't; the margin itself can be nil, meaning none.")
 
 (defun roost--light-margins ()
   "Give the windows showing this buffer a margin for status lights.
@@ -3444,16 +3445,17 @@ margin then."
       (remove-hook 'window-buffer-change-functions #'roost--light-margins-shown t))
     (when (or on had)
       (cond ((and on (not had))
-             (setq roost--light-margin left-margin-width
-                   left-margin-width (max left-margin-width 2)))
+             (setq roost--light-margin (list left-margin-width)
+                   left-margin-width (max (or left-margin-width 0) 2)))
             ((not on)
-             (setq left-margin-width had
+             (setq left-margin-width (car had)
                    roost--light-margin nil)))
       (dolist (window (get-buffer-window-list nil nil t))
         ;; A text frame shows no lights, so its windows keep the margin.
-        (let* ((left (if (and on (not (roost--light-frame-p (window-frame window))))
-                         roost--light-margin
-                       left-margin-width))
+        (let* ((left (or (if (and on (not (roost--light-frame-p (window-frame window))))
+                             (car roost--light-margin)
+                           left-margin-width)
+                         0))
                (width (and (> left 0) left)))
           (unless (eql (car (window-margins window)) width)
             (set-window-margins window left (cdr (window-margins window)))))))))
