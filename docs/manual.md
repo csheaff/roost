@@ -151,7 +151,12 @@ panel steps aside when the terminal would drop below 80 columns, and `q` in it
 turns it off. `i` shows the same panel in the main area whenever you want it.
 
 **Check the work yourself.** `t` opens a shell beside the agent, in the same
-worktree. Run the tests, start the app, poke at it.
+worktree, and returns to it after. Run the tests, start the app, poke at it.
+The agent and the shell are tmux panes, each in a window of its own: `C-x o`
+or `C-c C-o` moves between them, `C-c C-t` shows one at a time, and
+tmux-control's other pane keys work too. `C-c |` splits off another pane,
+which starts in the worktree; it closes when its program exits, and every
+pane closes when the task stops.
 
 **Review in Magit.** `r` opens Magit on the task's worktree, through TRAMP for
 remote tasks. Stage, edit and commit as usual. The status names the task,

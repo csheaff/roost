@@ -6,6 +6,12 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.8.1:
 
+- A pane you split off in a task's window closes when its program exits;
+  only the agent's pane stays to show how it ended. On tmux 3.0, which
+  can't tell them apart, they stay until `C-c C-x` closes them. Tasks
+  started earlier change when resumed.
+  `C-c C-o` moves between the agent and its shell once tmux-control is past
+  0.7.2.
 - Prompts, replies and permission requests are set in `variable-pitch`
   (face `roost-prose`), which fits more of them in the panel and the
   dashboard; tables and code in replies keep the fixed-pitch font. A status

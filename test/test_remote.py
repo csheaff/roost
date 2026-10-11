@@ -886,6 +886,25 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual((pane["task"], pane["dead"], pane["window"]), (task["id"], False, resumed["windowId"]))
         self.assertNotEqual(resumed["shellPaneId"], resumed["paneId"])
 
+    def test_panes_split_by_hand_start_in_worktree_and_close_on_exit(self):
+        task = self.create()
+        # As tmux-control splits, naming no directory; then its program exits.
+        before = set(roost.pane_inventory(self.socket))
+        roost.tmux(self.socket, "-C", "attach", "-t", task["session"],
+                   input="split-window -d -t %s cat\n" % task["paneId"])
+        (pane,) = set(roost.pane_inventory(self.socket)) - before
+        path = roost.tmux(self.socket, "display-message", "-p", "-t", pane, "#{pane_current_path}").stdout.strip()
+        self.assertEqual(Path(path).resolve(), Path(task["worktree"]).resolve())
+        roost.tmux(self.socket, "send-keys", "-t", pane, "C-d")
+        deadline = time.monotonic() + 8
+        while pane in roost.pane_inventory(self.socket) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertNotIn(pane, roost.pane_inventory(self.socket))
+        self.request("send", id=task["id"], text="exit")
+        self.wait(task, "exited")
+        self.wait_for_pane_exit(task)
+        self.assertTrue(roost.pane_inventory(self.socket)[task["paneId"]]["dead"])
+
     def test_shell_survives_agent_exit_but_refuses_lost_ownership(self):
         task = self.create()
         self.request("send", id=task["id"], text="exit")

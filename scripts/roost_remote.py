@@ -770,7 +770,11 @@ def spawn(store, task, resume=False):
     # Before the agent starts, which is when it asks.
     enable_extended_keys(socket)
     tmux(socket, "set-option", "-p", "-t", pane, "@roost_task_id", task["id"])
-    tmux(socket, "set-option", "-w", "-t", window, "remain-on-exit", "on")
+    # Kept after it exits, so Roost can tell how the agent ended. Only the
+    # agent's pane: one you split off and exit should close. tmux 3.0 sets
+    # this only for the whole window.
+    if tmux(socket, "set-option", "-p", "-t", pane, "remain-on-exit", "on", check=False).returncode:
+        tmux(socket, "set-option", "-w", "-t", window, "remain-on-exit", "on")
     tmux(socket, "set-option", "-w", "-t", window, "automatic-rename", "off")
     # The agent's hooks call this helper for as long as it runs.
     task["helper"] = script
