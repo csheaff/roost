@@ -830,6 +830,34 @@ records Claude keeps for subagents are ignored. The ERT tests (Magit and
 Evil ones skipped here) and 125 Python tests pass on macOS and the Linux
 host.
 
+### Status lights that move, 2026-10-10
+
+Emacs 32 draws canvas images: pixels that Lisp writes and redraws in
+place. With `roost-animations` on, the status light of an agent asking
+you something pulses and one whose turn ended unseen glows; the rest
+stay still. In a `-Q` Emacs 32 on macOS with six made-up tasks, one in
+each state, and Roost uncompiled, as Clay runs it:
+
+- A canvas has no transparency: unpainted pixels show black, so each
+  light paints its background. In the sidebar the lights sit in the left
+  margin (the `margin` face, Emacs 31 and later), where no highlight
+  covers them; in the task panel and mode line they take the dot's place.
+- `:scale` on a canvas drew only a quarter of it, so lights are drawn at
+  one pixel per pixel.
+- A first version, which moved working agents too, drew 12 frames a
+  second and used 10% of a core: a closure made for every pixel. Plain
+  arithmetic, distances cached per size and a redraw only when a light's
+  motion takes one of its 16 steps brought that to 3%; compiling didn't
+  help, since redisplay cost the rest. Agents at work rest now, so motion
+  means an agent needs you. With two waiting, Emacs used 2% of a core;
+  with none, the timer stops and it used 0.01 s of CPU in 20 s.
+- Motion pauses while no Emacs frame has focus, and only lights in a
+  visible window are redrawn. The mode line's light goes when nobody
+  waits, and a task panel forgets the light of the task it showed before.
+
+Elsewhere (Emacs 29 and 30, a terminal, or the option off) a light is
+the dot it was, and the ERT tests stand in for canvases.
+
 ### Codex and Pi adapters
 
 Used another disposable remote `hello-service` project, an isolated registry and

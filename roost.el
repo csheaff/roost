@@ -3206,6 +3206,224 @@ A turn you interrupted, or whose permission prompt you declined, is
     ((or "failed" "crashed" "error") 'roost-status-failed)
     (_ 'roost-status-inactive)))
 
+;;;; Status lights
+
+(defcustom roost-animations nil
+  "Whether the status lights of agents waiting for you move.
+One asking you something pulses, and one whose turn ended unseen glows
+slowly; the rest stay still, so motion always means an agent needs you.
+This needs Emacs 32's canvas images; without them the lights stay the
+dots they are.  The motion pauses while no Emacs frame has focus."
+  :type 'boolean)
+
+(declare-function canvas-refresh "image.c" (image &optional reload-data))
+
+(defvar roost--lights (make-hash-table :test 'equal)
+  "Status lights drawn on canvases, by (PLACE . KEY).
+Each is a plist: :image, the canvas; :motion, as from
+`roost--light-motion'; :color and :background, pixels; :buffer, where
+it shows, or nil for the mode line.")
+
+(defvar roost--lights-timer nil
+  "Timer moving the status lights.")
+
+(defconst roost--light-periods '((pulse . 1.6) (glow . 3.4))
+  "Seconds each motion of a status light takes.")
+
+(defun roost--animations-p ()
+  "Whether status lights can move here: on, in a graphical frame, on canvases."
+  (and roost-animations (display-graphic-p) (fboundp 'canvas-refresh)
+       (image-type-available-p 'canvas)))
+
+(defun roost--light-motion (status)
+  "How the light of a task with attention STATUS moves, or nil if it rests.
+Only an agent waiting for you moves; one at work rests, like one done."
+  (pcase status
+    ((or "permission" "prompt") 'pulse)
+    ((or "ready" "interrupted") 'glow)))
+
+(defun roost--light-pixel (color)
+  "COLOR, a name or #RRGGBB, as an opaque ARGB32 pixel; mid-gray if unknown."
+  (if-let* ((rgb (and (stringp color) (color-values color))))
+      (logior #xFF000000 (ash (ash (nth 0 rgb) -8) 16) (ash (ash (nth 1 rgb) -8) 8) (ash (nth 2 rgb) -8))
+    #xFF808080))
+
+(defun roost--light-mix (a b amount)
+  "Pixel A moved towards pixel B by AMOUNT, from 0 to 1."
+  (let ((ar (logand (ash a -16) 255)) (ag (logand (ash a -8) 255)) (ab (logand a 255)))
+    (logior #xFF000000
+            (ash (+ ar (round (* amount (- (logand (ash b -16) 255) ar)))) 16)
+            (ash (+ ag (round (* amount (- (logand (ash b -8) 255) ag)))) 8)
+            (+ ab (round (* amount (- (logand b 255) ab)))))))
+
+(defvar roost--light-shapes (make-hash-table :test 'equal)
+  "Each pixel's distance from the middle of a light, by (WIDTH . HEIGHT).")
+
+(defun roost--light-shape (width height)
+  "The distance of each pixel of a WIDTH by HEIGHT light from its middle."
+  (or (gethash (cons width height) roost--light-shapes)
+      (let ((shape (make-vector (* width height) 0.0))
+            (cx (/ width 2.0))
+            (cy (/ height 2.0)))
+        (dotimes (y height)
+          (dotimes (x width)
+            (aset shape (+ x (* y width))
+                  (sqrt (+ (expt (- (+ x 0.5) cx) 2) (expt (- (+ y 0.5) cy) 2))))))
+        (puthash (cons width height) shape roost--light-shapes))))
+
+(defun roost--light-draw (light phase)
+  "Draw LIGHT at PHASE, from 0 to 1, of its motion.
+A disc, smoothed at its edge, and while moving a halo that swells and
+fades.  Canvases have no transparency, so it paints its background too.
+Plain arithmetic, cheap even when Roost runs uncompiled."
+  (let* ((image (plist-get light :image))
+         (pixels (plist-get (cdr image) :data))
+         (width (plist-get (cdr image) :data-width))
+         (height (plist-get (cdr image) :data-height))
+         (shape (roost--light-shape width height))
+         (color (plist-get light :color))
+         (background (plist-get light :background))
+         (motion (plist-get light :motion))
+         (wave (- 0.5 (* 0.5 (cos (* 2 float-pi phase)))))
+         (radius (min 3.5 (- (/ (min width height) 2.0) 1)))
+         (halo (pcase motion ('pulse (* 0.5 wave)) ('glow (* 0.25 wave)) (_ 0)))
+         (reach (+ radius (if (eq motion 'pulse) (+ 1.5 (* 2.5 wave)) 2.5)))
+         (edge (+ radius 0.5))
+         (br (logand (ash background -16) 255)) (bg (logand (ash background -8) 255)) (bb (logand background 255))
+         (dr (- (logand (ash color -16) 255) br)) (dg (- (logand (ash color -8) 255) bg)) (db (- (logand color 255) bb))
+         (kr (logand (ash color -16) 255)) (kg (logand (ash color -8) 255)) (kb (logand color 255))
+         (span (- reach radius)))
+    (fillarray pixels background)
+    (dotimes (i (length pixels))
+      (let ((d (aref shape i)))
+        (when (< d (max reach edge))
+          (let* ((glow (if (and (> halo 0) (< d reach)) (* halo (expt (/ (- reach d) span) 2)) 0))
+                 (cover (max 0.0 (min 1.0 (- edge d))))
+                 (r (+ br (* glow dr))) (g (+ bg (* glow dg))) (b (+ bb (* glow db))))
+            (aset pixels i (logior #xFF000000
+                                   (ash (round (+ r (* cover (- kr r)))) 16)
+                                   (ash (round (+ g (* cover (- kg g)))) 8)
+                                   (round (+ b (* cover (- kb b))))))))))
+    (when (fboundp 'canvas-refresh)
+      (canvas-refresh image 'reload-data))))
+
+(defconst roost--light-steps 16
+  "Steps a light's motion takes per cycle.
+A light is redrawn only when its step changes, and each redraw makes
+Emacs redisplay its window, so fewer steps cost less.")
+
+(defun roost--light-phase (motion)
+  "Where in MOTION a light is now, from 0 to 1, in whole steps."
+  (let ((period (or (alist-get motion roost--light-periods) 1.0)))
+    (/ (float (floor (* roost--light-steps (/ (mod (float-time) period) period))))
+       roost--light-steps)))
+
+(defun roost--light (place key status face background &optional buffer)
+  "The canvas showing the status light of KEY at PLACE, made or updated.
+STATUS is the task's attention status, FACE its status face and
+BACKGROUND the color behind the light.  BUFFER is where it shows, nil
+for the mode line."
+  (let* ((id (cons place key))
+         (light (gethash id roost--lights))
+         (width (* 2 (frame-char-width)))
+         (height (max 8 (default-line-height)))
+         (color (roost--light-pixel (face-foreground face nil t)))
+         (back (roost--light-pixel background))
+         (motion (roost--light-motion status)))
+    (unless (and light
+                 (= width (plist-get (cdr (plist-get light :image)) :data-width))
+                 (= height (plist-get (cdr (plist-get light :image)) :data-height)))
+      (setq light (list :image (create-image (make-vector (* width height) back) 'canvas t
+                                             :data-width width :data-height height
+                                             :id (intern (format "roost-light-%S" id))
+                                             :ascent 'center)
+                        :motion nil :color nil :background nil :buffer nil :phase nil))
+      (puthash id light roost--lights))
+    (let ((changed (not (and (eql color (plist-get light :color))
+                             (eql back (plist-get light :background))
+                             (eq motion (plist-get light :motion))))))
+      (plist-put light :color color)
+      (plist-put light :background back)
+      (plist-put light :motion motion)
+      (plist-put light :buffer buffer)
+      (when changed
+        (plist-put light :phase (roost--light-phase motion))
+        (roost--light-draw light (plist-get light :phase))))
+    (when motion (roost--lights-start))
+    (plist-get light :image)))
+
+(defun roost--status-light (task place &optional inline)
+  "TASK's status dot at PLACE: a moving light when `roost--animations-p'.
+The light shows in the window's left margin, which no highlight
+covers, keeping the dot's column blank; with INLINE, it shows in place
+of the dot.  Otherwise this is the dot, in TASK's status face."
+  (let* ((status (roost--attention-status task))
+         (face (roost--status-face status)))
+    (if (not (roost--animations-p))
+        (propertize "●" 'face face)
+      ;; The margin has a face of its own since Emacs 31.
+      (let ((image (roost--light place (roost--key task) status face
+                                 (face-background (if (and (not inline) (facep 'margin)) 'margin 'default)
+                                                  nil t)
+                                 (current-buffer))))
+        (if inline
+            (propertize "●" 'display image)
+          (concat (propertize "●" 'display `((margin left-margin) ,image)) " "))))))
+
+(defun roost--lights-forget (place keys)
+  "Forget the lights at PLACE of tasks other than KEYS."
+  (let (stale)
+    (maphash (lambda (id _light)
+               (when (and (equal (car id) place) (not (member (cdr id) keys)))
+                 (push id stale)))
+             roost--lights)
+    (dolist (id stale) (remhash id roost--lights))))
+
+(defvar-local roost--light-margin nil
+  "Whether this buffer's windows have a margin for status lights.")
+
+(defun roost--light-margins ()
+  "Give the windows showing this buffer a margin for status lights.
+Take it back once the lights are off; a margin Roost didn't give is left
+alone."
+  (let ((on (roost--animations-p)))
+    (when (or on roost--light-margin)
+      (setq roost--light-margin on
+            left-margin-width (if on 2 0))
+      (dolist (window (get-buffer-window-list nil nil t))
+        (unless (eql (car (window-margins window)) (and on 2))
+          (set-window-margins window left-margin-width (cdr (window-margins window))))))))
+
+(defun roost--lights-start ()
+  "Start moving the status lights, if they aren't."
+  (unless (timerp roost--lights-timer)
+    (setq roost--lights-timer (run-at-time 0 (/ 1.0 12) #'roost--lights-tick))))
+
+(defun roost--lights-tick ()
+  "Move the status lights that show, while Emacs has focus.
+Stop once none moves or animations are off."
+  (let ((moving nil)
+        (focused (seq-some #'frame-focus-state (frame-list))))
+    (when (roost--animations-p)
+      (maphash (lambda (id light)
+                 (let ((buffer (plist-get light :buffer))
+                       (motion (plist-get light :motion)))
+                   (cond ((and buffer (not (buffer-live-p buffer)))
+                          (remhash id roost--lights))
+                         (motion
+                          (setq moving t)
+                          (let ((phase (roost--light-phase motion)))
+                            ;; Only a light that shows and whose motion moved on is redrawn.
+                            (when (and focused
+                                       (not (eql phase (plist-get light :phase)))
+                                       (or (null buffer) (get-buffer-window buffer 'visible)))
+                              (plist-put light :phase phase)
+                              (roost--light-draw light phase)))))))
+               roost--lights))
+    (unless moving
+      (cancel-timer roost--lights-timer)
+      (setq roost--lights-timer nil))))
+
 (defun roost--seconds-since (timestamp)
   "Whole seconds since TIMESTAMP, or nil if it is missing or unreadable."
   (when timestamp
@@ -3859,6 +4077,7 @@ Windows showing the panel keep their scroll position, and the mark stays."
         (mark (roost--mark-place))
         (places (roost--window-places)))
     (erase-buffer)
+    (roost--lights-forget (cons 'panel (current-buffer)) (and task (list (roost--key task))))
     (if (not task)
         (insert "This task has been retired or is no longer available.\n")
       (let* ((status (roost--display-status task))
@@ -3867,7 +4086,8 @@ Windows showing the panel keep their scroll position, and the mark stays."
              (base (roost--field task 'baseRef))
              (integration (roost--field task 'integrationBranch)))
         (insert (propertize (roost--field task 'name) 'face 'roost-title) "   "
-                (propertize (concat "● " status) 'face (roost--status-face (roost--attention-status task)))
+                (roost--status-light task (cons 'panel (current-buffer)) t)
+                (propertize (concat " " status) 'face (roost--status-face (roost--attention-status task)))
                 (propertize (format " for %s" (roost--elapsed (roost--field task 'updatedAt)))
                             'face 'roost-dim)
                 "\n"
@@ -4202,7 +4422,7 @@ The changes column shrinks first, then the agent column is dropped."
          (face (roost--status-face (roost--attention-status task)))
          (cell (lambda (text size &optional cell-face)
                  (propertize (truncate-string-to-width text size nil ?\s "…") 'face cell-face)))
-         (line (concat "  " (propertize "●" 'face face) " "
+         (line (concat "  " (roost--status-light task 'dashboard) " "
                        (funcall cell (roost--field task 'name) (plist-get layout :name)) "  "
                        (funcall cell status 11 face) " "
                        (funcall cell (roost--elapsed (roost--field task 'updatedAt)) 6 'roost-dim) "  "
@@ -4309,7 +4529,9 @@ The mark stays where it was."
         (set-window-start window (save-excursion (goto-char (point-min))
                                                  (forward-line (1- start-line))
                                                  (point)))
-        (set-window-point window target)))))
+        (set-window-point window target)))
+    (roost--lights-forget 'dashboard (mapcar #'roost--key tasks))
+    (roost--light-margins)))
 
 (defun roost--dashboard-task ()
   "The task on the current dashboard line, if any."
@@ -4830,7 +5052,7 @@ An agent asking, then one that failed, then one that finished."
          (name (truncate-string-to-width name (if label (- room (string-width label) 1) room)
                                          nil nil "…")))
     (concat (if current (propertize "▸" 'face 'roost-heading) " ")
-            (propertize "●" 'face face) " "
+            (roost--status-light task 'sidebar) " "
             (propertize name 'face (if current 'roost-heading 'default))
             (when label
               (concat (make-string (max 1 (- room (string-width name) (string-width label))) ?\s)
@@ -4891,6 +5113,8 @@ An agent asking, then one that failed, then one that finished."
                    (and heading (roost--heading-row heading))
                    (point-min)))
     (when window (set-window-point window (point)))
+    (roost--lights-forget 'sidebar (mapcar #'roost--key tasks))
+    (roost--light-margins)
     ;; Redrawing removed the highlight with the text.
     (roost--sidebar-mark-selection)))
 
@@ -5301,8 +5525,18 @@ Agents asking permission or stuck at a startup prompt color the count."
                (cond ((roost--blocked-p task) (cl-incf blocked))
                      ((roost--waiting-p task) (cl-incf waiting))))
              roost--tasks)
+    ;; With nothing waiting, the light leaves the mode line and stops moving.
+    (unless (and (> (+ blocked waiting) 0) (roost--animations-p))
+      (remhash '(mode-line . waiting) roost--lights))
     (when (> (+ blocked waiting) 0)
-      (concat (propertize (format " Roost:%d" (+ blocked waiting))
+      (concat (when (roost--animations-p)
+                (propertize " " 'display
+                            (roost--light 'mode-line 'waiting (if (> blocked 0) "permission" "ready")
+                                          (roost--waiting-face tasks)
+                                          (face-background (if (facep 'mode-line-active) 'mode-line-active
+                                                             'mode-line)
+                                                           nil t))))
+              (propertize (format " Roost:%d" (+ blocked waiting))
                           'face (roost--waiting-face tasks)
                           'help-echo "Agents waiting for you; mouse-1 opens the next"
                           'mouse-face 'mode-line-highlight

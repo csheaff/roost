@@ -327,6 +327,10 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
   mode line of your own, set it to nil and place
   `(:eval (and (fboundp 'roost-mode-line-waiting) (roost-mode-line-waiting)))`
   where you want the count.
+- `roost-animations` (nil): on Emacs 32, which draws canvas images, the
+  status light of an agent asking you something pulses and one whose turn
+  ended unseen glows; the rest stay still, and the motion pauses while Emacs
+  isn't in front. Elsewhere the lights stay dots.
 - `roost-notify`, `roost-notify-function`: notifications use
   [terminal-notifier](https://github.com/julienXX/terminal-notifier) when it is
   installed (`brew install terminal-notifier`), otherwise macOS's own or Emacs's
