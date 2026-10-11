@@ -2575,7 +2575,10 @@ ROOM, it leaves that many pixels after them, for the note box."
                                                 `(:underline (:color ,color :position t)))))))
                           ;; The note's own faces, rather than those of the
                           ;; diff line it is shown before.
-                          (concat (propertize "  ┃ " 'face `(,rule (:slant normal) roost-note default))
+                          ;; Rules set notes apart in graphic frames; a
+                          ;; terminal, which draws no line over text, gets a bar.
+                          (concat (propertize (if (display-graphic-p) "    " "  ┃ ")
+                                              'face `(,rule (:slant normal) roost-note default))
                                   (propertize line 'face `(,rule roost-note default))
                                   ;; Rules go across the window, as the note's
                                   ;; background does, whatever the next line is.
