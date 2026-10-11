@@ -228,6 +228,7 @@ In Magit on a task's worktree, Roost adds a few keys, and a Roost menu:
 | --- | --- | --- |
 | `;` | `roost-note` | Write a note for the agent on the line at point, the region's lines, or the file, in a box that opens under it (`C-c C-c` saves, `C-c C-k` cancels); on a noted line, edit its note (saved empty, it is removed) |
 | `'` | `roost-goto-note` | Go to one of the task's notes, chosen in the minibuffer |
+| `C-c ;` | `roost-note-actions` | Edit a note under the line at point, send it alone to the agent, or discard it |
 | `@` | `roost-send` | Draft a prompt to the agent, holding your notes |
 | `=` | `roost-diff-whole-file` | Show the whole file with its changes; staging still works (`0` goes back to hunks). A new file opens as it is. With Evil, `g=` |
 

@@ -4671,6 +4671,85 @@ With INITIAL, the box must start out holding it."
         (should-not (memq #'roost--note-box-frame-deleted delete-frame-functions))
         (should (equal (mapcar (lambda (note) (alist-get 'text note)) roost--notes) '("Keep me")))))))
 
+(ert-deftest roost-a-note-is-acted-on-from-the-keyboard ()
+  (roost-test--with-magit-task
+    (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")
+    (magit-diff-unstaged)
+    (with-current-buffer (magit-get-mode-buffer 'magit-diff-mode)
+      (should (eq (key-binding (kbd "C-c ;")) #'roost-note-actions))
+      (roost-test--goto-line-text "new line")
+      (roost-test--write-note "Name it")
+      ;; A second note under the same line, on it and the one before.
+      (roost-test--goto-line-text "line 4")
+      (set-mark (point))
+      (forward-line 2)
+      (activate-mark)
+      (roost-test--write-note "These two")
+      (roost-test--goto-line-text "new line")
+      (let ((choices (list 'edit)))
+        (cl-letf (((symbol-function 'x-popup-menu)
+                   (lambda (_where menu)
+                     ;; First which note, then what to do with it.
+                     (if (equal (car menu) "Review notes")
+                         (cdr (assoc "These two" (cdr (cadr menu))))
+                       (pop choices)))))
+          (save-current-buffer (roost-note-actions))))
+      (should (equal (roost--note-box-text) "These two"))
+      (roost-note-box-cancel)
+      (roost-test--goto-line-text "line 2")
+      (should-error (roost-note-actions) :type 'user-error))))
+
+(ert-deftest roost-a-note-is-sent-once-at-a-time ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (roost-test--task "a"))) callbacks)
+     (setq roost--notes (list (roost-test--note "1" "a" '(file . "x") '(text . "Once"))))
+     (cl-letf (((symbol-function 'roost--send-text)
+                (lambda (_task _text done failed) (push (cons done failed) callbacks)))
+               ((symbol-function 'roost--redraw) #'ignore))
+       (roost-note-send (car roost--notes))
+       (should-error (roost-note-send (car roost--notes)) :type 'user-error)
+       (should (= (length callbacks) 1))
+       ;; Failed, it can be sent again; sent, it is cleared.
+       (funcall (cdr (pop callbacks)) "no host")
+       (roost-note-send (car roost--notes))
+       (funcall (car (pop callbacks)) task)
+       (should-not roost--notes)
+       (should-not roost--notes-sending)))))
+
+(ert-deftest roost-goes-to-a-note-on-committed-work-or-a-folded-hunk ()
+  (roost-test--with-magit-task
+    (let ((base (string-trim (shell-command-to-string "git rev-parse HEAD"))))
+      (setq task (roost--cache-task nil (append `((baseCommit . ,base)) task)))
+      ;; Committed on the task's branch, the line is no longer in Magit's
+      ;; status.
+      (call-process "git" nil nil nil "checkout" "-qb" "roost/a-line")
+      (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")
+      (call-process "git" nil nil nil "commit" "-qam" "Add a line")
+      (setq roost--notes (list `((id . "1") (host) (task . ,(roost--field task 'id))
+                                 (file . "a.txt") (line . 5) (end . 5) (anchorLine . 5)
+                                 (quote "+new line") (text . "Name it"))))
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (_prompt table &rest _) (car (all-completions "" table))))
+                ((symbol-function 'roost--activate-workspace) #'ignore))
+        (save-current-buffer
+          (roost-goto-note task)
+          (should (derived-mode-p 'magit-diff-mode))
+          (should (equal (buffer-substring-no-properties (point) (line-end-position)) "+new line"))
+          ;; Folded, the hunk opens again.
+          (goto-char (point-min))
+          (re-search-forward "^@@")
+          (magit-section-hide (magit-current-section))
+          (goto-char (point-min)))
+        (save-current-buffer
+          (roost-goto-note task)
+          (should (equal (buffer-substring-no-properties (point) (line-end-position)) "+new line"))
+          (should-not (invisible-p (point))))
+        ;; A line gone from the task's changes is said to be.
+        (setq roost--notes (list `((id . "2") (host) (task . ,(roost--field task 'id))
+                                   (file . "b.txt") (line . 1) (end . 1)
+                                   (quote "+gone") (text . "Where?"))))
+        (should-error (save-current-buffer (roost-goto-note task)) :type 'user-error)))))
+
 (ert-deftest roost-a-whole-file-note-shown-twice-is-edited-where-clicked ()
   (roost-test--with-magit-task
     ;; Staged, and changed again since: the file is under both headings.

@@ -2290,6 +2290,7 @@ no longer counts the note as its own, so sending it leaves the note."
   :doc "Roost's keys in Magit on a task's worktree."
   ";" #'roost-note
   "'" #'roost-goto-note
+  "C-c ;" #'roost-note-actions
   "=" #'roost-diff-whole-file
   "@" #'roost-send
   ;; As in the task's terminal.
@@ -2303,6 +2304,7 @@ no longer counts the note as its own, so sending it leaves the note."
   '("Roost"
     ["Note on This Line…" roost-note]
     ["Go to Note…" roost-goto-note]
+    ["Note Actions…" roost-note-actions]
     ["Whole-File Diff" roost-diff-whole-file]
     ["Send to the Agent…" roost-send]
     ["Discard Notes…" roost-discard-notes]
@@ -3295,15 +3297,48 @@ EVENT is the click on the note, in Magit."
          (note (or (seq-find (lambda (note) (equal (alist-get 'id note) id)) (roost--notes))
                    (user-error "That note has gone"))))
     (select-window (posn-window posn))
-    (pcase (x-popup-menu event `(,(concat "Note on " (roost--note-location note))
-                                 ("" ("Edit…" . edit) ("Send to the Agent" . send)
-                                  "--" ("Discard" . discard))))
-      ;; The copy clicked, of a note shown more than once.
-      ('edit (roost--note-edit-shown
-              note (seq-find (lambda (overlay) (eq (overlay-get overlay 'after-string) (car string)))
-                             roost--note-overlays)))
-      ('send (roost-note-send note))
-      ('discard (roost--note-save (roost--note-task note) note note "")))))
+    ;; The copy clicked, of a note shown more than once.
+    (roost--note-act note event
+                     (seq-find (lambda (overlay) (eq (overlay-get overlay 'after-string) (car string)))
+                               roost--note-overlays))))
+
+(defun roost-note-actions ()
+  "Choose what to do with a review note under the line at point.
+It can be edited, sent alone to the agent, or discarded, as clicking it
+offers; with more than one note there, first choose which."
+  (interactive)
+  (unless roost-magit-mode
+    (user-error "Use this in Magit, on a task's changes"))
+  (let* ((overlay (or (seq-find (lambda (overlay) (overlay-get overlay 'roost-notes))
+                                (overlays-in (line-end-position) (1+ (line-end-position))))
+                      (user-error "No review note under this line")))
+         (notes (overlay-get overlay 'roost-notes))
+         (where (let ((posn (posn-at-point (line-end-position))))
+                  (if posn
+                      (list (list (car (posn-x-y posn)) (+ (cdr (posn-x-y posn)) (default-line-height)))
+                            (selected-window))
+                    (list '(0 0) (selected-window)))))
+         (note (if (not (cdr notes))
+                   (car notes)
+                 (or (x-popup-menu where `("Review notes"
+                                           ("" ,@(mapcar (lambda (note)
+                                                           (cons (truncate-string-to-width
+                                                                  (car (split-string (alist-get 'text note) "\n"))
+                                                                  60 nil nil "…")
+                                                                 note))
+                                                         notes))))
+                     (keyboard-quit)))))
+    (roost--note-act note where overlay)))
+
+(defun roost--note-act (note where overlay)
+  "Do what is chosen, in a menu at WHERE, with NOTE shown by OVERLAY.
+WHERE is a position for `x-popup-menu'."
+  (pcase (x-popup-menu where `(,(concat "Note on " (roost--note-location note))
+                               ("" ("Edit…" . edit) ("Send to the Agent" . send)
+                                "--" ("Discard" . discard))))
+    ('edit (roost--note-edit-shown note overlay))
+    ('send (roost-note-send note))
+    ('discard (roost--note-save (roost--note-task note) note note ""))))
 
 (defun roost--note-task (note)
   "The task NOTE is for."
@@ -3330,20 +3365,35 @@ OVERLAY is the one showing it there, if NOTE shows more than once."
     (when (memq note (roost--notes))
       (roost--note-box (roost--note-task note) note note))))
 
+(defvar roost--notes-sending nil
+  "Identifiers of the review notes being sent alone.")
+
 (defun roost-note-send (note)
   "Send review NOTE alone to its task's agent; once sent, it is cleared.
-A note edited while it was being sent stays, with your edit."
+A note edited while it was being sent stays, with your edit.  A note is
+sent once at a time."
   (let ((task (roost--note-task note))
-        (text (alist-get 'text note)))
-    (roost--send-text
-     task (roost--format-note note)
-     (lambda (_task)
-       (when (roost--remove-notes (lambda (shown)
-                                    (and (eq shown note) (equal (alist-get 'text shown) text))))
-         (roost--redraw))
-       (message "Sent the note on %s to %s" (roost--note-location note) (roost--field task 'name)))
-     (lambda (err)
-       (message "Roost could not send the note to %s: %s" (roost--field task 'name) err)))))
+        (text (alist-get 'text note))
+        (id (alist-get 'id note)))
+    (when (member id roost--notes-sending)
+      (user-error "Already sending the note on %s" (roost--note-location note)))
+    (push id roost--notes-sending)
+    (condition-case err
+        (roost--send-text
+         task (roost--format-note note)
+         (lambda (_task)
+           (setq roost--notes-sending (delete id roost--notes-sending))
+           (when (roost--remove-notes (lambda (shown)
+                                        (and (eq shown note) (equal (alist-get 'text shown) text))))
+             (roost--redraw))
+           (message "Sent the note on %s to %s" (roost--note-location note) (roost--field task 'name)))
+         (lambda (err)
+           (setq roost--notes-sending (delete id roost--notes-sending))
+           (message "Roost could not send the note to %s: %s" (roost--field task 'name) err)))
+      ;; A declined confirmation leaves the note ready to send again.
+      ((quit error)
+       (setq roost--notes-sending (delete id roost--notes-sending))
+       (signal (car err) (cdr err))))))
 
 ;;;###autoload
 (defun roost-goto-note (&optional task)
@@ -3369,30 +3419,33 @@ The note shows in Magit, under its line, with point on the line:
   "Show TASK's NOTE in Magit, with point on its line.
 A Magit buffer already showing it is used, else Magit's status of the
 task's worktree, else a diff of the note's file since the task began."
-  (let ((buffer (seq-find (lambda (buffer) (roost--note-shown-overlay note buffer))
-                          (cons (current-buffer)
-                                (seq-filter (lambda (buffer) (buffer-local-value 'roost-magit-mode buffer))
-                                            (buffer-list))))))
-    (if buffer
-        (if-let* ((window (get-buffer-window buffer)))
-            (select-window window)
-          (pop-to-buffer-same-window buffer))
-      (roost-review task)
-      (unless (roost--note-shown-overlay note)
-        ;; Committed changes show in the diff since the task's fork point.
-        (roost--diff-file task `((path . ,(alist-get 'file note)))))
-      (unless (roost--note-shown-overlay note)
-        (user-error "The note's line is no longer in the task's changes")))
-    (let ((overlay (roost--note-shown-overlay note)))
-      (goto-char (overlay-start overlay))
-      ;; Its hunk and file may be folded away.
-      (let ((section (magit-current-section)))
-        (while section
-          (magit-section-show section)
-          (setq section (roost--slot section 'parent))))
-      (goto-char (overlay-start overlay))
-      (beginning-of-line)
-      (recenter))))
+  (let* ((find (lambda ()
+                 (seq-find (lambda (buffer) (roost--note-shown-overlay note buffer))
+                           (cons (current-buffer)
+                                 (seq-filter (lambda (buffer)
+                                               (buffer-local-value 'roost-magit-mode buffer))
+                                             (buffer-list))))))
+         (buffer (or (funcall find)
+                     (progn (roost-review task) (funcall find))
+                     ;; Committed changes show in the diff since the
+                     ;; task's fork point.
+                     (progn (roost--diff-file task `((path . ,(alist-get 'file note))))
+                            (funcall find))
+                     (user-error "The note's line is no longer in the task's changes"))))
+    (if-let* ((window (get-buffer-window buffer)))
+        (select-window window)
+      (pop-to-buffer-same-window buffer))
+    (with-current-buffer buffer
+      (let ((overlay (roost--note-shown-overlay note)))
+        (goto-char (overlay-start overlay))
+        ;; Its hunk and file may be folded away.
+        (let ((section (magit-current-section)))
+          (while section
+            (magit-section-show section)
+            (setq section (roost--slot section 'parent))))
+        (goto-char (overlay-start overlay))
+        (beginning-of-line)
+        (when (eq (window-buffer) buffer) (recenter))))))
 
 ;;;###autoload
 (defun roost-diff-whole-file ()
