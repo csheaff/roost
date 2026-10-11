@@ -3730,9 +3730,9 @@ keeps one process-wide registration per mode; a nil STATE removes it."
 (defun roost--quiet-display ()
   "Turn off line numbers and wrapping that global modes enable in Roost buffers."
   (when (derived-mode-p 'roost-dashboard-mode 'roost-task-info-mode 'roost-compose-mode
-                      'roost-send-mode 'roost-pr-mode)
+                      'roost-send-mode 'roost-pr-mode 'roost-search-mode 'roost-doctor-mode)
     (display-line-numbers-mode -1)
-    (when (derived-mode-p 'roost-dashboard-mode)
+    (when (derived-mode-p 'roost-dashboard-mode 'roost-search-mode)
       (visual-line-mode -1)
       (setq truncate-lines t))))
 
@@ -4742,7 +4742,9 @@ On a live task's message, task commands such as those in
   (setq-local truncate-lines t
               revert-buffer-function (lambda (&rest _) (roost-search-again)))
   (add-hook 'window-size-change-functions #'roost--search-resized nil t)
-  (roost--evil-state 'roost-search-mode roost-evil-state))
+  (add-hook 'after-change-major-mode-hook #'roost--quiet-display 90 t)
+  (roost--evil-state 'roost-search-mode roost-evil-state)
+  (roost--quiet-display))
 
 (defun roost--search-resized (window)
   "Wrap the messages shown in full again after WINDOW is resized."
@@ -5447,7 +5449,9 @@ RESULT is `pending', a list of checks, or (error . MESSAGE).")
   "What Roost needs locally and on each host, with fixes for problems.
 \\{roost-doctor-mode-map}"
   (setq-local truncate-lines nil word-wrap t)
-  (roost--evil-state 'roost-doctor-mode roost-evil-state))
+  (add-hook 'after-change-major-mode-hook #'roost--quiet-display 90 t)
+  (roost--evil-state 'roost-doctor-mode roost-evil-state)
+  (roost--quiet-display))
 
 (defconst roost--ssh-hints
   '(("Permission denied" . "Set up key-based SSH (ssh-copy-id HOST), or add your key to ssh-agent")

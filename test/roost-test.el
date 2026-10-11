@@ -2802,6 +2802,30 @@
                  (should-not display-line-numbers))
              (kill-buffer))))))))
 
+;; Global modes many configurations turn on.
+(defvar global-display-line-numbers-mode)
+(defvar global-visual-line-mode)
+
+(ert-deftest roost-lists-keep-out-global-line-numbers-and-wrapping ()
+  ;; Search results came later than the others, and showed line numbers
+  ;; and wrapped every message, so TAB had nothing more to show.
+  (let ((numbers (bound-and-true-p global-display-line-numbers-mode))
+        (wrapping (bound-and-true-p global-visual-line-mode)))
+    (unwind-protect
+        (progn
+          (global-display-line-numbers-mode 1)
+          (global-visual-line-mode 1)
+          (dolist (mode '(roost-dashboard-mode roost-search-mode roost-task-info-mode roost-doctor-mode))
+            (with-temp-buffer
+              (funcall mode)
+              (should-not display-line-numbers)
+              ;; Lists keep a line for each row.
+              (when (memq mode '(roost-dashboard-mode roost-search-mode))
+                (should-not visual-line-mode)
+                (should truncate-lines)))))
+      (global-display-line-numbers-mode (if numbers 1 -1))
+      (global-visual-line-mode (if wrapping 1 -1)))))
+
 (ert-deftest roost-merging-measures-the-other-tasks-again ()
   (roost-test--isolated
    (let ((task (roost--cache-task "dev" (roost-test--task))) refreshes)
