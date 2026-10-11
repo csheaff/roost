@@ -4154,17 +4154,18 @@ and lines indented as code."
          (tables (roost--table-lines lines))
          (start 0)
          ;; The run of backticks or tildes that opened the code block
-         ;; under way; only as long a run of the same closes it.
+         ;; under way; only as long a run of the same closes it.  A fence
+         ;; is indented three spaces at most, or it is indented code.
          (fence nil))
     (dotimes (index (length lines))
       (let* ((line (aref lines index))
              (end (+ start (length line))))
         (cond (fence
-               (when (string-match-p (format "\\`[ \t]*%s\\{%d,\\}[ \t]*\\'"
+               (when (string-match-p (format "\\` \\{0,3\\}%s\\{%d,\\}[ \t]*\\'"
                                              (regexp-quote (substring fence 0 1)) (length fence))
                                      line)
                  (setq fence nil)))
-              ((string-match "\\`[ \t]*\\(`\\{3,\\}\\|~\\{3,\\}\\)" line)
+              ((string-match "\\` \\{0,3\\}\\(`\\{3,\\}\\|~\\{3,\\}\\)" line)
                (setq fence (match-string 1 line)))
               ((or (memq index tables) (string-match-p "\\`\\(?:[ \t]*|\\|    \\|\t\\)" line)))
               (t (add-face-text-property start end 'roost-prose t text)))
@@ -5561,12 +5562,13 @@ The changes column shrinks first, then the agent column is dropped."
     (concat line
             (when (> room 8)
               ;; In `roost-prose', which fits more in its room than the
-              ;; columns do; it is cut short of three times as many.
+              ;; columns do; it is cut short of three times as many, with
+              ;; an ellipsis should that cut be the one that shows.
               (let ((text (truncate-string-to-width
                            (roost--one-line (or (roost--permission-request task)
                                                 (roost--last-message-summary task)
                                                 (roost--prompt-text task)))
-                           (* 3 room))))
+                           (* 3 room) nil nil "…")))
                 (roost--truncate-width (propertize text 'face '(roost-dim roost-prose)) room))))))
 
 (defun roost--insert-unreachable-hosts (tasks &optional width)

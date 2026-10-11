@@ -248,6 +248,9 @@
                   (memq 'roost-prose (ensure-list (get-text-property (string-search line text) 'face text))))))
     (should-not (funcall prose "still code"))
     (should (funcall prose "Prose again.")))
+  ;; Indented four spaces, a fence is indented code and opens no block.
+  (let ((text (roost--prose "Before.\n    ```\nAfter.")))
+    (should (memq 'roost-prose (ensure-list (get-text-property (string-search "After." text) 'face text)))))
   ;; A table without outer pipes is found by its delimiter row.
   (let* ((text (roost--prose "Before.\nName | Does\n--- | :---:\nadd | adds a note\nAfter."))
          (prose (lambda (line)
@@ -263,6 +266,16 @@
   (should (equal (roost--truncate-width "one two three" 8) "one two…"))
   (should (equal (roost--wrap-width "one two three\nfour" 7) '("one two" "three" "four")))
   (should (equal (roost--wrap-width "one two three four" 3 1) '("one" "two"))))
+
+(ert-deftest roost-a-dashboard-summary-cut-short-says-so ()
+  (roost-test--isolated
+   ;; A narrow proportional font fits four letters in a column, so the
+   ;; first cut, at three times the room, is the one that shows.
+   (cl-letf (((symbol-function 'roost--text-width) (lambda (string) (/ (string-width string) 4.0))))
+     (let* ((task (append `((lastMessage . ,(mapconcat #'identity (make-list 200 "iiii") " ")))
+                          (roost-test--task)))
+            (row (roost--dashboard-row task (roost--dashboard-layout (list task) 120) 120)))
+       (should (string-suffix-p "…" row))))))
 
 (ert-deftest roost-status-words-are-coloured-only-when-you-are-needed ()
   (should (eq (roost--status-word-face "permission") 'roost-status-permission))
