@@ -4554,6 +4554,73 @@ With INITIAL, the box must start out holding it."
               (should-not (string-match-p "\n.*\n" (overlay-get notes 'after-string)))))
         (setq roost--note-box nil)))))
 
+(ert-deftest roost-the-note-button-slows-down-while-the-mouse-rests ()
+  (roost-test--with-magit-task
+    (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")
+    (cl-letf (((symbol-function 'display-graphic-p) #'always)
+              ((symbol-function 'display-images-p) #'ignore))
+      (magit-diff-unstaged)
+      (with-current-buffer (magit-get-mode-buffer 'magit-diff-mode)
+        (set-window-buffer (selected-window) (current-buffer))
+        (roost-test--goto-line-text "new line")
+        (let* ((line (point))
+               (window (selected-window))
+               (mouse (cons (selected-frame) (cons 10 10)))
+               (state (list nil 0))
+               (interval roost--note-mouse-interval)
+               (follow (lambda ()
+                         (roost--note-follow-mouse state interval)
+                         (when (timerp roost--note-mouse-timer)
+                           (setq interval (timer--repeat-delay roost--note-mouse-timer))))))
+          (unwind-protect
+              (cl-letf (((symbol-function 'mouse-pixel-position) (lambda () mouse))
+                        ((symbol-function 'window-at-x-y) (lambda (&rest _) (and (cadr mouse) window)))
+                        ((symbol-function 'posn-at-x-y)
+                         (lambda (&rest _) (list window line '(10 . 10) 0 nil line))))
+                (roost--note-hover-echo window roost--note-hover line)
+                ;; Only in the window under the mouse.
+                (should (eq (overlay-get roost--note-button 'window) window))
+                (dotimes (_ 10) (funcall follow))
+                (should (= interval 1))
+                (should (overlay-buffer roost--note-button))
+                ;; Moving, it looks faster again; leaving, the button goes.
+                (setq mouse (cons (selected-frame) (cons 12 10)))
+                (funcall follow)
+                (should (= interval roost--note-mouse-interval))
+                (setq mouse (cons (selected-frame) (cons nil nil)))
+                (funcall follow)
+                (should-not (overlay-buffer roost--note-button))
+                (should-not roost--note-mouse-timer))
+            (when (timerp roost--note-mouse-timer)
+              (cancel-timer roost--note-mouse-timer)
+              (setq roost--note-mouse-timer nil))))))))
+
+(ert-deftest roost-a-whole-file-note-shown-twice-is-edited-where-clicked ()
+  (roost-test--with-magit-task
+    ;; Staged, and changed again since: the file is under both headings.
+    (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")
+    (call-process "git" nil nil nil "add" "a.txt")
+    (roost-test--write-lines "a.txt" (number-sequence 1 10) "newer line\n")
+    (magit-status-setup-buffer dir)
+    (with-current-buffer (magit-get-mode-buffer 'magit-status-mode)
+      (set-window-buffer (selected-window) (current-buffer))
+      (goto-char (point-min))
+      (re-search-forward "^modified +a.txt")
+      (roost-test--write-note "Whole file")
+      (let* ((copies (sort (seq-filter (lambda (overlay) (overlay-get overlay 'roost-notes))
+                                       roost--note-overlays)
+                           (lambda (a b) (< (overlay-start a) (overlay-start b)))))
+             (last (car (last copies))))
+        (should (= (length copies) 2))
+        (cl-letf (((symbol-function 'x-popup-menu) (lambda (&rest _) 'edit)))
+          (save-current-buffer
+            (roost-note-mouse-menu
+             (list 'mouse-1 (list (selected-window) (overlay-end last) '(1 . 1) 0
+                                  (cons (overlay-get last 'after-string) 2) (overlay-end last))))))
+        (let ((positions (nth 1 (assoc "a.txt" (roost--magit-file-lines)))))
+          (should (= (nth (plist-get roost--note-box :copy) positions) (overlay-start last))))
+        (roost-note-box-cancel)))))
+
 (ert-deftest roost-a-note-box-belongs-to-the-window-it-opens-from ()
   (roost-test--with-magit-task
     (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")
@@ -4651,6 +4718,7 @@ With INITIAL, the box must start out holding it."
               (evil-normal-state)
               (roost-test--goto-line-text "new line")
               (should (eq (key-binding ";") #'roost-note))
+              (should (eq (key-binding "'") #'roost-goto-note))
               (should (eq (key-binding "@") #'roost-send))
               (should (eq (key-binding "g=") #'roost-diff-whole-file))
               ;; evil-collection's own keys are left as they are.
