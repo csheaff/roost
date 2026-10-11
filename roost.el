@@ -3356,7 +3356,9 @@ for the mode line."
          (width (* 2 (frame-char-width frame)))
          (height (max 8 (if (eq frame (selected-frame)) (default-line-height) (frame-char-height frame))))
          (color (roost--light-pixel (face-foreground face frame t)))
-         (back (roost--light-pixel (face-background background frame t))))
+         ;; A face without a background shows the default one: a theme
+         ;; can leave `margin' so, as modus-themes does for no fringe.
+         (back (roost--light-pixel (face-background background frame 'default))))
     (unless (and light
                  (= width (plist-get (cdr (plist-get light :image)) :data-width))
                  (= height (plist-get (cdr (plist-get light :image)) :data-height)))
@@ -3404,7 +3406,7 @@ dot.  Otherwise this is the dot, in TASK's status face."
   "Paint the light ID over FACE's background where it shows, if it isn't already."
   (when-let* ((light (gethash id roost--lights))
               (window (roost--light-window (plist-get light :buffer)))
-              (back (roost--light-pixel (face-background face (window-frame window) t)))
+              (back (roost--light-pixel (face-background face (window-frame window) 'default)))
               ((not (eql back (plist-get light :background)))))
     (plist-put light :background back)
     (roost--light-draw light (or (plist-get light :phase) 0.0))))

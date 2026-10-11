@@ -2338,6 +2338,26 @@
         (should-not (equal (funcall pixels-at motion 0.0) (funcall pixels-at motion 0.5))))
       (should (= roost-test--refreshed 6)))))
 
+(ert-deftest roost-status-lights-paint-the-background-that-shows ()
+  ;; A theme can leave the margin face of Emacs 31 and later without a
+  ;; background, or anything to inherit one from, as modus-themes does with
+  ;; an unspecified fringe: the margin shows the default background, where
+  ;; lights painted mid-gray squares.
+  (roost-test--isolated
+   (roost-test--with-canvases t
+     (let ((task (roost--cache-task "dev" (roost-test--task "1111111111111111" "permission")))
+           (default (face-background 'default))
+           (inherit (and (facep 'margin) (face-attribute 'margin :inherit))))
+       (unwind-protect
+           (with-temp-buffer
+             (set-face-background 'default "#123456")
+             (when (facep 'margin) (set-face-attribute 'margin nil :inherit 'unspecified))
+             (roost--status-light task 'sidebar)
+             (should (= (plist-get (gethash (cons 'sidebar (roost--key task)) roost--lights) :background)
+                        (roost--light-pixel "#123456"))))
+         (set-face-background 'default default)
+         (when (facep 'margin) (set-face-attribute 'margin nil :inherit inherit)))))))
+
 (ert-deftest roost-status-lights-move-until-their-agents-rest ()
   (roost-test--isolated
    (let ((on t))
