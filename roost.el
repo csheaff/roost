@@ -4236,20 +4236,27 @@ more than MOST lines.  Return the lines."
                    ;; A long reply is measured only as far as it shows.
                    (when (and most (> (length lines) most)) (throw 'enough nil)))))
         (dolist (source (split-string text "\n"))
-          (let ((line nil))
+          ;; A line broken off starts without spaces; TEXT's own lines
+          ;; keep theirs, as list items are indented.
+          (let ((line nil)
+                (broken nil))
             ;; Each word after the first keeps the space before it, so
             ;; spaces keep their face, as their width depends on it.
             (dolist (word (roost--words source))
-              (let ((longer (if line (concat line word) word)))
-                (if (or (null line) (<= (roost--text-width longer) columns))
+              (when (and broken (string-empty-p line))
+                (setq word (string-trim-left word " +")))
+              (let ((longer (concat line word)))
+                (if (or (null line) (string-empty-p line) (<= (roost--text-width longer) columns))
                     (setq line longer)
                   (funcall add line)
-                  (setq line (if (string-prefix-p " " word) (substring word 1) word))))
+                  (setq line (string-trim-left word " +")
+                        broken t)))
               (while (> (roost--text-width line) columns)
                 (let ((part (roost--fit-width line columns)))
                   (when (string-empty-p part) (setq part (substring line 0 1)))
                   (funcall add part)
-                  (setq line (substring line (length part))))))
+                  (setq line (substring line (length part))
+                        broken t))))
             (funcall add (or line ""))))))
     (nreverse lines)))
 

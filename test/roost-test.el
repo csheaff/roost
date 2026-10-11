@@ -263,6 +263,10 @@
    (should (equal (roost--wrap-width "one two three four" 3 1) '("one" "two")))
    (should (equal (roost--wrap-width "a  b" 10) '("a  b")))
    (should (equal (roost--wrap-width "one\n\ntwo" 10) '("one" "" "two")))
+   ;; Repeated spaces at a break leave no blank line, and a line's own
+   ;; indentation stays.
+   (should (equal (roost--wrap-width "1234567890  abcdefghij" 10) '("1234567890" "abcdefghij")))
+   (should (equal (roost--wrap-width "  - one two" 8) '("  - one" "two")))
    ;; Spaces keep the face of the text around them.
    (let ((line (car (roost--wrap-width (propertize "one two three" 'face 'roost-prose) 7))))
      (should (equal line "one two"))
