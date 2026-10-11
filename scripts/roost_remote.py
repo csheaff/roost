@@ -771,10 +771,8 @@ def spawn(store, task, resume=False):
     enable_extended_keys(socket)
     tmux(socket, "set-option", "-p", "-t", pane, "@roost_task_id", task["id"])
     # Kept after it exits, so Roost can tell how the agent ended. Only the
-    # agent's pane: one you split off and exit should close. tmux 3.0 sets
-    # this only for the whole window.
-    if tmux(socket, "set-option", "-p", "-t", pane, "remain-on-exit", "on", check=False).returncode:
-        tmux(socket, "set-option", "-w", "-t", window, "remain-on-exit", "on")
+    # agent's pane: one you split off and exit should close.
+    tmux(socket, "set-option", "-p", "-t", pane, "remain-on-exit", "on")
     tmux(socket, "set-option", "-w", "-t", window, "automatic-rename", "off")
     # The agent's hooks call this helper for as long as it runs.
     task["helper"] = script
@@ -1916,7 +1914,7 @@ def doctor(store, request):
 
     for name, argv, minimum, hint in (
             ("Git", ["git", "--version"], (2, 17), "Install Git 2.17 or newer"),
-            ("tmux", ["tmux", "-V"], (3, 0), "Install tmux 3.0 or newer")):
+            ("tmux", ["tmux", "-V"], (3, 1), "Install tmux 3.1 or newer")):
         code, out = run(argv)
         version = version_of(out) if code == 0 else None
         check(name, bool(version and version >= minimum), out if code == 0 else "not found",

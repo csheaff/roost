@@ -67,7 +67,7 @@ agent resolving any conflicts, and `P` opens a pull request instead.
 
 Roost needs Emacs 29.1 or newer and
 [tmux-control](https://github.com/csheaff/tmux-control) 0.7.0 or newer. Each
-host needs Python 3.9+, Git, tmux 3.0+ and a signed-in agent CLI; remote hosts
+host needs Python 3.9+, Git, tmux 3.1+ and a signed-in agent CLI; remote hosts
 need SSH with keys or an agent. With Emacs 30:
 
 ```elisp

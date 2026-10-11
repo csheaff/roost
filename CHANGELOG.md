@@ -7,9 +7,10 @@ What each release changes, and what to do when upgrading. Newest first.
 Since 0.8.1:
 
 - A pane you split off in a task's window closes when its program exits;
-  only the agent's pane stays to show how it ended. On tmux 3.0, which
-  can't tell them apart, they stay until `C-c C-x` closes them. Tasks
-  started earlier change when resumed.
+  only the agent's pane stays to show how it ended. Tasks started earlier
+  change when resumed.
+- Roost needs tmux 3.1 or later, as it always has: it sets options on
+  panes, which tmux 3.0 can't. `roost-doctor` now says so.
   `C-c C-o` moves between the agent and its shell once tmux-control is past
   0.7.2.
 - Prompts, replies and permission requests are set in `variable-pitch`
