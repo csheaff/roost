@@ -932,6 +932,73 @@ leaves xah-fly-keys in command mode, where `;` isn't `roost-note`.
 193 ERT tests pass on Emacs 32 with Magit (and on 30 without it), and
 139 Python tests.
 
+### A new user's first hour, 2026-10-10
+
+The rounds before used the author's configuration. This one used none:
+Emacs 30.2 with a fresh `--init-directory`, Roost and tmux-control
+installed with `use-package :vc` from GitHub as the README says, Magit
+from MELPA, fido, and no Roost settings but the hosts. In a throwaway
+project, two Claude Code tasks (Haiku 5.5, 2.1.293, asking before each
+command) worked at once on the same function; one committed, one left its
+change uncommitted. The first was merged, which put the second behind
+with a conflict; `u` had its agent commit, merge main, resolve the
+conflict and pass the tests, and the second was merged too. A third task
+was stopped and retired.
+
+What worked: the setup check, the draft finding the project, `n` from
+terminal to terminal, the agent resolving a real conflict on the first
+try, merging with its cleanup, and the sidebar, terminal and panel side
+by side.
+
+Found and fixed:
+
+- **Work the agent committed had nowhere to be reviewed.** `r` opened
+  Magit's status with only a folded "Recent commits": a task's branch has
+  no upstream, so Magit has nothing to call unmerged. The status now lists
+  the commits not yet in the integration branch (`Unmerged into main`),
+  and `RET` on that heading shows their changes together.
+- **After a restart, Roost said nothing until opened.** Watching starts
+  with the dashboard, the sidebar or a new task, so agents still at work
+  went uncounted and unannounced, and Magit lacked Roost's keys. The
+  install snippets now turn on `roost-watch-mode`, and the setup check
+  says whether it ran from the start.
+- **No way to Roost from where you work.** In an agent's terminal every
+  key but `C-c` and `C-x` goes to the agent, and a plain configuration
+  binds no Roost key, so it was `M-x` every time. `C-c ?` there, and in
+  Magit on a task, opens the menu.
+- **Two small tasks left three merge commits.** `m` made a merge commit
+  for each task, and `u` had made one in the task, so main read
+  `Merge branch 'roost/add-top-n-option-0e40ec'` around a merge of main.
+  `roost-merge-style` now defaults to `squash`: one commit per task with
+  its commits' message, and the updates gone.
+- **Typing `yes` for things that lose nothing.** Stopping (which keeps
+  everything), updating (which sends the agent a prompt), merging and
+  retiring a task with nothing to lose wanted `yes`; the author's
+  configuration answers every question with one key, so it never showed.
+  They ask `y` or `n`; discarding work still wants the task's name.
+- **A finished task's panel stayed.** It said the task had been retired
+  and kept half the frame, which kept the next task's panel from docking.
+  It closes with the task now.
+- **Reading the reply didn't count.** Only the terminal marked an agent
+  seen, so after reading its whole reply in the panel, `n` went back to
+  it. A panel in the selected window counts now.
+- **Requests began with the worktree's path.** The dashboard showed "Asks
+  to run cd /Users/…/worktrees/5b12cd8500/add-top-n-option…", as Claude
+  Code often starts a command with a `cd` into the directory it is already
+  in. That `cd` is left out now, and paths in the worktree are relative.
+
+Not changed: names made from prompts can read oddly ("when a file named
+on the command line…" became `when-file-named-command`; Claude Code
+writes no title of its session to borrow), and a dashboard half a frame
+wide leaves about ten columns for the reply.
+
+The changes were checked again in a plain Emacs 32 loading this branch:
+the setup check, `C-c ?` in a terminal, a committed task reviewed through
+`Unmerged into main`, and `m` squashing it into one commit and closing
+its panel. 198 ERT tests pass on Emacs 32 with Magit, and 139 Python
+tests; a test session now fails rather than waits on a question no test
+answered.
+
 ### Codex and Pi adapters
 
 Used another disposable remote `hello-service` project, an isolated registry and

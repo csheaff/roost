@@ -54,7 +54,7 @@ a review in Magit followed by a merge or a pull request.
 2. `M-x roost-doctor` checks this machine, and any SSH hosts you list.
 3. In a Git project, `M-x roost-new-task`, write a prompt, and `C-c C-c`.
 4. `M-x roost-status` opens the dashboard; `b` there pins the task list to the
-   side.
+   side. In an agent's terminal, `C-c ?` opens Roost's menu.
 
 ## A day with Roost
 
@@ -116,8 +116,11 @@ worktree. Run the tests, start the app, poke at it.
 ![The agent's summary beside a shell in the same worktree, trying the new --tag filter by hand](docs/images/roost-workspace.jpg)
 
 **Review in Magit.** `r` opens Magit on the task's worktree, through TRAMP for
-remote tasks. Stage, edit and commit as usual. The status names the task and
-keeps the agent's latest reply folded at the top.
+remote tasks. Stage, edit and commit as usual. The status names the task,
+keeps the agent's latest reply folded at the top, and lists the commits not
+yet in the branch the task merges into (`Unmerged into main`); `RET` on that
+heading shows all their changes together, as on Magit's own sections of
+unmerged commits.
 
 Staging doubles as approval: stage what you have checked, and whatever the
 agent changes after that shows up as unstaged, on its own. To ask for changes,
@@ -165,11 +168,20 @@ Emacs 30 (built-in `use-package`):
 
 (use-package roost
   :vc (:url "https://github.com/csheaff/roost" :rev :newest)
-  :custom (roost-hosts '(nil "devbox")))   ; nil is this machine
+  :demand t
+  :bind ("C-c r" . roost-dispatch)          ; the menu, from anywhere
+  :custom (roost-hosts '(nil "devbox"))     ; nil is this machine
+  :config (roost-watch-mode 1))             ; tell me from startup
 ```
 
+`roost-watch-mode` counts the agents waiting for you in the mode line and
+notifies you when one needs you. Without it, that starts only once you open
+Roost, so after a restart, agents still at work go unnoticed until then. Add
+`(roost-sidebar-mode 1)` and `(roost-task-panel-mode 1)` to keep the task list
+and the task's panel on screen ([below](#a-day-with-roost)).
+
 Emacs 29: `M-x package-vc-install` tmux-control's URL, then Roost's, and
-`(setq roost-hosts '(nil "devbox"))`.
+`(setq roost-hosts '(nil "devbox"))` and `(roost-watch-mode 1)`.
 
 straight.el:
 
@@ -178,7 +190,10 @@ straight.el:
   :straight (:host github :repo "csheaff/tmux-control"))
 (use-package roost
   :straight (:host github :repo "csheaff/roost" :files ("roost.el" "scripts"))
-  :custom (roost-hosts '(nil "devbox")))
+  :demand t
+  :bind ("C-c r" . roost-dispatch)
+  :custom (roost-hosts '(nil "devbox"))
+  :config (roost-watch-mode 1))
 ```
 
 Doom Emacs, in `packages.el`:
@@ -188,7 +203,8 @@ Doom Emacs, in `packages.el`:
 (package! roost :recipe (:host github :repo "csheaff/roost" :files ("roost.el" "scripts")))
 ```
 
-and in `config.el`: `(setq roost-hosts '(nil "devbox"))`.
+and in `config.el`: `(setq roost-hosts '(nil "devbox"))` and
+`(roost-watch-mode 1)`.
 
 Then run **`M-x roost-doctor`**. It checks Emacs's side and, on each host, SSH,
 Python, Git, tmux and each agent CLI's version and sign-in, with a fix for
@@ -252,7 +268,7 @@ Magit is optional (review falls back to Dired).
 | `I` | `roost-task-panel-mode` | Dock the open task's panel beside its terminal |
 | `u` | `roost-update` | Merge the integration branch into the task; for uncommitted changes or conflicts, offers to have its agent do it |
 | `P` | `roost-pr` | Draft a pull request for the task; if it has one, push new commits and open it (`C-u`: open only) |
-| `m` | `roost-merge-retire` | Merge committed work, then retire the task (as one commit with `roost-merge-style` set to `squash`) |
+| `m` | `roost-merge-retire` | Merge committed work as one commit, then retire the task (a merge commit with `roost-merge-style` set to `merge`) |
 | `x` | `roost-retire` | Finish with a task: retire it when its work is merged or it has none, otherwise offer to discard it (`roost-discard`), first saying what would be lost; to lose commits or files you type its name |
 | `X` | `roost-forget` | Drop the task from Roost, leaving its worktree and branch as they are |
 | `K` | `roost-stop` | Stop the agent's window; keep all work |
@@ -261,8 +277,11 @@ Magit is optional (review falls back to Dired).
 
 `j`/`k` or `TAB` move between tasks; `mouse-1` opens one and `mouse-3` shows its actions.
 Outside the dashboard, commands act on the task of the current terminal,
-worktree file, Org entry or perspective, or ask. Bind the menu globally to reach
-Roost from anywhere, for example `(keymap-global-set "C-c r" #'roost-dispatch)`.
+worktree file, Org entry or perspective, or ask. In an agent's terminal, where
+every other key goes to the agent, `C-c ?` opens the menu for its task (while
+`roost-watch-mode` is on); so does `C-c ?` in Magit on a task. Bind the menu
+globally to reach Roost from anywhere, for example
+`(keymap-global-set "C-c r" #'roost-dispatch)`.
 Also available: `roost-send-region` (adds the selection, with its file and
 lines, to the prompt you are drafting). Roost watches its hosts once you open the dashboard or sidebar or start
 a task: every 3 seconds while Emacs is in front, every 15 otherwise.
@@ -301,9 +320,11 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
   project's `.dir-locals.el` only with `enable-remote-dir-locals` on. A new
   worktree lacks files Git doesn't track, such as `.env`; the command finds the
   primary checkout in `$ROOST_REPO`: `cp "$ROOST_REPO/.env" . && npm ci`.
-- `roost-merge-style`: `merge` (the default) brings a task in with a merge
-  commit; `squash` adds one commit holding all its work, with a message made
-  from its commits.
+- `roost-merge-style`: `squash` (the default) adds one commit holding all of a
+  task's work, with a message made from its commits, so each task is one
+  change in your history and the merges that kept it up to date (`u`) leave
+  no trace there; `merge` brings it in with a merge commit, keeping its
+  commits.
 - `roost-program-status` (nil, experimental): let the agent say what it is
   doing. Claude Code 2.1.295 and later reports whether it works, waits on you
   or is done (OSC 7501), but only to a terminal that answers its probe, which
@@ -422,6 +443,19 @@ Things to know:
 
 Since 0.8.1 (unreleased):
 
+- `m` now squashes a task's work into one commit. Set `roost-merge-style`
+  to `merge` for a merge commit, as before.
+- Roost watches, counts waiting agents and notifies you only once you open
+  it, unless your configuration turns on `roost-watch-mode`, as the install
+  snippets now do; `roost-doctor` says which. While it watches, `C-c ?` in
+  an agent's terminal, or in Magit on a task, opens the menu.
+- Magit's status of a task lists the commits not yet merged (`Unmerged into
+  main`), so work the agent committed has a place to be reviewed.
+- Stopping, updating, merging and retiring a task with nothing to lose ask
+  `y` or `n`; discarding work still has you type the task's name. A finished
+  task's panel closes with it, and reading a task's panel counts as seeing
+  its agent's reply. A permission request leaves out a leading `cd` into
+  the task's worktree, and shows paths in it relative to it.
 - The sidebar (`b`) and the task panel beside each terminal (`I`). The panel
   lists only what a task can do now and says what comes next; the command
   menu says so too, and greys out the rest. Like the sidebar, the panel is

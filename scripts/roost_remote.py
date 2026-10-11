@@ -1995,6 +1995,33 @@ def push_check(check, repo):
 
 REQUEST_LIMIT = 300
 
+# A cd at the start of a command, as agents write it to be sure where it
+# runs: `cd DIR &&`, `cd "DIR";`, `cd DIR 2>/dev/null || true;`.
+CD_PREFIX = re.compile(r"""\A\s*cd\s+(?P<path>"[^"]*"|'[^']*'|[^\s;&|]+)"""
+                       r"""(?:\s*2>\s*/dev/null)?(?:\s*\|\|\s*(?:true|:|exit(?:\s+\d+)?))?\s*(?:&&|;)\s*""")
+
+
+def shown_command(command, worktree):
+    """COMMAND as a request shows it. Agents often start with a cd into the
+    worktree they already run in, which would fill the line before the
+    command itself; that is left out, and the worktree's path elsewhere
+    becomes relative to it."""
+    if not worktree:
+        return command
+    roots = sorted({str(worktree).rstrip("/"), os.path.realpath(str(worktree)).rstrip("/")},
+                   key=len, reverse=True)
+    match = CD_PREFIX.match(command)
+    if match:
+        target = match.group("path")
+        if target[:1] in "\"'":
+            target = target[1:-1]
+        if target.rstrip("/") in roots:
+            command = command[match.end():]
+    for root in roots:
+        command = re.sub(re.escape(root) + r"/+", "", command)
+        command = re.sub(re.escape(root) + r"(?![^\s;&|'\")])", ".", command)
+    return command
+
 
 def permission_request(payload, worktree=None):
     """What a permission request asks, as a sentence: "Asks to run python3
@@ -2040,6 +2067,8 @@ def permission_request(payload, worktree=None):
     detail = None
     if tool in ("Bash", "shell", "exec_command", "local_shell"):
         verb, detail = "run", arg("command", "cmd")
+        if detail:
+            detail = clip(shown_command(detail, worktree)) or detail
     elif tool in ("Edit", "MultiEdit", "NotebookEdit", "Write", "Read"):
         verb, detail = {"Write": "write", "Read": "read"}.get(tool, "edit"), arg("file_path", "notebook_path")
     elif tool == "WebFetch":

@@ -53,6 +53,10 @@
 (declare-function magit-map-sections "magit-section" (function &optional section))
 (declare-function magit-insert-heading "magit-section" (&rest args))
 (declare-function magit-add-section-hook "magit-section" (hook function &optional at append local))
+(declare-function magit--insert-log "magit-log" (keep-error revs &optional args files))
+(declare-function magit-log-insert-child-count "magit-log" ())
+(declare-function magit-rev-verify "magit-git" (rev))
+(declare-function magit-get-upstream-branch "magit-git" (&optional branch))
 (declare-function persp-switch "perspective" (name))
 (declare-function persp-kill "perspective" (name))
 (declare-function persp-current-name "perspective" ())
@@ -74,6 +78,7 @@
 (defvar magit-status-headers-hook)
 (defvar magit-status-sections-hook)
 (defvar magit-refresh-buffer-hook)
+(defvar magit-buffer-log-args)
 (defvar tmux-control-remote-tmux-socket-setup)
 (defvar tmux-control-ssh-options)
 (defvar tmux-control-session-activity)
@@ -221,15 +226,18 @@ Ordinary perspectives retain their existing labels and click actions."
 
 (defcustom roost-magit-status-sections t
   "Whether Magit's status of a task's worktree names the task.
-It then also shows the agent's latest reply, folded.  Review notes and
+It then also shows the agent's latest reply, folded, and the task's
+commits not yet merged into its integration branch.  Review notes and
 Roost's keys in Magit do not depend on this."
   :type 'boolean)
 
-(defcustom roost-merge-style 'merge
+(defcustom roost-merge-style 'squash
   "How `roost-merge-retire' brings a task's work into its integration branch.
-`merge' makes a merge commit, keeping the task's commits as they are.
 `squash' adds one commit holding all the task's work, with a message
-made from its commits, so small tasks keep the history straight."
+made from its commits, so each task is one change in the history and
+the merges that brought the task up to date (`roost-update') leave no
+trace there.  `merge' makes a merge commit, keeping the task's commits
+as they are."
   :type '(choice (const :tag "Merge commit" merge)
                  (const :tag "One squashed commit" squash)))
 
@@ -339,6 +347,9 @@ A ready agent you have seen since its last event is no longer waiting.")
 (defvar roost--current-task nil
   "Key of the task most recently opened.")
 (defvar roost--watch-timer nil)
+(defvar roost--watching-on-demand nil
+  "Non-nil when Roost began watching only because you opened it.
+The setup check then suggests watching from the start of each session.")
 (defvar roost--requests nil
   "Live RPC processes.")
 (defvar roost--open-generation 0
@@ -974,13 +985,16 @@ to another task.  Each task has a session of its own."
        (equal (roost--field task 'session) (tmux-control-buffer-session))))
 
 (defun roost--watched-task ()
-  "The task whose agent's terminal is in the selected window, if any.
-Only while Emacs has focus, since otherwise nobody is looking."
-  (when (and (frame-focus-state) (fboundp 'tmux-control-active-pane))
+  "The task whose agent's terminal or panel is in the selected window, if any.
+A panel counts, since it starts with the agent's latest reply.  Only
+while Emacs has focus, since otherwise nobody is looking."
+  (when (frame-focus-state)
     (with-current-buffer (window-buffer (selected-window))
-      (when (tmux-control-active-pane)
-        (seq-find (lambda (task) (roost--terminal-shows-p task (list (roost--field task 'paneId))))
-                  (roost-tasks))))))
+      (cond ((derived-mode-p 'roost-task-info-mode)
+             (and roost--buffer-task-key (gethash roost--buffer-task-key roost--tasks)))
+            ((and (fboundp 'tmux-control-active-pane) (tmux-control-active-pane))
+             (seq-find (lambda (task) (roost--terminal-shows-p task (list (roost--field task 'paneId))))
+                       (roost-tasks)))))))
 
 (defun roost--note-watched-agent ()
   "Mark seen the agent whose terminal is in the selected window."
@@ -1450,7 +1464,7 @@ EXTRA is an alist of further request fields, such as the GitHub issue."
          (roost--remember-project (roost--project-directory (cons (cons 'host host) task))))
        (setq task (roost--cache-task host task))
        (when on-success (funcall on-success task))
-       (roost-watch-mode 1)
+       (roost--watch-on-demand)
        (roost--redraw)
        (roost-open-task task)
        (message "Roost created %s on %s from %s; integrates into %s"
@@ -2253,7 +2267,9 @@ no longer counts the note as its own, so sending it leaves the note."
   :doc "Roost's keys in Magit on a task's worktree."
   ";" #'roost-note
   "=" #'roost-diff-whole-file
-  "@" #'roost-send)
+  "@" #'roost-send
+  ;; As in the task's terminal.
+  "C-c ?" #'roost-dispatch)
 
 (easy-menu-define roost-magit-menu roost-magit-mode-map
   "Menu for Roost in Magit on a task's worktree."
@@ -2294,7 +2310,13 @@ less diff context.
   (add-hook 'magit-refresh-buffer-hook #'roost--magit-buffer-refreshed)
   (magit-add-section-hook 'magit-status-headers-hook #'roost--magit-insert-task-header nil t)
   (magit-add-section-hook 'magit-status-sections-hook #'roost--magit-insert-reply
-                          'magit-insert-status-headers t))
+                          'magit-insert-status-headers t)
+  ;; Where Magit lists commits; at the end if you have removed those.
+  (let ((at (seq-find (lambda (inserter) (memq inserter (default-value 'magit-status-sections-hook)))
+                      '(magit-insert-unpushed-to-upstream-or-recent
+                        magit-insert-unpushed-to-upstream magit-insert-recent-commits))))
+    (magit-add-section-hook 'magit-status-sections-hook #'roost--magit-insert-unmerged
+                            at (not at))))
 
 (defun roost--magit-teardown ()
   "Remove what `roost--magit-setup' added, from Magit and its buffers."
@@ -2302,7 +2324,8 @@ less diff context.
   (when (featurep 'magit)
     (remove-hook 'magit-refresh-buffer-hook #'roost--magit-buffer-refreshed)
     (remove-hook 'magit-status-headers-hook #'roost--magit-insert-task-header)
-    (remove-hook 'magit-status-sections-hook #'roost--magit-insert-reply))
+    (remove-hook 'magit-status-sections-hook #'roost--magit-insert-reply)
+    (remove-hook 'magit-status-sections-hook #'roost--magit-insert-unmerged))
   (dolist (buffer (buffer-list))
     (when (buffer-local-value 'roost-magit-mode buffer)
       (with-current-buffer buffer
@@ -2361,6 +2384,31 @@ It starts folded, showing its first line.  See `roost-magit-status-sections'."
                                        (or (roost--last-message-summary task) "") room nil nil "…"))
                          'face 'roost-dim))))
        (insert (replace-regexp-in-string "^" "  " reply) "\n\n")))))
+
+(defun roost--magit-insert-unmerged ()
+  "In Magit's status of a task's worktree, insert the commits to review.
+They are the task's commits not yet in the branch it merges into.  A
+task's branch has no upstream, so Magit itself shows only recent
+commits, and the work an agent committed would have no place there.
+As in Magit's own sections of unmerged commits, RET on the heading shows
+their changes together.  See `roost-magit-status-sections'."
+  (when-let* ((roost-magit-status-sections)
+              (task (roost--task-in-directory default-directory))
+              (integration (roost--field task 'integrationBranch))
+              ((stringp integration))
+              ;; Magit shows the commits itself then.
+              ((not (equal (magit-get-upstream-branch) integration)))
+              ((magit-rev-verify integration)))
+    (let ((range (concat integration "..")))
+      (roost--magit-insert-section
+       'unpushed range nil
+       (lambda ()
+         (magit-insert-heading
+           (format (propertize "Unmerged into %s." 'font-lock-face 'magit-section-heading)
+                   integration))
+         ;; With no commits, Magit leaves the section out.
+         (magit--insert-log nil range magit-buffer-log-args)
+         (magit-log-insert-child-count))))))
 
 (defun roost--magit-insert-section (type value hide insert)
   "Insert a Magit section of TYPE with VALUE, folded if HIDE, using INSERT.
@@ -2727,7 +2775,7 @@ agent do it."
             (branch (roost--field updated 'integrationBranch)))
        (roost--refresh-host (roost--field updated 'host) nil)
        (cond (conflicts
-              (if (yes-or-no-p (format "%s conflicts with %s in %s. Ask its agent to resolve them? "
+              (if (y-or-n-p (format "%s conflicts with %s in %s.  Ask its agent to resolve them? "
                                        name branch (string-join conflicts ", ")))
                   (roost-send updated
                               (format "I merged %s into this branch and Git reports conflicts in: %s. Resolve the conflicts so the changes from both sides keep working, run the tests, and commit the merge."
@@ -2742,7 +2790,7 @@ agent do it."
          (message "Roost %s: %s" (roost--host-label (roost--field task 'host)) err)
        (let ((name (roost--field task 'name))
              (branch (roost--field task 'integrationBranch)))
-         (if (yes-or-no-p (format "%s has changes not yet committed. Ask its agent to commit them and merge %s? "
+         (if (y-or-n-p (format "%s has changes not yet committed.  Ask its agent to commit them and merge %s? "
                                   name branch))
              (roost-send task
                          (format "Commit your changes, then merge %s into this branch. If that conflicts, resolve the conflicts so the changes from both sides keep working. Run the tests, and commit the merge."
@@ -3025,7 +3073,7 @@ Without a status from GitHub yet, a recorded pull request counts as open."
   "Stop TASK's window, retaining its worktree, branch and conversation."
   (interactive)
   (setq task (roost--choose task))
-  (when (yes-or-no-p (format "Stop %s's window and its processes, keeping its work? "
+  (when (y-or-n-p (format "Stop %s's window and its processes, keeping its work? "
                              (roost--field task 'name)))
     (roost--act task "stop")))
 
@@ -3065,7 +3113,7 @@ merges it instead."
       (user-error "%s's agent is at work; stop it (K) first, or wait" name))
      ((roost--unmerged-work-p task)
       (funcall offer))
-     ((yes-or-no-p (format "Retire %s, removing its merged worktree and branch? " name))
+     ((y-or-n-p (format "Retire %s, removing its worktree and branch?  Nothing in them would be lost. " name))
       (funcall retire)))))
 
 ;;;###autoload
@@ -3081,7 +3129,7 @@ comes in as a merge commit, or one squashed commit; see `roost-merge-style'."
     (when (y-or-n-p (format "%s has uncommitted changes to commit first.  Open Magit? "
                             (roost--field task 'name)))
       (roost-review task)))
-   ((yes-or-no-p (format (if (eq roost-merge-style 'squash)
+   ((y-or-n-p (format (if (eq roost-merge-style 'squash)
                              "Squash committed work from %s into one commit and retire it? "
                            "Merge committed work from %s and retire it? ")
                          (roost--field task 'name)))
@@ -3175,7 +3223,14 @@ File buffers stay, since they may hold unsaved edits."
         (kill-buffer buffer)))))
 
 (defun roost--retired-workspace (task)
-  "Remove TASK's workspace, retaining buffers."
+  "Remove TASK's workspace and panel, retaining other buffers.
+A window made to show the panel goes away; any other goes back to what
+it showed before."
+  (let ((key (roost--key task)))
+    (dolist (buffer (buffer-list))
+      (when (and (equal (buffer-local-value 'roost--buffer-task-key buffer) key)
+                 (eq (buffer-local-value 'major-mode buffer) 'roost-task-info-mode))
+        (quit-windows-on buffer t))))
   (pcase (roost--workspace-backend)
     ('perspective
      (when (fboundp 'persp-kill)
@@ -4739,7 +4794,7 @@ The mark stays where it was."
     (roost--leave-side-window)
     (pop-to-buffer buffer '((display-buffer-reuse-window display-buffer-same-window)))
     (roost--redraw))
-  (roost-watch-mode 1)
+  (roost--watch-on-demand)
   (roost-refresh))
 
 ;;;; Searching conversations
@@ -5537,6 +5592,10 @@ RESULT is `pending', a list of checks, or (error . MESSAGE).")
                   ('tab-bar "a tab per task (tab-bar-mode)")
                   (_ "none; tasks open in the selected window (see `roost-workspace')"))
                 nil)
+          (if (and roost-watch-mode (not roost--watching-on-demand))
+              (list "Watching" t "from the start of the session" nil)
+            (list "Watching" 'optional "once you open Roost"
+                  "Optional: (roost-watch-mode 1) in your configuration tells you from the start when an agent needs you"))
           (roost--doctor-notifications))))
 
 (defun roost--doctor-notifications ()
@@ -5703,18 +5762,39 @@ to `mode-line-format'."
 (defconst roost--mode-line-entry '(roost-mode-line-count (:eval (roost--mode-line-count)))
   "The `global-mode-string' entry for `roost-watch-mode'.")
 
+(defun roost--watch-on-demand ()
+  "Watch, as opening Roost does; see `roost--watching-on-demand'."
+  (unless roost-watch-mode
+    (setq roost--watching-on-demand t)
+    (roost-watch-mode 1)))
+
+(defun roost--in-terminal (command)
+  "COMMAND in an agent's terminal, and nil elsewhere.
+A key filter, so that the key keeps its own meaning in other buffers."
+  (and (derived-mode-p 'tmux-control-mode) command))
+
+(defvar-keymap roost-watch-mode-map
+  :doc "Roost's keys while it watches.
+In an agent's terminal, where every other key goes to the agent,
+\\`C-c ?' opens Roost's menu for its task."
+  "C-c ?" '(menu-item "" roost-dispatch :filter roost--in-terminal))
+
 ;;;###autoload
 (define-minor-mode roost-watch-mode
   "Watch tasks asynchronously, retaining cached records during disconnects.
-While watching, the mode line counts the agents waiting for you; see
-`roost-mode-line-count'.  Opening the dashboard or sidebar, or starting
-a task, turns this on; it refreshes every `roost-watch-interval' seconds
-while Emacs has focus, and every `roost-watch-unfocused-interval'
-otherwise.  Turning it off leaves the sidebar marked paused."
+While watching, the mode line counts the agents waiting for you (see
+`roost-mode-line-count'), Roost notifies you when one needs you, and
+\`C-c ?' in an agent's terminal opens Roost's menu.  Opening the
+dashboard or sidebar, or starting a task, turns this on; turn it on in
+your configuration to be told from the start of each session.  It
+refreshes every `roost-watch-interval' seconds while Emacs has focus,
+and every `roost-watch-unfocused-interval' otherwise.  Turning it off
+leaves the sidebar marked paused."
   :global t
   (when roost--watch-timer
     (cancel-timer roost--watch-timer)
     (setq roost--watch-timer nil))
+  (unless roost-watch-mode (setq roost--watching-on-demand nil))
   (setq global-mode-string (delete roost--mode-line-entry (ensure-list global-mode-string)))
   ;; The mode line asks for its light again if it still shows it.
   (remhash '(mode-line . waiting) roost--lights)

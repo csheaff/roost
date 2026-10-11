@@ -27,7 +27,10 @@
          (roost--requests nil) (roost-notify nil) (roost--current-task nil))
      (set-frame-parameter nil 'roost-task nil)
      ;; Seeing an agent is recorded on its host too; tests that check it say so.
-     (cl-letf (((symbol-function 'roost--record-seen) #'ignore))
+     (cl-letf (((symbol-function 'roost--record-seen) #'ignore)
+               ;; A question nobody stubbed would wait for input forever.
+               ((symbol-function 'y-or-n-p) (lambda (prompt &rest _) (error "Unexpected question: %s" prompt)))
+               ((symbol-function 'yes-or-no-p) (lambda (prompt) (error "Unexpected question: %s" prompt))))
        (unwind-protect (progn ,@body)
          (set-frame-parameter nil 'roost-task nil)))))
 
@@ -1411,9 +1414,11 @@
        (should (equal (caar acted) "discard"))
        ;; With nothing to lose, x retires.
        (setq acted nil)
-       (let ((merged (roost--cache-task "dev" (append '((ahead . 0) (dirty)) (roost-test--task nil "ready")))))
-         (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
-           (roost-retire merged)))
+       (let ((merged (roost--cache-task "dev" (append '((ahead . 0) (dirty)) (roost-test--task nil "ready"))))
+             question)
+         (cl-letf (((symbol-function 'y-or-n-p) (lambda (prompt &rest _) (setq question prompt) t)))
+           (roost-retire merged))
+         (should (string-match-p "Nothing in them would be lost" question)))
        (should (equal (caar acted) "retire"))
        ;; Not while its agent works.
        (should-error (roost-retire (roost--cache-task "dev" (roost-test--task nil "running"))) :type 'user-error)))))
@@ -1606,6 +1611,60 @@
     (cl-letf (((symbol-function 'executable-find) (lambda (name &rest _) (equal name "terminal-notifier")))
               ((symbol-function 'roost--emacsclient-command) (lambda (&rest _) "emacsclient")))
       (should (eq (nth 1 (roost--doctor-notifications)) t)))))
+
+(ert-deftest roost-doctor-says-whether-roost-watches-from-startup ()
+  (let ((roost-watch-mode nil) (roost--watching-on-demand nil))
+    (should (eq (nth 1 (assoc "Watching" (roost--doctor-local-checks))) 'optional)))
+  ;; Opening the dashboard watched only from then on.
+  (let ((roost-watch-mode t) (roost--watching-on-demand t))
+    (should (string-match-p "(roost-watch-mode 1)" (nth 3 (assoc "Watching" (roost--doctor-local-checks))))))
+  (let ((roost-watch-mode t) (roost--watching-on-demand nil))
+    (should (eq (nth 1 (assoc "Watching" (roost--doctor-local-checks))) t))))
+
+(ert-deftest roost-c-c-?-opens-the-menu-in-agents-terminals ()
+  ;; Every other key in an agent's terminal goes to the agent.
+  (let ((roost-watch-mode t))
+    (with-temp-buffer
+      (setq major-mode 'tmux-control-mode)
+      (should (eq (key-binding (kbd "C-c ?")) #'roost-dispatch)))
+    ;; Elsewhere the key keeps its own meaning.
+    (with-temp-buffer
+      (use-local-map (define-keymap "C-c ?" #'ignore))
+      (should (eq (key-binding (kbd "C-c ?")) #'ignore))))
+  (should (eq (keymap-lookup roost-magit-mode-map "C-c ?") #'roost-dispatch)))
+
+(ert-deftest roost-a-finished-tasks-panel-closes-with-it ()
+  ;; It stayed, saying the task was retired, and kept the panel of the
+  ;; next task from docking beside its terminal.
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (roost-test--task)))
+         (other (roost--cache-task "dev" (roost-test--task "1111111111111111"))))
+     (cl-letf (((symbol-function 'roost--refresh-host) #'ignore))
+       (save-window-excursion
+         (delete-other-windows)
+         (let ((kept (roost--task-info-buffer other)))
+           (roost-task-info task)
+           (let ((panel (window-buffer (selected-window))))
+             (should (= (count-windows) 2))
+             (roost--retired-workspace task)
+             (should-not (buffer-live-p panel))
+             (should (= (count-windows) 1))
+             (should (buffer-live-p kept))
+             (kill-buffer kept))))))))
+
+(ert-deftest roost-reading-a-tasks-panel-sees-its-agent ()
+  ;; Reading the reply in the panel left the task waiting, and n went back to it.
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (roost-test--task nil "ready"))))
+     (cl-letf (((symbol-function 'frame-focus-state) (lambda (&rest _) t)))
+       (save-window-excursion
+         (switch-to-buffer (roost--task-info-buffer task))
+         (unwind-protect
+             (progn
+               (should (equal (roost--key (roost--watched-task)) (roost--key task)))
+               (roost--note-watched-agent)
+               (should-not (roost--waiting-p (gethash (roost--key task) roost--tasks))))
+           (kill-buffer)))))))
 
 (ert-deftest roost-a-task-offers-what-it-can-do-now ()
   ;; A stopped task's panel offered Stop, Shell and Send, which its host refuses.
@@ -2875,7 +2934,7 @@
 (ert-deftest roost-merging-measures-the-other-tasks-again ()
   (roost-test--isolated
    (let ((task (roost--cache-task "dev" (roost-test--task))) refreshes)
-     (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_) t))
+     (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
                ((symbol-function 'roost--request)
                 (lambda (_host _action _params success &optional _failure)
                   (funcall success (append '((status . "retired")) (roost-test--task)))))
@@ -2959,7 +3018,7 @@
                                              (integrationBranch . "main"))
                                            (roost-test--task)))))
                ((symbol-function 'roost--refresh-host) #'ignore)
-               ((symbol-function 'yes-or-no-p) (lambda (_) t))
+               ((symbol-function 'y-or-n-p) (lambda (_) t))
                ((symbol-function 'roost-send) (lambda (_task text) (setq sent text))))
        (roost-update task)
        (should (string-match-p "merged main into this branch and Git reports conflicts in: a.py, b.py" sent))))))
@@ -3819,7 +3878,7 @@ ssh: connect to host dev port 22: Operation timed out"
                   (if (equal action "update")
                       (funcall failure "Commit the task's changes before updating it from main")
                     (setq sent (alist-get 'text params)))))
-               ((symbol-function 'yes-or-no-p) (lambda (_) answer))
+               ((symbol-function 'y-or-n-p) (lambda (_) answer))
                ((symbol-function 'message)
                 (lambda (format &rest args) (setq shown (apply #'format-message format args)))))
        (roost-update task)
@@ -3829,21 +3888,22 @@ ssh: connect to host dev port 22: Operation timed out"
        (roost-update task)
        (should (string-prefix-p "Commit your changes, then merge main into this branch." sent))))))
 
-(ert-deftest roost-merge-style-squash-asks-the-host-to-squash ()
+(ert-deftest roost-merge-style-squashes-unless-asked-to-merge ()
   (roost-test--isolated
    (let ((task (roost--cache-task "dev" (roost-test--task))) params question)
      (cl-letf (((symbol-function 'roost--request)
                 (lambda (_host action request &rest _)
                   (when (equal action "merge") (setq params request))))
-               ((symbol-function 'yes-or-no-p) (lambda (prompt) (setq question prompt) t))
+               ((symbol-function 'y-or-n-p) (lambda (prompt) (setq question prompt) t))
                ((symbol-function 'roost--release-terminal) #'ignore))
        (roost-merge-retire task)
+       (should (equal (alist-get 'style params) "squash"))
+       (should (string-prefix-p "Squash committed work from fix auth into one commit" question))
+       (let ((roost-merge-style 'merge))
+         (roost-merge-retire task))
        (should (assq 'id params))
        (should-not (assq 'style params))
-       (let ((roost-merge-style 'squash))
-         (roost-merge-retire task))
-       (should (equal (alist-get 'style params) "squash"))
-       (should (string-prefix-p "Squash committed work from fix auth into one commit" question))))))
+       (should (string-prefix-p "Merge committed work from fix auth" question))))))
 
 (ert-deftest roost-task-commands-are-greyed-out-with-no-tasks ()
   (roost-test--isolated
@@ -4253,6 +4313,33 @@ Its a.txt has ten lines, committed.  Skipped without Magit."
               (should-not roost-magit-mode)
               (should-not (string-match-p "^Task:" (buffer-string)))))
         (delete-directory other t)))))
+
+(ert-deftest roost-magit-status-lists-the-commits-to-review ()
+  ;; A task branch has no upstream, so Magit showed only recent commits,
+  ;; and the work an agent committed had no place in the status.
+  (roost-test--with-magit-task
+    (call-process "git" nil nil nil "branch" "-M" "main")
+    (call-process "git" nil nil nil "checkout" "-qb" "task")
+    (magit-status-setup-buffer dir)
+    (with-current-buffer (magit-get-mode-buffer 'magit-status-mode)
+      (should-not (string-match-p "^Unmerged into main" (buffer-string))))
+    (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")
+    (call-process "git" nil nil nil "commit" "-qam" "Add a line")
+    (with-current-buffer (magit-get-mode-buffer 'magit-status-mode)
+      (magit-refresh-buffer)
+      (goto-char (point-min))
+      (re-search-forward "^Unmerged into main")
+      (let ((section (magit-current-section)))
+        (should (eq (eieio-oref section 'type) 'unpushed))
+        (should (equal (eieio-oref section 'value) "main.."))
+        (should (= (length (eieio-oref section 'children)) 1))
+        ;; RET on the heading shows the task's changes since it left main.
+        (should (equal (magit-diff--dwim) "main...")))
+      (should (string-match-p "Add a line" (buffer-string))))
+    (let ((roost-magit-status-sections nil))
+      (with-current-buffer (magit-get-mode-buffer 'magit-status-mode)
+        (magit-refresh-buffer)
+        (should-not (string-match-p "^Unmerged into main" (buffer-string)))))))
 
 (ert-deftest roost-evil-users-get-roosts-keys-in-magit ()
   (skip-unless (or (featurep 'evil)
