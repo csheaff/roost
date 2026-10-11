@@ -49,7 +49,10 @@ Since 0.8.1:
   `$ROOST_REPO`; a notification click opens its task (terminal-notifier).
 - Claude Code worktrees an agent makes for itself show in its task's panel.
 - Review notes: in Magit on a task, `;` writes a note for the agent on a
-  line and `@` sends your notes; `=` shows a whole file's diff. The status
+  line, in a box that opens under it, and `@` sends your notes. With the
+  mouse, click the `+` that shows beside the diff line under it (drag for
+  more lines), and click a note to edit it, send it alone or discard it.
+  `'` goes to a note chosen in the minibuffer. `=` shows a whole file's diff. The status
   names the task and folds in the agent's latest reply. A draft prompt
   (`e`, or `roost-send-region`) now keeps what you have written and adds to it.
 - A new task's project is the one you are in again, also in Dired or a

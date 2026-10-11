@@ -120,7 +120,7 @@ Summoned with `r`, it refreshes only when you ask.
 | Orca | Roost |
 | --- | --- |
 | Source Control: staged, unstaged and untracked files, stage per file | Magit's status (`r`), staging files, hunks or lines; it names the task and folds in the agent's latest reply |
-| Notes on a line, a range or a file | `;` in Magit on a task: on the line at point, the region's lines, or a file's name. Notes show under their lines in every Magit buffer on the task, follow their line when the agent edits above it, and survive restarts |
+| Notes on a line, a range or a file | `;` in Magit on a task, or the `+` beside the diff line under the mouse: on the line at point, the region's lines (or the lines dragged along), or a file's name, written in a box under the line. Notes show under their lines in every Magit buffer on the task, follow their line when the agent edits above it, and survive restarts. Click one to edit it, send it alone or discard it; `'` lists them in the minibuffer |
 | Send notes: this file, or all unsent | `@` (or `e`) drafts a prompt holding every unsent note, quoting the lines they are about; sending it clears them |
 | The diff of a whole file in the editor area | `=` (`g=` with Evil) shows the whole file with its changes, as a Magit diff you can still stage from |
 

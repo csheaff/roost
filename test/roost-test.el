@@ -4208,6 +4208,19 @@ Its a.txt has ten lines, committed.  Skipped without Magit."
   (re-search-forward (concat "^[-+ ]" (regexp-quote text) "$"))
   (beginning-of-line))
 
+(defun roost-test--write-note (text &optional initial)
+  "Write TEXT in the note box `roost-note' opens here, and save it.
+With INITIAL, the box must start out holding it."
+  (save-current-buffer
+    (roost-note)
+    (with-current-buffer (plist-get roost--note-box :buffer)
+      (should (derived-mode-p 'roost-note-box-mode))
+      (when initial (should (equal (buffer-string) initial)))
+      (erase-buffer)
+      (insert text)
+      (roost-note-box-save)))
+  (should-not roost--note-box))
+
 (defun roost-test--shown-notes ()
   "The notes shown in this buffer, as (TEXT-OF-LINE . NOTE-TEXT), in order."
   (seq-mapcat (lambda (overlay)
@@ -4226,42 +4239,33 @@ Its a.txt has ten lines, committed.  Skipped without Magit."
     (magit-diff-unstaged)
     (with-current-buffer (magit-get-mode-buffer 'magit-diff-mode)
       (should roost-magit-mode)
-      (let (answer)
-        (cl-letf (((symbol-function 'read-string) (lambda (_prompt &optional initial) (or answer initial ""))))
-          ;; An added line.
-          (roost-test--goto-line-text "new line")
-          (setq answer "Name it")
-          (roost-note)
-          ;; A context line and the added one, as a region.
-          (roost-test--goto-line-text "line 4")
-          (set-mark (point))
-          (forward-line 2)
-          (activate-mark)
-          (setq answer "These two")
-          (roost-note)
-          (should-not (use-region-p))
-          ;; The whole file, from its name.
-          (goto-char (point-min))
-          (re-search-forward "^modified +a.txt")
-          (setq answer "Whole file")
-          (roost-note)
-          (should (equal (mapcar (lambda (note) (roost--format-note note)) roost--notes)
-                         '("a.txt:5\n> +new line\nName it"
-                           "a.txt:4-5\n>  line 4\n> +new line\nThese two"
-                           "a.txt\nWhole file")))
-          (should (equal (roost-test--shown-notes)
-                         '(("modified   a.txt" . "Whole file")
-                           ("+new line" . "Name it")
-                           ("+new line" . "These two"))))
-          ;; On a noted line, the note is edited; left empty, removed.
-          (roost-test--goto-line-text "new line")
-          (setq answer nil)
-          (cl-letf (((symbol-function 'read-string) (lambda (_prompt &optional initial)
-                                                      (should (equal initial "Name it"))
-                                                      "")))
-            (roost-note))
-          (should (equal (mapcar (lambda (note) (alist-get 'text note)) roost--notes)
-                         '("These two" "Whole file"))))))))
+      ;; An added line.
+      (roost-test--goto-line-text "new line")
+      (roost-test--write-note "Name it")
+      ;; A context line and the added one, as a region.
+      (roost-test--goto-line-text "line 4")
+      (set-mark (point))
+      (forward-line 2)
+      (activate-mark)
+      (roost-test--write-note "These two")
+      (should-not (use-region-p))
+      ;; The whole file, from its name.
+      (goto-char (point-min))
+      (re-search-forward "^modified +a.txt")
+      (roost-test--write-note "Whole file")
+      (should (equal (mapcar (lambda (note) (roost--format-note note)) roost--notes)
+                     '("a.txt:5\n> +new line\nName it"
+                       "a.txt:4-5\n>  line 4\n> +new line\nThese two"
+                       "a.txt\nWhole file")))
+      (should (equal (roost-test--shown-notes)
+                     '(("modified   a.txt" . "Whole file")
+                       ("+new line" . "Name it")
+                       ("+new line" . "These two"))))
+      ;; On a noted line, the note is edited; saved empty, removed.
+      (roost-test--goto-line-text "new line")
+      (roost-test--write-note "" "Name it")
+      (should (equal (mapcar (lambda (note) (alist-get 'text note)) roost--notes)
+                     '("These two" "Whole file"))))))
 
 (ert-deftest roost-a-note-on-a-region-stays-within-one-hunk ()
   (roost-test--with-magit-task
@@ -4269,36 +4273,35 @@ Its a.txt has ten lines, committed.  Skipped without Magit."
     (roost-test--write-lines "a.txt" (append '(0) (number-sequence 2 9) '(11)))
     (magit-diff-unstaged)
     (with-current-buffer (magit-get-mode-buffer 'magit-diff-mode)
-      (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "Why?")))
-        (dolist (forward '(t nil))
-          (roost-test--goto-line-text (if forward "line 0" "line 11"))
-          (set-mark (point))
-          (roost-test--goto-line-text (if forward "line 11" "line 0"))
-          (activate-mark)
-          (should-error (roost-note) :type 'user-error)
-          (deactivate-mark))
-        (should-not roost--notes)
-        ;; Within one hunk, a region is fine.
-        (roost-test--goto-line-text "line 1")
+      (dolist (forward '(t nil))
+        (roost-test--goto-line-text (if forward "line 0" "line 11"))
         (set-mark (point))
-        (forward-line 2)
+        (roost-test--goto-line-text (if forward "line 11" "line 0"))
         (activate-mark)
-        (roost-note)
-        (should (equal (roost--format-note (car roost--notes))
-                       "a.txt:1\n> -line 1\n> +line 0\nWhy?"))))))
+        (should-error (roost-note) :type 'user-error)
+        (should-not roost--note-box)
+        (deactivate-mark))
+      (should-not roost--notes)
+      ;; Within one hunk, a region is fine.
+      (roost-test--goto-line-text "line 1")
+      (set-mark (point))
+      (forward-line 2)
+      (activate-mark)
+      (roost-test--write-note "Why?")
+      (should (equal (roost--format-note (car roost--notes))
+                     "a.txt:1\n> -line 1\n> +line 0\nWhy?")))))
 
 (ert-deftest roost-a-note-shows-under-the-last-line-chosen ()
   (roost-test--with-magit-task
     (roost-test--write-lines "a.txt" (append (number-sequence 1 4) (number-sequence 6 10)))
     (magit-diff-unstaged)
     (with-current-buffer (magit-get-mode-buffer 'magit-diff-mode)
-      (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "Keep this")))
-        ;; An unchanged line, then the removed one after it.
-        (roost-test--goto-line-text "line 4")
-        (set-mark (point))
-        (forward-line 2)
-        (activate-mark)
-        (roost-note))
+      ;; An unchanged line, then the removed one after it.
+      (roost-test--goto-line-text "line 4")
+      (set-mark (point))
+      (forward-line 2)
+      (activate-mark)
+      (roost-test--write-note "Keep this")
       (should (equal (roost--format-note (car roost--notes))
                      "a.txt:4\n>  line 4\n> -line 5\nKeep this"))
       (should (equal (roost-test--shown-notes) '(("-line 5" . "Keep this")))))))
@@ -4308,18 +4311,158 @@ Its a.txt has ten lines, committed.  Skipped without Magit."
     (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")
     (magit-diff-unstaged)
     (with-current-buffer (magit-get-mode-buffer 'magit-diff-mode)
-      (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "Removed?")))
-        ;; A removed line keeps the old version's numbers.
-        (roost-test--write-lines "a.txt" (append '(1 2 3 4) (number-sequence 6 10)) "new line\n")
-        (magit-refresh)
-        (roost-test--goto-line-text "line 5")
-        (roost-note)
-        (should (equal (roost--format-note (car roost--notes))
-                       "a.txt:5 (a removed line)\n> -line 5\nRemoved?")))
+      ;; A removed line keeps the old version's numbers.
+      (roost-test--write-lines "a.txt" (append '(1 2 3 4) (number-sequence 6 10)) "new line\n")
+      (magit-refresh)
+      (roost-test--goto-line-text "line 5")
+      (roost-test--write-note "Removed?")
+      (should (equal (roost--format-note (car roost--notes))
+                     "a.txt:5 (a removed line)\n> -line 5\nRemoved?"))
       ;; The agent adds two lines at the top: the note moves with its line.
       (roost-test--write-lines "a.txt" (append '(0 0 1 2 3 4) (number-sequence 6 10)) "new line\n")
       (magit-refresh)
       (should (equal (roost-test--shown-notes) '(("-line 5" . "Removed?")))))))
+
+(ert-deftest roost-the-note-box-cancels-and-keeps-what-you-wrote ()
+  (roost-test--with-magit-task
+    (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")
+    (magit-diff-unstaged)
+    (with-current-buffer (magit-get-mode-buffer 'magit-diff-mode)
+      ;; Cancelled, the box leaves no note.
+      (roost-test--goto-line-text "new line")
+      (save-current-buffer
+        (roost-note)
+        (with-current-buffer (plist-get roost--note-box :buffer)
+          (insert "Never mind")
+          (roost-note-box-cancel)))
+      (should-not roost--note-box)
+      (should-not roost--notes)
+      ;; A note being written is saved when another box opens.
+      (save-current-buffer
+        (roost-note)
+        (with-current-buffer (plist-get roost--note-box :buffer) (insert "Keep me")))
+      (roost-test--goto-line-text "line 4")
+      (save-current-buffer (roost-note))
+      (should (equal (mapcar (lambda (note) (alist-get 'text note)) roost--notes) '("Keep me")))
+      (should (equal (alist-get 'line (plist-get roost--note-box :place)) 4))
+      (roost-note-box-cancel)
+      (should (equal (roost-test--shown-notes) '(("+new line" . "Keep me")))))))
+
+(defun roost-test--margin-event (kind from &optional to)
+  "A mouse event of KIND in the left margin, from position FROM to TO."
+  (let ((posn (lambda (position)
+                (list (selected-window) 'left-margin '(1 . 1) 0 nil position '(0 . 0) nil '(1 . 1) '(10 . 10)))))
+    (if to
+        (list kind (funcall posn from) (funcall posn to))
+      (list kind (funcall posn from)))))
+
+(ert-deftest roost-notes-are-written-with-the-mouse ()
+  (roost-test--with-magit-task
+    (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")
+    (magit-diff-unstaged)
+    (let ((buffer (magit-get-mode-buffer 'magit-diff-mode)))
+      (set-window-buffer (selected-window) buffer)
+      (with-current-buffer buffer
+        ;; A click beside a line.
+        (roost-test--goto-line-text "new line")
+        (let ((line (point)))
+          (goto-char (point-min))
+          (save-current-buffer (roost-note-mouse (roost-test--margin-event 'mouse-1 (+ line 3)))))
+        (should (equal (alist-get 'line (plist-get roost--note-box :place)) 5))
+        (roost-note-box-cancel)
+        ;; A drag up along lines.
+        (let ((from (progn (roost-test--goto-line-text "new line") (point)))
+              (to (progn (roost-test--goto-line-text "line 3") (point))))
+          (save-current-buffer (roost-note-mouse (roost-test--margin-event 'drag-mouse-1 from to))))
+        (should (equal (roost--note-location (plist-get roost--note-box :place)) "a.txt:3-5"))
+        (roost-note-box-cancel)
+        ;; Beside a heading, a click only moves point.
+        (save-current-buffer (roost-note-mouse (roost-test--margin-event 'mouse-1 (point-min))))
+        (should-not roost--note-box)
+        (should (= (point) (point-min)))))))
+
+(ert-deftest roost-the-note-button-follows-the-mouse-over-diff-lines ()
+  (roost-test--with-magit-task
+    (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")
+    ;; As in a graphic frame, but with the button as text.
+    (cl-letf (((symbol-function 'display-graphic-p) #'always)
+              ((symbol-function 'display-images-p) #'ignore))
+      (magit-diff-unstaged)
+      (with-current-buffer (magit-get-mode-buffer 'magit-diff-mode)
+        (unwind-protect
+            (progn
+              (should (= left-margin-width 2))
+              (should (overlayp roost--note-hover))
+              (roost-test--goto-line-text "new line")
+              (let ((line (point)))
+                (roost--note-hover-echo (selected-window) roost--note-hover (+ line 2))
+                (should (eq (overlay-buffer roost--note-button) (current-buffer)))
+                (should (= (overlay-start roost--note-button) line))
+                (should (string-prefix-p "mouse-1" (get-text-property 0 'help-echo (overlay-get roost--note-button 'before-string)))))
+              ;; Over a heading, it goes.
+              (roost--note-hover-echo (selected-window) roost--note-hover (point-min))
+              (should-not (overlay-buffer roost--note-button))
+              ;; Without Roost, so does the margin.
+              (roost-magit-mode -1)
+              (should (= left-margin-width 0))
+              (should-not roost--note-hover))
+          (when (timerp roost--note-mouse-timer)
+            (cancel-timer roost--note-mouse-timer)
+            (setq roost--note-mouse-timer nil)))))))
+
+(ert-deftest roost-goes-to-a-note-chosen-in-the-minibuffer ()
+  (roost-test--with-magit-task
+    (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")
+    (magit-diff-unstaged)
+    (with-current-buffer (magit-get-mode-buffer 'magit-diff-mode)
+      (roost-test--goto-line-text "new line")
+      (roost-test--write-note "Name it\nwith care")
+      (roost-test--goto-line-text "line 2")
+      (roost-test--write-note "Fine")
+      (goto-char (point-min))
+      (let (choices)
+        (cl-letf (((symbol-function 'completing-read)
+                   (lambda (_prompt table &rest _)
+                     (setq choices (all-completions "" table))
+                     (car choices))))
+          (save-current-buffer (roost-goto-note task)))
+        (should (equal choices '("1. a.txt:5  Name it" "2. a.txt:2  Fine")))
+        (should (equal (buffer-substring-no-properties (point) (line-end-position)) "+new line"))))))
+
+(ert-deftest roost-a-note-clicked-is-edited-sent-or-discarded ()
+  (roost-test--with-magit-task
+    (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")
+    (magit-diff-unstaged)
+    (with-current-buffer (magit-get-mode-buffer 'magit-diff-mode)
+      (set-window-buffer (selected-window) (current-buffer))
+      (roost-test--goto-line-text "new line")
+      (roost-test--write-note "Name it")
+      (roost-test--goto-line-text "line 2")
+      (roost-test--write-note "Fine")
+      (let* (choice sent
+             (click (lambda (text)
+                      (let* ((overlay (seq-find (lambda (overlay)
+                                                  (equal (alist-get 'text (car (overlay-get overlay 'roost-notes)))
+                                                         text))
+                                                roost--note-overlays))
+                             (string (overlay-get overlay 'after-string)))
+                        (save-current-buffer
+                          (roost-note-mouse-menu
+                           (list 'mouse-1 (list (selected-window) (overlay-end overlay) '(1 . 1) 0
+                                                (cons string 5) (overlay-end overlay)))))))))
+        (cl-letf (((symbol-function 'x-popup-menu) (lambda (&rest _) choice))
+                  ((symbol-function 'roost--send-text)
+                   (lambda (_task text callback &rest _) (setq sent text) (funcall callback task))))
+          (setq choice 'edit)
+          (funcall click "Name it")
+          (should (equal (roost--note-box-text) "Name it"))
+          (roost-note-box-cancel)
+          (setq choice 'send)
+          (funcall click "Name it")
+          (should (equal sent "a.txt:5\n> +new line\nName it"))
+          (setq choice 'discard)
+          (funcall click "Fine")
+          (should-not roost--notes))))))
 
 (ert-deftest roost-magit-status-names-the-task-and-shows-notes ()
   (roost-test--with-magit-task

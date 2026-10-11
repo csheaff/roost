@@ -226,9 +226,16 @@ In Magit on a task's worktree, Roost adds a few keys, and a Roost menu:
 
 | Key | Command | |
 | --- | --- | --- |
-| `;` | `roost-note` | Write a note for the agent on the line at point, the region's lines, or the file; on a noted line, edit its note (empty removes it) |
+| `;` | `roost-note` | Write a note for the agent on the line at point, the region's lines, or the file, in a box that opens under it (`C-c C-c` saves, `C-c C-k` cancels); on a noted line, edit its note (saved empty, it is removed) |
+| `'` | `roost-goto-note` | Go to one of the task's notes, chosen in the minibuffer |
 | `@` | `roost-send` | Draft a prompt to the agent, holding your notes |
 | `=` | `roost-diff-whole-file` | Show the whole file with its changes; staging still works (`0` goes back to hunks). A new file opens as it is. With Evil, `g=` |
+
+With the mouse, a `+` shows beside the diff line under the pointer: click it
+to write a note on that line, or drag from it along lines for a note on
+them. Click a note for a menu that edits it, sends it alone to the agent, or
+discards it. The box is a child frame over room left under the line; in a
+terminal, it opens in a window below.
 
 `M-x roost-discard-notes` drops a task's notes unsent. In a task's panel, `e`
 also drafts a prompt holding them.
@@ -267,6 +274,8 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
   terminal of Roost's own, relayed to its tmux pane, that does: an approval, a
   declined request and Esc then show at once.
 - `roost-notes-file`: review notes not yet sent, kept across sessions.
+  `roost-note-box-lines` (4): how many lines of text the box for writing one
+  shows. Faces `roost-note` and `roost-note-button` color the notes and the `+`.
 - `roost-magit-status-sections` (t): whether Magit's status of a task's
   worktree names the task and folds in its agent's latest reply.
 - `roost-branch-prefix`: topic branches are `PREFIX<name>-<id>`; default `roost/`.
