@@ -3464,8 +3464,10 @@ change when they show."
   (force-mode-line-update t))
 
 (defun roost--light-margins-shown (window)
-  "Give WINDOW, which has just started showing its buffer, the margin for lights."
-  (with-current-buffer (window-buffer window)
+  "Give WINDOW the margin for lights, if it has started showing this buffer.
+The hook runs, with this buffer current, for a window that stopped
+showing it too; that one is left alone."
+  (when (eq (window-buffer window) (current-buffer))
     (roost--light-margins)))
 
 (defun roost--lights-start ()

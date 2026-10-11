@@ -2428,6 +2428,15 @@
                (set-window-margins nil 2)
                (roost--light-margins-shown (selected-window))
                (should-not (car (window-margins)))
+               ;; Run for a window that went on to show another buffer, it
+               ;; leaves that one alone.
+               (let ((lights (current-buffer)))
+                 (with-temp-buffer
+                   (set-window-buffer nil (current-buffer))
+                   (with-current-buffer lights (roost--light-margins-shown (selected-window)))
+                   (should-not (local-variable-p 'roost--light-margin))
+                   (should-not (memq #'roost--light-margins-shown window-buffer-change-functions)))
+                 (set-window-buffer nil lights))
                (setq on nil)
                (roost--light-margins)
                (should (= left-margin-width 0))
