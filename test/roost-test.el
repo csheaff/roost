@@ -272,6 +272,31 @@
      (should (equal line "one two"))
      (should (eq (get-text-property 3 'face line) 'roost-prose)))))
 
+(ert-deftest roost-measuring-text-leaves-a-shown-buffer-as-it-was-drawn ()
+  (roost-test--isolated
+   ;; Measured in a window showing the buffer, as a panel beside a
+   ;; terminal is while it is redrawn.
+   (let ((task (roost--cache-task "dev" (append `((lastMessage . ,roost-test--reply))
+                                                (roost-test--task nil "permission")))))
+     (with-temp-buffer
+       (let ((window (split-window)))
+         (unwind-protect
+             (progn
+               (set-window-buffer window (current-buffer))
+               (insert "one\ntwo\n")
+               (set-window-point window 1)
+               (goto-char (point-max))
+               (roost--text-width "word")
+               (should (= (point) (point-max)))
+               (roost-task-info-mode)
+               (setq roost--buffer-task-key (roost--key task))
+               (roost--render-task-info)
+               (should (string-prefix-p "fix auth" (buffer-string)))
+               (should (< (string-search "Agent's latest reply" (buffer-string))
+                          (string-search "Changes" (buffer-string))
+                          (string-search "Details" (buffer-string)))))
+           (delete-window window)))))))
+
 (ert-deftest roost-a-dashboard-summary-cut-short-says-so ()
   (roost-test--isolated
    ;; A narrow proportional font fits four letters in a column, so the

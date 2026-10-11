@@ -4181,17 +4181,20 @@ counts.  In a text frame, as in batch, this is STRING's width in columns."
                                (lambda (a b) (eq (window-frame a) (window-frame b))))
                      (list (selected-window))))
         (remapping face-remapping-alist))
-    (with-current-buffer (get-buffer-create " *roost text width*")
-      ;; As `text-scale-adjust' leaves it in the buffer measured for, and
-      ;; with no line numbers, which a global mode may have turned on.
-      (setq-local face-remapping-alist remapping
-                  display-line-numbers nil)
-      (erase-buffer)
-      (insert string)
-      (apply #'max (mapcar (lambda (window)
-                             (/ (float (car (buffer-text-pixel-size nil window t)))
-                                (window-font-width window)))
-                           windows)))))
+    ;; Measuring in a window showing this buffer puts the buffer's point
+    ;; where the window's is, and a drawing in progress needs its own.
+    (save-excursion
+      (with-current-buffer (get-buffer-create " *roost text width*")
+        ;; As `text-scale-adjust' leaves it in the buffer measured for, and
+        ;; with no line numbers, which a global mode may have turned on.
+        (setq-local face-remapping-alist remapping
+                    display-line-numbers nil)
+        (erase-buffer)
+        (insert string)
+        (apply #'max (mapcar (lambda (window)
+                               (/ (float (car (buffer-text-pixel-size nil window t)))
+                                  (window-font-width window)))
+                             windows))))))
 
 (defun roost--fit-width (string columns)
   "The longest start of STRING no wider than COLUMNS, as shown."
