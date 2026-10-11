@@ -5544,7 +5544,8 @@ refresh of Magit's status does a dozen times or more."
             ('optional (propertize "–" 'face 'roost-dim))
             ('nil (propertize "✗" 'face 'roost-status-failed))
             (_ (propertize "✓" 'face 'roost-status-ready)))
-          " " (format "%-16s" name)
+          ;; A long name, such as a project's push check, keeps a space.
+          " " (string-pad name 15) " "
           (propertize (or (if (stringp detail) detail "") "") 'face 'roost-dim
                       'help-echo path)
           "\n")

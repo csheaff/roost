@@ -3325,7 +3325,9 @@
                                          ((name . "GitHub CLI") (ok) (optional . t) (detail . "not found")
                                           (hint . "Optional: install gh"))
                                          ((name . "Mystery") (ok) (optional) (detail . "broken")
-                                          (hint . "Fix it"))))
+                                          (hint . "Fix it"))
+                                         ((name . "Push · qa-project") (ok) (optional . t)
+                                          (detail . "no origin remote"))))
                     (funcall failure "far: Permission denied (publickey)."))))
                ((symbol-function 'pop-to-buffer) #'ignore))
        (unwind-protect
@@ -3339,6 +3341,8 @@
                  (should (string-match-p "– Codex +codex-cli 0.150.1\n +For Codex tasks: Upgrade to Codex 0.160.0" text))
                  (should (string-match-p "– GitHub CLI +not found\n +Optional: install gh" text))
                  (should (string-match-p "✗ Mystery +broken" text))
+                 ;; A name longer than the column keeps a space before its detail.
+                 (should (string-match-p "– Push · qa-project no origin remote" text))
                  (should (string-match-p "✗ SSH and Python +far: Permission denied" text))
                  (should (string-match-p "ssh-copy-id far" text))
                  (should (string-match-p "· Workspaces" text)))))
