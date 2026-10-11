@@ -6,6 +6,14 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.8.1:
 
+- Prompts, replies and permission requests are set in `variable-pitch`
+  (face `roost-prose`), which fits more of them in the panel and the
+  dashboard; tables and code in replies keep the fixed-pitch font. A status
+  word is coloured only when its agent can't go on without you or failed,
+  plain while it otherwise waits for you, and dim the rest of the time; the
+  dot keeps the colour. Actions and changed files are no longer underlined,
+  and groups and sections are half a line apart. To keep the old look,
+  make `roost-prose` inherit `default` and `roost-field` inherit `link`.
 - `m` now squashes a task's work into one commit. Set `roost-merge-style`
   to `merge` for a merge commit, as before.
 - Roost watches, counts waiting agents and notifies you only once you open

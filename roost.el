@@ -272,8 +272,13 @@ See `roost-note'."
   "Secondary text: labels, timestamps, prompts.")
 (defface roost-key '((t :inherit help-key-binding))
   "Key bindings shown beside actions.")
-(defface roost-field '((t :inherit link))
-  "Clickable fields and actions.")
+(defface roost-field '((t))
+  "Clickable fields and actions.
+They light up under the mouse; inherit `link' to underline them too.")
+(defface roost-prose '((t :inherit variable-pitch))
+  "What you and the agents wrote: prompts, replies and requests.
+Tables and code in them keep the fixed-pitch font.  Inherit `default'
+to show all of it in that font.")
 (defface roost-status-permission '((t :inherit warning :weight bold))
   "A task waiting for a permission answer in its terminal.")
 (defface roost-status-ready '((t :inherit success))
@@ -1032,7 +1037,7 @@ while Emacs has focus, since otherwise nobody is looking."
           (lambda (label)
             (let* ((task (cdr (assoc label choices)))
                    (status (roost--display-status task)))
-              (concat "  " (propertize status 'face (roost--status-face status))
+              (concat "  " (propertize status 'face (roost--status-word-face (roost--attention-status task)))
                       (propertize (concat "  " (truncate-string-to-width
                                                 (roost--one-line (roost--field task 'task)) 60 nil nil "…"))
                                   'face 'roost-dim))))))
@@ -4108,6 +4113,95 @@ A turn you interrupted, or whose permission prompt you declined, is
     ((or "failed" "crashed" "error") 'roost-status-failed)
     (_ 'roost-status-inactive)))
 
+(defun roost--status-word-face (status)
+  "Face for STATUS, from `roost--attention-status', written beside its dot.
+The dot has the status's colour.  The word has it too when the agent
+can't go on without you or failed, is plain while the agent waits for
+you otherwise, and is dim the rest of the time."
+  (pcase status
+    ((or "permission" "prompt" "error" "failed" "crashed") (roost--status-face status))
+    ((or "ready" "interrupted") nil)
+    (_ 'roost-dim)))
+
+(defconst roost--gap (propertize "\n" 'face '(:height 0.5))
+  "A blank line half as tall as the rest, between groups and sections.")
+
+(defun roost--prose (text)
+  "TEXT with `roost-prose' on what reads as prose.
+Lines laid out by column keep their font: Markdown tables, code between
+fences, and lines indented as code."
+  (let ((text (copy-sequence text))
+        (start 0)
+        (fenced nil))
+    (dolist (line (split-string text "\n"))
+      (let ((end (+ start (length line))))
+        (cond ((string-match-p "\\`[ \t]*\\(?:```\\|~~~\\)" line)
+               (setq fenced (not fenced)))
+              ((or fenced (string-match-p "\\`\\(?:[ \t]*|\\|    \\|\t\\)" line)))
+              (t (add-face-text-property start end 'roost-prose t text)))
+        (setq start (1+ end))))
+    text))
+
+(defun roost--pixel-width (string)
+  "STRING's width in pixels, as the current buffer would show it.
+That is in the selected frame, as `default-font-width' measures a
+column; in a text frame, as in batch, a pixel is a column."
+  ;; Since Emacs 30, the buffer's face remapping, as by
+  ;; `text-scale-adjust', counts too.
+  (if (eql (cdr (func-arity #'string-pixel-width)) 1)
+      (string-pixel-width string)
+    (with-suppressed-warnings ((callargs string-pixel-width))
+      (string-pixel-width string (current-buffer)))))
+
+(defun roost--fit-pixels (string pixels)
+  "The longest start of STRING no wider than PIXELS, as shown."
+  (if (<= (roost--pixel-width string) pixels)
+      string
+    (let ((low 0) (high (1- (length string))))
+      (while (< low high)
+        (let ((middle (/ (+ low high 1) 2)))
+          (if (<= (roost--pixel-width (substring string 0 middle)) pixels)
+              (setq low middle)
+            (setq high (1- middle)))))
+      (substring string 0 low))))
+
+(defun roost--truncate-pixels (string pixels)
+  "STRING cut with an ellipsis to fit PIXELS, as shown.
+The ellipsis takes the face of the text it follows."
+  (if (<= (roost--pixel-width string) pixels)
+      string
+    (let* ((ellipsis (propertize "…" 'face (get-text-property 0 'face string)))
+           (start (string-trim-right
+                   (roost--fit-pixels string (- pixels (roost--pixel-width ellipsis))))))
+      (concat start ellipsis))))
+
+(defun roost--wrap-pixels (text pixels &optional most)
+  "TEXT's lines broken at spaces to fit PIXELS each, as shown.
+TEXT's own line breaks are kept, as in lists and code.  A word wider
+than PIXELS, such as a URL, is broken within.  With MOST, stop after
+more than MOST lines.  Return the lines."
+  (let ((lines nil))
+    (catch 'enough
+      (let ((add (lambda (line)
+                   (push line lines)
+                   ;; A long reply is measured only as far as it shows.
+                   (when (and most (> (length lines) most)) (throw 'enough nil)))))
+        (dolist (source (split-string text "\n"))
+          (let ((line nil))
+            (dolist (word (split-string source " "))
+              (let ((longer (if line (concat line " " word) word)))
+                (if (or (null line) (<= (roost--pixel-width longer) pixels))
+                    (setq line longer)
+                  (funcall add line)
+                  (setq line word)))
+              (while (> (roost--pixel-width line) pixels)
+                (let ((part (roost--fit-pixels line pixels)))
+                  (when (string-empty-p part) (setq part (substring line 0 1)))
+                  (funcall add part)
+                  (setq line (substring line (length part))))))
+            (funcall add (or line ""))))))
+    (nreverse lines)))
+
 ;;;; Status lights
 
 (defcustom roost-animations nil
@@ -4935,7 +5029,7 @@ the last column is kept for the truncation mark."
 
 (defun roost--insert-heading (title)
   "Insert section TITLE."
-  (insert "\n" (propertize title 'face 'roost-heading) "\n"))
+  (insert roost--gap (propertize title 'face 'roost-heading) "\n"))
 
 (defvar-local roost--show-full-prompt nil
   "Non-nil when the task panel shows a long prompt in full.")
@@ -4945,30 +5039,18 @@ the last column is kept for the truncation mark."
 A different reply starts collapsed when it arrives.")
 
 (defun roost--reply-preview (reply width)
-  "The first six wrapped lines of REPLY, fitting WIDTH columns.
-Return short replies unchanged."
-  (let* ((columns (max 12 (- width 2)))
-         (lines (with-temp-buffer
-                  (let ((fill-column columns) wrapped)
-                    ;; Preserve explicit newlines, including lists and code.
-                    (dolist (source-line (split-string reply "\n"))
-                      (erase-buffer)
-                      (insert source-line)
-                      (fill-region (point-min) (point-max))
-                      (dolist (line (split-string (buffer-string) "\n"))
-                        ;; Fill leaves long URLs and unbroken tokens alone.
-                        (while (> (string-width line) columns)
-                          (let ((part (truncate-string-to-width line columns)))
-                            (push part wrapped)
-                            (setq line (substring line (length part)))))
-                        (push line wrapped)))
-                    (nreverse wrapped)))))
+  "The first six lines of REPLY as shown wrapped in WIDTH columns.
+Return short replies unchanged.  Faces in REPLY, as from `roost--prose',
+count in its width."
+  (let* ((pixels (* (max 12 (- width 2)) (default-font-width)))
+         (lines (roost--wrap-pixels reply pixels 6)))
     (if (<= (length lines) 6)
         reply
-      (concat (string-join (seq-take lines 5) "\n") "\n"
-              (truncate-string-to-width (string-trim-right (nth 5 lines))
-                                        (1- columns))
-              "…"))))
+      (let ((last (string-trim-right (nth 5 lines))))
+        (concat (string-join (seq-take lines 5) "\n") "\n"
+                (roost--truncate-pixels
+                 (concat last (propertize "…" 'face (get-text-property (max 0 (1- (length last))) 'face last)))
+                 pixels))))))
 
 (defun roost--prompt-preview (prompt)
   "The start of PROMPT for the task panel.
@@ -4992,7 +5074,7 @@ prompt is returned whole."
   "Insert a button to expand REPLY, or collapse it when EXPANDED."
   (let ((start (point)))
     (insert-text-button (if expanded "Collapse reply" "Show the whole reply")
-                        'follow-link t 'face 'roost-field
+                        'follow-link t 'face 'roost-dim
                         'action (lambda (_)
                                   (setq roost--expanded-reply (unless expanded reply))
                                   (roost--render-task-info)))
@@ -5082,7 +5164,7 @@ Windows showing the panel keep their scroll position, and the mark stays."
              (integration (roost--field task 'integrationBranch)))
         (insert (propertize (roost--field task 'name) 'face 'roost-title) "   "
                 (roost--status-light task (cons 'panel (current-buffer)) t)
-                (propertize (concat " " status) 'face (roost--status-face (roost--attention-status task)))
+                (propertize (concat " " status) 'face (roost--status-word-face (roost--attention-status task)))
                 (propertize (format " for %s" (roost--elapsed (roost--field task 'updatedAt)))
                             'face 'roost-dim)
                 "\n"
@@ -5093,8 +5175,9 @@ Windows showing the panel keep their scroll position, and the mark stays."
                 "\n")
         (when-let* ((request (roost--permission-request task)))
           (roost--insert-heading "Waiting for your answer")
-          (roost--insert-indented request))
-        (when-let* ((reply (roost--last-message task)))
+          (roost--insert-indented (roost--prose request)))
+        (when-let* ((reply (roost--last-message task))
+                    (reply (roost--prose reply)))
           (roost--insert-heading "Agent's latest reply")
           (let* ((preview (if (< width 72) (roost--reply-preview reply width) reply))
                  (expanded (equal reply roost--expanded-reply)))
@@ -5161,10 +5244,10 @@ Windows showing the panel keep their scroll position, and the mark stays."
           (roost--insert-heading "Prompt")
           (let ((preview (roost--prompt-preview prompt)))
             (if (or roost--show-full-prompt (equal preview prompt))
-                (roost--insert-indented prompt)
-              (roost--insert-indented preview)
+                (roost--insert-indented (roost--prose prompt))
+              (roost--insert-indented (roost--prose preview))
               (let ((start (point)))
-                (insert-text-button "Show the whole prompt" 'follow-link t 'face 'roost-field
+                (insert-text-button "Show the whole prompt" 'follow-link t 'face 'roost-dim
                                     'action (lambda (_)
                                               (setq roost--show-full-prompt t)
                                               (roost--render-task-info)))
@@ -5207,7 +5290,7 @@ Windows showing the panel keep their scroll position, and the mark stays."
                                           (or (cdr entry) "unknown") "\n")
                                   'wrap-prefix (make-string 15 ?\s)))))
           (unless (< width 72)
-            (insert "\n" (propertize (substitute-command-keys
+            (insert roost--gap (propertize (substitute-command-keys
                                       "Ready means the agent is waiting for you, not that the work is reviewed.
 \\<roost-task-info-mode-map>\\[roost-task-info-refresh] refreshes · \\[roost-task-info-quit] closes")
                                      'face 'roost-dim)
@@ -5377,7 +5460,7 @@ Refreshes are asynchronous; rendering uses only cached state.
                                                      (cddr class)))))
                        (when (> count 0)
                          (propertize (format "%d %s" count (car class))
-                                     'face (roost--status-face (nth 2 class))))))
+                                     'face (roost--status-word-face (nth 2 class))))))
                    '(("awaiting permission" nil "permission")
                      ("at a startup prompt" nil "prompt")
                      ("ready" nil "ready")
@@ -5414,7 +5497,7 @@ The changes column shrinks first, then the agent column is dropped."
 (defun roost--dashboard-row (task layout width)
   "Dashboard line for TASK using column LAYOUT, fitting WIDTH columns."
   (let* ((status (roost--display-status task))
-         (face (roost--status-face (roost--attention-status task)))
+         (face (roost--status-word-face (roost--attention-status task)))
          (cell (lambda (text size &optional cell-face)
                  (propertize (truncate-string-to-width text size nil ?\s "…") 'face cell-face)))
          (line (concat "  " (roost--status-light task 'dashboard) " "
@@ -5438,11 +5521,15 @@ The changes column shrinks first, then the agent column is dropped."
          (room (- width (string-width line) 1)))
     (concat line
             (when (> room 8)
-              (propertize (truncate-string-to-width (roost--one-line (or (roost--permission-request task)
-                                                                   (roost--last-message-summary task)
-                                                                   (roost--prompt-text task)))
-                                                    room nil nil "…")
-                          'face 'roost-dim)))))
+              ;; In `roost-prose', which fits more in its room than the
+              ;; columns do; it is cut short of three times as many.
+              (let ((text (truncate-string-to-width
+                           (roost--one-line (or (roost--permission-request task)
+                                                (roost--last-message-summary task)
+                                                (roost--prompt-text task)))
+                           (* 3 room))))
+                (roost--truncate-pixels (propertize text 'face '(roost-dim roost-prose))
+                                        (* room (default-font-width))))))))
 
 (defun roost--insert-unreachable-hosts (tasks &optional width)
   "Name each host Roost cannot reach that has none of TASKS to show.
@@ -5495,7 +5582,7 @@ The mark stays where it was."
         (insert (roost--summary tasks) "\n")
         (dolist (group (roost--task-groups tasks))
           (let ((host (caar group)) (repo (cadar group)) (start (1+ (point))))
-            (insert "\n" (propertize (format "%s · %s" (roost--host-label host)
+            (insert roost--gap (propertize (format "%s · %s" (roost--host-label host)
                                              (file-name-nondirectory (directory-file-name (or repo "?"))))
                                      'face 'roost-heading)
                     (propertize (concat "  " (roost--abbreviate-path (or repo "") host)) 'face 'roost-dim)
@@ -5742,27 +5829,9 @@ Hosts match words so: \"test\" finds \"tests\", but not \"latest\"."
 
 (defun roost--search-wrap (text width)
   "TEXT with each line wider than WIDTH columns broken between words.
-A word wider than WIDTH, such as a URL, is broken within, as in
-`roost--reply-preview'."
-  (with-temp-buffer
-    (let ((fill-column width) wrapped)
-      ;; Keep its own line breaks, as in lists and code.
-      (dolist (source-line (split-string text "\n"))
-        (if (<= (string-width source-line) width)
-            (push source-line wrapped)
-          (erase-buffer)
-          (insert source-line)
-          (fill-region (point-min) (point-max) nil t)
-          (dolist (line (split-string (buffer-string) "\n"))
-            ;; Filling leaves such words whole.
-            (while (> (string-width line) width)
-              (let ((part (truncate-string-to-width line width)))
-                (when (string-empty-p part)
-                  (setq part (substring line 0 1)))
-                (push part wrapped)
-                (setq line (substring line (length part)))))
-            (push line wrapped))))
-      (string-join (nreverse wrapped) "\n"))))
+Its prose is in `roost-prose', and widths are as shown.  A word wider
+than WIDTH, such as a URL, is broken within, as in `roost--reply-preview'."
+  (string-join (roost--wrap-pixels (roost--prose text) (* width (default-font-width))) "\n"))
 
 (defun roost--search-time (timestamp)
   "TIMESTAMP as a local date and time, or blanks if it is unreadable."
@@ -5830,7 +5899,7 @@ A word wider than WIDTH, such as a URL, is broken within, as in
                             'face 'roost-dim)
                 (if status
                     (concat "  " (propertize status 'face (if task
-                                                               (roost--status-face (roost--attention-status task))
+                                                               (roost--status-word-face (roost--attention-status task))
                                                              'roost-dim)))
                   "")
                 "\n")
@@ -5847,7 +5916,7 @@ A word wider than WIDTH, such as a URL, is broken within, as in
             (insert (apply #'propertize
                            (concat "  " (roost--search-time (alist-get 'at hit)) "  "
                                    (format "%-7s" who)
-                                   (roost--search-highlight (or (alist-get 'snippet hit) "") words)
+                                   (roost--search-highlight (roost--prose (or (alist-get 'snippet hit) "")) words)
                                    "\n")
                            'roost-search-line t properties))
             (when (member id roost--search-expanded)
@@ -6051,7 +6120,7 @@ MARGIN says that its status light shows in the margin, taking no column."
                       (equal (roost--workspace-name task) (roost--current-workspace))
                     (equal (roost--key task) roost--current-task)))
          (status (roost--display-status task))
-         (face (roost--status-face (roost--attention-status task)))
+         (face (roost--status-word-face (roost--attention-status task)))
          ;; The marker, the dot unless it shows in the margin, and a space.
          (room (- width (if margin 2 3)))
          (name (roost--field task 'name))
@@ -6098,7 +6167,7 @@ MARGIN says that its status light shows in the margin, taking no column."
                        (format "%s · %s" (roost--host-label host)
                                (file-name-nondirectory (directory-file-name (or repo "?"))))
                        (- width 2) nil nil "…")))
-          (insert "\n" (propertize label 'face (if (gethash host roost--errors)
+          (insert roost--gap (propertize label 'face (if (gethash host roost--errors)
                                                    'roost-status-failed 'roost-dim))
                   (make-string (max 1 (- width (string-width label) 1)) ?\s))
           (insert-text-button "+" 'face 'roost-key 'follow-link t

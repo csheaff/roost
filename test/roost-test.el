@@ -232,6 +232,40 @@
        (should (string-match-p (make-string 1000 ?a) (buffer-string)))
        (should-not (string-match-p "Show the whole reply" (buffer-string)))))))
 
+(ert-deftest roost-prose-leaves-tables-and-code-in-their-font ()
+  (let* ((text (roost--prose "Done, see below.\n| a | b |\n```\nx = 1\n```\n    indented\nThe end."))
+         (prose (lambda (line)
+                  (let ((start (string-search line text)))
+                    (memq 'roost-prose (ensure-list (get-text-property start 'face text)))))))
+    (should (funcall prose "Done, see below."))
+    (should (funcall prose "The end."))
+    (should-not (funcall prose "| a | b |"))
+    (should-not (funcall prose "x = 1"))
+    (should-not (funcall prose "    indented")))
+  ;; In batch a pixel is a column, so text is cut and wrapped as by columns.
+  (should (equal (roost--truncate-pixels "short" 10) "short"))
+  (should (equal (roost--truncate-pixels "one two three" 8) "one two…"))
+  (should (equal (roost--wrap-pixels "one two three\nfour" 7) '("one two" "three" "four")))
+  (should (equal (roost--wrap-pixels "one two three four" 3 1) '("one" "two"))))
+
+(ert-deftest roost-status-words-are-coloured-only-when-you-are-needed ()
+  (should (eq (roost--status-word-face "permission") 'roost-status-permission))
+  (should (eq (roost--status-word-face "failed") 'roost-status-failed))
+  (should-not (roost--status-word-face "ready"))
+  (should (eq (roost--status-word-face "running") 'roost-dim))
+  (should (eq (roost--status-word-face "idle") 'roost-dim))
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (roost-test--task nil "running"))))
+     (should (eq (get-text-property 0 'face (roost--summary (list task))) 'roost-dim))
+     (with-temp-buffer
+       (roost-task-info-mode)
+       (setq roost--buffer-task-key (roost--key task))
+       (roost--render-task-info)
+       ;; Sections are apart by half a line.
+       (goto-char (point-min))
+       (search-forward "\nChanges\n")
+       (should (equal (get-text-property (match-beginning 0) 'face) '(:height 0.5)))))))
+
 (ert-deftest roost-quiet-refresh-retains-last-message ()
   (roost-test--isolated
    (roost--cache-task "dev" (append '((lastMessage . "All done")) (roost-test--task)))

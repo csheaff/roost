@@ -300,6 +300,12 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
   status light of an agent asking you something pulses and one that
   finished, failed or exited since you saw it glows; the rest stay still, and the motion pauses while Emacs
   isn't in front. Elsewhere the lights stay dots.
+- Faces: `roost-prose` sets what you and the agents wrote (prompts, replies,
+  requests) in `variable-pitch`, keeping tables and code in the fixed-pitch
+  font; make it inherit `default` for one font throughout. `roost-field` is
+  for actions and files you can click, plain until the mouse is over them;
+  make it inherit `link` to underline them. `M-x customize-group RET roost`
+  lists the rest.
 - `roost-notify`, `roost-notify-function`: notifications use
   [terminal-notifier](https://github.com/julienXX/terminal-notifier) when it is
   installed (`brew install terminal-notifier`), otherwise macOS's own or Emacs's
