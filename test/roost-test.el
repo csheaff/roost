@@ -233,45 +233,40 @@
        (should-not (string-match-p "Show the whole reply" (buffer-string)))))))
 
 (ert-deftest roost-prose-leaves-tables-and-code-in-their-font ()
-  (let* ((text (roost--prose "Done, see below.\n| a | b |\n```\nx = 1\n```\n    indented\nThe end."))
-         (prose (lambda (line)
-                  (let ((start (string-search line text)))
-                    (memq 'roost-prose (ensure-list (get-text-property start 'face text)))))))
-    (should (funcall prose "Done, see below."))
-    (should (funcall prose "The end."))
-    (should-not (funcall prose "| a | b |"))
-    (should-not (funcall prose "x = 1"))
-    (should-not (funcall prose "    indented")))
-  ;; A fence closes only with as long a run of its own marker.
-  (let* ((text (roost--prose "````\n```\nstill code\n~~~\n````\nProse again."))
-         (prose (lambda (line)
+  (roost-test--isolated
+   (let ((prose (lambda (text line)
                   (memq 'roost-prose (ensure-list (get-text-property (string-search line text) 'face text))))))
-    (should-not (funcall prose "still code"))
-    (should (funcall prose "Prose again.")))
-  ;; Indented four spaces, a fence is indented code and opens no block.
-  (let ((text (roost--prose "Before.\n    ```\nAfter.")))
-    (should (memq 'roost-prose (ensure-list (get-text-property (string-search "After." text) 'face text)))))
-  ;; A table without outer pipes is found by its delimiter row.
-  (let* ((text (roost--prose "Before.\nName | Does\n--- | :---:\nadd | adds a note\nAfter."))
-         (prose (lambda (line)
-                  (memq 'roost-prose (ensure-list (get-text-property (string-search line text) 'face text))))))
-    (should (funcall prose "Before."))
-    (should-not (funcall prose "Name | Does"))
-    (should-not (funcall prose "--- | :---:"))
-    (should-not (funcall prose "add | adds a note"))
-    (should (funcall prose "After.")))
-  ;; In batch a pixel is a column, so text is cut and wrapped as by columns.
-  (should (= (roost--text-width "a界") 3))
-  (should (equal (roost--truncate-width "short" 10) "short"))
-  (should (equal (roost--truncate-width "one two three" 8) "one two…"))
-  (should (equal (roost--wrap-width "one two three\nfour" 7) '("one two" "three" "four")))
-  (should (equal (roost--wrap-width "one two three four" 3 1) '("one" "two")))
-  (should (equal (roost--wrap-width "a  b" 10) '("a  b")))
-  (should (equal (roost--wrap-width "one\n\ntwo" 10) '("one" "" "two")))
-  ;; Spaces keep the face of the text around them.
-  (let ((line (car (roost--wrap-width (propertize "one two three" 'face 'roost-prose) 7))))
-    (should (equal line "one two"))
-    (should (eq (get-text-property 3 'face line) 'roost-prose))))
+     (let ((text (roost--prose "Done, see below.\n| a | b |\n```\nx = 1\n```\n    indented\nThe end.")))
+       (should (funcall prose text "Done, see below."))
+       (should (funcall prose text "The end."))
+       (should-not (funcall prose text "| a | b |"))
+       (should-not (funcall prose text "x = 1"))
+       (should-not (funcall prose text "    indented")))
+     ;; A fence closes only with as long a run of its own marker.
+     (let ((text (roost--prose "````\n```\nstill code\n~~~\n````\nProse again.")))
+       (should-not (funcall prose text "still code"))
+       (should (funcall prose text "Prose again.")))
+     ;; Indented four spaces, a fence is indented code and opens no block.
+     (should (funcall prose (roost--prose "Before.\n    ```\nAfter.") "After."))
+     ;; A table without outer pipes is found by its delimiter row.
+     (let ((text (roost--prose "Before.\nName | Does\n--- | :---:\nadd | adds a note\nAfter.")))
+       (should (funcall prose text "Before."))
+       (should-not (funcall prose text "Name | Does"))
+       (should-not (funcall prose text "--- | :---:"))
+       (should-not (funcall prose text "add | adds a note"))
+       (should (funcall prose text "After."))))
+   ;; In batch a pixel is a column, so text is cut and wrapped as by columns.
+   (should (= (roost--text-width "a界") 3))
+   (should (equal (roost--truncate-width "short" 10) "short"))
+   (should (equal (roost--truncate-width "one two three" 8) "one two…"))
+   (should (equal (roost--wrap-width "one two three\nfour" 7) '("one two" "three" "four")))
+   (should (equal (roost--wrap-width "one two three four" 3 1) '("one" "two")))
+   (should (equal (roost--wrap-width "a  b" 10) '("a  b")))
+   (should (equal (roost--wrap-width "one\n\ntwo" 10) '("one" "" "two")))
+   ;; Spaces keep the face of the text around them.
+   (let ((line (car (roost--wrap-width (propertize "one two three" 'face 'roost-prose) 7))))
+     (should (equal line "one two"))
+     (should (eq (get-text-property 3 'face line) 'roost-prose)))))
 
 (ert-deftest roost-a-dashboard-summary-cut-short-says-so ()
   (roost-test--isolated
@@ -284,12 +279,12 @@
        (should (string-suffix-p "…" row))))))
 
 (ert-deftest roost-status-words-are-coloured-only-when-you-are-needed ()
-  (should (eq (roost--status-word-face "permission") 'roost-status-permission))
-  (should (eq (roost--status-word-face "failed") 'roost-status-failed))
-  (should-not (roost--status-word-face "ready"))
-  (should (eq (roost--status-word-face "running") 'roost-dim))
-  (should (eq (roost--status-word-face "idle") 'roost-dim))
   (roost-test--isolated
+   (should (eq (roost--status-word-face "permission") 'roost-status-permission))
+   (should (eq (roost--status-word-face "failed") 'roost-status-failed))
+   (should-not (roost--status-word-face "ready"))
+   (should (eq (roost--status-word-face "running") 'roost-dim))
+   (should (eq (roost--status-word-face "idle") 'roost-dim))
    (let ((task (roost--cache-task "dev" (roost-test--task nil "running"))))
      (should (eq (get-text-property 0 'face (roost--summary (list task))) 'roost-dim))
      (with-temp-buffer
