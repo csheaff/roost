@@ -2339,8 +2339,24 @@
            (let ((light (roost--status-light asking 'sidebar)))
              (should (equal (substring-no-properties light) "●"))
              (should (equal (car (get-text-property 0 'display light)) '(margin left-margin))))
-           ;; In the task panel, it takes the dot's place.
+           ;; In the task panel, it takes the dot's place, painting the
+           ;; highlight behind it while it is on the highlighted line.
            (should (eq (car (get-text-property 0 'display (roost--status-light asking '(panel . 1) t))) 'image))
+           (let ((light (gethash (cons '(panel . 1) (roost--key asking)) roost--lights)))
+             (cl-letf (((symbol-function 'face-background)
+                        (lambda (face &rest _) (if (eq face 'roost-selection) "#ffffff" "#000000"))))
+               (save-window-excursion
+                 (set-window-buffer nil (current-buffer))
+                 (insert "fix auth  " (roost--status-light asking '(panel . 1) t) " permission\nmore\n")
+                 (set-window-point nil (point-min))
+                 (roost--mark-selection)
+                 ;; Batch Emacs has a terminal's colors, so compare its own pixels.
+                 (should-not (= (roost--light-pixel "#ffffff") (roost--light-pixel "#000000")))
+                 (should (= (plist-get light :background) (roost--light-pixel "#ffffff")))
+                 (set-window-point nil (point-max))
+                 (roost--mark-selection)
+                 (should (= (plist-get light :background) (roost--light-pixel "#000000")))
+                 (erase-buffer))))
            (should (= (hash-table-count roost--lights) 3))
            (should (timerp roost--lights-timer))
            ;; Asked for again unchanged, a light isn't redrawn.

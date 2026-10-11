@@ -3368,7 +3368,17 @@ dot.  Otherwise this is the dot, in TASK's status face."
                                  (face-background (if (and (not inline) (facep 'margin)) 'margin 'default)
                                                   nil t)
                                  (current-buffer))))
-        (propertize "●" 'display (if inline image `((margin left-margin) ,image)))))))
+        (if inline
+            (propertize "●" 'display image 'roost-light (cons place (roost--key task)))
+          (propertize "●" 'display `((margin left-margin) ,image)))))))
+
+(defun roost--light-behind (id background)
+  "Paint the light ID over BACKGROUND, a color, if it isn't already."
+  (when-let* ((light (gethash id roost--lights))
+              (back (roost--light-pixel background))
+              ((not (eql back (plist-get light :background)))))
+    (plist-put light :background back)
+    (roost--light-draw light (or (plist-get light :phase) 0.0))))
 
 (defun roost--lights-forget (place keys)
   "Forget the lights at PLACE of tasks other than KEYS."
@@ -4976,7 +4986,16 @@ are in one."
       (save-excursion
         (goto-char (window-point window))
         (move-overlay roost--selection (line-beginning-position)
-                      (min (point-max) (1+ (line-end-position))) (current-buffer))))))
+                      (min (point-max) (1+ (line-end-position))) (current-buffer)))))
+  ;; A light in the text, having no transparency, paints the highlight
+  ;; behind it while it is on the highlighted line.
+  (when-let* ((at (text-property-not-all (point-min) (point-max) 'roost-light nil)))
+    (roost--light-behind (get-text-property at 'roost-light)
+                         (face-background (if (and roost--selection (overlay-buffer roost--selection)
+                                                   (<= (overlay-start roost--selection) at)
+                                                   (< at (overlay-end roost--selection)))
+                                              'roost-selection 'default)
+                                          nil t))))
 
 (defun roost--selection-changed (window)
   "Highlight, or stop highlighting, the line you are on in WINDOW's buffer."
@@ -5332,6 +5351,7 @@ Beside a terminal, that turns off `roost-task-panel-mode'."
   (remove-hook 'magit-post-refresh-hook #'roost--magit-refreshed)
   (roost--magit-teardown)
   (when roost-watch-mode (roost-watch-mode -1))
+  (when (timerp roost--lights-timer) (cancel-timer roost--lights-timer))
   (advice-remove 'persp-mode-line #'roost--compact-perspective-mode-line)
   ;; Continue with the standard unloading.
   nil)
