@@ -10,7 +10,7 @@ worktree, a branch and a terminal, here or on any SSH host. It tells you which
 agents need you, and you review and merge their work with Magit. If you've
 used Orca or Conductor, it's that idea, inside the Emacs you already use.
 
-![Emacs with three columns: Roost's sidebar listing five agents on two machines, one asking permission; that agent's Claude Code terminal on the SSH host claylien, asking to run its tests; and the task's panel with what it asks, what it changed and what to do next](docs/images/roost-hero.png)
+![Emacs with three columns: Roost's sidebar listing six agents on two machines, one asking permission; that agent's Claude Code terminal on the SSH host claylien, asking to run its tests; and the task's panel with what it asks, its latest reply, what it changed and what to do next](docs/images/roost-hero.png)
 
 *Five Claude Code agents on two machines. The one on `claylien` wants to run
 its tests: its own terminal in the middle, every task at the left, and at the
