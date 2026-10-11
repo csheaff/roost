@@ -842,8 +842,13 @@ each state, and Roost uncompiled, as Clay runs it:
   light paints its background. In the sidebar the lights sit in the left
   margin (the `margin` face, Emacs 31 and later), where no highlight
   covers them; in the task panel and mode line they take the dot's place.
-- `:scale` on a canvas drew only a quarter of it, so lights are drawn at
-  one pixel per pixel.
+- A scaled canvas drew only a quarter of itself, and `create-image`
+  scales by default (`image-scaling-factor` forced to 2 doubled a light to
+  32×30 and made rows taller), so lights are made with `:scale 1`.
+- Canvases ignore `:mask` too. The task panel's light, in the text of its
+  first line, repaints its background while the selection highlight is on
+  that line, and the mode line's light shows only in the selected window,
+  whose background it paints.
 - A first version, which moved working agents too, drew 12 frames a
   second and used 10% of a core: a closure made for every pixel. Plain
   arithmetic, distances cached per size and a redraw only when a light's
