@@ -2478,6 +2478,21 @@
                                 '(panel . 1) t)
            (should (timerp roost--lights-timer))))))))
 
+(ert-deftest roost-status-lights-follow-the-option-at-once ()
+  (roost-test--isolated
+   (roost-test--with-canvases t
+     (let ((roost-animations t) redrawn)
+       (cl-letf (((symbol-function 'roost--redraw) (lambda () (setq redrawn t))))
+         (with-temp-buffer
+           (roost--status-light (roost--cache-task "dev" (roost-test--task nil "permission")) 'sidebar))
+         (should (timerp roost--lights-timer))
+         ;; Turned off, the lights go and the buffers that show are drawn again.
+         (customize-set-variable 'roost-animations nil)
+         (should-not roost-animations)
+         (should redrawn)
+         (should (zerop (hash-table-count roost--lights)))
+         (should-not roost--lights-timer))))))
+
 (ert-deftest roost-a-seen-ready-agent-stops-counting-as-waiting ()
   (roost-test--isolated
    (let ((task (roost--cache-task "dev" (roost-test--task nil "ready")))

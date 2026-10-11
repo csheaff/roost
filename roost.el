@@ -3214,8 +3214,13 @@ One asking you something pulses, and one that finished, failed, crashed
 or exited since you saw it glows slowly; the rest stay still, so motion
 always means an agent needs you.
 This needs Emacs 32's canvas images; without them the lights stay the
-dots they are.  The motion pauses while no Emacs frame has focus."
-  :type 'boolean)
+dots they are.  The motion pauses while no Emacs frame has focus.
+Changed with `setopt' or Customize, it shows at once."
+  :type 'boolean
+  :initialize #'custom-initialize-default
+  :set (lambda (symbol value)
+         (set-default symbol value)
+         (roost--animations-changed)))
 
 (declare-function canvas-refresh "image.c" (image &optional reload-data))
 
@@ -3448,6 +3453,17 @@ once the lights are off."
                (width (and (> left 0) left)))
           (unless (eql (car (window-margins window)) width)
             (set-window-margins window left (cdr (window-margins window)))))))))
+
+(defun roost--animations-changed ()
+  "Show a change of `roost-animations' at once, in the buffers that show.
+Lights are made again, or let go with their margins; hidden buffers
+change when they show."
+  (clrhash roost--lights)
+  (when (timerp roost--lights-timer)
+    (cancel-timer roost--lights-timer)
+    (setq roost--lights-timer nil))
+  (roost--redraw)
+  (force-mode-line-update t))
 
 (defun roost--lights-start ()
   "Start moving the status lights, if they aren't."
