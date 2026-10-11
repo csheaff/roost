@@ -2581,8 +2581,8 @@ ROOM, it leaves that many pixels after them, for the note box."
                                   ;; background does, whatever the next line is.
                                   (when rule
                                     (propertize " " 'display '(space :align-to right)
-                                                'face `(,rule default)))
-                                  (propertize "\n" 'face '(:inherit default :extend t)))))
+                                                'face `(,rule roost-note default)))
+                                  (propertize "\n" 'face '(:inherit (roost-note default) :extend t)))))
                       lines "")
                      'roost-note-id (alist-get 'id note)
                      'keymap roost--note-shown-map
@@ -2702,7 +2702,11 @@ Empty TEXT removes OLD."
                        (list (append `((id . ,(roost--note-id))
                                        (host . ,(roost--field task 'host))
                                        (task . ,(roost--field task 'id)))
-                                     place
+                                     ;; PLACE may be a note that has gone since:
+                                     ;; only what that was about.
+                                     (seq-remove (lambda (field)
+                                                   (memq (car-safe field) '(id host task text)))
+                                                 place)
                                      `((text . ,text))))))
          (roost--save-notes)))
   (roost--show-notes-everywhere)
@@ -2879,7 +2883,6 @@ Closing it otherwise selects the window it was opened from."
          (edges (window-inside-pixel-edges window))
          (numbers (with-selected-window window
                     (if display-line-numbers (line-number-display-width t) 0)))
-         (width (- (nth 2 edges) (nth 0 edges) numbers (frame-char-width parent)))
          (frame (make-frame
                  `((parent-frame . ,parent)
                    (minibuffer . ,(minibuffer-window parent))
@@ -2900,7 +2903,7 @@ Closing it otherwise selects the window it was opened from."
                    (right-fringe . 8)
                    (internal-border-width . 0)
                    (child-frame-border-width . 1)
-                   (width . (text-pixels . ,(max (* 30 (frame-char-width parent)) (- width 18))))
+                   (width . (text-pixels . ,(roost--note-box-width window)))
                    (height . ,(+ roost-note-box-lines 1))
                    (left . ,(+ (nth 0 edges) numbers))
                    (top . ,(nth 1 edges)))))
@@ -2926,6 +2929,15 @@ Closing it otherwise selects the window it was opened from."
                           (max (nth 1 edges) (- (nth 3 edges) (frame-pixel-height frame))))
       (make-frame-visible frame))
     (select-frame-set-input-focus frame)))
+
+(defun roost--note-box-width (window)
+  "How wide the note box's text is, in pixels, to span WINDOW's text.
+Its fringes and border take 18 pixels more."
+  (let ((edges (window-inside-pixel-edges window)))
+    (max (* 30 (frame-char-width (window-frame window)))
+         (- (nth 2 edges) (nth 0 edges) 18 (frame-char-width (window-frame window))
+            (with-selected-window window
+              (if display-line-numbers (line-number-display-width t) 0))))))
 
 (defun roost--note-box-spot ()
   "Where the note box goes, as pixels in its window's frame, or nil.
@@ -2972,7 +2984,9 @@ buffer it came from is gone, it closes, keeping what you wrote."
     (if (not (buffer-live-p (plist-get roost--note-box :source)))
         (roost--note-box-close t)
       (if-let* ((spot (roost--note-box-spot)))
-          (progn
+          (let ((width (roost--note-box-width (plist-get roost--note-box :window))))
+            (unless (= width (frame-text-width frame))
+              (set-frame-width frame width nil t))
             (set-frame-position frame (car spot) (cdr spot))
             (make-frame-visible frame))
         (when (frame-visible-p frame)
@@ -3004,20 +3018,40 @@ Its foreground fills the button.")
 (defvar roost--note-button-images nil
   "The note button's image, made for the colors and sizes in its key.")
 
+(defvar-local roost--note-margin nil
+  "A list of the left margin this buffer had before the note button widened it.
+Nil while it hasn't; the margin itself can be nil, meaning none.")
+
 (defun roost--note-margin-p ()
-  "Whether this Magit buffer shows note buttons, in its left margin."
-  (and roost-magit-mode (display-graphic-p)
-       (derived-mode-p 'magit-status-mode 'magit-diff-mode)))
+  "Whether this Magit buffer shows note buttons, in its left margin.
+It does in graphic frames: those showing it, or the selected one before
+any does."
+  (and roost-magit-mode
+       (derived-mode-p 'magit-status-mode 'magit-diff-mode)
+       (seq-some (lambda (window) (display-graphic-p (window-frame window)))
+                 (or (get-buffer-window-list nil nil t) (list (selected-window))))))
 
 (defun roost--note-hover-setup ()
   "Make room for the note button in this Magit buffer, and follow the mouse.
 Emacs calls the help-echo of text as the mouse moves over it, so an
 overlay across the buffer has `roost--note-hover-echo' as its help-echo."
-  (let ((on (roost--note-margin-p)))
-    (if on (setq-local left-margin-width 2) (kill-local-variable 'left-margin-width))
+  (let ((on (roost--note-margin-p))
+        (had roost--note-margin))
+    ;; A margin at least as wide is kept, and the one the buffer had comes
+    ;; back once the button is off.
+    (cond ((and on (not had))
+           (setq roost--note-margin (list left-margin-width)
+                 left-margin-width (max (or left-margin-width 0) 2)))
+          ((and had (not on))
+           (setq left-margin-width (car had)
+                 roost--note-margin nil)))
     (dolist (window (get-buffer-window-list nil nil t))
-      (unless (eql (car (window-margins window)) (and on left-margin-width))
-        (set-window-margins window left-margin-width (cdr (window-margins window)))))
+      ;; A text frame shows no button, so its windows keep the margin.
+      (let ((left (if (and on (not (display-graphic-p (window-frame window))))
+                      (car roost--note-margin)
+                    left-margin-width)))
+        (unless (eql (car (window-margins window)) left)
+          (set-window-margins window left (cdr (window-margins window))))))
     (when (and (overlayp roost--note-button) (eq (overlay-buffer roost--note-button) (current-buffer)))
       (delete-overlay roost--note-button))
     (cond (on

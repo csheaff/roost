@@ -4405,7 +4405,14 @@ With INITIAL, the box must start out holding it."
               ;; Without Roost, so does the margin.
               (roost-magit-mode -1)
               (should (= left-margin-width 0))
-              (should-not roost--note-hover))
+              (should-not roost--note-hover)
+              ;; A wider margin of the buffer's own stays, and comes back.
+              (setq left-margin-width 3)
+              (roost-magit-mode 1)
+              (should (= left-margin-width 3))
+              (should (overlayp roost--note-hover))
+              (roost-magit-mode -1)
+              (should (= left-margin-width 3)))
           (when (timerp roost--note-mouse-timer)
             (cancel-timer roost--note-mouse-timer)
             (setq roost--note-mouse-timer nil)))))))
@@ -4499,6 +4506,26 @@ With INITIAL, the box must start out holding it."
       (save-current-buffer (roost-note))
       (should-not roost--notes)
       (roost-note-box-cancel))))
+
+(ert-deftest roost-a-note-edited-after-it-has-gone-is-written-anew ()
+  (roost-test--with-magit-task
+    (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")
+    (magit-diff-unstaged)
+    (with-current-buffer (magit-get-mode-buffer 'magit-diff-mode)
+      (roost-test--goto-line-text "new line")
+      (roost-test--write-note "Name it")
+      (save-current-buffer
+        (roost-note)
+        (with-current-buffer (plist-get roost--note-box :buffer)
+          (erase-buffer)
+          (insert "Rename it")
+          ;; Sent meanwhile, from another window.
+          (roost--remove-notes #'always)
+          (roost-note-box-save)))
+      (should (equal (mapcar (lambda (note) (roost--format-note note)) roost--notes)
+                     '("a.txt:5\n> +new line\nRename it")))
+      (should (= (length (seq-filter (lambda (field) (eq (car-safe field) 'id)) (car roost--notes)))
+                 1)))))
 
 (ert-deftest roost-a-note-box-belongs-to-the-window-it-opens-from ()
   (roost-test--with-magit-task
