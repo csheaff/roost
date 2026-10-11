@@ -1623,15 +1623,38 @@
 
 (ert-deftest roost-c-c-?-opens-the-menu-in-agents-terminals ()
   ;; Every other key in an agent's terminal goes to the agent.
-  (let ((roost-watch-mode t))
-    (with-temp-buffer
-      (setq major-mode 'tmux-control-mode)
-      (should (eq (key-binding (kbd "C-c ?")) #'roost-dispatch)))
-    ;; Elsewhere the key keeps its own meaning.
-    (with-temp-buffer
-      (use-local-map (define-keymap "C-c ?" #'ignore))
-      (should (eq (key-binding (kbd "C-c ?")) #'ignore))))
+  (roost-test--isolated
+   (roost--cache-task "dev" (roost-test--task))
+   (roost-test--with-tmux-buffers
+    (let ((roost-watch-mode t))
+      (with-temp-buffer
+        (setq major-mode 'tmux-control-mode)
+        (setq-local roost-test--tmux '(:host "dev" :socket "main" :session "roost-123456" :pane "%3"))
+        (should (eq (key-binding (kbd "C-c ?")) #'roost-dispatch))
+        ;; Not in the terminal of a tmux session of your own, nor elsewhere.
+        (setq-local roost-test--tmux '(:host "dev" :socket "main" :session "work" :pane "%3"))
+        (use-local-map (define-keymap "C-c ?" #'ignore))
+        (should (eq (key-binding (kbd "C-c ?")) #'ignore))
+        (setq major-mode 'fundamental-mode)
+        (should (eq (key-binding (kbd "C-c ?")) #'ignore))))))
   (should (eq (keymap-lookup roost-magit-mode-map "C-c ?") #'roost-dispatch)))
+
+(ert-deftest roost-watching-turned-on-by-your-configuration-is-from-the-start ()
+  ;; The sidebar turned on in your configuration watches from the start;
+  ;; opening it later, like the dashboard, only from then on.
+  (let ((roost-watch-mode nil) (roost--watching-on-demand nil) (roost-sidebar-mode nil))
+    (cl-letf (((symbol-function 'roost-watch-mode) (lambda (&rest _) (setq roost-watch-mode t)))
+              ((symbol-function 'roost--watch-layout) #'ignore)
+              ((symbol-function 'roost--sync-all-frames) #'ignore)
+              ((symbol-function 'roost-refresh) #'ignore))
+      (let ((after-init-time nil))
+        (roost-sidebar-mode 1))
+      (should roost-watch-mode)
+      (should-not roost--watching-on-demand)
+      (setq roost-watch-mode nil roost-sidebar-mode nil)
+      (roost-sidebar-mode 1)
+      (should roost--watching-on-demand)
+      (setq roost-sidebar-mode nil))))
 
 (ert-deftest roost-a-finished-tasks-panel-closes-with-it ()
   ;; It stayed, saying the task was retired, and kept the panel of the

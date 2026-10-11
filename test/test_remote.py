@@ -2133,6 +2133,11 @@ class PermissionRequest(unittest.TestCase):
         self.assertEqual(ask("Bash", command="cd /work/task && "), "Asks to run cd /work/task &&")
         self.assertEqual(ask("Bash", command="ls /other/work/task/a /work/task/b"),
                          "Asks to run ls /other/work/task/a b")
+        # Shortened before it is clipped: a long path can't crowd out the command.
+        deep = "/work/" + "d" * 290
+        self.assertEqual(roost.permission_request(
+            dict(tool_name="Bash", tool_input=dict(command="cd %s && make --keep-going" % deep)), deep),
+            "Asks to run make --keep-going")
         # Questions and plans wait for an answer rather than a permission.
         question = lambda text: dict(question=text, header="h", options=[dict(label="a"), dict(label="b")])
         self.assertEqual(ask("AskUserQuestion", questions=[question("Red or blue?")]), "Asks: Red or blue?")

@@ -2043,7 +2043,7 @@ def permission_request(payload, worktree=None):
         return None
     args = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
 
-    def arg(*keys):
+    def raw(*keys):
         for key in keys:
             value = args.get(key)
             if isinstance(value, list) and value and all(isinstance(x, str) for x in value):
@@ -2052,8 +2052,12 @@ def permission_request(payload, worktree=None):
                 if key in ("file_path", "notebook_path", "path") and worktree:
                     with contextlib.suppress(ValueError):
                         value = str(Path(value).relative_to(worktree))
-                return clip(value)
+                return value
         return None
+
+    def arg(*keys):
+        value = raw(*keys)
+        return clip(value) if value else None
 
     if tool == "AskUserQuestion":
         questions = [q.get("question") for q in args.get("questions") or [] if isinstance(q, dict)]
@@ -2068,9 +2072,10 @@ def permission_request(payload, worktree=None):
         return "Asks to edit files"
     detail = None
     if tool in ("Bash", "shell", "exec_command", "local_shell"):
-        verb, detail = "run", arg("command", "cmd")
-        if detail:
-            detail = clip(shown_command(detail, worktree)) or detail
+        # Shortened before it is clipped, so a long path can't crowd out
+        # the command.
+        command = raw("command", "cmd")
+        verb, detail = "run", command and (clip(shown_command(command, worktree)) or clip(command))
     elif tool in ("Edit", "MultiEdit", "NotebookEdit", "Write", "Read"):
         verb, detail = {"Write": "write", "Read": "read"}.get(tool, "edit"), arg("file_path", "notebook_path")
     elif tool == "WebFetch":

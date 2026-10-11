@@ -5457,7 +5457,7 @@ point.  Turning the mode on starts `roost-watch-mode'.  Frames narrower
 than `roost-sidebar-width' plus 80 columns go without."
   :global t
   (roost--watch-layout)
-  (when roost-sidebar-mode (roost-watch-mode 1))
+  (when roost-sidebar-mode (roost--watch-on-demand))
   (roost--sync-all-frames)
   (if roost-sidebar-mode
       (roost-refresh t)
@@ -5763,20 +5763,34 @@ to `mode-line-format'."
   "The `global-mode-string' entry for `roost-watch-mode'.")
 
 (defun roost--watch-on-demand ()
-  "Watch, as opening Roost does; see `roost--watching-on-demand'."
+  "Watch, as opening Roost does.
+Done once your configuration has loaded, as by opening the dashboard,
+it sets `roost--watching-on-demand'; done by your configuration, as by
+turning on the sidebar there, it is watching from the start."
   (unless roost-watch-mode
-    (setq roost--watching-on-demand t)
+    (setq roost--watching-on-demand (and after-init-time t))
     (roost-watch-mode 1)))
 
 (defun roost--in-terminal (command)
-  "COMMAND in an agent's terminal, and nil elsewhere.
-A key filter, so that the key keeps its own meaning in other buffers."
-  (and (derived-mode-p 'tmux-control-mode) command))
+  "COMMAND in a task's terminal, and nil elsewhere.
+A key filter, so that the key keeps its own meaning in other buffers,
+the terminals of other tmux sessions included."
+  (and (derived-mode-p 'tmux-control-mode)
+       (fboundp 'tmux-control-buffer-session)
+       (let ((host (tmux-control-buffer-host))
+             (socket (tmux-control-buffer-socket-name))
+             (session (tmux-control-buffer-session)))
+         (seq-some (lambda (task)
+                     (and (equal (roost--field task 'session) session)
+                          (equal (roost--field task 'host) host)
+                          (equal (roost--field task 'socket) socket)))
+                   (roost-tasks)))
+       command))
 
 (defvar-keymap roost-watch-mode-map
   :doc "Roost's keys while it watches.
-In an agent's terminal, where every other key goes to the agent,
-\\`C-c ?' opens Roost's menu for its task."
+In a task's terminal, where every other key goes to its agent,
+\\`C-c ?' opens Roost's menu for the task."
   "C-c ?" '(menu-item "" roost-dispatch :filter roost--in-terminal))
 
 ;;;###autoload
