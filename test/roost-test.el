@@ -728,7 +728,11 @@
                                          '((number . 9) (title . "Docs") (body . "")
                                            (url . "https://github.com/o/r/issues/9") (labels . []))))))
                      ((symbol-function 'completing-read)
-                      (lambda (_prompt choices &rest _) (car (nth (if created 1 0) choices))))
+                      (lambda (_prompt table &rest _)
+                        ;; Newest first, as gh lists them, whatever the completion UI.
+                        (should (eq (alist-get 'display-sort-function (cdr (funcall table "" nil 'metadata)))
+                                    'identity))
+                        (nth (if created 1 0) (funcall table "" nil t))))
                      ((symbol-function 'roost--create-task)
                       (lambda (directory name base prompt agent _success _failure &optional extra)
                         (setq created (list directory name base prompt agent extra)))))
@@ -3771,6 +3775,21 @@ ssh: connect to host dev port 22: Operation timed out"
                (should-not (member plain choices)))))
        (delete-directory repo t)
        (delete-directory plain t)))))
+
+(ert-deftest roost-pickers-keep-their-order ()
+  ;; Vertico sorts candidates by length unless told not to, which put
+  ;; "Other directory…" above the projects you used last.
+  (let (shown sort)
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_prompt table &rest _)
+                 (setq shown (funcall table "" nil t)
+                       sort (alist-get 'display-sort-function (cdr (funcall table "" nil 'metadata))))
+                 (car shown))))
+      (should (equal (roost--choose-from "Project: " '(("dev · ~/work/ledger" . "/ssh:dev:/work/ledger/")
+                                                       ("Other directory…" . other)))
+                     "/ssh:dev:/work/ledger/"))
+      (should (equal shown '("dev · ~/work/ledger" "Other directory…")))
+      (should (eq sort 'identity)))))
 
 (ert-deftest roost-an-interrupted-turn-says-so ()
   (roost-test--isolated

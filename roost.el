@@ -1713,12 +1713,21 @@ A task started from a GitHub issue leads with the issue's number."
                                              (with-current-buffer buffer
                                                (roost--compose-render)))))))))
 
+(defun roost--in-order (choices)
+  "A completion table of CHOICES that completion UIs show in their order.
+Vertico, for one, sorts by length otherwise, which put \"Other
+directory…\" above the projects you used last."
+  (lambda (string predicate action)
+    (if (eq action 'metadata)
+        '(metadata (display-sort-function . identity) (cycle-sort-function . identity))
+      (complete-with-action action choices string predicate))))
+
 (defun roost--choose-from (prompt choices &optional default)
   "Choose from CHOICES, an alist of (LABEL . VALUE), with PROMPT.
 A mouse click shows a menu at the pointer; the keyboard uses the minibuffer."
   (if (and (mouse-event-p last-nonmenu-event) (display-popup-menus-p))
       (x-popup-menu last-nonmenu-event (list prompt (cons "" choices)))
-    (cdr (assoc (completing-read prompt choices nil t nil nil default) choices))))
+    (cdr (assoc (completing-read prompt (roost--in-order choices) nil t nil nil default) choices))))
 
 (defun roost-compose-set-project ()
   "Choose the draft's project from known checkouts, or any directory.
@@ -1811,7 +1820,7 @@ listed with gh on the project's host."
                                              'face 'roost-dim)))))))
     (unless issues
       (user-error "%s has no open issues" (roost--project-label directory)))
-    (let* ((issue (cdr (assoc (completing-read "Issue: " choices nil t) choices)))
+    (let* ((issue (cdr (assoc (completing-read "Issue: " (roost--in-order choices) nil t) choices)))
            (previous (plist-get roost--compose-fields :issue))
            (prompt (roost--compose-prompt)))
       (setq roost--compose-fields (plist-put roost--compose-fields :issue
