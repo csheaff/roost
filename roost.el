@@ -3269,14 +3269,6 @@ that can't go on without you pulses, and the others glow."
       (logior #xFF000000 (ash (ash (nth 0 rgb) -8) 16) (ash (ash (nth 1 rgb) -8) 8) (ash (nth 2 rgb) -8))
     #xFF808080))
 
-(defun roost--light-mix (a b amount)
-  "Pixel A moved towards pixel B by AMOUNT, from 0 to 1."
-  (let ((ar (logand (ash a -16) 255)) (ag (logand (ash a -8) 255)) (ab (logand a 255)))
-    (logior #xFF000000
-            (ash (+ ar (round (* amount (- (logand (ash b -16) 255) ar)))) 16)
-            (ash (+ ag (round (* amount (- (logand (ash b -8) 255) ag)))) 8)
-            (+ ab (round (* amount (- (logand b 255) ab)))))))
-
 (defvar roost--light-shapes (make-hash-table :test 'equal)
   "Each pixel's distance from the middle of a light, by (WIDTH . HEIGHT).")
 
