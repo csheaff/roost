@@ -995,9 +995,10 @@ wide leaves about ten columns for the reply.
 The changes were checked again in a plain Emacs 32 loading this branch:
 the setup check, `C-c ?` in a terminal, a committed task reviewed through
 `Unmerged into main`, and `m` squashing it into one commit and closing
-its panel. 198 ERT tests pass on Emacs 32 with Magit, and 139 Python
-tests; a test session now fails rather than waits on a question no test
-answered.
+its panel. Of 199 ERT tests, 198 pass on Emacs 32 with Magit and one
+is skipped without Evil; 139 Python tests pass. The six new ERT tests
+fail against the code before them, and a test session now fails rather
+than waits on a question no test answered.
 
 ### Codex and Pi adapters
 
