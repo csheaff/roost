@@ -863,6 +863,75 @@ each state, and Roost uncompiled, as Clay runs it:
 Elsewhere (Emacs 29 and 30, a terminal, or the option off) a light is
 the dot it was, and the ERT tests stand in for canvases.
 
+### A full configuration on Emacs 32, 2026-10-10
+
+The author's daily Emacs became Emacs 32 (32.0.50, emacs-plus master)
+the same day; CI tests 29.1 and 30.1. The suites ran on 32 first, then a
+copy of the author's configuration (xah-fly-keys, Vertico, perspective.el,
+modus-vivendi, global line numbers and `visual-line-mode`, Roost
+uncompiled) with its own server, state and tmux socket, driven with real
+key events: fake agents here and on claylien, and one Claude Code task
+there (Haiku 5.5, 2.1.296) taken from prompt to review notes, a commit in
+Magit over TRAMP's rpc method, and merge. tmux-control's 331 tests pass
+on 32 and it compiles without warnings.
+
+What worked: the menu from a terminal (`Esc SPC s`), naming the task and
+the next step; the folder-trust prompt counted as waiting after 15 s;
+permission requests through program status, approved and declined; a
+notification naming the command; session search, a retired task's
+conversation included; a review note sent with `@` and applied; stop,
+resume and finish; the sidebar and panel through `C-x 1`, a narrow frame
+and back.
+
+Found and fixed:
+
+- **A test failed on Emacs 32, and host errors could end in a stray
+  line.** For a request's stderr, Emacs makes a pipe that notes "Process
+  roost-rpc stderr finished" when it closes, and Emacs 32 can read that
+  before the request does. Requests now make their own pipe.
+- **Status lights sat on gray squares.** modus-themes gives the margin
+  face the fringe's background, and with no fringe color it has none, so
+  each light painted the fallback gray. A face without a background shows
+  the default one, and lights now paint that.
+- **Search results showed line numbers, and wrapped.** Global
+  `display-line-numbers-mode` and `visual-line-mode` reached the search
+  buffer, which came after the others were kept from them, and wrapping
+  left TAB nothing more to show. The setup check had line numbers too.
+- **A view that failed to draw stopped all polling.** An error drawing a
+  list reply (a search buffer made inconsistent while testing) was taken
+  for the host's failure, so every host showed "offline"; drawing again
+  failed again before the refresh ended, so no host was asked again until
+  Emacs restarted. A callback's error is now Roost's, and refreshes always
+  end.
+- **Moving lights cost CPU with Emacs in the background.** Their timer
+  ran twelve times a second whether or not a light was due to move, and in
+  this configuration each wakeup costs a redisplay: a timer doing nothing
+  at 12 Hz used 2.9% of a core. With two agents asking, lights used 3.3%
+  with Emacs in the background, where they don't move, and 6.3% in front.
+  The timer now wakes when the next light is due to move, ten times a
+  second for a pulse, and once a second while no frame has focus: 0.4%
+  in the background (0.55% without lights) and 5.8% in front. Drawing is
+  cheap (1 ms for six lights, uncompiled); the rest is redisplay.
+- **Pickers lost their order.** Vertico sorts a plain list by length,
+  which put "Other directory…" above the projects used last; the project,
+  agent and issue pickers now keep their order.
+- The setup check ran a long name into its detail ("Push · qa-projectno
+  origin remote"), and sending, stopping, resuming and opening a shell
+  said "Roost mean: send" where other actions say what they did.
+- `make contract` on 2.1.296 found a new notification type,
+  `plugin_notification`, a plugin's message through its `ui.notify`. Roost
+  ignores types it doesn't map, so status was right; the scan knows it now.
+
+Not Roost's: Magit's commit message shows "Error showing commit diff" in
+any linked worktree over TRAMP, as every remote task is. In the worktree's
+Git directory, `magit-toplevel` returns the working tree's path on the
+host without the TRAMP prefix (the commit itself works). In the author's
+configuration, a minibuffer prompt in Magit, such as a review note's,
+leaves xah-fly-keys in command mode, where `;` isn't `roost-note`.
+
+193 ERT tests pass on Emacs 32 with Magit (and on 30 without it), and
+139 Python tests.
+
 ### Codex and Pi adapters
 
 Used another disposable remote `hello-service` project, an isolated registry and
