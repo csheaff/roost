@@ -4464,6 +4464,66 @@ With INITIAL, the box must start out holding it."
           (funcall click "Fine")
           (should-not roost--notes))))))
 
+(ert-deftest roost-a-note-edited-while-it-is-sent-stays ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (roost-test--task "a"))) done)
+     (setq roost--notes (list (roost-test--note "1" "a" '(file . "x") '(text . "Old"))))
+     (cl-letf (((symbol-function 'roost--send-text)
+                (lambda (_task _text callback &rest _) (setq done callback)))
+               ((symbol-function 'roost--redraw) #'ignore))
+       (roost-note-send (car roost--notes))
+       (roost--edit-note (car roost--notes) "New")
+       (funcall done task)
+       (should (equal (mapcar (lambda (note) (alist-get 'text note)) roost--notes) '("New")))
+       ;; Unchanged, a note sent is cleared.
+       (roost-note-send (car roost--notes))
+       (funcall done task)
+       (should-not roost--notes)))))
+
+(ert-deftest roost-a-note-box-set-aside-saves-as-save-would ()
+  (roost-test--with-magit-task
+    (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")
+    (magit-diff-unstaged)
+    (with-current-buffer (magit-get-mode-buffer 'magit-diff-mode)
+      (roost-test--goto-line-text "new line")
+      (roost-test--write-note "Name it")
+      ;; Emptied, then left for another line: the note goes.
+      (save-current-buffer
+        (roost-note)
+        (with-current-buffer (plist-get roost--note-box :buffer) (erase-buffer)))
+      (roost-test--goto-line-text "line 4")
+      (save-current-buffer (roost-note))
+      (should-not roost--notes)
+      ;; A new note left empty is no note.
+      (roost-test--goto-line-text "line 2")
+      (save-current-buffer (roost-note))
+      (should-not roost--notes)
+      (roost-note-box-cancel))))
+
+(ert-deftest roost-a-note-box-belongs-to-the-window-it-opens-from ()
+  (roost-test--with-magit-task
+    (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")
+    (magit-diff-unstaged)
+    (delete-other-windows)
+    (let* ((buffer (magit-get-mode-buffer 'magit-diff-mode))
+           (first (selected-window))
+           ;; Above, since a box without child frames opens in the
+           ;; window below.
+           (second (split-window first nil 'above)))
+      (set-window-buffer first buffer)
+      (set-window-buffer second buffer)
+      (select-window first)
+      (with-current-buffer buffer
+        (roost-test--goto-line-text "new line")
+        (save-current-buffer (roost-note))
+        (should (eq (plist-get roost--note-box :window) first))
+        ;; The box is set aside for a note from the other window.
+        (select-window second)
+        (roost-test--goto-line-text "line 4")
+        (save-current-buffer (roost-note))
+        (should (eq (plist-get roost--note-box :window) second))
+        (roost-note-box-cancel)))))
+
 (ert-deftest roost-magit-status-names-the-task-and-shows-notes ()
   (roost-test--with-magit-task
     (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")

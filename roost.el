@@ -2669,9 +2669,8 @@ their lines in Magit, and go to the agent with your next prompt to it:
   (let ((task (or (roost--task-in-directory default-directory)
                   (user-error "This repository is not a Roost task's worktree"))))
     ;; A note being written elsewhere is kept, before looking for the
-    ;; note here, which it may be.  Closing the box selects the window
-    ;; it came from.
-    (save-excursion (roost--note-box-close t))
+    ;; note here, which it may be.
+    (roost--note-box-set-aside)
     (let* ((shown (unless (use-region-p) (roost--notes-at-point)))
            (place (roost--magit-note-place))
            (old (seq-find
@@ -2850,9 +2849,22 @@ Focus goes back to the Magit window it was opened from."
       (when (window-live-p window)
         (select-frame-set-input-focus (window-frame window))
         (select-window window))
-      (when (and keep text (not (string-blank-p text))
-                 (not (equal (string-trim text) (alist-get 'text (plist-get box :old)))))
+      ;; Kept as Save would: emptied, a note is removed.  A new note
+      ;; left empty, or a note left as it was, stays as it is.
+      (when (and keep text
+                 (not (equal (string-trim text) (or (alist-get 'text (plist-get box :old)) ""))))
         (roost--note-save (plist-get box :task) (plist-get box :place) (plist-get box :old) text)))))
+
+(defun roost--note-box-set-aside ()
+  "Close the note box, keeping what it holds, and stay where you are.
+Closing it otherwise selects the window it was opened from."
+  (save-excursion
+    (let ((window (selected-window)))
+      (roost--note-box-close t)
+      (when (and (window-live-p window) (not (eq window (selected-window))))
+        (unless (eq (window-frame window) (selected-frame))
+          (select-frame-set-input-focus (window-frame window)))
+        (select-window window)))))
 
 (defun roost--note-box-killed ()
   "Forget the note box when its buffer is killed some other way."
@@ -3173,18 +3185,21 @@ EVENT is the click on the note, in Magit."
   (let ((overlay (or (roost--note-shown-overlay note) (user-error "That note has gone"))))
     (goto-char (overlay-start overlay))
     (beginning-of-line)
-    (save-excursion (roost--note-box-close t))
+    (roost--note-box-set-aside)
     ;; Saving the note being written may have removed this one.
     (when (memq note (roost--notes))
       (roost--note-box (roost--note-task note) note note))))
 
 (defun roost-note-send (note)
-  "Send review NOTE alone to its task's agent; once sent, it is cleared."
-  (let ((task (roost--note-task note)))
+  "Send review NOTE alone to its task's agent; once sent, it is cleared.
+A note edited while it was being sent stays, with your edit."
+  (let ((task (roost--note-task note))
+        (text (alist-get 'text note)))
     (roost--send-text
      task (roost--format-note note)
      (lambda (_task)
-       (when (roost--remove-notes (lambda (shown) (eq shown note)))
+       (when (roost--remove-notes (lambda (shown)
+                                    (and (eq shown note) (equal (alist-get 'text shown) text))))
          (roost--redraw))
        (message "Sent the note on %s to %s" (roost--note-location note) (roost--field task 'name)))
      (lambda (err)
