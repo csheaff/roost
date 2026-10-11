@@ -3502,13 +3502,27 @@ showing it too; that one is left alone."
 (defun roost--lights-start ()
   "Start moving the status lights, if they aren't."
   (unless (timerp roost--lights-timer)
-    (setq roost--lights-timer (run-at-time 0 (/ 1.0 12) #'roost--lights-tick))))
+    (setq roost--lights-timer (run-at-time 0 nil #'roost--lights-tick))))
+
+(defun roost--light-wait (motion)
+  "Seconds until a light in MOTION reaches its next step."
+  (let ((step (/ (or (alist-get motion roost--light-periods) 1.0) roost--light-steps)))
+    ;; Just past the step, so that its phase has moved on.
+    (+ (- step (mod (float-time) step)) 0.002)))
 
 (defun roost--lights-tick ()
   "Move the status lights that show, while Emacs has focus.
-Stop once none that shows moves, or animations are off; drawing a buffer
-again when it shows starts them again."
-  (let ((moving nil)
+It runs again when the next of them is due to move, or while no frame
+has focus, after a second, to see whether one has.  It stops once none
+that shows moves, or animations are off; drawing a buffer again when it
+shows starts it again."
+  (when (timerp roost--lights-timer)
+    (cancel-timer roost--lights-timer))
+  (setq roost--lights-timer nil)
+  ;; Every wakeup costs a redisplay, which in a full configuration is
+  ;; most of what moving lights cost; one in the background costs that
+  ;; for nothing.
+  (let ((next nil)
         (focused (seq-some #'frame-focus-state (frame-list))))
     (when (roost--animations-p)
       (maphash (lambda (id light)
@@ -3517,16 +3531,15 @@ again when it shows starts them again."
                    (cond ((and buffer (not (buffer-live-p buffer)))
                           (remhash id roost--lights))
                          ((and motion (or (null buffer) (roost--light-window buffer)))
-                          (setq moving t)
+                          (setq next (min (or next 1.0) (if focused (roost--light-wait motion) 1.0)))
                           (let ((phase (roost--light-phase motion)))
                             ;; Only a light whose motion moved on is redrawn.
                             (when (and focused (not (eql phase (plist-get light :phase))))
                               (plist-put light :phase phase)
                               (roost--light-draw light phase)))))))
                roost--lights))
-    (unless moving
-      (cancel-timer roost--lights-timer)
-      (setq roost--lights-timer nil))))
+    (when next
+      (setq roost--lights-timer (run-at-time next nil #'roost--lights-tick)))))
 
 (defun roost--seconds-since (timestamp)
   "Whole seconds since TIMESTAMP, or nil if it is missing or unreadable."

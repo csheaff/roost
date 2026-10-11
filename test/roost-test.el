@@ -2522,6 +2522,31 @@
                                 '(panel . 1) t)
            (should (timerp roost--lights-timer))))))))
 
+(ert-deftest roost-status-lights-wake-emacs-only-when-they-move ()
+  ;; A timer twelve times a second cost a redisplay each time, even
+  ;; with Emacs in the background, where the lights don't move.
+  (roost-test--isolated
+   (roost-test--with-canvases t
+     (let ((task (roost--cache-task "dev" (roost-test--task "1111111111111111" "permission")))
+           (focused t))
+       (cl-letf (((symbol-function 'frame-focus-state) (lambda (&rest _) focused)))
+         (cl-flet ((wait () (- (float-time (timer--time roost--lights-timer)) (float-time))))
+           (with-temp-buffer
+             (save-window-excursion
+               (set-window-buffer nil (current-buffer))
+               (roost--status-light task 'sidebar)
+               ;; A pulse moves sixteen steps in 1.6 seconds: the next is
+               ;; at most a tenth of a second away.
+               (roost--lights-tick)
+               (should (< (wait) 0.11))
+               ;; In the background, it looks again a second later.
+               (setq focused nil)
+               (roost--lights-tick)
+               (should (> (wait) 0.9))
+               (setq focused t)
+               (roost--lights-tick)
+               (should (< (wait) 0.11))))))))))
+
 (ert-deftest roost-status-lights-follow-the-option-at-once ()
   (roost-test--isolated
    (roost-test--with-canvases t
