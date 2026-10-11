@@ -2728,9 +2728,16 @@ their lines in Magit, and go to the agent with your next prompt to it:
       (deactivate-mark)
       (roost--note-box task place old))))
 
+(defun roost--note-task-live-p (task)
+  "Whether Roost still has TASK, which notes can then be for."
+  (and (gethash (roost--key task) roost--tasks) t))
+
 (defun roost--note-save (task place old text)
   "Save TEXT as TASK's note on PLACE, or as note OLD's new text.
-Empty TEXT removes OLD."
+Empty TEXT removes OLD.  A task Roost no longer has, as one retired
+while you wrote, gets no note."
+  (unless (roost--note-task-live-p task)
+    (user-error "Roost no longer has %s, so the note can't be kept" (roost--field task 'name)))
   (setq text (string-trim text))
   ;; OLD may have been sent, or discarded, while you wrote.
   (unless (memq old (roost--notes)) (setq old nil))
@@ -2857,6 +2864,10 @@ over room left for it, where Emacs shows them, or in a window below."
   (interactive)
   (let ((box roost--note-box)
         (text (or (roost--note-box-text) (user-error "No note is being written"))))
+    ;; Refused with the box still open, so what you wrote is not lost.
+    (unless (roost--note-task-live-p (plist-get box :task))
+      (user-error "Roost no longer has %s, so the note can't be kept"
+                  (roost--field (plist-get box :task) 'name)))
     (roost--note-box-close)
     (roost--note-save (plist-get box :task) (plist-get box :place) (plist-get box :old) text)))
 
@@ -2870,11 +2881,14 @@ over room left for it, where Emacs shows them, or in a window below."
   (interactive)
   (let ((box roost--note-box))
     (roost--note-box-close)
-    (roost--note-save (plist-get box :task) (plist-get box :place) (plist-get box :old) "")))
+    ;; A task Roost no longer has took its notes with it.
+    (when (roost--note-task-live-p (plist-get box :task))
+      (roost--note-save (plist-get box :task) (plist-get box :place) (plist-get box :old) ""))))
 
-(defun roost--note-box-close (&optional keep)
+(defun roost--note-box-close (&optional keep killed)
   "Close the note box.  With KEEP, save the note first if you changed it.
-Focus goes back to the Magit window it was opened from."
+Focus goes back to the Magit window it was opened from.  KILLED means
+its buffer is being killed already."
   (when-let* ((box roost--note-box))
     (let ((text (roost--note-box-text))
           (frame (plist-get box :frame))
@@ -2888,7 +2902,7 @@ Focus goes back to the Magit window it was opened from."
       (when (buffer-live-p buffer)
         (dolist (shown (get-buffer-window-list buffer nil t))
           (quit-restore-window shown))
-        (kill-buffer buffer))
+        (unless killed (kill-buffer buffer)))
       (when (buffer-live-p source)
         (with-current-buffer source
           (remove-hook 'window-scroll-functions #'roost--note-box-follow t)
@@ -2897,8 +2911,10 @@ Focus goes back to the Magit window it was opened from."
         (select-frame-set-input-focus (window-frame window))
         (select-window window))
       ;; Kept as Save would: emptied, a note is removed.  A new note
-      ;; left empty, or a note left as it was, stays as it is.
+      ;; left empty, or a note left as it was, stays as it is, and so
+      ;; does nothing for a task Roost no longer has.
       (when (and keep text
+                 (roost--note-task-live-p (plist-get box :task))
                  (not (equal (string-trim text) (or (alist-get 'text (plist-get box :old)) ""))))
         (roost--note-save (plist-get box :task) (plist-get box :place) (plist-get box :old) text)))))
 
@@ -2916,7 +2932,7 @@ Closing it otherwise selects the window it was opened from."
 (defun roost--note-box-killed ()
   "Forget the note box when its buffer is killed some other way."
   (when (eq (current-buffer) (plist-get roost--note-box :buffer))
-    (roost--note-box-close)))
+    (roost--note-box-close nil t)))
 
 (defun roost--note-box-float ()
   "Show the note box in a child frame, over room left under its line."

@@ -4614,6 +4614,42 @@ With INITIAL, the box must start out holding it."
             (cancel-timer roost--note-mouse-timer)
             (setq roost--note-mouse-timer nil)))))))
 
+(ert-deftest roost-a-note-box-keeps-nothing-for-a-task-gone-meanwhile ()
+  (roost-test--with-magit-task
+    (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")
+    (magit-diff-unstaged)
+    (with-current-buffer (magit-get-mode-buffer 'magit-diff-mode)
+      (roost-test--goto-line-text "new line")
+      (let ((gone (lambda () (remhash (roost--key task) roost--tasks))))
+        ;; Saved, it is refused, with the box still open.
+        (save-current-buffer
+          (roost-note)
+          (with-current-buffer (plist-get roost--note-box :buffer) (insert "Too late")))
+        (funcall gone)
+        (should-error (roost-note-box-save) :type 'user-error)
+        (should roost--note-box)
+        ;; Set aside, it is dropped.
+        (roost--note-box-close t)
+        (should-not roost--note-box)
+        (should-not roost--notes)))))
+
+(ert-deftest roost-a-note-box-killed-closes-once ()
+  (roost-test--with-magit-task
+    (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")
+    (magit-diff-unstaged)
+    (with-current-buffer (magit-get-mode-buffer 'magit-diff-mode)
+      (roost-test--goto-line-text "new line")
+      (save-current-buffer (roost-note))
+      (let ((buffer (plist-get roost--note-box :buffer))
+            (kills 0))
+        (cl-letf* ((kill (symbol-function 'kill-buffer))
+                   ((symbol-function 'kill-buffer)
+                    (lambda (&optional b) (cl-incf kills) (funcall kill b))))
+          (kill-buffer buffer))
+        (should (= kills 1))
+        (should-not (buffer-live-p buffer))
+        (should-not roost--note-box)))))
+
 (ert-deftest roost-a-whole-file-note-shown-twice-is-edited-where-clicked ()
   (roost-test--with-magit-task
     ;; Staged, and changed again since: the file is under both headings.
