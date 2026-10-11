@@ -1,0 +1,104 @@
+# Changes
+
+What each release changes, and what to do when upgrading. Newest first.
+
+## Unreleased
+
+Since 0.8.1:
+
+- `m` now squashes a task's work into one commit. Set `roost-merge-style`
+  to `merge` for a merge commit, as before.
+- Roost watches, counts waiting agents and notifies you only once you open
+  it, unless your configuration turns on `roost-watch-mode`, as the install
+  snippets now do; `roost-doctor` says which. While it watches, `C-c ?` in
+  an agent's terminal, or in Magit on a task, opens the menu.
+- Magit's status of a task lists the commits not yet merged (`Unmerged into
+  main`), so work the agent committed has a place to be reviewed.
+- Stopping, updating, merging and retiring a task with nothing to lose ask
+  `y` or `n`; discarding work still has you type the task's name. A finished
+  task's panel closes with it, and reading a task's panel counts as seeing
+  its agent's reply. A permission request leaves out a leading `cd` into
+  the task's worktree, and shows paths in it relative to it.
+- The sidebar (`b`) and the task panel beside each terminal (`I`). The panel
+  lists only what a task can do now and says what comes next; the command
+  menu says so too, and greys out the rest. Like the sidebar, the panel is
+  off until you turn it on: add `(roost-task-panel-mode 1)` to your
+  configuration to keep it. Neither has a mode line: while you are in one,
+  it shows the cursor (with its modal-editing shape) and highlights the line
+  you are on in face `roost-selection`, which replaces
+  `roost-sidebar-selection`.
+- `/` searches the conversations of your tasks on every host, including
+  tasks retired since: every word must be in one message, yours or the
+  agent's, and tool output is left out. Each host searches its newest
+  conversations first, for at most 20 seconds. Claude Code tasks only, for now.
+  Hosts record each repository beside its worktrees, so a task retired
+  after this release is shown under its project.
+- Each task has a tmux session of its own, which ends with the task. Older
+  tasks move to their own when resumed. `roost-session-name` is gone.
+- `x` finishes a task: it retires one whose work is merged, or discards one
+  whose work isn't (`roost-discard`), with the worktrees its agent made. `X`
+  only forgets. `m` merges while your checkout is on another branch (Git 2.38+).
+- A turn that failed while its agent waits shows as `error`. Errors, failed,
+  crashed and exited agents count as waiting until you've seen them,
+  and what you've seen is kept on the task's host, for your other machines and
+  the next session.
+- Keys follow Magit's: `h` and `?` open the menu, `i` a task's details (`?`
+  before); `l` switches task. Roost polls every 15 s while Emacs isn't in
+  front (`roost-watch-unfocused-interval`).
+- `M-x roost-forget-host`; setup commands get the primary checkout in
+  `$ROOST_REPO`; a notification click opens its task (terminal-notifier).
+- Claude Code worktrees an agent makes for itself show in its task's panel.
+- Review notes: in Magit on a task, `;` writes a note for the agent on a
+  line and `@` sends your notes; `=` shows a whole file's diff. The status
+  names the task and folds in the agent's latest reply. A draft prompt
+  (`e`, or `roost-send-region`) now keeps what you have written and adds to it.
+- A new task's project is the one you are in again, also in Dired or a
+  shell; the picker adds `project.el`'s projects. A turn you interrupted, or
+  whose permission you declined, shows as `interrupted` rather than `ready`.
+  `u` on a task with uncommitted changes offers to have its agent commit and
+  update, and `roost-merge-style` can squash a task into one commit. With no
+  tasks yet, the menus grey out the task commands.
+- With tmux-control newer than 0.7.2, switching sessions from a terminal
+  (`C-c C-s`, next and previous session) opens that task in its workspace.
+- `roost-claude-command` moved into `roost-agent-commands`, and
+  `roost-use-perspectives` into `roost-workspace`; both still work.
+- An agent keeps the hooks it was started with, so one started before this
+  notices its own worktrees only after `K` and `s`.
+
+## 0.8
+
+0.8 adds GitHub issues as a starting point (`C-c C-t` in the draft), the
+command menu (`h`, or `roost-dispatch` from anywhere), the mode-line count of
+waiting agents, links between Org entries and their tasks, and one shared SSH
+connection per host. It needs transient, which Emacs 29 includes.
+`roost-dispatch` used to be an alias for `roost-new-task`; it now opens the
+menu, where `c` starts a task.
+
+## 0.7
+
+0.7 needs tmux-control 0.7.0, which adds the public API Roost now uses. Update
+tmux-control first: with straight.el or a Git checkout, pull it before Roost;
+with `package-vc`, run `package-vc-upgrade` on tmux-control, then Roost. Then
+restart Emacs. `M-x roost-doctor` flags an older tmux-control. 0.7 also adds
+pull requests (`P`), the agent's latest reply in the dashboard, task panel
+and notifications, prompts from Org entries and the region, and a push check
+in `roost-doctor`. `D` now diffs a task's own changes since it last met its
+integration branch, so updates from `u` no longer appear as the task's work.
+
+## 0.6
+
+0.6 declares tmux-control as a package dependency and adds `roost-doctor`,
+tab-bar workspaces and Evil support. Stopping a task moved from `k` to `K`; `j`
+and `k` now move between tasks in the dashboard.
+
+## 0.5
+
+0.5 defaults new branches to `roost/…` (formerly `codex/roost/…`; existing tasks
+keep theirs). It replaces the minibuffer prompts of `roost-new-task` with the
+draft buffer; called from Lisp with arguments, it still creates the task
+directly. Retired task records are now deleted. Codex tasks started after
+upgrading ask for one final hook review.
+
+## 0.4 and 0.3
+
+0.4 added Codex and Pi. 0.3 replaced the 0.2 Pi orchestrator registry.

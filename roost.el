@@ -5626,7 +5626,7 @@ refresh of Magit's status does a dozen times or more."
                   (tramp-file-name-method (tramp-dissect-file-name (roost--host-directory host "/"))))))
     (list "Magit" (if (equal method "rpc") t 'optional)
           (format "over TRAMP's %s method" (or method "default"))
-          "Each Git command is a round trip; see \"Remote review\" in Roost's README for a faster method")))
+          "Each Git command is a round trip; see \"Remote review\" in Roost's manual for a faster method")))
 
 (defun roost--doctor-line (name ok detail hint &optional path)
   "Insert one check NAME with status OK, DETAIL and HINT; PATH is a tooltip."
