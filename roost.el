@@ -3232,11 +3232,24 @@ it shows, or nil for the mode line; :phase, the step last drawn; and
 (defconst roost--light-periods '((pulse . 1.6) (glow . 3.4))
   "Seconds each motion of a status light takes.")
 
+(defun roost--light-frame-p (frame)
+  "Whether FRAME shows status lights: it is graphical.
+A text frame shows each light's dot instead."
+  (display-graphic-p frame))
+
 (defun roost--animations-p ()
-  "Whether status lights can move: on, with canvases and a frame to show them.
-A text frame showing the same buffer shows each light's dot instead."
+  "Whether status lights can move: on, with canvases and a frame to show them."
   (and roost-animations (fboundp 'canvas-refresh) (image-type-available-p 'canvas)
-       (seq-some #'display-graphic-p (frame-list))))
+       (seq-some #'roost--light-frame-p (frame-list))))
+
+(defun roost--light-window (buffer)
+  "A visible window on a graphical frame showing BUFFER, or nil.
+Only there do its lights show; a text frame shows their dots."
+  ;; `visible' would look only at frames on the selected one's terminal.
+  (seq-find (lambda (window)
+              (let ((frame (window-frame window)))
+                (and (roost--light-frame-p frame) (eq (frame-visible-p frame) t))))
+            (get-buffer-window-list buffer nil t)))
 
 (defun roost--light-motion (task)
   "How TASK's light moves, or nil if it rests.
@@ -3324,14 +3337,20 @@ Emacs redisplay its window, so fewer steps cost less.")
 (defun roost--light (place key motion face background &optional buffer)
   "The canvas showing the status light of KEY at PLACE, made or updated.
 MOTION is as from `roost--light-motion', FACE the status face and
-BACKGROUND the color behind the light.  BUFFER is where it shows, nil
+BACKGROUND the face behind the light.  BUFFER is where it shows, nil
 for the mode line."
   (let* ((id (cons place key))
          (light (gethash id roost--lights))
-         (width (* 2 (frame-char-width)))
-         (height (max 8 (default-line-height)))
-         (color (roost--light-pixel (face-foreground face nil t)))
-         (back (roost--light-pixel background)))
+         ;; One image serves every frame showing BUFFER, so it is measured
+         ;; in a graphical one that shows it, or any graphical one.
+         (frame (or (when-let* ((window (and buffer (roost--light-window buffer))))
+                      (window-frame window))
+                    (seq-find #'roost--light-frame-p (cons (selected-frame) (frame-list)))
+                    (selected-frame)))
+         (width (* 2 (frame-char-width frame)))
+         (height (max 8 (if (eq frame (selected-frame)) (default-line-height) (frame-char-height frame))))
+         (color (roost--light-pixel (face-foreground face frame t)))
+         (back (roost--light-pixel (face-background background frame t))))
     (unless (and light
                  (= width (plist-get (cdr (plist-get light :image)) :data-width))
                  (= height (plist-get (cdr (plist-get light :image)) :data-height)))
@@ -3368,18 +3387,18 @@ dot.  Otherwise this is the dot, in TASK's status face."
         (propertize "●" 'face face)
       ;; The margin has a face of its own since Emacs 31.
       (let ((image (roost--light place (roost--key task) (roost--light-motion task) face
-                                 (face-background (if (and (not inline) (facep 'margin)) 'margin 'default)
-                                                  nil t)
+                                 (if (and (not inline) (facep 'margin)) 'margin 'default)
                                  (current-buffer))))
         ;; The dot keeps its face for a text frame, which shows no image.
         (if inline
             (propertize "●" 'face face 'display image 'roost-light (cons place (roost--key task)))
           (propertize "●" 'face face 'display `((margin left-margin) ,image)))))))
 
-(defun roost--light-behind (id background)
-  "Paint the light ID over BACKGROUND, a color, if it isn't already."
+(defun roost--light-behind (id face)
+  "Paint the light ID over FACE's background where it shows, if it isn't already."
   (when-let* ((light (gethash id roost--lights))
-              (back (roost--light-pixel background))
+              (window (roost--light-window (plist-get light :buffer)))
+              (back (roost--light-pixel (face-background face (window-frame window) t)))
               ((not (eql back (plist-get light :background)))))
     (plist-put light :background back)
     (roost--light-draw light (or (plist-get light :phase) 0.0))))
@@ -3395,10 +3414,12 @@ they are made to, and one that shows it asks for it."
       (force-mode-line-update t))))
 
 (defun roost--lights-forget (place keys)
-  "Forget the lights at PLACE of tasks other than KEYS."
+  "Forget the lights at PLACE of tasks other than KEYS, and those of dead buffers."
   (let (stale)
-    (maphash (lambda (id _light)
-               (when (and (equal (car id) place) (not (member (cdr id) keys)))
+    (maphash (lambda (id light)
+               (when (or (and (equal (car id) place) (not (member (cdr id) keys)))
+                         (when-let* ((buffer (plist-get light :buffer)))
+                           (not (buffer-live-p buffer))))
                  (push id stale)))
              roost--lights)
     (dolist (id stale) (remhash id roost--lights))))
@@ -3421,7 +3442,7 @@ once the lights are off."
                    roost--light-margin nil)))
       (dolist (window (get-buffer-window-list nil nil t))
         ;; A text frame shows no lights, so its windows keep the margin.
-        (let* ((left (if (and on (not (display-graphic-p (window-frame window))))
+        (let* ((left (if (and on (not (roost--light-frame-p (window-frame window))))
                          roost--light-margin
                        left-margin-width))
                (width (and (> left 0) left)))
@@ -3445,7 +3466,7 @@ again when it shows starts them again."
                        (motion (plist-get light :motion)))
                    (cond ((and buffer (not (buffer-live-p buffer)))
                           (remhash id roost--lights))
-                         ((and motion (or (null buffer) (get-buffer-window buffer 'visible)))
+                         ((and motion (or (null buffer) (roost--light-window buffer)))
                           (setq moving t)
                           (let ((phase (roost--light-phase motion)))
                             ;; Only a light whose motion moved on is redrawn.
@@ -5010,11 +5031,10 @@ are in one."
   ;; behind it while it is on the highlighted line.
   (when-let* ((at (text-property-not-all (point-min) (point-max) 'roost-light nil)))
     (roost--light-behind (get-text-property at 'roost-light)
-                         (face-background (if (and roost--selection (overlay-buffer roost--selection)
-                                                   (<= (overlay-start roost--selection) at)
-                                                   (< at (overlay-end roost--selection)))
-                                              'roost-selection 'default)
-                                          nil t))))
+                         (if (and roost--selection (overlay-buffer roost--selection)
+                                  (<= (overlay-start roost--selection) at)
+                                  (< at (overlay-end roost--selection)))
+                             'roost-selection 'default))))
 
 (defun roost--selection-changed (window)
   "Highlight, or stop highlighting, the line you are on in WINDOW's buffer."
@@ -5107,10 +5127,11 @@ MARGIN says that its status light shows in the margin, taking no column."
   "Render the task sidebar from cached state, keeping point on its row."
   (let* ((window (get-buffer-window (current-buffer) t))
          (width (max 12 (if window (roost--usable-width window) roost-sidebar-width)))
-         ;; Lines fit the window they are measured in; a text frame's has
-         ;; no lights in its margin.
+         ;; A light in the margin gives its dot's column back, unless a text
+         ;; frame shows the sidebar too, with the dot in its text.
          (margin (and (roost--animations-p)
-                      (or (null window) (display-graphic-p (window-frame window)))))
+                      (not (seq-some (lambda (shown) (not (roost--light-frame-p (window-frame shown))))
+                                     (get-buffer-window-list nil nil t)))))
          (position (if window (window-point window) (point)))
          (key (get-text-property position 'roost-task))
          (heading (unless key (get-text-property position 'roost-directory)))
@@ -5581,12 +5602,12 @@ PLAIN leaves out the status light, for a count no mode line shows."
       (remhash '(mode-line . waiting) roost--lights))
     (when (> (+ blocked waiting) 0)
       ;; A canvas has one background, so the light shows only in the
-      ;; selected window's mode line.
-      (concat (when (and (not plain) (roost--animations-p) (mode-line-window-selected-p))
+      ;; selected window's mode line, and only on a graphical frame.
+      (concat (when (and (not plain) (roost--animations-p) (roost--light-frame-p (selected-frame))
+                         (mode-line-window-selected-p))
                 (propertize " " 'display
                             (roost--light 'mode-line 'waiting (if (> blocked 0) 'pulse 'glow)
-                                          (roost--waiting-face tasks)
-                                          (face-background 'mode-line-active nil t))))
+                                          (roost--waiting-face tasks) 'mode-line-active)))
               (propertize (format " Roost:%d" (+ blocked waiting))
                           'face (roost--waiting-face tasks)
                           'help-echo "Agents waiting for you; mouse-1 opens the next"

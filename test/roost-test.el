@@ -2277,12 +2277,15 @@
                   `(image :type canvas :data ,data ,@props)))
                ((symbol-function 'canvas-refresh) (lambda (&rest _) (cl-incf roost-test--refreshed)))
                ((symbol-function 'frame-focus-state) (lambda (&rest _) t))
-               ((symbol-function 'mode-line-window-selected-p) (lambda () roost-test--selected)))
+               ((symbol-function 'mode-line-window-selected-p) (lambda () roost-test--selected))
+               ;; Batch Emacs has only a text frame; tests say what it stands for.
+               ((symbol-function 'roost--light-frame-p) (lambda (_frame) roost-test--graphic)))
        (unwind-protect (progn ,@body)
          (when (timerp roost--lights-timer) (cancel-timer roost--lights-timer))))))
 
 (defvar roost-test--refreshed 0)
 (defvar roost-test--selected t)
+(defvar roost-test--graphic t)
 
 (ert-deftest roost-status-lights-stay-dots-without-canvases ()
   ;; Off, or where Emacs has no canvases, a task's light is its dot.
@@ -2399,17 +2402,29 @@
            (let ((before roost-test--refreshed))
              (roost--lights-tick)
              (should (= roost-test--refreshed (1+ before))))
-           ;; The lights get a margin, which goes when they are turned off;
-           ;; a text frame's window, which shows the dots, keeps its own.
            (save-window-excursion
              (set-window-buffer nil (current-buffer))
-             (roost--light-margins)
-             (should (= left-margin-width 2))
-             (should-not (car (window-margins)))
-             (setq on nil)
-             (roost--light-margins)
-             (should (= left-margin-width 0))
-             (setq on t))
+             ;; In a graphical window its lights move too; in a text frame's,
+             ;; which shows the dots, they don't, nor does its mode line get one.
+             (maphash (lambda (_id light) (plist-put light :phase -1.0)) roost--lights)
+             (let ((before roost-test--refreshed))
+               (roost--lights-tick)
+               (should (= roost-test--refreshed (+ before 3))))
+             (let ((roost-test--graphic nil))
+               (maphash (lambda (_id light) (plist-put light :phase -1.0)) roost--lights)
+               (let ((before roost-test--refreshed))
+                 (roost--lights-tick)
+                 (should (= roost-test--refreshed (1+ before))))
+               (should-not (get-text-property 0 'display (roost--mode-line-count)))
+               ;; The lights get a margin, which goes when they are turned
+               ;; off; a text frame's window keeps its own.
+               (roost--light-margins)
+               (should (= left-margin-width 2))
+               (should-not (car (window-margins)))
+               (setq on nil)
+               (roost--light-margins)
+               (should (= left-margin-width 0))
+               (setq on t)))
            ;; A sidebar row whose light is in the margin has the dot's column
            ;; for its name: 31 characters, one of them not shown.
            (should (= (string-width (roost--sidebar-row asking 30 t)) 31))
@@ -2434,6 +2449,13 @@
          (plist-put (gethash '(mode-line . waiting) roost--lights) :asked (- (float-time) 3600))
          (roost--mode-line-light-check)
          (should-not (gethash '(mode-line . waiting) roost--lights))
+         ;; The lights of a buffer that is gone go whenever lights are
+         ;; forgotten, moving or not.
+         (let ((buffer (generate-new-buffer " lights")))
+           (with-current-buffer buffer (roost--status-light running 'sidebar))
+           (kill-buffer buffer)
+           (roost--lights-forget 'dashboard nil)
+           (should-not (gethash (cons 'sidebar (roost--key running)) roost--lights)))
          ;; Once nobody waits, the mode line's light goes.
          (roost--cache-task "dev" (roost-test--task "1111111111111111" "running"))
          (should-not (roost--mode-line-count))
