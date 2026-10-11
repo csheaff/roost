@@ -2885,10 +2885,11 @@ over room left for it, where Emacs shows them, or in a window below."
     (when (roost--note-task-live-p (plist-get box :task))
       (roost--note-save (plist-get box :task) (plist-get box :place) (plist-get box :old) ""))))
 
-(defun roost--note-box-close (&optional keep killed)
+(defun roost--note-box-close (&optional keep gone)
   "Close the note box.  With KEEP, save the note first if you changed it.
-Focus goes back to the Magit window it was opened from.  KILLED means
-its buffer is being killed already."
+Focus goes back to the Magit window it was opened from.  GONE is the
+buffer or frame being killed or deleted already, the box's own or its
+frame's parent."
   (when-let* ((box roost--note-box))
     (let ((text (roost--note-box-text))
           (frame (plist-get box :frame))
@@ -2898,16 +2899,17 @@ its buffer is being killed already."
       (setq roost--note-box nil)
       (remove-hook 'window-size-change-functions #'roost--note-box-follow)
       (remove-hook 'window-buffer-change-functions #'roost--note-box-follow)
-      (when (frame-live-p frame) (delete-frame frame))
+      (remove-hook 'delete-frame-functions #'roost--note-box-frame-deleted)
+      (when (and (frame-live-p frame) (not (eq frame gone))) (delete-frame frame))
       (when (buffer-live-p buffer)
         (dolist (shown (get-buffer-window-list buffer nil t))
           (quit-restore-window shown))
-        (unless killed (kill-buffer buffer)))
+        (unless (eq buffer gone) (kill-buffer buffer)))
       (when (buffer-live-p source)
         (with-current-buffer source
           (remove-hook 'window-scroll-functions #'roost--note-box-follow t)
           (roost--show-notes-here (roost--task-in-directory default-directory))))
-      (when (window-live-p window)
+      (when (and (window-live-p window) (not (eq (window-frame window) gone)))
         (select-frame-set-input-focus (window-frame window))
         (select-window window))
       ;; Kept as Save would: emptied, a note is removed.  A new note
@@ -2932,7 +2934,16 @@ Closing it otherwise selects the window it was opened from."
 (defun roost--note-box-killed ()
   "Forget the note box when its buffer is killed some other way."
   (when (eq (current-buffer) (plist-get roost--note-box :buffer))
-    (roost--note-box-close nil t)))
+    (roost--note-box-close nil (current-buffer))))
+
+(defun roost--note-box-frame-deleted (frame)
+  "Close the note box, keeping what it holds, if FRAME is its frame or the parent.
+Run from `delete-frame-functions' while the box is open, as when you
+delete its frame with \\[delete-frame]."
+  (when-let* ((box-frame (plist-get roost--note-box :frame))
+              ((or (eq frame box-frame) (eq frame (frame-parent box-frame)))))
+    (with-demoted-errors "Roost: %S"
+      (roost--note-box-close t frame))))
 
 (defun roost--note-box-float ()
   "Show the note box in a child frame, over room left under its line."
@@ -2980,6 +2991,7 @@ Closing it otherwise selects the window it was opened from."
       (roost--show-notes-here (plist-get box :task)))
     (add-hook 'window-size-change-functions #'roost--note-box-follow)
     (add-hook 'window-buffer-change-functions #'roost--note-box-follow)
+    (add-hook 'delete-frame-functions #'roost--note-box-frame-deleted)
     (unless (roost--note-box-spot)
       (with-selected-window window (recenter 3)))
     (roost--note-box-place)

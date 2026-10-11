@@ -4650,6 +4650,27 @@ With INITIAL, the box must start out holding it."
         (should-not (buffer-live-p buffer))
         (should-not roost--note-box)))))
 
+(ert-deftest roost-a-note-box-closes-with-its-frame ()
+  (roost-test--with-magit-task
+    (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")
+    (magit-diff-unstaged)
+    (with-current-buffer (magit-get-mode-buffer 'magit-diff-mode)
+      (roost-test--goto-line-text "new line")
+      (save-current-buffer
+        (roost-note)
+        (with-current-buffer (plist-get roost--note-box :buffer) (insert "Keep me")))
+      ;; As if the box were a child frame of this one, deleted with C-x 5 0:
+      ;; the hook runs while the frame is still there.
+      (let ((buffer (plist-get roost--note-box :buffer)))
+        (setq roost--note-box (plist-put roost--note-box :frame (selected-frame)))
+        (add-hook 'delete-frame-functions #'roost--note-box-frame-deleted)
+        (roost--note-box-frame-deleted (selected-frame))
+        (should (frame-live-p (selected-frame)))
+        (should-not roost--note-box)
+        (should-not (buffer-live-p buffer))
+        (should-not (memq #'roost--note-box-frame-deleted delete-frame-functions))
+        (should (equal (mapcar (lambda (note) (alist-get 'text note)) roost--notes) '("Keep me")))))))
+
 (ert-deftest roost-a-whole-file-note-shown-twice-is-edited-where-clicked ()
   (roost-test--with-magit-task
     ;; Staged, and changed again since: the file is under both headings.
