@@ -1641,20 +1641,31 @@
 
 (ert-deftest roost-watching-turned-on-by-your-configuration-is-from-the-start ()
   ;; The sidebar turned on in your configuration watches from the start;
-  ;; opening it later, like the dashboard, only from then on.
-  (let ((roost-watch-mode nil) (roost--watching-on-demand nil) (roost-sidebar-mode nil))
-    (cl-letf (((symbol-function 'roost-watch-mode) (lambda (&rest _) (setq roost-watch-mode t)))
+  ;; opening it later, like the dashboard or M-x roost-watch-mode, only
+  ;; from then on, and the setup check suggests more.
+  (let ((roost-watch-mode nil) (roost--watching-on-demand nil) (roost--watch-timer nil)
+        (roost-sidebar-mode nil) (global-mode-string nil) (roost-watch-interval 3600))
+    (cl-letf (((symbol-function 'roost--magit-setup) #'ignore)
               ((symbol-function 'roost--watch-layout) #'ignore)
               ((symbol-function 'roost--sync-all-frames) #'ignore)
               ((symbol-function 'roost-refresh) #'ignore))
-      (let ((after-init-time nil))
-        (roost-sidebar-mode 1))
-      (should roost-watch-mode)
-      (should-not roost--watching-on-demand)
-      (setq roost-watch-mode nil roost-sidebar-mode nil)
-      (roost-sidebar-mode 1)
-      (should roost--watching-on-demand)
-      (setq roost-sidebar-mode nil))))
+      (unwind-protect
+          (progn
+            (let ((after-init-time nil))
+              (roost-sidebar-mode 1))
+            (should roost-watch-mode)
+            (should-not roost--watching-on-demand)
+            ;; Turning it on again changes nothing.
+            (roost-watch-mode 1)
+            (should-not roost--watching-on-demand)
+            (roost-watch-mode -1)
+            (roost-watch-mode 1)
+            (should roost--watching-on-demand)
+            (roost-watch-mode -1)
+            (setq roost-sidebar-mode nil)
+            (roost-sidebar-mode 1)
+            (should roost--watching-on-demand))
+        (roost-watch-mode -1)))))
 
 (ert-deftest roost-a-finished-tasks-panel-closes-with-it ()
   ;; It stayed, saying the task was retired, and kept the panel of the
@@ -1673,7 +1684,11 @@
              (should-not (buffer-live-p panel))
              (should (= (count-windows) 1))
              (should (buffer-live-p kept))
-             (kill-buffer kept))))))))
+             (kill-buffer kept))))
+       ;; A panel no window shows goes too.
+       (let ((hidden (roost--task-info-buffer other)))
+         (roost--retired-workspace other)
+         (should-not (buffer-live-p hidden)))))))
 
 (ert-deftest roost-reading-a-tasks-panel-sees-its-agent ()
   ;; Reading the reply in the panel left the task waiting, and n went back to it.

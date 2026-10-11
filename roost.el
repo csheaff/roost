@@ -348,8 +348,9 @@ A ready agent you have seen since its last event is no longer waiting.")
   "Key of the task most recently opened.")
 (defvar roost--watch-timer nil)
 (defvar roost--watching-on-demand nil
-  "Non-nil when Roost began watching only because you opened it.
-The setup check then suggests watching from the start of each session.")
+  "Non-nil when Roost began watching after your configuration had loaded.
+As when you opened the dashboard: the setup check then suggests
+watching from the start of each session.")
 (defvar roost--requests nil
   "Live RPC processes.")
 (defvar roost--open-generation 0
@@ -1464,7 +1465,7 @@ EXTRA is an alist of further request fields, such as the GitHub issue."
          (roost--remember-project (roost--project-directory (cons (cons 'host host) task))))
        (setq task (roost--cache-task host task))
        (when on-success (funcall on-success task))
-       (roost--watch-on-demand)
+       (roost-watch-mode 1)
        (roost--redraw)
        (roost-open-task task)
        (message "Roost created %s on %s from %s; integrates into %s"
@@ -3230,7 +3231,10 @@ it showed before."
     (dolist (buffer (buffer-list))
       (when (and (equal (buffer-local-value 'roost--buffer-task-key buffer) key)
                  (eq (buffer-local-value 'major-mode buffer) 'roost-task-info-mode))
-        (quit-windows-on buffer t))))
+        ;; In every frame.  Before Emacs 31 this kills only a panel that
+        ;; shows, so kill the rest too.
+        (quit-windows-on buffer t)
+        (when (buffer-live-p buffer) (kill-buffer buffer)))))
   (pcase (roost--workspace-backend)
     ('perspective
      (when (fboundp 'persp-kill)
@@ -4794,7 +4798,7 @@ The mark stays where it was."
     (roost--leave-side-window)
     (pop-to-buffer buffer '((display-buffer-reuse-window display-buffer-same-window)))
     (roost--redraw))
-  (roost--watch-on-demand)
+  (roost-watch-mode 1)
   (roost-refresh))
 
 ;;;; Searching conversations
@@ -5457,7 +5461,7 @@ point.  Turning the mode on starts `roost-watch-mode'.  Frames narrower
 than `roost-sidebar-width' plus 80 columns go without."
   :global t
   (roost--watch-layout)
-  (when roost-sidebar-mode (roost--watch-on-demand))
+  (when roost-sidebar-mode (roost-watch-mode 1))
   (roost--sync-all-frames)
   (if roost-sidebar-mode
       (roost-refresh t)
@@ -5762,15 +5766,6 @@ to `mode-line-format'."
 (defconst roost--mode-line-entry '(roost-mode-line-count (:eval (roost--mode-line-count)))
   "The `global-mode-string' entry for `roost-watch-mode'.")
 
-(defun roost--watch-on-demand ()
-  "Watch, as opening Roost does.
-Done once your configuration has loaded, as by opening the dashboard,
-it sets `roost--watching-on-demand'; done by your configuration, as by
-turning on the sidebar there, it is watching from the start."
-  (unless roost-watch-mode
-    (setq roost--watching-on-demand (and after-init-time t))
-    (roost-watch-mode 1)))
-
 (defun roost--in-terminal (command)
   "COMMAND in a task's terminal, and nil elsewhere.
 A key filter, so that the key keeps its own meaning in other buffers,
@@ -5805,10 +5800,13 @@ refreshes every `roost-watch-interval' seconds while Emacs has focus,
 and every `roost-watch-unfocused-interval' otherwise.  Turning it off
 leaves the sidebar marked paused."
   :global t
+  ;; Turned on by your configuration, or by something you did since.  A
+  ;; second call to turn it on leaves that as it was.
+  (cond ((not roost-watch-mode) (setq roost--watching-on-demand nil))
+        ((not roost--watch-timer) (setq roost--watching-on-demand (and after-init-time t))))
   (when roost--watch-timer
     (cancel-timer roost--watch-timer)
     (setq roost--watch-timer nil))
-  (unless roost-watch-mode (setq roost--watching-on-demand nil))
   (setq global-mode-string (delete roost--mode-line-entry (ensure-list global-mode-string)))
   ;; The mode line asks for its light again if it still shows it.
   (remhash '(mode-line . waiting) roost--lights)
