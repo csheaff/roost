@@ -2131,6 +2131,8 @@ class PermissionRequest(unittest.TestCase):
         self.assertEqual(ask("Bash", command="cd /elsewhere && ls /work/task-2"),
                          "Asks to run cd /elsewhere && ls /work/task-2")
         self.assertEqual(ask("Bash", command="cd /work/task && "), "Asks to run cd /work/task &&")
+        self.assertEqual(ask("Bash", command="ls /other/work/task/a /work/task/b"),
+                         "Asks to run ls /other/work/task/a b")
         # Questions and plans wait for an answer rather than a permission.
         question = lambda text: dict(question=text, header="h", options=[dict(label="a"), dict(label="b")])
         self.assertEqual(ask("AskUserQuestion", questions=[question("Red or blue?")]), "Asks: Red or blue?")

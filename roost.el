@@ -3120,7 +3120,7 @@ merges it instead."
 (defun roost-merge-retire (&optional task)
   "Merge TASK's committed work into its recorded integration branch and retire.
 Dirty worktrees are refused; review and commit in Magit first.  The work
-comes in as a merge commit, or one squashed commit; see `roost-merge-style'."
+comes in as one squashed commit, or a merge commit; see `roost-merge-style'."
   (interactive)
   (setq task (roost--choose task))
   (cond
@@ -5784,7 +5784,7 @@ In an agent's terminal, where every other key goes to the agent,
   "Watch tasks asynchronously, retaining cached records during disconnects.
 While watching, the mode line counts the agents waiting for you (see
 `roost-mode-line-count'), Roost notifies you when one needs you, and
-\`C-c ?' in an agent's terminal opens Roost's menu.  Opening the
+\\`C-c ?' in an agent's terminal opens Roost's menu.  Opening the
 dashboard or sidebar, or starting a task, turns this on; turn it on in
 your configuration to be told from the start of each session.  It
 refreshes every `roost-watch-interval' seconds while Emacs has focus,

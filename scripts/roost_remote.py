@@ -2018,8 +2018,10 @@ def shown_command(command, worktree):
         if target.rstrip("/") in roots:
             command = command[match.end():]
     for root in roots:
-        command = re.sub(re.escape(root) + r"/+", "", command)
-        command = re.sub(re.escape(root) + r"(?![^\s;&|'\")])", ".", command)
+        # The whole path, not one that only ends with it.
+        start = r"(?<![^\s;&|'\"(=])" + re.escape(root)
+        command = re.sub(start + r"/+", "", command)
+        command = re.sub(start + r"(?![^\s;&|'\")])", ".", command)
     return command
 
 
