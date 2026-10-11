@@ -2273,11 +2273,13 @@
                ((symbol-function 'create-image)
                 (lambda (data _type _data-p &rest props) `(image :type canvas :data ,data ,@props)))
                ((symbol-function 'canvas-refresh) (lambda (&rest _) (cl-incf roost-test--refreshed)))
-               ((symbol-function 'frame-focus-state) (lambda (&rest _) t)))
+               ((symbol-function 'frame-focus-state) (lambda (&rest _) t))
+               ((symbol-function 'mode-line-window-selected-p) (lambda () roost-test--selected)))
        (unwind-protect (progn ,@body)
          (when (timerp roost--lights-timer) (cancel-timer roost--lights-timer))))))
 
 (defvar roost-test--refreshed 0)
+(defvar roost-test--selected t)
 
 (ert-deftest roost-status-lights-stay-dots-without-canvases ()
   ;; Off, or where Emacs has no canvases, a task's light is its dot.
@@ -2329,9 +2331,9 @@
            ;; At work, a light rests: nothing has to move.
            (roost--status-light running 'sidebar)
            (should-not roost--lights-timer)
-           ;; The light shows in the margin, keeping the dot's column.
+           ;; The light shows in the margin, taking no column of the text.
            (let ((light (roost--status-light asking 'sidebar)))
-             (should (equal (substring-no-properties light) "● "))
+             (should (equal (substring-no-properties light) "●"))
              (should (equal (car (get-text-property 0 'display light)) '(margin left-margin))))
            ;; In the task panel, it takes the dot's place.
            (should (eq (car (get-text-property 0 'display (roost--status-light asking '(panel . 1) t))) 'image))
@@ -2341,8 +2343,11 @@
            (let ((before roost-test--refreshed))
              (roost--status-light running 'sidebar)
              (should (= roost-test--refreshed before)))
-           ;; The mode line has one too, for the agents waiting.
+           ;; The mode line has one too, for the agents waiting, in the
+           ;; selected window, whose background it paints.
            (should (eq (car (get-text-property 0 'display (roost--mode-line-count))) 'image))
+           (let ((roost-test--selected nil))
+             (should-not (get-text-property 0 'display (roost--mode-line-count))))
            ;; Lights of tasks no longer listed are forgotten, only at their place.
            (roost--lights-forget 'sidebar (list (roost--key asking)))
            (should (= (hash-table-count roost--lights) 3))
@@ -2363,12 +2368,17 @@
            (roost--light-margins)
            (should (= left-margin-width 0))
            (setq on t))
-         ;; A margin Roost didn't give is left alone.
+         ;; A margin the buffer had is kept, and there again after.
          (with-temp-buffer
            (setq left-margin-width 3)
+           (roost--light-margins)
+           (should (= left-margin-width 3))
            (setq on nil)
            (roost--light-margins)
            (should (= left-margin-width 3))
+           (setq left-margin-width 1)
+           (roost--light-margins)
+           (should (= left-margin-width 1))
            (setq on t))
          ;; Once nobody waits, the mode line's light goes.
          (roost--cache-task "dev" (roost-test--task "1111111111111111" "running"))
@@ -2378,7 +2388,19 @@
          ;; nothing moves, neither does the timer.
          (roost--lights-tick)
          (should (zerop (hash-table-count roost--lights)))
-         (should-not roost--lights-timer))))))
+         (should-not roost--lights-timer)
+         ;; A light moving in a buffer no window shows doesn't keep it going
+         ;; either; drawing that buffer again starts it.
+         (with-temp-buffer
+           (roost--cache-task "dev" (roost-test--task "1111111111111111" "permission"))
+           (roost--status-light (roost--cache-task "dev" (roost-test--task "1111111111111111" "permission"))
+                                '(panel . 1) t)
+           (should (timerp roost--lights-timer))
+           (roost--lights-tick)
+           (should-not roost--lights-timer)
+           (roost--status-light (roost--cache-task "dev" (roost-test--task "1111111111111111" "permission"))
+                                '(panel . 1) t)
+           (should (timerp roost--lights-timer))))))))
 
 (ert-deftest roost-a-seen-ready-agent-stops-counting-as-waiting ()
   (roost-test--isolated
