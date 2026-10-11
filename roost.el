@@ -4215,6 +4215,15 @@ The ellipsis takes the face of the text it follows."
                    (roost--fit-width string (- columns (roost--text-width ellipsis))))))
       (concat start ellipsis))))
 
+(defun roost--words (line)
+  "LINE split before each space, so that the pieces join to LINE again.
+Each piece keeps LINE's text properties."
+  (let ((start 0) (words nil))
+    (while (and (< start (length line)) (string-match " " line (1+ start)))
+      (push (substring line start (match-beginning 0)) words)
+      (setq start (match-beginning 0)))
+    (nreverse (cons (substring line start) words))))
+
 (defun roost--wrap-width (text columns &optional most)
   "TEXT's lines broken at spaces to fit COLUMNS each, as shown.
 TEXT's own line breaks are kept, as in lists and code.  A word wider
@@ -4228,12 +4237,14 @@ more than MOST lines.  Return the lines."
                    (when (and most (> (length lines) most)) (throw 'enough nil)))))
         (dolist (source (split-string text "\n"))
           (let ((line nil))
-            (dolist (word (split-string source " "))
-              (let ((longer (if line (concat line " " word) word)))
+            ;; Each word after the first keeps the space before it, so
+            ;; spaces keep their face, as their width depends on it.
+            (dolist (word (roost--words source))
+              (let ((longer (if line (concat line word) word)))
                 (if (or (null line) (<= (roost--text-width longer) columns))
                     (setq line longer)
                   (funcall add line)
-                  (setq line word)))
+                  (setq line (if (string-prefix-p " " word) (substring word 1) word))))
               (while (> (roost--text-width line) columns)
                 (let ((part (roost--fit-width line columns)))
                   (when (string-empty-p part) (setq part (substring line 0 1)))

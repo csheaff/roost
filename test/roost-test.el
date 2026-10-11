@@ -265,7 +265,13 @@
   (should (equal (roost--truncate-width "short" 10) "short"))
   (should (equal (roost--truncate-width "one two three" 8) "one two…"))
   (should (equal (roost--wrap-width "one two three\nfour" 7) '("one two" "three" "four")))
-  (should (equal (roost--wrap-width "one two three four" 3 1) '("one" "two"))))
+  (should (equal (roost--wrap-width "one two three four" 3 1) '("one" "two")))
+  (should (equal (roost--wrap-width "a  b" 10) '("a  b")))
+  (should (equal (roost--wrap-width "one\n\ntwo" 10) '("one" "" "two")))
+  ;; Spaces keep the face of the text around them.
+  (let ((line (car (roost--wrap-width (propertize "one two three" 'face 'roost-prose) 7))))
+    (should (equal line "one two"))
+    (should (eq (get-text-property 3 'face line) 'roost-prose))))
 
 (ert-deftest roost-a-dashboard-summary-cut-short-says-so ()
   (roost-test--isolated
