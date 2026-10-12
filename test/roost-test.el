@@ -192,7 +192,9 @@
                        "https://example.test/page_")
                       ("_https://x.example/i_ now" "https://x.example/i now" "https://x.example/i")
                       ("[article](https://en.wikipedia.org/wiki/Foo_(bar))" "article"
-                       "https://en.wikipedia.org/wiki/Foo_(bar)")))
+                       "https://en.wikipedia.org/wiki/Foo_(bar)")
+                      ("[article](https://example.test/Foo_(bar_(baz)))" "article"
+                       "https://example.test/Foo_(bar_(baz))")))
        (let ((out (roost--strip-markdown in t)))
          (should (equal (substring-no-properties out) shown))
          (should (equal (roost--strip-markdown in) shown))

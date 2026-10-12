@@ -4847,8 +4847,11 @@ With LINKS, that text and each URL are buttons that open the URL."
                       (keep (if links (roost--link-urls inner) inner))))
                   text t t))
       (setq text (replace-regexp-in-string
-                  ;; The URL may hold balanced parentheses, as Markdown allows.
-                  "\\[\\([^]\n]+\\)\\](\\(https?://\\(?:[^()[:space:]]\\|([^()[:space:]]*)\\)+\\))"
+                  ;; The URL may hold balanced parentheses, as Markdown
+                  ;; allows, nested two deep.
+                  (concat "\\[\\([^]\n]+\\)\\]"
+                          "(\\(https?://\\(?:[^()[:space:]]\\|"
+                          "(\\(?:[^()[:space:]]\\|([^()[:space:]]*)\\)*)\\)+\\))")
                   (lambda (match)
                     (let ((label (roost--strip-markdown (restore (match-string 1 match))))
                           (url (match-string 2 match)))
