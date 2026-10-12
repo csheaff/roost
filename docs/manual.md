@@ -135,9 +135,10 @@ The agent whose terminal you are looking at doesn't notify. The dashboard
 shows the same for every agent, and the mode line counts the agents waiting
 (`Roost:2`; click it for the next one). `n` jumps to the next agent waiting
 for you, permission requests first. Answer it in the terminal, then `n` again.
-A link the agent shows there, such as the pull request it opened, opens with a
-click, or with `C-c C-u`, which offers each link on the screen (with
-tmux-control later than 0.7.2).
+A link the agent shows there, such as the pull request it opened, opens with
+`C-c C-u`, which offers each link on the screen, and with a click when the
+agent marks it as a link, as Claude Code does with tmux 3.4 or later (both
+need tmux-control later than 0.7.2).
 A finished agent you have looked at stops counting, and turns grey, until it
 replies again; one that failed or stopped by itself stops counting once you've
 seen it. What you've seen is kept on the task's host, for your other machines

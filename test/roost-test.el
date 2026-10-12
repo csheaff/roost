@@ -181,6 +181,26 @@
      (let ((summary (roost--last-message-summary `((lastMessage . ,reply)))))
        (should (equal summary "Opened PR #22. See https://x.example/a_b, or https://y.example."))
        (should-not (text-property-not-all 0 (length summary) 'button nil summary)))
+     ;; A URL keeps the brackets and trailing characters that are its own,
+     ;; and leaves out the prose and emphasis around it.
+     (pcase-dolist (`(,in ,shown ,url)
+                    '(("See https://en.wikipedia.org/wiki/Foo_(bar)."
+                       "See https://en.wikipedia.org/wiki/Foo_(bar)."
+                       "https://en.wikipedia.org/wiki/Foo_(bar)")
+                      ("(see https://x.example/a)" "(see https://x.example/a)" "https://x.example/a")
+                      ("Open https://example.test/page_" "Open https://example.test/page_"
+                       "https://example.test/page_")
+                      ("_https://x.example/i_ now" "https://x.example/i now" "https://x.example/i")
+                      ("[article](https://en.wikipedia.org/wiki/Foo_(bar))" "article"
+                       "https://en.wikipedia.org/wiki/Foo_(bar)")))
+       (let ((out (roost--strip-markdown in t)))
+         (should (equal (substring-no-properties out) shown))
+         (should (equal (roost--strip-markdown in) shown))
+         (let* ((at (text-property-not-all 0 (length out) 'button-data nil out))
+                (end (next-single-property-change at 'button-data out (length out))))
+           (should (equal (get-text-property at 'button-data out) url))
+           (should (equal (substring-no-properties out at end)
+                          (if (equal shown "article") "article" url))))))
      ;; In the task panel, RET or a click on a link opens it.
      (let ((task (roost--cache-task "dev" (append `((lastMessage . ,reply)) (roost-test--task))))
            opened)

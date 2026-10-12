@@ -4771,8 +4771,31 @@ Only ERR's first line fits there; the echo area and *Messages* have it all."
   (let ((prompt (roost--field task 'task)))
     (unless (or (null prompt) (equal prompt (roost--field task 'name))) prompt)))
 
-(defconst roost--url-regexp "https?://[^][[:space:]<>\"'`()\ue000\ue001]+"
-  "A URL in what an agent wrote, with any punctuation after it.")
+(defconst roost--url-regexp
+  "\\([*_~]*\\)\\(https?://[^[:space:]<>\"'`\ue000\ue001]+\\)"
+  "A URL in what an agent wrote, with the Markdown emphasis that opens on it
+and anything that follows it up to a space.")
+
+(defun roost--trim-url (url emphasis)
+  "URL without what follows it in the prose.
+That is sentence punctuation, a closing bracket the URL did not open, as
+around \"(see https://a.example)\", and the delimiters that close
+EMPHASIS, the run that opened on the URL, as in \"**https://a.example**\"."
+  (let (done)
+    (while (and (not done) (> (length url) 0))
+      (let ((last (aref url (1- (length url)))))
+        (cond ((memq last '(?. ?, ?\; ?: ?! ??))
+               (setq url (substring url 0 -1)))
+              ((and (memq last '(?\) ?\] ?}))
+                    (< (seq-count (apply-partially #'eq (pcase last (?\) ?\() (?\] ?\[) (_ ?{)))
+                                  url)
+                       (seq-count (apply-partially #'eq last) url)))
+               (setq url (substring url 0 -1)))
+              ((and (> (length emphasis) 0) (string-suffix-p emphasis url))
+               (setq url (substring url 0 (- (length emphasis)))
+                     emphasis ""))
+              (t (setq done t))))))
+  url)
 
 (defun roost--link (label url)
   "LABEL as a button that opens URL in the browser."
@@ -4781,14 +4804,17 @@ Only ERR's first line fits there; the echo area and *Messages* have it all."
 
 (defun roost--link-urls (text &optional wrap)
   "TEXT with each URL in it a button that opens it.
-Punctuation after a URL is left out of it, as the end of a sentence.
+What follows a URL in the prose is left out of it, see `roost--trim-url'.
 WRAP, when given, is called on each button and returns what replaces it."
   (replace-regexp-in-string
    roost--url-regexp
    (lambda (match)
-     (let ((url (replace-regexp-in-string "[.,;:!?*_~]+\\'" "" match)))
-       (concat (funcall (or wrap #'identity) (roost--link url url))
-               (substring match (length url)))))
+     (let* ((emphasis (match-string 1 match))
+            (whole (match-string 2 match))
+            (url (roost--trim-url whole emphasis)))
+       (concat emphasis
+               (funcall (or wrap #'identity) (roost--link url url))
+               (substring whole (length url)))))
    text t t))
 
 (defun roost--strip-markdown (text &optional links)
@@ -4821,7 +4847,8 @@ With LINKS, that text and each URL are buttons that open the URL."
                       (keep (if links (roost--link-urls inner) inner))))
                   text t t))
       (setq text (replace-regexp-in-string
-                  "\\[\\([^]\n]+\\)\\](\\(https?://[^()[:space:]]+\\))"
+                  ;; The URL may hold balanced parentheses, as Markdown allows.
+                  "\\[\\([^]\n]+\\)\\](\\(https?://\\(?:[^()[:space:]]\\|([^()[:space:]]*)\\)+\\))"
                   (lambda (match)
                     (let ((label (roost--strip-markdown (restore (match-string 1 match))))
                           (url (match-string 2 match)))

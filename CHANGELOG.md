@@ -8,10 +8,11 @@ Since 0.8.1:
 
 - Links in an agent's latest reply, in the task panel and in Magit, open with
   a click or `RET`, and a Markdown link shows only its text. In the agent's
-  terminal, with tmux-control later than 0.7.2, a click or `C-c C-u` opens a
-  link it shows, such as the pull request Claude Code names `#22`; before,
-  Claude Code's links showed only their text there. To upgrade, update
-  tmux-control too.
+  terminal, with tmux-control later than 0.7.2, `C-c C-u` opens a link it
+  shows, and so does a click on a link the agent marks as one. Claude Code
+  marks its links with tmux 3.4 or later, as in the pull request it names
+  `#22`; before, those showed only their text, with no URL anywhere. To
+  upgrade, update tmux-control too, and tmux to 3.4 for the marked links.
 - With perspectives, a task's buffer list no longer offers the terminals of
   other tasks: one that reconnected in the background was added to
   whichever task you were in. Nothing to do when upgrading; switching
