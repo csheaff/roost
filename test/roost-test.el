@@ -156,6 +156,44 @@
          (should (string-match-p "^Fixed the auth bug in login\\.py\\.\n" text))
          (should-not (string-match-p "\\*\\*\\|`" text)))))))
 
+(ert-deftest roost-replies-show-link-text-and-open-links ()
+  (roost-test--isolated
+   (let* ((reply (concat "Opened [**PR #22**](https://github.com/o/r/pull/22). "
+                         "See https://x.example/a_b, or **https://y.example**.\n"
+                         "Run `curl https://z.example/p` and keep `[a](https://b.example)`."))
+          (text (roost--strip-markdown reply t)))
+     ;; Without buttons, a Markdown link shows only its text; inside code it
+     ;; is code.
+     (should (equal (roost--strip-markdown reply)
+                    (concat "Opened PR #22. See https://x.example/a_b, or https://y.example.\n"
+                            "Run curl https://z.example/p and keep [a](https://b.example).")))
+     (should (equal (substring-no-properties text) (roost--strip-markdown reply)))
+     (pcase-dolist (`(,shown . ,url) '(("PR #22" . "https://github.com/o/r/pull/22")
+                                       ("https://x.example/a_b" . "https://x.example/a_b")
+                                       ("https://y.example" . "https://y.example")
+                                       ("https://z.example/p" . "https://z.example/p")))
+       (let ((at (string-search shown text)))
+         (should (equal (get-text-property at 'button-data text) url))
+         (should (equal (get-text-property (+ at (length shown) -1) 'button-data text) url))
+         (should-not (equal (get-text-property (+ at (length shown)) 'button-data text) url))))
+     (should-not (get-text-property (string-search "Opened" text) 'button text))
+     ;; A dashboard row's summary has no buttons: RET there opens the task.
+     (let ((summary (roost--last-message-summary `((lastMessage . ,reply)))))
+       (should (equal summary "Opened PR #22. See https://x.example/a_b, or https://y.example."))
+       (should-not (text-property-not-all 0 (length summary) 'button nil summary)))
+     ;; In the task panel, RET or a click on a link opens it.
+     (let ((task (roost--cache-task "dev" (append `((lastMessage . ,reply)) (roost-test--task))))
+           opened)
+       (with-temp-buffer
+         (roost-task-info-mode)
+         (setq roost--buffer-task-key (roost--key task))
+         (cl-letf (((symbol-function 'browse-url) (lambda (url &rest _) (push url opened))))
+           (roost--render-task-info)
+           (goto-char (point-min))
+           (search-forward "PR #22")
+           (push-button (match-beginning 0))
+           (should (equal opened '("https://github.com/o/r/pull/22")))))))))
+
 (ert-deftest roost-task-panel-folds-a-long-prompt ()
   (should (equal (roost--prompt-preview "Fix it.") "Fix it."))
   (should (equal (roost--prompt-preview "Fix it.\n\nDetails follow.") "Fix it."))

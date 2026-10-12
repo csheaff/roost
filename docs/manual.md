@@ -135,6 +135,9 @@ The agent whose terminal you are looking at doesn't notify. The dashboard
 shows the same for every agent, and the mode line counts the agents waiting
 (`Roost:2`; click it for the next one). `n` jumps to the next agent waiting
 for you, permission requests first. Answer it in the terminal, then `n` again.
+A link the agent shows there, such as the pull request it opened, opens with a
+click, or with `C-c C-u`, which offers each link on the screen (with
+tmux-control later than 0.7.2).
 A finished agent you have looked at stops counting, and turns grey, until it
 replies again; one that failed or stopped by itself stops counting once you've
 seen it. What you've seen is kept on the task's host, for your other machines
@@ -144,7 +147,8 @@ and the next session.
 compact task list at the left of every frame, through perspective and tab
 switches and `C-x 1`; add `(roost-sidebar-mode 1)` to your configuration to have
 it from the start. `I` docks a panel at the right of an open task's terminal:
-the agent's latest reply, the files it changed (each opens its diff), and what
+the agent's latest reply (a click or `RET` opens a link in it), the files it
+changed (each opens its diff), and what
 you can do with the task now, starting with the next step, kept current as the
 agent works. Add `(roost-task-panel-mode 1)` to have it from the start. The
 panel steps aside when the terminal would drop below 80 columns, and `q` in it
