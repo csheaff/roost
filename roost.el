@@ -60,6 +60,7 @@
 (declare-function magit-get-upstream-branch "magit-git" (&optional branch))
 (declare-function persp-switch "perspective" (name))
 (declare-function persp-kill "perspective" (name))
+(declare-function persp-remove-buffer "perspective" (buffer &optional persp))
 (declare-function persp-current-name "perspective" ())
 (declare-function persp-names "perspective" ())
 (declare-function persp-format-name "perspective" (name))
