@@ -1293,6 +1293,28 @@ panel, rather than inside the workspace of the task you were in."
       (roost-open-task (car tasks))
       t)))
 
+(defun roost--keep-terminal-in-its-workspace ()
+  "Take the current buffer out of another task's workspace.
+For `after-change-major-mode-hook': a terminal reconnecting in the
+background is added to whichever perspective is current, so the
+buffer list of one task would offer the terminals of the others."
+  (when (and (fboundp 'persp-remove-buffer)
+             (eq (roost--workspace-backend) 'perspective)
+             (fboundp 'tmux-control-buffer-session)
+             (tmux-control-buffer-session))
+    (let* ((host (tmux-control-buffer-host))
+           (socket (tmux-control-buffer-socket-name))
+           (session (tmux-control-buffer-session))
+           (tasks (seq-filter (lambda (task)
+                                (and (equal (roost--field task 'host) host)
+                                     (equal (roost--field task 'socket) socket)
+                                     (equal (roost--field task 'session) session)))
+                              (roost-tasks))))
+      (when (and tasks (null (cdr tasks))
+                 (not (equal (persp-current-name) (roost--perspective-name (car tasks)))))
+        (let ((persp-autokill-buffer-on-remove nil))
+          (persp-remove-buffer (current-buffer)))))))
+
 (defun roost--task-terminal-window (task)
   "The window of the selected frame showing TASK's terminal, or nil."
   (when (and task (fboundp 'tmux-control-window-id))
@@ -1310,6 +1332,7 @@ panel, rather than inside the workspace of the task you were in."
   "Display TASK after ownership validation, selecting TARGET-PANE if supplied."
   (require 'tmux-control)
   (add-hook 'tmux-control-switch-session-functions #'roost--switch-session)
+  (add-hook 'after-change-major-mode-hook #'roost--keep-terminal-in-its-workspace 90)
   (roost--leave-side-window)
   (roost--activate-workspace task)
   (roost--leave-side-window)

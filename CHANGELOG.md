@@ -6,6 +6,10 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.8.1:
 
+- With perspectives, a task's buffer list no longer offers the terminals of
+  other tasks: one that reconnected in the background was added to
+  whichever task you were in. Nothing to do when upgrading; switching
+  tasks again or restarting Emacs clears those already added.
 - A task's agent starts at the size of the window it opens in, not tmux's
   80 by 24, so its first output is no longer wrapped narrow and torn by the
   redraw when Emacs attaches. Tasks started earlier keep their history;

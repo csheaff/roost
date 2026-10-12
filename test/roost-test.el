@@ -622,6 +622,28 @@
      (cl-letf (((symbol-function 'persp-current-name) (lambda () "unrelated")))
        (with-temp-buffer (setq default-directory "/tmp/") (should-not (roost--task-at-point)))))))
 
+(ert-deftest roost-terminal-leaves-the-workspace-of-another-task ()
+  (roost-test--isolated
+   (let* ((a (roost--cache-task nil (roost-test--task "1111111111111111")))
+          (b (roost--cache-task nil (roost-test--task "2222222222222222")))
+          (persp-mode t) removed)
+     (setf (alist-get 'session a) "roost-a" (alist-get 'session b) "roost-b")
+     (roost--cache-task nil a)
+     (roost--cache-task nil b)
+     (cl-letf (((symbol-function 'persp-remove-buffer) (lambda (buffer) (push buffer removed)))
+               ((symbol-function 'tmux-control-buffer-host) (lambda () nil))
+               ((symbol-function 'tmux-control-buffer-socket-name) (lambda () (roost--field a 'socket)))
+               ((symbol-function 'tmux-control-buffer-session) (lambda () "roost-a"))
+               ((symbol-function 'persp-current-name) (lambda () (roost--perspective-name b))))
+       (with-temp-buffer
+         (roost--keep-terminal-in-its-workspace)
+         (should (equal removed (list (current-buffer)))))
+       (setq removed nil)
+       (cl-letf (((symbol-function 'persp-current-name) (lambda () (roost--perspective-name a))))
+         (with-temp-buffer
+           (roost--keep-terminal-in-its-workspace)
+           (should-not removed)))))))
+
 (ert-deftest roost-context-distinguishes-hosts-and-directory-boundaries ()
   (roost-test--isolated
    (roost--cache-task "a" (roost-test--task))
