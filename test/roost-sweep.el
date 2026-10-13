@@ -248,18 +248,19 @@ Host \"gone\" failed to search."
   '((panel :mode roost-task-info-mode :render roost--render-task-info :widths (40 100)
            :layouts (selected none other both) :setup roost-sweep--panel-setup)
     (dashboard :mode roost-dashboard-mode :render roost--render-dashboard :buffer "*roost*"
-               :layouts (selected other both) :point roost-sweep--row)
+               :layouts (selected none other both) :point roost-sweep--row :sized t)
     (sidebar :mode roost-sidebar-list-mode :render roost--render-sidebar
-             :layouts (selected other both) :point roost-sweep--row)
+             :layouts (selected none other both) :point roost-sweep--row :sized t)
     (search :mode roost-search-mode :render roost--render-search :buffer "*roost search*"
-            :layouts (selected other both) :setup roost-sweep--search-setup :point roost-sweep--hit))
+            :layouts (selected none other both) :setup roost-sweep--search-setup :point roost-sweep--hit
+            :sized t))
   "Roost's views, each (NAME . PLIST).
 :mode makes the buffer, :setup gives it what it shows for a state,
 :render draws it, :point finds the state's task in it, and :buffer names
 it.  :widths are the task panel's widths to try, and :layouts the
 windows to show it in, the first as actions are tried: see
-`roost-sweep--draw'.  Lists fit the window they are in, so with none
-they draw for another width.")
+`roost-sweep--draw'.  :sized means it fits the window it is in, so with
+none it draws for a width of its own, and isn't compared with the rest.")
 
 (defun roost-sweep--view (view property)
   "PROPERTY of VIEW in `roost-sweep--views'."
@@ -432,6 +433,9 @@ keys there are then."
                       (push (cons layout text) texts))
                   (kill-buffer buffer)))))
         (error (push (format "drawing it fails, shown %s: %S" (roost-sweep--layout layout) err) problems))))
+    ;; Drawn in no window, a view that fits its window has another width.
+    (when (roost-sweep--view view :sized)
+      (setq texts (assq-delete-all 'none texts)))
     (let ((first (cdar (last texts))))
       (dolist (entry texts)
         (unless (equal (cdr entry) first)
