@@ -96,12 +96,13 @@ def relay(source, sink, done):
 
 def main():
     host, command, control, terminal = parse(sys.argv[1:])
-    if control:
-        return 0
     if host.split("@")[-1] != HOST:
         sys.stderr.write("ssh: Could not resolve hostname %s: nodename nor servname provided, "
                          "or not known\r\n" % host)
         return 255
+    # Asked about a shared connection, which this host has no need of.
+    if control:
+        return 0
     # Connecting takes a round trip or two.
     time.sleep(2 * LATENCY)
     if terminal or not command:

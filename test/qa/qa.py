@@ -1405,15 +1405,16 @@ def main():
                 qa.settle()
                 chosen_journey(qa, repo)
             except Stuck as stuck:
+                # What was still running, such as a request that never
+                # replied, for working out why: before asking Emacs anything
+                # more, which can wait until Roost gives up on that request.
+                running = ["Running then: %s%s" % (line, (" — waiting in " + qa.blocked_in(line))
+                                                       if "runpy" in line else "")
+                           for line in qa.processes()]
                 try:
                     screen = qa.screen()
                 except Stuck:
                     screen = dict(windows=[])
-                # What was still running, such as a request that never
-                # replied, for working out why.
-                running = ["Running then: %s%s" % (line, (" — waiting in " + qa.blocked_in(line))
-                                                       if "runpy" in line else "")
-                           for line in qa.processes()]
                 qa.steps.append(dict(journey=qa.journey, title="Stopped",
                                      problems=[str(stuck)] + running, shot=None, screen=screen))
                 print("  ✗ Stopped: %s" % stuck)
