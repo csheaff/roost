@@ -6308,9 +6308,11 @@ Then showing more of it would only repeat it."
     (let ((window (get-buffer-window (current-buffer))))
       (and (not (member (get-text-property (point) 'roost-search-id) roost--search-expanded))
            (equal (alist-get 'text hit) (alist-get 'snippet hit))
+           ;; Drawn in `roost-prose', so measured in pixels, as drawn.
            (or (not window)
-               (< (string-width (buffer-substring (line-beginning-position) (line-end-position)))
-                  (window-body-width window)))))))
+               (< (car (window-text-pixel-size window (line-beginning-position)
+                                               (line-end-position) t))
+                  (window-body-width window t)))))))
 
 (defun roost-search-open ()
   "Open the live task of the message on this line, or show more of the message."
