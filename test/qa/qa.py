@@ -170,7 +170,7 @@ class Run:
       roost-socket-name %(server)s
       roost-hosts '(nil)
       roost-agent-commands '(("claude" %(python)s %(fake)s))
-      roost-workspace 'none
+      roost-workspace nil
       ;; Nobody focuses this Emacs while you work elsewhere.
       roost-watch-unfocused-interval roost-watch-interval
       roost-notify-function #'ignore)
@@ -930,8 +930,49 @@ def org(qa, repo):
          not in ("nil", ""))])
 
 
+@journey("A tab per task")
+def tabs(qa, repo):
+    """With tab-bar-mode, each task has a tab of its own, which a task of the
+    same name leaves alone, and which goes with its task."""
+    qa.emacs.eval("(progn (switch-to-buffer \"*scratch*\") (setq roost-workspace 'tab-bar) (tab-bar-mode 1))")
+    try:
+        first = start_task(qa, "Draw a tab")
+        qa.step("A task in its own tab", expect=[
+            ("the tab has its name", lambda s: s["workspace"] == "local/" + first),
+            ("its terminal there", lambda s: (s.get("task") or {}).get("name") == first and selected_terminal(s)),
+            ("its panel beside it", lambda s: panel_text(qa, s).startswith(first))])
+        elder = qa.task(qa.screen(), first)["key"]
+        qa.keys("C-c r c")
+        qa.type("Draw a tab")
+        qa.keys("C-c C-c")
+        screen = qa.wait("a second task named " + first,
+                         lambda s: len([t for t in s["tasks"] if t["name"] == first]) == 2)
+        twin = next(t["key"] for t in screen["tasks"] if t["name"] == first and t["key"] != elder)
+        qa.wait("its terminal", lambda s: (s.get("task") or {}).get("key") == twin and selected_terminal(s))
+        qa.step("A second task of the same name", expect=[
+            ("its tab has its ID too",
+             lambda s: s["workspace"] == "local/%s:%s" % (first, twin.split("/")[1][:6])),
+            ("the first's tab keeps its name", lambda s: "local/" + first in s["workspaces"])])
+        qa.keys("C-x t RET")
+        qa.type("local/%s\r" % first)
+        qa.step("Back in the first's tab", expect=[
+            ("it is the first task's", lambda s: (s.get("task") or {}).get("key") == elder),
+            ("its panel beside it", lambda s: panel_text(qa, s).startswith(first)),
+            ("no tab was added", lambda s: len(s["workspaces"]) == 3)])
+        qa.keys("C-c r x")
+        qa.wait("the question", lambda s: s["prompt"])
+        qa.type("y")
+        qa.wait("the task to go", lambda s: not any(t["key"] == elder for t in s["tasks"]), timeout=30)
+        qa.step("Retired, with its tab", expect=[
+            ("its tab is gone", lambda s: "local/" + first not in s["workspaces"]),
+            ("the other's is still there", lambda s: len(s["workspaces"]) == 2)])
+    finally:
+        qa.emacs.eval("(progn (tab-bar-close-other-tabs) (tab-bar-mode -1) (setq roost-workspace nil))")
+        qa.settle()
+
+
 JOURNEYS = [sweep, answer, fold, resize, merge, review, panes,
-            dashboard, stop_resume, retire, send, update, restart, search, frames, org]
+            dashboard, stop_resume, retire, send, update, restart, search, frames, org, tabs]
 
 
 def main():

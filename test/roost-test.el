@@ -3932,6 +3932,36 @@ Read from the layout transient keeps, whose form varies by version."
            (should-not (member "dev/fix auth" (roost--tabs))))
        (while (cdr (roost--tabs)) (tab-bar-close-tab))))))
 
+(ert-deftest roost-a-task-keeps-its-tab-when-another-of-its-name-comes-and-goes ()
+  (roost-test--isolated
+   (let* ((roost-workspace 'tab-bar)
+          (first (roost--cache-task "dev" (cons '(startedAt . "2026-10-03T20:00:00Z") (roost-test--task))))
+          (second (cons '(startedAt . "2026-10-03T21:00:00Z") (roost-test--task "fedcba9876543210")))
+          (tabs (length (roost--tabs)))
+          (original-tab-bar-mode tab-bar-mode))
+     (unwind-protect
+         (progn
+           (roost--activate-workspace first)
+           (setq second (roost--cache-task "dev" second))
+           ;; The first keeps its name; the second's tab has its ID.
+           (should (equal (roost--key (roost--frame-task)) (roost--key first)))
+           (roost--activate-workspace second)
+           (should (equal (roost--current-workspace) "dev/fix auth:fedcba"))
+           (roost--activate-workspace first)
+           (should (equal (roost--current-workspace) "dev/fix auth"))
+           (should (= (length (roost--tabs)) (+ tabs 2)))
+           ;; Once the first is gone, the second keeps the tab it has.
+           (roost--retired-workspace first)
+           (roost--apply-snapshot "dev" (list second))
+           (should-not (member "dev/fix auth" (roost--tabs)))
+           (roost--activate-workspace second)
+           (should (equal (roost--current-workspace) "dev/fix auth:fedcba"))
+           (should (= (length (roost--tabs)) (+ tabs 1)))
+           (should (equal (roost--key (roost--frame-task)) (roost--key second))))
+       (while (cdr (roost--tabs)) (tab-bar-close-tab))
+       ;; A second tab shows the tab bar.
+       (unless original-tab-bar-mode (tab-bar-mode -1))))))
+
 (ert-deftest roost-workspace-backend-is-chosen-automatically ()
   (roost-test--isolated
    (let ((roost-workspace 'auto) (persp-mode nil) (tab-bar-mode nil))

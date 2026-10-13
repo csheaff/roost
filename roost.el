@@ -1217,26 +1217,43 @@ nobody is looking."
       ('perspective (and perspective 'perspective))
       ('tab-bar 'tab-bar))))
 
-(defun roost--tab-name (task)
-  "Tab name for TASK, with its ID when another task has the same name."
+(defun roost--tab-name (task &optional with-id)
+  "Name for a new tab of TASK's: its host and name.
+With WITH-ID, or when a task of the same name started before it, its
+ID follows the name."
   (let* ((host (roost--field task 'host))
          (name (roost--field task 'name))
-         (twin (seq-find (lambda (other)
-                           (and (equal (roost--field other 'host) host)
-                                (equal (roost--field other 'name) name)
-                                (not (equal (roost--field other 'id) (roost--field task 'id)))))
-                         (roost-tasks))))
+         (id (roost--field task 'id))
+         (started (or (roost--field task 'startedAt) ""))
+         (elder (and (not with-id)
+                     (seq-find (lambda (other)
+                                 (let ((other-started (or (roost--field other 'startedAt) "")))
+                                   (and (equal (roost--field other 'host) host)
+                                        (equal (roost--field other 'name) name)
+                                        (not (equal (roost--field other 'id) id))
+                                        (if (equal other-started started)
+                                            (string< (roost--field other 'id) id)
+                                          (string< other-started started)))))
+                               (roost-tasks)))))
     (format "%s/%s%s" (roost--host-label host) name
-            (if twin (concat ":" (substring (roost--field task 'id) 0 6)) ""))))
+            (if (or with-id elder) (concat ":" (substring id 0 6)) ""))))
 
 (defun roost--tabs ()
   "Names of the tab bar's tabs."
   (mapcar (lambda (tab) (alist-get 'name tab)) (funcall tab-bar-tabs-function)))
 
+(defun roost--task-tab (task)
+  "The name of TASK's tab, or nil when it has none.
+A task keeps the tab it was given, though a task of the same name has
+started or gone since."
+  (let ((tabs (roost--tabs)))
+    (seq-find (lambda (name) (member name tabs))
+              (list (roost--tab-name task t) (roost--tab-name task)))))
+
 (defun roost--workspace-name (task)
   "Name of TASK's workspace in the current backend."
   (if (eq (roost--workspace-backend) 'tab-bar)
-      (roost--tab-name task)
+      (or (roost--task-tab task) (roost--tab-name task))
     (roost--perspective-name task)))
 
 (defun roost--current-workspace ()
@@ -1252,11 +1269,10 @@ nobody is looking."
     ('perspective
      (when (fboundp 'persp-switch) (persp-switch (roost--perspective-name task))))
     ('tab-bar
-     (let ((name (roost--tab-name task)))
-       (if (member name (roost--tabs))
-           (tab-bar-select-tab-by-name name)
-         (tab-bar-new-tab)
-         (tab-bar-rename-tab name)))))
+     (if-let* ((name (roost--task-tab task)))
+         (tab-bar-select-tab-by-name name)
+       (tab-bar-new-tab)
+       (tab-bar-rename-tab (roost--tab-name task)))))
   (setq roost--current-task (roost--key task))
   ;; Without workspaces, the frame's task panel follows the last task used.
   (set-frame-parameter nil 'roost-task (roost--key task))
@@ -4172,8 +4188,8 @@ it showed before."
        (let ((persp-autokill-buffer-on-remove nil))
          (persp-kill (roost--perspective-name task)))))
     ('tab-bar
-     (let ((name (roost--tab-name task)))
-       (when (and (member name (roost--tabs)) (cdr (roost--tabs)))
+     (let ((name (roost--task-tab task)))
+       (when (and name (cdr (roost--tabs)))
          (tab-bar-close-tab-by-name name))))))
 
 ;;;###autoload

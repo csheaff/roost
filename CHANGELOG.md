@@ -6,6 +6,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.8.1:
 
+- With a tab per task, a task keeps its tab when you start another of the
+  same name, whose tab has its ID after the name. Before, Roost then looked
+  for the first task's tab under a name with its ID too, so that tab lost
+  its panel and opening the task made a second one. Nothing to do when
+  upgrading.
 - `n` takes the tasks that ask for permission in turn. With three or more
   asking, it went back and forth between the first two. Nothing to do when
   upgrading.

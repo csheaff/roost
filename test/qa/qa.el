@@ -276,8 +276,14 @@ doesn't."
                                     (or (qa--task-info (with-selected-frame each (roost--frame-task)))
                                         :json-false))
                               frames)))))
+       ;; With a workspace per task, the current one and, with tab-bar, all.
+       (workspace . ,(with-selected-frame frame (roost--current-workspace)))
+       (workspaces . ,(vconcat (with-selected-frame frame
+                                 (when (eq (roost--workspace-backend) 'tab-bar) (roost--tabs)))))
        (tasks . ,(vconcat (mapcar (lambda (task)
                                     `((name . ,(roost--field task 'name))
+                                      (key . ,(format "%s/%s" (or (roost--field task 'host) "local")
+                                                      (roost--field task 'id)))
                                       (status . ,(roost--attention-status task))))
                                   (roost-tasks))))
        (buffers . ,(vconcat (seq-filter (lambda (name) (member name '("*Backtrace*" "*Warnings*")))

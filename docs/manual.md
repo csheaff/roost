@@ -447,8 +447,9 @@ terminal with tmux-control's own keys (split a pane, open and move between
 tmux windows, switch to another task and back), use the dashboard, stop and
 resume an agent, retire a task or discard its work, send a prompt, bring a
 task up to date, restart Emacs with agents at work, search the
-conversations, work in a second frame, and start a task from an Org heading. They press keys and click
-through Emacs's command loop. After each step it checks for Lisp errors, in
+conversations, work in a second frame, start a task from an Org heading,
+and keep a tab per task, two of the same name among them. They press keys
+and click through Emacs's command loop. After each step it checks for Lisp errors, in
 commands, timers and process filters alike, for a backtrace, for lines of
 Roost's views cut off at the window's edge, and for another task's terminal
 beside the current task's; it also runs the sweep where text is measured in
