@@ -303,16 +303,21 @@ with point on STATE's task in a list."
   "The current buffer's text, without properties."
   (buffer-substring-no-properties (point-min) (point-max)))
 
-(defun roost-sweep--buttons ()
-  "The buttons in the current buffer, each (LABEL . OCCURRENCE)."
+(defun roost-sweep--button-starts ()
+  "The buttons in the current buffer, each (LABEL OCCURRENCE . START).
+OCCURRENCE counts the buttons before it with the same label."
   (let (found (pos (point-min)))
     (while (< (setq pos (next-single-char-property-change pos 'button)) (point-max))
       (when (get-char-property pos 'button)
         (let* ((end (next-single-char-property-change pos 'button))
                (label (buffer-substring-no-properties pos end)))
-          (push (cons label (cl-count label found :key #'car :test #'equal)) found)
+          (push (cons label (cons (cl-count label found :key #'car :test #'equal) pos)) found)
           (setq pos end))))
     (nreverse found)))
+
+(defun roost-sweep--buttons ()
+  "The buttons in the current buffer, each (LABEL . OCCURRENCE)."
+  (mapcar (lambda (button) (cons (car button) (cadr button))) (roost-sweep--button-starts)))
 
 (defun roost-sweep--keys ()
   "The keys the current buffer's mode binds, each (KEY . COMMAND).
@@ -345,9 +350,12 @@ Return nil, or the error it ended in when that is a Lisp error."
       (progn
         (pcase action
           (`(button ,label . ,n)
-           (goto-char (point-min))
-           (dotimes (_ (1+ n)) (search-forward label))
-           (push-button (1- (point))))
+           ;; Found by its property: the same words can be plain text too.
+           (goto-char (or (cddr (seq-find (lambda (button) (equal (cons (car button) (cadr button))
+                                                                   (cons label n)))
+                                          (roost-sweep--button-starts)))
+                          (error "No button %S here" label)))
+           (push-button (point)))
           (`(key ,key . ,command)
            (let ((last-command-event (aref key (1- (length key))))
                  (this-command command)
@@ -543,7 +551,11 @@ Return them as (PROBLEM . PLACES), PLACES naming the view, state and width."
            (changed (roost-sweep--try view state width (list action))))
        (should-not (plist-get changed :outside))
        (should-not (plist-get changed :error))
-       (should-not (equal (plist-get changed :text) (plist-get start :text)))))))
+       (should-not (equal (plist-get changed :text) (plist-get start :text)))))
+   ;; A button is pressed, not the same words in plain text before it:
+   ;; the prompt says "the report" too.
+   (let ((link (roost-sweep--try 'panel "permission" 40 '((button "the report" . 0)))))
+     (should (equal (cdr (assq 'browse-url (plist-get link :outside))) '("https://example.com/report"))))))
 
 (ert-deftest roost-sweep-views-draw-the-same-each-time ()
   (roost-test--isolated
