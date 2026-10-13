@@ -368,6 +368,9 @@ class Run:
                     problems.append("%s, another task's terminal, is beside %s's" % (window["buffer"], own["name"]))
             if window["mode"] == "roost-sidebar-list-mode" and window["total"] != screen["sidebar-width"]:
                 problems.append("The sidebar is %d columns wide, not %d" % (window["total"], screen["sidebar-width"]))
+            if window.get("history"):
+                # Nothing here scrolls a terminal back: it showed history by itself.
+                problems.append("%s shows %d lines of history above its screen" % (window["buffer"], window["history"]))
             if window.get("terminal") and window.get("pane"):
                 drift = self.drift(window)
                 if drift:
@@ -747,15 +750,21 @@ def panes(qa, repo):
     qa.step("Back to the first task", expect=[
         ("its two panes, as it left them", lambda s: len(terminals(s, own)) == 2),
         ("and nothing of the other task's", lambda s: all(w["terminal"] == own for w in terminals(s)))])
-    # To the shell, wherever the view has put you: never type into the agent.
-    if "FAKE_CLAUDE_READY" in (selected_terminal(qa.screen()) or {}).get("text", ""):
-        qa.keys("C-c C-o")
+    to_shell(qa)
     qa.type("exit\r")
     qa.wait("the shell to go", lambda s: len(terminals(s, own)) == 1)
     qa.step("One pane again", expect=[
         ("its panel back beside it", lambda s: panel_text(qa, s).startswith(first)),
         ("its tabs back, its window highlighted",
          lambda s: "[%s:" % window_a in (selected_terminal(s).get("tabs") or ""))])
+
+
+def to_shell(qa):
+    """Move to the shell pane beside the agent, wherever the view has put you:
+    what is typed next must not reach the agent."""
+    screen = qa.screen()
+    if (selected_terminal(screen) or {}).get("pane") == (screen.get("task") or {}).get("pane"):
+        qa.keys("C-c C-o")
 
 
 def answer_yes(qa, name):
@@ -827,6 +836,9 @@ def retire(qa, repo):
         ("the echo area says so", lambda s: "Retired" in (s["echo"] or ""))])
     dirty = new_task(qa, "ask touch scratch.txt")
     answer_yes(qa, dirty)
+    # Once Roost knows of the file: before, it asks as for a task with no work,
+    # and offers to discard only once the host refuses.
+    qa.wait("the file in its panel", lambda s: "scratch.txt" in panel_text(qa, s))
     qa.keys("C-c r x")
     qa.wait("the question", lambda s: s["prompt"])
     qa.step("Work not merged: it asks", expect=[
@@ -1023,8 +1035,7 @@ def shell(qa, repo):
     qa.step("Back to it, the shell still open", expect=[
         ("the agent's pane as tmux has it, from its first row",
          lambda s: any(w["text"].startswith("FAKE_CLAUDE_READY") for w in terminals(s, own)))])
-    if "FAKE_CLAUDE_READY" in (selected_terminal(qa.screen()) or {}).get("text", ""):
-        qa.keys("C-c C-o")
+    to_shell(qa)
     qa.type("exit\r")
     qa.wait("the shell to go", lambda s: len(terminals(s, own)) == 1 and not s["prompt"])
     qa.step("The agent alone again", expect=[
@@ -1063,6 +1074,8 @@ def main():
             qa.journey = chosen_journey.title
             print(chosen_journey.title)
             try:
+                qa.emacs.eval("(qa-fresh-start)")
+                qa.settle()
                 chosen_journey(qa, repo)
             except Stuck as stuck:
                 try:

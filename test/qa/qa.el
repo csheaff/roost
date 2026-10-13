@@ -118,6 +118,22 @@ Return nil when it isn't on screen."
             (append unread-command-events (list (list 'down-mouse-1 posn) (list 'mouse-1 posn))))
       t)))
 
+(defun qa-fresh-start ()
+  "Leave one frame, its window on *scratch* beside Roost's side windows.
+Each journey starts here, rather than amid the windows the last one left,
+so that one going wrong doesn't take the rest with it."
+  (when (active-minibuffer-window) (abort-recursive-edit))
+  (dolist (frame (frame-list))
+    (unless (or (eq frame (selected-frame)) (frame-parent frame) (not (frame-visible-p frame)))
+      (delete-frame frame)))
+  (let ((main (seq-find (lambda (window) (not (window-parameter window 'window-side)))
+                        (window-list nil 'nomini))))
+    (select-window main)
+    (delete-other-windows main)
+    (switch-to-buffer "*scratch*"))
+  (roost--redraw)
+  t)
+
 (defun qa-idle-p ()
   "Whether the input given so far has been taken."
   (and (null unread-command-events) (not executing-kbd-macro)))
@@ -222,6 +238,16 @@ them; nil when BUFFER isn't a terminal."
           (while (and lines (string-empty-p (car lines))) (pop lines))
           (vconcat (nreverse lines)))))))
 
+(defun qa--history-shown (window)
+  "How many lines of history terminal WINDOW shows above its live screen."
+  (with-current-buffer (window-buffer window)
+    (if (and (derived-mode-p 'tmux-control-mode) (bound-and-true-p tmux-control--terminal)
+             (eat-term-live-p tmux-control--terminal))
+        (let ((screen (save-excursion (goto-char (eat-term-display-beginning tmux-control--terminal))
+                                      (line-beginning-position))))
+          (if (< (window-start window) screen) (count-lines (window-start window) screen) 0))
+      0)))
+
 (defun qa--tabs (window)
   "WINDOW's header line as shown, the highlighted tab in [brackets], or nil."
   (with-current-buffer (window-buffer window)
@@ -247,7 +273,9 @@ them; nil when BUFFER isn't a terminal."
     `((name . ,(roost--field task 'name))
       (key . ,(format "%s/%s" (or (roost--field task 'host) "local") (roost--field task 'id)))
       (terminal . ,(format "%s/%s/%s" (or (roost--field task 'host) "local")
-                           (roost--field task 'socket) (roost--field task 'session))))))
+                           (roost--field task 'socket) (roost--field task 'session)))
+      ;; The agent's own pane.
+      (pane . ,(roost--field task 'paneId)))))
 
 (defun qa-screen ()
   "What is on screen now, as JSON."
@@ -274,6 +302,7 @@ them; nil when BUFFER isn't a terminal."
                           (selected . ,(if (eq window (selected-window)) t :json-false))
                           (side . ,(window-parameter window 'window-side))
                           (terminal . ,(qa--terminal buffer))
+                          (history . ,(qa--history-shown window))
                           (pane . ,(with-current-buffer buffer
                                      (and (derived-mode-p 'tmux-control-mode) (fboundp 'tmux-control-active-pane)
                                           (tmux-control-active-pane))))
