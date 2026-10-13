@@ -1330,6 +1330,25 @@ buffer list of one task would offer the terminals of the others."
                        (equal (tmux-control-window-id) (roost--field task 'windowId)))))
               (window-list))))
 
+(defun roost--terminal-window-for (task)
+  "The window to show TASK's terminal in, or nil for the selected one.
+That is the window showing it already, or else one showing another
+task's terminal, the one used last: TASK takes its place, rather than
+that of a code or Magit window selected beside it, which would leave
+the other task's terminal on screen."
+  (or (roost--task-terminal-window task)
+      (seq-find (lambda (window)
+                  (with-current-buffer (window-buffer window)
+                    (and (fboundp 'tmux-control-buffer-session)
+                         (tmux-control-buffer-session)
+                         (seq-some (lambda (other)
+                                     (and (equal (roost--field other 'host) (tmux-control-buffer-host))
+                                          (equal (roost--field other 'socket) (tmux-control-buffer-socket-name))
+                                          (equal (roost--field other 'session) (tmux-control-buffer-session))))
+                                   (roost-tasks)))))
+                (sort (roost--main-windows)
+                      (lambda (a b) (> (window-use-time a) (window-use-time b)))))))
+
 (defun roost--display-task (task &optional target-pane)
   "Display TASK after ownership validation, selecting TARGET-PANE if supplied."
   (require 'tmux-control)
@@ -1338,11 +1357,7 @@ buffer list of one task would offer the terminals of the others."
   (roost--leave-side-window)
   (roost--activate-workspace task)
   (roost--leave-side-window)
-  ;; Reuse the saved terminal window instead of replacing its neighboring
-  ;; code or Magit window when that happened to be selected on departure.
-  ;; A tiled pane's window is left alone: the session buffer would replace
-  ;; that pane in the grid.
-  (when-let* ((window (roost--task-terminal-window task)))
+  (when-let* ((window (roost--terminal-window-for task)))
     (select-window window))
   (tmux-control-connect-or-switch (roost--field task 'host) (roost--field task 'socket)
                                   (roost--field task 'session))

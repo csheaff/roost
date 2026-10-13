@@ -310,6 +310,33 @@
        (should-not (string-match-p "Run the tests" (buffer-string)))
        (should (looking-at-p "Show the whole prompt"))))))
 
+(ert-deftest roost-a-task-opens-in-place-of-another-tasks-terminal ()
+  ;; Opening one task with Magit selected below another's terminal put the
+  ;; task in Magit's window and left the other terminal on screen.
+  (roost-test--isolated
+   (let ((shown (roost--cache-task "dev" (roost-test--task "1111111111111111")))
+         (opened (roost--cache-task "dev" (append '((session . "roost-other"))
+                                                  (roost-test--task "2222222222222222"))))
+         (terminal (generate-new-buffer " terminal"))
+         (magit (generate-new-buffer " magit")))
+     (unwind-protect
+         (roost-test--with-tmux-buffers
+          (save-window-excursion
+            (delete-other-windows)
+            (with-current-buffer terminal
+              (setq roost-test--tmux (list :host "dev" :socket "main" :session (roost--field shown 'session))))
+            (let ((top (selected-window))
+                  (bottom (split-window)))
+              (set-window-buffer top terminal)
+              (set-window-buffer bottom magit)
+              (select-window bottom)
+              (should (eq (roost--terminal-window-for opened) top))
+              ;; With no task's terminal on screen, the selected window it is.
+              (set-window-buffer top magit)
+              (should-not (roost--terminal-window-for opened)))))
+       (kill-buffer terminal)
+       (kill-buffer magit)))))
+
 (ert-deftest roost-task-panel-keeps-the-status-on-one-line ()
   (roost-test--isolated
    (let ((task (roost--cache-task "dev" (append '((name . "ask-git-status-short"))
