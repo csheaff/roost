@@ -3621,7 +3621,9 @@ stamp, so polls would not notice it."
   "Diff TASK's tracked files against where its own work begins."
   (interactive)
   (setq task (roost--choose task))
-  (require 'magit)
+  (unless (require 'magit nil t)
+    (user-error (substitute-command-keys
+                 "The diff needs Magit; \\[roost-review] opens the worktree in Dired instead")))
   (roost--magit-setup)
   (roost--activate-workspace task)
   (let ((default-directory (roost--remote-directory task)))

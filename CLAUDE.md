@@ -13,8 +13,14 @@ The [manual](docs/manual.md#how-it-works) says how it fits together.
   stubbed), the Python lifecycle tests against real Git and isolated tmux
   sockets, and a byte-compile with no warnings. CI runs it on Emacs 29.1
   and 30.1.
+- `test/roost-sweep.el` presses every button and key of the task panel,
+  dashboard, sidebar and search results in a gallery of task states, and
+  checks rules any of them must keep (no Lisp errors, a way back from each
+  change to a view, keys it names apply). Give a new kind of task a state in
+  `roost-sweep--gallery`, and a new view an entry in `roost-sweep--views`.
+  To check a new rule, break Roost the way it should catch and watch it fail.
 - One ERT test, or those matching a regexp:
-  `emacs -Q --batch -L . -L test -l test/roost-test.el --eval '(ert-run-tests-batch-and-exit "REGEXP")'`.
+  `emacs -Q --batch -L . -L test -l test/roost-test.el -l test/roost-sweep.el --eval '(ert-run-tests-batch-and-exit "REGEXP")'`.
   Python: `python3 -m unittest discover -s test -p 'test_remote.py' -k PATTERN`.
 - The tests of Roost in Magit and its Evil keys are skipped unless Magit,
   Evil and evil-collection are on `TEST_LOAD_PATH`.

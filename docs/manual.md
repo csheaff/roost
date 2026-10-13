@@ -415,6 +415,25 @@ and 30.1. The tests of Roost in Magit need Magit and its dependencies on the
 load path, as `make test TEST_LOAD_PATH="-L …/magit/lisp -L …"`, and Evil
 and evil-collection for its Evil keys there; without them they are skipped.
 
+Most ERT tests check one thing someone thought to check. `test/roost-sweep.el`
+checks rules instead. It draws the task panel, dashboard, sidebar and search
+results for a gallery of task states, presses every button and key in them,
+and fails on:
+
+- a view that draws differently the second time, or in two windows rather
+  than one;
+- a button or key that ends in a Lisp error, rather than doing its job, asking,
+  or saying why it can't (`user-error`);
+- a button or key that changes only the view, when a redraw undoes the change
+  or nothing changes it back;
+- a key the task panel tells you to press that isn't bound there, or whose
+  command doesn't apply to the task.
+
+Hosts, processes, terminals, Magit, the menu and the browser are stubbed, and
+every question is answered with `C-g`. A new button or key is covered as it
+is. A new kind of task needs a state in `roost-sweep--gallery`, and a new view
+an entry in `roost-sweep--views`.
+
 Claude Code updates itself often, and Roost relies on what it reports and
 does. `make contract` scans the installed Claude Code for the hook events,
 notification types and payload fields Roost reads, and names any it has not

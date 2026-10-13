@@ -6,6 +6,8 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.8.1:
 
+- Without Magit, `D` says the diff needs it and that `r` opens the worktree
+  in Dired, rather than failing to load Magit. Nothing to do when upgrading.
 - A long prompt shown whole in the task panel folds up again: "Collapse
   prompt" sits above it, as "Collapse reply" does above a long reply.
   Nothing to do when upgrading.
