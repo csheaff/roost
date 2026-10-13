@@ -93,7 +93,9 @@ Child frames, such as the box a review note is written in, count."
   "Click with the mouse on button LABEL, or its OCCURRENCE, counting from 0.
 The button must be on screen.  Return nil when it isn't."
   (when-let* ((place (qa--find-button label (or occurrence 0)))
-              (posn (posn-at-point (1+ (cdr place)) (car place))))
+              ;; Its middle: a step in from its start is past a button of one
+              ;; character, such as the sidebar's +.
+              (posn (posn-at-point (+ (cdr place) (/ (length label) 2)) (car place))))
     (setq unread-command-events
           (append unread-command-events
                   (list (list 'down-mouse-1 posn) (list 'mouse-1 posn))))
