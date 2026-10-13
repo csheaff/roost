@@ -333,6 +333,13 @@
                (roost--pop-to-buffer-in-place draft)
                (should (eq (selected-window) bottom))
                (should (eq (window-buffer top) pane))
+               ;; Not one kept for its buffer.
+               (set-window-dedicated-p bottom t)
+               (select-window top)
+               (roost--pop-to-buffer-in-place another)
+               (should (eq (window-buffer bottom) draft))
+               (delete-window (selected-window))
+               (set-window-dedicated-p bottom nil)
                ;; With none, a new one below.
                (set-window-buffer bottom pane)
                (select-window top)

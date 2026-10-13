@@ -1790,7 +1790,10 @@ taken back at the next change of layout, and the selection with it."
 A `display-buffer' action, for when the selected window is a tiled
 terminal's pane, which BUFFER would not keep."
   (if-let* ((window (seq-find (lambda (window)
+                                ;; Nor one kept for its buffer, as a note's on
+                                ;; a text terminal.
                                 (not (or (window-parameter window 'window-side)
+                                         (window-dedicated-p window)
                                          (with-current-buffer (window-buffer window)
                                            (derived-mode-p 'tmux-control-mode)))))
                               (window-list nil 'nomini))))
