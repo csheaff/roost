@@ -335,9 +335,12 @@ class Run:
                 for w in step["screen"]["windows"])
             shot = ('<img src="%s" alt="The frame after: %s">' % (step["shot"], html.escape(step["title"]))
                     if step["shot"] else "")
-            rows.append('<section class="%s"><h3>%s %s</h3><ul>%s</ul>%s%s</section>' % (
+            said = "".join("<p><small>%s: %s</small></p>" % (label, html.escape(step["screen"][key]))
+                           for key, label in (("echo", "Echo area"), ("prompt", "Minibuffer"))
+                           if step["screen"].get(key))
+            rows.append('<section class="%s"><h3>%s %s</h3><ul>%s</ul>%s%s%s</section>' % (
                 "bad" if step["problems"] else "good", "✗" if step["problems"] else "✓",
-                html.escape(step["title"]), problems, shot, windows))
+                html.escape(step["title"]), problems, said, shot, windows))
         (self.out / "report.html").write_text("""<!doctype html>
 <meta charset="utf-8"><title>Roost QA</title>
 <style>
@@ -489,7 +492,49 @@ def merge(qa, repo):
         ("main has the commit", lambda s: "Add a to-do list" in qa.git(repo, "log", "--format=%s", "-3"))])
 
 
-JOURNEYS = [sweep, answer, fold, resize, merge]
+@journey("Review in Magit and send a note")
+def review(qa, repo):
+    if qa.emacs.eval("(and (require 'magit nil t) t)") != "t":
+        qa.notes.add("No review journey: Magit isn't loaded")
+        return
+    qa.keys("C-c r c")
+    qa.type("ask sh -c \"echo 'TODAY = None' >> notes.py\"")
+    qa.keys("C-c C-c")
+    screen = qa.wait("the review task", lambda s: any(t["name"].startswith("ask-sh-c-echo") for t in s["tasks"]))
+    name = next(t["name"] for t in screen["tasks"] if t["name"].startswith("ask-sh-c-echo"))
+    qa.status(name, "permission")
+    qa.wait("its terminal", lambda s: any(w["mode"].startswith("tmux-control") and w["selected"]
+                                          for w in s["windows"]))
+    qa.type("yes\r")
+    qa.status(name, "ready", "idle")
+    qa.keys("C-c r r")
+    qa.wait("Magit", lambda s: (qa.window(s, "magit-status-mode") or {}).get("selected"))
+    qa.step("Magit on its worktree", expect=[
+        ("it shows the change to notes.py", lambda s: "notes.py" in qa.window(s, "magit-status-mode")["text"])])
+    # To the added line in the file's diff, below the agent's reply that names it.
+    qa.keys("C-s")
+    qa.type("+TODAY")
+    qa.keys("RET ;")
+    qa.wait("the note box", lambda s: (qa.window(s, "roost-note-box-mode") or {}).get("selected"))
+    qa.step("A box under the line", expect=[
+        ("it is a frame of its own", lambda s: qa.window(s, "roost-note-box-mode")["child"])])
+    qa.type("Call it DUE_TODAY.")
+    qa.keys("C-c C-c")
+    qa.wait("the note under its line", lambda s: "Call it DUE_TODAY." in
+            (qa.window(s, "magit-status-mode") or {}).get("text", ""))
+    qa.step("The note shows under its line")
+    qa.keys("@")
+    qa.wait("the draft", lambda s: (qa.window(s, "roost-send-mode") or {}).get("selected"))
+    qa.step("A prompt with the note", expect=[
+        ("the draft quotes the note", lambda s: "DUE_TODAY" in qa.window(s, "roost-send-mode")["text"])])
+    qa.keys("C-c C-c")
+    qa.status(name, "ready", "idle")
+    qa.wait("the agent to get it", lambda s: any(
+        w["mode"].startswith("tmux-control") and "DUE_TODAY" in w["text"] for w in s["windows"]), timeout=20)
+    qa.step("The agent has the note")
+
+
+JOURNEYS = [sweep, answer, fold, resize, merge, review]
 
 
 def main():

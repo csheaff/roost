@@ -63,10 +63,17 @@ process filters and sentinels, and hooks, which never reach a command."
   (setq unread-command-events (append unread-command-events (string-to-list text)))
   t)
 
+(defun qa--windows ()
+  "The windows of every visible frame, those of the main frame first.
+Child frames, such as the box a review note is written in, count."
+  (cl-mapcan (lambda (frame) (window-list frame 'nomini))
+             (sort (visible-frame-list)
+                   (lambda (a b) (and (not (frame-parent a)) (frame-parent b))))))
+
 (defun qa--find-button (label occurrence)
   "Window and position of button LABEL, its OCCURRENCE in visible windows."
   (let ((seen 0) found)
-    (dolist (window (window-list nil 'nomini) found)
+    (dolist (window (qa--windows) found)
       (unless found
         (with-current-buffer (window-buffer window)
           (let ((pos (window-start window)) (end (window-end window t)))
@@ -94,15 +101,40 @@ The button must be on screen.  Return nil when it isn't."
 
 ;;;; What is on screen
 
+(defun qa--overlay-strings (pos property ends)
+  "PROPERTY strings of the overlays at POS, with ENDS those ending there.
+Empty overlays at POS count among both."
+  (let (strings)
+    (dolist (overlay (delete-dups (append (overlays-in (max (point-min) (1- pos))
+                                                       (min (point-max) (1+ pos)))
+                                          ;; Empty ones at POS, which the first leaves out.
+                                          (overlays-in pos pos))))
+      (when (and (= (if ends (overlay-end overlay) (overlay-start overlay)) pos)
+                 (stringp (overlay-get overlay property)))
+        (push (overlay-get overlay property) strings)))
+    strings))
+
+(defun qa--shown (start end)
+  "The text from START to END as shown: what is invisible left out,
+strings that overlays add put in, and the text properties kept."
+  (let ((pieces nil) (pos start))
+    (while (<= pos end)
+      (setq pieces (append (qa--overlay-strings pos 'after-string t) pieces))
+      (when (< pos end)
+        (setq pieces (append (qa--overlay-strings pos 'before-string nil) pieces))
+        (unless (invisible-p pos)
+          (push (buffer-substring pos (1+ pos)) pieces)))
+      (cl-incf pos))
+    (apply #'concat (nreverse pieces))))
+
 (defun qa--visible-text (window)
   "WINDOW's text from its start to its end, as shown, line prefixes included."
   (with-current-buffer (window-buffer window)
     (let* ((start (window-start window))
            (end (min (point-max) (or (window-end window t) (point-max))))
-           (text (buffer-substring start end))
            (lines nil))
       ;; Prefixes are display properties; show them as text.
-      (dolist (line (split-string text "\n"))
+      (dolist (line (split-string (qa--shown start end) "\n"))
         (let ((prefix (and (> (length line) 0) (get-text-property 0 'line-prefix line))))
           (push (concat (if (stringp prefix) prefix "") (substring-no-properties line)) lines)))
       (string-join (nreverse lines) "\n"))))
@@ -136,7 +168,7 @@ doesn't."
 
 (defun qa-screen ()
   "What is on screen now, as JSON."
-  (let ((frame (selected-frame)))
+  (let ((frame (or (frame-parent) (selected-frame))))
     (json-encode
      `((frame . ((columns . ,(frame-width frame)) (lines . ,(frame-height frame))
                  (pixels . [,(frame-pixel-width frame) ,(frame-pixel-height frame)])))
@@ -155,11 +187,12 @@ doesn't."
                           (roost . ,(if (qa--roost-buffer-p buffer) t :json-false))
                           (selected . ,(if (eq window (selected-window)) t :json-false))
                           (side . ,(window-parameter window 'window-side))
+                          (child . ,(if (frame-parent (window-frame window)) t :json-false))
                           (columns . ,(window-body-width window))
                           (lines . ,(window-body-height window))
                           (text . ,(qa--visible-text window))
                           (overflow . ,(qa--overflow window)))))
-                    (window-list frame 'nomini))))
+                    (qa--windows))))
        (tasks . ,(vconcat (mapcar (lambda (task)
                                     `((name . ,(roost--field task 'name))
                                       (status . ,(roost--attention-status task))))
