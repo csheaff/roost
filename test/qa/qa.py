@@ -1017,6 +1017,14 @@ def shell(qa, repo):
         ("nothing typed for it reached the agent",
          lambda s: not any("PROMPT echo" in w["text"] for w in terminals(s, own))),
         ("the agent still in view", lambda s: any("PROMPT Leave room" in w["text"] for w in terminals(s, own)))])
+    other = start_task(qa, "Step away from the shell")
+    open_task(qa, name)
+    qa.wait("both panes again", lambda s: len(terminals(s, own)) == 2)
+    qa.step("Back to it, the shell still open", expect=[
+        ("the agent's pane as tmux has it, from its first row",
+         lambda s: any(w["text"].startswith("FAKE_CLAUDE_READY") for w in terminals(s, own)))])
+    if "FAKE_CLAUDE_READY" in (selected_terminal(qa.screen()) or {}).get("text", ""):
+        qa.keys("C-c C-o")
     qa.type("exit\r")
     qa.wait("the shell to go", lambda s: len(terminals(s, own)) == 1 and not s["prompt"])
     qa.step("The agent alone again", expect=[

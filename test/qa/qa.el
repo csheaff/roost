@@ -205,7 +205,11 @@ them; nil when BUFFER isn't a terminal."
     (with-current-buffer buffer
       (when (and (derived-mode-p 'tmux-control-mode) (bound-and-true-p tmux-control--terminal)
                  (eat-term-live-p tmux-control--terminal))
-        (let ((start (eat-term-display-beginning tmux-control--terminal))
+        ;; From the start of the line it begins on, which the window shows
+        ;; too: a screen starting partway into a line of history must not
+        ;; read as tmux's.
+        (let ((start (save-excursion (goto-char (eat-term-display-beginning tmux-control--terminal))
+                                     (line-beginning-position)))
               (end (eat-term-end tmux-control--terminal))
               lines)
           ;; Without the invisible cell Eat puts after a wide character.
