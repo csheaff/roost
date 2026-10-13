@@ -1074,6 +1074,11 @@ def main():
             qa.journey = chosen_journey.title
             print(chosen_journey.title)
             try:
+                # A question or menu the last journey left open goes first.
+                for _ in range(3):
+                    if not qa.screen()["prompt"] and qa.emacs.eval("(and transient--prefix t)") != "t":
+                        break
+                    qa.keys("C-g")
                 qa.emacs.eval("(qa-fresh-start)")
                 qa.settle()
                 chosen_journey(qa, repo)

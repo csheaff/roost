@@ -121,10 +121,12 @@ Return nil when it isn't on screen."
 (defun qa-fresh-start ()
   "Leave one frame, its window on *scratch* beside Roost's side windows.
 Each journey starts here, rather than amid the windows the last one left,
-so that one going wrong doesn't take the rest with it."
-  (when (active-minibuffer-window) (abort-recursive-edit))
+so that one going wrong doesn't take the rest with it.  A question left
+open is dismissed first, with keys."
   (dolist (frame (frame-list))
-    (unless (or (eq frame (selected-frame)) (frame-parent frame) (not (frame-visible-p frame)))
+    (when (frame-parent frame) (delete-frame frame)))
+  (dolist (frame (frame-list))
+    (unless (or (eq frame (selected-frame)) (not (frame-visible-p frame)))
       (delete-frame frame)))
   (let ((main (seq-find (lambda (window) (not (window-parameter window 'window-side)))
                         (window-list nil 'nomini))))
