@@ -6,6 +6,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.8.1:
 
+- A new task's draft, the dashboard and search, opened from a task's
+  terminal split into panes (as with `t`'s shell), open beside the panes
+  rather than in the pane you are in. There, tmux-control took the window
+  back when it next arranged the panes, and what you typed went to the
+  terminal. Nothing to do when upgrading.
 - With a tab per task, a task keeps its tab when you start another of the
   same name, whose tab has its ID after the name. Before, Roost then looked
   for the first task's tab under a name with its ID too, so that tab lost

@@ -310,6 +310,43 @@
        (should-not (string-match-p "Run the tests" (buffer-string)))
        (should (looking-at-p "Show the whole prompt"))))))
 
+(ert-deftest roost-a-draft-from-a-tiled-pane-opens-beside-the-tiles ()
+  ;; Shown in the pane's window, the draft was taken back when tmux-control
+  ;; next arranged its panes, and what you typed went to the terminal.
+  (roost-test--isolated
+   (let ((pane (generate-new-buffer " pane"))
+         (magit (generate-new-buffer " magit"))
+         (draft (generate-new-buffer " draft"))
+         (another (generate-new-buffer " another draft"))
+         (tiled t))
+     (unwind-protect
+         (cl-letf (((symbol-function 'tmux-control-tiled-p) (lambda () tiled)))
+           (with-current-buffer pane (setq major-mode 'tmux-control-mode))
+           (save-window-excursion
+             (delete-other-windows)
+             (let ((top (selected-window))
+                   (bottom (split-window)))
+               (set-window-buffer top pane)
+               (set-window-buffer bottom magit)
+               (select-window top)
+               ;; Another window there is: the draft takes it.
+               (roost--pop-to-buffer-in-place draft)
+               (should (eq (selected-window) bottom))
+               (should (eq (window-buffer top) pane))
+               ;; With none, a new one below.
+               (set-window-buffer bottom pane)
+               (select-window top)
+               (roost--pop-to-buffer-in-place another)
+               (should (= (length (window-list)) 3))
+               (should (eq (window-buffer top) pane))
+               (should-not (memq (selected-window) (list top bottom)))
+               ;; Not tiled, the window you are in.
+               (setq tiled nil)
+               (select-window top)
+               (roost--pop-to-buffer-in-place draft)
+               (should (eq (window-buffer top) draft)))))
+       (mapc #'kill-buffer (list pane magit draft another))))))
+
 (ert-deftest roost-a-task-opens-in-place-of-another-tasks-terminal ()
   ;; Opening one task with Magit selected below another's terminal put the
   ;; task in Magit's window and left the other terminal on screen.

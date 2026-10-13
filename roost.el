@@ -1774,7 +1774,35 @@ Planning lines and drawers are left out."
     ;; In the window you are in, as Magit does, rather than a split that
     ;; squeezes an agent's terminal; cancelling gives the window back.
     (roost--leave-side-window)
-    (pop-to-buffer buffer '((display-buffer-reuse-window display-buffer-same-window)))))
+    (roost--pop-to-buffer-in-place buffer)))
+
+(defun roost--tiled-pane-window-p (window)
+  "Whether WINDOW shows a pane of a terminal tmux-control has tiled.
+tmux-control arranges those windows itself: a buffer shown in one is
+taken back at the next change of layout, and the selection with it."
+  (with-current-buffer (window-buffer window)
+    (and (derived-mode-p 'tmux-control-mode)
+         (fboundp 'tmux-control-tiled-p)
+         (tmux-control-tiled-p))))
+
+(defun roost--display-beside-tiles (buffer alist)
+  "Display BUFFER in a window of the frame's that no terminal is in, or a new one.
+A `display-buffer' action, for when the selected window is a tiled
+terminal's pane, which BUFFER would not keep."
+  (if-let* ((window (seq-find (lambda (window)
+                                (not (or (window-parameter window 'window-side)
+                                         (with-current-buffer (window-buffer window)
+                                           (derived-mode-p 'tmux-control-mode)))))
+                              (window-list nil 'nomini))))
+      (window--display-buffer buffer window 'reuse alist)
+    (display-buffer-at-bottom buffer alist)))
+
+(defun roost--pop-to-buffer-in-place (buffer)
+  "Show BUFFER in the selected window, and select it.
+When that window is a tiled terminal's pane, use another, or a new one."
+  (pop-to-buffer buffer (if (roost--tiled-pane-window-p (selected-window))
+                            '((display-buffer-reuse-window roost--display-beside-tiles))
+                          '((display-buffer-reuse-window display-buffer-same-window)))))
 
 (defun roost--compose-prompt ()
   "The draft's prompt text."
@@ -5982,7 +6010,7 @@ The mark stays where it was."
       (unless (derived-mode-p 'roost-dashboard-mode) (roost-dashboard-mode)))
     ;; In the window you are in, like the task draft; q gives it back.
     (roost--leave-side-window)
-    (pop-to-buffer buffer '((display-buffer-reuse-window display-buffer-same-window)))
+    (roost--pop-to-buffer-in-place buffer)
     (roost--redraw))
   (roost-watch-mode 1)
   (roost-refresh))
@@ -6057,7 +6085,7 @@ up to its first 1,500 characters."
     (roost--search-start buffer)
     ;; In the window you are in, like the dashboard; q gives it back.
     (roost--leave-side-window)
-    (pop-to-buffer buffer '((display-buffer-reuse-window display-buffer-same-window)))))
+    (roost--pop-to-buffer-in-place buffer)))
 
 (defun roost-search-again ()
   "Search every host again for this buffer's query."
