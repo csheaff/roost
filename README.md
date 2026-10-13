@@ -26,7 +26,8 @@ three ways:
   terminal. Restart Emacs, and an agent at work is still at work, rather than
   resumed from its saved conversation.
 - **On any machine you can reach over SSH.** One dashboard covers this
-  machine and your remote hosts, and Magit reviews their work over TRAMP.
+  machine and your remote hosts, and Magit reviews their work over TRAMP,
+  fastest with [tramp-rpc](docs/manual.md#fitting-your-setup).
   Close the laptop, and a remote agent carries on.
 - **It sees a task through.** Each task has its own worktree and branch. You
   review it in Magit and send notes on its lines back to the agent; Roost
