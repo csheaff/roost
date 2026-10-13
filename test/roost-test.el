@@ -1455,6 +1455,10 @@
                ;; One not fetched yet can't open until it is, and Roost fetches it.
                (roost-search-next)
                (should (string-match-p "Fresh CSV" (thing-at-point 'line)))
+               ;; A message its line shows whole has no more to show.
+               (let ((shown (buffer-string)))
+                 (should-error (roost-search-toggle) :type 'user-error)
+                 (should (equal (buffer-string) shown)))
                (setq fetched nil)
                (should-error (roost-search-open) :type 'user-error)
                (should (equal fetched '("dev")))
@@ -1467,6 +1471,14 @@
                (roost--redraw)
                (should (string-match-p "^fresh task  dev · shop  running$" (buffer-string)))
                (should (string-match-p "^gone task  dev · shop  past task$" (buffer-string)))
+               ;; Nor can a past task's, which says there is nothing to open.
+               (save-excursion
+                 (goto-char (point-min))
+                 (search-forward "Gone CSV")
+                 (let ((shown (buffer-string)))
+                   (should (string-match-p "Nothing to open: gone task is no longer a task"
+                                           (cadr (should-error (roost-search-open) :type 'user-error))))
+                   (should (equal (buffer-string) shown))))
                (should (string-match-p "Fresh CSV" (thing-at-point 'line)))
                ;; Later lists redraw it too, so statuses stay current.
                (roost--apply-snapshot "dev" (list (roost-test--task)
@@ -1483,7 +1495,7 @@
                (should (string-match-p "commas, please\\.\n" (buffer-string)))
                ;; It wraps to the window, also once the window is resized.
                (should (memq #'roost--search-resized window-size-change-functions))
-               (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 28)))
+               (cl-letf (((symbol-function 'roost--usable-width) (lambda (&rest _) 28)))
                  (roost--search-resized (selected-window))
                  ;; Within its indentation of 8 columns.
                  (should (string-match-p "^Quote CSV fields\nwith commas, please\\.$" (buffer-string))))
@@ -1511,6 +1523,68 @@
    (should (eq (lookup-key roost-dashboard-mode-map "/") 'roost-search))
    (should (eq (lookup-key roost-sidebar-list-mode-map "/") 'roost-search))
    (should (eq (lookup-key roost-task-info-mode-map "/") 'roost-search))))
+
+(ert-deftest roost-search-fits-a-long-message-to-its-window ()
+  ;; A long message ran past the window's edge; cut to fit, it opens up.
+  (roost-test--isolated
+   (let ((roost-hosts '("dev")) requests
+         (long (mapconcat #'identity (make-list 30 "needle in the haystack") " ")))
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (host _action _params success &optional _failure) (push (list host success) requests)))
+               ((symbol-function 'roost--refresh-host) #'ignore))
+       (save-window-excursion
+         (unwind-protect
+             (progn
+               (roost-search "needle")
+               (set-buffer roost--search-buffer)
+               (switch-to-buffer (current-buffer))
+               (funcall (cadr (car requests))
+                        `((tasks ((past . t) (key . "0a1b/hay-9f8e7d") (name . "hay") (repo)
+                                  (hits ((at . "2026-10-03T10:00:00Z") (role . "user") (session . "s1") (line . 1)
+                                         (snippet . ,long) (text . ,long)))
+                                  (more . 0)))
+                          (moreTasks . 0)))
+               (goto-char (point-min))
+               (search-forward "haystack")
+               (let ((line (buffer-substring (line-beginning-position) (line-end-position))))
+                 (should (string-suffix-p "…" line))
+                 (should (<= (string-width line) (window-body-width))))
+               (should-not (roost--search-whole-p))
+               (roost-search-toggle)
+               (should (string-match-p (concat (regexp-quote "haystack needle") ".*\n.*haystack")
+                                       (buffer-string)))
+               (roost-search-toggle)
+               ;; Opened in a narrow window, a short message shows in full
+               ;; below its cut line; widened, its line shows it whole, once.
+               (let ((short "needle and thread") (saved roost--search-replies))
+                 (setq roost--search-replies
+                       `(("dev" (tasks ((past . t) (key . "0a1b/short-1a2b3c") (name . "short") (repo)
+                                        (hits ((at . "2026-10-04T10:00:00Z") (role . "user") (session . "s2")
+                                               (line . 1) (snippet . ,short) (text . ,short)))
+                                        (more . 0)))
+                          (moreTasks . 0))))
+                 (cl-letf (((symbol-function 'roost--usable-width) (lambda (&rest _) 30)))
+                   (roost--render-search)
+                   (goto-char (point-min))
+                   (search-forward "2026-10-04")
+                   (roost-search-toggle)
+                   (should (string-match-p "needle and thread\n" (buffer-string))))
+                 (roost--render-search)
+                 (should (= (how-many "needle and thread" (point-min) (point-max)) 1))
+                 (setq roost--search-replies saved roost--search-expanded nil))
+               ;; Shown in two windows, the narrower decides; in one narrower
+               ;; than a result's date and speaker, the whole line is cut.
+               (dolist (columns '(40 20))
+                 (delete-other-windows)
+                 (let ((narrow (split-window nil (- (window-total-width) columns 1) 'right)))
+                   (set-window-buffer narrow (current-buffer))
+                   (roost--render-search)
+                   (goto-char (point-min))
+                   (search-forward "2026-10-03")
+                   (should (<= (string-width (buffer-substring (line-beginning-position) (line-end-position)))
+                               (roost--usable-width narrow)))
+                   (should (get-text-property (line-beginning-position) 'roost-search-cut)))))
+           (when (get-buffer roost--search-buffer) (kill-buffer roost--search-buffer))))))))
 
 (ert-deftest roost-search-shows-a-task-retired-after-its-reply-as-past ()
   (roost-test--isolated
