@@ -331,12 +331,15 @@ class Run:
         known = []
         for expectation in expect:
             description, check = expectation[:2]
+            raised = False
             try:
                 ok = check(screen)
             except Exception as error:
-                ok = False
+                ok, raised = False, True
                 description += " (%s)" % error
-            if isinstance(expectation, Known):
+            # A check that broke is a problem, known or not: only its plain
+            # failure is the known behavior.
+            if isinstance(expectation, Known) and not raised:
                 if ok:
                     self.notes.add("A known problem no longer happens, so it can be an expectation: "
                                    + description)
