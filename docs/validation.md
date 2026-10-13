@@ -1000,6 +1000,51 @@ is skipped without Evil; 139 Python tests pass. The six new ERT tests
 fail against the code before them, and a test session now fails rather
 than waits on a question no test answered.
 
+### The task panel beside the terminal, 2026-10-12
+
+A survey of other tools' side panels (Claude Code's agent view, Codex's
+review pane, Conductor's Checks tab, Cosine's side panel, Pentagon, workmux)
+found the column beside one agent holding what its terminal doesn't show:
+the goal, the Git and pull request state. Replies show in lists of agents,
+and actions behind a key. The panel had led with the agent's latest reply,
+which the terminal beside it already showed, and ended with a list of every
+action, which `?` already opens.
+
+Tried in a plain Emacs 30.2 (Magit, tmux-control from its main branch,
+the sidebar and the panel on, no workspaces), with Claude Code 2.1.296 and
+`--model haiku`, asking before each command. A local task added a
+`search` command and its test. From the panel, `RET` on `notes.py`
+opened its diff above the terminal, which stayed in view; `;` on a line
+wrote a note, the panel counted it, `@` drafted the prompt, `C-c C-c` sent
+it, and the agent made the change and ran the tests. Committing the test
+by hand moved it under "Committed", with the edited file still under
+"Uncommitted". On `claylien`, a task held at folder trust had a commit, a
+staged rename, an edit and a new file made in its worktree over SSH; all
+three files showed under "Uncommitted", and a note written in the
+renamed file's diff, opened from the panel through TRAMP, was counted.
+
+Found and fixed:
+
+- **Docked didn't mean beside the terminal.** With the dashboard in the
+  main area and the panel docked, `i` selected the panel, which left out
+  the reply though no terminal showed it. The panel now leaves the reply
+  out only while the agent's terminal is on screen, and redraws when it
+  comes or goes.
+- **The same advice twice.** With the next step at the top, the notes
+  lower down repeated it for an agent at a startup prompt, one whose turn
+  failed, and one that exited. Those notes are gone; the startup prompt's
+  next step names folder trust, and the failed turn's says it failed.
+- **"Uncommitted" twice.** The summary said "· uncommitted" over the label
+  that says it per file; in the panel the summary leaves it out.
+
+Not changed: a renamed file's diff, limited to its new path, shows the
+whole file as new, as before; the panel's mouse use wasn't tried, since
+the capture had no screen access; and docked beside the terminal, the
+panel now leaves much of its column empty.
+
+All 225 ERT tests pass on Emacs 32 with Magit and Evil, and 141 Python
+tests pass.
+
 ### Codex and Pi adapters
 
 Used another disposable remote `hello-service` project, an isolated registry and

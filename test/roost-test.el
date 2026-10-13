@@ -130,7 +130,7 @@
        (roost-task-info-mode)
        (setq roost--buffer-task-key (roost--key asking))
        (roost--render-task-info)
-       (should (string-match-p "^Waiting for your answer\nAsks to run make test\n\nAgent's latest reply$"
+       (should (string-match-p "^Answer it in its terminal: RET\n\nWaiting for your answer\nAsks to run make test\n\nPrompt\nfix authentication\n\nAgent's latest reply$"
                                (buffer-string))))
      ;; The notification names it, rather than the agent's last words.
      (let (body)
@@ -149,12 +149,57 @@
        (setq roost--buffer-task-key (roost--key task))
        (roost--render-task-info)
        (let ((text (buffer-string)))
-         (should (< (string-match "^fix auth " text) (string-match "^Agent's latest reply$" text)
-                    (string-match "^Changes$" text) (string-match "^Prompt$" text)))
+         (should (< (string-match "^fix auth " text) (string-match "^Prompt$" text)
+                    (string-match "^Agent's latest reply$" text) (string-match "^Changes$" text)))
          (should (string-match-p "^Agent's latest reply\n## Summary\n" text))
          (should (equal (get-text-property (string-match "Fixed the" text) 'line-prefix text) "  "))
          (should (string-match-p "^Fixed the auth bug in login\\.py\\.\n" text))
          (should-not (string-match-p "\\*\\*\\|`" text)))))))
+
+(ert-deftest roost-task-panel-leaves-the-conversation-to-the-terminal-on-screen ()
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let* ((task (roost--cache-task "dev" (append `((request . "Asks to run make test")
+                                                     (lastMessage . ,roost-test--reply)
+                                                     (diff . "1 file changed, 1 insertion(+)")
+                                                     (dirty . t)
+                                                     (files ((path . "login.py") (added . 1) (deleted . 0))))
+                                                   (roost-test--task nil "permission"))))
+            (buffer (roost--task-info-buffer task))
+            (on-screen t)
+            (draws 0))
+       (unwind-protect
+           (cl-letf (((symbol-function 'magit-status) #'ignore)
+                     ((symbol-function 'roost--terminal-on-screen-p) (lambda (_) on-screen)))
+             (display-buffer-in-side-window buffer (roost--side-window-alist 'right 44))
+             (with-current-buffer buffer
+               (roost--render-task-info)
+               (let ((text (buffer-string)))
+                 ;; What to do next, then what the task is for.
+                 (should (string-match-p "^Answer it in its terminal: RET\n\nPrompt\nfix authentication\n" text))
+                 (should-not (string-match-p "Waiting for your answer\\|Agent's latest reply\\|Fixed the" text))
+                 ;; The labels say what is uncommitted, and where notes are written.
+                 (should (string-match-p "^Changes\n1 file \\+1 −0\n" text))
+                 (should (string-match-p "^  Committed\n  login\\.py  \\+1 −0\nIn a file's diff, ; writes a note for the agent$"
+                                         text))
+                 (should-not (string-match-p "Actions" text))))
+             ;; With the terminal gone from the screen, it has the conversation.
+             (advice-add 'roost--render-task-info :before (lambda () (cl-incf draws)) '((name . qa-count)))
+             (unwind-protect
+                 (progn
+                   (roost--redraw-moved-panels)
+                   (should (= draws 0))
+                   (setq on-screen nil)
+                   (roost--redraw-moved-panels)
+                   (should (= draws 1))
+                   (roost--redraw-moved-panels)
+                   (should (= draws 1)))
+               (advice-remove 'roost--render-task-info 'qa-count))
+             (with-current-buffer buffer
+               (should (string-match-p "^Waiting for your answer$" (buffer-string)))
+               (should (string-match-p "^Agent's latest reply$" (buffer-string)))))
+         (kill-buffer buffer))))))
 
 (ert-deftest roost-replies-show-link-text-and-open-links ()
   (roost-test--isolated
@@ -270,7 +315,7 @@
          (should-not roost--expanded-reply)
          (should-not (string-match-p "A new response arrived" (buffer-string)))
          (should (string-match-p "^Changes$" (buffer-string)))
-         (should (string-match-p "^Actions$" (buffer-string))))))))
+         (should (string-match-p "^Details$" (buffer-string))))))))
 
 (ert-deftest roost-task-panel-previews-wrap-long-tokens-and-preserve-short-replies ()
   (should (equal (roost--reply-preview "Done.\nTests passed." 40) "Done.\nTests passed."))
@@ -429,14 +474,15 @@
        (setq roost--buffer-task-key (roost--key failed))
        (roost--render-task-info)
        (should (string-match-p "^fix auth   ● error for" (buffer-string)))
-       (should (string-match-p "Its last turn failed, and the agent waits. RET opens it to try again."
+       (should (string-match-p "^Its last turn failed; open it to try its last prompt again: RET$"
                                (buffer-string)))
        (should-not (string-match-p "resumes" (buffer-string)))
        (should (string-match-p (concat "Last error: " (regexp-quote error)) (buffer-string)))
        ;; An agent that exited is resumed.
        (roost--cache-task "dev" (append '((live)) (roost-test--task nil "failed")))
        (roost--render-task-info)
-       (should (string-match-p "The agent has failed. RET shows its last output; s resumes" (buffer-string))))
+       (should (string-match-p "^fix auth   ● failed for" (buffer-string)))
+       (should (string-match-p "^RET shows its last output; s resumes its conversation$" (buffer-string))))
      ;; Its status says the agent waits: an error, not a failure to resume.
      (should (equal (roost--display-status failed) "error"))
      (should (roost--waiting-p failed))
@@ -1477,7 +1523,7 @@
                (roost--render-task-info)
                (roost--render-task-info)
                (should (string-prefix-p "fix auth" (buffer-string)))
-               (should (< (string-search "Actions" (buffer-string))
+               (should (< (string-search "Changes" (buffer-string))
                           (string-search "Details" (buffer-string))))))
          (kill-buffer buffer))))))
 
@@ -1504,7 +1550,7 @@
              (should (equal (buffer-substring (line-beginning-position) (point)) "Line 30 ")))
          (kill-buffer buffer))))))
 (ert-deftest roost-task-panel-lists-changed-files-that-open-their-diffs ()
-  (let* ((files '(((path . "notes.py") (added . 10) (deleted . 3))
+  (let* ((files '(((path . "notes.py") (added . 10) (deleted . 3) (uncommitted . t))
                   ((path . "docs/a/very/long/path/to/the/guide.md") (added . 1) (deleted . 0))
                   ((path . "logo.png"))
                   ((path . "notes.md") (untracked . t))))
@@ -1513,9 +1559,10 @@
     (with-temp-buffer
       (roost--insert-changed-files task 40)
       (let ((lines (split-string (buffer-string) "\n" t)))
-        (should (equal (car lines) "  notes.py  +10 −3"))
+        ;; Files with changes not yet committed, new ones too, come first.
+        (should (equal (seq-take lines 4) '("  Uncommitted" "  notes.py  +10 −3" "  notes.md  new"
+                                            "  Committed")))
         (should (member "  logo.png  binary" lines))
-        (should (member "  notes.md  new" lines))
         ;; A long path keeps its end and fits.
         (should (seq-some (lambda (line) (and (string-match-p "….*guide\\.md  \\+1 −0" line)
                                               (<= (string-width line) 40)))
@@ -1541,14 +1588,6 @@
                (roost-test--task))
        60)
       (should (string-match-p "and 3 more" (buffer-string))))))
-
-(ert-deftest roost-task-panel-flows-actions-in-a-narrow-window ()
-  (with-temp-buffer
-    (roost--insert-narrow-actions 40 roost--task-actions)
-    (let ((lines (split-string (buffer-string) "\n" t)))
-      (should (seq-every-p (lambda (line) (<= (string-width line) 40)) lines))
-      (should (string-match-p "RET Agent · t Shell" (buffer-string)))
-      (should (string-match-p "m Merge and retire" (buffer-string))))))
 
 (ert-deftest roost-discarding-says-what-is-lost-and-wants-the-name-to-lose-it ()
   (roost-test--isolated
@@ -1882,7 +1921,13 @@
 (ert-deftest roost-a-task-offers-what-it-can-do-now ()
   ;; A stopped task's panel offered Stop, Shell and Send, which its host refuses.
   (roost-test--isolated
-   (let* ((applies (lambda (task) (mapcar #'cadr (seq-mapcat #'cdr (roost--applicable-actions task)))))
+   (let* ((commands '(("RET" . roost-open-task) ("t" . roost-shell) ("f" . roost-files)
+                      ("e" . roost-send) ("r" . roost-review) ("D" . roost-diff) ("u" . roost-update)
+                      ("P" . roost-pr) ("m" . roost-merge-retire) ("x" . roost-retire)
+                      ("X" . roost-forget) ("K" . roost-stop) ("s" . roost-resume)))
+          (applies (lambda (task)
+                     (mapcar #'car (seq-filter (lambda (command) (roost--action-applies-p task (cdr command)))
+                                               commands))))
           (stopped (roost--cache-task "dev" (append '((live)) (roost-test--task nil "stopped"))))
           (working (roost--cache-task "dev" (append '((live . t) (ahead . 0) (dirty))
                                                     (roost-test--task "1111111111111111" "running"))))
@@ -1910,10 +1955,10 @@
          (should-not (roost--resume-inapt-p))
          ;; Every task entry of the menu has its predicate.
          (should (seq-every-p #'fboundp
-                              (mapcar (lambda (action)
+                              (mapcar (lambda (command)
                                         (intern (format "roost--%s-inapt-p"
-                                                        (string-remove-prefix "roost-" (symbol-name (nth 2 action))))))
-                                      (seq-mapcat #'cdr roost--task-actions)))))))))
+                                                        (string-remove-prefix "roost-" (symbol-name (cdr command))))))
+                                      commands))))))))
 
 (ert-deftest roost-sidebar-opens-in-a-live-window-when-the-main-area-is-split ()
   (roost-test--isolated
@@ -3094,7 +3139,7 @@
      (should (equal candidates '("beta  dev · unknown  [222222]" "alpha  dev · unknown" "beta  dev · unknown  [333333]")))
      (should (string-match-p "permission  fix authentication" (funcall annotation (car candidates)))))))
 
-(ert-deftest roost-task-panel-shows-prompt-changes-and-grouped-actions ()
+(ert-deftest roost-task-panel-shows-prompt-changes-and-details ()
   (roost-test--isolated
    (let ((task (roost--cache-task "dev" (append '((repo . "/home/user/ledger") (diff . "1 file changed, 2 insertions(+)")
                                                   (baseRef . "main") (integrationBranch . "main")
@@ -3109,7 +3154,9 @@
                  (should (string-match-p "^fix auth   ● ready for" text))
                  (should (string-match-p "^Prompt\nfix authentication" text))
                  (should (string-match-p "^Changes\n1 file \\+2 −0" text))
-                 (should (string-match-p "Finish   Pull request P    Merge and retire m    Retire or discard x    Forget X" text))
+                 ;; The menu has the actions.
+                 (should-not (string-match-p "Merge and retire" text))
+                 (should (string-match-p "^\\? opens the menu · g refreshes · q closes$" text))
                  (should (string-match-p "Branch       codex/roost/fix-auth-123456, from main, merges into main" text))
                  (should (string-match-p "Worktree     ~/work/fix auth" text))
                  ;; Line counts keep their colors inside the indented section.

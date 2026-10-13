@@ -6,6 +6,13 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.8.1:
 
+- The task panel puts what to do next at its top, then the task's prompt,
+  then the files it changed, those not yet committed first, under labels
+  that say which. It reminds you that `;` in a file's diff writes a note for
+  the agent. While the agent's terminal is on screen, the panel leaves the
+  agent's latest reply and permission requests to it; elsewhere, as with
+  `i` from the dashboard, it still shows them. Its list of every action is
+  gone: `?` in the panel opens the same menu. Nothing to do when upgrading.
 - Links in an agent's latest reply, in the task panel and in Magit, open with
   a click or `RET`, and a Markdown link shows only its text. In the agent's
   terminal, with tmux-control later than 0.7.2, `C-c C-u` opens a link it

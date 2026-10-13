@@ -1024,8 +1024,9 @@ to another task.  Each task has a session of its own."
 
 (defun roost--watched-task ()
   "The task whose agent's terminal or panel is in the selected window, if any.
-A panel counts, since it starts with the agent's latest reply.  Only
-while Emacs has focus, since otherwise nobody is looking."
+A panel counts: the terminal is on screen beside it, or it shows the
+agent's latest reply.  Only while Emacs has focus, since otherwise
+nobody is looking."
   (when (frame-focus-state)
     (with-current-buffer (window-buffer (selected-window))
       (cond ((derived-mode-p 'roost-task-info-mode)
@@ -4642,9 +4643,11 @@ shows starts it again."
           ((< seconds 86400) (format "%dh%02dm" (/ seconds 3600) (/ (mod seconds 3600) 60)))
           (t (format "%dd" (/ seconds 86400))))))
 
-(defun roost--changes (task &optional compact)
+(defun roost--changes (task &optional compact listed)
   "Git summary for TASK from the last full refresh.
-COMPACT abbreviates commits ahead of and behind the integration branch."
+COMPACT abbreviates commits ahead of and behind the integration branch.
+LISTED non-nil leaves out whether changes are uncommitted, for where
+the files are listed under labels that say so."
   (let* ((diff (or (roost--field task 'diff) ""))
          (count (lambda (pattern)
                   (if (string-match (concat "\\([0-9]+\\) " pattern) diff)
@@ -4664,7 +4667,7 @@ COMPACT abbreviates commits ahead of and behind the integration branch."
                      (when (> new 0)
                        (if (> files 0) (format "%d new" new)
                          (format "%d new file%s" new (if (= new 1) "" "s"))))
-                     (when (roost--field task 'dirty) "uncommitted")
+                     (when (and (roost--field task 'dirty) (not listed)) "uncommitted")
                      (when commits (string-join commits (if compact " " " · ")))))
      " · ")))
 
@@ -4672,33 +4675,46 @@ COMPACT abbreviates commits ahead of and behind the integration branch."
   "How many changed files a task panel lists before summing up the rest.")
 
 (defun roost--insert-changed-files (task width)
-  "Insert TASK's changed files as buttons that show them, within WIDTH columns."
-  (let ((files (roost--field task 'files)))
-    (dolist (file (seq-take files roost--changed-files-shown))
-      (let* ((path (alist-get 'path file))
-             (counts (cond ((alist-get 'untracked file) (propertize "new" 'face 'roost-diff-added))
-                           ((alist-get 'added file)
-                            (roost--fontify-changes (format "+%d −%d" (alist-get 'added file)
-                                                            (alist-get 'deleted file))))
-                           (t (propertize "binary" 'face 'roost-dim))))
-             (room (max 8 (- width 6 (string-width counts)))))
-        (insert "  ")
-        ;; Long paths keep their end, which names the file.
-        (insert-text-button (if (> (string-width path) room)
-                                (concat "…" (truncate-string-to-width
-                                             path (string-width path)
-                                             (- (string-width path) (1- room))))
-                              path)
-                            'follow-link t 'face 'roost-field
-                            'help-echo (concat path "\nmouse-1: show its changes")
-                            'action (lambda (_) (roost--diff-file task file)))
-        (insert "  " counts "\n")))
+  "Insert TASK's changed files as buttons that show them, within WIDTH columns.
+Those with changes not yet committed come first, under a label of their
+own.  Each button shows all the file's changes since the task began."
+  (let* ((files (roost--field task 'files))
+         (uncommitted (lambda (file) (or (alist-get 'uncommitted file) (alist-get 'untracked file))))
+         (room roost--changed-files-shown))
+    (pcase-dolist (`(,label . ,group) `(("Uncommitted" . ,(seq-filter uncommitted files))
+                                        ("Committed" . ,(seq-remove uncommitted files))))
+      (when (and group (> room 0))
+        (insert "  " (propertize label 'face 'roost-dim) "\n")
+        (dolist (file (seq-take group room))
+          (roost--insert-changed-file task file width))
+        (setq room (max 0 (- room (length group))))))
     (when (length> files roost--changed-files-shown)
       (roost--insert-indented
        (substitute-command-keys
         (format "and %d more; \\<roost-task-info-mode-map>\\[roost-diff] shows every change"
                 (- (length files) roost--changed-files-shown)))
        'roost-dim))))
+
+(defun roost--insert-changed-file (task file width)
+  "Insert a button showing FILE, one of TASK's `files', within WIDTH columns."
+  (let* ((path (alist-get 'path file))
+         (counts (cond ((alist-get 'untracked file) (propertize "new" 'face 'roost-diff-added))
+                       ((alist-get 'added file)
+                        (roost--fontify-changes (format "+%d −%d" (alist-get 'added file)
+                                                        (alist-get 'deleted file))))
+                       (t (propertize "binary" 'face 'roost-dim))))
+         (room (max 8 (- width 6 (string-width counts)))))
+    (insert "  ")
+    ;; Long paths keep their end, which names the file.
+    (insert-text-button (if (> (string-width path) room)
+                            (concat "…" (truncate-string-to-width
+                                         path (string-width path)
+                                         (- (string-width path) (1- room))))
+                          path)
+                        'follow-link t 'face 'roost-field
+                        'help-echo (concat path "\nmouse-1: show its changes")
+                        'action (lambda (_) (roost--diff-file task file)))
+    (insert "  " counts "\n")))
 
 (defun roost--agent-work-left (task)
   "The worktrees TASK's agent made that hold work not on the task's branch."
@@ -5022,7 +5038,7 @@ Unknown Git statistics count as making sense."
 (defun roost--next-step (task &optional menu)
   "What to do next with TASK, as a line naming its key, or nil.
 MENU non-nil means the line is for `roost-dispatch', away from the
-task panel's buttons."
+task panel's list of the agent's own worktrees."
   (let ((key (lambda (key) (propertize key 'face 'roost-key)))
         (status (roost--attention-status task))
         (pr (roost--field task 'prStatus)))
@@ -5030,12 +5046,12 @@ task panel's buttons."
      ((equal status "permission")
       (concat "Answer it in its terminal: " (funcall key "RET")))
      ((equal status "prompt")
-      (concat "It may be waiting at a startup prompt: " (funcall key "RET")))
+      (concat "It may be waiting at a startup prompt, such as folder trust: " (funcall key "RET")))
      ((roost--field task 'worktreeMissing)
       (concat "Its worktree is gone: " (funcall key "x") " retires it if its work is merged, "
               (funcall key "X") " forgets it"))
      ((equal status "error")
-      (concat "Open it to try its last prompt again: " (funcall key "RET")))
+      (concat "Its last turn failed; open it to try its last prompt again: " (funcall key "RET")))
      ((member status '("stopped" "crashed"))
       (concat (funcall key "RET") " or " (funcall key "s") " resumes its conversation"))
      ((not (roost--agent-running-p task))
@@ -5128,7 +5144,7 @@ terminal or worktree, or ask which task."
   (cons "Roost" roost--task-menu-items))
 
 (define-derived-mode roost-task-info-mode special-mode "Roost Task"
-  "A task's prompt, changes, actions and details.
+  "A task's next step, prompt, changes and details.
 Status is the last observation from the task's host.
 \\{roost-task-info-mode-map}"
   (setq-local truncate-lines nil
@@ -5148,48 +5164,26 @@ Status is the last observation from the task's host.
   (roost--evil-state 'roost-task-info-mode roost-evil-state)
   (roost--quiet-display))
 
-(defconst roost--task-actions
-  '(("Work" ("Agent" "RET" roost-open-task) ("Shell" "t" roost-shell)
-     ("Files" "f" roost-files) ("Send prompt" "e" roost-send))
-    ("Review" ("Magit" "r" roost-review) ("Diff" "D" roost-diff)
-     ("Update" "u" roost-update))
-    ("Finish" ("Pull request" "P" roost-pr) ("Merge and retire" "m" roost-merge-retire) ("Retire or discard" "x" roost-retire)
-     ("Forget" "X" roost-forget))
-    ("Session" ("Stop" "K" roost-stop) ("Resume" "s" roost-resume)))
-  "Task panel actions as (GROUP (LABEL KEY COMMAND)...).")
+(defvar-local roost--beside-terminal nil
+  "Non-nil if this task panel was last drawn with its agent's terminal on screen.")
 
-(defun roost--insert-action-button (action)
-  "Insert a button for ACTION, a (LABEL KEY COMMAND) from `roost--task-actions'."
-  (insert-text-button (nth 0 action) 'follow-link t 'face 'roost-field
-                      'roost-command (nth 2 action)
-                      'action (lambda (button)
-                                (call-interactively (button-get button 'roost-command)))))
+(defun roost--terminal-on-screen-p (task)
+  "Whether a window of a visible frame shows TASK's agent terminal.
+There, the task panel leaves the agent's conversation to the terminal."
+  (seq-some (lambda (window)
+              (with-current-buffer (window-buffer window)
+                (roost--terminal-shows-p task (list (roost--field task 'paneId)))))
+            (window-list-1 nil 'nomini 'visible)))
 
-(defun roost--applicable-actions (task)
-  "`roost--task-actions' that make sense for TASK, in their groups."
-  (delq nil (mapcar (lambda (group)
-                      (when-let* ((actions (seq-filter (lambda (action)
-                                                         (roost--action-applies-p task (nth 2 action)))
-                                                       (cdr group))))
-                        (cons (car group) actions)))
-                    roost--task-actions)))
-
-(defun roost--insert-narrow-actions (width groups)
-  "Insert GROUPS of task actions as KEY LABEL items flowing within WIDTH columns.
-For a panel in a narrow window, such as beside a task's terminal."
-  (dolist (group groups)
-    (insert "  ")
-    (let ((first t))
-      (dolist (action (cdr group))
-        (let ((item (+ (string-width (nth 1 action)) 1 (string-width (nth 0 action)))))
-          (when (and (not first) (> (+ (current-column) 3 item) width))
-            (insert "\n  ")
-            (setq first t))
-          (unless first (insert (propertize " · " 'face 'roost-dim)))
-          (insert (propertize (nth 1 action) 'face 'roost-key) " ")
-          (roost--insert-action-button action)
-          (setq first nil))))
-    (insert "\n")))
+(defun roost--redraw-moved-panels ()
+  "Redraw the task panels whose agent's terminal came on or off screen."
+  (dolist (window (window-list-1 nil 'nomini 'visible))
+    (with-current-buffer (window-buffer window)
+      (when-let* (((derived-mode-p 'roost-task-info-mode))
+                  (task (gethash roost--buffer-task-key roost--tasks))
+                  ((not (eq (not roost--beside-terminal)
+                            (not (roost--terminal-on-screen-p task))))))
+        (roost--render-task-info)))))
 
 (defun roost--task-info-width ()
   "Columns in the narrowest window showing the current task panel."
@@ -5340,10 +5334,12 @@ Windows showing the panel keep their scroll position, and the mark stays."
     (if (not task)
         (insert "This task has been retired or is no longer available.\n")
       (let* ((status (roost--display-status task))
-             (changes (roost--changes task))
+             (changes (roost--changes task nil (roost--field task 'files)))
              (width (roost--task-info-width))
              (base (roost--field task 'baseRef))
-             (integration (roost--field task 'integrationBranch)))
+             (integration (roost--field task 'integrationBranch))
+             ;; With the agent's terminal on screen, the conversation is its.
+             (beside (setq roost--beside-terminal (roost--terminal-on-screen-p task))))
         (insert (propertize (roost--field task 'name) 'face 'roost-title) "   "
                 (roost--status-light task (cons 'panel (current-buffer)) t)
                 (propertize (concat " " status) 'face (roost--status-word-face (roost--attention-status task)))
@@ -5355,10 +5351,27 @@ Windows showing the panel keep their scroll position, and the mark stays."
                                     (or (roost--field task 'agent) "claude"))
                             'face 'roost-dim)
                 "\n")
-        (when-let* ((request (roost--permission-request task)))
-          (roost--insert-heading "Waiting for your answer")
-          (roost--insert-indented (roost--prose request)))
-        (when-let* ((reply (roost--last-message task))
+        (when-let* ((next (roost--next-step task)))
+          (insert roost--gap next "\n"))
+        (unless beside
+          (when-let* ((request (roost--permission-request task)))
+            (roost--insert-heading "Waiting for your answer")
+            (roost--insert-indented (roost--prose request))))
+        (when-let* ((prompt (roost--prompt-text task)))
+          (roost--insert-heading "Prompt")
+          (let ((preview (roost--prompt-preview prompt)))
+            (if (or roost--show-full-prompt (equal preview prompt))
+                (roost--insert-indented (roost--prose prompt))
+              (roost--insert-indented (roost--prose preview))
+              (let ((start (point)))
+                (insert-text-button "Show the whole prompt" 'follow-link t 'face 'roost-dim
+                                    'action (lambda (_)
+                                              (setq roost--show-full-prompt t)
+                                              (roost--render-task-info)))
+                (insert "\n")
+                (put-text-property start (point) 'line-prefix "  ")))))
+        (when-let* (((not beside))
+                    (reply (roost--last-message task))
                     (reply (roost--prose reply)))
           (roost--insert-heading "Agent's latest reply")
           (let* ((preview (if (< width 72) (roost--reply-preview reply width) reply))
@@ -5372,14 +5385,22 @@ Windows showing the panel keep their scroll position, and the mark stays."
         (roost--insert-heading "Changes")
         (roost--insert-indented
          (cond ((roost--field task 'worktreeMissing)
-                (propertize "The worktree is gone; retire the task if its work is merged, or forget it"
+                (propertize "The worktree is gone"
                             'face 'roost-status-failed))
                ((not (assq 'diff task)) (propertize "Refreshing…" 'face 'roost-dim))
                ((string-empty-p changes) (propertize "No changes yet" 'face 'roost-dim))
                (t (roost--fontify-changes changes))))
         (roost--insert-changed-files task width)
-        (when-let* ((notes (roost--notes-summary task)))
-          (roost--insert-indented notes))
+        (if-let* ((notes (roost--notes-summary task)))
+            (roost--insert-indented notes)
+          (when (and (fboundp 'magit-status)
+                     (seq-some (lambda (file) (not (alist-get 'untracked file)))
+                               (roost--field task 'files)))
+            (roost--insert-indented
+             (concat "In a file's diff, "
+                     (substitute-command-keys "\\<roost-magit-mode-map>\\[roost-note]")
+                     " writes a note for the agent")
+             'roost-dim)))
         (if-let* ((merging (roost--field task 'merging)))
             (roost--insert-indented
              (substitute-command-keys
@@ -5396,87 +5417,51 @@ Windows showing the panel keep their scroll position, and the mark stays."
                     integration))
            'roost-dim)))
         (roost--insert-agent-work task)
+        ;; How an agent ended, or why it waits, is the next step's, above.
         (pcase status
-          ("error"
-           ;; A turn ended on an error, such as a usage limit, and the
-           ;; agent waits; it has not exited, so there is nothing to resume.
-           (roost--insert-indented
-            "Its last turn failed, and the agent waits. RET opens it to try again."
-            'roost-status-failed))
-          ((or "exited" "failed" "crashed")
-           (roost--insert-indented
-            (format "The agent has %s. RET shows its last output; s resumes the conversation." status)
-            'roost-status-failed))
           ("offline"
            (roost--insert-indented "The host is unreachable; this is the last known state." 'roost-dim))
           ("starting"
-           (cond ((equal (roost--field task 'agent) "codex")
-                  (roost--insert-indented
-                   "Codex reports status from its first turn. Open the terminal, review any hook or startup prompts, and enter the first prompt there; sending prompts from Emacs works after that."
-                   'roost-dim))
-                 ((equal (roost--attention-status task) "prompt")
-                  (roost--insert-indented
-                   "The agent has reported nothing yet, so it is probably waiting at a startup prompt such as folder trust. RET opens its terminal."
-                   'roost-status-permission)))))
+           (when (equal (roost--field task 'agent) "codex")
+             (roost--insert-indented
+              "Codex reports status from its first turn. Open the terminal, review any hook or startup prompts, and enter the first prompt there; sending prompts from Emacs works after that."
+              'roost-dim))))
         (when-let* ((error (roost--field task 'error)))
           (roost--insert-indented (concat "Last error: " error) 'roost-status-failed))
         (roost--insert-issue task)
         (roost--insert-pull-request task)
-        (when-let* ((prompt (roost--prompt-text task)))
-          (roost--insert-heading "Prompt")
-          (let ((preview (roost--prompt-preview prompt)))
-            (if (or roost--show-full-prompt (equal preview prompt))
-                (roost--insert-indented (roost--prose prompt))
-              (roost--insert-indented (roost--prose preview))
-              (let ((start (point)))
-                (insert-text-button "Show the whole prompt" 'follow-link t 'face 'roost-dim
-                                    'action (lambda (_)
-                                              (setq roost--show-full-prompt t)
-                                              (roost--render-task-info)))
-                (insert "\n")
-                (put-text-property start (point) 'line-prefix "  ")))))
-        (roost--insert-heading "Actions")
-        (when-let* ((next (roost--next-step task)))
-          (roost--insert-indented next))
-        (let ((width (roost--task-info-width))
-              (groups (roost--applicable-actions task)))
+        (roost--insert-heading "Details")
+        (dolist (entry `(("Branch" . ,(format "%s, from %s%s" (roost--field task 'branch) base
+                                              (if (and integration (not (string-empty-p integration)))
+                                                  (format ", merges into %s" integration)
+                                                "")))
+                         ,@(unless (< width 72)
+                             `(("Worktree" . ,(roost--abbreviate-path (or (roost--field task 'worktree) "")
+                                                                      (roost--field task 'host)))
+                               ("Project" . ,(roost--abbreviate-path (or (roost--field task 'repo) "")
+                                                                     (roost--field task 'host)))
+                               ("Tmux" . ,(format "session %s on socket %s" (roost--field task 'session)
+                                                  (roost--field task 'socket)))
+                               ("Conversation" . ,(or (roost--field task 'agentSession)
+                                                      (roost--field task 'claudeSession)
+                                                      "not recorded yet"))))))
           (if (< width 72)
-              (roost--insert-narrow-actions width groups)
-            (dolist (group groups)
-              (insert "  " (propertize (format "%-9s" (car group)) 'face 'roost-dim))
-              (dolist (action (cdr group))
-                (roost--insert-action-button action)
-                (insert " " (propertize (nth 1 action) 'face 'roost-key) "    "))
-              (insert "\n")))
-          (roost--insert-heading "Details")
-          (dolist (entry `(("Branch" . ,(format "%s, from %s%s" (roost--field task 'branch) base
-                                                (if (and integration (not (string-empty-p integration)))
-                                                    (format ", merges into %s" integration)
-                                                  "")))
-                           ,@(unless (< width 72)
-                               `(("Worktree" . ,(roost--abbreviate-path (or (roost--field task 'worktree) "")
-                                                                        (roost--field task 'host)))
-                                 ("Project" . ,(roost--abbreviate-path (or (roost--field task 'repo) "")
-                                                                       (roost--field task 'host)))
-                                 ("Tmux" . ,(format "session %s on socket %s" (roost--field task 'session)
-                                                    (roost--field task 'socket)))
-                                 ("Conversation" . ,(or (roost--field task 'agentSession)
-                                                        (roost--field task 'claudeSession)
-                                                        "not recorded yet"))))))
-            (if (< width 72)
-                ;; Too narrow for a label column: the value goes below its label.
-                (insert "  " (propertize (car entry) 'face 'roost-dim) "\n"
-                        (propertize (concat (or (cdr entry) "unknown") "\n")
-                                    'line-prefix "  " 'wrap-prefix "  "))
-              (insert (propertize (concat "  " (propertize (format "%-13s" (car entry)) 'face 'roost-dim)
-                                          (or (cdr entry) "unknown") "\n")
-                                  'wrap-prefix (make-string 15 ?\s)))))
-          (unless (< width 72)
-            (insert roost--gap (propertize (substitute-command-keys
-                                      "Ready means the agent is waiting for you, not that the work is reviewed.
-\\<roost-task-info-mode-map>\\[roost-task-info-refresh] refreshes · \\[roost-task-info-quit] closes")
-                                     'face 'roost-dim)
-                    "\n")))))
+              ;; Too narrow for a label column: the value goes below its label.
+              (insert "  " (propertize (car entry) 'face 'roost-dim) "\n"
+                      (propertize (concat (or (cdr entry) "unknown") "\n")
+                                  'line-prefix "  " 'wrap-prefix "  "))
+            (insert (propertize (concat "  " (propertize (format "%-13s" (car entry)) 'face 'roost-dim)
+                                        (or (cdr entry) "unknown") "\n")
+                                'wrap-prefix (make-string 15 ?\s)))))
+        (insert roost--gap
+                (propertize (substitute-command-keys
+                             (concat (unless (< width 72)
+                                       "Ready means the agent is waiting for you, not that the work is reviewed.\n")
+                                     "\\<roost-task-info-mode-map>\\[roost-dispatch] opens the menu · "
+                                     (unless (< width 72) "\\[roost-task-info-refresh] refreshes · ")
+                                     "\\[roost-task-info-quit] closes"))
+                            'face 'roost-dim)
+                "\n")))
     (goto-char (min position (point-max)))
     (roost--restore-mark mark)
     (roost--restore-window-places places)
@@ -5513,7 +5498,7 @@ same name keep drafts of their own."
 
 ;;;###autoload
 (defun roost-task-info (&optional task)
-  "Show TASK's prompt, Git status, actions and details."
+  "Show TASK's next step, prompt, the agent's latest reply, changes and details."
   (interactive)
   (setq task (roost--choose task))
   (let ((buffer (roost--task-info-buffer task)))
@@ -6495,7 +6480,9 @@ unreported to other packages, such as tmux-control resizing a terminal."
     (setq roost--layout-timer
           (run-at-time 0 nil (lambda ()
                                (setq roost--layout-timer nil)
-                               (with-demoted-errors "Roost: %S" (roost--sync-all-frames)))))))
+                               (with-demoted-errors "Roost: %S"
+                                 (roost--sync-all-frames)
+                                 (roost--redraw-moved-panels)))))))
 
 (defun roost--watch-layout ()
   "Keep Roost's side windows in step with the window layout from now on.
@@ -6551,7 +6538,8 @@ than `roost-sidebar-width' plus 80 columns go without."
 ;;;###autoload
 (define-minor-mode roost-task-panel-mode
   "Show the open task's panel to the right of its terminal.
-The panel shows the agent's latest reply, its changes and the actions.
+The panel shows what to do next, the prompt and the changes, leaving
+the agent's replies to its terminal.
 It docks while the terminal keeps at least 80 columns, and steps aside
 when a split or a narrower frame would squeeze it.  With workspaces, it
 shows the task whose workspace is current.  \\<roost-dashboard-mode-map>\\[roost-task-panel-mode] in the dashboard or sidebar

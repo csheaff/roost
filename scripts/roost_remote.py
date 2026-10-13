@@ -1063,9 +1063,24 @@ def pr_status(task):
         return None
 
 
-def changed_files(worktree, base, limit=50):
+def status_paths(porcelain):
+    """The paths in STATUS --porcelain -z output: what is changed and not
+    yet committed, staged or not, untracked files included."""
+    paths = set()
+    fields = porcelain.split("\0")
+    while fields and fields[0]:
+        entry = fields.pop(0)
+        paths.add(entry[3:])
+        if "R" in entry[:2] or "C" in entry[:2]:
+            # A rename or copy: its old path follows.
+            fields.pop(0)
+    return paths
+
+
+def changed_files(worktree, base, uncommitted=frozenset(), limit=50):
     """The task's changed files since BASE, committed or not. Line counts
-    are absent for binary files, and untracked files are marked so."""
+    are absent for binary files, and untracked files are marked so, as are
+    files among UNCOMMITTED, those with changes not yet committed."""
     files = []
     fields = read_git(worktree, "diff", "--numstat", "-z", base).stdout.split("\0")
     while fields and fields[0]:
@@ -1077,6 +1092,8 @@ def changed_files(worktree, base, limit=50):
         file = dict(path=path)
         if added != "-":
             file.update(added=int(added), deleted=int(deleted))
+        if path in uncommitted:
+            file["uncommitted"] = True
         files.append(file)
     untracked = read_git(worktree, "ls-files", "--others", "--exclude-standard", "-z")
     files += [dict(path=path, untracked=True) for path in untracked.stdout.split("\0") if path]
@@ -1135,10 +1152,10 @@ def add_git_stats(tasks, pull_requests=True):
             continue
         base = fork_point(worktree, task)
         stats = read_git(worktree, "diff", "--shortstat", base)
-        dirty = read_git(worktree, "status", "--porcelain")
+        dirty = read_git(worktree, "status", "--porcelain", "-z")
         task["diff"] = stats.stdout.strip()
         task["dirty"] = bool(dirty.stdout)
-        task["files"] = changed_files(worktree, base)
+        task["files"] = changed_files(worktree, base, status_paths(dirty.stdout))
         # A merge under way, as when an update conflicted, with its files in
         # conflict; null otherwise, so Emacs forgets one that has finished.
         task["merging"] = (dict(conflicts=read_git(worktree, "diff", "--name-only",

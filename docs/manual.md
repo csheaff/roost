@@ -147,13 +147,16 @@ and the next session.
 **Keep them in view.** `b` in the dashboard, or `M-x roost-sidebar-mode`, keeps a
 compact task list at the left of every frame, through perspective and tab
 switches and `C-x 1`; add `(roost-sidebar-mode 1)` to your configuration to have
-it from the start. `I` docks a panel at the right of an open task's terminal:
-the agent's latest reply (a click or `RET` opens a link in it), the files it
-changed (each opens its diff), and what
-you can do with the task now, starting with the next step, kept current as the
-agent works. Add `(roost-task-panel-mode 1)` to have it from the start. The
-panel steps aside when the terminal would drop below 80 columns, and `q` in it
-turns it off. `i` shows the same panel in the main area whenever you want it.
+it from the start. `I` docks a panel at the right of an open task's terminal,
+kept current as the agent works: what to do next, the task's prompt, and the
+files it changed, those not yet committed first. A click or `RET` on a file
+opens its diff in Magit, where `;` writes a note for the agent (more under
+Review in Magit, below). The terminal shows the agent's replies, so the panel leaves them out
+while the terminal is on screen; `i` shows the same panel in the main area,
+with the latest reply (a click or `RET` opens a link in it). `?` in the panel
+opens the menu of what you can do with the task. Add
+`(roost-task-panel-mode 1)` to have the panel from the start. It steps aside
+when the terminal would drop below 80 columns, and `q` in it turns it off.
 
 **Check the work yourself.** `t` opens a shell beside the agent, in the same
 worktree, and returns to it after. Run the tests, start the app, poke at it.
@@ -208,7 +211,7 @@ branch. Needs `gh` on the task's host, and Git credentials there that can push.
 | `r` | `roost-review` | Magit in the worktree |
 | `D` | `roost-diff` | Diff the task's own changes, including uncommitted ones |
 | `e` | `roost-send` | Paste a prompt into the agent and press Enter |
-| `i` | `roost-task-info` | Prompt, changes, actions and details |
+| `i` | `roost-task-info` | The task's next step, prompt, latest reply, changes and details |
 | `l` | `roost-switch-task` | Choose a task by name, waiting tasks first |
 | `/` | `roost-search` | Find messages in your tasks' conversations, retired tasks' too; `RET` opens a live task, `TAB` shows more of a message (its first 1,500 characters) |
 | `b` | `roost-sidebar-mode` | Keep the task list at the left of every frame |

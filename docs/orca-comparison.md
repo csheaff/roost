@@ -70,7 +70,7 @@ tasks were then taken from creation to merge in it (see
 | --- | --- |
 | Left sidebar: projects and their workspaces, each with a status dot and an unread marker | `roost-sidebar-mode` (`b`): tasks grouped by host and project, a status dot, how many wait for you; a finished agent you have seen turns grey |
 | Always there by default | Opt-in, since an Emacs package that claims a column of every frame should be asked to; one line in your configuration keeps it |
-| Right sidebar: Source Control with the changed files and their diffs, live | The task panel (`I`, opt-in like the sidebar since 2026-10-09): the agent's latest reply, the changed files, kept current, each opening its diff in Magit, commits ahead and behind, the pull request's review and checks, and every action. Staging and committing stay in Magit (`r`) |
+| Right sidebar: Source Control with the changed files and their diffs, live | The task panel (`I`, opt-in like the sidebar since 2026-10-09): what to do next, the prompt, the changed files, uncommitted ones first, kept current, each opening its diff in Magit for notes to the agent, commits ahead and behind, and the pull request's review and checks. The agent's replies stay in its terminal beside it, and `?` opens the menu of actions. Staging and committing stay in Magit (`r`) |
 | Checks tab | Pull request checks as passing, failing and pending counts in the panel |
 | Agents tab: past sessions to resume | `s` resumes the task's own conversation; there is no history browser |
 | Panels collapse by hand | The panel steps aside by itself when the terminal would drop below 80 columns, and comes back with room; `q` and `I` turn it off and on |
