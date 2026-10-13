@@ -77,13 +77,13 @@ Child frames, such as the box a review note is written in, count."
       (unless found
         (with-current-buffer (window-buffer window)
           (let ((pos (window-start window)) (end (window-end window t)))
-            (while (and (not found) (setq pos (next-single-char-property-change pos 'button nil end))
-                        (< pos end))
-              (when (and (get-char-property pos 'button)
-                         (equal (buffer-substring-no-properties
-                                 pos (next-single-char-property-change pos 'button nil end))
-                                label))
-                (if (= seen occurrence) (setq found (cons window pos)) (cl-incf seen))))))))))
+            ;; From the window's start itself: a button can begin there.
+            (while (and (not found) (< pos end))
+              (let ((next (next-single-char-property-change pos 'button nil end)))
+                (when (and (get-char-property pos 'button)
+                           (equal (buffer-substring-no-properties pos next) label))
+                  (if (= seen occurrence) (setq found (cons window pos)) (cl-incf seen)))
+                (setq pos next)))))))))
 
 (defun qa-click (label &optional occurrence)
   "Click with the mouse on button LABEL, or its OCCURRENCE, counting from 0.

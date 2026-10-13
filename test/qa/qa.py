@@ -177,13 +177,15 @@ class Run:
         else:
             sys.exit("Emacs didn't start its server; see %s" % (self.out / "emacs.log"))
         if not self.emacs.eval("(and (require 'tmux-control nil t) t)") == "t":
-            self.stop()
             sys.exit("Emacs can't load tmux-control: give its directory with -L, or --package-dir")
         # Set once it runs: a new frame is kept within the screen, and the
         # panel needs room beside a terminal of 80 columns.
         self.emacs.eval("(set-frame-size nil %d %d)" % FRAME)
         for file in self.args.load:
-            self.emacs.eval("(load %s nil t)" % lisp(str(Path(file).resolve())))
+            try:
+                self.emacs.eval("(load %s nil t)" % lisp(str(Path(file).resolve())))
+            except RuntimeError as error:
+                sys.exit("Couldn't load %s: %s" % (file, error))
         self.emacs.eval("(qa-take-errors)")
         return repo
 
@@ -455,9 +457,17 @@ def unclocked(text):
 @journey("Resize the frame")
 def resize(qa, repo):
     """The panel docks while the terminal keeps 80 columns, and steps aside otherwise."""
-    for columns, lines in ((100, 30), (150, 40), (220, 56)):
+    qa.keys("C-c r c")
+    qa.type("Say hello")
+    qa.keys("C-c C-c")
+    qa.wait("its terminal", lambda s: any(w["mode"].startswith("tmux-control") and w["selected"]
+                                          for w in s["windows"]))
+    # Heights a laptop's screen has room for: a frame is kept within it.
+    for columns, lines in ((100, 30), (150, 40), (220, 40)):
         qa.emacs.eval("(set-frame-size nil %d %d)" % (columns, lines))
         qa.step("%d×%d" % (columns, lines), expect=[
+            ("the frame is %d×%d" % (columns, lines),
+             lambda s, size=(columns, lines): (s["frame"]["columns"], s["frame"]["lines"]) == size),
             ("the sidebar is still there", lambda s: qa.window(s, "roost-sidebar-list-mode")),
             ("the panel is there just when the terminal keeps 80 columns beside it",
              lambda s: panel_fits(qa, s))])
@@ -551,11 +561,15 @@ def main():
     parser.add_argument("--keep", action="store_true", help="Leave Emacs and tmux running")
     parser.add_argument("--no-shots", action="store_true", help="Take no screenshots")
     args = parser.parse_args()
-    chosen = [j for j in JOURNEYS if not args.journeys or j.__name__ in args.journeys]
+    known = {j.__name__: j for j in JOURNEYS}
+    unknown = [name for name in args.journeys if name not in known]
+    if unknown:
+        parser.error("no journey %s; there are %s" % (", ".join(unknown), ", ".join(known)))
+    chosen = [known[name] for name in args.journeys] or JOURNEYS
     qa = Run(args)
     print("Roost QA in %s" % qa.out)
-    repo = qa.start()
     try:
+        repo = qa.start()
         for chosen_journey in chosen:
             qa.journey = chosen_journey.title
             print(chosen_journey.title)
@@ -566,8 +580,10 @@ def main():
                                      shot=None, screen=qa.screen()))
                 print("  ✗ Stopped: %s" % stuck)
     finally:
-        failed = qa.report()
-        qa.stop()
+        try:
+            failed = qa.report()
+        finally:
+            qa.stop()
     for note in sorted(qa.notes):
         print(note)
     print("%d steps, %d with problems: %s" % (len(qa.steps), len(failed), qa.out / "report.html"))
