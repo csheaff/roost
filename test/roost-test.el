@@ -157,6 +157,29 @@
          (should (string-match-p "^Fixed the auth bug in login\\.py\\.\n" text))
          (should-not (string-match-p "\\*\\*\\|`" text)))))))
 
+(ert-deftest roost-opening-a-task-redraws-its-panel-with-the-reply ()
+  ;; The host's reply to opening a task can carry a newer status, as when
+  ;; you answered the agent meanwhile; the panel kept the older one until
+  ;; the next poll.
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (roost-test--task nil "permission")))
+         callback)
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host _action _params success &optional _failure) (setq callback success)))
+               ((symbol-function 'roost--display-task) #'ignore))
+       (save-window-excursion
+         (with-current-buffer (get-buffer-create " *panel*")
+           (roost-task-info-mode)
+           (setq roost--buffer-task-key (roost--key task))
+           (switch-to-buffer (current-buffer))
+           (roost--render-task-info)
+           (should (string-match-p "● permission" (buffer-string)))
+           (roost-open-task task)
+           (funcall callback (roost-test--task nil "ready"))
+           (should (string-match-p "● ready" (buffer-string)))
+           (should-not (string-match-p "● permission" (buffer-string))))
+         (kill-buffer " *panel*"))))))
+
 (ert-deftest roost-task-panel-leaves-the-conversation-to-the-terminal-on-screen ()
   (roost-test--isolated
    (save-window-excursion

@@ -1469,6 +1469,10 @@ answer to the task's terminal."
                     (list (cons 'id (roost--field task 'id)))
                     (lambda (current)
                       (setq current (roost--cache-task (roost--field task 'host) current))
+                      ;; The reply can be newer than what is shown, as when
+                      ;; you answered the agent meanwhile: show it everywhere,
+                      ;; the task's panel too, not only where the task opens.
+                      (roost--redraw)
                       (roost--when-out-of-minibuffer
                        (lambda ()
                          (when (and (= generation roost--open-generation)

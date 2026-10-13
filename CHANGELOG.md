@@ -14,6 +14,9 @@ Since 0.8.1:
   the checkout on the host, which took seconds before TRAMP had connected
   to it, where it now takes a project Roost knows the buffer is in.
   Nothing to do when upgrading.
+- A task's panel shows what its host says when you open the task, such as
+  that you have answered its agent, rather than keeping what it showed
+  before until the next refresh. Nothing to do when upgrading.
 - A task whose work is merged, through its pull request on GitHub or into
   the branch it merges into, says `merged` in the dashboard and sidebar, so
   you can see which tasks to retire without opening them. Roost now finds a
