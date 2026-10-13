@@ -4077,8 +4077,7 @@ Without a status from GitHub yet, it is as its host recorded, or open."
         " · "))
       (when (eq state 'merged)
         (roost--insert-indented
-         ;; Before Git is measured, the merge on GitHub is all there is to go on.
-         (if (or (roost--field task 'landed) (not (assq 'landed task)))
+         (if (roost--landed task)
              (substitute-command-keys
               "Merged on GitHub. \\<roost-task-info-mode-map>\\[roost-retire] retires this task, removing its worktree and branch.")
            "Merged on GitHub, but not the commits since.")
@@ -4093,16 +4092,23 @@ Without a status from GitHub yet, it is as its host recorded, or open."
                              (roost--field task 'name)))
     (roost--act task "stop")))
 
+(defun roost--landed (task &optional measured)
+  "Whether TASK's commits are all merged, as its host last measured.
+That is, in its integration branch or a pull request GitHub merged at
+its tip.  Until its Git statistics are measured too, as after a poll
+that only asked GitHub, the merge on GitHub is all there is to go on;
+with MEASURED, the answer is then `unknown'."
+  (cond ((and (assq 'landed task) (assq 'dirty task)) (roost--field task 'landed))
+        (measured 'unknown)
+        (t (eq (roost--pr-state task) 'merged))))
+
 (defun roost--unmerged-work-p (task)
   "Whether TASK, as last seen, holds work that retiring it would refuse to lose.
 Commits not merged into its integration branch, or files not committed."
   (or (roost--field task 'dirty)
       (and (numberp (roost--field task 'ahead)) (> (roost--field task 'ahead) 0)
-           ;; Commits since a pull request merged are not in it.  Before
-           ;; Git is measured, the merge on GitHub is all there is to go on.
-           (if (assq 'landed task)
-               (not (roost--field task 'landed))
-             (not (eq (roost--pr-state task) 'merged))))))
+           ;; Commits since a pull request merged are not in it.
+           (not (roost--landed task)))))
 
 ;;;###autoload
 (defun roost-retire (&optional task)
@@ -4326,7 +4332,7 @@ neither works nor has anything new for you."
 Its commits are in its integration branch or a pull request GitHub
 merged, nothing is left uncommitted, and its agent is not at work, did
 not fail, and has said nothing you haven't seen."
-  (and (roost--field task 'landed)
+  (and (eq (roost--landed task t) t)
        (not (roost--field task 'dirty))
        (not (roost--field task 'merging))
        (not (roost--field task 'worktreeMissing))
@@ -5205,9 +5211,7 @@ Unknown Git statistics count as making sense."
   (let ((worktree (not (roost--field task 'worktreeMissing)))
         (ahead (roost--field task 'ahead))
         ;; All its work, not a pull request merged before its latest commits.
-        (merged (if (assq 'landed task)
-                    (roost--field task 'landed)
-                  (eq (roost--pr-state task) 'merged)))
+        (merged (roost--landed task))
         ;; The host retires and merges only a task whose agent is not at work.
         (active (member (roost--field task 'status) '("starting" "running" "permission" "background"))))
     (pcase command
@@ -5264,8 +5268,7 @@ task panel's list of the agent's own worktrees."
               ;; The panel lists those worktrees, with buttons, below this line.
               (when menu (concat "; " (funcall key "i") " shows it"))))
      ;; As for one you haven't looked at since its agent finished.
-     ((or (roost--field task 'landed) (and merged (not (assq 'landed task))))
-      (funcall retire))
+     ((roost--landed task) (funcall retire))
      (merged (concat "Its pull request is merged, but not its commits since: " (funcall key "m") " merges them"))
      ((equal (alist-get 'state pr) "OPEN")
       (concat (funcall key "P") " pushes new commits to its pull request"))
@@ -5635,7 +5638,7 @@ Windows showing the panel keep their scroll position, and the mark stays."
                         integration)))
              'roost-status-permission)
           ;; Not when it moved on by merging the task.
-          (when (and (> (or (roost--field task 'behind) 0) 0) (not (roost--field task 'landed)))
+          (when (and (> (or (roost--field task 'behind) 0) 0) (not (eq (roost--landed task t) t)))
             (roost--insert-indented
            (substitute-command-keys
             (format "%s has moved on; \\<roost-task-info-mode-map>\\[roost-update] merges it into this task before you merge the task back."

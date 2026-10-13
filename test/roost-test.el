@@ -4078,7 +4078,8 @@ Read from the layout transient keeps, whose form varies by version."
   (roost-test--isolated
    (let* ((seen '(seen . "2026-10-03T20:00:00+00:00"))
           (cache (lambda (id &rest fields)
-                   (roost--cache-task "dev" (append fields `((repo . "/home/user/ledger") (live . t) (ahead . 2))
+                   (roost--cache-task "dev" (append fields `((repo . "/home/user/ledger") (live . t) (ahead . 2)
+                                                             (dirty))
                                                     (roost-test--task id)))))
           (merged (funcall cache "1111111111111111" seen '(landed . t)
                            '(pr . ((number . 12) (url . "https://github.com/o/r/pull/12")))
@@ -4111,6 +4112,11 @@ Read from the layout transient keeps, whose form varies by version."
                                                       `(status . ,status) '(live)))
                       status)))
      (remhash '("dev" "7777777777777777") roost--tasks)
+     ;; Known merged before its Git statistics are, as after a poll that only asked GitHub.
+     (let ((unmeasured (roost--cache-task "dev" (append `(,seen (landed . t) (live . t) (ahead . 2))
+                                                        (roost-test--task "8888888888888888")))))
+       (should (equal (roost--display-status unmeasured) "ready"))
+       (remhash '("dev" "8888888888888888") roost--tasks))
      (with-temp-buffer
        (roost-dashboard-mode)
        (roost--render-dashboard)
@@ -4143,7 +4149,7 @@ Read from the layout transient keeps, whose form varies by version."
 
 (ert-deftest roost-commits-since-a-merge-are-work-to-lose ()
   (roost-test--isolated
-   (let ((later (roost--cache-task "dev" (append '((live . t) (ahead . 3) (landed)
+   (let ((later (roost--cache-task "dev" (append '((live . t) (ahead . 3) (landed) (dirty)
                                                    (pr . ((number . 12) (url . "https://github.com/o/r/pull/12")))
                                                    (prStatus . ((state . "MERGED"))))
                                                  (roost-test--task))))
