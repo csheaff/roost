@@ -1448,14 +1448,20 @@ answer to the task's terminal."
   "Validate TASK's tmux ownership, then restore its perspective and terminal."
   (interactive)
   (setq task (roost--choose task))
-  (let ((generation (cl-incf roost--open-generation)))
+  (let* ((generation (cl-incf roost--open-generation))
+         (window (if (window-minibuffer-p) (minibuffer-selected-window) (selected-window)))
+         (shown (window-buffer window)))
     (roost--request (roost--field task 'host) "inspect"
                     (list (cons 'id (roost--field task 'id)))
                     (lambda (current)
                       (setq current (roost--cache-task (roost--field task 'host) current))
                       (roost--when-out-of-minibuffer
                        (lambda ()
-                         (when (= generation roost--open-generation)
+                         (when (and (= generation roost--open-generation)
+                                    ;; Unless you have shown something else
+                                    ;; since, such as tmux-control's pager.
+                                    (eq (selected-window) window)
+                                    (eq (window-buffer window) shown))
                            (roost--display-task current)
                            (when (and (assq 'live current) (not (roost--field current 'live)))
                              (message "%s's agent has %s; its last output is shown. Resume with `s'."

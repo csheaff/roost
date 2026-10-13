@@ -963,6 +963,26 @@
        (funcall (cadr callbacks) (roost-test--task "1111111111111111"))
        (should (equal displayed "2222222222222222"))))))
 
+(ert-deftest roost-open-leaves-what-you-showed-before-the-reply ()
+  ;; C-c C-e just after opening a task showed the pager, which the host's
+  ;; reply then replaced with the terminal.
+  (roost-test--isolated
+   (let (callback displayed)
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host _action _params success &optional _failure) (setq callback success)))
+               ((symbol-function 'roost--display-task) (lambda (task) (setq displayed (roost--field task 'id)))))
+       (save-window-excursion
+         (switch-to-buffer (get-buffer-create " *before*"))
+         (roost-open-task (roost-test--task))
+         (switch-to-buffer (get-buffer-create " *pager*"))
+         (funcall callback (roost-test--task))
+         (should-not displayed)
+         (roost-open-task (roost-test--task))
+         (funcall callback (roost-test--task))
+         (should (equal displayed "0123456789abcdef")))
+       (kill-buffer " *before*")
+       (kill-buffer " *pager*")))))
+
 (ert-deftest roost-create-and-resume-callbacks-retain-remote-host ()
   (roost-test--isolated
    (let (opened)

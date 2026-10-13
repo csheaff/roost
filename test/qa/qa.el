@@ -16,6 +16,10 @@
 (require 'ert)
 (require 'roost)
 
+(declare-function tmux-control-pause-log-mode "tmux-control" (&optional arg))
+(declare-function tmux-control--pause-log-took "tmux-control" (start what))
+(defvar tmux-control--pause-log)
+(defvar tmux-control-pause-log-threshold)
 (declare-function tmux-control-buffer-host "tmux-control" ())
 (declare-function tmux-control-buffer-socket-name "tmux-control" ())
 (declare-function tmux-control-buffer-session "tmux-control" ())
@@ -49,6 +53,36 @@ process filters and sentinels, and hooks, which never reach a command."
           (push (match-string 0) found))
         (setq qa--messages-seen (point-max)))
       found)))
+
+(defvar qa--pauses-seen nil
+  "The latest of tmux-control's pause notes `qa-take-pauses' has returned.")
+
+(defun qa--own-request (execute &rest arguments)
+  "Run EXECUTE with ARGUMENTS, a request from qa.py, as work of its own.
+The pause log then blames qa.py's requests, such as the sweep, for the
+pauses they make, which `qa-take-pauses' leaves out."
+  (let ((start (float-time)))
+    (unwind-protect
+        (apply execute arguments)
+      (tmux-control--pause-log-took start (lambda () "qa.py's own request")))))
+
+(defun qa-watch-pauses ()
+  "Note each pause of a second or more, if tmux-control can, and say whether it can."
+  (when (fboundp 'tmux-control-pause-log-mode)
+    (setq tmux-control-pause-log-threshold 1.0)
+    (tmux-control-pause-log-mode 1)
+    (advice-add 'server-execute :around #'qa--own-request)
+    t))
+
+(defun qa-take-pauses ()
+  "The pauses noted since the last call, oldest first, but qa.py's own."
+  (when (boundp 'tmux-control--pause-log)
+    (let ((new (seq-take-while (lambda (note) (not (eq note qa--pauses-seen)))
+                               tmux-control--pause-log)))
+      (when tmux-control--pause-log
+        (setq qa--pauses-seen (car tmux-control--pause-log)))
+      (seq-remove (lambda (note) (string-match-p "qa\\.py's own request took" note))
+                  (reverse new)))))
 
 (defun qa-take-errors ()
   "Every error since the last call, oldest first, and forget them."

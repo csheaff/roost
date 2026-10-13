@@ -230,6 +230,8 @@ class Run:
             except RuntimeError as error:
                 sys.exit("Couldn't load %s: %s" % (file, error))
         self.emacs.eval("(qa-take-errors)")
+        if self.emacs.eval("(qa-watch-pauses)") != "t":
+            self.notes.add("This tmux-control has no pause log, so pauses go unchecked")
 
     def stop(self):
         if self.args.keep:
@@ -349,6 +351,8 @@ class Run:
         self.settle()
         screen = self.screen()
         problems = ["Error: " + error for error in self.emacs.json("(json-encode (vconcat (qa-take-errors)))")]
+        problems += ["Emacs stopped responding: " + pause
+                     for pause in self.emacs.json("(json-encode (vconcat (qa-take-pauses)))")]
         for name in screen["buffers"]:
             if name == "*Backtrace*":
                 problems.append("A backtrace is showing")
@@ -1127,9 +1131,46 @@ def unreachable(qa, repo):
         qa.emacs.eval("(progn (setq roost-hosts '(nil)) (clrhash roost--errors) (roost--redraw) t)")
 
 
+def pager(screen):
+    """The window of tmux-control's scrollback pager, or None."""
+    return next((w for w in screen["windows"] if w["mode"] == "tmux-control-scrollback-mode"), None)
+
+
+@journey("Scrollback through a long reply")
+def scrollback(qa, repo):
+    """Read back through an agent's long reply, colors, links and all, in
+    tmux-control's pager, and return: Emacs must answer all the while."""
+    # Within the 2000 lines of history tmux keeps by default.
+    name = start_task(qa, "long 1500")
+    open_task(qa, name)
+    qa.keys("C-c C-e")
+    qa.wait("the pager", lambda s: "LONG DONE" in (pager(s) or {}).get("text", ""))
+    qa.step("Its history, in a pager", expect=[
+        ("at the end of the reply", lambda s: "LONG 1500" in pager(s)["text"]),
+        ("in place of the terminal", lambda s: pager(s)["selected"] and not terminals(s))])
+    # The pager loads more as you near its top, until there is no more.
+    for _ in range(20):
+        text = (pager(qa.screen()) or {}).get("text", "")
+        if "LONG 0001" in text:
+            break
+        qa.keys("M-<")
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and (pager(qa.screen()) or {}).get("text", "") == text:
+            time.sleep(0.3)
+        if (pager(qa.screen()) or {}).get("text", "") == text:
+            break
+    qa.step("The top of its history", expect=[
+        ("the reply's first line", lambda s: "LONG 0001" in pager(s)["text"])])
+    qa.keys("q")
+    qa.wait("the terminal again", lambda s: selected_terminal(s))
+    qa.step("Back to the live terminal", expect=[
+        ("the pager gone", lambda s: not pager(s)),
+        ("the reply's end on screen", lambda s: "LONG DONE" in selected_terminal(s)["text"])])
+
+
 JOURNEYS = [sweep, answer, fold, resize, merge, review, panes, shell,
             dashboard, stop_resume, retire, send, update, restart, search, frames, org, tabs,
-            forget, fork, exits, unreachable]
+            forget, fork, exits, unreachable, scrollback]
 
 
 def main():
