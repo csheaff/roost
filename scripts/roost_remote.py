@@ -1341,9 +1341,13 @@ def stop(store, task, inventory=None):
     inventory = inventory if inventory is not None else inventory_for(task)
     if owned_pane(task, inventory):
         tmux(task["socket"], "kill-window", "-t", task["windowId"])
+    # Stopping says nothing new: an agent you had seen stays seen.
+    was_seen = bool(task.get("seen")) and task.get("seen") == task.get("updatedAt")
     # A pane ID owned by something else means ours is gone (for example after a
     # tmux server restart reused the ID): never touch it, and forget the IDs.
     task.update(status="stopped", updatedAt=now(), paneId=None, windowId=None)
+    if was_seen:
+        task["seen"] = task["updatedAt"]
     task.pop("shellPaneId", None)
     store.save(task)
     task["live"] = False

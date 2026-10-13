@@ -4342,7 +4342,8 @@ not fail, and has said nothing you haven't seen."
        (not (roost--agent-work-left task))
        (not (member (roost--field task 'status)
                     '("starting" "running" "permission" "background" "failed" "crashed")))
-       (or (equal (roost--field task 'status) "stopped") (roost--seen-p task))))
+       ;; Stopped too: its host keeps it seen only if it was before.
+       (roost--seen-p task)))
 
 (defun roost--status-face (status)
   "Face for STATUS."

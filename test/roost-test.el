@@ -4176,8 +4176,11 @@ Read from the layout transient keeps, whose form varies by version."
      (should (equal (roost--next-step later) "Its pull request is merged, but not its commits since: m merges them"))
      (should (roost--action-applies-p later 'roost-merge-retire))
      (should-not (roost--action-applies-p merged 'roost-merge-retire))
-     ;; Merged into its branch without GitHub, by an agent that has stopped.
+     ;; Merged into its branch without GitHub, by an agent that has stopped:
+     ;; once you have seen what it said last.
      (let ((stopped (funcall cache "5555555555555555" '(landed . t) '(status . "stopped") '(live))))
+       (should (equal (roost--display-status stopped) "stopped"))
+       (setq stopped (funcall cache "5555555555555555" seen '(landed . t) '(status . "stopped") '(live)))
        (should (equal (roost--display-status stopped) "merged"))
        (should (equal (roost--next-step stopped) "Its work is merged; x retires it")))
      (should (equal (roost--display-status (funcall cache "6666666666666666" '(landed . t) '(status . "running")))

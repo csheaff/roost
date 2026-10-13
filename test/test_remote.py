@@ -2080,6 +2080,16 @@ elif args[:2] == ["auth", "status"]:
         self.assertTrue(self.request("update", id=task["id"])["ok"])
         self.assertIs(self.request("list", full=True)["result"][0]["landed"], False)
 
+    def test_stopping_an_agent_you_had_seen_keeps_it_seen(self):
+        store = roost.Store(str(self.state))
+        seen, unseen = self.create(name="seen"), self.create(name="unseen")
+        self.assertTrue(self.request("seen", id=seen["id"], updatedAt=store.read(seen["id"])["updatedAt"])["ok"])
+        for task in (seen, unseen):
+            self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        stopped = store.read(seen["id"])
+        self.assertEqual(stopped["seen"], stopped["updatedAt"])
+        self.assertNotEqual(store.read(unseen["id"]).get("seen"), store.read(unseen["id"])["updatedAt"])
+
     def test_asking_github_keeps_within_its_deadline(self):
         # A stalled GitHub must not hold up the reply past Emacs's wait for it.
         self.github()
