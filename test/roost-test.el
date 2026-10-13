@@ -343,6 +343,61 @@
        (kill-buffer terminal)
        (kill-buffer magit)))))
 
+(ert-deftest roost-an-ended-terminal-gives-way-to-no-other-tasks ()
+  ;; Stopping a task put another task's terminal, shown earlier in the
+  ;; window, back in its place, beside the stopped task's panel.
+  (roost-test--isolated
+   (let ((ended (generate-new-buffer "ended terminal"))
+         (other (generate-new-buffer "other terminal"))
+         (code (generate-new-buffer "code.py")))
+     (unwind-protect
+         (roost-test--with-tmux-buffers
+          (let ((task (roost--cache-task "dev" (roost-test--task "1111111111111111")))
+                (another (roost--cache-task "dev" (append '((session . "roost-another"))
+                                                          (roost-test--task "2222222222222222")))))
+            (with-current-buffer ended
+              (setq major-mode 'tmux-control-mode
+                    roost-test--tmux (list :host "dev" :socket "main" :session (roost--field task 'session))))
+            (with-current-buffer other
+              (setq major-mode 'tmux-control-mode
+                    roost-test--tmux (list :host "dev" :socket "main" :session (roost--field another 'session))))
+            (save-window-excursion
+              (delete-other-windows)
+              (switch-to-buffer code)
+              (switch-to-buffer other)
+              (switch-to-buffer ended)
+              (roost--discard-terminal (list ended))
+              (should-not (buffer-live-p ended))
+              (should (eq (window-buffer) code)))))
+       (mapc (lambda (b) (when (buffer-live-p b) (kill-buffer b))) (list ended other code))))))
+
+(ert-deftest roost-discarding-points-to-the-key-for-the-work-it-holds ()
+  ;; Work not yet committed can't be merged: it says how to commit it.
+  (roost-test--isolated
+   (pcase-dolist (`(,fields . ,hint) '((((dirty . t) (ahead . 0)) . "r commits it in Magit")
+                                       (((dirty) (ahead . 2)) . "m merges it")))
+     (let ((task (roost--cache-task "dev" (append fields (roost-test--task nil "ready"))))
+           asked)
+       (cl-letf (((symbol-function 'y-or-n-p) (lambda (prompt) (setq asked prompt) nil)))
+         (roost-retire task))
+       (should (string-match-p (regexp-quote (format "(%s).  Discard it?" hint)) asked))))))
+
+(ert-deftest roost-a-dashboard-heading-keeps-the-end-of-a-long-path ()
+  (should (equal (roost--truncate-start "~/code/roost" 20) "~/code/roost"))
+  (should (equal (roost--truncate-start "/a/very/long/path/to/notes" 10) "…/to/notes"))
+  (roost-test--isolated
+   (roost--cache-task "dev" (append '((repo . "/home/user/a/very/long/path/that/goes/on/to/the/notes"))
+                                    (roost-test--task)))
+   (with-temp-buffer
+     (roost-dashboard-mode)
+     (cl-letf (((symbol-function 'roost--usable-width) (lambda (_) 40)))
+       (let ((window (selected-window)))
+         (set-window-buffer window (current-buffer))
+         (roost--render-dashboard)))
+     (goto-char (point-min))
+     (should (re-search-forward "^dev · notes  ….*/notes$" nil t))
+     (should (<= (string-width (buffer-substring (line-beginning-position) (line-end-position))) 40)))))
+
 (ert-deftest roost-a-shared-session-is-no-tasks-terminal ()
   ;; Tasks from before each had a session of its own can share one.
   (roost-test--isolated

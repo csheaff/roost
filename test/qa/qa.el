@@ -99,6 +99,23 @@ The button must be on screen.  Return nil when it isn't."
                   (list (list 'down-mouse-1 posn) (list 'mouse-1 posn))))
     t))
 
+(defun qa-click-text (text &optional mode)
+  "Click with the mouse on the first TEXT on screen, in a window in MODE if given.
+Return nil when it isn't on screen."
+  (let (found)
+    (dolist (window (qa--windows))
+      (unless found
+        (with-current-buffer (window-buffer window)
+          (when (or (null mode) (derived-mode-p (intern mode)))
+            (save-excursion
+              (goto-char (window-start window))
+              (when (search-forward text (window-end window t) t)
+                (setq found (cons window (match-beginning 0)))))))))
+    (when-let* ((posn (and found (posn-at-point (cdr found) (car found)))))
+      (setq unread-command-events
+            (append unread-command-events (list (list 'down-mouse-1 posn) (list 'mouse-1 posn))))
+      t)))
+
 (defun qa-idle-p ()
   "Whether the input given so far has been taken."
   (and (null unread-command-events) (not executing-kbd-macro)))

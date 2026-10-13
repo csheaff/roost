@@ -2038,10 +2038,14 @@ empty one.  Opening the task reconnects the rest."
                     #'ignore)))
 
 (defun roost--discard-terminal (terminals)
-  "Kill TERMINALS, whose session ended, rather than leave them blank."
-  (dolist (buffer terminals)
-    (when (buffer-live-p buffer)
-      (let ((kill-buffer-query-functions nil))
+  "Kill TERMINALS, whose session ended, rather than leave them blank.
+The windows showing them go back to what they showed before, but not to
+another task's terminal: nobody asked for that task."
+  (let ((kill-buffer-query-functions nil)
+        (switch-to-prev-buffer-skip
+         (lambda (_window buffer _bury-or-kill) (roost--terminal-task buffer))))
+    (dolist (buffer terminals)
+      (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
 (defconst roost--action-messages
@@ -3995,8 +3999,14 @@ merges it instead."
   (setq task (roost--choose task))
   (let* ((name (roost--field task 'name))
          (offer (lambda ()
-                  (when (y-or-n-p (format "%s has work not merged into %s (m merges it).  Discard it? "
-                                          name (or (roost--field task 'integrationBranch) "its branch")))
+                  (when (y-or-n-p
+                         (substitute-command-keys
+                          (format "%s has work not merged into %s (%s).  Discard it? "
+                                  name (or (roost--field task 'integrationBranch) "its branch")
+                                  ;; m merges only committed work.
+                                  (if (roost--field task 'dirty)
+                                      "\\<roost-task-info-mode-map>\\[roost-review] commits it in Magit"
+                                    "\\<roost-task-info-mode-map>\\[roost-merge-retire] merges it"))))
                     (roost-discard task))))
          (retire (lambda ()
                    (roost--act task "retire" nil
@@ -4305,6 +4315,16 @@ The ellipsis takes the face of the text it follows."
            (start (string-trim-right
                    (roost--fit-width string (- columns (roost--text-width ellipsis))))))
       (concat start ellipsis))))
+
+(defun roost--truncate-start (string columns)
+  "STRING cut at its start with an ellipsis to fit COLUMNS, as shown."
+  (if (<= (roost--text-width string) columns)
+      string
+    (let ((start 0))
+      (while (and (< start (length string))
+                  (> (roost--text-width (concat "…" (substring string start))) columns))
+        (setq start (1+ start)))
+      (concat "…" (substring string start)))))
 
 (defun roost--words (line)
   "LINE split before each space, so that the pieces join to LINE again.
@@ -5798,14 +5818,20 @@ The mark stays where it was."
         (insert (roost--summary tasks) "\n")
         (dolist (group (roost--task-groups tasks))
           (let ((host (caar group)) (repo (cadar group)) (start (1+ (point))))
-            (insert roost--gap (propertize (format "%s · %s" (roost--host-label host)
-                                             (file-name-nondirectory (directory-file-name (or repo "?"))))
-                                     'face 'roost-heading)
-                    (propertize (concat "  " (roost--abbreviate-path (or repo "") host)) 'face 'roost-dim)
-                    (if (gethash host roost--errors)
-                        (propertize "  unreachable; showing the last known state" 'face 'roost-status-failed)
-                      "")
-                    "\n")
+            (let* ((heading (propertize (format "%s · %s" (roost--host-label host)
+                                                (file-name-nondirectory (directory-file-name (or repo "?"))))
+                                        'face 'roost-heading))
+                   (note (if (gethash host roost--errors)
+                             (propertize "  unreachable; showing the last known state" 'face 'roost-status-failed)
+                           ""))
+                   ;; A long path keeps its end, which names the project.
+                   (room (- width (roost--text-width heading) (roost--text-width note) 2)))
+              (insert roost--gap heading
+                      (if (< room 4) ""
+                        (propertize (concat "  " (roost--truncate-start
+                                                  (roost--abbreviate-path (or repo "") host) room))
+                                    'face 'roost-dim))
+                      note "\n"))
             ;; `c' on the heading starts a task in this project.
             (when repo
               (put-text-property start (point) 'roost-directory

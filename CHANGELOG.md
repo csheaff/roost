@@ -6,6 +6,13 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.8.1:
 
+- Stopping, retiring, merging or discarding a task gives its window back to
+  what it showed before, but never to another task's terminal: stopping one
+  task used to bring up another's, where `s` then resumed nothing. A
+  dashboard heading cuts a long project path at its start, keeping the end
+  that names the project, rather than running off the window. Discarding
+  work not yet committed points to `r` to commit it, not `m`, which merges
+  only commits. Nothing to do when upgrading.
 - When `m` merges the task whose terminal is on screen, the panel and the
   sidebar's marker follow the task whose terminal Emacs shows in its place;
   before, no panel came back until you opened a task. Opening a task marks

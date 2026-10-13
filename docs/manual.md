@@ -440,9 +440,11 @@ configuration with its own server, state directory and tmux socket, and
 `test/fake_claude.py` for Claude Code, so Git, tmux and the host helper are
 real and no model is called. Its journeys start a task from the menu, answer
 it in its terminal, fold and unfold a long prompt with the mouse, resize the
-frame, merge a commit, review a change in Magit and send a note, and work in
-the terminal with tmux-control's own keys: split a pane, open and move between
-tmux windows, and switch to another task and back. They press keys and click
+frame, merge a commit, review a change in Magit and send a note, work in the
+terminal with tmux-control's own keys (split a pane, open and move between
+tmux windows, switch to another task and back), use the dashboard, stop and
+resume an agent, retire a task or discard its work, send a prompt, bring a
+task up to date, and restart Emacs with agents at work. They press keys and click
 through Emacs's command loop. After each step it checks for Lisp errors, in
 commands, timers and process filters alike, for a backtrace, for lines of
 Roost's views cut off at the window's edge, and for another task's terminal

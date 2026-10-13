@@ -178,10 +178,21 @@ class Run:
 
     def start(self):
         repo = self.project()
-        init = self.configure(repo)
-        log = open(self.work / "emacs.log", "w")
+        self.init = self.configure(repo)
+        self.launch()
+        return repo
+
+    def restart(self):
+        """Quit Emacs, leaving tmux, the agents and Roost's state as they are,
+        and start it again, as after quitting yours."""
+        self.emacs.eval("(kill-emacs)", timeout=10) if self.process.poll() is None else None
+        self.process.wait(20)
+        self.launch()
+
+    def launch(self):
+        log = open(self.work / "emacs.log", "a")
         # No site-start.el either: nothing of this machine's own setup.
-        self.process = subprocess.Popen([self.args.emacs, "--no-site-file", "--init-directory", str(init)],
+        self.process = subprocess.Popen([self.args.emacs, "--no-site-file", "--init-directory", str(self.init)],
                                         stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                                         env=self.env)
         deadline = time.monotonic() + 60
@@ -207,7 +218,6 @@ class Run:
             except RuntimeError as error:
                 sys.exit("Couldn't load %s: %s" % (file, error))
         self.emacs.eval("(qa-take-errors)")
-        return repo
 
     def stop(self):
         if self.args.keep:
@@ -240,6 +250,12 @@ class Run:
     def click(self, label, occurrence=0):
         if self.emacs.eval("(qa-click %s %d)" % (lisp(label), occurrence)) != "t":
             raise Stuck("No button %r on screen to click" % label)
+        self.settle()
+
+    def click_text(self, text, mode=None):
+        """Click on TEXT, as shown, in a window in MODE if given."""
+        if self.emacs.eval("(qa-click-text %s %s)" % (lisp(text), lisp(mode) if mode else "nil")) != "t":
+            raise Stuck("No %r on screen to click" % text)
         self.settle()
 
     def settle(self, quiet=0.4):
@@ -623,13 +639,19 @@ def selected_terminal(screen):
     return next((w for w in screen["windows"] if w.get("terminal") and w["selected"]), None)
 
 
-def start_task(qa, prompt, prefix):
-    """Start a task with PROMPT and wait until it is ready; return its name."""
+def new_task(qa, prompt):
+    """Start a task with PROMPT from the menu; return its name once listed."""
+    before = {t["name"] for t in qa.screen()["tasks"]}
     qa.keys("C-c r c")
     qa.type(prompt)
     qa.keys("C-c C-c")
-    screen = qa.wait("the task " + prefix, lambda s: any(t["name"].startswith(prefix) for t in s["tasks"]))
-    name = next(t["name"] for t in screen["tasks"] if t["name"].startswith(prefix))
+    screen = qa.wait("the task for %r" % prompt[:30], lambda s: {t["name"] for t in s["tasks"]} - before)
+    return next(t["name"] for t in screen["tasks"] if t["name"] not in before)
+
+
+def start_task(qa, prompt, prefix=None):
+    """Start a task with PROMPT and wait until it is ready; return its name."""
+    name = new_task(qa, prompt)
     qa.status(name, "ready", "idle")
     return name
 
@@ -695,7 +717,147 @@ def panes(qa, repo):
         ("its panel back beside it", lambda s: panel_text(qa, s).startswith(first))])
 
 
-JOURNEYS = [sweep, answer, fold, resize, merge, review, panes]
+def panel_text(qa, screen):
+    """The docked panel's text, or else that of the first task panel on screen."""
+    docked = next((w for w in screen["windows"]
+                   if w["mode"] == "roost-task-info-mode" and w.get("side") == "right"), None)
+    return (docked or qa.window(screen, "roost-task-info-mode") or {}).get("text", "")
+
+
+def answer_yes(qa, name):
+    """Answer NAME's agent's permission prompt in its terminal, and wait until it is done."""
+    qa.status(name, "permission")
+    open_task(qa, name)
+    qa.type("yes\r")
+    qa.status(name, "ready", "idle")
+
+
+@journey("The dashboard")
+def dashboard(qa, repo):
+    name = start_task(qa, "Tidy the notes", "tidy-notes")
+    qa.keys("C-c r S")
+    qa.wait("the dashboard", lambda s: (qa.window(s, "roost-dashboard-mode") or {}).get("selected"))
+    qa.step("The dashboard", expect=[
+        ("it lists the task", lambda s: name in qa.window(s, "roost-dashboard-mode")["text"])])
+    qa.keys("g")
+    qa.step("Refreshed")
+    # To its row, among the others.
+    qa.keys("C-s")
+    qa.type(name)
+    qa.keys("RET")
+    qa.keys("i")
+    qa.wait("the task's details", lambda s: panel_text(qa, s).startswith(name))
+    qa.step("Its details", expect=[("they name the task", lambda s: panel_text(qa, s).startswith(name))])
+    qa.keys("C-c r S")
+    qa.wait("the dashboard", lambda s: (qa.window(s, "roost-dashboard-mode") or {}).get("selected"))
+    qa.keys("C-s")
+    qa.type(name)
+    qa.keys("RET RET")
+    qa.wait("its terminal", lambda s: (s.get("task") or {}).get("name") == name and selected_terminal(s))
+    qa.step("RET opens it", expect=[("its panel beside it", lambda s: panel_text(qa, s).startswith(name))])
+
+
+@journey("Stop and resume an agent")
+def stop_resume(qa, repo):
+    name = start_task(qa, "Wait for me", "wait-me")
+    open_task(qa, name)
+    qa.keys("C-c r K")
+    qa.wait("the question", lambda s: s["prompt"])
+    qa.step("Stopping asks first", expect=[("it names the task", lambda s: name in (s["prompt"] or ""))])
+    qa.type("y")
+    qa.status(name, "stopped")
+    qa.step("Stopped", expect=[
+        ("the panel says how to resume", lambda s: "resumes its conversation" in panel_text(qa, s))])
+    # In the panel, as it says: elsewhere, such as a dashboard row, s is
+    # that row's task's.
+    qa.click_text(name, "roost-task-info-mode")
+    qa.keys("s")
+    qa.wait("its agent again", lambda s: (qa.task(s, name) or {}).get("status") not in (None, "stopped"))
+    qa.status(name, "ready", "idle")
+    qa.step("Resumed", expect=[
+        ("its terminal", lambda s: (s.get("task") or {}).get("name") == name and selected_terminal(s)),
+        ("the panel no longer says to resume", lambda s: "resumes its conversation" not in panel_text(qa, s))])
+
+
+@journey("Retire a task, or keep its work")
+def retire(qa, repo):
+    clean = start_task(qa, "Look around", "look-around")
+    open_task(qa, clean)
+    qa.keys("C-c r x")
+    qa.wait("the question", lambda s: s["prompt"])
+    qa.step("Retiring asks first", expect=[
+        ("it says nothing would be lost", lambda s: "Nothing in them would be lost" in (s["prompt"] or ""))])
+    qa.type("y")
+    qa.wait("the task to go", lambda s: qa.task(s, clean) is None, timeout=30)
+    qa.step("A task with no work retires", expect=[
+        ("the echo area says so", lambda s: "Retired" in (s["echo"] or ""))])
+    dirty = new_task(qa, "ask touch scratch.txt")
+    answer_yes(qa, dirty)
+    qa.keys("C-c r x")
+    qa.wait("the question", lambda s: s["prompt"])
+    qa.step("Work not merged: it asks", expect=[
+        ("it offers to discard it", lambda s: "Discard" in (s["prompt"] or ""))])
+    qa.type("n")
+    qa.step("Kept", expect=[("the task is still there", lambda s: qa.task(s, dirty))])
+    qa.keys("C-c r x")
+    qa.wait("the question", lambda s: s["prompt"])
+    qa.type("y")
+    qa.wait("the name to type", lambda s: s["prompt"] and dirty in s["prompt"])
+    qa.step("Discarding asks for its name", expect=[
+        ("the prompt names it", lambda s: dirty in (s["prompt"] or ""))])
+    qa.type(dirty + "\r")
+    qa.wait("the task to go", lambda s: qa.task(s, dirty) is None, timeout=30)
+    qa.step("Discarded", expect=[
+        ("its branch is gone", lambda s: not qa.git(repo, "branch", "--list", "roost/" + dirty + "*"))])
+
+
+@journey("Send a prompt")
+def send(qa, repo):
+    name = start_task(qa, "Say hi", "say-hi")
+    open_task(qa, name)
+    qa.keys("C-c r e")
+    qa.wait("the prompt", lambda s: s["prompt"])
+    qa.step("A prompt to send", expect=[("it names the task", lambda s: name in (s["prompt"] or ""))])
+    qa.type("How are you?\r")
+    qa.wait("the agent to get it", lambda s: any("PROMPT How are you?" in w["text"] for w in terminals(s)))
+    qa.status(name, "ready", "idle")
+    qa.step("Sent", expect=[("the echo area says so", lambda s: "Sent to " + name in (s["echo"] or ""))])
+
+
+@journey("Bring a task up to date")
+def update(qa, repo):
+    behind = start_task(qa, "Stay behind", "stay-behind")
+    ahead = new_task(qa, "ask env sh -c \"printf 'x\\n' > AHEAD.md && git add AHEAD.md && git commit -qm 'Go ahead'\"")
+    answer_yes(qa, ahead)
+    qa.wait("its commit", lambda s: "Committed" in panel_text(qa, s))
+    qa.keys("C-c r m")
+    qa.wait("the question", lambda s: s["prompt"])
+    qa.type("y")
+    qa.wait("the task to go", lambda s: qa.task(s, ahead) is None)
+    open_task(qa, behind)
+    qa.wait("main to have moved on", lambda s: "has moved on" in panel_text(qa, s))
+    qa.step("Behind main", expect=[("the panel says u brings it up", lambda s: "u" in panel_text(qa, s))])
+    qa.keys("C-c r u")
+    qa.wait("it to catch up", lambda s: "has moved on" not in panel_text(qa, s))
+    qa.step("Up to date", expect=[
+        ("the panel no longer says it is behind", lambda s: "has moved on" not in panel_text(qa, s))])
+
+
+@journey("Restart Emacs")
+def restart(qa, repo):
+    name = start_task(qa, "Remember me", "remember-me")
+    qa.restart()
+    qa.wait("the task, after the restart", lambda s: qa.task(s, name))
+    qa.step("After a restart", expect=[
+        ("the sidebar lists it", lambda s: name in (qa.window(s, "roost-sidebar-list-mode") or {}).get("text", ""))])
+    open_task(qa, name)
+    qa.step("Its terminal again", expect=[
+        ("the agent's earlier output", lambda s: any("PROMPT Remember me" in w["text"] for w in terminals(s))),
+        ("its panel beside it", lambda s: panel_text(qa, s).startswith(name))])
+
+
+JOURNEYS = [sweep, answer, fold, resize, merge, review, panes,
+            dashboard, stop_resume, retire, send, update, restart]
 
 
 def main():
