@@ -6,6 +6,9 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.8.1:
 
+- In search results, `RET` on a message from a task that is gone, or `TAB`
+  on a message its line already shows whole, says so, rather than
+  repeating the message under it. Nothing to do when upgrading.
 - A task no longer goes back to what its agent did before, such as
   running or asking for permission, for a few seconds after its turn
   ends. A refresh that took a while could arrive after a newer one and

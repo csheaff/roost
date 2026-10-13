@@ -6301,6 +6301,17 @@ IDs are lists made afresh by each redraw, so compare them with `equal'."
   "The result on this line: (HOST RESULT HIT), or nil."
   (get-text-property (point) 'roost-search-hit))
 
+(defun roost--search-whole-p ()
+  "Whether the message on this line shows whole on it, folded.
+Then showing more of it would only repeat it."
+  (when-let* ((hit (nth 2 (roost--search-hit))))
+    (let ((window (get-buffer-window (current-buffer))))
+      (and (not (member (get-text-property (point) 'roost-search-id) roost--search-expanded))
+           (equal (alist-get 'text hit) (alist-get 'snippet hit))
+           (or (not window)
+               (< (string-width (buffer-substring (line-beginning-position) (line-end-position)))
+                  (window-body-width window)))))))
+
 (defun roost-search-open ()
   "Open the live task of the message on this line, or show more of the message."
   (interactive)
@@ -6311,6 +6322,9 @@ IDs are lists made afresh by each redraw, so compare them with `equal'."
            (roost--refresh-host (car key) nil (cdr key))
            (user-error "Roost is still fetching the tasks on %s; try again in a moment"
                        (roost--host-label (car key))))
+          ((roost--search-whole-p)
+           (user-error "Nothing to open: %s is no longer a task, and this is the whole message"
+                       (alist-get 'name (nth 1 (roost--search-hit)))))
           ((roost--search-hit) (roost-search-toggle))
           (t (user-error "Put point on a message")))))
 
@@ -6320,6 +6334,8 @@ Hosts send a message's first 1,500 characters."
   (interactive)
   (let ((id (or (get-text-property (point) 'roost-search-id)
                 (user-error "Put point on a message"))))
+    (when (roost--search-whole-p)
+      (user-error "This is the whole message"))
     (setq roost--search-expanded (if (member id roost--search-expanded)
                                      (delete id roost--search-expanded)
                                    (cons id roost--search-expanded)))

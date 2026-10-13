@@ -1425,6 +1425,10 @@
                ;; One not fetched yet can't open until it is, and Roost fetches it.
                (roost-search-next)
                (should (string-match-p "Fresh CSV" (thing-at-point 'line)))
+               ;; A message its line shows whole has no more to show.
+               (let ((shown (buffer-string)))
+                 (should-error (roost-search-toggle) :type 'user-error)
+                 (should (equal (buffer-string) shown)))
                (setq fetched nil)
                (should-error (roost-search-open) :type 'user-error)
                (should (equal fetched '("dev")))
@@ -1437,6 +1441,14 @@
                (roost--redraw)
                (should (string-match-p "^fresh task  dev · shop  running$" (buffer-string)))
                (should (string-match-p "^gone task  dev · shop  past task$" (buffer-string)))
+               ;; Nor can a past task's, which says there is nothing to open.
+               (save-excursion
+                 (goto-char (point-min))
+                 (search-forward "Gone CSV")
+                 (let ((shown (buffer-string)))
+                   (should (string-match-p "Nothing to open: gone task is no longer a task"
+                                           (cadr (should-error (roost-search-open) :type 'user-error))))
+                   (should (equal (buffer-string) shown))))
                (should (string-match-p "Fresh CSV" (thing-at-point 'line)))
                ;; Later lists redraw it too, so statuses stay current.
                (roost--apply-snapshot "dev" (list (roost-test--task)
