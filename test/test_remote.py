@@ -510,7 +510,7 @@ class Lifecycle(unittest.TestCase):
         merged_earlier = self.commit_in(task)
         self.assertTrue(self.request("pr", id=task["id"], title="Earlier")["ok"])
         # GitHub merged the pull request; the task went on to commit again.
-        (self.gh_dir / "view.json").write_text(json.dumps(dict(state="MERGED", headRefOid=merged_earlier)))
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(number=7, state="MERGED", headRefOid=merged_earlier)]))
         wt = Path(task["worktree"])
         (wt / "hello").write_text("two\n")
         self.git("commit", "-qam", "Second", cwd=wt)
@@ -752,11 +752,12 @@ class Lifecycle(unittest.TestCase):
         # git status would refresh the index under its lock, and an agent
         # committing at that moment would fail.
         task = self.create()
+        self.commit_in(task)
         (Path(task["worktree"]) / "hello").write_text("changed\n")
         calls = []
         real = roost.execute
         with patch.object(roost, "execute", lambda argv, **kw: calls.append(argv) or real(argv, **kw)):
-            roost.add_git_stats([roost.Store(str(self.state)).read(task["id"])], pull_requests=False)
+            roost.add_git_stats([roost.Store(str(self.state)).read(task["id"])])
         statuses = [argv for argv in calls if "status" in argv]
         self.assertTrue(statuses)
         for argv in calls:
@@ -1649,14 +1650,19 @@ def canned(name, default=None):
         sys.stderr.write("canned " + name + " missing\\n")
         sys.exit(1)
     print(default)
+if os.path.exists(os.path.join(directory, "slow")):
+    import time
+    time.sleep(float(open(os.path.join(directory, "slow")).read()))
 if args[:2] == ["pr", "list"]:
-    canned("list.json", "[]")
+    # Filtered by --state as GitHub would; a canned entry without one is open.
+    path = os.path.join(directory, "list.json")
+    listed = json.load(open(path)) if os.path.exists(path) else []
+    state = args[args.index("--state") + 1].upper() if "--state" in args else "OPEN"
+    print(json.dumps([pr for pr in listed if state == "ALL" or pr.get("state", "OPEN") == state]))
 elif args[:2] == ["pr", "create"]:
     if os.path.exists(os.path.join(directory, "linger")):
         os.system("sleep 1.5 > /dev/null 2>&1 &")
     print("https://github.com/octo/repo/pull/7")
-elif args[:2] == ["pr", "view"]:
-    canned("view.json")
 elif args[:2] == ["issue", "list"]:
     canned("issues.json", "[]")
 elif args[:2] == ["auth", "status"]:
@@ -1802,29 +1808,33 @@ elif args[:2] == ["auth", "status"]:
         record = store.read(task["id"])
         record["pr"] = dict(number=7, url="https://github.com/octo/repo/pull/7")
         store.save(record)
-        (self.gh_dir / "view.json").write_text(json.dumps(dict(
-            state="OPEN", isDraft=True, reviewDecision="APPROVED", headRefOid=tip, mergedAt=None,
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(
+            number=7, url="https://github.com/octo/repo/pull/7",
+            state="OPEN", isDraft=True, reviewDecision="APPROVED", headRefOid=tip,
             statusCheckRollup=[
                 dict(__typename="CheckRun", status="COMPLETED", conclusion="SUCCESS"),
                 dict(__typename="CheckRun", status="COMPLETED", conclusion="SKIPPED"),
                 dict(__typename="CheckRun", status="COMPLETED", conclusion="FAILURE"),
                 dict(__typename="CheckRun", status="IN_PROGRESS", conclusion=""),
                 dict(__typename="StatusContext", state="PENDING"),
-                dict(__typename="StatusContext", state="SUCCESS")])))
+                dict(__typename="StatusContext", state="SUCCESS")])]))
         listed = self.request("list", full=True)["result"][0]
         self.assertEqual(listed["prStatus"], dict(
             state="OPEN", draft=True, review="APPROVED", head=tip,
             checks=dict(passing=3, failing=1, pending=2)))
         self.assertEqual(self.gh_calls()[-1],
-                         ["pr", "view", "7", "--json",
-                          "state,isDraft,reviewDecision,statusCheckRollup,headRefOid,mergedAt"])
+                         ["pr", "list", "--head", task["branch"], "--state", "all", "--limit", "10", "--json",
+                          "number,url,state,isDraft,reviewDecision,statusCheckRollup,headRefOid"])
         self.assertNotIn("prStatus", store.read(task["id"]))
+        # What it shows is recorded, for views that ask GitHub nothing.
+        self.assertEqual(store.read(task["id"])["pr"], dict(number=7, url="https://github.com/octo/repo/pull/7",
+                                                            state="OPEN", head=tip))
         self.assertNotIn("prStatus", self.request("list")["result"][0])
         # Refreshing an active agent's changes leaves GitHub alone.
         calls = len(self.gh_calls())
         self.assertNotIn("prStatus", self.request("list", full=[task["id"]])["result"][0])
         self.assertEqual(len(self.gh_calls()), calls)
-        (self.gh_dir / "view.json").unlink()
+        (self.gh_dir / "list.json").unlink()
         self.assertNotIn("prStatus", self.request("list", full=True)["result"][0])
 
     def test_retire_accepts_a_squash_merged_pull_request_and_deletes_the_remote_branch(self):
@@ -1834,15 +1844,15 @@ elif args[:2] == ["auth", "status"]:
         self.assertTrue(self.request("pr", id=task["id"], title="Squash")["ok"])
         self.git("merge", "--squash", task["branch"])
         self.git("commit", "-qm", "Squash (#7)")
-        view = self.gh_dir / "view.json"
+        listed = self.gh_dir / "list.json"
         # The task committed again after the merge: its branch must be kept.
-        view.write_text(json.dumps(dict(state="MERGED", headRefOid="0" * 40)))
+        listed.write_text(json.dumps([dict(number=7, state="MERGED", headRefOid="0" * 40)]))
         reply = self.request("retire", id=task["id"])
         self.assertIn("unmerged commits", reply["error"])
         self.assertTrue(Path(task["worktree"]).exists())
-        view.write_text(json.dumps(dict(state="OPEN", headRefOid=tip)))
+        listed.write_text(json.dumps([dict(number=7, state="OPEN", headRefOid=tip)]))
         self.assertFalse(self.request("retire", id=task["id"])["ok"])
-        view.write_text(json.dumps(dict(state="MERGED", headRefOid=tip)))
+        listed.write_text(json.dumps([dict(number=7, state="MERGED", headRefOid=tip)]))
         # gh is asked once, with the registry lock released; retire never calls it.
         observed = []
         original = roost.gh
@@ -1854,7 +1864,7 @@ elif args[:2] == ["auth", "status"]:
             return original(*args, **kwargs)
         with patch.object(roost, "gh", probe):
             reply = self.request("retire", id=task["id"], mergedHead=tip)
-        self.assertEqual(observed, [("pr", "view")])
+        self.assertEqual(observed, [("pr", "list")])
         self.assertTrue(reply["ok"], reply)
         self.assertNotIn("remoteCleanup", reply["result"])
         self.assertFalse(Path(task["worktree"]).exists())
@@ -1869,8 +1879,294 @@ elif args[:2] == ["auth", "status"]:
         self.git("branch", "-D", task["branch"], cwd=self.origin)
         self.git("merge", "--squash", task["branch"])
         self.git("commit", "-qm", "Squash (#7)")
-        (self.gh_dir / "view.json").write_text(json.dumps(dict(state="MERGED", headRefOid=tip)))
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(number=7, state="MERGED", headRefOid=tip)]))
         self.assertTrue(self.request("retire", id=task["id"])["ok"])
+
+    def push(self, task):
+        self.git("push", "-q", "-u", "origin", task["branch"], cwd=Path(task["worktree"]))
+
+    def test_list_learns_the_pull_request_an_agent_opened(self):
+        self.github()
+        task = self.create()
+        base = task["baseCommit"]
+        store = roost.Store(str(self.state))
+        # Not pushed yet: GitHub is not asked.
+        tip = self.commit_in(task)
+        self.request("list", full=True)
+        self.assertEqual(self.gh_calls(), [])
+        self.push(task)
+        url = "https://github.com/octo/repo/pull/%d"
+        (self.gh_dir / "list.json").write_text(json.dumps([
+            # Another task's of the same name, merged before this one started.
+            dict(number=2, url=url % 2, state="MERGED", headRefOid=base),
+            # Someone else's branch of that name, with commits not here.
+            dict(number=5, url=url % 5, state="CLOSED", headRefOid="f" * 40),
+            dict(number=9, url=url % 9, state="OPEN", headRefOid=tip)]))
+        listed = self.request("list", full=True)["result"][0]
+        self.assertEqual(listed["pr"], dict(number=9, url=url % 9, state="OPEN", head=tip))
+        self.assertEqual(listed["prStatus"]["state"], "OPEN")
+        self.assertIs(listed["landed"], False)
+        self.assertEqual(store.read(task["id"])["pr"], listed["pr"])
+        # Background polls ask GitHub only when told to.
+        calls = len(self.gh_calls())
+        quiet = self.request("list")["result"][0]
+        self.assertEqual(len(self.gh_calls()), calls)
+        self.assertNotIn("landed", quiet)
+        self.assertEqual(quiet["pr"]["number"], 9)
+        # Merged on GitHub as a squash: Git alone can't tell.
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(number=9, url=url % 9, state="MERGED",
+                                                                headRefOid=tip)]))
+        polled = self.request("list", pullRequests=True)["result"][0]
+        self.assertEqual(len(self.gh_calls()), calls + 1)
+        self.assertEqual((polled["prStatus"]["state"], polled["landed"]), ("MERGED", True))
+        # Measured with it, as one to retire must be.
+        self.assertIs(polled["dirty"], False)
+        self.assertEqual(store.read(task["id"])["pr"]["state"], "MERGED")
+        # A commit after the merge is new work, and measuring it needs no GitHub.
+        again = self.commit_in(task, "more")
+        calls = len(self.gh_calls())
+        self.assertIs(self.request("list", full=[task["id"]])["result"][0]["landed"], False)
+        self.assertEqual(len(self.gh_calls()), calls)
+        # Its second pull request shows, and its merge lands the task again.
+        (self.gh_dir / "list.json").write_text(json.dumps([
+            dict(number=11, url=url % 11, state="OPEN", headRefOid=again),
+            dict(number=9, url=url % 9, state="MERGED", headRefOid=tip)]))
+        listed = self.request("list", full=True)["result"][0]
+        self.assertEqual((listed["pr"]["number"], listed["landed"]), (11, False))
+        (self.gh_dir / "list.json").write_text(json.dumps([
+            dict(number=12, url=url % 12, state="CLOSED", headRefOid=again),
+            dict(number=11, url=url % 11, state="MERGED", headRefOid=again),
+            dict(number=9, url=url % 9, state="MERGED", headRefOid=tip)]))
+        listed = self.request("list", full=True)["result"][0]
+        self.assertEqual((listed["pr"]["number"], listed["landed"]), (11, True))
+        # Without gh, what was recorded stands.
+        (self.gh_dir / "gh").unlink()
+        with patch.object(roost, "agent_path", lambda inherited: str(self.gh_dir)):
+            listed = self.request("list", full=True)["result"][0]
+        self.assertEqual((listed["pr"]["number"], listed["landed"]), (11, True))
+        self.assertNotIn("prStatus", listed)
+
+    def test_a_lookup_leaves_a_pull_request_recorded_meanwhile(self):
+        # Another Emacs, or P, recorded one while this lookup waited on GitHub.
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(number=9, state="OPEN", headRefOid=tip)]))
+        store = roost.Store(str(self.state))
+        newer = dict(number=10, url="https://github.com/octo/repo/pull/10", state="OPEN", head=tip)
+        original = roost.task_pull_requests
+
+        def meanwhile(*args, **kwargs):
+            prs = original(*args, **kwargs)
+            with store.locked():
+                record = store.read(task["id"])
+                record["pr"] = newer
+                store.save(record)
+            return prs
+
+        with patch.object(roost, "task_pull_requests", meanwhile):
+            listed = self.request("list", full=True)["result"][0]
+        self.assertEqual(store.read(task["id"])["pr"], newer)
+        self.assertEqual(listed["pr"], newer)
+        self.assertNotIn("prStatus", listed)
+
+    def test_a_lookup_that_found_what_was_recorded_still_leaves_a_newer_one(self):
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        url = "https://github.com/octo/repo/pull/%d"
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(number=9, url=url % 9, state="OPEN",
+                                                                headRefOid=tip)]))
+        store = roost.Store(str(self.state))
+        self.request("list", full=True)
+        newer = dict(number=10, url=url % 10, state="OPEN", head=tip)
+        original = roost.task_pull_requests
+
+        def meanwhile(*args, **kwargs):
+            prs = original(*args, **kwargs)
+            with store.locked():
+                record = store.read(task["id"])
+                record["pr"] = newer
+                store.save(record)
+            return prs
+
+        with patch.object(roost, "task_pull_requests", meanwhile):
+            listed = self.request("list", pullRequests=True)["result"][0]
+        self.assertEqual((store.read(task["id"])["pr"], listed["pr"]), (newer, newer))
+        self.assertNotIn("prStatus", listed)
+
+    def test_a_merge_found_on_github_comes_with_whether_the_task_is_clean(self):
+        # A file changed since the last measurement moves no Git stamp.
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        self.assertIs(self.request("list", full=True)["result"][0]["dirty"], False)
+        (Path(task["worktree"]) / "hello").write_text("edited since\n")
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(number=9, state="MERGED", headRefOid=tip)]))
+        polled = self.request("list", pullRequests=True)["result"][0]
+        self.assertEqual((polled["landed"], polled["dirty"]), (True, True))
+
+    def test_a_same_named_pull_request_on_main_is_not_a_task_with_no_work(self):
+        # Someone else's fork, with a branch of the same name at main's commit.
+        self.github()
+        task = self.create()
+        (self.repo / "later").write_text("later\n")
+        self.git("add", "later")
+        self.git("commit", "-qm", "Later on main")
+        self.assertTrue(self.request("update", id=task["id"])["ok"])
+        self.push(task)
+        tip = self.git("rev-parse", "main")
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(number=4, state="MERGED", headRefOid=tip)]))
+        listed = self.request("list", full=True)["result"][0]
+        self.assertNotIn("pr", listed)
+        self.assertIs(listed["landed"], False)
+        self.assertIsNone(roost.merged_pull_request_head(roost.Store(str(self.state)).read(task["id"])))
+
+    def test_a_pull_request_is_a_tasks_only_at_a_commit_it_made(self):
+        # Brought up to main's M, then committing T: another fork's PR at M is not its.
+        self.github()
+        task = self.create()
+        (self.repo / "later").write_text("later\n")
+        self.git("add", "later")
+        self.git("commit", "-qm", "Later on main")
+        self.assertTrue(self.request("update", id=task["id"])["ok"])
+        main = self.git("rev-parse", "main")
+        tip = self.commit_in(task)
+        self.push(task)
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(number=4, state="MERGED", headRefOid=main)]))
+        self.assertNotIn("pr", self.request("list", full=True)["result"][0])
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(number=4, state="MERGED", headRefOid=main),
+                                                           dict(number=6, state="OPEN", headRefOid=tip)]))
+        self.assertEqual(self.request("list", full=True)["result"][0]["pr"]["number"], 6)
+        # Rebased onto main and pushed again: the rebased tip is its own too.
+        (self.repo / "later2").write_text("later\n")
+        self.git("add", "later2")
+        self.git("commit", "-qm", "Later still on main")
+        self.git("rebase", "-q", "main", cwd=Path(task["worktree"]))
+        rebased = self.git("rev-parse", "HEAD", cwd=Path(task["worktree"]))
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(number=6, state="OPEN", headRefOid=rebased)]))
+        self.assertEqual(self.request("list", full=True)["result"][0]["pr"]["head"], rebased)
+        store = roost.Store(str(self.state))
+        record = store.read(task["id"])
+        del record["pr"]
+        store.save(record)
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(number=8, state="OPEN", headRefOid=rebased)]))
+        self.assertEqual(self.request("list", full=True)["result"][0]["pr"]["number"], 8)
+
+    def test_a_pull_request_merged_at_the_tip_counts_while_another_is_open(self):
+        # As when one went to a release branch and another, open, to main.
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(number=11, state="OPEN", headRefOid=tip),
+                                                           dict(number=10, state="MERGED", headRefOid=tip)]))
+        listed = self.request("list", full=True)["result"][0]
+        self.assertEqual((listed["pr"]["number"], listed["pr"]["mergedHead"], listed["landed"]), (11, tip, True))
+        # Retiring trusts it too when gh can't say.
+        (self.gh_dir / "gh").unlink()
+        with patch.object(roost, "agent_path", lambda inherited: str(self.gh_dir)):
+            self.assertEqual(roost.merged_pull_request_head(roost.Store(str(self.state)).read(task["id"])), tip)
+
+    def test_a_merge_at_the_tip_stays_when_a_later_lookup_lists_it_no_more(self):
+        # A branch with more than a page of pull requests.
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(number=3, state="MERGED", headRefOid=tip)]))
+        self.assertIs(self.request("list", full=True)["result"][0]["landed"], True)
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(number=n, state="CLOSED", headRefOid=tip)
+                                                           for n in range(20, 10, -1)]))
+        listed = self.request("list", full=True)["result"][0]
+        self.assertEqual((listed["pr"]["mergedHead"], listed["landed"]), (tip, True))
+        self.assertEqual(roost.merged_pull_request_head(roost.Store(str(self.state)).read(task["id"])), tip)
+
+    def test_without_a_reflog_a_task_brought_up_to_date_is_not_merged(self):
+        self.git("config", "core.logAllRefUpdates", "false")
+        task = self.create()
+        (self.repo / "later").write_text("later\n")
+        self.git("add", "later")
+        self.git("commit", "-qm", "Later on main")
+        self.assertTrue(self.request("update", id=task["id"])["ok"])
+        self.assertIs(self.request("list", full=True)["result"][0]["landed"], False)
+
+    def test_stopping_an_agent_you_had_seen_keeps_it_seen(self):
+        store = roost.Store(str(self.state))
+        seen, unseen = self.create(name="seen"), self.create(name="unseen")
+        self.assertTrue(self.request("seen", id=seen["id"], updatedAt=store.read(seen["id"])["updatedAt"])["ok"])
+        for task in (seen, unseen):
+            self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        stopped = store.read(seen["id"])
+        self.assertEqual(stopped["seen"], stopped["updatedAt"])
+        self.assertNotEqual(store.read(unseen["id"]).get("seen"), store.read(unseen["id"])["updatedAt"])
+
+    def test_asking_github_keeps_within_its_deadline(self):
+        # A stalled GitHub must not hold up the reply past Emacs's wait for it.
+        self.github()
+        tasks = [self.create(name="slow %d" % n) for n in range(3)]
+        for task in tasks:
+            self.commit_in(task)
+            self.push(task)
+        (self.gh_dir / "slow").write_text("10")
+        start = time.monotonic()
+        with patch.object(roost, "PULL_REQUEST_DEADLINE", 1.5):
+            listed = self.request("list", full=True)["result"]
+        self.assertLess(time.monotonic() - start, 6)
+        self.assertEqual([task.get("prStatus") for task in listed], [None] * 3)
+
+    def test_list_says_whether_a_tasks_work_is_merged_into_its_branch(self):
+        task = self.create()
+        self.assertIs(self.request("list", full=True)["result"][0]["landed"], False)  # Nothing committed.
+        # Brought up to date, it fast-forwards to main's commits, none of them its own.
+        (self.repo / "later").write_text("later\n")
+        self.git("add", "later")
+        self.git("commit", "-qm", "Later on main")
+        self.assertTrue(self.request("update", id=task["id"])["ok"])
+        self.assertEqual(self.git("rev-parse", "HEAD", cwd=Path(task["worktree"])), self.git("rev-parse", "main"))
+        self.assertIs(self.request("list", full=True)["result"][0]["landed"], False)
+        self.commit_in(task)
+        self.assertIs(self.request("list", full=True)["result"][0]["landed"], False)
+        self.git("merge", "-q", "--no-ff", "--no-edit", task["branch"])
+        self.assertIs(self.request("list", full=True)["result"][0]["landed"], True)
+        self.assertNotIn("landed", roost.Store(str(self.state)).read(task["id"]))
+        # Work merged in from a branch of the agent's own counts too.
+        other = self.create(name="merges a side branch")
+        wt = Path(other["worktree"])
+        self.git("checkout", "-q", "-b", "side", cwd=wt)
+        self.git("commit", "-q", "--allow-empty", "-m", "On the side", cwd=wt)
+        self.git("checkout", "-q", other["branch"], cwd=wt)
+        self.git("merge", "-q", "--no-ff", "--no-edit", "side", cwd=wt)
+        self.git("merge", "-q", "--no-ff", "--no-edit", other["branch"])
+        listed = {t["id"]: t for t in self.request("list", full=True)["result"]}
+        self.assertIs(listed[other["id"]]["landed"], True)
+
+    def test_retire_accepts_a_pull_request_its_agent_opened_and_github_squashed(self):
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        self.git("merge", "--squash", task["branch"])
+        self.git("commit", "-qm", "Squash (#9)")
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(number=9, state="MERGED", headRefOid=tip)]))
+        reply = self.request("retire", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(self.git("branch", "--list", task["branch"], cwd=self.origin), "")
+
+    def test_retire_trusts_a_recorded_merge_when_gh_cannot_say(self):
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(number=9, state="MERGED", headRefOid=tip)]))
+        self.assertIs(self.request("list", full=True)["result"][0]["landed"], True)
+        (self.gh_dir / "gh").unlink()
+        with patch.object(roost, "agent_path", lambda inherited: str(self.gh_dir)):
+            reply = self.request("retire", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
 
     def test_doctor_checks_the_github_cli(self):
         self.github()

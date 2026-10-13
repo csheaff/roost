@@ -2,6 +2,7 @@
 """Roost's host-side task manager. Standard library only; JSON over stdin/stdout."""
 
 import base64
+import concurrent.futures
 import contextlib
 import datetime
 import errno
@@ -40,7 +41,7 @@ ACTIVE = ("starting", "running", "permission", "background")
 ENDED = ("stopped", "exited", "failed", "crashed")
 # Computed per request and never persisted in a task record.
 TRANSIENT = ("live", "diff", "dirty", "files", "ahead", "behind", "update", "worktreeMissing",
-             "prStatus", "lastMessage", "gitStamp", "agentWork", "merging")
+             "prStatus", "lastMessage", "gitStamp", "agentWork", "merging", "landed")
 LAST_MESSAGE_TAIL = 256 * 1024
 LAST_MESSAGE_LIMIT = 2000
 INTERRUPT_TAIL = 64 * 1024
@@ -1048,19 +1049,187 @@ def summarize_checks(rollup):
     return counts
 
 
-def pr_status(task):
-    """A pull request's state, review and checks, or None when gh cannot say."""
+PULL_REQUEST_FIELDS = "number,url,state,isDraft,reviewDecision,statusCheckRollup,headRefOid"
+# Seconds that asking GitHub about every task's pull requests may take.
+PULL_REQUEST_DEADLINE = 20
+
+
+def branch_tip(task):
+    """The commit at the tip of the task's branch, or None when it is gone."""
+    result = read_git(task["repo"], "rev-parse", "--verify", "--quiet",
+                      "refs/heads/" + task["branch"] + "^{commit}")
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def is_ancestor(repo, commit, of):
+    """Whether COMMIT is OF or comes before it; False when either is unknown here."""
+    return read_git(repo, "merge-base", "--is-ancestor", commit, of).returncode == 0
+
+
+def recorded_pull_request(task):
+    """The pull request recorded for the task, or an empty dict. Records
+    from older helpers hold only its number and URL."""
+    pr = task.get("pr")
+    return pr if isinstance(pr, dict) and pr.get("number") else {}
+
+
+def recorded_merge_at(task, tip):
+    """Whether GitHub said, as recorded, that one of the task's pull requests
+    merged TIP. A merge stays one, whatever later lookups list."""
+    pr = recorded_pull_request(task)
+    return bool(tip) and (pr.get("mergedHead") == tip or (pr.get("state") == "MERGED" and pr.get("head") == tip))
+
+
+def pushed(task):
+    """Whether the task's branch was pushed, so GitHub may have a pull
+    request for it that its agent opened."""
+    branch = task["branch"]
+    return bool(read_git(task["repo"], "config", "--get", "branch.%s.remote" % branch).stdout.strip()
+                or read_git(task["repo"], "rev-parse", "--verify", "--quiet",
+                            "refs/remotes/origin/" + branch).returncode == 0)
+
+
+def task_pull_requests(task, tip, timeout=15):
+    """The task's pull requests, newest first, or None when gh cannot say
+    within TIMEOUT seconds. They are those from its branch whose head is a
+    commit of its own, made since it started and still on its branch at
+    TIP, of a task that made commits: a task retired earlier, or someone
+    else's fork, may have had a branch of the same name. The recorded one
+    counts too."""
     try:
-        view = json.loads(gh(task["repo"] if Path(task["repo"]).is_dir() else None,
-                             "pr", "view", str(task["pr"]["number"]), "--json",
-                             "state,isDraft,reviewDecision,statusCheckRollup,headRefOid,mergedAt",
-                             timeout=15))
-        return dict(state=view["state"], draft=bool(view.get("isDraft")),
-                    review=view.get("reviewDecision") or None,
-                    checks=summarize_checks(view.get("statusCheckRollup")),
-                    head=view.get("headRefOid"))
-    except (RoostError, ValueError, KeyError, TypeError, AttributeError):
+        listed = json.loads(gh(task["repo"] if Path(task["repo"]).is_dir() else None,
+                               "pr", "list", "--head", task["branch"], "--state", "all", "--limit", "10",
+                               "--json", PULL_REQUEST_FIELDS, timeout=timeout))
+    except (RoostError, ValueError, OSError):
         return None
+    if not isinstance(listed, list):
+        return None
+    number = recorded_pull_request(task).get("number")
+    base = task.get("baseCommit")
+    made = None
+
+    def ours(pr):
+        nonlocal made
+        head = pr.get("headRefOid")
+        if pr.get("number") == number:
+            return True
+        if not (isinstance(head, str) and head and head != base and is_ancestor(task["repo"], head, tip)
+                and not (base and is_ancestor(task["repo"], head, base))):
+            return False
+        # Not one an update brought in from its integration branch.
+        if made is None:
+            made = own_commits(task)
+        return made is True or head in made
+
+    return sorted((pr for pr in listed if isinstance(pr, dict) and isinstance(pr.get("number"), int) and ours(pr)),
+                  key=lambda pr: pr["number"], reverse=True)
+
+
+def shown_pull_request(prs, tip):
+    """Which of PRS the task shows: an open one, else one merged at TIP, else the newest."""
+    return (next((pr for pr in prs if pr.get("state") == "OPEN"), None)
+            or next((pr for pr in prs if pr.get("state") == "MERGED" and pr.get("headRefOid") == tip), None)
+            or (prs[0] if prs else None))
+
+
+def check_pull_requests(store, tasks):
+    """Ask GitHub about the pull requests of TASKS with one recorded or a
+    pushed branch, several at once, and add each one's state, review and
+    checks. Record the one each shows when it changed, as when its agent
+    opened one or it was merged. All within PULL_REQUEST_DEADLINE seconds,
+    well inside Emacs's wait for the reply: a task GitHub hasn't answered
+    for by then keeps what it had. Runs without the registry lock; returns
+    the tasks asked about."""
+    asked = []
+    for task in tasks:
+        if task.get("removing"):
+            continue
+        tip = branch_tip(task)
+        if tip and (recorded_pull_request(task) or pushed(task)):
+            asked.append((task, tip))
+    if not asked:
+        return []
+    deadline = time.monotonic() + PULL_REQUEST_DEADLINE
+
+    def ask(pair):
+        left = deadline - time.monotonic()
+        return task_pull_requests(*pair, timeout=left) if left >= 1 else None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(asked))) as pool:
+        answers = list(pool.map(ask, asked))
+    for (task, tip), prs in zip(asked, answers):
+        pr = shown_pull_request(prs or [], tip)
+        if not pr:
+            continue
+        try:
+            checks = summarize_checks(pr.get("statusCheckRollup"))
+        except (AttributeError, TypeError):
+            checks = None
+        task["prStatus"] = dict(state=pr.get("state"), draft=bool(pr.get("isDraft")),
+                                review=pr.get("reviewDecision") or None, checks=checks, head=pr.get("headRefOid"))
+        record = dict(number=pr["number"], url=pr.get("url"), state=pr.get("state"), head=pr.get("headRefOid"))
+        # Shown or not, as when an open one goes to another base, or listed
+        # or not, as when the branch has had more than a page of them.
+        if (any(other.get("state") == "MERGED" and other.get("headRefOid") == tip for other in prs)
+                or recorded_merge_at(task, tip)):
+            record["mergedHead"] = tip
+        try:
+            with store.locked():
+                current = store.read(task["id"])
+                # Unless another request recorded a pull request while this one asked.
+                stale = current.get("branch") != task["branch"] or current.get("pr") != task.get("pr")
+                if not stale and current.get("pr") != record:
+                    current["pr"] = record
+                    store.save(current)
+        except (RoostError, ValueError, OSError):
+            continue  # Retired meanwhile, or not to be written: shown, not recorded.
+        if stale:
+            task["pr"] = current.get("pr")
+            task.pop("prStatus", None)
+            continue
+        task["pr"] = record
+    return [task for task, _ in asked]
+
+
+def landed(task, tip):
+    """Whether the task's commits are all merged, so retiring it loses none,
+    as `safe_to_delete` has it: TIP, its branch's, is in its integration
+    branch, or is what GitHub merged for one of its pull requests. False
+    for a task that never committed. Takes no optional Git locks, for polls."""
+    if not tip or tip == task.get("baseCommit"):
+        return False
+    if recorded_merge_at(task, tip):
+        return True
+    integration = task.get("integrationBranch")
+    return bool(integration) and is_ancestor(task["repo"], tip, "refs/heads/" + integration) and committed_on(task)
+
+
+def own_commits(task):
+    """The commits made on the task's branch, as its reflog has them, merge
+    commits among them, rather than brought in from its integration branch,
+    as when an update fast-forwards a task that had none; True, meaning it
+    can't tell, if Git keeps no reflog. A rebase's makes count unless its
+    integration branch has it."""
+    log = read_git(task["repo"], "log", "--walk-reflogs", "--format=%H %gs", "refs/heads/" + task["branch"], "--")
+    if log.returncode or not log.stdout.strip():
+        return True
+    made, rebased = set(), set()
+    for line in log.stdout.splitlines():
+        commit, _, subject = line.partition(" ")
+        if re.match(r"(commit|cherry-pick|revert|am)\b|(merge|pull)\b[^:]*: Merge made by", subject):
+            made.add(commit)
+        elif subject.startswith("rebase"):
+            rebased.add(commit)
+    integration = task.get("integrationBranch")
+    return made | {commit for commit in rebased
+                   if not (integration and is_ancestor(task["repo"], commit, "refs/heads/" + integration))}
+
+
+def committed_on(task):
+    """Whether commits were made on the task's branch, as `own_commits` has
+    it: not without a reflog to show them."""
+    made = own_commits(task)
+    return made is not True and bool(made)
 
 
 def status_paths(porcelain):
@@ -1135,11 +1304,11 @@ def git_stamp(task):
     return " ".join(times)
 
 
-def add_git_stats(tasks, pull_requests=True):
-    """Diffstat, dirtiness and divergence from the integration branch, and
-    pull request status, and the agent's latest reply. Runs outside the registry lock: in a large
-    repository, or over the network, these take seconds. Without
-    PULL_REQUESTS, GitHub is not asked."""
+def add_git_stats(tasks):
+    """Diffstat, dirtiness and divergence from the integration branch,
+    whether its work is merged, and the agent's latest reply. Runs outside
+    the registry lock: in a large repository, or over the network, these
+    take seconds."""
     for task in tasks:
         if task.get("removing"):
             continue  # Going, file by file.
@@ -1148,10 +1317,7 @@ def add_git_stats(tasks, pull_requests=True):
             task["lastMessage"] = reply
         if task.get("agentWorktrees"):
             task["agentWork"] = agent_work(task)
-        if pull_requests and isinstance(task.get("pr"), dict) and task["pr"].get("number"):
-            status = pr_status(task)
-            if status:
-                task["prStatus"] = status
+        task["landed"] = landed(task, branch_tip(task))
         worktree = Path(task["worktree"])
         task["worktreeMissing"] = not worktree.is_dir()
         if task["worktreeMissing"]:
@@ -1183,9 +1349,13 @@ def stop(store, task, inventory=None):
     inventory = inventory if inventory is not None else inventory_for(task)
     if owned_pane(task, inventory):
         tmux(task["socket"], "kill-window", "-t", task["windowId"])
+    # Stopping says nothing new: an agent you had seen stays seen.
+    was_seen = bool(task.get("seen")) and task.get("seen") == task.get("updatedAt")
     # A pane ID owned by something else means ours is gone (for example after a
     # tmux server restart reused the ID): never touch it, and forget the IDs.
     task.update(status="stopped", updatedAt=now(), paneId=None, windowId=None)
+    if was_seen:
+        task["seen"] = task["updatedAt"]
     task.pop("shellPaneId", None)
     store.save(task)
     task["live"] = False
@@ -1436,17 +1606,19 @@ def squash_merge(task, integration, here):
 
 
 def merged_pull_request_head(task):
-    """The branch tip GitHub merged for the task's pull request, or None when
-    there is no recorded pull request, it is not MERGED, or gh cannot say.
+    """The task branch's tip when GitHub merged it as one of the task's pull
+    requests, or None. GitHub is asked for a task with a pull request
+    recorded or a pushed branch; a merge it recorded earlier counts too.
     Slow: call it without the registry lock and pass the answer to `retire`."""
-    if not isinstance(task.get("pr"), dict) or not task["pr"].get("number"):
+    tip = branch_tip(task)
+    if not tip:
         return None
-    try:
-        view = json.loads(gh(task["repo"], "pr", "view", str(task["pr"]["number"]),
-                             "--json", "state,headRefOid", timeout=15))
-        return view["headRefOid"] if view["state"] == "MERGED" else None
-    except (RoostError, ValueError, KeyError, TypeError):
-        return None
+    recorded = recorded_pull_request(task)
+    if recorded or pushed(task):
+        prs = task_pull_requests(task, tip)
+        if prs and any(pr.get("state") == "MERGED" and pr.get("headRefOid") == tip for pr in prs):
+            return tip
+    return tip if recorded_merge_at(task, tip) else None
 
 
 def safe_to_delete(task, commit, merged_head=None):
@@ -2813,8 +2985,7 @@ def rpc(request):
             # Ask GitHub without the lock; retire then trusts only this answer.
             with store.locked():
                 task = store.read(request["id"])
-            merged = merged_pull_request_head(task) if task.get("pr") else None
-            request = dict(request, mergedHead=merged)
+            request = dict(request, mergedHead=merged_pull_request_head(task))
         with store.locked():
             if action == "list":
                 result = list_tasks(store, request)
@@ -2829,14 +3000,23 @@ def rpc(request):
         if action == "list":
             for task in result:
                 task["gitStamp"] = git_stamp(task)
-        if action == "list" and request.get("full"):
+        if action == "list":
             # Full is true for every task, or a list of task IDs whose agents
-            # have been active; their pull requests are checked with the rest.
-            full = request["full"]
-            if full is True:
-                add_git_stats(result)
-            else:
-                add_git_stats([t for t in result if t["id"] in full], pull_requests=False)
+            # have been active. Pull requests are checked for every task, when
+            # full is true or they are asked for: changes on GitHub, such as
+            # a merge, leave no trace here.
+            full = request.get("full")
+            measured = result if full is True else [t for t in result if isinstance(full, list) and t["id"] in full]
+            checked = check_pull_requests(store, result) if full is True or request.get("pullRequests") else []
+            add_git_stats(measured)
+            for task in checked:
+                # Merged since, it is measured whole, or its cleanliness
+                # would be older than the news that it can be retired.
+                if "landed" not in task:
+                    if landed(task, branch_tip(task)):
+                        add_git_stats([task])
+                    else:
+                        task["landed"] = False
         elif action in ("retire", "merge") and result.pop("remoteCleanup", None):
             delete_remote_branch(result["repo"], result["branch"])
         return {"ok": True, "result": outgoing(result)}

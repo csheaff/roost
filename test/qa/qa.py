@@ -1107,6 +1107,33 @@ def fork(qa, repo):
                                               "roost/%s-*" % fork_name)))])
 
 
+@journey("A task merged elsewhere")
+def merged(qa, repo):
+    """A task whose commits reach its branch some other way says so, and x retires it."""
+    name = new_task(qa, "ask sh -c \"touch LANDED.md && git add LANDED.md && git commit -qm 'Land me'\"")
+    answer_yes(qa, name)
+    qa.wait("its commit", lambda s: "Committed" in panel_text(qa, s))
+    branch = qa.git(repo, "branch", "--list", "--format=%(refname:short)", "roost/%s-*" % name)
+    # As when GitHub merged its pull request and main was pulled since.
+    qa.git(repo, "merge", "-q", "--no-ff", "--no-edit", branch)
+    qa.status(name, "merged")
+    qa.step("Merged", expect=[
+        ("its row in the sidebar says so",
+         lambda s: [line for line in (qa.window(s, "roost-sidebar-list-mode") or {}).get("text", "").splitlines()
+                    if line.rstrip().endswith(" merged")]),
+        ("the panel says x retires it", lambda s: "Its work is merged; x retires it" in panel_text(qa, s)),
+        ("and not to bring it up to date with main, which merged it",
+         lambda s: "has moved on" not in panel_text(qa, s))])
+    qa.keys("C-c r x")
+    qa.wait("the question", lambda s: s["prompt"])
+    qa.step("Retiring asks only whether to", expect=[
+        ("it says nothing would be lost", lambda s: "Nothing in them would be lost" in (s["prompt"] or ""))])
+    qa.type("y")
+    qa.wait("the task to go", lambda s: qa.task(s, name) is None, timeout=30)
+    qa.step("Retired", expect=[
+        ("its branch is gone", lambda s: not qa.git(repo, "branch", "--list", branch))])
+
+
 @journey("An agent that exits")
 def exits(qa, repo):
     """An agent that exits on its own shows as such, and s resumes its conversation."""
@@ -1180,7 +1207,7 @@ def scrollback(qa, repo):
 
 JOURNEYS = [sweep, answer, fold, resize, merge, review, panes, shell,
             dashboard, stop_resume, retire, send, update, restart, search, frames, org, tabs,
-            forget, fork, exits, unreachable, scrollback]
+            forget, fork, merged, exits, unreachable, scrollback]
 
 
 def main():

@@ -24,8 +24,22 @@ happened in a section below:
    brings the conflict into its worktree for its agent to resolve, and `m`
    merges it.
 7. `P` opens a pull request; once it merges on GitHub, `x` retires the task.
+   So does one the agent opens itself, and the sidebar then says `merged`.
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
+
+## Merged at a glance — 2026-10-13
+
+- **A pull request Roost didn't open.** Against this repository on GitHub, the
+  helper's own lookup for the branch `status-lights` found #12, squash-merged
+  and its branch deleted there: `gh pr list --head` still lists it, with the
+  branch's local tip as its head. The task counted as merged, and retiring it
+  had GitHub's proof, where before it would have refused for unmerged commits.
+- **Merged outside Roost.** In `make qa`, a task whose commit reached main by a
+  merge made in the primary checkout said `merged` in the sidebar and panel,
+  and `x` asked only whether to retire it. A task with no commits that `u`
+  fast-forwarded to main first said `merged` too; the task branch's reflog now
+  has to show a commit made on it.
 
 ## After 0.7.0 — 2026-10-04
 
