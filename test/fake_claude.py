@@ -136,6 +136,24 @@ for line in lines():
         print("SIZE %dx%d" % (size.columns, size.lines), flush=True)
         event("Stop")
         status("done")
+    elif line.startswith("long "):
+        # A long reply, as Claude Code prints one: colors, rules, wide
+        # characters and links, a numbered line each, for scrollback.
+        count = int(line.split()[1])
+        for number in range(1, count + 1):
+            shade = 40 + number * 7 % 200
+            if number % 50 == 0:
+                body = "\x1b]8;;https://example.com/%d\x1b\\link %d\x1b]8;;\x1b\\" % (number, number)
+            elif number % 5 == 0:
+                body = "\u256d" + "\u2500" * 40 + "\u256e \u6f22\u5b57"
+            else:
+                body = " ".join("\x1b[38;2;%d;%d;%dm%s\x1b[39m" % (shade, 255 - shade, word * 9 % 256, "word")
+                                for word in range(12))
+            print("LONG %04d %s" % (number, body))
+        print("LONG DONE", flush=True)
+        record("assistant", "Printed %d lines" % count)
+        event("Stop", last_assistant_message="Printed %d lines" % count)
+        status("done")
     elif line.strip() == "exit":
         break
     else:

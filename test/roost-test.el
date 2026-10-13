@@ -963,6 +963,36 @@
        (funcall (cadr callbacks) (roost-test--task "1111111111111111"))
        (should (equal displayed "2222222222222222"))))))
 
+(ert-deftest roost-open-leaves-what-you-showed-before-the-reply ()
+  ;; C-c C-e just after opening a task showed the pager, which the host's
+  ;; reply then replaced with the terminal.
+  (roost-test--isolated
+   (let (callback displayed)
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host _action _params success &optional _failure) (setq callback success)))
+               ((symbol-function 'roost--display-task) (lambda (task) (setq displayed (roost--field task 'id)))))
+       (save-window-excursion
+         (switch-to-buffer (get-buffer-create " *before*"))
+         (roost-open-task (roost-test--task))
+         (switch-to-buffer (get-buffer-create " *pager*"))
+         (funcall callback (roost-test--task))
+         (should-not displayed)
+         ;; Nor when you have moved to another window since, the one it was
+         ;; opened from still showing what it did.
+         (delete-other-windows)
+         (switch-to-buffer " *before*")
+         (roost-open-task (roost-test--task))
+         (select-window (split-window))
+         (funcall callback (roost-test--task))
+         (should-not displayed)
+         (delete-other-windows)
+         (switch-to-buffer " *before*")
+         (roost-open-task (roost-test--task))
+         (funcall callback (roost-test--task))
+         (should (equal displayed "0123456789abcdef")))
+       (kill-buffer " *before*")
+       (kill-buffer " *pager*")))))
+
 (ert-deftest roost-create-and-resume-callbacks-retain-remote-host ()
   (roost-test--isolated
    (let (opened)
@@ -2341,6 +2371,25 @@ Read from the layout transient keeps, whose form varies by version."
      (cl-letf (((symbol-function 'persp-current-name) (lambda () (roost--perspective-name b))))
        (should (string-prefix-p " " (roost--sidebar-row a 30)))
        (should (string-prefix-p "▸" (roost--sidebar-row b 30)))))))
+
+(ert-deftest roost-tasks-of-one-name-show-their-ids ()
+  (roost-test--isolated
+   (let* ((a (roost--cache-task "dev" (roost-test--task)))
+          (b (roost--cache-task "dev" (roost-test--task "1111111111111111")))
+          (elsewhere (roost--cache-task "ci" (roost-test--task "2222222222222222")))
+          (alone (roost--cache-task "dev" (append '((name . "tidy notes"))
+                                                  (roost-test--task "3333333333333333"))))
+          (layout (roost--dashboard-layout (roost-tasks) 120)))
+     (should (string-match-p "fix auth 012345" (roost--sidebar-row a 30)))
+     (should (string-match-p "fix auth 111111" (roost--sidebar-row b 30)))
+     (let ((row (roost--dashboard-row b layout 120)))
+       (should (string-match "fix auth \\(111111\\)" row))
+       (should (eq (get-text-property (match-beginning 1) 'face row) 'roost-dim)))
+     ;; On another host, or with a name of its own, a task shows its name alone.
+     (should-not (string-match-p "222222" (roost--sidebar-row elsewhere 30)))
+     (should-not (string-match-p "333333" (roost--dashboard-row alone layout 120)))
+     ;; A name cut to fit keeps the ID.
+     (should (equal (substring-no-properties (roost--row-name a 9)) "f… 012345")))))
 
 (ert-deftest roost-files-from-the-sidebar-leaves-the-side-window ()
   (roost-test--isolated
