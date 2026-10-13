@@ -977,6 +977,16 @@
          (switch-to-buffer (get-buffer-create " *pager*"))
          (funcall callback (roost-test--task))
          (should-not displayed)
+         ;; Nor when you have moved to another window since, the one it was
+         ;; opened from still showing what it did.
+         (delete-other-windows)
+         (switch-to-buffer " *before*")
+         (roost-open-task (roost-test--task))
+         (select-window (split-window))
+         (funcall callback (roost-test--task))
+         (should-not displayed)
+         (delete-other-windows)
+         (switch-to-buffer " *before*")
          (roost-open-task (roost-test--task))
          (funcall callback (roost-test--task))
          (should (equal displayed "0123456789abcdef")))
