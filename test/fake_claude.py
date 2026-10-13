@@ -14,8 +14,35 @@ settings = json.loads(Path(sys.argv[sys.argv.index("--settings") + 1]).read_text
 session = sys.argv[sys.argv.index("--resume") + 1] if "--resume" in sys.argv else str(uuid.uuid4())
 
 
+# Asked for, as make qa does with a home of its own: a transcript where
+# Claude Code keeps one, in its form, for Roost's search and replies.
+TRANSCRIPT = None
+if os.environ.get("FAKE_CLAUDE_TRANSCRIPTS"):
+    import datetime
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "roost_remote", Path(__file__).resolve().parents[1] / "scripts/roost_remote.py")
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+    TRANSCRIPT = (Path.home() / ".claude" / "projects" / helper.claude_project_folder(os.getcwd())
+                  / (session + ".jsonl"))
+    TRANSCRIPT.parent.mkdir(parents=True, exist_ok=True)
+
+
+def record(role, text):
+    """Add what you or the agent wrote to the transcript, if there is one."""
+    if TRANSCRIPT:
+        entry = dict(type=role, sessionId=session, cwd=os.getcwd(),
+                     timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+                     message=dict(role=role, content=text if role == "user" else [dict(type="text", text=text)]))
+        with TRANSCRIPT.open("a") as handle:
+            handle.write(json.dumps(entry) + "\n")
+
+
 def event(name, **fields):
     payload = dict(hook_event_name=name, session_id=session, **fields)
+    if TRANSCRIPT:
+        payload.setdefault("transcript_path", str(TRANSCRIPT))
     for matcher in settings["hooks"].get(name, []):
         for hook in matcher["hooks"]:
             subprocess.run(hook["command"], input=json.dumps(payload), text=True, shell=True, check=True)
@@ -74,6 +101,7 @@ def lines():
 
 
 for line in lines():
+    record("user", line.strip())
     event("UserPromptSubmit")
     status("working", "Thinking")
     if line.strip() == "permission":
@@ -95,6 +123,7 @@ for line in lines():
             quoted = "'" + command.replace("'", "'\"'\"'") + "'"
             subprocess.run(["/bin/sh", "-c", "eval " + quoted + " < /dev/null && pwd -P > /dev/null"])
             event("PostToolUse", tool_name="Bash")
+            record("assistant", "Ran " + command)
             event("Stop", last_assistant_message="Ran " + command)
         else:
             event("Stop")
@@ -111,6 +140,7 @@ for line in lines():
         break
     else:
         print("PROMPT " + line.rstrip(), flush=True)
+        record("assistant", "PROMPT " + line.rstrip())
         event("Stop", last_assistant_message="PROMPT " + line.rstrip())
         status("done")
 status("clear")
