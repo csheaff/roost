@@ -14,6 +14,11 @@ Since 0.8.1:
   the dashboard. Retiring a task whose pull request GitHub squashed no
   longer refuses for unmerged commits when the agent opened it. Nothing to
   do when upgrading.
+- Search results fit their window, each message's line cut with an
+  ellipsis, rather than running past its edge; `TAB` shows the rest.
+  `RET` on a message from a task that is gone, or `TAB` on one its line
+  already shows whole, says so, rather than repeating the message under
+  it. Nothing to do when upgrading.
 - The manual recommends tramp-rpc for remote hosts, with a setup to copy,
   and `roost-doctor` names it for a host whose Magit goes over a shell
   method. Magit opened a remote task in 0.4 s with it, against 3.6 s over

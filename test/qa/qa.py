@@ -921,7 +921,9 @@ def restart(qa, repo):
 
 @journey("Search the conversations")
 def search(qa, repo):
-    name = start_task(qa, "Find the needle in the notes", None)
+    # Longer than a result's line: one its line shows whole has no more.
+    name = start_task(qa, "Find the needle in the notes, then say what each note is for, which of "
+                      "them are due this week, and which could go, one line for each", None)
     qa.keys("C-c r /")
     qa.wait("the search prompt", lambda s: s["prompt"])
     qa.type("needle\r")
