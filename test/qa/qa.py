@@ -58,8 +58,12 @@ class Emacs:
         self.server = server
 
     def eval(self, expression, timeout=60):
-        reply = subprocess.run(["emacsclient", "--socket-name", self.server, "--eval", expression],
-                               capture_output=True, text=True, timeout=timeout)
+        try:
+            reply = subprocess.run(["emacsclient", "--socket-name", self.server, "--eval", expression],
+                                   capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # Its command loop is busy, or waits for something.
+            raise Stuck("Emacs didn't answer in %ds" % timeout) from None
         if reply.returncode:
             raise RuntimeError("emacsclient: %s" % (reply.stderr.strip() or reply.stdout.strip()))
         return reply.stdout.strip()
@@ -177,7 +181,7 @@ class Run:
             try:
                 if self.emacs.eval("(featurep 'qa)") == "t":
                     break
-            except (RuntimeError, subprocess.TimeoutExpired):
+            except (RuntimeError, Stuck):
                 pass
             time.sleep(0.5)
         else:
@@ -231,7 +235,7 @@ class Run:
     def settle(self, quiet=0.4):
         """Wait until Emacs has taken the input, and a moment for what it started."""
         deadline = time.monotonic() + 20
-        while self.emacs.eval("(qa-idle-p)") != "t":
+        while self.emacs.eval("(qa-idle-p)", timeout=max(1, deadline - time.monotonic())) != "t":
             if time.monotonic() > deadline:
                 raise Stuck("Emacs didn't take the input in 20s")
             time.sleep(0.1)
@@ -586,8 +590,12 @@ def main():
             try:
                 chosen_journey(qa, repo)
             except Stuck as stuck:
+                try:
+                    screen = qa.screen()
+                except Stuck:
+                    screen = dict(windows=[])
                 qa.steps.append(dict(journey=qa.journey, title="Stopped", problems=[str(stuck)],
-                                     shot=None, screen=qa.screen()))
+                                     shot=None, screen=screen))
                 print("  ✗ Stopped: %s" % stuck)
     finally:
         try:
