@@ -286,11 +286,21 @@ them; nil when BUFFER isn't a terminal."
           (if (< (window-start window) screen) (count-lines (window-start window) screen) 0))
       0)))
 
+(defun qa--line (window line)
+  "WINDOW's LINE, `mode-line-format' or `header-line-format', or nil.
+A window parameter of that name takes the buffer's place, as in redisplay."
+  (let ((format (or (window-parameter window line)
+                    (buffer-local-value line (window-buffer window)))))
+    (and format (not (eq format 'none))
+         (with-current-buffer (window-buffer window)
+           (format-mode-line format nil window)))))
+
 (defun qa--tabs (window)
   "WINDOW's header line as shown, the highlighted tab in [brackets], or nil."
   (with-current-buffer (window-buffer window)
-    (when (and (derived-mode-p 'tmux-control-mode) header-line-format)
-      (let ((line (format-mode-line header-line-format nil window)) (shown "") (start 0))
+    (when-let* (((derived-mode-p 'tmux-control-mode))
+                (line (qa--line window 'header-line-format)))
+      (let ((shown "") (start 0))
         (while (< start (length line))
           (let ((end (or (next-single-property-change start 'face line) (length line))))
             (setq shown (concat shown
@@ -345,6 +355,8 @@ them; nil when BUFFER isn't a terminal."
                                      (and (derived-mode-p 'tmux-control-mode) (fboundp 'tmux-control-active-pane)
                                           (tmux-control-active-pane))))
                           (tabs . ,(qa--tabs window))
+                          (mode-line . ,(substring-no-properties
+                                         (or (qa--line window 'mode-line-format) "")))
                           (child . ,(if (frame-parent (window-frame window)) t :json-false))
                           (frame . ,(qa--frame-id (window-frame window)))
                           (columns . ,(window-body-width window))
