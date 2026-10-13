@@ -5841,18 +5841,20 @@ The changes column shrinks first, then the agent column is dropped."
                            (* 3 room) nil nil "…")))
                 (roost--truncate-width (propertize text 'face '(roost-dim roost-prose)) room))))))
 
-(defun roost--insert-unreachable-hosts (tasks &optional width)
+(defun roost--insert-unreachable-hosts (tasks width &optional brief)
   "Name each host Roost cannot reach that has none of TASKS to show.
 Its tasks are unknown rather than absent, as after a restart while it is
-down.  With WIDTH, fit each line within it, leaving details to hover."
+down.  Each line fits within WIDTH, leaving the rest to hover; BRIEF
+says only that the host is unreachable."
   (dolist (host (roost--hosts))
     (when-let* ((error (gethash host roost--errors))
                 ((not (seq-some (lambda (task) (equal (roost--field task 'host) host)) tasks))))
-      (insert (propertize (if width
-                              (truncate-string-to-width
-                               (format "%s unreachable" (roost--host-label host)) width nil nil "…")
-                            (format "%s is unreachable, so its tasks are unknown: %s"
-                                    (roost--host-label host) error))
+      (insert (propertize (truncate-string-to-width
+                           (if brief
+                               (format "%s unreachable" (roost--host-label host))
+                             (format "%s is unreachable, so its tasks are unknown: %s"
+                                     (roost--host-label host) (roost--one-line error)))
+                           width nil nil "…")
                           'face 'roost-status-failed
                           'help-echo (format "%s\nM-x roost-doctor checks this host" error))
               "\n"))))
@@ -5885,7 +5887,7 @@ The mark stays where it was."
          (tasks (roost-tasks))
          (inhibit-read-only t))
     (erase-buffer)
-    (roost--insert-unreachable-hosts tasks)
+    (roost--insert-unreachable-hosts tasks width)
     (if (null tasks)
         (roost--insert-empty-dashboard)
       (let ((layout (roost--dashboard-layout tasks width)))
@@ -6475,7 +6477,7 @@ MARGIN says that its status light shows in the margin, taking no column."
             ;; Nothing here changes until it watches again.
             (if roost-watch-mode "" (propertize "  paused" 'face 'roost-dim))
             "\n")
-    (roost--insert-unreachable-hosts tasks width)
+    (roost--insert-unreachable-hosts tasks width t)
     (if (null tasks)
         (insert "\n" (propertize (substitute-command-keys
                                   "No tasks.  \\<roost-sidebar-list-mode-map>\\[roost-new-task] starts one.")

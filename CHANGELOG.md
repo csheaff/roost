@@ -6,6 +6,9 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.8.1:
 
+- The dashboard's line for a host Roost can't reach fits the window, with
+  the whole error on hover, rather than running off its edge. Nothing to
+  do when upgrading.
 - A new task's draft, the dashboard and search, opened from a task's
   terminal split into panes (as with `t`'s shell), open beside the panes
   rather than in the pane you are in. There, tmux-control took the window

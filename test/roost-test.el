@@ -426,6 +426,22 @@
          (roost-retire task))
        (should (string-match-p (regexp-quote (format "(%s).  Discard it?" hint)) asked))))))
 
+(ert-deftest roost-an-unreachable-host-fits-the-dashboard ()
+  ;; Its line held the whole ssh error, cut off at the window's edge.
+  (roost-test--isolated
+   (let ((roost-hosts '("far")))
+     (puthash "far" "ssh: Could not resolve hostname far: nodename nor servname provided, or not known\nmore"
+              roost--errors)
+     (with-temp-buffer
+       (roost-dashboard-mode)
+       (cl-letf (((symbol-function 'roost--usable-width) (lambda (_) 40)))
+         (set-window-buffer (selected-window) (current-buffer))
+         (roost--render-dashboard))
+       (goto-char (point-min))
+       (should (looking-at "far is unreachable"))
+       (should (<= (string-width (buffer-substring (line-beginning-position) (line-end-position))) 40))
+       (should (string-match-p "nodename" (get-text-property (point) 'help-echo)))))))
+
 (ert-deftest roost-a-dashboard-heading-keeps-the-end-of-a-long-path ()
   (roost-test--isolated
    (should (equal (roost--truncate-start "~/code/roost" 20) "~/code/roost"))
