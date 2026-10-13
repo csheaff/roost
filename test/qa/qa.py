@@ -751,7 +751,9 @@ def panes(qa, repo):
     qa.type("exit\r")
     qa.wait("the shell to go", lambda s: len(terminals(s, own)) == 1)
     qa.step("One pane again", expect=[
-        ("its panel back beside it", lambda s: panel_text(qa, s).startswith(first))])
+        ("its panel back beside it", lambda s: panel_text(qa, s).startswith(first)),
+        ("its tabs back, its window highlighted",
+         lambda s: "[%s:" % window_a in (selected_terminal(s).get("tabs") or ""))])
 
 
 def answer_yes(qa, name):
