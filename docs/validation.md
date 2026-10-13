@@ -1,5 +1,32 @@
 # Validation
 
+## Before a release
+
+`make test` checks every view, button and key in batch, and `make qa` uses
+Roost in a GUI Emacs with a fake agent; the manual's Development section says
+what each covers. What only real agents, hosts and GitHub show needs a run by
+hand. In a separate Emacs, as CLAUDE.md says, go through these and record what
+happened in a section below:
+
+1. Claude Code: `make contract`, then `make contract-live`. Start a task from
+   a draft and one from an Org heading. Answer a permission prompt in its
+   terminal, interrupt a turn with Esc, and let one finish while you look at
+   another: it waits in the sidebar, and `n` reaches it.
+2. Codex and Pi: start a task with each, send a prompt with `e`, and see it
+   reach ready.
+3. A remote host: start a task over SSH, review it in Magit over TRAMP, write
+   a note with `;` and send it with `@`.
+4. Restart Emacs while an agent works: it is still at work, and `RET` brings
+   back its terminal and panel.
+5. Take a host away: the dashboard says it is unreachable and shows its last
+   known state, and catches up once it is back.
+6. Two tasks that change the same lines: merge one, then `u` in the other
+   brings the conflict into its worktree for its agent to resolve, and `m`
+   merges it.
+7. `P` opens a pull request; once it merges on GitHub, `x` retires the task.
+8. Narrow and widen the frame, and open a second one: the sidebar and panel
+   follow.
+
 ## After 0.7.0 — 2026-10-04
 
 - **GitHub issues.** The host's `issues` action listed tmux-control's real open
