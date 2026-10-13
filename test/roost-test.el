@@ -2297,7 +2297,8 @@ Read from the layout transient keeps, whose form varies by version."
                                                     (roost-test--task "1111111111111111" "running"))))
           (finished (roost--cache-task "dev" (append '((live . t) (ahead . 2))
                                                      (roost-test--task "2222222222222222" "ready"))))
-          (merged (roost--cache-task "dev" (append '((live . t) (ahead . 2) (prStatus (state . "MERGED")))
+          (merged (roost--cache-task "dev" (append '((live . t) (ahead . 2) (prStatus (state . "MERGED"))
+                                                     (pr (number . 12) (url . "https://github.com/o/r/pull/12")))
                                                    (roost-test--task "3333333333333333" "ready")))))
      (should (equal (funcall applies stopped) '("RET" "f" "r" "D" "u" "P" "m" "x" "X" "s")))
      (should (string-match-p "resumes its conversation" (roost--next-step stopped)))
@@ -4102,6 +4103,12 @@ Read from the layout transient keeps, whose form varies by version."
        (should (equal (roost--next-step stopped) "Its work is merged; x retires it")))
      (should (equal (roost--display-status (funcall cache "6666666666666666" '(landed . t) '(status . "running")))
                     "running"))
+     ;; A failure shows, seen or not.
+     (dolist (status '("failed" "crashed"))
+       (should (equal (roost--display-status (funcall cache "7777777777777777" seen '(landed . t)
+                                                      `(status . ,status) '(live)))
+                      status)))
+     (remhash '("dev" "7777777777777777") roost--tasks)
      (with-temp-buffer
        (roost-dashboard-mode)
        (roost--render-dashboard)
@@ -4118,13 +4125,34 @@ Read from the layout transient keeps, whose form varies by version."
        (should (string-prefix-p "Retire fix auth" (car asked)))))))
 
 (ert-deftest roost-a-pull-request-shows-its-recorded-state-before-github-answers ()
-  (should (eq (roost--pr-state (roost-test--task)) nil))
-  (should (eq (roost--pr-state (roost-test--pr-task)) 'open))
-  (should (eq (roost--pr-state (append '((pr . ((number . 12) (state . "MERGED")))) (roost-test--task)))
-              'merged))
-  (should (eq (roost--pr-state (append '((prStatus . ((state . "OPEN"))) (pr . ((number . 12) (state . "MERGED"))))
-                                       (roost-test--task)))
-              'open)))
+  (roost-test--isolated
+   (should (eq (roost--pr-state (roost-test--task)) nil))
+   (should (eq (roost--pr-state (roost-test--pr-task)) 'open))
+   (let ((recorded (roost--cache-task "dev" (append '((pr . ((number . 12) (state . "MERGED")))
+                                                      (seen . "2026-10-03T20:00:00+00:00") (live . t)
+                                                      (ahead . 2) (landed . t))
+                                                    (roost-test--task)))))
+     (should (eq (roost--pr-state recorded) 'merged))
+     ;; GitHub can't say now: the merge on record names it.
+     (should (equal (roost--next-step recorded) "Its pull request is merged; x retires it")))
+   (should (eq (roost--pr-state (append '((prStatus . ((state . "OPEN"))) (pr . ((number . 12) (state . "MERGED"))))
+                                        (roost-test--task)))
+               'open))))
+
+(ert-deftest roost-commits-since-a-merge-are-work-to-lose ()
+  (roost-test--isolated
+   (let ((later (roost--cache-task "dev" (append '((live . t) (ahead . 3) (landed)
+                                                   (pr . ((number . 12) (url . "https://github.com/o/r/pull/12")))
+                                                   (prStatus . ((state . "MERGED"))))
+                                                 (roost-test--task))))
+         (unmeasured (roost-test--pr-task '(live . t) '(ahead . 3) '(prStatus . ((state . "MERGED"))))))
+     (should (roost--unmerged-work-p later))
+     ;; Before Git is measured, the merge on GitHub is all there is to go on.
+     (should-not (roost--unmerged-work-p unmeasured))
+     (let (asked)
+       (cl-letf (((symbol-function 'y-or-n-p) (lambda (prompt) (push prompt asked) nil)))
+         (roost-retire later))
+       (should (string-match-p "has work not merged" (car asked)))))))
 
 (ert-deftest roost-tab-bar-workspaces-follow-tasks ()
   (roost-test--isolated

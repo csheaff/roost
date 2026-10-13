@@ -4098,8 +4098,11 @@ Without a status from GitHub yet, it is as its host recorded, or open."
 Commits not merged into its integration branch, or files not committed."
   (or (roost--field task 'dirty)
       (and (numberp (roost--field task 'ahead)) (> (roost--field task 'ahead) 0)
-           (not (roost--field task 'landed))
-           (not (equal (alist-get 'state (roost--field task 'prStatus)) "MERGED")))))
+           ;; Commits since a pull request merged are not in it.  Before
+           ;; Git is measured, the merge on GitHub is all there is to go on.
+           (if (assq 'landed task)
+               (not (roost--field task 'landed))
+             (not (eq (roost--pr-state task) 'merged))))))
 
 ;;;###autoload
 (defun roost-retire (&optional task)
@@ -4321,14 +4324,15 @@ neither works nor has anything new for you."
 (defun roost--merged-p (task)
   "Whether TASK's work is merged, as its host last measured, and nothing needs you.
 Its commits are in its integration branch or a pull request GitHub
-merged, nothing is left uncommitted, and its agent is not at work and
-has said nothing you haven't seen."
+merged, nothing is left uncommitted, and its agent is not at work, did
+not fail, and has said nothing you haven't seen."
   (and (roost--field task 'landed)
        (not (roost--field task 'dirty))
        (not (roost--field task 'merging))
        (not (roost--field task 'worktreeMissing))
        (not (roost--agent-work-left task))
-       (not (member (roost--field task 'status) '("starting" "running" "permission" "background")))
+       (not (member (roost--field task 'status)
+                    '("starting" "running" "permission" "background" "failed" "crashed")))
        (or (equal (roost--field task 'status) "stopped") (roost--seen-p task))))
 
 (defun roost--status-face (status)
@@ -5200,7 +5204,7 @@ Its host would refuse the rest, or there is nothing for them to do.
 Unknown Git statistics count as making sense."
   (let ((worktree (not (roost--field task 'worktreeMissing)))
         (ahead (roost--field task 'ahead))
-        (merged (equal (alist-get 'state (roost--field task 'prStatus)) "MERGED"))
+        (merged (eq (roost--pr-state task) 'merged))
         ;; The host retires and merges only a task whose agent is not at work.
         (active (member (roost--field task 'status) '("starting" "running" "permission" "background"))))
     (pcase command
@@ -5223,9 +5227,10 @@ task panel's list of the agent's own worktrees."
   (let* ((key (lambda (key) (propertize key 'face 'roost-key)))
          (status (roost--attention-status task))
          (pr (roost--field task 'prStatus))
+         ;; As GitHub said last, or as its host recorded.
+         (merged (eq (roost--pr-state task) 'merged))
          (retire (lambda ()
-                   (concat (if (equal (alist-get 'state pr) "MERGED") "Its pull request is merged; "
-                             "Its work is merged; ")
+                   (concat (if merged "Its pull request is merged; " "Its work is merged; ")
                            (funcall key "x") " retires it"))))
     (cond
      ((equal status "permission")
@@ -5256,11 +5261,9 @@ task panel's list of the agent's own worktrees."
               ;; The panel lists those worktrees, with buttons, below this line.
               (when menu (concat "; " (funcall key "i") " shows it"))))
      ;; As for one you haven't looked at since its agent finished.
-     ((or (roost--field task 'landed)
-          (and (equal (alist-get 'state pr) "MERGED") (not (assq 'landed task))))
+     ((or (roost--field task 'landed) (and merged (not (assq 'landed task))))
       (funcall retire))
-     ((equal (alist-get 'state pr) "MERGED")
-      "Its pull request is merged, but not its commits since")
+     (merged "Its pull request is merged, but not its commits since")
      ((equal (alist-get 'state pr) "OPEN")
       (concat (funcall key "P") " pushes new commits to its pull request"))
      ((and (numberp (roost--field task 'ahead)) (> (roost--field task 'ahead) 0))

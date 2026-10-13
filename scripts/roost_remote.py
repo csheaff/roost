@@ -1050,6 +1050,8 @@ def summarize_checks(rollup):
 
 
 PULL_REQUEST_FIELDS = "number,url,state,isDraft,reviewDecision,statusCheckRollup,headRefOid"
+# Seconds that asking GitHub about every task's pull requests may take.
+PULL_REQUEST_DEADLINE = 20
 
 
 def branch_tip(task):
@@ -1080,15 +1082,16 @@ def pushed(task):
                             "refs/remotes/origin/" + branch).returncode == 0)
 
 
-def task_pull_requests(task, tip):
-    """The task's pull requests, newest first, or None when gh cannot say.
-    They are those from its branch whose head is a commit of its own, made
-    since it started and still on its branch at TIP: a task retired earlier
-    may have had a branch of the same name. The recorded one counts too."""
+def task_pull_requests(task, tip, timeout=15):
+    """The task's pull requests, newest first, or None when gh cannot say
+    within TIMEOUT seconds. They are those from its branch whose head is a
+    commit of its own, made since it started and still on its branch at
+    TIP: a task retired earlier may have had a branch of the same name. The
+    recorded one counts too."""
     try:
         listed = json.loads(gh(task["repo"] if Path(task["repo"]).is_dir() else None,
                                "pr", "list", "--head", task["branch"], "--state", "all", "--limit", "10",
-                               "--json", PULL_REQUEST_FIELDS, timeout=15))
+                               "--json", PULL_REQUEST_FIELDS, timeout=timeout))
     except (RoostError, ValueError, OSError):
         return None
     if not isinstance(listed, list):
@@ -1118,7 +1121,9 @@ def check_pull_requests(store, tasks):
     """Ask GitHub about the pull requests of TASKS with one recorded or a
     pushed branch, several at once, and add each one's state, review and
     checks. Record the one each shows when it changed, as when its agent
-    opened one or it was merged. Runs without the registry lock; returns
+    opened one or it was merged. All within PULL_REQUEST_DEADLINE seconds,
+    well inside Emacs's wait for the reply: a task GitHub hasn't answered
+    for by then keeps what it had. Runs without the registry lock; returns
     the tasks asked about."""
     asked = []
     for task in tasks:
@@ -1129,8 +1134,14 @@ def check_pull_requests(store, tasks):
             asked.append((task, tip))
     if not asked:
         return []
+    deadline = time.monotonic() + PULL_REQUEST_DEADLINE
+
+    def ask(pair):
+        left = deadline - time.monotonic()
+        return task_pull_requests(*pair, timeout=left) if left >= 1 else None
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(asked))) as pool:
-        answers = list(pool.map(lambda pair: task_pull_requests(*pair), asked))
+        answers = list(pool.map(ask, asked))
     for (task, tip), prs in zip(asked, answers):
         pr = shown_pull_request(prs or [], tip)
         if not pr:

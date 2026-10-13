@@ -1650,6 +1650,9 @@ def canned(name, default=None):
         sys.stderr.write("canned " + name + " missing\\n")
         sys.exit(1)
     print(default)
+if os.path.exists(os.path.join(directory, "slow")):
+    import time
+    time.sleep(float(open(os.path.join(directory, "slow")).read()))
 if args[:2] == ["pr", "list"]:
     # Filtered by --state as GitHub would; a canned entry without one is open.
     path = os.path.join(directory, "list.json")
@@ -1941,6 +1944,20 @@ elif args[:2] == ["auth", "status"]:
             listed = self.request("list", full=True)["result"][0]
         self.assertEqual((listed["pr"]["number"], listed["landed"]), (11, True))
         self.assertNotIn("prStatus", listed)
+
+    def test_asking_github_keeps_within_its_deadline(self):
+        # A stalled GitHub must not hold up the reply past Emacs's wait for it.
+        self.github()
+        tasks = [self.create(name="slow %d" % n) for n in range(3)]
+        for task in tasks:
+            self.commit_in(task)
+            self.push(task)
+        (self.gh_dir / "slow").write_text("10")
+        start = time.monotonic()
+        with patch.object(roost, "PULL_REQUEST_DEADLINE", 1.5):
+            listed = self.request("list", full=True)["result"]
+        self.assertLess(time.monotonic() - start, 6)
+        self.assertEqual([task.get("prStatus") for task in listed], [None] * 3)
 
     def test_list_says_whether_a_tasks_work_is_merged_into_its_branch(self):
         task = self.create()
