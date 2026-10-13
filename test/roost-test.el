@@ -3243,9 +3243,10 @@ Read from the layout transient keeps, whose form varies by version."
                                                  (roost-test--task nil "ready"))))
      (should (equal (roost--attention-status task) "ready"))
      ;; Seeing a task that is working changes nothing until it is ready.
-     (roost--mark-seen (roost--cache-task "dev" (roost-test--task nil "running")))
-     (should (equal (roost--attention-status (roost--cache-task "dev" (roost-test--task nil "running")))
-                    "running")))))
+     (let ((working (append '((updatedAt . "2026-10-03T20:06:00+00:00")) (roost-test--task nil "running"))))
+       (roost--mark-seen (roost--cache-task "dev" working))
+       (should (equal (roost--attention-status (roost--cache-task "dev" working))
+                      "running"))))))
 
 (ert-deftest roost-a-failed-or-crashed-agent-waits-until-you-have-seen-it ()
   ;; A usage limit or a crash notified you, then dropped out of `n' and the count.
@@ -3966,6 +3967,25 @@ Read from the layout transient keeps, whose form varies by version."
                  (roost--render-task-info)
                  (should (string-match-p "Merged on GitHub\\. x retires this task" (buffer-string))))
              (kill-buffer))))))))
+
+(ert-deftest roost-a-reply-read-before-the-latest-event-keeps-it ()
+  ;; A poll that took a while, read before the agent's turn ended, put the
+  ;; task back to running after a newer reply had it ready.
+  (roost-test--isolated
+   (roost--cache-task "dev" (append '((updatedAt . "2026-10-13T10:31:36.627905+00:00") (lastEvent . "Stop"))
+                                    (roost-test--task nil "ready")))
+   (roost--cache-task "dev" (append '((updatedAt . "2026-10-13T10:31:36.510719+00:00") (lastEvent . "PostToolUse")
+                                      (diff . "1 file changed"))
+                                    (roost-test--task nil "running")))
+   (let ((task (gethash '("dev" "0123456789abcdef") roost--tasks)))
+     (should (equal (roost--field task 'status) "ready"))
+     (should (equal (roost--field task 'lastEvent) "Stop"))
+     ;; What else it read is still news.
+     (should (equal (roost--field task 'diff) "1 file changed")))
+   ;; A newer one is taken whole.
+   (roost--cache-task "dev" (append '((updatedAt . "2026-10-13T10:31:40+00:00") (lastEvent . "UserPromptSubmit"))
+                                    (roost-test--task nil "running")))
+   (should (equal (roost--field (gethash '("dev" "0123456789abcdef") roost--tasks) 'status) "running"))))
 
 (ert-deftest roost-quiet-refresh-retains-pull-request-status ()
   (roost-test--isolated

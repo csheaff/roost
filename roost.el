@@ -743,10 +743,32 @@ and a newer notification about TASK replaces it."
          (notifications-notify :title title :body body))
         (t (message "%s: %s" title body))))
 
+(defconst roost--event-fields
+  '(status updatedAt lastEvent error lastReply request requestCommand exitCode statusBeforeCrash)
+  "A task's fields that its agent's events and its runner change.
+They are as of its `updatedAt'.")
+
+(defun roost--newer-events (task old)
+  "TASK, keeping OLD's event fields when OLD's events are newer.
+A reply its host read before the agent's latest event, such as a poll's
+that took a while, arrives after one that read it: it must not bring
+back what the agent did before, as asking for permission again.  The
+rest of TASK, such as Git statistics, is as new as anything."
+  (let ((new (roost--field task 'updatedAt))
+        (had (roost--field old 'updatedAt)))
+    (if (not (and (stringp new) (stringp had) (string< new had)))
+        task
+      (dolist (field roost--event-fields task)
+        (setq task (assq-delete-all field task))
+        (when-let* ((cell (assq field old)))
+          (push cell task))))))
+
 (defun roost--cache-task (host task)
   "Cache TASK from HOST and notify only on attention transitions."
   (setf (alist-get 'host task) host)
   (setq task (assq-delete-all 'pushed task))
+  (when-let* ((old (gethash (roost--key task) roost--tasks)))
+    (setq task (roost--newer-events task old)))
   (let* ((key (roost--key task))
          (old (gethash key roost--tasks))
          (status (roost--field task 'status))

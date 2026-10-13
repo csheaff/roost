@@ -6,6 +6,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.8.1:
 
+- A task no longer goes back to what its agent did before, such as
+  running or asking for permission, for a few seconds after its turn
+  ends. A refresh that took a while could arrive after a newer one and
+  put back its older state; while it lasted, the menu offered nothing for
+  a task at rest, such as `x`. Nothing to do when upgrading.
 - The dashboard's line for a host Roost can't reach fits the window, with
   the whole error on hover, rather than running off its edge. Nothing to
   do when upgrading.
