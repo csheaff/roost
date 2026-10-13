@@ -6310,9 +6310,9 @@ Then showing more of it would only repeat it."
            (equal (alist-get 'text hit) (alist-get 'snippet hit))
            ;; Drawn in `roost-prose', so measured in pixels, as drawn.
            (or (not window)
-               (< (car (window-text-pixel-size window (line-beginning-position)
-                                               (line-end-position) t))
-                  (window-body-width window t)))))))
+               (<= (car (window-text-pixel-size window (line-beginning-position)
+                                                (line-end-position) t))
+                   (window-body-width window t)))))))
 
 (defun roost-search-open ()
   "Open the live task of the message on this line, or show more of the message."
