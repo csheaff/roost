@@ -717,13 +717,6 @@ def panes(qa, repo):
         ("its panel back beside it", lambda s: panel_text(qa, s).startswith(first))])
 
 
-def panel_text(qa, screen):
-    """The docked panel's text, or else that of the first task panel on screen."""
-    docked = next((w for w in screen["windows"]
-                   if w["mode"] == "roost-task-info-mode" and w.get("side") == "right"), None)
-    return (docked or qa.window(screen, "roost-task-info-mode") or {}).get("text", "")
-
-
 def answer_yes(qa, name):
     """Answer NAME's agent's permission prompt in its terminal, and wait until it is done."""
     qa.status(name, "permission")

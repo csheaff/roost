@@ -383,9 +383,9 @@
        (should (string-match-p (regexp-quote (format "(%s).  Discard it?" hint)) asked))))))
 
 (ert-deftest roost-a-dashboard-heading-keeps-the-end-of-a-long-path ()
-  (should (equal (roost--truncate-start "~/code/roost" 20) "~/code/roost"))
-  (should (equal (roost--truncate-start "/a/very/long/path/to/notes" 10) "…/to/notes"))
   (roost-test--isolated
+   (should (equal (roost--truncate-start "~/code/roost" 20) "~/code/roost"))
+   (should (equal (roost--truncate-start "/a/very/long/path/to/notes" 10) "…/to/notes"))
    (roost--cache-task "dev" (append '((repo . "/home/user/a/very/long/path/that/goes/on/to/the/notes"))
                                     (roost-test--task)))
    (with-temp-buffer

@@ -3993,8 +3993,9 @@ Commits not merged into its integration branch, or files not committed."
 (defun roost-retire (&optional task)
   "Finish with TASK: remove its worktree, branch and window.
 When its work is merged, or it has none, retire it.  When it holds work
-nothing else has, offer to discard it, saying what that loses; `m'
-merges it instead."
+nothing else has, offer to discard it, saying what that loses: `m'
+merges its commits instead, and for work not yet committed, `r' opens
+Magit to commit it."
   (interactive)
   (setq task (roost--choose task))
   (let* ((name (roost--field task 'name))
