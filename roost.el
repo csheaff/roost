@@ -1424,16 +1424,19 @@ answer to the task's terminal."
                                       (roost--field current 'status)))))))
                     (lambda (err)
                       ;; Stopped, or its tmux server gone, as after a crash:
-                      ;; resuming is the way to its terminal.
-                      (if (and (= generation roost--open-generation)
-                               (string-prefix-p "The agent's tmux window is gone" err))
-                          (when (progn
-                                  ;; You know now; `n' moves on to the next.
-                                  (roost--mark-seen (or (gethash (roost--key task) roost--tasks) task))
-                                  (y-or-n-p (format "%s's agent isn't running.  Resume its conversation? "
-                                                  (roost--field task 'name))))
-                            (roost-resume task))
-                        (message "Roost %s: %s" (roost--host-label (roost--field task 'host)) err))))))
+                      ;; resuming is the way to its terminal.  Asked once
+                      ;; any question you are answering is done, too.
+                      (roost--when-out-of-minibuffer
+                       (lambda ()
+                         (if (and (= generation roost--open-generation)
+                                  (string-prefix-p "The agent's tmux window is gone" err))
+                             (when (progn
+                                     ;; You know now; `n' moves on to the next.
+                                     (roost--mark-seen (or (gethash (roost--key task) roost--tasks) task))
+                                     (y-or-n-p (format "%s's agent isn't running.  Resume its conversation? "
+                                                     (roost--field task 'name))))
+                               (roost-resume task))
+                           (message "Roost %s: %s" (roost--host-label (roost--field task 'host)) err))))))))
 
 ;;;###autoload
 (defun roost-switch-task ()
@@ -5250,9 +5253,8 @@ window without it, such as in another frame, keeps the conversation."
                                      ;; only its agent's window.
                                      (and (fboundp 'tmux-control-active-pane)
                                           (null (tmux-control-active-pane))
-                                          (equal (roost--field task 'host) (tmux-control-buffer-host))
-                                          (equal (roost--field task 'socket) (tmux-control-buffer-socket-name))
-                                          (equal (roost--field task 'session) (tmux-control-buffer-session))))))
+                                          (when-let* ((shown (roost--terminal-task (current-buffer))))
+                                            (equal (roost--key shown) (roost--key task)))))))
                              (window-list (window-frame window) 'nomini)))
                  windows)))
 

@@ -414,29 +414,37 @@
               (setq roost--buffer-task-key (roost--key task))
               (set-window-buffer (selected-window) terminal)
               (set-window-buffer (split-window nil nil 'right) (current-buffer))
+              (with-current-buffer terminal (setq major-mode 'tmux-control-mode))
               (pcase-dolist (`(,pane . ,reply) '((nil . nil) ("%12" . nil) ("%99" . t)))
                 (with-current-buffer terminal
                   (setq roost-test--tmux (list :host "dev" :socket "main"
                                                :session (roost--field task 'session) :pane pane)))
                 (roost--render-task-info)
-                (should (eq reply (and (string-search "All done here." (buffer-string)) t)))))))
+                (should (eq reply (and (string-search "All done here." (buffer-string)) t))))
+              ;; A session tasks share, from before each had its own, is
+              ;; no one's terminal.
+              (roost--cache-task "dev" (roost-test--task "fedcba9876543210" "ready"))
+              (with-current-buffer terminal (setq roost-test--tmux (plist-put roost-test--tmux :pane nil)))
+              (roost--render-task-info)
+              (should (string-search "All done here." (buffer-string))))))
        (kill-buffer terminal)))))
 
 (ert-deftest roost-a-task-is-shown-once-the-minibuffer-is-done ()
   ;; A reply opening a task while a question was asked took the answer to
   ;; the task's terminal.
-  (let ((minibuffer t) (shown nil))
-    (cl-letf (((symbol-function 'active-minibuffer-window) (lambda () minibuffer)))
-      (roost--when-out-of-minibuffer (lambda () (push 'shown shown)))
-      (should-not shown)
-      (setq minibuffer nil)
-      (run-hooks 'minibuffer-exit-hook)
-      (should-not shown)
-      (accept-process-output nil 0.05)
-      (should (equal shown '(shown)))
-      ;; With no minibuffer, at once.
-      (roost--when-out-of-minibuffer (lambda () (push 'again shown)))
-      (should (equal shown '(again shown))))))
+  (roost-test--isolated
+   (let ((minibuffer t) (shown nil))
+     (cl-letf (((symbol-function 'active-minibuffer-window) (lambda () minibuffer)))
+       (roost--when-out-of-minibuffer (lambda () (push 'shown shown)))
+       (should-not shown)
+       (setq minibuffer nil)
+       (run-hooks 'minibuffer-exit-hook)
+       (should-not shown)
+       (accept-process-output nil 0.05)
+       (should (equal shown '(shown)))
+       ;; With no minibuffer, at once.
+       (roost--when-out-of-minibuffer (lambda () (push 'again shown)))
+       (should (equal shown '(again shown)))))))
 
 (ert-deftest roost-closing-a-frame-marks-the-task-of-the-frame-left ()
   ;; The sidebar marked the task opened in a frame since closed.
@@ -4285,7 +4293,17 @@ ssh: connect to host dev port 22: Operation timed out"
        (setq reply "ssh: connect to host dev port 22: Operation timed out" asked nil)
        (roost-open-task task)
        (should-not asked)
-       (should (equal (car messages) "Roost dev: ssh: connect to host dev port 22: Operation timed out"))))))
+       (should (equal (car messages) "Roost dev: ssh: connect to host dev port 22: Operation timed out"))
+       ;; Asked once a question you are answering is done.
+       (setq reply "The agent's tmux window is gone; resume the task")
+       (let ((minibuffer t))
+         (cl-letf (((symbol-function 'active-minibuffer-window) (lambda () minibuffer)))
+           (roost-open-task task)
+           (should-not asked)
+           (setq minibuffer nil)
+           (run-hooks 'minibuffer-exit-hook)
+           (accept-process-output nil 0.05)
+           (should asked)))))))
 
 (ert-deftest roost-task-sessions-stay-out-of-tmux-controls-activity-corner ()
   ;; The corner named every other task whose agent printed anything, and
