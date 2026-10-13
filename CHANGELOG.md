@@ -6,6 +6,10 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.8.1:
 
+- The manual recommends tramp-rpc for remote hosts, with a setup to copy,
+  and `roost-doctor` names it for a host whose Magit goes over a shell
+  method. Magit opened a remote task in 0.4 s with it, against 3.6 s over
+  `scp`. Nothing to do when upgrading, unless you want it.
 - A task no longer goes back to what its agent did before, such as
   running or asking for permission, for a few seconds after its turn
   ends. A refresh that took a while could arrive after a newer one and

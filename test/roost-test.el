@@ -4597,6 +4597,7 @@ ssh: connect to host dev port 22: Operation timed out"
       (should (equal name "Magit"))
       (should (eq ok 'optional))
       (should (equal detail "over TRAMP's scp method"))
+      (should (string-match-p "tramp-rpc" hint))
       (should (string-match-p "Remote review" hint)))))
 
 ;;;; Review notes
