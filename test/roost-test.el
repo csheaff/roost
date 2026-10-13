@@ -1763,6 +1763,12 @@
          ;; The deepest project it is in.
          (setq default-directory "/ssh:dev:/srv/ledger/tools/bin/")
          (should (equal (roost--compose-default-directory nil nil) "/ssh:dev:/srv/ledger/tools/"))
+         ;; Whatever TRAMP method names it.
+         (setq default-directory "/scp:dev:/srv/ledger/tools/bin/")
+         (should (equal (roost--compose-default-directory nil nil) "/ssh:dev:/srv/ledger/tools/"))
+         ;; Not the same path on another host.
+         (setq default-directory "/ssh:other:/srv/ledger/src/")
+         (should-not (roost--known-project-of default-directory))
          ;; Outside them, on a host not connected to, the latest project.
          (setq default-directory "/ssh:dev:/tmp/")
          (should (equal (roost--compose-default-directory nil nil) "/ssh:dev:/srv/ledger/"))

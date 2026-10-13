@@ -1727,13 +1727,25 @@ host TRAMP is connected to."
 
 (defun roost--known-project-of (directory)
   "The project Roost knows that DIRECTORY is in, the deepest, or nil.
-By name alone, so a remote DIRECTORY opens no connection."
-  (let ((directory (file-name-as-directory (expand-file-name directory))))
-    (car (sort (seq-filter (lambda (project)
-                             (string-prefix-p (file-name-as-directory (expand-file-name project))
-                                              directory))
-                           (roost--known-projects))
-               (lambda (a b) (> (length a) (length b)))))))
+By host and path alone, whatever TRAMP method names them, so a remote
+DIRECTORY opens no connection."
+  (when-let* ((place (roost--host-and-path directory)))
+    (cdr (car (sort (seq-filter (lambda (project)
+                                  (and (equal (car (car project)) (car place))
+                                       (string-prefix-p (cdr (car project)) (cdr place))))
+                                (seq-keep (lambda (project)
+                                            (when-let* ((at (roost--host-and-path project)))
+                                              (cons at project)))
+                                          (roost--known-projects)))
+                    (lambda (a b) (> (length (cdr (car a))) (length (cdr (car b))))))))))
+
+(defun roost--host-and-path (directory)
+  "DIRECTORY's host, nil if local, and its path there, as (HOST . PATH).
+By name, without connecting; nil for a name TRAMP can't read, such as
+one with a method not loaded."
+  (ignore-errors
+    (cons (file-remote-p directory 'host)
+          (file-name-as-directory (file-local-name (expand-file-name directory))))))
 
 (defun roost--compose-seed ()
   "Prompt text from the current buffer, or nil.

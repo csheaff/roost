@@ -26,6 +26,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -127,7 +128,8 @@ class Run:
             self.notes.add("The tasks were on qa-remote, %g s away each way" % args.latency)
             bin = self.work / "bin"
             bin.mkdir()
-            (bin / "ssh").write_text('#!/bin/sh\nexec %s %s "$@"\n' % (sys.executable, FAKE_SSH))
+            (bin / "ssh").write_text('#!/bin/sh\nexec %s %s "$@"\n'
+                                     % (shlex.quote(sys.executable), shlex.quote(str(FAKE_SSH))))
             (bin / "ssh").chmod(0o755)
             self.env["PATH"] = "%s:%s" % (bin, self.env.get("PATH", ""))
             self.env["QA_SSH_LATENCY"] = str(args.latency)
@@ -283,7 +285,12 @@ class Run:
 
     def stop(self):
         if self.args.keep:
-            print("Left running: emacsclient --socket-name %s, tmux -L %s" % (self.name, self.name))
+            # The host's tmux keeps its sockets where tmux-control's setup
+            # for a remote host puts them.
+            tmux = "tmux -L %s" % self.name
+            if self.host:
+                tmux = "TMUX_TMPDIR=%s %s" % (shlex.quote(self.tmux_env["TMUX_TMPDIR"]), tmux)
+            print("Left running: emacsclient --socket-name %s, %s" % (self.name, tmux))
             return
         try:
             self.emacs.eval("(kill-emacs)", timeout=10)
