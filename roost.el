@@ -6223,8 +6223,10 @@ than WIDTH, such as a URL, is broken within, as in `roost--reply-preview'."
          (more 0)
          ;; Lines stay unwrapped, so each message is one line; a whole
          ;; message is wrapped to the window, inside its indentation.
-         (window (get-buffer-window (current-buffer) t))
-         (width (max 10 (- (if window (window-body-width window) 80) 8))))
+         ;; Fitted to the narrowest window showing them, as a task's panel is.
+         (columns (let ((windows (get-buffer-window-list nil nil t)))
+                    (if windows (apply #'min (mapcar #'roost--usable-width windows)) 80)))
+         (width (max 10 (- columns 8))))
     (pcase-dolist (`(,host . ,reply) roost--search-replies)
       (unless (eq (car-safe reply) :error)
         (setq more (+ more (or (alist-get 'moreTasks reply) 0)))
@@ -6286,18 +6288,16 @@ than WIDTH, such as a URL, is broken within, as in `roost--reply-preview'."
                            (alist-get 'session hit) (alist-get 'line hit)))
                  (properties (append (list 'roost-search-id id 'roost-search-hit (list host result hit)) row))
                  (who (if (equal (alist-get 'role hit) "user") "You" "Claude")))
-            (let* ((lead (concat "  " (roost--search-time (alist-get 'at hit)) "  "
-                                 (format "%-7s" who)))
-                   (snippet (roost--search-highlight (roost--prose (or (alist-get 'snippet hit) ""))
-                                                     words))
+            (let* ((line (concat "  " (roost--search-time (alist-get 'at hit)) "  "
+                                 (format "%-7s" who)
+                                 (roost--search-highlight
+                                  (roost--prose (or (alist-get 'snippet hit) "")) words)))
                    ;; Cut to the window, as the dashboard cuts replies: TAB
                    ;; shows the rest.
-                   (shown (roost--truncate-width
-                           snippet (max 10 (- (if window (window-body-width window) 80)
-                                              (string-width lead) 1)))))
-              (insert (apply #'propertize (concat lead shown "\n")
+                   (shown (roost--truncate-width line columns)))
+              (insert (apply #'propertize (concat shown "\n")
                              'roost-search-line t
-                             'roost-search-cut (not (equal shown snippet))
+                             'roost-search-cut (not (equal shown line))
                              properties)))
             (when (member id roost--search-expanded)
               (let ((body-start (point)))

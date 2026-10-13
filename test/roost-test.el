@@ -1495,7 +1495,7 @@
                (should (string-match-p "commas, please\\.\n" (buffer-string)))
                ;; It wraps to the window, also once the window is resized.
                (should (memq #'roost--search-resized window-size-change-functions))
-               (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 28)))
+               (cl-letf (((symbol-function 'roost--usable-width) (lambda (&rest _) 28)))
                  (roost--search-resized (selected-window))
                  ;; Within its indentation of 8 columns.
                  (should (string-match-p "^Quote CSV fields\nwith commas, please\\.$" (buffer-string))))
@@ -1552,7 +1552,20 @@
                (should-not (roost--search-whole-p))
                (roost-search-toggle)
                (should (string-match-p (concat (regexp-quote "haystack needle") ".*\n.*haystack")
-                                       (buffer-string))))
+                                       (buffer-string)))
+               (roost-search-toggle)
+               ;; Shown in two windows, the narrower decides; in one narrower
+               ;; than a result's date and speaker, the whole line is cut.
+               (dolist (columns '(40 20))
+                 (delete-other-windows)
+                 (let ((narrow (split-window nil (- (window-total-width) columns 1) 'right)))
+                   (set-window-buffer narrow (current-buffer))
+                   (roost--render-search)
+                   (goto-char (point-min))
+                   (search-forward "2026-10-03")
+                   (should (<= (string-width (buffer-substring (line-beginning-position) (line-end-position)))
+                               (roost--usable-width narrow)))
+                   (should (get-text-property (line-beginning-position) 'roost-search-cut)))))
            (when (get-buffer roost--search-buffer) (kill-buffer roost--search-buffer))))))))
 
 (ert-deftest roost-search-shows-a-task-retired-after-its-reply-as-past ()
