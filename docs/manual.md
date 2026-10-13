@@ -420,8 +420,9 @@ checks rules instead. It draws the task panel, dashboard, sidebar and search
 results for a gallery of task states, presses every button and key in them,
 and fails on:
 
-- a view that draws differently the second time, or in two windows rather
-  than one;
+- a view that draws differently the second time, or in other windows: none,
+  the one you are in, one beside it (as a panel beside the terminal you type
+  in), or two;
 - a button or key that ends in a Lisp error, rather than doing its job, asking,
   or saying why it can't (`user-error`);
 - a button or key that changes only the view, when a redraw undoes the change

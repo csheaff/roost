@@ -7,7 +7,9 @@
 ;; every button and key there, and check rules that hold for all of them:
 ;;
 ;; - A view draws without an error, and drawing it again changes nothing.
-;; - What a view draws doesn't depend on how many windows show it.
+;; - What a view draws doesn't depend on the windows showing it: none,
+;;   the one you are in, one beside it (as a panel beside the terminal
+;;   you type in), or two.
 ;; - A button or key does its job, says why it can't (`user-error'), or
 ;;   asks; it never ends in a Lisp error.
 ;; - A button or key that changes only the view keeps that change through
@@ -244,42 +246,58 @@ Host \"gone\" failed to search."
 
 (defvar roost-sweep--views
   '((panel :mode roost-task-info-mode :render roost--render-task-info :widths (40 100)
-           :windows (0 1 2) :setup roost-sweep--panel-setup)
+           :layouts (selected none other both) :setup roost-sweep--panel-setup)
     (dashboard :mode roost-dashboard-mode :render roost--render-dashboard :buffer "*roost*"
-               :windows (1 2) :point roost-sweep--row)
-    (sidebar :mode roost-sidebar-list-mode :render roost--render-sidebar :windows (1 2)
-             :point roost-sweep--row)
+               :layouts (selected other both) :point roost-sweep--row)
+    (sidebar :mode roost-sidebar-list-mode :render roost--render-sidebar
+             :layouts (selected other both) :point roost-sweep--row)
     (search :mode roost-search-mode :render roost--render-search :buffer "*roost search*"
-            :windows (1 2) :setup roost-sweep--search-setup :point roost-sweep--hit))
+            :layouts (selected other both) :setup roost-sweep--search-setup :point roost-sweep--hit))
   "Roost's views, each (NAME . PLIST).
 :mode makes the buffer, :setup gives it what it shows for a state,
 :render draws it, :point finds the state's task in it, and :buffer names
-it.  :widths are the task panel's widths to try, and :windows how many
-windows of one width to show it in.  Lists fit the window they are in,
-so with none they draw for another width.")
+it.  :widths are the task panel's widths to try, and :layouts the
+windows to show it in, the first as actions are tried: see
+`roost-sweep--draw'.  Lists fit the window they are in, so with none
+they draw for another width.")
 
 (defun roost-sweep--view (view property)
   "PROPERTY of VIEW in `roost-sweep--views'."
   (plist-get (cdr (assq view roost-sweep--views)) property))
 
-(defun roost-sweep--draw (view state width &optional windows)
-  "Make and draw VIEW for gallery STATE at WIDTH, shown in WINDOWS windows.
-WINDOWS is 1 unless given.  Return the buffer, current, with point on
-STATE's task in a list."
+(defun roost-sweep--draw (view state width &optional layout)
+  "Make and draw VIEW for gallery STATE at WIDTH, in windows as LAYOUT says.
+LAYOUT is `selected', the window you are in, unless given; `none', no
+window; `other', a window beside the one you are in, as a panel is
+beside the terminal you type in; or `both'.  Return the buffer, current,
+with point on STATE's task in a list."
   (let ((buffer (generate-new-buffer (or (roost-sweep--view view :buffer) (format "*sweep %s*" view)))))
     (delete-other-windows)
+    (set-window-buffer (selected-window) (get-buffer-create "*sweep elsewhere*"))
+    (pcase (or layout 'selected)
+      ('selected (set-window-buffer (selected-window) buffer))
+      ('other (set-window-buffer (split-window) buffer))
+      ('both (set-window-buffer (selected-window) buffer)
+             (set-window-buffer (split-window) buffer)))
     (set-buffer buffer)
     (funcall (roost-sweep--view view :mode))
     (when-let* ((setup (roost-sweep--view view :setup))) (funcall setup state))
-    (dotimes (n (or windows 1))
-      (set-window-buffer (if (zerop n) (selected-window) (split-window)) buffer))
     (roost-sweep--at-width width
       (funcall (roost-sweep--view view :render)))
     (when-let* ((find (roost-sweep--view view :point))
                 (place (funcall find state)))
       (goto-char place)
-      (set-window-point (selected-window) place))
+      (dolist (window (get-buffer-window-list buffer))
+        (set-window-point window place)))
     buffer))
+
+(defun roost-sweep--layout (layout)
+  "LAYOUT, from `roost-sweep--draw', as text."
+  (pcase layout
+    ('none "in no window")
+    ('selected "in the window you are in")
+    ('other "beside the window you are in")
+    ('both "in two windows")))
 
 (defun roost-sweep--text ()
   "The current buffer's text, without properties."
@@ -389,26 +407,28 @@ keys there are then."
 (defun roost-sweep--check-drawing (view state width)
   "Problems drawing VIEW for STATE at WIDTH: errors, redraws, windows."
   (let (problems texts)
-    (dolist (windows (roost-sweep--view view :windows))
+    (dolist (layout (roost-sweep--view view :layouts))
       (condition-case err
           (roost-sweep--world
             (save-window-excursion
-              (let ((buffer (roost-sweep--draw view state width windows)))
+              (let ((buffer (roost-sweep--draw view state width layout)))
                 (unwind-protect
                     (let ((text (roost-sweep--text)) (point (point)))
                       (roost-sweep--at-width width
                         (funcall (roost-sweep--view view :render)))
                       (unless (equal text (roost-sweep--text))
-                        (push (format "drawing it again changes it, in %d windows" windows) problems))
+                        (push (format "drawing it again changes it, shown %s" (roost-sweep--layout layout))
+                              problems))
                       (unless (= point (point))
                         (push (format "drawing it again moves point from %d to %d" point (point)) problems))
-                      (push (cons windows text) texts))
+                      (push (cons layout text) texts))
                   (kill-buffer buffer)))))
-        (error (push (format "drawing it in %d windows fails: %S" windows err) problems))))
+        (error (push (format "drawing it fails, shown %s: %S" (roost-sweep--layout layout) err) problems))))
     (let ((first (cdar (last texts))))
       (dolist (entry texts)
         (unless (equal (cdr entry) first)
-          (push (format "it draws differently in %d windows than in %d" (car entry) (caar (last texts)))
+          (push (format "it draws differently shown %s than %s"
+                        (roost-sweep--layout (car entry)) (roost-sweep--layout (caar (last texts))))
                 problems))))
     problems))
 
