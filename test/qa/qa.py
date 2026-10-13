@@ -98,9 +98,17 @@ class Run:
         # and a home of the run's own: no ~/.tmux.conf or shell setup of
         # yours, and the fake agent's transcripts not among your Claude's.
         (self.work / "gitconfig").write_text("")
-        (self.work / "home").mkdir()
+        home = self.work / "home"
+        home.mkdir()
         self.env = dict(os.environ, GIT_CONFIG_GLOBAL=str(self.work / "gitconfig"), GIT_CONFIG_NOSYSTEM="1",
-                        HOME=str(self.work / "home"), FAKE_CLAUDE_TRANSCRIPTS="1")
+                        HOME=str(home), FAKE_CLAUDE_TRANSCRIPTS="1",
+                        # Where tmux and others look besides the home.
+                        XDG_CONFIG_HOME=str(home / ".config"), XDG_DATA_HOME=str(home / ".local/share"),
+                        XDG_STATE_HOME=str(home / ".local/state"), XDG_CACHE_HOME=str(home / ".cache"))
+        # Shell startup files named outside the home, and the tmux you may
+        # be running this in.
+        for name in ("ZDOTDIR", "BASH_ENV", "ENV", "TMUX", "TMUX_PANE"):
+            self.env.pop(name, None)
         self.emacs = Emacs(self.name)
         self.process = None
         self.steps = []
