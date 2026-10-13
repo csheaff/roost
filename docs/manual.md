@@ -440,12 +440,17 @@ configuration with its own server, state directory and tmux socket, and
 `test/fake_claude.py` for Claude Code, so Git, tmux and the host helper are
 real and no model is called. Its journeys start a task from the menu, answer
 it in its terminal, fold and unfold a long prompt with the mouse, resize the
-frame and merge a commit, pressing keys and clicking through Emacs's command
-loop. After each step it checks for Lisp errors, in commands, timers and
-process filters alike, for a backtrace, and for lines of Roost's views cut off
-at the window's edge; it also runs the sweep where text is measured in pixels.
-It takes about a minute, writes `report.html` with each step's windows and,
-on macOS, a screenshot, and fails if anything was wrong. Emacs needs
+frame, merge a commit, review a change in Magit and send a note, and work in
+the terminal with tmux-control's own keys: split a pane, open and move between
+tmux windows, and switch to another task and back. They press keys and click
+through Emacs's command loop. After each step it checks for Lisp errors, in
+commands, timers and process filters alike, for a backtrace, for lines of
+Roost's views cut off at the window's edge, and for another task's terminal
+beside the current task's; it also runs the sweep where text is measured in
+pixels. It takes about two minutes, writes `report.html` with each step's
+windows, the echo area and, on macOS, a screenshot, and fails if anything was
+wrong. Look at the screenshots too: the checks don't see what merely looks
+wrong. Emacs needs
 tmux-control and its dependencies:
 
     make qa QA_FLAGS="-L ../tmux-control --package-dir ~/.emacs.d/elpa"

@@ -244,6 +244,11 @@ class Run:
     def screen(self):
         return self.emacs.json("(qa-screen)")
 
+    def tmux(self, *args):
+        """What tmux on this run's socket says to ARGS, as lines."""
+        return subprocess.run(["tmux", "-L", self.name] + list(args), capture_output=True,
+                              text=True).stdout.split("\n")[:-1]
+
     def wait(self, what, check, timeout=40):
         """Wait until CHECK, given the screen, holds."""
         deadline = time.monotonic() + timeout
@@ -309,7 +314,10 @@ class Run:
         for name in screen["buffers"]:
             if name == "*Backtrace*":
                 problems.append("A backtrace is showing")
+        task = screen.get("task")
         for window in screen["windows"]:
+            if task and window.get("terminal") and window["terminal"] != task["terminal"]:
+                problems.append("%s, another task's terminal, is beside %s's" % (window["buffer"], task["name"]))
             if window.get("overflow"):
                 over = window["overflow"]
                 problems.append("%s: %d lines cut off at the window's edge (%d px), the first %d px: %r" % (
@@ -558,7 +566,83 @@ def review(qa, repo):
     qa.step("The agent has the note")
 
 
-JOURNEYS = [sweep, answer, fold, resize, merge, review]
+def terminals(screen, terminal=None):
+    """The terminal windows on SCREEN, or those of TERMINAL's session."""
+    return [w for w in screen["windows"]
+            if w.get("terminal") and (terminal is None or w["terminal"] == terminal)]
+
+
+def selected_terminal(screen):
+    return next((w for w in screen["windows"] if w.get("terminal") and w["selected"]), None)
+
+
+def start_task(qa, prompt, prefix):
+    """Start a task with PROMPT and wait until it is ready; return its name."""
+    qa.keys("C-c r c")
+    qa.type(prompt)
+    qa.keys("C-c C-c")
+    screen = qa.wait("the task " + prefix, lambda s: any(t["name"].startswith(prefix) for t in s["tasks"]))
+    name = next(t["name"] for t in screen["tasks"] if t["name"].startswith(prefix))
+    qa.status(name, "ready", "idle")
+    return name
+
+
+def open_task(qa, name):
+    qa.keys("C-c r l")
+    qa.type(name + "\r")
+    return qa.wait(name + "'s terminal", lambda s: (s.get("task") or {}).get("name") == name
+                   and selected_terminal(s))
+
+
+@journey("Panes and windows across tasks")
+def panes(qa, repo):
+    """Each task keeps its own panes and windows, in its own terminal."""
+    first = start_task(qa, "Count to three", "count-three")
+    second = start_task(qa, "Count to five", "count-five")
+    screen = open_task(qa, first)
+    own = screen["task"]["terminal"]
+    qa.keys("C-c |")
+    qa.step("Split in two", expect=[
+        ("two panes of its own", lambda s: len(terminals(s, own)) == 2)])
+    qa.keys("M-x")
+    qa.type("tmux-control-new-window\r")
+    qa.wait("the name prompt", lambda s: s["prompt"])
+    qa.keys("RET")
+    session = own.split("/")[-1]
+    qa.wait("a second window", lambda s: len(qa.tmux("list-windows", "-t", session)) == 2)
+    qa.step("A second tmux window", expect=[
+        ("its tab is the highlighted one", lambda s: "[1:" in (selected_terminal(s).get("tabs") or ""))])
+    qa.keys("C-c C-p")
+    qa.step("Back to the first window", expect=[
+        ("its tab is the highlighted one", lambda s: "[0:" in (selected_terminal(s).get("tabs") or "")),
+        ("with both its panes", lambda s: len(terminals(s, own)) == 2)])
+    qa.keys("C-c C-w")
+    qa.wait("the window chooser", lambda s: any("chooser" in w["buffer"] for w in s["windows"]))
+    qa.step("Choosing a window", expect=[
+        ("it offers the task's two windows and no others",
+         lambda s: [l.split(":")[0] for l in next(w for w in s["windows"] if "chooser" in w["buffer"])["text"]
+                    .split("\n") if re.match(r"\s*\d+:", l)] == ["0", "1"])])
+    qa.keys("q")
+    screen = open_task(qa, second)
+    qa.step("The other task", expect=[
+        ("only its own terminal", lambda s: all(w["terminal"] == s["task"]["terminal"] for w in terminals(s))),
+        ("its panel beside it", lambda s: (qa.window(s, "roost-task-info-mode") or {}).get("text", "").startswith(second))])
+    qa.keys("C-c C-s")
+    qa.wait("the session prompt", lambda s: s["prompt"])
+    qa.step("Choosing a session")
+    qa.type(session + "\r")
+    qa.wait(first + " again", lambda s: (s.get("task") or {}).get("name") == first)
+    qa.step("Back to the first task", expect=[
+        ("its two panes, as it left them", lambda s: len(terminals(s, own)) == 2),
+        ("and nothing of the other task's", lambda s: all(w["terminal"] == own for w in terminals(s)))])
+    qa.keys("C-c C-o")
+    qa.type("exit\r")
+    qa.wait("the shell to go", lambda s: len(terminals(s, own)) == 1)
+    qa.step("One pane again", expect=[
+        ("its panel back beside it", lambda s: qa.window(s, "roost-task-info-mode"))])
+
+
+JOURNEYS = [sweep, answer, fold, resize, merge, review, panes]
 
 
 def main():

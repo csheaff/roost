@@ -16,6 +16,10 @@
 (require 'ert)
 (require 'roost)
 
+(declare-function tmux-control-buffer-host "tmux-control" ())
+(declare-function tmux-control-buffer-socket-name "tmux-control" ())
+(declare-function tmux-control-buffer-session "tmux-control" ())
+
 (defvar qa--errors nil
   "Errors since `qa-take-errors' last ran, newest first, as strings.")
 
@@ -166,6 +170,29 @@ doesn't."
             (forward-line 1)))
         (when over `((width . ,width) (lines . ,(vconcat (nreverse over)))))))))
 
+(defun qa--terminal (buffer)
+  "BUFFER's tmux session as HOST/SOCKET/SESSION, if it is a terminal."
+  (with-current-buffer buffer
+    (when (and (derived-mode-p 'tmux-control-mode) (fboundp 'tmux-control-buffer-session)
+               (tmux-control-buffer-session))
+      (format "%s/%s/%s" (or (tmux-control-buffer-host) "local")
+              (tmux-control-buffer-socket-name) (tmux-control-buffer-session)))))
+
+(defun qa--tabs (window)
+  "WINDOW's header line as shown, the highlighted tab in [brackets], or nil."
+  (with-current-buffer (window-buffer window)
+    (when (and (derived-mode-p 'tmux-control-mode) header-line-format)
+      (let ((line (format-mode-line header-line-format nil window)) (shown "") (start 0))
+        (while (< start (length line))
+          (let ((end (or (next-single-property-change start 'face line) (length line))))
+            (setq shown (concat shown
+                                (if (memq 'tmux-control-tab-active
+                                          (ensure-list (get-text-property start 'face line)))
+                                    (format "[%s]" (string-trim (substring-no-properties line start end)))
+                                  (substring-no-properties line start end))))
+            (setq start end)))
+        (string-trim shown)))))
+
 (defun qa-screen ()
   "What is on screen now, as JSON."
   (let ((frame (or (frame-parent) (selected-frame))))
@@ -190,12 +217,18 @@ doesn't."
                           (roost . ,(if (qa--roost-buffer-p buffer) t :json-false))
                           (selected . ,(if (eq window (selected-window)) t :json-false))
                           (side . ,(window-parameter window 'window-side))
+                          (terminal . ,(qa--terminal buffer))
+                          (tabs . ,(qa--tabs window))
                           (child . ,(if (frame-parent (window-frame window)) t :json-false))
                           (columns . ,(window-body-width window))
                           (lines . ,(window-body-height window))
                           (text . ,(qa--visible-text window))
                           (overflow . ,(qa--overflow window)))))
                     (qa--windows))))
+       (task . ,(when-let* ((task (roost--frame-task)))
+                  `((name . ,(roost--field task 'name))
+                    (terminal . ,(format "%s/%s/%s" (or (roost--field task 'host) "local")
+                                         (roost--field task 'socket) (roost--field task 'session))))))
        (tasks . ,(vconcat (mapcar (lambda (task)
                                     `((name . ,(roost--field task 'name))
                                       (status . ,(roost--attention-status task))))
