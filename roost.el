@@ -743,26 +743,26 @@ and a newer notification about TASK replaces it."
          (notifications-notify :title title :body body))
         (t (message "%s: %s" title body))))
 
-(defconst roost--event-fields
-  '(status updatedAt lastEvent error lastReply request requestCommand exitCode statusBeforeCrash
-    agentSession claudeSession transcript)
-  "A task's fields that its agent's events and its runner change.
-They are as of its `updatedAt'.")
+(defconst roost--measured-fields
+  '(diff dirty files ahead behind update worktreeMissing prStatus gitStamp agentWork merging)
+  "A task's fields its host measures for each reply, such as Git statistics.
+They are as new as the reply, whatever its `updatedAt'.")
 
 (defun roost--newer-events (task old)
-  "TASK, keeping OLD's event fields when OLD's events are newer.
-A reply its host read before the agent's latest event, such as a poll's
-that took a while, arrives after one that read it: it must not bring
-back what the agent did before, as asking for permission again.  The
-rest of TASK, such as Git statistics, is as new as anything."
+  "TASK, or OLD with TASK's measurements when OLD's `updatedAt' is newer.
+A reply its host read before the agent's latest event or the task's
+latest change, such as a poll's that took a while, can arrive after one
+that read it: it must not bring back what was before, as an agent asking
+for permission again or the pane of an agent since stopped.  What its
+host measured, such as Git statistics, is as new as anything."
   (let ((new (roost--field task 'updatedAt))
         (had (roost--field old 'updatedAt)))
     (if (not (and (stringp new) (stringp had) (string< new had)))
         task
-      (dolist (field roost--event-fields task)
-        (setq task (assq-delete-all field task))
-        (when-let* ((cell (assq field old)))
-          (push cell task))))))
+      (let ((kept (copy-sequence old)))
+        (dolist (field roost--measured-fields kept)
+          (when-let* ((cell (assq field task)))
+            (setq kept (cons cell (assq-delete-all field kept)))))))))
 
 (defun roost--cache-task (host task)
   "Cache TASK from HOST and notify only on attention transitions."

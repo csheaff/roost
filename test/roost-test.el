@@ -3984,6 +3984,15 @@ Read from the layout transient keeps, whose form varies by version."
      (should (equal (roost--field task 'agentSession) "after-clear"))
      ;; What else it read is still news.
      (should (equal (roost--field task 'diff) "1 file changed")))
+   ;; Nor the pane of an agent stopped since.
+   (roost--cache-task "dev" (append '((updatedAt . "2026-10-13T10:31:38+00:00") (paneId) (windowId) (live))
+                                    (roost-test--task nil "stopped")))
+   (roost--cache-task "dev" (append '((updatedAt . "2026-10-13T10:31:37+00:00") (live . t))
+                                    (roost-test--task nil "ready")))
+   (let ((task (gethash '("dev" "0123456789abcdef") roost--tasks)))
+     (should (equal (roost--field task 'status) "stopped"))
+     (should-not (roost--field task 'paneId))
+     (should-not (roost--field task 'live)))
    ;; A newer one is taken whole.
    (roost--cache-task "dev" (append '((updatedAt . "2026-10-13T10:31:40+00:00") (lastEvent . "UserPromptSubmit"))
                                     (roost-test--task nil "running")))
