@@ -6,12 +6,15 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.8.1:
 
+- tmux-control 0.8.1 keeps a terminal's top row in sight after `C-c C-r`
+  reconnects it, which a dropped connection, such as a laptop's sleep,
+  calls for. To upgrade, update tmux-control too.
 - Starting a task in a buffer on a remote host, such as Dired or a shell
   there, no longer holds Emacs while TRAMP connects. The draft looked for
   the checkout on the host, which took seconds before TRAMP had connected
   to it, where it now takes a project Roost knows the buffer is in.
   Nothing to do when upgrading.
-- With tmux-control later than 0.7.2, a task's terminal split into panes,
+- With tmux-control 0.8.0 or later, a task's terminal split into panes,
   as with `t`'s shell, keeps its window tabs above the panes, and each
   pane's mode line names the task and keeps the rest of your mode line,
   such as Roost's count of waiting agents. To upgrade, update tmux-control
@@ -66,7 +69,7 @@ Since 0.8.1:
   when upgrading.
 - Opening a task shows its terminal in place of another task's, rather than
   in a code or Magit window selected beside it, which left the other task's
-  terminal on screen. With tmux-control later than 0.7.2, switching away from
+  terminal on screen. With tmux-control 0.8.0 or later, switching away from
   a task whose terminal is split into panes no longer leaves those panes
   beside the next task's, and they come back when you return. To upgrade,
   update tmux-control too.
@@ -89,7 +92,7 @@ Since 0.8.1:
   gone: `?` in the panel opens the same menu. Nothing to do when upgrading.
 - Links in an agent's latest reply, in the task panel and in Magit, open with
   a click or `RET`, and a Markdown link shows only its text. In the agent's
-  terminal, with tmux-control later than 0.7.2, `C-c C-u` opens a link it
+  terminal, with tmux-control 0.8.0 or later, `C-c C-u` opens a link it
   shows, and so does a click on a link the agent marks as one. Claude Code
   marks its links with tmux 3.4 or later, as in the pull request it names
   `#22`; before, those showed only their text, with no URL anywhere. To
@@ -107,8 +110,8 @@ Since 0.8.1:
   change when resumed.
 - Roost needs tmux 3.1 or later, as it always has: it sets options on
   panes, which tmux 3.0 can't. `roost-doctor` now says so.
-  `C-c C-o` moves between the agent and its shell once tmux-control is past
-  0.7.2.
+  `C-c C-o` moves between the agent and its shell with tmux-control 0.8.0
+  or later.
 - Prompts, replies and permission requests are set in `variable-pitch`
   (face `roost-prose`), which fits more of them in the panel and the
   dashboard; tables and code in replies keep the fixed-pitch font. A status
@@ -173,7 +176,7 @@ Since 0.8.1:
   `u` on a task with uncommitted changes offers to have its agent commit and
   update, and `roost-merge-style` can squash a task into one commit. With no
   tasks yet, the menus grey out the task commands.
-- With tmux-control newer than 0.7.2, switching sessions from a terminal
+- With tmux-control 0.8.0 or later, switching sessions from a terminal
   (`C-c C-s`, next and previous session) opens that task in its workspace.
 - `roost-claude-command` moved into `roost-agent-commands`, and
   `roost-use-perspectives` into `roost-workspace`; both still work.

@@ -91,12 +91,14 @@ advised for this: natively compiled, they call each other directly."
 (defvar qa--commands-run (make-hash-table :test 'eq)
   "The commands journeys ran, through the command loop.")
 
-(defun qa--note-command ()
-  "Note the command that just ran, for `qa-commands-not-run'."
-  (when (and this-command (symbolp this-command))
-    (puthash this-command t qa--commands-run)))
+(defun qa--note-command (command &rest _)
+  "Note COMMAND, run from a key or a menu, for `qa-commands-not-run'."
+  (when (and command (symbolp command))
+    (puthash command t qa--commands-run)))
 
-(add-hook 'post-command-hook #'qa--note-command)
+;; Keys and menus alike, transient's suffixes among them, run their
+;; commands through `command-execute'.
+(advice-add 'command-execute :before #'qa--note-command)
 
 (defun qa-commands-not-run ()
   "Roost's and tmux-control's commands no journey ran, by name.
@@ -108,6 +110,10 @@ view stubbed out, so it doesn't count here."
                   (when (and (commandp symbol)
                              (string-match-p "\\`\\(?:roost\\|tmux-control\\)-" name)
                              (not (string-match-p "--" name))
+                             ;; A major mode comes with the command that
+                             ;; shows its buffer.
+                             (not (and (string-suffix-p "-mode" name)
+                                       (not (memq symbol minor-mode-list))))
                              (not (gethash symbol qa--commands-run)))
                     (push name missing)))))
     (sort missing #'string<)))

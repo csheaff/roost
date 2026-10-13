@@ -334,6 +334,24 @@ class Run:
     def screen(self):
         return self.emacs.json("(qa-screen)")
 
+    def processes(self, own=True):
+        """This run's processes, or with OWN false, other QA runs', as lines."""
+        lines = subprocess.run(["ps", "-axo", "pid,etime,command"], capture_output=True,
+                               text=True).stdout.split("\n")[1:]
+        return [line.strip()[:200] for line in lines
+                if (self.name in line) == own and "roost-qa-" in line and "ps -axo" not in line]
+
+    def blocked_in(self, line):
+        """Where the process on LINE, from `processes', waits, as the system
+        calls macOS's `sample' finds it in, or ""."""
+        if not shutil.which("sample"):
+            return ""
+        pid = line.split()[0]
+        out = subprocess.run(["sample", pid, "1", "-mayDie"], capture_output=True, text=True).stdout
+        calls = re.findall(r"\b(flock|read|__select|poll|kevent|__wait4|__semwait_signal|nanosleep|"
+                           r"__psynch_cvwait|recvfrom|__open)\b", out)
+        return ", ".join(dict.fromkeys(calls))
+
     def tmux(self, *args):
         """What tmux on this run's socket says to ARGS, as lines."""
         return subprocess.run(["tmux", "-L", self.name] + list(args), capture_output=True,
@@ -1333,6 +1351,9 @@ def main():
     chosen = [known[name] for name in args.journeys] or JOURNEYS
     qa = Run(args)
     print("Roost QA in %s" % qa.out)
+    others = qa.processes(own=False)
+    if others:
+        qa.notes.add("%d processes of other QA runs were running, which can slow this one" % len(others))
     try:
         repo = qa.start()
         for chosen_journey in chosen:
@@ -1352,8 +1373,13 @@ def main():
                     screen = qa.screen()
                 except Stuck:
                     screen = dict(windows=[])
-                qa.steps.append(dict(journey=qa.journey, title="Stopped", problems=[str(stuck)],
-                                     shot=None, screen=screen))
+                # What was still running, such as a request that never
+                # replied, for working out why.
+                running = ["Running then: %s%s" % (line, (" — waiting in " + qa.blocked_in(line))
+                                                       if "runpy" in line else "")
+                           for line in qa.processes()]
+                qa.steps.append(dict(journey=qa.journey, title="Stopped",
+                                     problems=[str(stuck)] + running, shot=None, screen=screen))
                 print("  ✗ Stopped: %s" % stuck)
     finally:
         try:

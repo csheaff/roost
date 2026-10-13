@@ -138,7 +138,7 @@ for you, permission requests first. Answer it in the terminal, then `n` again.
 A link the agent shows there, such as the pull request it opened, opens with
 `C-c C-u`, which offers each link on the screen, and with a click when the
 agent marks it as a link, as Claude Code does with tmux 3.4 or later (both
-need tmux-control later than 0.7.2).
+need tmux-control 0.8.0 or later).
 A finished agent you have looked at stops counting, and turns grey, until it
 replies again; one that failed or stopped by itself stops counting once you've
 seen it. What you've seen is kept on the task's host, for your other machines
@@ -161,7 +161,7 @@ when the terminal would drop below 80 columns, and `q` in it turns it off.
 **Check the work yourself.** `t` opens a shell beside the agent, in the same
 worktree, and returns to it after. Run the tests, start the app, poke at it.
 The agent and the shell are tmux panes, each in a window of its own: `C-x o`
-moves between them (so does `C-c C-o`, with tmux-control later than 0.7.2),
+moves between them (so does `C-c C-o`, with tmux-control 0.8.0 or later),
 `C-c C-t` shows one at a time, and tmux-control's other pane keys work too. `C-c |` splits off another pane,
 which starts in the worktree; it closes when its program exits, and every
 pane closes when the task stops.
