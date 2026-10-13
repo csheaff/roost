@@ -368,6 +368,10 @@ class Run:
                     problems.append("%s, another task's terminal, is beside %s's" % (window["buffer"], own["name"]))
             if window["mode"] == "roost-sidebar-list-mode" and window["total"] != screen["sidebar-width"]:
                 problems.append("The sidebar is %d columns wide, not %d" % (window["total"], screen["sidebar-width"]))
+            if window.get("terminal") and window.get("pane"):
+                drift = self.drift(window)
+                if drift:
+                    problems.append(drift)
             if window.get("overflow"):
                 over = window["overflow"]
                 problems.append("%s: %d lines cut off at the window's edge (%d px), the first %d px: %r" % (
@@ -401,6 +405,25 @@ class Run:
         for description in known:
             print("      known: " + description)
         return screen
+
+    def drift(self, window, timeout=3):
+        """How WINDOW's terminal differs from what tmux has in its pane, or None.
+        Output on its way may take a moment to show."""
+        deadline = time.monotonic() + timeout
+        while True:
+            ours = self.emacs.json("(json-encode (qa-terminal-screen %s))" % lisp(window["buffer"])) or []
+            theirs = [line.rstrip() for line in self.tmux("capture-pane", "-p", "-t", window["pane"])]
+            while theirs and not theirs[-1]:
+                theirs.pop()
+            if ours == theirs or time.monotonic() > deadline:
+                break
+            time.sleep(0.25)
+        if ours == theirs:
+            return None
+        row = next((i for i, (a, b) in enumerate(zip(ours, theirs)) if a != b), min(len(ours), len(theirs)))
+        return "%s shows other than tmux's pane %s, from row %d: %r, where tmux has %r" % (
+            window["buffer"], window["pane"], row + 1, (ours[row:row + 1] or [""])[0][:50],
+            (theirs[row:row + 1] or [""])[0][:50])
 
     # Reporting
 

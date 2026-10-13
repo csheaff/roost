@@ -195,6 +195,27 @@ doesn't."
       (format "%s/%s/%s" (or (tmux-control-buffer-host) "local")
               (tmux-control-buffer-socket-name) (tmux-control-buffer-session)))))
 
+(defun qa-terminal-screen (buffer)
+  "The live screen of terminal BUFFER, a buffer or its name, as lines.
+Right-trimmed, without the trailing blank ones, as `capture-pane' gives
+them; nil when BUFFER isn't a terminal."
+  (when-let* ((buffer (get-buffer buffer)))
+    (with-current-buffer buffer
+      (when (and (derived-mode-p 'tmux-control-mode) (bound-and-true-p tmux-control--terminal)
+                 (eat-term-live-p tmux-control--terminal))
+        (let ((start (eat-term-display-beginning tmux-control--terminal))
+              (end (eat-term-end tmux-control--terminal))
+              lines)
+          ;; Without the invisible cell Eat puts after a wide character.
+          (dolist (line (split-string (apply #'string
+                                             (mapcar #'char-after
+                                                     (seq-remove (lambda (i) (get-text-property i 'invisible))
+                                                                 (number-sequence start (1- end)))))
+                                      "\n"))
+            (push (string-trim-right line) lines))
+          (while (and lines (string-empty-p (car lines))) (pop lines))
+          (vconcat (nreverse lines)))))))
+
 (defun qa--tabs (window)
   "WINDOW's header line as shown, the highlighted tab in [brackets], or nil."
   (with-current-buffer (window-buffer window)
@@ -247,6 +268,9 @@ doesn't."
                           (selected . ,(if (eq window (selected-window)) t :json-false))
                           (side . ,(window-parameter window 'window-side))
                           (terminal . ,(qa--terminal buffer))
+                          (pane . ,(with-current-buffer buffer
+                                     (and (derived-mode-p 'tmux-control-mode) (fboundp 'tmux-control-active-pane)
+                                          (tmux-control-active-pane))))
                           (tabs . ,(qa--tabs window))
                           (child . ,(if (frame-parent (window-frame window)) t :json-false))
                           (frame . ,(qa--frame-id (window-frame window)))
@@ -300,7 +324,10 @@ text is measured in pixels.  Return how many ran and the problems, as JSON."
         (with-selected-frame frame
           (let ((inhibit-message t))
             (setq stats (ert-run-tests-batch "^roost-sweep-"))))
-      (delete-frame frame))
+      (delete-frame frame)
+      ;; The sweep draws its sample tasks in Roost's own buffers, the
+      ;; sidebar's among them: draw yours again.
+      (roost--redraw))
     (json-encode
      `((ran . ,(length (ert--stats-tests stats)))
        (problems
