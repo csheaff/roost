@@ -57,21 +57,23 @@ process filters and sentinels, and hooks, which never reach a command."
 (defvar qa--pauses-seen nil
   "The latest of tmux-control's pause notes `qa-take-pauses' has returned.")
 
-(defun qa--own-request (execute &rest arguments)
-  "Run EXECUTE with ARGUMENTS, a request from qa.py, as work of its own.
-The pause log then blames qa.py's requests, such as the sweep, for the
-pauses they make, which `qa-take-pauses' leaves out."
-  (let ((start (float-time)))
-    (unwind-protect
-        (apply execute arguments)
-      (tmux-control--pause-log-took start (lambda () "qa.py's own request")))))
+(defmacro qa--own-work (&rest body)
+  "Run BODY, a long request from qa.py, such as the sweep, as work of its own.
+The pause log then blames it for the pause it makes, which
+`qa-take-pauses' leaves out.  The server's own functions can't be
+advised for this: natively compiled, they call each other directly."
+  (declare (indent 0))
+  `(let ((start (float-time)))
+     (unwind-protect
+         (progn ,@body)
+       (when (fboundp 'tmux-control--pause-log-took)
+         (tmux-control--pause-log-took start (lambda () "qa.py's own request"))))))
 
 (defun qa-watch-pauses ()
   "Note each pause of a second or more, if tmux-control can, and say whether it can."
   (when (fboundp 'tmux-control-pause-log-mode)
     (setq tmux-control-pause-log-threshold 1.0)
     (tmux-control-pause-log-mode 1)
-    (advice-add 'server-execute :around #'qa--own-request)
     t))
 
 (defun qa-take-pauses ()
@@ -394,7 +396,7 @@ text is measured in pixels.  Return how many ran and the problems, as JSON."
     (unwind-protect
         (with-selected-frame frame
           (let ((inhibit-message t))
-            (setq stats (ert-run-tests-batch "^roost-sweep-"))))
+            (setq stats (qa--own-work (ert-run-tests-batch "^roost-sweep-")))))
       (delete-frame frame)
       ;; The sweep draws its sample tasks in Roost's own buffers, the
       ;; sidebar's among them: draw yours again.
