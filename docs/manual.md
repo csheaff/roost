@@ -449,8 +449,10 @@ Roost's views cut off at the window's edge, and for another task's terminal
 beside the current task's; it also runs the sweep where text is measured in
 pixels. It takes about two minutes, writes `report.html` with each step's
 windows, the echo area and, on macOS, a screenshot, and fails if anything was
-wrong. Look at the screenshots too: the checks don't see what merely looks
-wrong. Emacs needs
+wrong. A problem known to come from elsewhere, such as tmux-control showing no
+tabs while a session is split into panes, is marked `Known` in its journey: it
+is reported, without failing the run, until it stops happening. Look at the
+screenshots too: the checks don't see what merely looks wrong. Emacs needs
 tmux-control and its dependencies:
 
     make qa QA_FLAGS="-L ../tmux-control --package-dir ~/.emacs.d/elpa"

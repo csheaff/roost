@@ -46,6 +46,11 @@ class Stuck(Exception):
     """A journey can't go on: what it waited for never came."""
 
 
+class Known(tuple):
+    """An expectation that fails for a known reason, reported but not a problem:
+    Known((DESCRIPTION, CHECK)).  The report says when it starts to hold."""
+
+
 def lisp(value):
     """VALUE as an Emacs Lisp string literal."""
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
@@ -323,20 +328,30 @@ class Run:
                 problems.append("%s: %d lines cut off at the window's edge (%d px), the first %d px: %r" % (
                     window["buffer"], len(over["lines"]), over["width"], over["lines"][0][1],
                     over["lines"][0][0].strip()[:60]))
-        for description, check in expect:
+        known = []
+        for expectation in expect:
+            description, check = expectation[:2]
             try:
                 ok = check(screen)
             except Exception as error:
                 ok = False
                 description += " (%s)" % error
-            if not ok:
+            if isinstance(expectation, Known):
+                if ok:
+                    self.notes.add("A known problem no longer happens, so it can be an expectation: "
+                                   + description)
+                else:
+                    known.append(description)
+            elif not ok:
                 problems.append("Expected: " + description)
-        self.steps.append(dict(journey=self.journey, title=title, problems=problems,
+        self.steps.append(dict(journey=self.journey, title=title, problems=problems, known=known,
                                shot=self.shot(), screen=screen))
         mark = "✗" if problems else "✓"
         print("  %s %s" % (mark, title))
         for problem in problems:
             print("      " + problem)
+        for description in known:
+            print("      known: " + description)
         return screen
 
     # Reporting
@@ -349,7 +364,8 @@ class Run:
             if step["journey"] != journey:
                 journey = step["journey"]
                 rows.append("<h2>%s</h2>" % html.escape(journey))
-            problems = "".join("<li>%s</li>" % html.escape(p) for p in step["problems"])
+            problems = "".join("<li>%s</li>" % html.escape(p) for p in step["problems"]) + "".join(
+                '<li class="known">Known: %s</li>' % html.escape(k) for k in step.get("known", []))
             windows = "".join(
                 "<details><summary>%s (%s, %d×%d)</summary><pre>%s</pre></details>" % (
                     html.escape(w["buffer"]), html.escape(w["mode"]), w["columns"], w["lines"],
@@ -374,6 +390,7 @@ section.bad { border-color: #c33; }
 img { max-width: 100%%; border-radius: 6px; }
 pre { overflow-x: auto; font-size: 12px; }
 li { color: #c33; }
+li.known { color: #888; }
 </style>
 <h1>Roost QA</h1>
 <p>%s · %d steps, %d with problems · Roost at %s</p>
@@ -549,7 +566,8 @@ def review(qa, repo):
     qa.keys("RET ;")
     qa.wait("the note box", lambda s: (qa.window(s, "roost-note-box-mode") or {}).get("selected"))
     qa.step("A box under the line", expect=[
-        ("it is a frame of its own", lambda s: qa.window(s, "roost-note-box-mode")["child"])])
+        ("it is a frame of its own", lambda s: qa.window(s, "roost-note-box-mode")["child"]),
+        ("the task is still the frame's, for the checks", lambda s: (s.get("task") or {}).get("name") == name)])
     qa.type("Call it DUE_TODAY.")
     qa.keys("C-c C-c")
     qa.wait("the note under its line", lambda s: "Call it DUE_TODAY." in
@@ -610,11 +628,12 @@ def panes(qa, repo):
     qa.keys("RET")
     session = own.split("/")[-1]
     qa.wait("a second window", lambda s: len(qa.tmux("list-windows", "-t", session)) == 2)
+    # tmux-control shows no tabs while a session is split into panes.
     qa.step("A second tmux window", expect=[
-        ("its tab is the highlighted one", lambda s: "[1:" in (selected_terminal(s).get("tabs") or ""))])
+        Known(("its tab is the highlighted one", lambda s: "[1:" in (selected_terminal(s).get("tabs") or "")))])
     qa.keys("C-c C-p")
     qa.step("Back to the first window", expect=[
-        ("its tab is the highlighted one", lambda s: "[0:" in (selected_terminal(s).get("tabs") or "")),
+        Known(("its tab is the highlighted one", lambda s: "[0:" in (selected_terminal(s).get("tabs") or ""))),
         ("with both its panes", lambda s: len(terminals(s, own)) == 2)])
     qa.keys("C-c C-w")
     qa.wait("the window chooser", lambda s: any("chooser" in w["buffer"] for w in s["windows"]))

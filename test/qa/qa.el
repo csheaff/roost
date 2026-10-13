@@ -225,7 +225,8 @@ doesn't."
                           (text . ,(qa--visible-text window))
                           (overflow . ,(qa--overflow window)))))
                     (qa--windows))))
-       (task . ,(when-let* ((task (roost--frame-task)))
+       ;; The main frame's, though a child frame such as a note box is selected.
+       (task . ,(when-let* ((task (with-selected-frame frame (roost--frame-task))))
                   `((name . ,(roost--field task 'name))
                     (terminal . ,(format "%s/%s/%s" (or (roost--field task 'host) "local")
                                          (roost--field task 'socket) (roost--field task 'session))))))
