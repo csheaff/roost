@@ -1650,6 +1650,30 @@
            (push-button (1- (point))))
          (should (string-suffix-p ":dev:/srv/ledger/" started)))))))
 
+(ert-deftest roost-a-draft-on-a-host-not-connected-to-takes-a-known-project ()
+  ;; Composing in a remote directory looked for its checkout there, which
+  ;; held Emacs while TRAMP connected, for a project Roost already knew.
+  (roost-test--isolated
+   (let ((roost--remembered-projects '("/ssh:dev:/srv/ledger/" "/ssh:dev:/srv/ledger/tools/"))
+         (roost--projects-loaded t)
+         looked)
+     (cl-letf (((symbol-function 'locate-dominating-file) (lambda (&rest _) (setq looked t) nil))
+               ((symbol-function 'vc-root-dir) #'ignore))
+       (with-temp-buffer
+         (setq default-directory "/ssh:dev:/srv/ledger/src/")
+         (should (equal (roost--compose-default-directory nil nil) "/ssh:dev:/srv/ledger/"))
+         ;; The deepest project it is in.
+         (setq default-directory "/ssh:dev:/srv/ledger/tools/bin/")
+         (should (equal (roost--compose-default-directory nil nil) "/ssh:dev:/srv/ledger/tools/"))
+         ;; Outside them, on a host not connected to, the latest project.
+         (setq default-directory "/ssh:dev:/tmp/")
+         (should (equal (roost--compose-default-directory nil nil) "/ssh:dev:/srv/ledger/"))
+         (should-not looked)
+         ;; A local directory is looked in.
+         (setq default-directory temporary-file-directory)
+         (roost--compose-default-directory nil nil)
+         (should looked))))))
+
 (ert-deftest roost-sidebar-mode-pins-a-left-window ()
   (roost-test--isolated
    (save-window-excursion

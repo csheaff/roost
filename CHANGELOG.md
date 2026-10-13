@@ -6,6 +6,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.8.1:
 
+- Starting a task in a buffer on a remote host, such as Dired or a shell
+  there, no longer holds Emacs while TRAMP connects. The draft looked for
+  the checkout on the host, which took seconds before TRAMP had connected
+  to it, where it now takes a project Roost knows the buffer is in.
+  Nothing to do when upgrading.
 - With tmux-control later than 0.7.2, a task's terminal split into panes,
   as with `t`'s shell, keeps its window tabs above the panes, and each
   pane's mode line names the task and keeps the rest of your mode line,

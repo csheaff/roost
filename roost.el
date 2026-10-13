@@ -1692,10 +1692,26 @@ On a project's heading in the dashboard or sidebar, that project."
   (cond (task (if fork (roost--remote-directory task) (roost--project-directory task)))
         ((get-text-property (point) 'roost-directory))
         ((ignore-errors (vc-root-dir)))
-        ;; Buffers VC does not track, such as Dired or a shell, in a checkout.
-        ((when-let* ((root (ignore-errors (locate-dominating-file default-directory ".git"))))
+        ;; Buffers VC does not track, such as Dired or a shell, in a checkout:
+        ;; one Roost knows, by name, or else the checkout on disk.  On a host
+        ;; TRAMP has not connected to yet, looking there would connect, while
+        ;; you wait.
+        ((roost--known-project-of default-directory))
+        ((when-let* (((or (not (file-remote-p default-directory))
+                          (file-remote-p default-directory nil t)))
+                     (root (ignore-errors (locate-dominating-file default-directory ".git"))))
            (file-name-as-directory (expand-file-name root))))
         ((car (roost--known-projects)))))
+
+(defun roost--known-project-of (directory)
+  "The project Roost knows that DIRECTORY is in, the deepest, or nil.
+By name alone, so a remote DIRECTORY opens no connection."
+  (let ((directory (file-name-as-directory (expand-file-name directory))))
+    (car (sort (seq-filter (lambda (project)
+                             (string-prefix-p (file-name-as-directory (expand-file-name project))
+                                              directory))
+                           (roost--known-projects))
+               (lambda (a b) (> (length a) (length b)))))))
 
 (defun roost--compose-seed ()
   "Prompt text from the current buffer, or nil.
