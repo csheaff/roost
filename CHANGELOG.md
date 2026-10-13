@@ -14,6 +14,10 @@ Since 0.8.1:
   the dashboard. Retiring a task whose pull request GitHub squashed no
   longer refuses for unmerged commits when the agent opened it. Nothing to
   do when upgrading.
+- The manual recommends tramp-rpc for remote hosts, with a setup to copy,
+  and `roost-doctor` names it for a host whose Magit goes over a shell
+  method. Magit opened a remote task in 0.4 s with it, against 3.6 s over
+  `scp`. Nothing to do when upgrading, unless you want it.
 - With tmux-control later than 0.7.2, a task's terminal split into panes,
   as with `t`'s shell, keeps its window tabs above the panes, and each
   pane's mode line names the task and keeps the rest of your mode line,
