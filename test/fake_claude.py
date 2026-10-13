@@ -62,7 +62,17 @@ def status(state, msg=None, **fields):
 event("SessionStart")
 status("idle")
 print("FAKE_CLAUDE_READY " + session, flush=True)
-for line in sys.stdin:
+
+
+def lines():
+    """The prompt it started with, as Claude Code takes it for its first
+    turn, then what is typed."""
+    if "--" in sys.argv[:-1]:
+        yield sys.argv[sys.argv.index("--") + 1].strip() + "\n"
+    yield from sys.stdin
+
+
+for line in lines():
     event("UserPromptSubmit")
     status("working", "Thinking")
     if line.strip() == "permission":
@@ -84,7 +94,9 @@ for line in sys.stdin:
             quoted = "'" + command.replace("'", "'\"'\"'") + "'"
             subprocess.run(["/bin/sh", "-c", "eval " + quoted + " < /dev/null && pwd -P > /dev/null"])
             event("PostToolUse", tool_name="Bash")
-        event("Stop")
+            event("Stop", last_assistant_message="Ran " + command)
+        else:
+            event("Stop")
         status("done")
     elif line.strip() == "interrupt":
         # Esc: Claude stops the turn, and runs no hook.

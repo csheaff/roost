@@ -435,6 +435,25 @@ every question is answered with `C-g`. A new button or key is covered as it
 is. A new kind of task needs a state in `roost-sweep--gallery`, and a new view
 an entry in `roost-sweep--views`.
 
+`make qa` uses Roost as you would, in a GUI Emacs of its own: a plain
+configuration with its own server, state directory and tmux socket, and
+`test/fake_claude.py` for Claude Code, so Git, tmux and the host helper are
+real and no model is called. Its journeys start a task from the menu, answer
+it in its terminal, fold and unfold a long prompt with the mouse, resize the
+frame and merge a commit, pressing keys and clicking through Emacs's command
+loop. After each step it checks for Lisp errors, in commands, timers and
+process filters alike, for a backtrace, and for lines of Roost's views cut off
+at the window's edge; it also runs the sweep where text is measured in pixels.
+It takes about a minute, writes `report.html` with each step's windows and,
+on macOS, a screenshot, and fails if anything was wrong. Emacs needs
+tmux-control and its dependencies:
+
+    make qa QA_FLAGS="-L ../tmux-control --package-dir ~/.emacs.d/elpa"
+
+Package directories are read, never written. `--load FILE` in `QA_FLAGS` loads
+Emacs Lisp after Roost, such as a change to try, and `--keep` leaves the Emacs
+and its tmux server running. A new flow gets a journey in `test/qa/qa.py`.
+
 Claude Code updates itself often, and Roost relies on what it reports and
 does. `make contract` scans the installed Claude Code for the hook events,
 notification types and payload fields Roost reads, and names any it has not
