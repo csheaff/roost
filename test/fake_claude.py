@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import termios
+import time
 import uuid
 
 settings = json.loads(Path(sys.argv[sys.argv.index("--settings") + 1]).read_text())
@@ -153,6 +154,17 @@ for line in lines():
         print("LONG DONE", flush=True)
         record("assistant", "Printed %d lines" % count)
         event("Stop", last_assistant_message="Printed %d lines" % count)
+        status("done")
+    elif line.startswith("stream "):
+        # Output for a while, as an agent at work prints it, a numbered
+        # line at a time.
+        _, count, pause, label = line.split()
+        for number in range(1, int(count) + 1):
+            print("STREAM %s %04d \x1b[3%dmworking on it\x1b[39m" % (label, number, 1 + number % 6), flush=True)
+            time.sleep(float(pause))
+        print("STREAM %s DONE" % label, flush=True)
+        record("assistant", "Streamed " + label)
+        event("Stop", last_assistant_message="Streamed " + label)
         status("done")
     elif line.strip() == "exit":
         break

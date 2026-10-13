@@ -27,6 +27,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -194,7 +195,7 @@ class Run:
 (require 'roost-sweep)
 (setq roost-state-directory %(state)s
       roost-socket-name %(server)s
-      roost-hosts '(%(host)s)
+      roost-hosts '(%(hosts)s)
       roost-agent-commands '(("claude" %(python)s %(fake)s))
       roost-workspace nil
       ;; Nobody focuses this Emacs while you work elsewhere.
@@ -215,7 +216,7 @@ class Run:
            checkout=lisp(str(CHECKOUT)), test=lisp(str(CHECKOUT / "test")), qa=lisp(str(HERE)),
            server=lisp(self.name), state=lisp(str(self.work / "state")),
            python=lisp(sys.executable), fake=lisp(str(FAKE)), repo=lisp(str(repo) + "/"),
-           host=lisp(self.host) if self.host else "nil",
+           hosts=self.hosts,
            remote="t" if self.host else "nil",
            # The project as Emacs reaches it: on the host, over TRAMP.
            project=lisp(("/ssh:%s:" % self.host if self.host else "") + str(repo) + "/")))
@@ -325,6 +326,12 @@ class Run:
                               text=True, env=self.tmux_env).stdout.split("\n")[:-1]
 
     @property
+    def hosts(self):
+        """`roost-hosts', as Lisp: with --remote, qa-remote and this machine,
+        as with a configuration that has a host or two besides its own."""
+        return "%s nil" % lisp(self.host) if self.host else "nil"
+
+    @property
     def host_label(self):
         """How Roost names the host the tasks are on."""
         return self.host or "local"
@@ -386,8 +393,10 @@ class Run:
             return None
         return name
 
-    def step(self, title, expect=()):
-        """Check the screen as it is now, against the rules and EXPECT."""
+    def step(self, title, expect=(), streaming=False):
+        """Check the screen as it is now, against the rules and EXPECT.
+        STREAMING says agents are printing, so a terminal can't be caught
+        matching tmux's capture of its pane, which is left unchecked."""
         self.settle()
         screen = self.screen()
         problems = ["Error: " + error for error in self.emacs.json("(json-encode (vconcat (qa-take-errors)))")]
@@ -415,7 +424,7 @@ class Run:
             if window.get("history"):
                 # Nothing here scrolls a terminal back: it showed history by itself.
                 problems.append("%s shows %d lines of history above its screen" % (window["buffer"], window["history"]))
-            if window.get("terminal") and window.get("pane"):
+            if window.get("terminal") and window.get("pane") and not streaming:
                 drift = self.drift(window)
                 if drift:
                     problems.append(drift)
@@ -481,6 +490,11 @@ class Run:
 
     def report(self):
         failed = [step for step in self.steps if step["problems"]]
+        # What no journey reaches: where the next one should go.
+        try:
+            self.not_run = self.emacs.json("(json-encode (vconcat (qa-commands-not-run)))")
+        except (RuntimeError, Stuck, ValueError):
+            self.not_run = None
         rows = []
         journey = None
         for step in self.steps:
@@ -525,7 +539,10 @@ li.known { color: #888; }
        html.escape(self.git(CHECKOUT, "rev-parse", "--short", "HEAD")
                    + (" with changes" if self.git(CHECKOUT, "status", "--porcelain") else "")),
        "".join("<p><em>%s.</em></p>" % html.escape(note) for note in sorted(self.notes)),
-       "\n".join(rows)))
+       "\n".join(rows) + (
+           "<h2>Commands no journey ran</h2><p>%d of Roost's and tmux-control's: %s</p>" % (
+               len(self.not_run), html.escape(", ".join(self.not_run)))
+           if self.not_run else "")))
         return failed
 
 
@@ -672,6 +689,11 @@ def merge(qa, repo):
 def review(qa, repo):
     if qa.emacs.eval("(and (require 'magit nil t) t)") != "t":
         qa.notes.add("No review journey: Magit isn't loaded")
+        return
+    if qa.host:
+        # Each of its many Git calls takes round trips: most of a minute.
+        qa.notes.add("No review journey: Magit over TRAMP's ssh method is too slow on a host this far "
+                     "away, which is why roost-doctor suggests tramp-rpc")
         return
     qa.keys("C-c r c")
     qa.type("ask sh -c \"echo 'TODAY = None' >> notes.py\"")
@@ -1166,8 +1188,7 @@ def exits(qa, repo):
 @journey("A host Roost can't reach")
 def unreachable(qa, repo):
     """A host that doesn't answer is named, in the sidebar and the dashboard, within their windows."""
-    host = lisp(qa.host) if qa.host else "nil"
-    qa.emacs.eval("(progn (setq roost-hosts '(%s \"qa-unreachable.invalid\")) (roost-refresh) t)" % host)
+    qa.emacs.eval("(progn (setq roost-hosts '(%s \"qa-unreachable.invalid\")) (roost-refresh) t)" % qa.hosts)
     try:
         qa.wait("the host to be named", lambda s: "unreachab" in
                 (qa.window(s, "roost-sidebar-list-mode") or {}).get("text", ""), timeout=30)
@@ -1177,7 +1198,7 @@ def unreachable(qa, repo):
         qa.step("So does the dashboard", expect=[
             ("with why", lambda s: "is unreachable" in qa.window(s, "roost-dashboard-mode")["text"])])
     finally:
-        qa.emacs.eval("(progn (setq roost-hosts '(%s)) (clrhash roost--errors) (roost--redraw) t)" % host)
+        qa.emacs.eval("(progn (setq roost-hosts '(%s)) (clrhash roost--errors) (roost--redraw) t)" % qa.hosts)
 
 
 def pager(screen):
@@ -1217,9 +1238,54 @@ def scrollback(qa, repo):
         ("the reply's end on screen", lambda s: "LONG DONE" in selected_terminal(s)["text"])])
 
 
+@journey("A busy fleet")
+def fleet(qa, repo):
+    """Agents print at once while you move between their terminals: each
+    shows its own output, and Emacs keeps answering throughout."""
+    labels = ("one", "two", "three", "four")
+    names = [new_task(qa, "stream 300 0.05 " + label) for label in labels]
+    for name in names:
+        qa.status(name, "running")
+    for label, name in zip(labels, names):
+        open_task(qa, name)
+        qa.wait(name + "'s output", lambda s: "STREAM %s" % label in (selected_terminal(s) or {}).get("text", ""))
+        qa.step("%s while they all print" % name, streaming=True, expect=[
+            ("its own output", lambda s: "STREAM %s" % label in selected_terminal(s)["text"]
+             and not any("STREAM %s " % other in selected_terminal(s)["text"]
+                         for other in labels if other != label))])
+    for name in names:
+        qa.status(name, "ready", "idle", timeout=90)
+    for label, name in zip(labels, names):
+        open_task(qa, name)
+        qa.wait(name + "'s last line", lambda s: "STREAM %s DONE" % label in (selected_terminal(s) or {}).get("text", ""))
+    qa.step("Each done, its terminal as tmux has it", expect=[
+        ("the last one's end", lambda s: "STREAM %s DONE" % labels[-1] in selected_terminal(s)["text"])])
+
+
+@journey("A terminal whose connection drops")
+def dropped(qa, repo):
+    """The connection to a task's tmux goes, as when the network does or a
+    laptop sleeps: the terminal says so, and C-c C-r brings it back."""
+    name = start_task(qa, "Hold the line")
+    open_task(qa, name)
+    os.kill(int(qa.emacs.eval("(qa-terminal-pid)")), signal.SIGKILL)
+    qa.wait("word of it", lambda s: "C-c C-r" in (s["echo"] or ""))
+    qa.step("The connection gone", expect=[
+        ("the echo area says how to reconnect", lambda s: "C-c C-r reconnects" in (s["echo"] or ""))])
+    qa.keys("C-c C-r")
+    qa.wait("the agent's screen again",
+            lambda s: "PROMPT Hold the line" in (selected_terminal(s) or {}).get("text", ""))
+    qa.step("Reconnected", expect=[
+        ("the agent's screen", lambda s: "FAKE_CLAUDE_READY" in selected_terminal(s)["text"])])
+    qa.type("After the drop\r")
+    qa.wait("its reply", lambda s: "PROMPT After the drop" in (selected_terminal(s) or {}).get("text", ""))
+    qa.step("It takes what you type", expect=[
+        ("the agent replied", lambda s: "PROMPT After the drop" in selected_terminal(s)["text"])])
+
+
 JOURNEYS = [sweep, answer, fold, resize, merge, review, panes, shell,
             dashboard, stop_resume, retire, send, update, restart, search, frames, org, tabs,
-            forget, fork, exits, unreachable, scrollback]
+            forget, fork, exits, unreachable, scrollback, fleet, dropped]
 
 
 def main():
@@ -1276,6 +1342,9 @@ def main():
             qa.stop()
     for note in sorted(qa.notes):
         print(note)
+    if getattr(qa, "not_run", None):
+        print("%d of Roost's and tmux-control's commands no journey ran; the report lists them"
+              % len(qa.not_run))
     print("%d steps, %d with problems: %s" % (len(qa.steps), len(failed), qa.out / "report.html"))
     sys.exit(1 if failed else 0)
 
