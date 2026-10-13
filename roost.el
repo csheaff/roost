@@ -6121,10 +6121,9 @@ On a live task's message, task commands such as those in
   (roost--quiet-display))
 
 (defun roost--search-resized (window)
-  "Wrap the messages shown in full again after WINDOW is resized."
+  "Fit the results to WINDOW again after it is resized."
   (with-current-buffer (window-buffer window)
-    (when roost--search-expanded
-      (roost--render-search))))
+    (roost--render-search)))
 
 ;;;###autoload
 (defun roost-search (query)
@@ -6228,8 +6227,11 @@ than WIDTH, such as a URL, is broken within, as in `roost--reply-preview'."
          (more 0)
          ;; Lines stay unwrapped, so each message is one line; a whole
          ;; message is wrapped to the window, inside its indentation.
-         (window (get-buffer-window (current-buffer) t))
-         (width (max 10 (- (if window (window-body-width window) 80) 8))))
+         ;; Fitted to the narrowest window showing them, as a task's panel is.
+         (columns (let ((windows (get-buffer-window-list nil nil t)))
+                    (if windows (apply #'min (mapcar #'roost--usable-width windows)) 80)))
+         ;; Within the body's indentation of 6 columns, and 2 more.
+         (width (max 1 (- columns 8))))
     (pcase-dolist (`(,host . ,reply) roost--search-replies)
       (unless (eq (car-safe reply) :error)
         (setq more (+ more (or (alist-get 'moreTasks reply) 0)))
@@ -6291,12 +6293,22 @@ than WIDTH, such as a URL, is broken within, as in `roost--reply-preview'."
                            (alist-get 'session hit) (alist-get 'line hit)))
                  (properties (append (list 'roost-search-id id 'roost-search-hit (list host result hit)) row))
                  (who (if (equal (alist-get 'role hit) "user") "You" "Claude")))
-            (insert (apply #'propertize
-                           (concat "  " (roost--search-time (alist-get 'at hit)) "  "
-                                   (format "%-7s" who)
-                                   (roost--search-highlight (roost--prose (or (alist-get 'snippet hit) "")) words)
-                                   "\n")
-                           'roost-search-line t properties))
+            (let* ((line (concat "  " (roost--search-time (alist-get 'at hit)) "  "
+                                 (format "%-7s" who)
+                                 (roost--search-highlight
+                                  (roost--prose (or (alist-get 'snippet hit) "")) words)))
+                   ;; Cut to the window, as the dashboard cuts replies: TAB
+                   ;; shows the rest.
+                   (shown (roost--truncate-width line columns)))
+              (insert (apply #'propertize (concat shown "\n")
+                             'roost-search-line t
+                             'roost-search-cut (not (equal shown line))
+                             properties))
+              ;; Its line shows it whole now, as in a window since widened:
+              ;; shown again below, it would only repeat.
+              (when (and (equal shown line)
+                         (equal (alist-get 'text hit) (alist-get 'snippet hit)))
+                (setq roost--search-expanded (delete id roost--search-expanded))))
             (when (member id roost--search-expanded)
               (let ((body-start (point)))
                 (insert (roost--search-highlight (roost--search-wrap (or (alist-get 'text hit) "") width)
@@ -6334,6 +6346,14 @@ IDs are lists made afresh by each redraw, so compare them with `equal'."
   "The result on this line: (HOST RESULT HIT), or nil."
   (get-text-property (point) 'roost-search-hit))
 
+(defun roost--search-whole-p ()
+  "Whether the message on this line shows whole on it, folded.
+Then showing more of it would only repeat it."
+  (when-let* ((hit (nth 2 (roost--search-hit))))
+    (and (not (member (get-text-property (point) 'roost-search-id) roost--search-expanded))
+         (equal (alist-get 'text hit) (alist-get 'snippet hit))
+         (not (get-text-property (line-beginning-position) 'roost-search-cut)))))
+
 (defun roost-search-open ()
   "Open the live task of the message on this line, or show more of the message."
   (interactive)
@@ -6344,6 +6364,9 @@ IDs are lists made afresh by each redraw, so compare them with `equal'."
            (roost--refresh-host (car key) nil (cdr key))
            (user-error "Roost is still fetching the tasks on %s; try again in a moment"
                        (roost--host-label (car key))))
+          ((roost--search-whole-p)
+           (user-error "Nothing to open: %s is no longer a task, and this is the whole message"
+                       (alist-get 'name (nth 1 (roost--search-hit)))))
           ((roost--search-hit) (roost-search-toggle))
           (t (user-error "Put point on a message")))))
 
@@ -6353,6 +6376,8 @@ Hosts send a message's first 1,500 characters."
   (interactive)
   (let ((id (or (get-text-property (point) 'roost-search-id)
                 (user-error "Put point on a message"))))
+    (when (roost--search-whole-p)
+      (user-error "This is the whole message"))
     (setq roost--search-expanded (if (member id roost--search-expanded)
                                      (delete id roost--search-expanded)
                                    (cons id roost--search-expanded)))
