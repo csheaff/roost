@@ -687,8 +687,10 @@ def selected_terminal(screen):
 def tabs_shown(screen):
     """The tabs over the selected terminal: in its window, or, split into
     panes, in the top-left one."""
-    selected = selected_terminal(screen) or {}
-    return next((w["tabs"] for w in terminals(screen, selected.get("terminal")) if w.get("tabs")), "")
+    selected = selected_terminal(screen)
+    if not selected:
+        return ""
+    return next((w["tabs"] for w in terminals(screen, selected["terminal"]) if w.get("tabs")), "")
 
 
 def new_task(qa, prompt):
