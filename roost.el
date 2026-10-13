@@ -6226,7 +6226,8 @@ than WIDTH, such as a URL, is broken within, as in `roost--reply-preview'."
          ;; Fitted to the narrowest window showing them, as a task's panel is.
          (columns (let ((windows (get-buffer-window-list nil nil t)))
                     (if windows (apply #'min (mapcar #'roost--usable-width windows)) 80)))
-         (width (max 10 (- columns 8))))
+         ;; Within the body's indentation of 6 columns, and 2 more.
+         (width (max 1 (- columns 8))))
     (pcase-dolist (`(,host . ,reply) roost--search-replies)
       (unless (eq (car-safe reply) :error)
         (setq more (+ more (or (alist-get 'moreTasks reply) 0)))
@@ -6298,7 +6299,12 @@ than WIDTH, such as a URL, is broken within, as in `roost--reply-preview'."
               (insert (apply #'propertize (concat shown "\n")
                              'roost-search-line t
                              'roost-search-cut (not (equal shown line))
-                             properties)))
+                             properties))
+              ;; Its line shows it whole now, as in a window since widened:
+              ;; shown again below, it would only repeat.
+              (when (and (equal shown line)
+                         (equal (alist-get 'text hit) (alist-get 'snippet hit)))
+                (setq roost--search-expanded (delete id roost--search-expanded))))
             (when (member id roost--search-expanded)
               (let ((body-start (point)))
                 (insert (roost--search-highlight (roost--search-wrap (or (alist-get 'text hit) "") width)

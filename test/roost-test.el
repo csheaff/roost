@@ -1554,6 +1554,24 @@
                (should (string-match-p (concat (regexp-quote "haystack needle") ".*\n.*haystack")
                                        (buffer-string)))
                (roost-search-toggle)
+               ;; Opened in a narrow window, a short message shows in full
+               ;; below its cut line; widened, its line shows it whole, once.
+               (let ((short "needle and thread") (saved roost--search-replies))
+                 (setq roost--search-replies
+                       `(("dev" (tasks ((past . t) (key . "0a1b/short-1a2b3c") (name . "short") (repo)
+                                        (hits ((at . "2026-10-04T10:00:00Z") (role . "user") (session . "s2")
+                                               (line . 1) (snippet . ,short) (text . ,short)))
+                                        (more . 0)))
+                          (moreTasks . 0))))
+                 (cl-letf (((symbol-function 'roost--usable-width) (lambda (&rest _) 30)))
+                   (roost--render-search)
+                   (goto-char (point-min))
+                   (search-forward "2026-10-04")
+                   (roost-search-toggle)
+                   (should (string-match-p "needle and thread\n" (buffer-string))))
+                 (roost--render-search)
+                 (should (= (how-many "needle and thread" (point-min) (point-max)) 1))
+                 (setq roost--search-replies saved roost--search-expanded nil))
                ;; Shown in two windows, the narrower decides; in one narrower
                ;; than a result's date and speaker, the whole line is cut.
                (dolist (columns '(40 20))
