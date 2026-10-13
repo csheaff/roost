@@ -98,15 +98,34 @@ Magit is optional (review falls back to Dired).
 - **Completion.** Prompts use `completing-read`, so Vertico, Ivy, Helm and the
   default UI all work. A new task's project picker offers the projects Roost
   has used, then those `project.el` knows.
-- **Remote review.** Magit reaches a remote task through TRAMP, where every Git
+- **Remote review.** Use
+  [tramp-rpc](https://github.com/ArthurHeymans/emacs-tramp-rpc) for remote
+  hosts if you can. Magit reaches a remote task through TRAMP, where every Git
   command is a round trip, and a refresh runs a dozen or more. With TRAMP's
   default `scp` method on a host on the same network, Magit took 3.6 s to open
-  a task and 1.7 s to refresh or stage a file; with
-  [tramp-rpc](https://github.com/ArthurHeymans/emacs-tramp-rpc), which runs
+  a task and 1.7 s to refresh or stage a file; with tramp-rpc, which runs
   commands through a small server on the host, 0.4 s. tramp-rpc needs Emacs
-  30.1, a newer TRAMP from GNU ELPA and msgpack, and puts its server on each
-  host, downloaded from its GitHub releases or built with Cargo. It first
-  appeared in 2026. `roost-doctor` names the method each host uses.
+  30.1, TRAMP 2.8.1.4 or later from GNU ELPA and msgpack, and a host running
+  Linux or macOS on x86_64 or aarch64, where it puts its server, downloaded
+  from its GitHub releases or built with Cargo. It first appeared in 2026.
+  With Emacs 30:
+
+  ```elisp
+  (use-package tramp-rpc
+    :after tramp
+    ;; Its latest release: the server it puts on each host comes from one,
+    ;; and a newer commit can speak a newer protocol than that server.
+    :vc (:url "https://github.com/ArthurHeymans/emacs-tramp-rpc"
+         :rev :last-release :lisp-dir "lisp")
+    :config
+    ;; Roost's paths to remote tasks use TRAMP's default method.
+    (setq tramp-default-method "rpc"))
+  ```
+
+  If your SSH configuration forwards ports for a host, add
+  `"-o" "ClearAllForwardings=yes"` to `tramp-rpc-ssh-args`: ssh's messages
+  about forwarding mix into tramp-rpc's replies. `roost-doctor` names the
+  method each host uses.
 
 ## A day with Roost
 
