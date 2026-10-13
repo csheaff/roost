@@ -16,6 +16,10 @@
 (require 'ert)
 (require 'roost)
 
+(declare-function tmux-control-pause-log-mode "tmux-control" (&optional arg))
+(declare-function tmux-control--pause-log-took "tmux-control" (start what))
+(defvar tmux-control--pause-log)
+(defvar tmux-control-pause-log-threshold)
 (declare-function tmux-control-buffer-host "tmux-control" ())
 (declare-function tmux-control-buffer-socket-name "tmux-control" ())
 (declare-function tmux-control-buffer-session "tmux-control" ())
@@ -49,6 +53,38 @@ process filters and sentinels, and hooks, which never reach a command."
           (push (match-string 0) found))
         (setq qa--messages-seen (point-max)))
       found)))
+
+(defvar qa--pauses-seen nil
+  "The latest of tmux-control's pause notes `qa-take-pauses' has returned.")
+
+(defmacro qa--own-work (&rest body)
+  "Run BODY, a long request from qa.py, such as the sweep, as work of its own.
+The pause log then blames it for the pause it makes, which
+`qa-take-pauses' leaves out.  The server's own functions can't be
+advised for this: natively compiled, they call each other directly."
+  (declare (indent 0))
+  `(let ((start (float-time)))
+     (unwind-protect
+         (progn ,@body)
+       (when (fboundp 'tmux-control--pause-log-took)
+         (tmux-control--pause-log-took start (lambda () "qa.py's own request"))))))
+
+(defun qa-watch-pauses ()
+  "Note each pause of a second or more, if tmux-control can, and say whether it can."
+  (when (fboundp 'tmux-control-pause-log-mode)
+    (setq tmux-control-pause-log-threshold 1.0)
+    (tmux-control-pause-log-mode 1)
+    t))
+
+(defun qa-take-pauses ()
+  "The pauses noted since the last call, oldest first, but qa.py's own."
+  (when (boundp 'tmux-control--pause-log)
+    (let ((new (seq-take-while (lambda (note) (not (eq note qa--pauses-seen)))
+                               tmux-control--pause-log)))
+      (when tmux-control--pause-log
+        (setq qa--pauses-seen (car tmux-control--pause-log)))
+      (seq-remove (lambda (note) (string-match-p "qa\\.py's own request took" note))
+                  (reverse new)))))
 
 (defun qa-take-errors ()
   "Every error since the last call, oldest first, and forget them."
@@ -360,7 +396,7 @@ text is measured in pixels.  Return how many ran and the problems, as JSON."
     (unwind-protect
         (with-selected-frame frame
           (let ((inhibit-message t))
-            (setq stats (ert-run-tests-batch "^roost-sweep-"))))
+            (setq stats (qa--own-work (ert-run-tests-batch "^roost-sweep-")))))
       (delete-frame frame)
       ;; The sweep draws its sample tasks in Roost's own buffers, the
       ;; sidebar's among them: draw yours again.
