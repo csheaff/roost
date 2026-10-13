@@ -650,19 +650,23 @@ def panes(qa, repo):
     qa.keys("RET")
     session = own.split("/")[-1]
     qa.wait("a second window", lambda s: len(qa.tmux("list-windows", "-t", session)) == 2)
+    # As tmux numbers them: your configuration may start at 1.
+    window_a, window_b = qa.tmux("list-windows", "-t", session, "-F", "#{window_index}")
     # tmux-control shows no tabs while a session is split into panes.
     qa.step("A second tmux window", expect=[
-        Known(("its tab is the highlighted one", lambda s: "[1:" in (selected_terminal(s).get("tabs") or "")))])
+        Known(("its tab is the highlighted one",
+               lambda s: "[%s:" % window_b in (selected_terminal(s).get("tabs") or "")))])
     qa.keys("C-c C-p")
     qa.step("Back to the first window", expect=[
-        Known(("its tab is the highlighted one", lambda s: "[0:" in (selected_terminal(s).get("tabs") or ""))),
+        Known(("its tab is the highlighted one",
+               lambda s: "[%s:" % window_a in (selected_terminal(s).get("tabs") or ""))),
         ("with both its panes", lambda s: len(terminals(s, own)) == 2)])
     qa.keys("C-c C-w")
     qa.wait("the window chooser", lambda s: any("chooser" in w["buffer"] for w in s["windows"]))
     qa.step("Choosing a window", expect=[
         ("it offers the task's two windows and no others",
          lambda s: [l.split(":")[0] for l in next(w for w in s["windows"] if "chooser" in w["buffer"])["text"]
-                    .split("\n") if re.match(r"\s*\d+:", l)] == ["0", "1"])])
+                    .split("\n") if re.match(r"\s*\d+:", l)] == [window_a, window_b])])
     qa.keys("q")
     screen = open_task(qa, second)
     qa.step("The other task", expect=[
