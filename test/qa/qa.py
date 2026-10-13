@@ -13,6 +13,10 @@ every step and what was wrong.  The run exits 1 if anything was.
 
 Emacs needs tmux-control and its dependencies, from -L directories or
 package directories, which are read and never written.
+
+With --remote, the tasks are on qa-remote, a host reached over SSH: it is
+this machine, behind test/qa/fake_ssh.py, which delays what goes each way
+by --latency seconds.  Replies then come as late as a remote host's do.
 """
 
 import argparse
@@ -22,6 +26,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -31,6 +36,7 @@ import uuid
 HERE = Path(__file__).resolve().parent
 CHECKOUT = HERE.parent.parent
 FAKE = HERE.parent / "fake_claude.py"
+FAKE_SSH = HERE / "fake_ssh.py"
 
 FRAME = (172, 40)
 PANEL = 44  # roost-task-panel-width
@@ -109,13 +115,33 @@ class Run:
         # be running this in.
         for name in ("ZDOTDIR", "BASH_ENV", "ENV", "TMUX", "TMUX_PANE"):
             self.env.pop(name, None)
+        self.notes = set()
+        # The host the tasks are on, and the tmux there, whose sockets
+        # tmux-control's setup for a remote host keeps in its home.
+        self.host = None
+        self.tmux_env = dict(self.env)
+        if args.remote:
+            self.notes.add("The tasks were on qa-remote, %g s away each way" % args.latency)
+            bin = self.work / "bin"
+            bin.mkdir()
+            (bin / "ssh").write_text('#!/bin/sh\nexec %s %s "$@"\n' % (sys.executable, FAKE_SSH))
+            (bin / "ssh").chmod(0o755)
+            self.env["PATH"] = "%s:%s" % (bin, self.env.get("PATH", ""))
+            self.env["QA_SSH_LATENCY"] = str(args.latency)
+            # The host's home, apart from Emacs's as on another machine, and
+            # short enough for tmux's sockets in it, which tmux finds by
+            # their real path.
+            self.remote_home = Path("/tmp") / self.name
+            self.remote_home.mkdir()
+            self.env["QA_REMOTE_HOME"] = str(self.remote_home)
+            self.host = "qa-remote"
+            self.tmux_env = dict(self.env, TMUX_TMPDIR=str(self.remote_home / ".tmux-sock"))
         self.emacs = Emacs(self.name)
         self.process = None
         self.steps = []
         self.journey = None
         self.shots = 0
         self.winid = None
-        self.notes = set()
 
     # Setting up
 
@@ -168,24 +194,31 @@ class Run:
 (require 'roost-sweep)
 (setq roost-state-directory %(state)s
       roost-socket-name %(server)s
-      roost-hosts '(nil)
+      roost-hosts '(%(host)s)
       roost-agent-commands '(("claude" %(python)s %(fake)s))
       roost-workspace nil
       ;; Nobody focuses this Emacs while you work elsewhere.
       roost-watch-unfocused-interval roost-watch-interval
       roost-notify-function #'ignore)
-(roost--remember-project %(repo)s)
+(when %(remote)s
+  ;; TRAMP's ssh runs ssh from PATH, as Roost does; scp would not.
+  (setq tramp-default-method "ssh"))
+(roost--remember-project %(project)s)
 (roost-watch-mode 1)
 (roost-sidebar-mode 1)
 (roost-task-panel-mode 1)
 (keymap-global-set "C-c r" #'roost-dispatch)
-(with-current-buffer "*scratch*" (setq default-directory %(repo)s))
+(with-current-buffer "*scratch*" (setq default-directory %(project)s))
 """ % dict(elpa=lisp(str(self.work / "elpa")),
            packages=" ".join(lisp(str(Path(p).expanduser())) for p in self.args.package_dir),
            load=" ".join(lisp(str(Path(p).expanduser())) for p in self.args.load_path),
            checkout=lisp(str(CHECKOUT)), test=lisp(str(CHECKOUT / "test")), qa=lisp(str(HERE)),
            server=lisp(self.name), state=lisp(str(self.work / "state")),
-           python=lisp(sys.executable), fake=lisp(str(FAKE)), repo=lisp(str(repo) + "/")))
+           python=lisp(sys.executable), fake=lisp(str(FAKE)), repo=lisp(str(repo) + "/"),
+           host=lisp(self.host) if self.host else "nil",
+           remote="t" if self.host else "nil",
+           # The project as Emacs reaches it: on the host, over TRAMP.
+           project=lisp(("/ssh:%s:" % self.host if self.host else "") + str(repo) + "/")))
         return init
 
     def start(self):
@@ -246,10 +279,12 @@ class Run:
                 self.process.wait(10)
             except subprocess.TimeoutExpired:
                 self.process.kill()
-        subprocess.run(["tmux", "-L", self.name, "kill-server"], capture_output=True)
+        subprocess.run(["tmux", "-L", self.name, "kill-server"], capture_output=True, env=self.tmux_env)
         # tmux leaves the socket's file.
-        socket = Path(os.environ.get("TMUX_TMPDIR") or "/tmp") / ("tmux-%d" % os.getuid()) / self.name
+        socket = Path(self.tmux_env.get("TMUX_TMPDIR") or "/tmp") / ("tmux-%d" % os.getuid()) / self.name
         socket.unlink(missing_ok=True)
+        if self.host:
+            shutil.rmtree(self.remote_home, ignore_errors=True)
 
     # Driving
 
@@ -287,7 +322,12 @@ class Run:
     def tmux(self, *args):
         """What tmux on this run's socket says to ARGS, as lines."""
         return subprocess.run(["tmux", "-L", self.name] + list(args), capture_output=True,
-                              text=True).stdout.split("\n")[:-1]
+                              text=True, env=self.tmux_env).stdout.split("\n")[:-1]
+
+    @property
+    def host_label(self):
+        """How Roost names the host the tasks are on."""
+        return self.host or "local"
 
     def wait(self, what, check, timeout=40):
         """Wait until CHECK, given the screen, holds."""
@@ -995,7 +1035,7 @@ def tabs(qa, repo):
     try:
         first = start_task(qa, "Draw a tab")
         qa.step("A task in its own tab", expect=[
-            ("the tab has its name", lambda s: s["workspace"] == "local/" + first),
+            ("the tab has its name", lambda s: s["workspace"] == qa.host_label + "/" + first),
             ("its terminal there", lambda s: (s.get("task") or {}).get("name") == first and selected_terminal(s)),
             ("its panel beside it", lambda s: panel_text(qa, s).startswith(first))])
         elder = qa.task(qa.screen(), first)["key"]
@@ -1008,10 +1048,10 @@ def tabs(qa, repo):
         qa.wait("its terminal", lambda s: (s.get("task") or {}).get("key") == twin and selected_terminal(s))
         qa.step("A second task of the same name", expect=[
             ("its tab has its ID too",
-             lambda s: s["workspace"] == "local/%s:%s" % (first, twin.split("/")[1][:6])),
-            ("the first's tab keeps its name", lambda s: "local/" + first in s["workspaces"])])
+             lambda s: s["workspace"] == "%s/%s:%s" % (qa.host_label, first, twin.split("/")[1][:6])),
+            ("the first's tab keeps its name", lambda s: qa.host_label + "/" + first in s["workspaces"])])
         qa.keys("C-x t RET")
-        qa.type("local/%s\r" % first)
+        qa.type("%s/%s\r" % (qa.host_label, first))
         qa.step("Back in the first's tab", expect=[
             ("it is the first task's", lambda s: (s.get("task") or {}).get("key") == elder),
             ("its panel beside it", lambda s: panel_text(qa, s).startswith(first)),
@@ -1021,7 +1061,7 @@ def tabs(qa, repo):
         qa.type("y")
         qa.wait("the task to go", lambda s: not any(t["key"] == elder for t in s["tasks"]), timeout=30)
         qa.step("Retired, with its tab", expect=[
-            ("its tab is gone", lambda s: "local/" + first not in s["workspaces"]),
+            ("its tab is gone", lambda s: qa.host_label + "/" + first not in s["workspaces"]),
             ("the other's is still there", lambda s: len(s["workspaces"]) == 2)])
     finally:
         qa.emacs.eval("(progn (tab-bar-close-other-tabs) (tab-bar-mode -1) (setq roost-workspace nil))")
@@ -1126,7 +1166,8 @@ def exits(qa, repo):
 @journey("A host Roost can't reach")
 def unreachable(qa, repo):
     """A host that doesn't answer is named, in the sidebar and the dashboard, within their windows."""
-    qa.emacs.eval("(progn (setq roost-hosts '(nil \"qa-unreachable.invalid\")) (roost-refresh) t)")
+    host = lisp(qa.host) if qa.host else "nil"
+    qa.emacs.eval("(progn (setq roost-hosts '(%s \"qa-unreachable.invalid\")) (roost-refresh) t)" % host)
     try:
         qa.wait("the host to be named", lambda s: "unreachab" in
                 (qa.window(s, "roost-sidebar-list-mode") or {}).get("text", ""), timeout=30)
@@ -1136,7 +1177,7 @@ def unreachable(qa, repo):
         qa.step("So does the dashboard", expect=[
             ("with why", lambda s: "is unreachable" in qa.window(s, "roost-dashboard-mode")["text"])])
     finally:
-        qa.emacs.eval("(progn (setq roost-hosts '(nil)) (clrhash roost--errors) (roost--redraw) t)")
+        qa.emacs.eval("(progn (setq roost-hosts '(%s)) (clrhash roost--errors) (roost--redraw) t)" % host)
 
 
 def pager(screen):
@@ -1194,6 +1235,10 @@ def main():
     parser.add_argument("--out", help="Where the report goes; a new directory by default")
     parser.add_argument("--keep", action="store_true", help="Leave Emacs and tmux running")
     parser.add_argument("--no-shots", action="store_true", help="Take no screenshots")
+    parser.add_argument("--remote", action="store_true",
+                        help="Put the tasks on qa-remote, this machine behind a slow fake ssh")
+    parser.add_argument("--latency", type=float, default=0.15, metavar="SECONDS",
+                        help="With --remote, the delay each way (default 0.15)")
     args = parser.parse_args()
     known = {j.__name__: j for j in JOURNEYS}
     unknown = [name for name in args.journeys if name not in known]
