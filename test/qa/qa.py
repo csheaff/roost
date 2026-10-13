@@ -22,7 +22,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -78,6 +77,9 @@ class Run:
         self.out = Path(args.out or tempfile.mkdtemp(prefix="roost-qa-")).resolve()
         self.out.mkdir(parents=True, exist_ok=True)
         self.name = "roost-qa-" + uuid.uuid4().hex[:8]
+        # The run's project, state and Emacs, new each time, beside the report.
+        self.work = self.out / self.name
+        self.work.mkdir()
         self.emacs = Emacs(self.name)
         self.process = None
         self.steps = []
@@ -94,10 +96,8 @@ class Run:
 
     def project(self):
         """A small project to work in, with one commit."""
-        repo = self.out / "projects" / "notes"
-        if repo.exists():
-            shutil.rmtree(repo)
-        repo.mkdir(parents=True)
+        repo = self.work / "notes"
+        repo.mkdir()
         (repo / "notes.py").write_text('"""Notes."""\n\nNOTES = []\n\n\ndef add(text):\n    NOTES.append(text)\n')
         (repo / "README.md").write_text("# notes\n\nA small notes module.\n")
         self.git(repo, "init", "-q", "-b", "main")
@@ -109,8 +109,8 @@ class Run:
         return repo
 
     def configure(self, repo):
-        init = self.out / "emacs"
-        init.mkdir(exist_ok=True)
+        init = self.work / "emacs"
+        init.mkdir()
         (init / "early-init.el").write_text(""";;; -*- lexical-binding: t -*-
 (setq native-comp-jit-compilation nil
       ;; qa.el advises a primitive, used here only by code run from source.
@@ -128,7 +128,8 @@ class Run:
 (dolist (directory '(%(packages)s)) (add-to-list 'package-directory-list directory))
 (package-initialize)
 (dolist (directory '(%(load)s %(checkout)s %(test)s %(qa)s)) (add-to-list 'load-path directory))
-(setq make-backup-files nil auto-save-default nil create-lockfiles nil use-short-answers t
+(setq inhibit-default-init t
+      make-backup-files nil auto-save-default nil create-lockfiles nil use-short-answers t
       ring-bell-function #'ignore frame-title-format "Roost QA" server-name %(server)s)
 (load-theme 'modus-vivendi t)
 (when (find-font (font-spec :family "Menlo")) (set-face-attribute 'default nil :family "Menlo" :height 150))
@@ -150,24 +151,25 @@ class Run:
 (roost-task-panel-mode 1)
 (keymap-global-set "C-c r" #'roost-dispatch)
 (with-current-buffer "*scratch*" (setq default-directory %(repo)s))
-""" % dict(elpa=lisp(str(self.out / "elpa")),
+""" % dict(elpa=lisp(str(self.work / "elpa")),
            packages=" ".join(lisp(str(Path(p).expanduser())) for p in self.args.package_dir),
            load=" ".join(lisp(str(Path(p).expanduser())) for p in self.args.load_path),
            checkout=lisp(str(CHECKOUT)), test=lisp(str(CHECKOUT / "test")), qa=lisp(str(HERE)),
-           server=lisp(self.name), state=lisp(str(self.out / "state")),
+           server=lisp(self.name), state=lisp(str(self.work / "state")),
            python=lisp(sys.executable), fake=lisp(str(FAKE)), repo=lisp(str(repo) + "/")))
         return init
 
     def start(self):
         repo = self.project()
         init = self.configure(repo)
-        log = open(self.out / "emacs.log", "w")
-        self.process = subprocess.Popen([self.args.emacs, "--init-directory", str(init)],
+        log = open(self.work / "emacs.log", "w")
+        # No site-start.el either: nothing of this machine's own setup.
+        self.process = subprocess.Popen([self.args.emacs, "--no-site-file", "--init-directory", str(init)],
                                         stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             if self.process.poll() is not None:
-                sys.exit("Emacs exited; see %s" % (self.out / "emacs.log"))
+                sys.exit("Emacs exited; see %s" % (self.work / "emacs.log"))
             try:
                 if self.emacs.eval("(featurep 'qa)") == "t":
                     break
@@ -175,7 +177,7 @@ class Run:
                 pass
             time.sleep(0.5)
         else:
-            sys.exit("Emacs didn't start its server; see %s" % (self.out / "emacs.log"))
+            sys.exit("Emacs didn't start its server; see %s" % (self.work / "emacs.log"))
         if not self.emacs.eval("(and (require 'tmux-control nil t) t)") == "t":
             sys.exit("Emacs can't load tmux-control: give its directory with -L, or --package-dir")
         # Set once it runs: a new frame is kept within the screen, and the
@@ -269,7 +271,7 @@ class Run:
             return None
         if self.winid is None:
             source = HERE / "winid.swift"
-            self.winid = self.out / "winid"
+            self.winid = self.work / "winid"
             if subprocess.run(["swiftc", "-O", "-o", str(self.winid), str(source)],
                               capture_output=True).returncode:
                 self.args.no_shots = True
@@ -281,7 +283,7 @@ class Run:
         if not windows:
             return None
         self.shots += 1
-        name = "%02d.png" % self.shots
+        name = "%s/%02d.png" % (self.name, self.shots)
         subprocess.run(["screencapture", "-x", "-o", "-l", windows[0][0], str(self.out / name)],
                        capture_output=True)
         if not (self.out / name).exists():

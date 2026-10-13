@@ -68,7 +68,8 @@ def lines():
     """The prompt it started with, as Claude Code takes it for its first
     turn, then what is typed."""
     if "--" in sys.argv[:-1]:
-        yield sys.argv[sys.argv.index("--") + 1].strip() + "\n"
+        prompt = sys.argv[sys.argv.index("--") + 1]
+        yield prompt if prompt.endswith("\n") else prompt + "\n"
     yield from sys.stdin
 
 
