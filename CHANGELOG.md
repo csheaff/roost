@@ -9,6 +9,11 @@ Since 0.8.1:
 - In search results, `RET` on a message from a task that is gone, or `TAB`
   on a message its line already shows whole, says so, rather than
   repeating the message under it. Nothing to do when upgrading.
+- With tmux-control later than 0.7.2, a task's terminal split into panes,
+  as with `t`'s shell, keeps its window tabs above the panes, and each
+  pane's mode line names the task and keeps the rest of your mode line,
+  such as Roost's count of waiting agents. To upgrade, update tmux-control
+  too.
 - Opening a task leaves the window alone when you show something else in
   it before the task's host replies, such as tmux-control's scrollback
   with `C-c C-e`: the reply put the task's terminal back in its place.
