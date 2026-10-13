@@ -221,11 +221,22 @@ doesn't."
                           (tabs . ,(qa--tabs window))
                           (child . ,(if (frame-parent (window-frame window)) t :json-false))
                           (columns . ,(window-body-width window))
+                          (total . ,(window-total-width window))
                           (lines . ,(window-body-height window))
                           (text . ,(qa--visible-text window))
                           (overflow . ,(qa--overflow window)))))
                     (qa--windows))))
        ;; The main frame's, though a child frame such as a note box is selected.
+       (sidebar-width . ,roost-sidebar-width)
+       ;; The task the sidebar marks as yours, as drawn.
+       (marked . ,(when-let* ((sidebar (get-buffer roost--sidebar-buffer)))
+                    (with-current-buffer sidebar
+                      (save-excursion
+                        (goto-char (point-min))
+                        (when-let* (((search-forward "▸" nil t))
+                                    (key (get-text-property (point) 'roost-task))
+                                    (task (gethash key roost--tasks)))
+                          (roost--field task 'name))))))
        (task . ,(when-let* ((task (with-selected-frame frame (roost--frame-task))))
                   `((name . ,(roost--field task 'name))
                     (terminal . ,(format "%s/%s/%s" (or (roost--field task 'host) "local")

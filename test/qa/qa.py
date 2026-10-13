@@ -51,6 +51,11 @@ class Known(tuple):
     Known((DESCRIPTION, CHECK)).  The report says when it starts to hold."""
 
 
+def qa_sidebar(screen):
+    """Whether SCREEN shows the sidebar."""
+    return any(w["mode"] == "roost-sidebar-list-mode" for w in screen["windows"])
+
+
 def lisp(value):
     """VALUE as an Emacs Lisp string literal."""
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
@@ -320,9 +325,16 @@ class Run:
             if name == "*Backtrace*":
                 problems.append("A backtrace is showing")
         task = screen.get("task")
+        if task and qa_sidebar(screen) and screen.get("marked") != task["name"]:
+            problems.append("The sidebar marks %s, not %s, the frame's task" % (screen.get("marked"), task["name"]))
         for window in screen["windows"]:
-            if task and window.get("terminal") and window["terminal"] != task["terminal"]:
-                problems.append("%s, another task's terminal, is beside %s's" % (window["buffer"], task["name"]))
+            if window.get("terminal") and not window.get("child"):
+                if not task:
+                    problems.append("%s, a terminal, is on screen with no task for the frame" % window["buffer"])
+                elif window["terminal"] != task["terminal"]:
+                    problems.append("%s, another task's terminal, is beside %s's" % (window["buffer"], task["name"]))
+            if window["mode"] == "roost-sidebar-list-mode" and window["total"] != screen["sidebar-width"]:
+                problems.append("The sidebar is %d columns wide, not %d" % (window["total"], screen["sidebar-width"]))
             if window.get("overflow"):
                 over = window["overflow"]
                 problems.append("%s: %d lines cut off at the window's edge (%d px), the first %d px: %r" % (
@@ -533,7 +545,9 @@ def merge(qa, repo):
         ("its panel is beside the terminal", lambda s: qa.window(s, "roost-task-info-mode")["text"].startswith(name))])
     qa.type("yes\r")
     qa.status(name, "ready", "idle")
-    qa.wait("its commit", lambda s: "TODO.md" in (qa.window(s, "roost-task-info-mode") or {}).get("text", ""))
+    # Listed under Committed: before, it can show between the agent's add and commit.
+    qa.wait("its commit", lambda s: re.search(r"Committed\n\s*TODO\.md",
+                                              (qa.window(s, "roost-task-info-mode") or {}).get("text", "")))
     qa.step("Committed", expect=[
         ("the panel lists the commit's file", lambda s: "Committed" in qa.window(s, "roost-task-info-mode")["text"]),
         ("and says m merges it", lambda s: "m merges it" in qa.window(s, "roost-task-info-mode")["text"])])

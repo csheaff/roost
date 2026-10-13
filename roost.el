@@ -1330,22 +1330,27 @@ buffer list of one task would offer the terminals of the others."
                        (equal (tmux-control-window-id) (roost--field task 'windowId)))))
               (window-list))))
 
+(defun roost--terminal-task (buffer)
+  "The task whose terminal BUFFER is, or nil."
+  (with-current-buffer buffer
+    (when (and (fboundp 'tmux-control-buffer-session) (tmux-control-buffer-session))
+      (seq-find (lambda (task)
+                  (and (equal (roost--field task 'host) (tmux-control-buffer-host))
+                       (equal (roost--field task 'socket) (tmux-control-buffer-socket-name))
+                       (equal (roost--field task 'session) (tmux-control-buffer-session))))
+                (roost-tasks)))))
+
 (defun roost--terminal-window-for (task)
   "The window to show TASK's terminal in, or nil for the selected one.
 That is the window showing it already, or else one showing another
 task's terminal, the one used last: TASK takes its place, rather than
 that of a code or Magit window selected beside it, which would leave
-the other task's terminal on screen."
+the other task's terminal on screen.  TASK's own panes, when tiled, are
+not another task's: they keep their grid."
   (or (roost--task-terminal-window task)
       (seq-find (lambda (window)
-                  (with-current-buffer (window-buffer window)
-                    (and (fboundp 'tmux-control-buffer-session)
-                         (tmux-control-buffer-session)
-                         (seq-some (lambda (other)
-                                     (and (equal (roost--field other 'host) (tmux-control-buffer-host))
-                                          (equal (roost--field other 'socket) (tmux-control-buffer-socket-name))
-                                          (equal (roost--field other 'session) (tmux-control-buffer-session))))
-                                   (roost-tasks)))))
+                  (when-let* ((shown (roost--terminal-task (window-buffer window))))
+                    (not (equal (roost--key shown) (roost--key task)))))
                 (sort (roost--main-windows)
                       (lambda (a b) (> (window-use-time a) (window-use-time b)))))))
 
@@ -1374,6 +1379,11 @@ the other task's terminal on screen."
   (roost--mark-seen (or (gethash (roost--key task) roost--tasks) task))
   (roost--watch-layout)
   (roost--sync-side-windows)
+  ;; The sidebar marks the task now, rather than once its host replies.
+  (when-let* ((sidebar (get-buffer roost--sidebar-buffer)))
+    (with-current-buffer sidebar
+      (when (derived-mode-p 'roost-sidebar-list-mode)
+        (roost--render-visible #'roost--render-sidebar))))
   (when (roost--task-panel-window)
     (roost--refresh-host (roost--field task 'host) nil)))
 
@@ -6445,12 +6455,21 @@ Ediff's control frame, are left alone."
 (defun roost--frame-task ()
   "Return the task for the selected frame's task panel.
 With workspaces, that is the task whose workspace is current; without,
-the task last used in the frame."
+the task last used in the frame.  Once that one is gone, as when merged,
+the frame takes up the task whose terminal it shows, as if opened there,
+so a draft covering that terminal later doesn't take the panel away."
   (if (roost--workspace-backend)
       (when-let* ((current (roost--current-workspace)))
         (seq-find (lambda (task) (equal (roost--workspace-name task) current))
                   (roost-tasks)))
-    (gethash (frame-parameter nil 'roost-task) roost--tasks)))
+    (or (gethash (frame-parameter nil 'roost-task) roost--tasks)
+        (when-let* ((window (roost--mru-main-window))
+                    (task (roost--terminal-task (window-buffer window))))
+          (set-frame-parameter nil 'roost-task (roost--key task))
+          ;; The sidebar marks it, as the task last opened was gone too.
+          (unless (gethash roost--current-task roost--tasks)
+            (setq roost--current-task (roost--key task)))
+          task))))
 
 (defun roost--task-panel-window ()
   "The task panel docked in the selected frame, if any."

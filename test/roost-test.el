@@ -331,11 +331,44 @@
               (set-window-buffer bottom magit)
               (select-window bottom)
               (should (eq (roost--terminal-window-for opened) top))
+              ;; The task's own panes, tiled, keep their grid.
+              (with-current-buffer terminal
+                (setq roost-test--tmux (list :host "dev" :socket "main" :session "roost-other")))
+              (should-not (roost--terminal-window-for opened))
               ;; With no task's terminal on screen, the selected window it is.
               (set-window-buffer top magit)
               (should-not (roost--terminal-window-for opened)))))
        (kill-buffer terminal)
        (kill-buffer magit)))))
+
+(ert-deftest roost-a-frame-whose-task-is-gone-follows-the-terminal-it-shows ()
+  ;; Once a task is merged, its window shows another task's terminal; the
+  ;; panel follows that task, rather than no task at all.
+  (roost-test--isolated
+   (let ((shown (roost--cache-task "dev" (roost-test--task "1111111111111111")))
+         (terminal (generate-new-buffer " terminal")))
+     (unwind-protect
+         (roost-test--with-tmux-buffers
+          (save-window-excursion
+            (delete-other-windows)
+            (with-current-buffer terminal
+              (setq roost-test--tmux (list :host "dev" :socket "main" :session (roost--field shown 'session))))
+            (set-window-buffer (selected-window) terminal)
+            (set-frame-parameter nil 'roost-task '("dev" "2222222222222222"))
+            (setq roost--current-task '("dev" "2222222222222222"))
+            (should (eq (roost--frame-task) shown))
+            ;; The sidebar marks it, the task last opened being gone too.
+            (should (equal roost--current-task (roost--key shown)))
+            ;; It keeps it, as if opened there, when a draft then covers
+            ;; the terminal: the panel stays, and so do the widths.
+            (set-window-buffer (selected-window) (get-buffer-create "*scratch*"))
+            (should (eq (roost--frame-task) shown))
+            ;; While the task it names is there, the frame keeps that one.
+            (let ((own (roost--cache-task "dev" (roost-test--task "2222222222222222"))))
+              (set-frame-parameter nil 'roost-task (roost--key own))
+              (set-window-buffer (selected-window) terminal)
+              (should (eq (roost--frame-task) own)))))
+       (kill-buffer terminal)))))
 
 (ert-deftest roost-task-panel-keeps-the-status-on-one-line ()
   (roost-test--isolated
