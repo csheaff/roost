@@ -377,6 +377,14 @@
             (should (eq (roost--frame-task) shown))
             ;; The sidebar marks it, the task last opened being gone too.
             (should (equal roost--current-task (roost--key shown)))
+            ;; From the terminal used last, though Magit was used since.
+            (set-frame-parameter nil 'roost-task '("dev" "3333333333333333"))
+            (let ((magit (split-window)))
+              (set-window-buffer magit (get-buffer-create "*scratch*"))
+              (select-window magit)
+              (roost--redraw)
+              (should (eq (roost--frame-task) shown))
+              (delete-window magit))
             ;; It keeps it, as if opened there, when a draft then covers
             ;; the terminal: the panel stays, and so do the widths.
             (set-window-buffer (selected-window) (get-buffer-create "*scratch*"))

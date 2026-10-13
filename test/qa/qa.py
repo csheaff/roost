@@ -325,7 +325,8 @@ class Run:
             if name == "*Backtrace*":
                 problems.append("A backtrace is showing")
         task = screen.get("task")
-        # By key: tasks can share a name.
+        # By key: tasks can share a name.  The sidebar, one for every frame,
+        # marks the task opened last; QA's Emacs has one frame, its task.
         if task and qa_sidebar(screen) and screen.get("marked") != task["key"]:
             problems.append("The sidebar marks %s, not %s, the frame's task (%s)"
                             % (screen.get("marked"), task["key"], task["name"]))

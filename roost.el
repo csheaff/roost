@@ -6478,10 +6478,13 @@ marker, and keeps it when a draft later covers the terminal.  Without
 workspaces only, where the frame records its task."
   (unless (or (roost--workspace-backend)
               (gethash (frame-parameter nil 'roost-task) roost--tasks))
-    (when-let* ((window (roost--mru-main-window))
-                (task (roost--terminal-task (window-buffer window))))
+    ;; The terminal used last, though Magit or a file was used since.
+    (when-let* ((task (seq-some (lambda (window) (roost--terminal-task (window-buffer window)))
+                                (sort (roost--main-windows)
+                                      (lambda (a b) (> (window-use-time a) (window-use-time b)))))))
       (set-frame-parameter nil 'roost-task (roost--key task))
-      ;; The task last opened is likely the one gone: the sidebar marks this.
+      ;; The task last opened is likely the one gone: the sidebar, one for
+      ;; every frame, marks the task opened last, now this one.
       (unless (gethash roost--current-task roost--tasks)
         (setq roost--current-task (roost--key task))))))
 

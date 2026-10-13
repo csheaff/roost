@@ -233,7 +233,8 @@ doesn't."
                     (with-current-buffer sidebar
                       (save-excursion
                         (goto-char (point-min))
-                        (when-let* (((search-forward "▸" nil t))
+                        ;; At a row's start: a task's name can hold one too.
+                        (when-let* (((re-search-forward "^▸" nil t))
                                     (key (get-text-property (point) 'roost-task)))
                           (format "%s/%s" (or (car key) "local") (cadr key)))))))
        (task . ,(when-let* ((task (with-selected-frame frame (roost--frame-task))))
