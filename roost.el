@@ -6117,10 +6117,9 @@ On a live task's message, task commands such as those in
   (roost--quiet-display))
 
 (defun roost--search-resized (window)
-  "Wrap the messages shown in full again after WINDOW is resized."
+  "Fit the results to WINDOW again after it is resized."
   (with-current-buffer (window-buffer window)
-    (when roost--search-expanded
-      (roost--render-search))))
+    (roost--render-search)))
 
 ;;;###autoload
 (defun roost-search (query)
@@ -6287,12 +6286,19 @@ than WIDTH, such as a URL, is broken within, as in `roost--reply-preview'."
                            (alist-get 'session hit) (alist-get 'line hit)))
                  (properties (append (list 'roost-search-id id 'roost-search-hit (list host result hit)) row))
                  (who (if (equal (alist-get 'role hit) "user") "You" "Claude")))
-            (insert (apply #'propertize
-                           (concat "  " (roost--search-time (alist-get 'at hit)) "  "
-                                   (format "%-7s" who)
-                                   (roost--search-highlight (roost--prose (or (alist-get 'snippet hit) "")) words)
-                                   "\n")
-                           'roost-search-line t properties))
+            (let* ((lead (concat "  " (roost--search-time (alist-get 'at hit)) "  "
+                                 (format "%-7s" who)))
+                   (snippet (roost--search-highlight (roost--prose (or (alist-get 'snippet hit) ""))
+                                                     words))
+                   ;; Cut to the window, as the dashboard cuts replies: TAB
+                   ;; shows the rest.
+                   (shown (roost--truncate-width
+                           snippet (max 10 (- (if window (window-body-width window) 80)
+                                              (string-width lead) 1)))))
+              (insert (apply #'propertize (concat lead shown "\n")
+                             'roost-search-line t
+                             'roost-search-cut (not (equal shown snippet))
+                             properties)))
             (when (member id roost--search-expanded)
               (let ((body-start (point)))
                 (insert (roost--search-highlight (roost--search-wrap (or (alist-get 'text hit) "") width)
@@ -6334,14 +6340,9 @@ IDs are lists made afresh by each redraw, so compare them with `equal'."
   "Whether the message on this line shows whole on it, folded.
 Then showing more of it would only repeat it."
   (when-let* ((hit (nth 2 (roost--search-hit))))
-    (let ((window (get-buffer-window (current-buffer))))
-      (and (not (member (get-text-property (point) 'roost-search-id) roost--search-expanded))
-           (equal (alist-get 'text hit) (alist-get 'snippet hit))
-           ;; Drawn in `roost-prose', so measured in pixels, as drawn.
-           (or (not window)
-               (<= (car (window-text-pixel-size window (line-beginning-position)
-                                                (line-end-position) t))
-                   (window-body-width window t)))))))
+    (and (not (member (get-text-property (point) 'roost-search-id) roost--search-expanded))
+         (equal (alist-get 'text hit) (alist-get 'snippet hit))
+         (not (get-text-property (line-beginning-position) 'roost-search-cut)))))
 
 (defun roost-search-open ()
   "Open the live task of the message on this line, or show more of the message."

@@ -6,9 +6,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.8.1:
 
-- In search results, `RET` on a message from a task that is gone, or `TAB`
-  on a message its line already shows whole, says so, rather than
-  repeating the message under it. Nothing to do when upgrading.
+- Search results fit their window, each message's line cut with an
+  ellipsis, rather than running past its edge; `TAB` shows the rest.
+  `RET` on a message from a task that is gone, or `TAB` on one its line
+  already shows whole, says so, rather than repeating the message under
+  it. Nothing to do when upgrading.
 - With tmux-control later than 0.7.2, a task's terminal split into panes,
   as with `t`'s shell, keeps its window tabs above the panes, and each
   pane's mode line names the task and keeps the rest of your mode line,

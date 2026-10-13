@@ -1524,6 +1524,37 @@
    (should (eq (lookup-key roost-sidebar-list-mode-map "/") 'roost-search))
    (should (eq (lookup-key roost-task-info-mode-map "/") 'roost-search))))
 
+(ert-deftest roost-search-fits-a-long-message-to-its-window ()
+  ;; A long message ran past the window's edge; cut to fit, it opens up.
+  (roost-test--isolated
+   (let ((roost-hosts '("dev")) requests
+         (long (mapconcat #'identity (make-list 30 "needle in the haystack") " ")))
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (host _action _params success &optional _failure) (push (list host success) requests)))
+               ((symbol-function 'roost--refresh-host) #'ignore))
+       (save-window-excursion
+         (unwind-protect
+             (progn
+               (roost-search "needle")
+               (set-buffer roost--search-buffer)
+               (switch-to-buffer (current-buffer))
+               (funcall (cadr (car requests))
+                        `((tasks ((past . t) (key . "0a1b/hay-9f8e7d") (name . "hay") (repo)
+                                  (hits ((at . "2026-10-03T10:00:00Z") (role . "user") (session . "s1") (line . 1)
+                                         (snippet . ,long) (text . ,long)))
+                                  (more . 0)))
+                          (moreTasks . 0)))
+               (goto-char (point-min))
+               (search-forward "haystack")
+               (let ((line (buffer-substring (line-beginning-position) (line-end-position))))
+                 (should (string-suffix-p "…" line))
+                 (should (<= (string-width line) (window-body-width))))
+               (should-not (roost--search-whole-p))
+               (roost-search-toggle)
+               (should (string-match-p (concat (regexp-quote "haystack needle") ".*\n.*haystack")
+                                       (buffer-string))))
+           (when (get-buffer roost--search-buffer) (kill-buffer roost--search-buffer))))))))
+
 (ert-deftest roost-search-shows-a-task-retired-after-its-reply-as-past ()
   (roost-test--isolated
    (let ((roost-hosts '("dev")) requests fetched)
