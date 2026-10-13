@@ -121,6 +121,8 @@ class Run:
         # tmux-control's setup for a remote host keeps in its home.
         self.host = None
         self.tmux_env = dict(self.env)
+        if args.tuned:
+            self.notes.add("Emacs had pixel scrolling, a 1 GB GC threshold, idle collection and pane directories")
         if args.remote:
             self.notes.add("The tasks were on qa-remote, %g s away each way" % args.latency)
             bin = self.work / "bin"
@@ -204,6 +206,14 @@ class Run:
 (when %(remote)s
   ;; TRAMP's ssh runs ssh from PATH, as Roost does; scp would not.
   (setq tramp-default-method "ssh"))
+(when %(tuned)s
+  ;; Settings many configurations have, which change how Emacs scrolls,
+  ;; collects garbage and names a terminal's directory.
+  (require 'tmux-control)
+  (setq gc-cons-threshold (* 1024 1024 1024) gc-cons-percentage 0.6)
+  (pixel-scroll-precision-mode 1)
+  (tmux-control-idle-gc-mode 1)
+  (add-hook 'tmux-control-mode-hook #'tmux-control-pane-directory-mode))
 (roost--remember-project %(project)s)
 (roost-watch-mode 1)
 (roost-sidebar-mode 1)
@@ -221,6 +231,7 @@ class Run:
            python=lisp(sys.executable), fake=lisp(str(FAKE)), repo=lisp(str(repo) + "/"),
            hosts=self.hosts,
            remote="t" if self.host else "nil",
+           tuned="t" if self.args.tuned else "nil",
            # The project as Emacs reaches it: on the host, over TRAMP.
            project=lisp(("/ssh:%s:" % self.host if self.host else "") + str(repo) + "/")))
         return init
@@ -1248,7 +1259,8 @@ def fleet(qa, repo):
     """Agents print at once while you move between their terminals: each
     shows its own output, and Emacs keeps answering throughout."""
     labels = ("one", "two", "three", "four")
-    names = [new_task(qa, "stream 300 0.05 " + label) for label in labels]
+    # The label first: a task's name comes from the prompt's first words.
+    names = [new_task(qa, "stream %s 300 0.05" % label) for label in labels]
     for name in names:
         qa.status(name, "running")
     for label, name in zip(labels, names):
@@ -1310,6 +1322,9 @@ def main():
                         help="Put the tasks on qa-remote, this machine behind a slow fake ssh")
     parser.add_argument("--latency", type=float, default=0.15, metavar="SECONDS",
                         help="With --remote, the delay each way (default 0.15)")
+    parser.add_argument("--tuned", action="store_true",
+                        help="With settings many configurations have: pixel scrolling, a large GC "
+                        "threshold, tmux-control's idle collection and pane directories")
     args = parser.parse_args()
     known = {j.__name__: j for j in JOURNEYS}
     unknown = [name for name in args.journeys if name not in known]

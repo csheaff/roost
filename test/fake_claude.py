@@ -158,7 +158,7 @@ for line in lines():
     elif line.startswith("stream "):
         # Output for a while, as an agent at work prints it, a numbered
         # line at a time.
-        _, count, pause, label = line.split()
+        _, label, count, pause = line.split()
         for number in range(1, int(count) + 1):
             print("STREAM %s %04d \x1b[3%dmworking on it\x1b[39m" % (label, number, 1 + number % 6), flush=True)
             time.sleep(float(pause))
