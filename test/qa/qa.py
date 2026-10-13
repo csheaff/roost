@@ -414,12 +414,13 @@ class Run:
         Output on its way may take a moment to show.  A dead pane is left out:
         tmux writes its "Pane is dead" line there without telling its control
         clients, and the view keeps the agent's last output whole."""
-        if self.tmux("display-message", "-p", "-t", window["pane"], "#{pane_dead}") == ["1"]:
-            return None
         deadline = time.monotonic() + timeout
         while True:
             ours = self.emacs.json("(json-encode (qa-terminal-screen %s))" % lisp(window["buffer"])) or []
             theirs = [line.rstrip() for line in self.tmux("capture-pane", "-p", "-t", window["pane"])]
+            # Asked after each capture: the pane can die while it is compared.
+            if self.tmux("display-message", "-p", "-t", window["pane"], "#{pane_dead}") == ["1"]:
+                return None
             while theirs and not theirs[-1]:
                 theirs.pop()
             if ours == theirs or time.monotonic() > deadline:
@@ -1053,14 +1054,17 @@ def forget(qa, repo):
     name = start_task(qa, "Forget about me")
     task = open_task(qa, name)["task"]
     branch = qa.git(repo, "branch", "--list", "--format=%(refname:short)", "roost/%s-*" % name)
+    worktree = qa.emacs.json("(json-encode (roost--field (roost--frame-task) 'worktree))")
     qa.keys("C-c r X")
     qa.wait("the question", lambda s: s["prompt"])
     qa.step("Forgetting asks first", expect=[("it names the task", lambda s: name in (s["prompt"] or ""))])
     qa.type("y")
     qa.wait("the task to go", lambda s: qa.task(s, name) is None)
     qa.step("Forgotten", expect=[
-        ("the echo area says what it left", lambda s: "Forgot " + name in (s["echo"] or "")),
+        ("the echo area names what it left",
+         lambda s: all(part in (s["echo"] or "") for part in ("Forgot " + name, worktree, branch))),
         ("its branch is still there", lambda s: branch and qa.git(repo, "branch", "--list", branch)),
+        ("and its worktree", lambda s: worktree in qa.git(repo, "worktree", "list", "--porcelain")),
         ("its agent's session is gone",
          lambda s: task["terminal"].split("/")[-1] not in qa.tmux("list-sessions", "-F", "#S"))])
 
@@ -1096,6 +1100,7 @@ def exits(qa, repo):
     open_task(qa, name)
     qa.type("exit\r")
     qa.status(name, "exited")
+    qa.wait("its panel to say so", lambda s: "resumes its conversation" in panel_text(qa, s), timeout=10)
     qa.step("Exited", expect=[
         ("the panel says s resumes it", lambda s: "resumes its conversation" in panel_text(qa, s)),
         ("its last output still shows", lambda s: any("PROMPT Leave when asked" in w["text"] for w in terminals(s)))])
