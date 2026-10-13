@@ -444,7 +444,8 @@ its transcripts there, as Claude Code would in yours, for search. Its journeys s
 it in its terminal, fold and unfold a long prompt with the mouse, resize the
 frame, merge a commit, review a change in Magit and send a note, work in the
 terminal with tmux-control's own keys (split a pane, open and move between
-tmux windows, switch to another task and back), use the dashboard, stop and
+tmux windows, switch to another task and back), open a shell beside the
+agent, use the dashboard, stop and
 resume an agent, retire a task or discard its work, send a prompt, bring a
 task up to date, restart Emacs with agents at work, search the
 conversations, work in a second frame, start a task from an Org heading,

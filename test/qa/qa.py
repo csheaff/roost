@@ -747,7 +747,9 @@ def panes(qa, repo):
     qa.step("Back to the first task", expect=[
         ("its two panes, as it left them", lambda s: len(terminals(s, own)) == 2),
         ("and nothing of the other task's", lambda s: all(w["terminal"] == own for w in terminals(s)))])
-    qa.keys("C-c C-o")
+    # To the shell, wherever the view has put you: never type into the agent.
+    if "FAKE_CLAUDE_READY" in (selected_terminal(qa.screen()) or {}).get("text", ""):
+        qa.keys("C-c C-o")
     qa.type("exit\r")
     qa.wait("the shell to go", lambda s: len(terminals(s, own)) == 1)
     qa.step("One pane again", expect=[
@@ -997,7 +999,32 @@ def tabs(qa, repo):
         qa.settle()
 
 
-JOURNEYS = [sweep, answer, fold, resize, merge, review, panes,
+@journey("A shell beside the agent")
+def shell(qa, repo):
+    """t opens a shell in the task's worktree beside its agent, and the view
+    is the agent's alone again once the shell exits."""
+    name = start_task(qa, "Leave room for a shell")
+    screen = open_task(qa, name)
+    own = screen["task"]["terminal"]
+    qa.keys("C-c r t")
+    qa.wait("the shell", lambda s: len(terminals(s, own)) == 2)
+    # At once, as you would: the shell has to be where your typing goes.
+    qa.type("echo SHELL_IN_$(basename $PWD)\r")
+    qa.wait("its output", lambda s: any("SHELL_IN_%s-" % name in w["text"] or "PROMPT echo" in w["text"]
+                                        for w in terminals(s, own)))
+    qa.step("The shell beside the agent", expect=[
+        ("in the task's worktree", lambda s: any("SHELL_IN_%s-" % name in w["text"] for w in terminals(s, own))),
+        ("nothing typed for it reached the agent",
+         lambda s: not any("PROMPT echo" in w["text"] for w in terminals(s, own))),
+        ("the agent still in view", lambda s: any("PROMPT Leave room" in w["text"] for w in terminals(s, own)))])
+    qa.type("exit\r")
+    qa.wait("the shell to go", lambda s: len(terminals(s, own)) == 1 and not s["prompt"])
+    qa.step("The agent alone again", expect=[
+        ("its tabs back", lambda s: (selected_terminal(s) or {}).get("tabs")),
+        ("its panel beside it", lambda s: panel_text(qa, s).startswith(name))])
+
+
+JOURNEYS = [sweep, answer, fold, resize, merge, review, panes, shell,
             dashboard, stop_resume, retire, send, update, restart, search, frames, org, tabs]
 
 
