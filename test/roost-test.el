@@ -4222,6 +4222,10 @@ Read from the layout transient keeps, whose form varies by version."
      (should (eq (roost--pr-state recorded) 'merged))
      ;; GitHub can't say now: the merge on record names it.
      (should (equal (roost--next-step recorded) "Its pull request is merged; x retires it")))
+   ;; Nor for one open: P pushes to it, rather than opening another.
+   (let ((open (roost--cache-task "dev" (append '((pr . ((number . 12) (state . "OPEN"))) (live . t) (ahead . 2))
+                                                (roost-test--task "1111111111111111")))))
+     (should (equal (roost--next-step open) "P pushes new commits to its pull request")))
    (should (eq (roost--pr-state (append '((prStatus . ((state . "OPEN"))) (pr . ((number . 12) (state . "MERGED"))))
                                         (roost-test--task)))
                'open))))

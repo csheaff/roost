@@ -5237,9 +5237,9 @@ MENU non-nil means the line is for `roost-dispatch', away from the
 task panel's list of the agent's own worktrees."
   (let* ((key (lambda (key) (propertize key 'face 'roost-key)))
          (status (roost--attention-status task))
-         (pr (roost--field task 'prStatus))
          ;; As GitHub said last, or as its host recorded.
-         (merged (eq (roost--pr-state task) 'merged))
+         (state (roost--pr-state task))
+         (merged (eq state 'merged))
          (retire (lambda ()
                    (concat (if merged "Its pull request is merged; " "Its work is merged; ")
                            (funcall key "x") " retires it"))))
@@ -5274,7 +5274,7 @@ task panel's list of the agent's own worktrees."
      ;; As for one you haven't looked at since its agent finished.
      ((roost--landed task) (funcall retire))
      (merged (concat "Its pull request is merged, but not its commits since: " (funcall key "m") " merges them"))
-     ((equal (alist-get 'state pr) "OPEN")
+     ((memq state '(open draft))
       (concat (funcall key "P") " pushes new commits to its pull request"))
      ((and (numberp (roost--field task 'ahead)) (> (roost--field task 'ahead) 0))
       (concat (funcall key "m") " merges it, or " (funcall key "P") " opens a pull request")))))
