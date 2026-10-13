@@ -534,8 +534,9 @@ def fold(qa, repo):
     qa.status(name, "ready", "idle")
     qa.keys("C-c r l")
     qa.type(name + "\r")
-    qa.wait("its panel", lambda s: "Show the whole prompt" in panel_text(qa, s))
-    # Once settled: its changes may still be refreshing when it first shows.
+    # Once its changes are in: they may still be refreshing when it first shows.
+    qa.wait("its panel", lambda s: "Show the whole prompt" in panel_text(qa, s)
+            and "Refreshing" not in panel_text(qa, s))
     folded = qa.step("Its panel folds the prompt")
     qa.click("Show the whole prompt")
     qa.step("Shown whole", expect=[
