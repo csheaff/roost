@@ -1999,6 +1999,16 @@ elif args[:2] == ["auth", "status"]:
         self.git("merge", "-q", "--no-ff", "--no-edit", task["branch"])
         self.assertIs(self.request("list", full=True)["result"][0]["landed"], True)
         self.assertNotIn("landed", roost.Store(str(self.state)).read(task["id"]))
+        # Work merged in from a branch of the agent's own counts too.
+        other = self.create(name="merges a side branch")
+        wt = Path(other["worktree"])
+        self.git("checkout", "-q", "-b", "side", cwd=wt)
+        self.git("commit", "-q", "--allow-empty", "-m", "On the side", cwd=wt)
+        self.git("checkout", "-q", other["branch"], cwd=wt)
+        self.git("merge", "-q", "--no-ff", "--no-edit", "side", cwd=wt)
+        self.git("merge", "-q", "--no-ff", "--no-edit", other["branch"])
+        listed = {t["id"]: t for t in self.request("list", full=True)["result"]}
+        self.assertIs(listed[other["id"]]["landed"], True)
 
     def test_retire_accepts_a_pull_request_its_agent_opened_and_github_squashed(self):
         self.github()

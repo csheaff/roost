@@ -5204,7 +5204,10 @@ Its host would refuse the rest, or there is nothing for them to do.
 Unknown Git statistics count as making sense."
   (let ((worktree (not (roost--field task 'worktreeMissing)))
         (ahead (roost--field task 'ahead))
-        (merged (eq (roost--pr-state task) 'merged))
+        ;; All its work, not a pull request merged before its latest commits.
+        (merged (if (assq 'landed task)
+                    (roost--field task 'landed)
+                  (eq (roost--pr-state task) 'merged)))
         ;; The host retires and merges only a task whose agent is not at work.
         (active (member (roost--field task 'status) '("starting" "running" "permission" "background"))))
     (pcase command
@@ -5263,7 +5266,7 @@ task panel's list of the agent's own worktrees."
      ;; As for one you haven't looked at since its agent finished.
      ((or (roost--field task 'landed) (and merged (not (assq 'landed task))))
       (funcall retire))
-     (merged "Its pull request is merged, but not its commits since")
+     (merged (concat "Its pull request is merged, but not its commits since: " (funcall key "m") " merges them"))
      ((equal (alist-get 'state pr) "OPEN")
       (concat (funcall key "P") " pushes new commits to its pull request"))
      ((and (numberp (roost--field task 'ahead)) (> (roost--field task 'ahead) 0))

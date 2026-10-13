@@ -1188,12 +1188,14 @@ def landed(task, tip):
 
 def committed_on(task):
     """Whether commits were made on the task's branch, as its reflog has it,
-    rather than all brought in from its integration branch, as when an
-    update fast-forwards a task that had none. True if Git keeps no reflog."""
+    merge commits among them, rather than all brought in from its
+    integration branch, as when an update fast-forwards a task that had
+    none. True if Git keeps no reflog."""
     log = read_git(task["repo"], "log", "--walk-reflogs", "--format=%gs", "refs/heads/" + task["branch"], "--")
     if log.returncode or not log.stdout.strip():
         return True
-    return any(re.match(r"(commit|cherry-pick|revert|am)\b", line) for line in log.stdout.splitlines())
+    return any(re.match(r"(commit|cherry-pick|revert|am)\b|(merge|pull)\b[^:]*: Merge made by", line)
+               for line in log.stdout.splitlines())
 
 
 def status_paths(porcelain):

@@ -4096,7 +4096,9 @@ Read from the layout transient keeps, whose form varies by version."
      (should (equal (roost--display-status dirty) "ready"))
      ;; Commits since its pull request merged are not merged.
      (should (equal (roost--display-status later) "ready"))
-     (should (equal (roost--next-step later) "Its pull request is merged, but not its commits since"))
+     (should (equal (roost--next-step later) "Its pull request is merged, but not its commits since: m merges them"))
+     (should (roost--action-applies-p later 'roost-merge-retire))
+     (should-not (roost--action-applies-p merged 'roost-merge-retire))
      ;; Merged into its branch without GitHub, by an agent that has stopped.
      (let ((stopped (funcall cache "5555555555555555" '(landed . t) '(status . "stopped") '(live))))
        (should (equal (roost--display-status stopped) "merged"))
