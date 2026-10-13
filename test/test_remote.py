@@ -1945,6 +1945,31 @@ elif args[:2] == ["auth", "status"]:
         self.assertEqual((listed["pr"]["number"], listed["landed"]), (11, True))
         self.assertNotIn("prStatus", listed)
 
+    def test_a_lookup_leaves_a_pull_request_recorded_meanwhile(self):
+        # Another Emacs, or P, recorded one while this lookup waited on GitHub.
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(number=9, state="OPEN", headRefOid=tip)]))
+        store = roost.Store(str(self.state))
+        newer = dict(number=10, url="https://github.com/octo/repo/pull/10", state="OPEN", head=tip)
+        original = roost.task_pull_requests
+
+        def meanwhile(*args, **kwargs):
+            prs = original(*args, **kwargs)
+            with store.locked():
+                record = store.read(task["id"])
+                record["pr"] = newer
+                store.save(record)
+            return prs
+
+        with patch.object(roost, "task_pull_requests", meanwhile):
+            listed = self.request("list", full=True)["result"][0]
+        self.assertEqual(store.read(task["id"])["pr"], newer)
+        self.assertEqual(listed["pr"], newer)
+        self.assertNotIn("prStatus", listed)
+
     def test_asking_github_keeps_within_its_deadline(self):
         # A stalled GitHub must not hold up the reply past Emacs's wait for it.
         self.github()

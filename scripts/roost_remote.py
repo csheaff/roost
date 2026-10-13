@@ -1157,11 +1157,17 @@ def check_pull_requests(store, tasks):
             try:
                 with store.locked():
                     current = store.read(task["id"])
-                    if current.get("branch") == task["branch"] and current.get("pr") != record:
+                    # Unless another request recorded a pull request while this one asked.
+                    stale = current.get("branch") != task["branch"] or current.get("pr") != task.get("pr")
+                    if not stale:
                         current["pr"] = record
                         store.save(current)
             except (RoostError, ValueError, OSError):
                 continue  # Retired meanwhile, or not to be written: shown, not recorded.
+            if stale:
+                task["pr"] = current.get("pr")
+                task.pop("prStatus", None)
+                continue
             task["pr"] = record
     return [task for task, _ in asked]
 
