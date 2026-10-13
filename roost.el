@@ -1392,6 +1392,19 @@ not another task's: they keep their grid."
     (roost--refresh-host (roost--field task 'host) nil)))
 
 ;;;###autoload
+(defun roost--when-out-of-minibuffer (function)
+  "Call FUNCTION now, or once the minibuffer you are in is done.
+A task is shown when its host replies, which can be while you answer a
+question that came up since; changing windows then would send your
+answer to the task's terminal."
+  (if (not (active-minibuffer-window))
+      (funcall function)
+    (letrec ((done (lambda ()
+                     (remove-hook 'minibuffer-exit-hook done)
+                     ;; Once its window has given the selection back.
+                     (run-at-time 0 nil #'roost--when-out-of-minibuffer function))))
+      (add-hook 'minibuffer-exit-hook done))))
+
 (defun roost-open-task (&optional task)
   "Validate TASK's tmux ownership, then restore its perspective and terminal."
   (interactive)
@@ -1401,12 +1414,14 @@ not another task's: they keep their grid."
                     (list (cons 'id (roost--field task 'id)))
                     (lambda (current)
                       (setq current (roost--cache-task (roost--field task 'host) current))
-                      (when (= generation roost--open-generation)
-                        (roost--display-task current)
-                        (when (and (assq 'live current) (not (roost--field current 'live)))
-                          (message "%s's agent has %s; its last output is shown. Resume with `s'."
-                                   (roost--field current 'name)
-                                   (roost--field current 'status)))))
+                      (roost--when-out-of-minibuffer
+                       (lambda ()
+                         (when (= generation roost--open-generation)
+                           (roost--display-task current)
+                           (when (and (assq 'live current) (not (roost--field current 'live)))
+                             (message "%s's agent has %s; its last output is shown. Resume with `s'."
+                                      (roost--field current 'name)
+                                      (roost--field current 'status)))))))
                     (lambda (err)
                       ;; Stopped, or its tmux server gone, as after a crash:
                       ;; resuming is the way to its terminal.
@@ -3608,11 +3623,13 @@ stamp, so polls would not notice it."
   (let ((generation (cl-incf roost--open-generation)))
     (roost--act task "shell" nil
                 (lambda (updated)
-                  (when (= generation roost--open-generation)
-                    (roost--display-task updated (roost--field updated 'shellPaneId))
-                    (with-current-buffer (window-buffer (selected-window))
-                      (unless (tmux-control-tiled-p) (tmux-control-tile))
-                      (roost--focus-shell updated generation)))))))
+                  (roost--when-out-of-minibuffer
+                   (lambda ()
+                     (when (= generation roost--open-generation)
+                       (roost--display-task updated (roost--field updated 'shellPaneId))
+                       (with-current-buffer (window-buffer (selected-window))
+                         (unless (tmux-control-tiled-p) (tmux-control-tile))
+                         (roost--focus-shell updated generation)))))))))
 
 (defun roost--focus-shell (task generation)
   "Focus TASK's shell after queued tiling replies, unless GENERATION changed."
@@ -5227,7 +5244,15 @@ window without it, such as in another frame, keeps the conversation."
     (seq-every-p (lambda (window)
                    (seq-some (lambda (other)
                                (with-current-buffer (window-buffer other)
-                                 (roost--terminal-shows-p task (list (roost--field task 'paneId)))))
+                                 (or (roost--terminal-shows-p task (list (roost--field task 'paneId)))
+                                     ;; Just connected, before tmux says which pane
+                                     ;; is active: the task's own session holds
+                                     ;; only its agent's window.
+                                     (and (fboundp 'tmux-control-active-pane)
+                                          (null (tmux-control-active-pane))
+                                          (equal (roost--field task 'host) (tmux-control-buffer-host))
+                                          (equal (roost--field task 'socket) (tmux-control-buffer-socket-name))
+                                          (equal (roost--field task 'session) (tmux-control-buffer-session))))))
                              (window-list (window-frame window) 'nomini)))
                  windows)))
 
@@ -6590,7 +6615,21 @@ unreported to other packages, such as tmux-control resizing a terminal."
 Workspace switches, splits, resizes and new frames all change the layout.
 Called when Roost first shows a side window, rather than when it loads;
 `roost-unload-function' stops it."
-  (add-hook 'window-configuration-change-hook #'roost--layout-changed))
+  (add-hook 'window-configuration-change-hook #'roost--layout-changed)
+  (add-hook 'after-delete-frame-functions #'roost--frame-deleted))
+
+(defun roost--frame-deleted (_frame)
+  "Mark the selected frame's task once the task marked is in no frame.
+For `after-delete-frame-functions'.  The sidebar, one for every frame,
+marks the task opened last; when the frame it was opened in is gone,
+the task of the frame you are left in."
+  (unless (or (roost--workspace-backend)
+              (seq-some (lambda (frame)
+                          (equal (frame-parameter frame 'roost-task) roost--current-task))
+                        (frame-list)))
+    (when-let* ((task (roost--frame-task)))
+      (setq roost--current-task (roost--key task))
+      (roost--redraw))))
 
 (defun roost--mru-main-window ()
   "The most recently used main window, or nil."
@@ -6685,6 +6724,7 @@ Beside a terminal, that turns off `roost-task-panel-mode'."
       (when-let* ((panel (roost--task-panel-window)))
         (delete-window panel))))
   (remove-hook 'window-configuration-change-hook #'roost--layout-changed)
+  (remove-hook 'after-delete-frame-functions #'roost--frame-deleted)
   (when (timerp roost--layout-timer) (cancel-timer roost--layout-timer))
   (remove-hook 'magit-post-refresh-hook #'roost--magit-refreshed)
   (roost--magit-teardown)

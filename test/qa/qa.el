@@ -210,6 +210,18 @@ doesn't."
             (setq start end)))
         (string-trim shown)))))
 
+(defun qa--frame-id (frame)
+  "An id for FRAME's root frame, the one a child frame such as a note box is in."
+  (format "%x" (sxhash-eq (or (frame-parent frame) frame))))
+
+(defun qa--task-info (task)
+  "TASK as qa-screen reports it, or nil."
+  (when task
+    `((name . ,(roost--field task 'name))
+      (key . ,(format "%s/%s" (or (roost--field task 'host) "local") (roost--field task 'id)))
+      (terminal . ,(format "%s/%s/%s" (or (roost--field task 'host) "local")
+                           (roost--field task 'socket) (roost--field task 'session))))))
+
 (defun qa-screen ()
   "What is on screen now, as JSON."
   (let ((frame (or (frame-parent) (selected-frame))))
@@ -237,6 +249,7 @@ doesn't."
                           (terminal . ,(qa--terminal buffer))
                           (tabs . ,(qa--tabs window))
                           (child . ,(if (frame-parent (window-frame window)) t :json-false))
+                          (frame . ,(qa--frame-id (window-frame window)))
                           (columns . ,(window-body-width window))
                           (total . ,(window-total-width window))
                           (lines . ,(window-body-height window))
@@ -254,11 +267,15 @@ doesn't."
                         (when-let* (((re-search-forward "^▸" nil t))
                                     (key (get-text-property (point) 'roost-task)))
                           (format "%s/%s" (or (car key) "local") (cadr key)))))))
-       (task . ,(when-let* ((task (with-selected-frame frame (roost--frame-task))))
-                  `((name . ,(roost--field task 'name))
-                    (key . ,(format "%s/%s" (or (roost--field task 'host) "local") (roost--field task 'id)))
-                    (terminal . ,(format "%s/%s/%s" (or (roost--field task 'host) "local")
-                                         (roost--field task 'socket) (roost--field task 'session))))))
+       (task . ,(qa--task-info (with-selected-frame frame (roost--frame-task))))
+       ;; Each frame's task, by its id: the checks hold per frame.
+       (frames . ,(let (frames)
+                    (dolist (each (visible-frame-list) frames)
+                      (unless (frame-parent each)
+                        (push (cons (intern (qa--frame-id each))
+                                    (or (qa--task-info (with-selected-frame each (roost--frame-task)))
+                                        :json-false))
+                              frames)))))
        (tasks . ,(vconcat (mapcar (lambda (task)
                                     `((name . ,(roost--field task 'name))
                                       (status . ,(roost--attention-status task))))

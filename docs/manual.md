@@ -444,7 +444,8 @@ frame, merge a commit, review a change in Magit and send a note, work in the
 terminal with tmux-control's own keys (split a pane, open and move between
 tmux windows, switch to another task and back), use the dashboard, stop and
 resume an agent, retire a task or discard its work, send a prompt, bring a
-task up to date, and restart Emacs with agents at work. They press keys and click
+task up to date, restart Emacs with agents at work, work in a second frame,
+and start a task from an Org heading. They press keys and click
 through Emacs's command loop. After each step it checks for Lisp errors, in
 commands, timers and process filters alike, for a backtrace, for lines of
 Roost's views cut off at the window's edge, and for another task's terminal

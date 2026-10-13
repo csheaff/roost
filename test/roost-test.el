@@ -398,6 +398,61 @@
      (should (re-search-forward "^dev · notes  ….*/notes$" nil t))
      (should (<= (string-width (buffer-substring (line-beginning-position) (line-end-position))) 40)))))
 
+(ert-deftest roost-a-panel-beside-a-terminal-just-connected-leaves-the-reply-to-it ()
+  ;; Before tmux named the active pane, the panel showed the reply beside
+  ;; the terminal, until the next redraw.
+  (roost-test--isolated
+   (let ((terminal (generate-new-buffer "terminal"))
+         (task (roost--cache-task "dev" (append `((lastMessage . "All done here."))
+                                                (roost-test--task nil "ready")))))
+     (unwind-protect
+         (roost-test--with-tmux-buffers
+          (save-window-excursion
+            (delete-other-windows)
+            (with-temp-buffer
+              (roost-task-info-mode)
+              (setq roost--buffer-task-key (roost--key task))
+              (set-window-buffer (selected-window) terminal)
+              (set-window-buffer (split-window nil nil 'right) (current-buffer))
+              (pcase-dolist (`(,pane . ,reply) '((nil . nil) ("%12" . nil) ("%99" . t)))
+                (with-current-buffer terminal
+                  (setq roost-test--tmux (list :host "dev" :socket "main"
+                                               :session (roost--field task 'session) :pane pane)))
+                (roost--render-task-info)
+                (should (eq reply (and (string-search "All done here." (buffer-string)) t)))))))
+       (kill-buffer terminal)))))
+
+(ert-deftest roost-a-task-is-shown-once-the-minibuffer-is-done ()
+  ;; A reply opening a task while a question was asked took the answer to
+  ;; the task's terminal.
+  (let ((minibuffer t) (shown nil))
+    (cl-letf (((symbol-function 'active-minibuffer-window) (lambda () minibuffer)))
+      (roost--when-out-of-minibuffer (lambda () (push 'shown shown)))
+      (should-not shown)
+      (setq minibuffer nil)
+      (run-hooks 'minibuffer-exit-hook)
+      (should-not shown)
+      (accept-process-output nil 0.05)
+      (should (equal shown '(shown)))
+      ;; With no minibuffer, at once.
+      (roost--when-out-of-minibuffer (lambda () (push 'again shown)))
+      (should (equal shown '(again shown))))))
+
+(ert-deftest roost-closing-a-frame-marks-the-task-of-the-frame-left ()
+  ;; The sidebar marked the task opened in a frame since closed.
+  (roost-test--isolated
+   (let ((left (roost--cache-task "dev" (roost-test--task "1111111111111111")))
+         (closed (roost--cache-task "dev" (roost-test--task "2222222222222222"))))
+     (set-frame-parameter nil 'roost-task (roost--key left))
+     (setq roost--current-task (roost--key closed))
+     (roost--frame-deleted nil)
+     (should (equal roost--current-task (roost--key left)))
+     ;; A task marked that a frame still shows stays marked.
+     (setq roost--current-task (roost--key left))
+     (set-frame-parameter nil 'roost-task (roost--key left))
+     (roost--frame-deleted nil)
+     (should (equal roost--current-task (roost--key left))))))
+
 (ert-deftest roost-a-shared-session-is-no-tasks-terminal ()
   ;; Tasks from before each had a session of its own can share one.
   (roost-test--isolated

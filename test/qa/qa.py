@@ -341,17 +341,19 @@ class Run:
             if name == "*Backtrace*":
                 problems.append("A backtrace is showing")
         task = screen.get("task")
+        frames = screen.get("frames") or {}
         # By key: tasks can share a name.  The sidebar, one for every frame,
-        # marks the task opened last; QA's Emacs has one frame, its task.
-        if task and qa_sidebar(screen) and screen.get("marked") != task["key"]:
+        # marks the task opened last, so with one frame, that frame's.
+        if task and len(frames) == 1 and qa_sidebar(screen) and screen.get("marked") != task["key"]:
             problems.append("The sidebar marks %s, not %s, the frame's task (%s)"
                             % (screen.get("marked"), task["key"], task["name"]))
         for window in screen["windows"]:
             if window.get("terminal") and not window.get("child"):
-                if not task:
-                    problems.append("%s, a terminal, is on screen with no task for the frame" % window["buffer"])
-                elif window["terminal"] != task["terminal"]:
-                    problems.append("%s, another task's terminal, is beside %s's" % (window["buffer"], task["name"]))
+                own = (frames.get(window.get("frame")) or None) if window.get("frame") in frames else task
+                if not own:
+                    problems.append("%s, a terminal, is on screen with no task for its frame" % window["buffer"])
+                elif window["terminal"] != own["terminal"]:
+                    problems.append("%s, another task's terminal, is beside %s's" % (window["buffer"], own["name"]))
             if window["mode"] == "roost-sidebar-list-mode" and window["total"] != screen["sidebar-width"]:
                 problems.append("The sidebar is %d columns wide, not %d" % (window["total"], screen["sidebar-width"]))
             if window.get("overflow"):
@@ -497,20 +499,19 @@ def fold(qa, repo):
     qa.status(name, "ready", "idle")
     qa.keys("C-c r l")
     qa.type(name + "\r")
-    folded = qa.wait("its panel", lambda s: "Show the whole prompt" in
-                     (qa.window(s, "roost-task-info-mode") or {}).get("text", ""))
-    qa.step("Its panel folds the prompt")
+    qa.wait("its panel", lambda s: "Show the whole prompt" in panel_text(qa, s))
+    # Once settled: its changes may still be refreshing when it first shows.
+    folded = qa.step("Its panel folds the prompt")
     qa.click("Show the whole prompt")
     qa.step("Shown whole", expect=[
         ("the whole prompt, with a way to fold it",
-         lambda s: "Collapse prompt" in qa.window(s, "roost-task-info-mode")["text"]
-         and "keep the existing ones passing" in qa.window(s, "roost-task-info-mode")["text"]),
+         lambda s: "Collapse prompt" in panel_text(qa, s)
+         and "keep the existing ones passing" in panel_text(qa, s)),
         ("point on the way back", lambda s: s["at"] == "Collapse prompt")])
     qa.click("Collapse prompt")
     qa.step("Folded again", expect=[
         ("the panel as it was",
-         lambda s: unclocked(qa.window(s, "roost-task-info-mode")["text"])
-         == unclocked(qa.window(folded, "roost-task-info-mode")["text"])),
+         lambda s: unclocked(panel_text(qa, s)) == unclocked(panel_text(qa, folded))),
         ("point on the way back", lambda s: s["at"] == "Show the whole prompt")])
 
 
@@ -849,8 +850,54 @@ def restart(qa, repo):
         ("its panel beside it", lambda s: panel_text(qa, s).startswith(name))])
 
 
+@journey("A second frame")
+def frames(qa, repo):
+    """Each frame keeps its own task: what one shows, the other leaves alone."""
+    first = start_task(qa, "Mind the first frame", None)
+    open_task(qa, first)
+    qa.keys("C-x 5 2")
+    qa.wait("the new frame", lambda s: len(s.get("frames") or {}) == 2)
+    qa.emacs.eval("(set-frame-size nil %d %d)" % FRAME)
+    qa.step("A second frame", expect=[
+        ("each frame has the sidebar",
+         lambda s: len([w for w in s["windows"] if w["mode"] == "roost-sidebar-list-mode"]) == 2)])
+    second = start_task(qa, "Mind the second frame", None)
+    qa.step("A task in the second frame", expect=[
+        ("its terminal there", lambda s: (s.get("task") or {}).get("name") == second and selected_terminal(s)),
+        ("and the first frame still the first task's",
+         lambda s: any((t or {}).get("name") == first for t in (s.get("frames") or {}).values()))])
+    qa.keys("C-x 5 0")
+    qa.wait("one frame", lambda s: len(s.get("frames") or {}) == 1)
+    qa.step("Back to one frame", expect=[
+        ("its task as it was", lambda s: (s.get("task") or {}).get("name") == first)])
+
+
+@journey("A draft from an Org heading")
+def org(qa, repo):
+    plans = qa.work / "plans.org"
+    plans.write_text("* Add a search command\nSearch notes by word, ignoring case.\n")
+    qa.keys("C-x C-f")
+    qa.type(str(plans) + "\r")
+    qa.wait("plans.org", lambda s: s["selected"] == "plans.org")
+    qa.keys("M-<")
+    qa.keys("C-c r c")
+    qa.wait("the draft", lambda s: (qa.window(s, "roost-compose-mode") or {}).get("selected"))
+    qa.step("The heading as the prompt", expect=[
+        ("the heading", lambda s: "Add a search command" in qa.window(s, "roost-compose-mode")["text"]),
+        ("and its notes", lambda s: "ignoring case" in qa.window(s, "roost-compose-mode")["text"])])
+    before = {t["name"] for t in qa.screen()["tasks"]}
+    qa.keys("C-c C-c")
+    screen = qa.wait("the task", lambda s: {t["name"] for t in s["tasks"]} - before)
+    name = next(t["name"] for t in screen["tasks"] if t["name"] not in before)
+    qa.step("The heading knows its task", expect=[
+        ("it is named for the heading", lambda s: name.startswith("add-search")),
+        ("the heading has its ROOST_TASK",
+         lambda s: qa.emacs.eval('(with-current-buffer "plans.org" (org-entry-get (point-min) "ROOST_TASK"))')
+         not in ("nil", ""))])
+
+
 JOURNEYS = [sweep, answer, fold, resize, merge, review, panes,
-            dashboard, stop_resume, retire, send, update, restart]
+            dashboard, stop_resume, retire, send, update, restart, frames, org]
 
 
 def main():

@@ -6,6 +6,13 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.8.1:
 
+- A task you open while answering a question, as a slow host replies,
+  shows once you have answered, rather than taking the window you were
+  typing in: your answer went to its agent's terminal. Closing a frame
+  moves the sidebar's marker to the task of the frame you are left in. A
+  task's panel leaves the latest reply to its terminal from the moment the
+  terminal connects, rather than showing it until the next redraw. Nothing
+  to do when upgrading.
 - Stopping, retiring, merging or discarding a task gives its window back to
   what it showed before, but never to another task's terminal: stopping one
   task used to bring up another's, where `s` then resumed nothing. A
