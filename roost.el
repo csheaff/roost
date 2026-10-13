@@ -5252,19 +5252,26 @@ prompt is returned whole."
     (when face (add-face-text-property 0 (length text) face t text))
     (insert text)))
 
-(defun roost--insert-toggle (label action)
-  "Insert a button LABEL on a line of its own that calls ACTION and redraws."
+(defun roost--insert-toggle (label what action)
+  "Insert a button LABEL on a line of its own that calls ACTION and redraws.
+WHAT names what it shows or hides, as `prompt': once redrawn, point is on
+the button for WHAT, so that pressing it again takes the change back."
   (let ((start (point)))
-    (insert-text-button label 'follow-link t 'face 'roost-dim
+    (insert-text-button label 'follow-link t 'face 'roost-dim 'roost-toggle what
                         'action (lambda (_)
                                   (funcall action)
-                                  (roost--render-task-info)))
+                                  (roost--render-task-info)
+                                  (when-let* ((button (text-property-any (point-min) (point-max)
+                                                                         'roost-toggle what)))
+                                    (goto-char button)
+                                    (when (eq (window-buffer) (current-buffer))
+                                      (set-window-point nil button)))))
     (insert "\n")
     (put-text-property start (point) 'line-prefix "  ")))
 
 (defun roost--insert-reply-toggle (reply expanded)
   "Insert a button to expand REPLY, or collapse it when EXPANDED."
-  (roost--insert-toggle (if expanded "Collapse reply" "Show the whole reply")
+  (roost--insert-toggle (if expanded "Collapse reply" "Show the whole reply") 'reply
                         (lambda () (setq roost--expanded-reply (unless expanded reply)))))
 
 (defun roost--window-places ()
@@ -5350,13 +5357,16 @@ Windows showing the panel keep their scroll position, and the mark stays."
              (integration (roost--field task 'integrationBranch))
              ;; With the agent's terminal on screen, the conversation is its.
              (beside (setq roost--beside-terminal (roost--panel-beside-terminal-p task))))
-        (insert (propertize (roost--field task 'name) 'face 'roost-title) "   "
-                (roost--status-light task (cons 'panel (current-buffer)) t)
-                (propertize (concat " " status) 'face (roost--status-word-face (roost--attention-status task)))
-                (propertize (format " for %s" (roost--elapsed (roost--field task 'updatedAt)))
-                            'face 'roost-dim)
-                "\n"
-                (propertize (format "%s · %s · %s" (roost--host-label (roost--field task 'host))
+        (let ((name (propertize (roost--field task 'name) 'face 'roost-title))
+              (state (concat (roost--status-light task (cons 'panel (current-buffer)) t)
+                             (propertize (concat " " status)
+                                         'face (roost--status-word-face (roost--attention-status task)))
+                             (propertize (format " for %s" (roost--elapsed (roost--field task 'updatedAt)))
+                                         'face 'roost-dim))))
+          ;; The status keeps to one line, below the name when both don't fit.
+          (insert name (if (> (+ (roost--text-width name) 3 (roost--text-width state)) width) "\n" "   ")
+                  state "\n"))
+        (insert (propertize (format "%s · %s · %s" (roost--host-label (roost--field task 'host))
                                     (roost--project-name task)
                                     (or (roost--field task 'agent) "claude"))
                             'face 'roost-dim)
@@ -5373,12 +5383,12 @@ Windows showing the panel keep their scroll position, and the mark stays."
             (cond ((equal preview prompt)
                    (roost--insert-indented (roost--prose prompt)))
                   (roost--show-full-prompt
-                   (roost--insert-toggle "Collapse prompt"
+                   (roost--insert-toggle "Collapse prompt" 'prompt
                                          (lambda () (setq roost--show-full-prompt nil)))
                    (roost--insert-indented (roost--prose prompt)))
                   (t
                    (roost--insert-indented (roost--prose preview))
-                   (roost--insert-toggle "Show the whole prompt"
+                   (roost--insert-toggle "Show the whole prompt" 'prompt
                                          (lambda () (setq roost--show-full-prompt t)))))))
         (when-let* (((not beside))
                     (reply (roost--last-message task))

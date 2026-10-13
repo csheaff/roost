@@ -6,6 +6,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.8.1:
 
+- In the task panel, a task's status goes below its name when they don't
+  fit on one line, rather than breaking after "for". Showing or folding the
+  prompt or the latest reply leaves point on the button that takes it back,
+  rather than in the text that moved, which the line highlight then covered.
+  Nothing to do when upgrading.
 - Without Magit, `D` says the diff needs it and that `r` opens the worktree
   in Dired, rather than failing to load Magit. Nothing to do when upgrading.
 - A long prompt shown whole in the task panel folds up again: "Collapse

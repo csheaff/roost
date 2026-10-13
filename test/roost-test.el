@@ -303,11 +303,26 @@
        (push-button (1- (point)))
        (should (string-match-p "^Collapse prompt\nFix the login\\.\n\nRun the tests afterwards\\.$"
                                (buffer-string)))
-       (goto-char (point-min))
-       (search-forward "Collapse prompt")
-       (push-button (1- (point)))
+       ;; Point is on the way back, not somewhere in the prompt.
+       (should (looking-at-p "Collapse prompt"))
+       (push-button)
        (should (string-match-p "^Fix the login\\.\nShow the whole prompt$" (buffer-string)))
-       (should-not (string-match-p "Run the tests" (buffer-string)))))))
+       (should-not (string-match-p "Run the tests" (buffer-string)))
+       (should (looking-at-p "Show the whole prompt"))))))
+
+(ert-deftest roost-task-panel-keeps-the-status-on-one-line ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (append '((name . "ask-git-status-short"))
+                                                (roost-test--task nil "permission")))))
+     (with-temp-buffer
+       (setq roost--buffer-task-key (roost--key task))
+       ;; Narrow, the status goes below the name rather than breaking.
+       (cl-letf (((symbol-function 'roost--task-info-width) (lambda () 40)))
+         (roost--render-task-info))
+       (should (string-match-p "\\`ask-git-status-short\n.*permission for [^\n]+\n" (buffer-string)))
+       (cl-letf (((symbol-function 'roost--task-info-width) (lambda () 100)))
+         (roost--render-task-info))
+       (should (string-match-p "\\`ask-git-status-short   .*permission for [^\n]+\n" (buffer-string)))))))
 
 (ert-deftest roost-task-panel-previews-long-replies-and-collapses-new-ones ()
   (roost-test--isolated
@@ -336,6 +351,7 @@
          (search-forward "Collapse reply")
          (push-button (1- (point)))
          (should-not (string-match-p "Progress item 30" (buffer-string)))
+         (should (looking-at-p "Show the whole reply"))
          (goto-char (point-min))
          (search-forward "Show the whole reply")
          (push-button (1- (point)))

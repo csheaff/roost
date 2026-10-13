@@ -433,12 +433,14 @@ def fold(qa, repo):
     qa.step("Shown whole", expect=[
         ("the whole prompt, with a way to fold it",
          lambda s: "Collapse prompt" in qa.window(s, "roost-task-info-mode")["text"]
-         and "keep the existing ones passing" in qa.window(s, "roost-task-info-mode")["text"])])
+         and "keep the existing ones passing" in qa.window(s, "roost-task-info-mode")["text"]),
+        ("point on the way back", lambda s: s["at"] == "Collapse prompt")])
     qa.click("Collapse prompt")
     qa.step("Folded again", expect=[
         ("the panel as it was",
          lambda s: unclocked(qa.window(s, "roost-task-info-mode")["text"])
-         == unclocked(qa.window(folded, "roost-task-info-mode")["text"]))])
+         == unclocked(qa.window(folded, "roost-task-info-mode")["text"])),
+        ("point on the way back", lambda s: s["at"] == "Show the whole prompt")])
 
 
 def panel_fits(qa, screen):
