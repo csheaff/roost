@@ -411,7 +411,11 @@ class Run:
 
     def drift(self, window, timeout=3):
         """How WINDOW's terminal differs from what tmux has in its pane, or None.
-        Output on its way may take a moment to show."""
+        Output on its way may take a moment to show.  A dead pane is left out:
+        tmux writes its "Pane is dead" line there without telling its control
+        clients, and the view keeps the agent's last output whole."""
+        if self.tmux("display-message", "-p", "-t", window["pane"], "#{pane_dead}") == ["1"]:
+            return None
         deadline = time.monotonic() + timeout
         while True:
             ours = self.emacs.json("(json-encode (qa-terminal-screen %s))" % lisp(window["buffer"])) or []
@@ -1043,8 +1047,84 @@ def shell(qa, repo):
         ("its panel beside it", lambda s: panel_text(qa, s).startswith(name))])
 
 
+@journey("Forget a task")
+def forget(qa, repo):
+    """X drops a task from Roost and stops its agent, leaving its worktree and branch."""
+    name = start_task(qa, "Forget about me")
+    task = open_task(qa, name)["task"]
+    branch = qa.git(repo, "branch", "--list", "--format=%(refname:short)", "roost/%s-*" % name)
+    qa.keys("C-c r X")
+    qa.wait("the question", lambda s: s["prompt"])
+    qa.step("Forgetting asks first", expect=[("it names the task", lambda s: name in (s["prompt"] or ""))])
+    qa.type("y")
+    qa.wait("the task to go", lambda s: qa.task(s, name) is None)
+    qa.step("Forgotten", expect=[
+        ("the echo area says what it left", lambda s: "Forgot " + name in (s["echo"] or "")),
+        ("its branch is still there", lambda s: branch and qa.git(repo, "branch", "--list", branch)),
+        ("its agent's session is gone",
+         lambda s: task["terminal"].split("/")[-1] not in qa.tmux("list-sessions", "-F", "#S"))])
+
+
+@journey("Fork a task's commits")
+def fork(qa, repo):
+    """C-u c starts a task from another's HEAD, its commits included."""
+    name = new_task(qa, "ask sh -c \"printf 'x\\n' > FORKED.md && git add FORKED.md && git commit -qm 'Fork me'\"")
+    answer_yes(qa, name)
+    qa.wait("its commit", lambda s: "Committed" in panel_text(qa, s))
+    qa.keys("C-c r C-u c")
+    qa.wait("the draft", lambda s: (qa.window(s, "roost-compose-mode") or {}).get("selected"))
+    qa.step("A draft from its HEAD", expect=[
+        ("it says the fork includes its commits",
+         lambda s: "includes its commits" in qa.window(s, "roost-compose-mode")["text"])])
+    before = {t["key"] for t in qa.screen()["tasks"]}
+    qa.type("Carry on from there")
+    qa.keys("C-c C-c")
+    screen = qa.wait("the fork", lambda s: {t["key"] for t in s["tasks"]} - before)
+    fork_name = next(t["name"] for t in screen["tasks"] if t["key"] not in before)
+    qa.status(fork_name, "ready", "idle")
+    qa.step("The fork has the commit", expect=[
+        ("its branch has it",
+         lambda s: "Fork me" in qa.git(repo, "log", "--format=%s", "-3",
+                                       qa.git(repo, "branch", "--list", "--format=%(refname:short)",
+                                              "roost/%s-*" % fork_name)))])
+
+
+@journey("An agent that exits")
+def exits(qa, repo):
+    """An agent that exits on its own shows as such, and s resumes its conversation."""
+    name = start_task(qa, "Leave when asked")
+    open_task(qa, name)
+    qa.type("exit\r")
+    qa.status(name, "exited")
+    qa.step("Exited", expect=[
+        ("the panel says s resumes it", lambda s: "resumes its conversation" in panel_text(qa, s)),
+        ("its last output still shows", lambda s: any("PROMPT Leave when asked" in w["text"] for w in terminals(s)))])
+    qa.click_text(name, "roost-task-info-mode")
+    qa.keys("s")
+    qa.status(name, "ready", "idle")
+    qa.step("Resumed", expect=[
+        ("its terminal", lambda s: (s.get("task") or {}).get("name") == name and selected_terminal(s))])
+
+
+@journey("A host Roost can't reach")
+def unreachable(qa, repo):
+    """A host that doesn't answer is named, in the sidebar and the dashboard, within their windows."""
+    qa.emacs.eval("(progn (setq roost-hosts '(nil \"qa-unreachable.invalid\")) (roost-refresh) t)")
+    try:
+        qa.wait("the host to be named", lambda s: "unreachab" in
+                (qa.window(s, "roost-sidebar-list-mode") or {}).get("text", ""), timeout=30)
+        qa.step("The sidebar names it")
+        qa.keys("C-c r S")
+        qa.wait("the dashboard", lambda s: (qa.window(s, "roost-dashboard-mode") or {}).get("selected"))
+        qa.step("So does the dashboard", expect=[
+            ("with why", lambda s: "is unreachable" in qa.window(s, "roost-dashboard-mode")["text"])])
+    finally:
+        qa.emacs.eval("(progn (setq roost-hosts '(nil)) (clrhash roost--errors) (roost--redraw) t)")
+
+
 JOURNEYS = [sweep, answer, fold, resize, merge, review, panes, shell,
-            dashboard, stop_resume, retire, send, update, restart, search, frames, org, tabs]
+            dashboard, stop_resume, retire, send, update, restart, search, frames, org, tabs,
+            forget, fork, exits, unreachable]
 
 
 def main():
