@@ -6,6 +6,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.8.1:
 
+- With tmux-control later than 0.7.2, a task's terminal split into panes,
+  as with `t`'s shell, keeps its window tabs above the panes, and each
+  pane's mode line names the task and keeps the rest of your mode line,
+  such as Roost's count of waiting agents. To upgrade, update tmux-control
+  too.
 - A task no longer goes back to what its agent did before, such as
   running or asking for permission, for a few seconds after its turn
   ends. A refresh that took a while could arrive after a newer one and
