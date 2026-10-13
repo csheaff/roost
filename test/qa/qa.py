@@ -370,8 +370,10 @@ class Run:
             problems = "".join("<li>%s</li>" % html.escape(p) for p in step["problems"]) + "".join(
                 '<li class="known">Known: %s</li>' % html.escape(k) for k in step.get("known", []))
             windows = "".join(
-                "<details><summary>%s (%s, %d×%d)</summary><pre>%s</pre></details>" % (
+                "<details><summary>%s (%s, %d×%d)%s</summary><pre>%s</pre></details>" % (
                     html.escape(w["buffer"]), html.escape(w["mode"]), w["columns"], w["lines"],
+                    "".join(" · %s %s" % (label, html.escape(w[key]))
+                            for key, label in (("terminal", "session"), ("tabs", "tabs")) if w.get(key)),
                     html.escape(w["text"]))
                 for w in step["screen"]["windows"])
             shot = ('<img src="%s" alt="The frame after: %s">' % (step["shot"], html.escape(step["title"]))
@@ -647,7 +649,8 @@ def panes(qa, repo):
     qa.keys("q")
     screen = open_task(qa, second)
     qa.step("The other task", expect=[
-        ("only its own terminal", lambda s: all(w["terminal"] == s["task"]["terminal"] for w in terminals(s))),
+        ("only its own terminal", lambda s: terminals(s)
+         and all(w["terminal"] == s["task"]["terminal"] for w in terminals(s))),
         ("its panel beside it", lambda s: (qa.window(s, "roost-task-info-mode") or {}).get("text", "").startswith(second))])
     qa.keys("C-c C-s")
     qa.wait("the session prompt", lambda s: s["prompt"])
