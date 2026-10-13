@@ -749,9 +749,10 @@ and a newer notification about TASK replaces it."
         (t (message "%s: %s" title body))))
 
 (defconst roost--measured-fields
-  '(diff dirty files ahead behind update worktreeMissing prStatus gitStamp agentWork merging landed)
+  '(diff dirty files ahead behind update worktreeMissing prStatus gitStamp agentWork merging landed pr)
   "A task's fields its host measures for each reply, such as Git statistics.
-They are as new as the reply, whatever its `updatedAt'.")
+They are as new as the reply, whatever its `updatedAt': its pull
+request too, which the host records as it finds one on GitHub.")
 
 (defun roost--newer-events (task old)
   "TASK, or OLD with TASK's measurements when OLD's `updatedAt' is newer.

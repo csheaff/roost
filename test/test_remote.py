@@ -2025,6 +2025,37 @@ elif args[:2] == ["auth", "status"]:
         self.assertIs(listed["landed"], False)
         self.assertIsNone(roost.merged_pull_request_head(roost.Store(str(self.state)).read(task["id"])))
 
+    def test_a_pull_request_is_a_tasks_only_at_a_commit_it_made(self):
+        # Brought up to main's M, then committing T: another fork's PR at M is not its.
+        self.github()
+        task = self.create()
+        (self.repo / "later").write_text("later\n")
+        self.git("add", "later")
+        self.git("commit", "-qm", "Later on main")
+        self.assertTrue(self.request("update", id=task["id"])["ok"])
+        main = self.git("rev-parse", "main")
+        tip = self.commit_in(task)
+        self.push(task)
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(number=4, state="MERGED", headRefOid=main)]))
+        self.assertNotIn("pr", self.request("list", full=True)["result"][0])
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(number=4, state="MERGED", headRefOid=main),
+                                                           dict(number=6, state="OPEN", headRefOid=tip)]))
+        self.assertEqual(self.request("list", full=True)["result"][0]["pr"]["number"], 6)
+        # Rebased onto main and pushed again: the rebased tip is its own too.
+        (self.repo / "later2").write_text("later\n")
+        self.git("add", "later2")
+        self.git("commit", "-qm", "Later still on main")
+        self.git("rebase", "-q", "main", cwd=Path(task["worktree"]))
+        rebased = self.git("rev-parse", "HEAD", cwd=Path(task["worktree"]))
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(number=6, state="OPEN", headRefOid=rebased)]))
+        self.assertEqual(self.request("list", full=True)["result"][0]["pr"]["head"], rebased)
+        store = roost.Store(str(self.state))
+        record = store.read(task["id"])
+        del record["pr"]
+        store.save(record)
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(number=8, state="OPEN", headRefOid=rebased)]))
+        self.assertEqual(self.request("list", full=True)["result"][0]["pr"]["number"], 8)
+
     def test_asking_github_keeps_within_its_deadline(self):
         # A stalled GitHub must not hold up the reply past Emacs's wait for it.
         self.github()

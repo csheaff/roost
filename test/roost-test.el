@@ -4101,14 +4101,16 @@ Read from the layout transient keeps, whose form varies by version."
                                       (agentSession . "after-clear"))
                                     (roost-test--task nil "ready")))
    (roost--cache-task "dev" (append '((updatedAt . "2026-10-13T10:31:36.510719+00:00") (lastEvent . "PostToolUse")
-                                      (agentSession . "before-clear") (diff . "1 file changed"))
+                                      (agentSession . "before-clear") (diff . "1 file changed")
+                                      (pr (number . 9) (url . "https://github.com/o/r/pull/9")))
                                     (roost-test--task nil "running")))
    (let ((task (gethash '("dev" "0123456789abcdef") roost--tasks)))
      (should (equal (roost--field task 'status) "ready"))
      (should (equal (roost--field task 'lastEvent) "Stop"))
      (should (equal (roost--field task 'agentSession) "after-clear"))
-     ;; What else it read is still news.
-     (should (equal (roost--field task 'diff) "1 file changed")))
+     ;; What else it read is still news, such as a pull request it found on GitHub.
+     (should (equal (roost--field task 'diff) "1 file changed"))
+     (should (equal (alist-get 'number (roost--field task 'pr)) 9)))
    ;; Nor the pane of an agent stopped since.
    (roost--cache-task "dev" (append '((updatedAt . "2026-10-13T10:31:38+00:00") (paneId) (windowId) (live))
                                     (roost-test--task nil "stopped")))

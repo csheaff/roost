@@ -1099,20 +1099,20 @@ def task_pull_requests(task, tip, timeout=15):
         return None
     number = recorded_pull_request(task).get("number")
     base = task.get("baseCommit")
-    # An update that fast-forwarded a task with no commits brought only main's.
-    committed = None
+    made = None
 
     def ours(pr):
-        nonlocal committed
+        nonlocal made
         head = pr.get("headRefOid")
         if pr.get("number") == number:
             return True
         if not (isinstance(head, str) and head and head != base and is_ancestor(task["repo"], head, tip)
                 and not (base and is_ancestor(task["repo"], head, base))):
             return False
-        if committed is None:
-            committed = committed_on(task)
-        return committed
+        # Not one an update brought in from its integration branch.
+        if made is None:
+            made = own_commits(task)
+        return made is True or head in made
 
     return sorted((pr for pr in listed if isinstance(pr, dict) and isinstance(pr.get("number"), int) and ours(pr)),
                   key=lambda pr: pr["number"], reverse=True)
@@ -1193,16 +1193,29 @@ def landed(task, tip):
     return bool(integration) and is_ancestor(task["repo"], tip, "refs/heads/" + integration) and committed_on(task)
 
 
-def committed_on(task):
-    """Whether commits were made on the task's branch, as its reflog has it,
-    merge commits among them, rather than all brought in from its
-    integration branch, as when an update fast-forwards a task that had
-    none. True if Git keeps no reflog."""
-    log = read_git(task["repo"], "log", "--walk-reflogs", "--format=%gs", "refs/heads/" + task["branch"], "--")
+def own_commits(task):
+    """The commits made on the task's branch, as its reflog has them, merge
+    commits among them, rather than brought in from its integration branch,
+    as when an update fast-forwards a task that had none; True if Git keeps
+    no reflog. A rebase's makes count unless its integration branch has it."""
+    log = read_git(task["repo"], "log", "--walk-reflogs", "--format=%H %gs", "refs/heads/" + task["branch"], "--")
     if log.returncode or not log.stdout.strip():
         return True
-    return any(re.match(r"(commit|cherry-pick|revert|am)\b|(merge|pull)\b[^:]*: Merge made by", line)
-               for line in log.stdout.splitlines())
+    made, rebased = set(), set()
+    for line in log.stdout.splitlines():
+        commit, _, subject = line.partition(" ")
+        if re.match(r"(commit|cherry-pick|revert|am)\b|(merge|pull)\b[^:]*: Merge made by", subject):
+            made.add(commit)
+        elif subject.startswith("rebase"):
+            rebased.add(commit)
+    integration = task.get("integrationBranch")
+    return made | {commit for commit in rebased
+                   if not (integration and is_ancestor(task["repo"], commit, "refs/heads/" + integration))}
+
+
+def committed_on(task):
+    """Whether commits were made on the task's branch, as `own_commits` has it."""
+    return bool(own_commits(task))
 
 
 def status_paths(porcelain):
