@@ -838,7 +838,7 @@ def retire(qa, repo):
     answer_yes(qa, dirty)
     # Once Roost knows of the file: before, it asks as for a task with no work,
     # and offers to discard only once the host refuses.
-    qa.wait("the file in its panel", lambda s: "scratch.txt" in panel_text(qa, s))
+    qa.wait("the file among its changes", lambda s: re.search(r"Uncommitted\n\s*scratch\.txt", panel_text(qa, s)))
     qa.keys("C-c r x")
     qa.wait("the question", lambda s: s["prompt"])
     qa.step("Work not merged: it asks", expect=[
