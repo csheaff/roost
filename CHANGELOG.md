@@ -6,6 +6,9 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.8.1:
 
+- A long prompt shown whole in the task panel folds up again: "Collapse
+  prompt" sits above it, as "Collapse reply" does above a long reply.
+  Nothing to do when upgrading.
 - The task panel puts what to do next at its top, then the task's prompt,
   then the files it changed, those not yet committed first, under labels
   that say which. It reminds you that `;` in a file's diff writes a note for

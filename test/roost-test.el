@@ -301,7 +301,13 @@
        (goto-char (point-min))
        (search-forward "Show the whole")
        (push-button (1- (point)))
-       (should (string-match-p "Run the tests afterwards" (buffer-string)))))))
+       (should (string-match-p "^Collapse prompt\nFix the login\\.\n\nRun the tests afterwards\\.$"
+                               (buffer-string)))
+       (goto-char (point-min))
+       (search-forward "Collapse prompt")
+       (push-button (1- (point)))
+       (should (string-match-p "^Fix the login\\.\nShow the whole prompt$" (buffer-string)))
+       (should-not (string-match-p "Run the tests" (buffer-string)))))))
 
 (ert-deftest roost-task-panel-previews-long-replies-and-collapses-new-ones ()
   (roost-test--isolated

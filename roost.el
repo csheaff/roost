@@ -5250,16 +5250,20 @@ prompt is returned whole."
     (when face (add-face-text-property 0 (length text) face t text))
     (insert text)))
 
-(defun roost--insert-reply-toggle (reply expanded)
-  "Insert a button to expand REPLY, or collapse it when EXPANDED."
+(defun roost--insert-toggle (label action)
+  "Insert a button LABEL on a line of its own that calls ACTION and redraws."
   (let ((start (point)))
-    (insert-text-button (if expanded "Collapse reply" "Show the whole reply")
-                        'follow-link t 'face 'roost-dim
+    (insert-text-button label 'follow-link t 'face 'roost-dim
                         'action (lambda (_)
-                                  (setq roost--expanded-reply (unless expanded reply))
+                                  (funcall action)
                                   (roost--render-task-info)))
     (insert "\n")
     (put-text-property start (point) 'line-prefix "  ")))
+
+(defun roost--insert-reply-toggle (reply expanded)
+  "Insert a button to expand REPLY, or collapse it when EXPANDED."
+  (roost--insert-toggle (if expanded "Collapse reply" "Show the whole reply")
+                        (lambda () (setq roost--expanded-reply (unless expanded reply)))))
 
 (defun roost--window-places ()
   "Where each window showing the current buffer is, by line and column.
@@ -5364,16 +5368,16 @@ Windows showing the panel keep their scroll position, and the mark stays."
         (when-let* ((prompt (roost--prompt-text task)))
           (roost--insert-heading "Prompt")
           (let ((preview (roost--prompt-preview prompt)))
-            (if (or roost--show-full-prompt (equal preview prompt))
-                (roost--insert-indented (roost--prose prompt))
-              (roost--insert-indented (roost--prose preview))
-              (let ((start (point)))
-                (insert-text-button "Show the whole prompt" 'follow-link t 'face 'roost-dim
-                                    'action (lambda (_)
-                                              (setq roost--show-full-prompt t)
-                                              (roost--render-task-info)))
-                (insert "\n")
-                (put-text-property start (point) 'line-prefix "  ")))))
+            (cond ((equal preview prompt)
+                   (roost--insert-indented (roost--prose prompt)))
+                  (roost--show-full-prompt
+                   (roost--insert-toggle "Collapse prompt"
+                                         (lambda () (setq roost--show-full-prompt nil)))
+                   (roost--insert-indented (roost--prose prompt)))
+                  (t
+                   (roost--insert-indented (roost--prose preview))
+                   (roost--insert-toggle "Show the whole prompt"
+                                         (lambda () (setq roost--show-full-prompt t)))))))
         (when-let* (((not beside))
                     (reply (roost--last-message task))
                     (reply (roost--prose reply)))
