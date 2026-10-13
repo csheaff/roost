@@ -461,6 +461,7 @@ keys there are then."
          ((not (seq-some (lambda (back)
                            (let ((undone (roost-sweep--try view state width (list action back))))
                              (and (not (plist-get undone :outside))
+                                  (not (plist-get undone :error))
                                   (equal (plist-get undone :text) original))))
                          (plist-get result :actions)))
           (push (format "%s changes the view, and nothing changes it back" name) problems)))))
