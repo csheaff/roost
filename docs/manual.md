@@ -210,10 +210,18 @@ want, `x` discards the task, first saying what that loses.
 **Or open a pull request.** To finish on GitHub instead, `P` drafts one: the first
 line is the title and the rest the body, prefilled from the agent's commit
 message. `C-c C-c` pushes the branch and creates it (`C-u C-c C-c` as a draft).
-The dashboard then shows `#12` with its checks and review. Send review feedback
+The dashboard then shows `#12` with its checks and review, as it does for a pull
+request the agent opened itself from the task's branch. Send review feedback
 to the agent with `e`; when it has committed, `P` pushes the new commits and
 opens the pull request. Once it is merged, `x` retires the task and deletes the
 branch. Needs `gh` on the task's host, and Git credentials there that can push.
+
+**See what's done.** A task whose work is merged, on GitHub or into the branch it
+merges into, says `merged` in the dashboard and sidebar once you've seen its
+agent's last reply, so you can tell which tasks to retire without opening them.
+Nothing is lost by retiring it with `x`: nothing is left uncommitted, and its
+commits are all in what was merged. Commits made after its pull request merged
+keep it from saying so.
 
 ## Commands
 
@@ -254,6 +262,8 @@ globally to reach Roost from anywhere, for example
 Also available: `roost-send-region` (adds the selection, with its file and
 lines, to the prompt you are drafting). Roost watches its hosts once you open the dashboard or sidebar or start
 a task: every 3 seconds while Emacs is in front, every 15 otherwise.
+Every two minutes, and whenever you open the dashboard or refresh it with `g`, it also
+asks GitHub about the pull requests of tasks whose branch was pushed.
 `roost-watch-mode` turns that off and on.
 
 In Magit on a task's worktree, Roost adds a few keys, and a Roost menu:

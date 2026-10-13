@@ -19,6 +19,7 @@
          (roost--revisions (make-hash-table :test 'equal))
          (roost--snapshots (make-hash-table :test 'equal))
          (roost--list-requests (make-hash-table :test 'equal))
+         (roost--pull-requests-asked (make-hash-table :test 'equal))
          (roost--full-refresh-pending (make-hash-table :test 'equal))
          (roost--failures (make-hash-table :test 'equal))
          (roost--hosts-loaded t) (roost--remembered-hosts nil)
@@ -2394,7 +2395,8 @@ Read from the layout transient keeps, whose form varies by version."
                                                     (roost-test--task "1111111111111111" "running"))))
           (finished (roost--cache-task "dev" (append '((live . t) (ahead . 2))
                                                      (roost-test--task "2222222222222222" "ready"))))
-          (merged (roost--cache-task "dev" (append '((live . t) (ahead . 2) (prStatus (state . "MERGED")))
+          (merged (roost--cache-task "dev" (append '((live . t) (ahead . 2) (prStatus (state . "MERGED"))
+                                                     (pr (number . 12) (url . "https://github.com/o/r/pull/12")))
                                                    (roost-test--task "3333333333333333" "ready")))))
      (should (equal (funcall applies stopped) '("RET" "f" "r" "D" "u" "P" "m" "x" "X" "s")))
      (should (string-match-p "resumes its conversation" (roost--next-step stopped)))
@@ -4123,14 +4125,16 @@ Read from the layout transient keeps, whose form varies by version."
                                       (agentSession . "after-clear"))
                                     (roost-test--task nil "ready")))
    (roost--cache-task "dev" (append '((updatedAt . "2026-10-13T10:31:36.510719+00:00") (lastEvent . "PostToolUse")
-                                      (agentSession . "before-clear") (diff . "1 file changed"))
+                                      (agentSession . "before-clear") (diff . "1 file changed")
+                                      (pr (number . 9) (url . "https://github.com/o/r/pull/9")))
                                     (roost-test--task nil "running")))
    (let ((task (gethash '("dev" "0123456789abcdef") roost--tasks)))
      (should (equal (roost--field task 'status) "ready"))
      (should (equal (roost--field task 'lastEvent) "Stop"))
      (should (equal (roost--field task 'agentSession) "after-clear"))
-     ;; What else it read is still news.
-     (should (equal (roost--field task 'diff) "1 file changed")))
+     ;; What else it read is still news, such as a pull request it found on GitHub.
+     (should (equal (roost--field task 'diff) "1 file changed"))
+     (should (equal (alist-get 'number (roost--field task 'pr)) 9)))
    ;; Nor the pane of an agent stopped since.
    (roost--cache-task "dev" (append '((updatedAt . "2026-10-13T10:31:38+00:00") (paneId) (windowId) (live))
                                     (roost-test--task nil "stopped")))
@@ -4150,6 +4154,124 @@ Read from the layout transient keeps, whose form varies by version."
    (roost--cache-task "dev" (roost-test--pr-task '(prStatus . ((state . "OPEN")))))
    (roost--apply-snapshot "dev" (list (roost-test--pr-task)))
    (should (alist-get 'prStatus (gethash '("dev" "0123456789abcdef") roost--tasks)))))
+
+(ert-deftest roost-quiet-polls-ask-about-pull-requests-now-and-then ()
+  ;; A merge on GitHub leaves no trace on the host for a poll to notice.
+  (roost-test--isolated
+   (let (asked)
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host _action params _ok _fail) (push params asked))))
+       (dolist (args '((t) (t) (nil ("0123456789abcdef")) (t)))
+         (clrhash roost--refreshing)
+         (apply #'roost--refresh-host "dev" args))
+       (should (equal (nreverse asked) '(((full . :false) (pullRequests . t)) ((full . :false))
+                                         ((full . ["0123456789abcdef"])) ((full . :false)))))
+       ;; A full refresh asks GitHub, so the next quiet poll needn't.
+       (puthash "dev" (- (float-time) roost--pull-request-interval 1) roost--pull-requests-asked)
+       (setq asked nil)
+       (dolist (quiet '(nil t))
+         (clrhash roost--refreshing)
+         (roost--refresh-host "dev" quiet))
+       (should (equal (nreverse asked) '(((full . t)) ((full . :false)))))))))
+
+(ert-deftest roost-a-merged-task-says-so-in-its-row ()
+  (roost-test--isolated
+   (let* ((seen '(seen . "2026-10-03T20:00:00+00:00"))
+          (cache (lambda (id &rest fields)
+                   (roost--cache-task "dev" (append fields `((repo . "/home/user/ledger") (live . t) (ahead . 2)
+                                                             (dirty))
+                                                    (roost-test--task id)))))
+          (merged (funcall cache "1111111111111111" seen '(landed . t)
+                           '(pr . ((number . 12) (url . "https://github.com/o/r/pull/12")))
+                           '(prStatus . ((state . "MERGED")))))
+          (unseen (funcall cache "2222222222222222" '(landed . t)))
+          (dirty (funcall cache "3333333333333333" seen '(landed . t) '(dirty . t)))
+          (later (funcall cache "4444444444444444" seen '(landed)
+                          '(pr . ((number . 12) (url . "https://github.com/o/r/pull/12")))
+                          '(prStatus . ((state . "MERGED"))))))
+     (should (equal (roost--display-status merged) "merged"))
+     (should (eq (roost--status-word-face (roost--attention-status merged)) 'roost-pr-merged))
+     (should (equal (roost--next-step merged) "Its pull request is merged; x retires it"))
+     ;; Anything that needs you comes first.
+     (should (equal (roost--display-status unseen) "ready"))
+     (should (equal (roost--display-status dirty) "ready"))
+     ;; Commits since its pull request merged are not merged.
+     (should (equal (roost--display-status later) "ready"))
+     (should (equal (roost--next-step later) "Its pull request is merged, but not its commits since: m merges them"))
+     (should (roost--action-applies-p later 'roost-merge-retire))
+     (should-not (roost--action-applies-p merged 'roost-merge-retire))
+     ;; Merged into its branch without GitHub, by an agent that has stopped:
+     ;; once you have seen what it said last.
+     (let ((stopped (funcall cache "5555555555555555" '(landed . t) '(status . "stopped") '(live))))
+       (should (equal (roost--display-status stopped) "stopped"))
+       (setq stopped (funcall cache "5555555555555555" seen '(landed . t) '(status . "stopped") '(live)))
+       (should (equal (roost--display-status stopped) "merged"))
+       (should (equal (roost--next-step stopped) "Its work is merged; x retires it")))
+     (should (equal (roost--display-status (funcall cache "6666666666666666" '(landed . t) '(status . "running")))
+                    "running"))
+     ;; A failure shows, seen or not.
+     (dolist (status '("failed" "crashed"))
+       (should (equal (roost--display-status (funcall cache "7777777777777777" seen '(landed . t)
+                                                      `(status . ,status) '(live)))
+                      status)))
+     (remhash '("dev" "7777777777777777") roost--tasks)
+     ;; Known merged before its Git statistics are, as after a poll that only asked GitHub.
+     (let ((unmeasured (roost--cache-task "dev" (append `(,seen (landed . t) (live . t) (ahead . 2))
+                                                        (roost-test--task "8888888888888888")))))
+       (should (equal (roost--display-status unmeasured) "ready"))
+       (remhash '("dev" "8888888888888888") roost--tasks))
+     (with-temp-buffer
+       (roost-dashboard-mode)
+       (roost--render-dashboard)
+       (should (string-match-p "fix auth 111111 +merged +[0-9a-z]+ +#12 merged" (buffer-string)))
+       (should (string-match-p "2 merged" (buffer-string))))
+     (with-temp-buffer
+       (roost-sidebar-list-mode)
+       (roost--render-sidebar)
+       (should (= (how-many "merged$" (point-min) (point-max)) 2)))
+     ;; Retiring it asks only whether to.
+     (let (asked)
+       (cl-letf (((symbol-function 'y-or-n-p) (lambda (prompt) (push prompt asked) nil)))
+         (roost-retire (assq-delete-all 'prStatus (copy-tree merged))))
+       (should (string-prefix-p "Retire fix auth" (car asked)))))))
+
+(ert-deftest roost-a-pull-request-shows-its-recorded-state-before-github-answers ()
+  (roost-test--isolated
+   (should (eq (roost--pr-state (roost-test--task)) nil))
+   (should (eq (roost--pr-state (roost-test--pr-task)) 'open))
+   (let ((recorded (roost--cache-task "dev" (append '((pr . ((number . 12) (state . "MERGED")))
+                                                      (seen . "2026-10-03T20:00:00+00:00") (live . t)
+                                                      (ahead . 2) (landed . t))
+                                                    (roost-test--task)))))
+     (should (eq (roost--pr-state recorded) 'merged))
+     ;; GitHub can't say now: the merge on record names it.
+     (should (equal (roost--next-step recorded) "Its pull request is merged; x retires it")))
+   ;; Nor for one open: P pushes to it, rather than opening another.
+   (let ((open (roost--cache-task "dev" (append '((pr . ((number . 12) (state . "OPEN"))) (live . t) (ahead . 2))
+                                                (roost-test--task "1111111111111111")))))
+     (should (equal (roost--next-step open) "P pushes new commits to its pull request")))
+   (should (eq (roost--pr-state (append '((prStatus . ((state . "OPEN"))) (pr . ((number . 12) (state . "MERGED"))))
+                                        (roost-test--task)))
+               'open))))
+
+(ert-deftest roost-commits-since-a-merge-are-work-to-lose ()
+  (roost-test--isolated
+   (let ((later (roost--cache-task "dev" (append '((live . t) (ahead . 3) (landed) (dirty)
+                                                   (pr . ((number . 12) (url . "https://github.com/o/r/pull/12")))
+                                                   (prStatus . ((state . "MERGED"))))
+                                                 (roost-test--task))))
+         (unmeasured (roost-test--pr-task '(live . t) '(ahead . 3) '(prStatus . ((state . "MERGED"))))))
+     (should (roost--unmerged-work-p later))
+     ;; Before Git is measured, the merge on GitHub is all there is to go on.
+     (should-not (roost--unmerged-work-p unmeasured))
+     ;; Unless its host has said its commits aren't all merged.
+     (let ((said (roost-test--pr-task '(live . t) '(ahead . 3) '(landed) '(prStatus . ((state . "MERGED"))))))
+       (should (roost--unmerged-work-p said))
+       (should (roost--action-applies-p said 'roost-merge-retire)))
+     (let (asked)
+       (cl-letf (((symbol-function 'y-or-n-p) (lambda (prompt) (push prompt asked) nil)))
+         (roost-retire later))
+       (should (string-match-p "has work not merged" (car asked)))))))
 
 (ert-deftest roost-tab-bar-workspaces-follow-tasks ()
   (roost-test--isolated

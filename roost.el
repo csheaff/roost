@@ -333,6 +333,11 @@ sidebar's keys act on this row.")
   "Per-host mutation counter, used to discard stale list replies.")
 (defvar roost--list-requests (make-hash-table :test 'equal)
   "How many task lists Roost has asked each host for.")
+(defvar roost--pull-requests-asked (make-hash-table :test 'equal)
+  "When each host last asked GitHub about its tasks' pull requests.")
+(defconst roost--pull-request-interval 120
+  "Seconds between background polls that ask GitHub about pull requests.
+A merge there leaves no trace on the host for a poll to notice.")
 (defvar roost--snapshots (make-hash-table :test 'equal)
   "For each host, the request, counted in `roost--list-requests', whose
 task list Roost holds, or the newest of them; so a view can tell that a
@@ -744,9 +749,10 @@ and a newer notification about TASK replaces it."
         (t (message "%s: %s" title body))))
 
 (defconst roost--measured-fields
-  '(diff dirty files ahead behind update worktreeMissing prStatus gitStamp agentWork merging)
+  '(diff dirty files ahead behind update worktreeMissing prStatus gitStamp agentWork merging landed pr)
   "A task's fields its host measures for each reply, such as Git statistics.
-They are as new as the reply, whatever its `updatedAt'.")
+They are as new as the reply, whatever its `updatedAt': its pull
+request too, which the host records as it finds one on GitHub.")
 
 (defun roost--newer-events (task old)
   "TASK, or OLD with TASK's measurements when OLD's `updatedAt' is newer.
@@ -779,7 +785,8 @@ host measured, such as Git statistics, is as new as anything."
                         (not (equal (roost--field task 'updatedAt)
                                     (roost--field old 'updatedAt))))))
     ;; Quiet polls skip Git and the latest reply; keep the last full refresh's.
-    (dolist (field '(diff dirty files ahead behind worktreeMissing prStatus lastMessage gitStamp agentWork merging))
+    (dolist (field '(diff dirty files ahead behind worktreeMissing prStatus lastMessage gitStamp agentWork merging
+                            landed))
       (unless (assoc field task)
         (when (assoc field old) (push (assoc field old) task))))
     (if (not (member status '("retired" "forgotten" "discarded")))
@@ -875,13 +882,20 @@ those tasks."
     (puthash host t roost--refreshing)
     (let ((request (puthash host (1+ (gethash host roost--list-requests 0)) roost--list-requests))
           (revision (gethash host roost--revisions 0))
+          ;; Full refreshes ask GitHub too, and quiet polls now and then.
+          (pull-requests (if quiet
+                             (> (- (float-time) (gethash host roost--pull-requests-asked 0))
+                                roost--pull-request-interval)
+                           (not ids)))
           (finish (lambda ()
                     (remhash host roost--refreshing)
                     (when-let* ((pending (gethash host roost--full-refresh-pending)))
                       (remhash host roost--full-refresh-pending)
                       (roost--refresh-host host nil (unless (eq pending t) pending))))))
+      (when pull-requests (puthash host (float-time) roost--pull-requests-asked))
       (roost--request
-       host "list" (list (cons 'full (cond (quiet :false) (ids (vconcat ids)) (t t))))
+       host "list" `((full . ,(cond (quiet :false) (ids (vconcat ids)) (t t)))
+                     ,@(when (and quiet pull-requests) '((pullRequests . t))))
        ;; Each ends the refresh even if drawing what it found fails, or
        ;; the host would never be asked again.
        (lambda (tasks)
@@ -979,7 +993,7 @@ recently failed."
 
 (defconst roost--status-order
   '("permission" "prompt" "ready" "interrupted" "error" "failed" "crashed" "exited" "running"
-    "background" "idle"
+    "background" "merged" "idle"
     "starting" "stopped")
   "Attention statuses from most to least in need of attention.")
 
@@ -3936,8 +3950,7 @@ only open it."
   (setq task (roost--choose task))
   (if-let* ((pr (roost--field task 'pr))
             (url (alist-get 'url pr)))
-      (if (or skip-push
-              (member (alist-get 'state (roost--field task 'prStatus)) '("MERGED" "CLOSED")))
+      (if (or skip-push (memq (roost--pr-state task) '(merged closed)))
           (browse-url url)
         (roost--act
          task "pr" nil
@@ -3992,9 +4005,9 @@ The text is kept if creation fails."
 
 (defun roost--pr-state (task)
   "TASK's pull request state: `open', `draft', `merged', `closed', or nil.
-Without a status from GitHub yet, a recorded pull request counts as open."
-  (when (roost--field task 'pr)
-    (let ((status (roost--field task 'prStatus)))
+Without a status from GitHub yet, it is as its host recorded, or open."
+  (when-let* ((pr (roost--field task 'pr)))
+    (let ((status (or (roost--field task 'prStatus) (and (alist-get 'state pr) pr))))
       (cond ((not status) 'open)
             ((equal (alist-get 'state status) "MERGED") 'merged)
             ((equal (alist-get 'state status) "CLOSED") 'closed)
@@ -4081,8 +4094,10 @@ Without a status from GitHub yet, a recorded pull request counts as open."
         " · "))
       (when (eq state 'merged)
         (roost--insert-indented
-         (substitute-command-keys
-          "Merged on GitHub. \\<roost-task-info-mode-map>\\[roost-retire] retires this task, removing its worktree and branch.")
+         (if (roost--landed task)
+             (substitute-command-keys
+              "Merged on GitHub. \\<roost-task-info-mode-map>\\[roost-retire] retires this task, removing its worktree and branch.")
+           "Merged on GitHub, but not the commits since.")
          'roost-dim)))))
 
 ;;;###autoload
@@ -4094,12 +4109,25 @@ Without a status from GitHub yet, a recorded pull request counts as open."
                              (roost--field task 'name)))
     (roost--act task "stop")))
 
+(defun roost--landed (task &optional measured)
+  "Whether TASK's commits are all merged, as its host last measured.
+That is, in its integration branch or a pull request GitHub merged at
+its tip.  Its host saying they aren't settles it.  That they are counts
+once its Git statistics are measured too: until then, as after a poll
+that only asked GitHub, the merge on GitHub is all there is to go on,
+and with MEASURED the answer is `unknown'."
+  (cond ((and (assq 'landed task) (not (roost--field task 'landed))) nil)
+        ((and (assq 'landed task) (assq 'dirty task)) t)
+        (measured 'unknown)
+        (t (eq (roost--pr-state task) 'merged))))
+
 (defun roost--unmerged-work-p (task)
   "Whether TASK, as last seen, holds work that retiring it would refuse to lose.
 Commits not merged into its integration branch, or files not committed."
   (or (roost--field task 'dirty)
       (and (numberp (roost--field task 'ahead)) (> (roost--field task 'ahead) 0)
-           (not (equal (alist-get 'state (roost--field task 'prStatus)) "MERGED")))))
+           ;; Commits since a pull request merged are not in it.
+           (not (roost--landed task)))))
 
 ;;;###autoload
 (defun roost-retire (&optional task)
@@ -4311,8 +4339,27 @@ A turn you interrupted, or whose permission prompt you declined, is
           (t status))))
 
 (defun roost--display-status (task)
-  "TASK's status, or \"offline\" while its host is unreachable."
-  (if (gethash (roost--field task 'host) roost--errors) "offline" (roost--status-name task)))
+  "TASK's status, or \"offline\" while its host is unreachable.
+It is \"merged\" when you can retire it, losing nothing, and its agent
+neither works nor has anything new for you."
+  (cond ((gethash (roost--field task 'host) roost--errors) "offline")
+        ((roost--merged-p task) "merged")
+        (t (roost--status-name task))))
+
+(defun roost--merged-p (task)
+  "Whether TASK's work is merged, as its host last measured, and nothing needs you.
+Its commits are in its integration branch or a pull request GitHub
+merged, nothing is left uncommitted, and its agent is not at work, did
+not fail, and has said nothing you haven't seen."
+  (and (eq (roost--landed task t) t)
+       (not (roost--field task 'dirty))
+       (not (roost--field task 'merging))
+       (not (roost--field task 'worktreeMissing))
+       (not (roost--agent-work-left task))
+       (not (member (roost--field task 'status)
+                    '("starting" "running" "permission" "background" "failed" "crashed")))
+       ;; Stopped too: its host keeps it seen only if it was before.
+       (roost--seen-p task)))
 
 (defun roost--status-face (status)
   "Face for STATUS."
@@ -4321,15 +4368,16 @@ A turn you interrupted, or whose permission prompt you declined, is
     ((or "ready" "interrupted") 'roost-status-ready)
     ((or "running" "background") 'roost-status-running)
     ((or "failed" "crashed" "error") 'roost-status-failed)
+    ("merged" 'roost-pr-merged)
     (_ 'roost-status-inactive)))
 
 (defun roost--status-word-face (status)
   "Face for STATUS, from `roost--attention-status', written beside its dot.
 The dot has the status's colour.  The word has it too when the agent
-can't go on without you or failed, is plain while the agent waits for
-you otherwise, and is dim the rest of the time."
+can't go on without you or failed, or the task is merged, is plain
+while the agent waits for you otherwise, and is dim the rest of the time."
   (pcase status
-    ((or "permission" "prompt" "error" "failed" "crashed") (roost--status-face status))
+    ((or "permission" "prompt" "error" "failed" "crashed" "merged") (roost--status-face status))
     ((or "ready" "interrupted") nil)
     (_ 'roost-dim)))
 
@@ -5182,7 +5230,8 @@ Its host would refuse the rest, or there is nothing for them to do.
 Unknown Git statistics count as making sense."
   (let ((worktree (not (roost--field task 'worktreeMissing)))
         (ahead (roost--field task 'ahead))
-        (merged (equal (alist-get 'state (roost--field task 'prStatus)) "MERGED"))
+        ;; All its work, not a pull request merged before its latest commits.
+        (merged (roost--landed task))
         ;; The host retires and merges only a task whose agent is not at work.
         (active (member (roost--field task 'status) '("starting" "running" "permission" "background"))))
     (pcase command
@@ -5202,9 +5251,14 @@ Unknown Git statistics count as making sense."
   "What to do next with TASK, as a line naming its key, or nil.
 MENU non-nil means the line is for `roost-dispatch', away from the
 task panel's list of the agent's own worktrees."
-  (let ((key (lambda (key) (propertize key 'face 'roost-key)))
-        (status (roost--attention-status task))
-        (pr (roost--field task 'prStatus)))
+  (let* ((key (lambda (key) (propertize key 'face 'roost-key)))
+         (status (roost--attention-status task))
+         ;; As GitHub said last, or as its host recorded.
+         (state (roost--pr-state task))
+         (merged (eq state 'merged))
+         (retire (lambda ()
+                   (concat (if merged "Its pull request is merged; " "Its work is merged; ")
+                           (funcall key "x") " retires it"))))
     (cond
      ((equal status "permission")
       (concat "Answer it in its terminal: " (funcall key "RET")))
@@ -5213,6 +5267,8 @@ task panel's list of the agent's own worktrees."
      ((roost--field task 'worktreeMissing)
       (concat "Its worktree is gone: " (funcall key "x") " retires it if its work is merged, "
               (funcall key "X") " forgets it"))
+     ;; Whether its agent is still there or not.
+     ((equal status "merged") (funcall retire))
      ((equal status "error")
       (concat "Its last turn failed; open it to try its last prompt again: " (funcall key "RET")))
      ((member status '("stopped" "crashed"))
@@ -5231,9 +5287,10 @@ task panel's list of the agent's own worktrees."
       (concat "Its agent left work in a worktree of its own: merge it into this task in Magit, or remove it"
               ;; The panel lists those worktrees, with buttons, below this line.
               (when menu (concat "; " (funcall key "i") " shows it"))))
-     ((equal (alist-get 'state pr) "MERGED")
-      (concat "Its pull request is merged; " (funcall key "x") " retires it"))
-     ((equal (alist-get 'state pr) "OPEN")
+     ;; As for one you haven't looked at since its agent finished.
+     ((roost--landed task) (funcall retire))
+     (merged (concat "Its pull request is merged, but not its commits since: " (funcall key "m") " merges them"))
+     ((memq state '(open draft))
       (concat (funcall key "P") " pushes new commits to its pull request"))
      ((and (numberp (roost--field task 'ahead)) (> (roost--field task 'ahead) 0))
       (concat (funcall key "m") " merges it, or " (funcall key "P") " opens a pull request")))))
@@ -5529,8 +5586,10 @@ Windows showing the panel keep their scroll position, and the mark stays."
               (state (concat (roost--status-light task (cons 'panel (current-buffer)) t)
                              (propertize (concat " " status)
                                          'face (roost--status-word-face (roost--attention-status task)))
-                             (propertize (format " for %s" (roost--elapsed (roost--field task 'updatedAt)))
-                                         'face 'roost-dim))))
+                             ;; Not since it merged, but since its agent last moved.
+                             (unless (equal status "merged")
+                               (propertize (format " for %s" (roost--elapsed (roost--field task 'updatedAt)))
+                                           'face 'roost-dim)))))
           ;; The status keeps to one line, below the name when both don't fit.
           (insert name (if (> (+ (roost--text-width name) 3 (roost--text-width state)) width) "\n" "   ")
                   state "\n"))
@@ -5598,7 +5657,8 @@ Windows showing the panel keep their scroll position, and the mark stays."
                 (format "A merge of %s is under way in it: commit it in Magit (\\<roost-task-info-mode-map>\\[roost-review])."
                         integration)))
              'roost-status-permission)
-          (when (> (or (roost--field task 'behind) 0) 0)
+          ;; Not when it moved on by merging the task.
+          (when (and (> (or (roost--field task 'behind) 0) 0) (not (eq (roost--landed task t) t)))
             (roost--insert-indented
            (substitute-command-keys
             (format "%s has moved on; \\<roost-task-info-mode-map>\\[roost-update] merges it into this task before you merge the task back."
@@ -5821,6 +5881,7 @@ Refreshes are asynchronous; rendering uses only cached state.
                      ("ready" nil "ready")
                      ("interrupted" nil "interrupted")
                      ("seen" nil "idle")
+                     ("merged" nil "merged")
                      ("failed" nil "error" "failed" "crashed")
                      ("running" nil "running" "background" "starting")
                      ("stopped" nil "stopped" "exited")

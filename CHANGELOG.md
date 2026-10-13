@@ -14,6 +14,14 @@ Since 0.8.1:
   the checkout on the host, which took seconds before TRAMP had connected
   to it, where it now takes a project Roost knows the buffer is in.
   Nothing to do when upgrading.
+- A task whose work is merged, through its pull request on GitHub or into
+  the branch it merges into, says `merged` in the dashboard and sidebar, so
+  you can see which tasks to retire without opening them. Roost now finds a
+  pull request the agent opened itself from the task's branch, and asks
+  GitHub about pull requests every two minutes, not only when you refresh
+  the dashboard. Retiring a task whose pull request GitHub squashed no
+  longer refuses for unmerged commits when the agent opened it. Nothing to
+  do when upgrading.
 - Search results fit their window, each message's line cut with an
   ellipsis, rather than running past its edge; `TAB` shows the rest.
   `RET` on a message from a task that is gone, or `TAB` on one its line
