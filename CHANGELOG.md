@@ -6,6 +6,9 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.8.1:
 
+- `n` takes the tasks that ask for permission in turn. With three or more
+  asking, it went back and forth between the first two. Nothing to do when
+  upgrading.
 - A task you open while answering a question, as a slow host replies,
   shows once you have answered, rather than taking the window you were
   typing in: your answer went to its agent's terminal. Closing a frame

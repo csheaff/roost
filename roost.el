@@ -4191,12 +4191,11 @@ that failed, crashed or exited, in turn."
          (viewing (unless (derived-mode-p 'roost-dashboard-mode)
                     (when-let* ((task (ignore-errors (roost--task-at-point))))
                       (roost--key task))))
-         (blocked (seq-find (lambda (task)
-                              (and (roost--blocked-p task)
-                                   (not (equal (roost--key task) viewing))))
-                            waiting))
-         (key (if blocked
-                  (roost--key blocked)
+         (blocked (mapcar #'roost--key (seq-filter #'roost--blocked-p waiting)))
+         (key (if (and blocked (not (equal blocked (list viewing))))
+                  ;; In turn from the one you are looking at, if blocked.
+                  (or (cadr (member viewing blocked))
+                      (seq-find (lambda (key) (not (equal key viewing))) blocked))
                 (or (cadr (member (or viewing roost--current-task) keys)) (car keys)))))
     (unless key (user-error "No tasks are waiting for you"))
     (roost-open-task (gethash key roost--tasks))))

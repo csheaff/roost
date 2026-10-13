@@ -2577,6 +2577,18 @@ Read from the layout transient keeps, whose form varies by version."
        (puthash "c" "offline" roost--errors)
        (roost-next-waiting) (should (equal (car opened) "d"))))))
 
+(ert-deftest roost-next-attention-takes-blocked-tasks-in-turn ()
+  ;; With three asking, n went back and forth between the first two.
+  (roost-test--isolated
+   (dolist (host '("a" "b" "c"))
+     (roost--cache-task host (roost-test--task nil "permission")))
+   (roost--cache-task "d" (roost-test--task))
+   (let (opened)
+     (cl-letf (((symbol-function 'roost-open-task)
+                (lambda (task) (setq opened (roost--key task) roost--current-task opened))))
+       (should (equal (cl-loop repeat 4 do (roost-next-waiting) collect (car opened))
+                      '("a" "b" "c" "a")))))))
+
 (ert-deftest roost-background-refresh-never-steals-focus ()
   (roost-test--isolated
    (let ((buffer (get-buffer-create "*roost*")) (original (current-buffer)))
