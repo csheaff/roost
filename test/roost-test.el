@@ -4233,6 +4233,10 @@ Read from the layout transient keeps, whose form varies by version."
      (should (roost--unmerged-work-p later))
      ;; Before Git is measured, the merge on GitHub is all there is to go on.
      (should-not (roost--unmerged-work-p unmeasured))
+     ;; Unless its host has said its commits aren't all merged.
+     (let ((said (roost-test--pr-task '(live . t) '(ahead . 3) '(landed) '(prStatus . ((state . "MERGED"))))))
+       (should (roost--unmerged-work-p said))
+       (should (roost--action-applies-p said 'roost-merge-retire)))
      (let (asked)
        (cl-letf (((symbol-function 'y-or-n-p) (lambda (prompt) (push prompt asked) nil)))
          (roost-retire later))

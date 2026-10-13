@@ -2056,6 +2056,30 @@ elif args[:2] == ["auth", "status"]:
         (self.gh_dir / "list.json").write_text(json.dumps([dict(number=8, state="OPEN", headRefOid=rebased)]))
         self.assertEqual(self.request("list", full=True)["result"][0]["pr"]["number"], 8)
 
+    def test_a_pull_request_merged_at_the_tip_counts_while_another_is_open(self):
+        # As when one went to a release branch and another, open, to main.
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(number=11, state="OPEN", headRefOid=tip),
+                                                           dict(number=10, state="MERGED", headRefOid=tip)]))
+        listed = self.request("list", full=True)["result"][0]
+        self.assertEqual((listed["pr"]["number"], listed["pr"]["mergedHead"], listed["landed"]), (11, tip, True))
+        # Retiring trusts it too when gh can't say.
+        (self.gh_dir / "gh").unlink()
+        with patch.object(roost, "agent_path", lambda inherited: str(self.gh_dir)):
+            self.assertEqual(roost.merged_pull_request_head(roost.Store(str(self.state)).read(task["id"])), tip)
+
+    def test_without_a_reflog_a_task_brought_up_to_date_is_not_merged(self):
+        self.git("config", "core.logAllRefUpdates", "false")
+        task = self.create()
+        (self.repo / "later").write_text("later\n")
+        self.git("add", "later")
+        self.git("commit", "-qm", "Later on main")
+        self.assertTrue(self.request("update", id=task["id"])["ok"])
+        self.assertIs(self.request("list", full=True)["result"][0]["landed"], False)
+
     def test_asking_github_keeps_within_its_deadline(self):
         # A stalled GitHub must not hold up the reply past Emacs's wait for it.
         self.github()

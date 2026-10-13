@@ -1161,6 +1161,9 @@ def check_pull_requests(store, tasks):
         task["prStatus"] = dict(state=pr.get("state"), draft=bool(pr.get("isDraft")),
                                 review=pr.get("reviewDecision") or None, checks=checks, head=pr.get("headRefOid"))
         record = dict(number=pr["number"], url=pr.get("url"), state=pr.get("state"), head=pr.get("headRefOid"))
+        # Shown or not, as when an open one goes to another base.
+        if any(other.get("state") == "MERGED" and other.get("headRefOid") == tip for other in prs):
+            record["mergedHead"] = tip
         try:
             with store.locked():
                 current = store.read(task["id"])
@@ -1182,12 +1185,12 @@ def check_pull_requests(store, tasks):
 def landed(task, tip):
     """Whether the task's commits are all merged, so retiring it loses none,
     as `safe_to_delete` has it: TIP, its branch's, is in its integration
-    branch, or is what GitHub merged for its pull request. False for a
-    task that never committed. Takes no optional Git locks, for polls."""
+    branch, or is what GitHub merged for one of its pull requests. False
+    for a task that never committed. Takes no optional Git locks, for polls."""
     if not tip or tip == task.get("baseCommit"):
         return False
     pr = recorded_pull_request(task)
-    if pr.get("state") == "MERGED" and pr.get("head") == tip:
+    if pr.get("mergedHead") == tip or (pr.get("state") == "MERGED" and pr.get("head") == tip):
         return True
     integration = task.get("integrationBranch")
     return bool(integration) and is_ancestor(task["repo"], tip, "refs/heads/" + integration) and committed_on(task)
@@ -1196,8 +1199,9 @@ def landed(task, tip):
 def own_commits(task):
     """The commits made on the task's branch, as its reflog has them, merge
     commits among them, rather than brought in from its integration branch,
-    as when an update fast-forwards a task that had none; True if Git keeps
-    no reflog. A rebase's makes count unless its integration branch has it."""
+    as when an update fast-forwards a task that had none; True, meaning it
+    can't tell, if Git keeps no reflog. A rebase's makes count unless its
+    integration branch has it."""
     log = read_git(task["repo"], "log", "--walk-reflogs", "--format=%H %gs", "refs/heads/" + task["branch"], "--")
     if log.returncode or not log.stdout.strip():
         return True
@@ -1214,8 +1218,10 @@ def own_commits(task):
 
 
 def committed_on(task):
-    """Whether commits were made on the task's branch, as `own_commits` has it."""
-    return bool(own_commits(task))
+    """Whether commits were made on the task's branch, as `own_commits` has
+    it: not without a reflog to show them."""
+    made = own_commits(task)
+    return made is not True and bool(made)
 
 
 def status_paths(porcelain):
@@ -1601,7 +1607,8 @@ def merged_pull_request_head(task):
         prs = task_pull_requests(task, tip)
         if prs is not None:
             return tip if any(pr.get("state") == "MERGED" and pr.get("headRefOid") == tip for pr in prs) else None
-    return tip if recorded.get("state") == "MERGED" and recorded.get("head") == tip else None
+    return tip if recorded.get("mergedHead") == tip or (recorded.get("state") == "MERGED"
+                                                         and recorded.get("head") == tip) else None
 
 
 def safe_to_delete(task, commit, merged_head=None):

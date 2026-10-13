@@ -4096,10 +4096,12 @@ Without a status from GitHub yet, it is as its host recorded, or open."
 (defun roost--landed (task &optional measured)
   "Whether TASK's commits are all merged, as its host last measured.
 That is, in its integration branch or a pull request GitHub merged at
-its tip.  Until its Git statistics are measured too, as after a poll
-that only asked GitHub, the merge on GitHub is all there is to go on;
-with MEASURED, the answer is then `unknown'."
-  (cond ((and (assq 'landed task) (assq 'dirty task)) (roost--field task 'landed))
+its tip.  Its host saying they aren't settles it.  That they are counts
+once its Git statistics are measured too: until then, as after a poll
+that only asked GitHub, the merge on GitHub is all there is to go on,
+and with MEASURED the answer is `unknown'."
+  (cond ((and (assq 'landed task) (not (roost--field task 'landed))) nil)
+        ((and (assq 'landed task) (assq 'dirty task)) t)
         (measured 'unknown)
         (t (eq (roost--pr-state task) 'merged))))
 
