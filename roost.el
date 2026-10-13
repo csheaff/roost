@@ -1727,8 +1727,8 @@ host TRAMP is connected to."
 
 (defun roost--known-project-of (directory)
   "The project Roost knows that DIRECTORY is in, the deepest, or nil.
-By host and path alone, whatever TRAMP method names them, so a remote
-DIRECTORY opens no connection."
+By SSH destination and path alone, whatever TRAMP method names them, so
+a remote DIRECTORY opens no connection."
   (when-let* ((place (roost--host-and-path directory)))
     (cdr (car (sort (seq-filter (lambda (project)
                                   (and (equal (car (car project)) (car place))
@@ -1740,11 +1740,12 @@ DIRECTORY opens no connection."
                     (lambda (a b) (> (length (cdr (car a))) (length (cdr (car b))))))))))
 
 (defun roost--host-and-path (directory)
-  "DIRECTORY's host, nil if local, and its path there, as (HOST . PATH).
-By name, without connecting; nil for a name TRAMP can't read, such as
-one with a method not loaded."
+  "DIRECTORY's SSH destination, nil if local, and its path there.
+As (HOST . PATH), HOST with its user, as `roost--directory-host' gives
+it.  By name, without connecting; nil for a name TRAMP can't read, such
+as one with a method not loaded."
   (ignore-errors
-    (cons (file-remote-p directory 'host)
+    (cons (roost--directory-host directory)
           (file-name-as-directory (file-local-name (expand-file-name directory))))))
 
 (defun roost--compose-seed ()

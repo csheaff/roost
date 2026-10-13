@@ -100,6 +100,12 @@ advised for this: natively compiled, they call each other directly."
 ;; commands through `command-execute'.
 (advice-add 'command-execute :before #'qa--note-command)
 
+(defun qa-commands-run ()
+  "The commands journeys ran, by name, for qa.py to keep across a restart."
+  (let (names)
+    (maphash (lambda (command _) (push (symbol-name command) names)) qa--commands-run)
+    names))
+
 (defun qa-commands-not-run ()
   "Roost's and tmux-control's commands no journey ran, by name.
 The sweep runs commands too, but with what they reach outside their

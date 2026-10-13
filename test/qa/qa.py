@@ -118,6 +118,8 @@ class Run:
         for name in ("ZDOTDIR", "BASH_ENV", "ENV", "TMUX", "TMUX_PANE"):
             self.env.pop(name, None)
         self.notes = set()
+        # Commands run in an Emacs since restarted.
+        self.ran = set()
         # The host the tasks are on, and the tmux there, whose sockets
         # tmux-control's setup for a remote host keeps in its home.
         self.host = None
@@ -247,6 +249,8 @@ class Run:
     def restart(self):
         """Quit Emacs, leaving tmux, the agents and Roost's state as they are,
         and start it again, as after quitting yours."""
+        # The commands run so far, which the new Emacs doesn't know.
+        self.ran |= set(self.emacs.json("(json-encode (vconcat (qa-commands-run)))"))
         self.emacs.eval("(kill-emacs)", timeout=10) if self.process.poll() is None else None
         self.process.wait(20)
         self.launch()
@@ -531,7 +535,8 @@ class Run:
         failed = [step for step in self.steps if step["problems"]]
         # What no journey reaches: where the next one should go.
         try:
-            self.not_run = self.emacs.json("(json-encode (vconcat (qa-commands-not-run)))")
+            self.not_run = [command for command in self.emacs.json("(json-encode (vconcat (qa-commands-not-run)))")
+                            if command not in self.ran]
         except (RuntimeError, Stuck, ValueError):
             self.not_run = None
         rows = []

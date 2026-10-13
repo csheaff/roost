@@ -1752,7 +1752,8 @@
   ;; Composing in a remote directory looked for its checkout there, which
   ;; held Emacs while TRAMP connected, for a project Roost already knew.
   (roost-test--isolated
-   (let ((roost--remembered-projects '("/ssh:dev:/srv/ledger/" "/ssh:dev:/srv/ledger/tools/"))
+   (let ((roost--remembered-projects '("/ssh:dev:/srv/ledger/" "/ssh:dev:/srv/ledger/tools/"
+                                       "/ssh:alice@dev:/srv/ledger/"))
          (roost--projects-loaded t)
          looked)
      (cl-letf (((symbol-function 'locate-dominating-file) (lambda (&rest _) (setq looked t) nil))
@@ -1766,9 +1767,13 @@
          ;; Whatever TRAMP method names it.
          (setq default-directory "/scp:dev:/srv/ledger/tools/bin/")
          (should (equal (roost--compose-default-directory nil nil) "/ssh:dev:/srv/ledger/tools/"))
-         ;; Not the same path on another host.
+         ;; Not the same path on another host, or as another user.
          (setq default-directory "/ssh:other:/srv/ledger/src/")
          (should-not (roost--known-project-of default-directory))
+         (setq default-directory "/ssh:bob@dev:/srv/ledger/src/")
+         (should-not (roost--known-project-of default-directory))
+         (setq default-directory "/scp:alice@dev:/srv/ledger/src/")
+         (should (equal (roost--known-project-of default-directory) "/ssh:alice@dev:/srv/ledger/"))
          ;; Outside them, on a host not connected to, the latest project.
          (setq default-directory "/ssh:dev:/tmp/")
          (should (equal (roost--compose-default-directory nil nil) "/ssh:dev:/srv/ledger/"))
