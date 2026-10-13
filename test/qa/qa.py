@@ -80,6 +80,9 @@ class Run:
         # The run's project, state and Emacs, new each time, beside the report.
         self.work = self.out / self.name
         self.work.mkdir()
+        # Git as it comes, without your configuration's hooks or signing.
+        (self.work / "gitconfig").write_text("")
+        self.env = dict(os.environ, GIT_CONFIG_GLOBAL=str(self.work / "gitconfig"), GIT_CONFIG_NOSYSTEM="1")
         self.emacs = Emacs(self.name)
         self.process = None
         self.steps = []
@@ -92,7 +95,7 @@ class Run:
 
     def git(self, cwd, *args):
         return subprocess.run(["git", "-C", str(cwd)] + list(args), check=True,
-                              capture_output=True, text=True).stdout.strip()
+                              capture_output=True, text=True, env=self.env).stdout.strip()
 
     def project(self):
         """A small project to work in, with one commit."""
@@ -165,7 +168,8 @@ class Run:
         log = open(self.work / "emacs.log", "w")
         # No site-start.el either: nothing of this machine's own setup.
         self.process = subprocess.Popen([self.args.emacs, "--no-site-file", "--init-directory", str(init)],
-                                        stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
+                                        stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                                        env=self.env)
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             if self.process.poll() is not None:
@@ -227,7 +231,9 @@ class Run:
     def settle(self, quiet=0.4):
         """Wait until Emacs has taken the input, and a moment for what it started."""
         deadline = time.monotonic() + 20
-        while time.monotonic() < deadline and self.emacs.eval("(qa-idle-p)") != "t":
+        while self.emacs.eval("(qa-idle-p)") != "t":
+            if time.monotonic() > deadline:
+                raise Stuck("Emacs didn't take the input in 20s")
             time.sleep(0.1)
         time.sleep(quiet)
 
