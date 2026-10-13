@@ -214,7 +214,10 @@ class Run:
            packages=" ".join(lisp(str(Path(p).expanduser())) for p in self.args.package_dir),
            load=" ".join(lisp(str(Path(p).expanduser())) for p in self.args.load_path),
            checkout=lisp(str(CHECKOUT)), test=lisp(str(CHECKOUT / "test")), qa=lisp(str(HERE)),
-           server=lisp(self.name), state=lisp(str(self.work / "state")),
+           server=lisp(self.name),
+           # Each host's own, in its home, as with Roost's default, when
+           # there is more than one: here they share a file system.
+           state=lisp("~/.local/share/roost" if self.host else str(self.work / "state")),
            python=lisp(sys.executable), fake=lisp(str(FAKE)), repo=lisp(str(repo) + "/"),
            hosts=self.hosts,
            remote="t" if self.host else "nil",
@@ -976,6 +979,8 @@ def restart(qa, repo):
     qa.step("After a restart", expect=[
         ("the sidebar lists it", lambda s: name in (qa.window(s, "roost-sidebar-list-mode") or {}).get("text", ""))])
     open_task(qa, name)
+    # Painted from the host, a round trip away.
+    qa.wait("its screen", lambda s: any("PROMPT Remember me" in w["text"] for w in terminals(s)))
     qa.step("Its terminal again", expect=[
         ("the agent's earlier output", lambda s: any("PROMPT Remember me" in w["text"] for w in terminals(s))),
         ("its panel beside it", lambda s: panel_text(qa, s).startswith(name))])
