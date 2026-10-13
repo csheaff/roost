@@ -11,6 +11,14 @@ Since 0.8.1:
   pane's mode line names the task and keeps the rest of your mode line,
   such as Roost's count of waiting agents. To upgrade, update tmux-control
   too.
+- Opening a task leaves the window alone when you show something else in
+  it before the task's host replies, such as tmux-control's scrollback
+  with `C-c C-e`: the reply put the task's terminal back in its place.
+  Nothing to do when upgrading.
+- Two tasks of one name in a project no longer look the same in the
+  sidebar and the dashboard: each shows the start of its ID after its
+  name, as the task picker and tab names already did. Nothing to do when
+  upgrading.
 - A task no longer goes back to what its agent did before, such as
   running or asking for permission, for a few seconds after its turn
   ends. A refresh that took a while could arrive after a newer one and
