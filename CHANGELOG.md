@@ -6,6 +6,14 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.8.1:
 
+- A task whose work is merged, through its pull request on GitHub or into
+  the branch it merges into, says `merged` in the dashboard and sidebar, so
+  you can see which tasks to retire without opening them. Roost now finds a
+  pull request the agent opened itself from the task's branch, and asks
+  GitHub about pull requests every two minutes, not only when you refresh
+  the dashboard. Retiring a task whose pull request GitHub squashed no
+  longer refuses for unmerged commits when the agent opened it. Nothing to
+  do when upgrading.
 - With tmux-control later than 0.7.2, a task's terminal split into panes,
   as with `t`'s shell, keeps its window tabs above the panes, and each
   pane's mode line names the task and keeps the rest of your mode line,
