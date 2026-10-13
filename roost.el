@@ -1332,9 +1332,11 @@ buffer list of one task would offer the terminals of the others."
 
 (defun roost--terminal-task (buffer)
   "The task whose terminal BUFFER is, or nil.
-A session shared by tasks from before each had its own is no one's."
+A session shared by tasks from before each had its own is no one's, and
+a view of a terminal, such as its scrollback, is no terminal."
   (with-current-buffer buffer
-    (when (and (fboundp 'tmux-control-buffer-session) (tmux-control-buffer-session))
+    (when (and (derived-mode-p 'tmux-control-mode)
+               (fboundp 'tmux-control-buffer-session) (tmux-control-buffer-session))
       (let ((tasks (seq-filter (lambda (task)
                                  (and (equal (roost--field task 'host) (tmux-control-buffer-host))
                                       (equal (roost--field task 'socket) (tmux-control-buffer-socket-name))

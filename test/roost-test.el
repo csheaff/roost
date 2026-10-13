@@ -324,7 +324,8 @@
           (save-window-excursion
             (delete-other-windows)
             (with-current-buffer terminal
-              (setq roost-test--tmux (list :host "dev" :socket "main" :session (roost--field shown 'session))))
+              (setq major-mode 'tmux-control-mode
+                    roost-test--tmux (list :host "dev" :socket "main" :session (roost--field shown 'session))))
             (let ((top (selected-window))
                   (bottom (split-window)))
               (set-window-buffer top terminal)
@@ -333,7 +334,8 @@
               (should (eq (roost--terminal-window-for opened) top))
               ;; The task's own panes, tiled, keep their grid.
               (with-current-buffer terminal
-                (setq roost-test--tmux (list :host "dev" :socket "main" :session "roost-other")))
+                (setq major-mode 'tmux-control-mode
+                      roost-test--tmux (list :host "dev" :socket "main" :session "roost-other")))
               (should-not (roost--terminal-window-for opened))
               ;; With no task's terminal on screen, the selected window it is.
               (set-window-buffer top magit)
@@ -349,7 +351,8 @@
          (roost-test--with-tmux-buffers
           (let ((one (roost--cache-task "dev" (roost-test--task "1111111111111111"))))
             (with-current-buffer terminal
-              (setq roost-test--tmux (list :host "dev" :socket "main" :session (roost--field one 'session))))
+              (setq major-mode 'tmux-control-mode
+                    roost-test--tmux (list :host "dev" :socket "main" :session (roost--field one 'session))))
             (should (eq (roost--terminal-task terminal) one))
             (roost--cache-task "dev" (roost-test--task "2222222222222222"))
             (should-not (roost--terminal-task terminal))))
@@ -366,7 +369,8 @@
           (save-window-excursion
             (delete-other-windows)
             (with-current-buffer terminal
-              (setq roost-test--tmux (list :host "dev" :socket "main" :session (roost--field shown 'session))))
+              (setq major-mode 'tmux-control-mode
+                    roost-test--tmux (list :host "dev" :socket "main" :session (roost--field shown 'session))))
             (set-window-buffer (selected-window) terminal)
             (set-frame-parameter nil 'roost-task '("dev" "2222222222222222"))
             (setq roost--current-task '("dev" "2222222222222222"))

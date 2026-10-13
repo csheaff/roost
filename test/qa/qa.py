@@ -606,6 +606,13 @@ def review(qa, repo):
     qa.step("The agent has the note")
 
 
+def panel_text(qa, screen):
+    """The docked panel's text, or else that of the first task panel on screen."""
+    docked = next((w for w in screen["windows"]
+                   if w["mode"] == "roost-task-info-mode" and w.get("side") == "right"), None)
+    return (docked or qa.window(screen, "roost-task-info-mode") or {}).get("text", "")
+
+
 def terminals(screen, terminal=None):
     """The terminal windows on SCREEN, or those of TERMINAL's session."""
     return [w for w in screen["windows"]
@@ -685,7 +692,7 @@ def panes(qa, repo):
     qa.type("exit\r")
     qa.wait("the shell to go", lambda s: len(terminals(s, own)) == 1)
     qa.step("One pane again", expect=[
-        ("its panel back beside it", lambda s: qa.window(s, "roost-task-info-mode"))])
+        ("its panel back beside it", lambda s: panel_text(qa, s).startswith(first))])
 
 
 JOURNEYS = [sweep, answer, fold, resize, merge, review, panes]
