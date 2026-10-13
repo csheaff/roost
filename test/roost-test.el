@@ -171,7 +171,7 @@
             (draws 0))
        (unwind-protect
            (cl-letf (((symbol-function 'magit-status) #'ignore)
-                     ((symbol-function 'roost--terminal-on-screen-p) (lambda (_) on-screen)))
+                     ((symbol-function 'roost--panel-beside-terminal-p) (lambda (_) on-screen)))
              (display-buffer-in-side-window buffer (roost--side-window-alist 'right 44))
              (with-current-buffer buffer
                (roost--render-task-info)
@@ -200,6 +200,29 @@
                (should (string-match-p "^Waiting for your answer$" (buffer-string)))
                (should (string-match-p "^Agent's latest reply$" (buffer-string)))))
          (kill-buffer buffer))))))
+
+(ert-deftest roost-task-panel-is-beside-a-terminal-only-in-its-frame ()
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let* ((task (roost--cache-task "dev" (roost-test--task)))
+            (panel (roost--task-info-buffer task))
+            (terminal (get-buffer-create " *terminal stand-in*"))
+            (main (selected-window)))
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--terminal-shows-p)
+                      (lambda (_task _panes) (eq (current-buffer) terminal))))
+             (set-window-buffer main panel)
+             (with-current-buffer panel
+               ;; Alone, the panel keeps the conversation.
+               (should-not (roost--panel-beside-terminal-p task))
+               (set-window-buffer (split-window-right) terminal)
+               (should (roost--panel-beside-terminal-p task))
+               ;; Hidden, it has no terminal beside it.
+               (set-window-buffer main (get-buffer-create "*scratch*"))
+               (should-not (roost--panel-beside-terminal-p task))))
+         (kill-buffer panel)
+         (kill-buffer terminal))))))
 
 (ert-deftest roost-replies-show-link-text-and-open-links ()
   (roost-test--isolated
@@ -1918,6 +1941,25 @@
                (should-not (roost--waiting-p (gethash (roost--key task) roost--tasks))))
            (kill-buffer)))))))
 
+(defun roost-test--task-menu-suffixes ()
+  "The commands of `roost-dispatch's task group, with their :inapt-if.
+Read from the layout transient keeps, whose form varies by version."
+  (let (found)
+    (cl-labels ((walk (node in-task)
+                  (when-let* ((items (cond ((vectorp node) (append node nil))
+                                           ((proper-list-p node) node))))
+                    (if (and in-task (memq :command items))
+                        (push (cons (cadr (memq :command items)) (cadr (memq :inapt-if items))) found)
+                      (let ((task (or in-task
+                                      (seq-some (lambda (item)
+                                                  (and (proper-list-p item) (keywordp (car item))
+                                                       (eq (plist-get item :description)
+                                                           'roost--dispatch-task-description)))
+                                                items))))
+                        (dolist (item items) (walk item task)))))))
+      (walk (get 'roost-dispatch 'transient--layout) nil))
+    (nreverse found)))
+
 (ert-deftest roost-a-task-offers-what-it-can-do-now ()
   ;; A stopped task's panel offered Stop, Shell and Send, which its host refuses.
   (roost-test--isolated
@@ -1952,13 +1994,13 @@
      (let ((transient--original-buffer (current-buffer)))
        (cl-letf (((symbol-function 'roost--task-at-point) (lambda () stopped)))
          (should (roost--stop-inapt-p))
-         (should-not (roost--resume-inapt-p))
-         ;; Every task entry of the menu has its predicate.
-         (should (seq-every-p #'fboundp
-                              (mapcar (lambda (command)
-                                        (intern (format "roost--%s-inapt-p"
-                                                        (string-remove-prefix "roost-" (symbol-name (cdr command))))))
-                                      commands))))))))
+         (should-not (roost--resume-inapt-p))))
+     ;; Every task entry of the menu has its predicate.
+     (let ((suffixes (roost-test--task-menu-suffixes)))
+       (should (assq 'roost-goto-note suffixes))
+       (should (seq-every-p (lambda (command) (assq (cdr command) suffixes)) commands))
+       (dolist (suffix suffixes)
+         (should (functionp (cdr suffix))))))))
 
 (ert-deftest roost-sidebar-opens-in-a-live-window-when-the-main-area-is-split ()
   (roost-test--isolated

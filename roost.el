@@ -5167,13 +5167,17 @@ Status is the last observation from the task's host.
 (defvar-local roost--beside-terminal nil
   "Non-nil if this task panel was last drawn with its agent's terminal on screen.")
 
-(defun roost--terminal-on-screen-p (task)
-  "Whether a window of a visible frame shows TASK's agent terminal.
-There, the task panel leaves the agent's conversation to the terminal."
-  (seq-some (lambda (window)
-              (with-current-buffer (window-buffer window)
-                (roost--terminal-shows-p task (list (roost--field task 'paneId)))))
-            (window-list-1 nil 'nomini 'visible)))
+(defun roost--panel-beside-terminal-p (task)
+  "Whether each window showing this task panel has TASK's terminal in its frame.
+Then the panel leaves the agent's conversation to the terminal; one
+window without it, such as in another frame, keeps the conversation."
+  (when-let* ((windows (get-buffer-window-list nil 'nomini 'visible)))
+    (seq-every-p (lambda (window)
+                   (seq-some (lambda (other)
+                               (with-current-buffer (window-buffer other)
+                                 (roost--terminal-shows-p task (list (roost--field task 'paneId)))))
+                             (window-list (window-frame window) 'nomini)))
+                 windows)))
 
 (defun roost--redraw-moved-panels ()
   "Redraw the task panels whose agent's terminal came on or off screen."
@@ -5182,7 +5186,7 @@ There, the task panel leaves the agent's conversation to the terminal."
       (when-let* (((derived-mode-p 'roost-task-info-mode))
                   (task (gethash roost--buffer-task-key roost--tasks))
                   ((not (eq (not roost--beside-terminal)
-                            (not (roost--terminal-on-screen-p task))))))
+                            (not (roost--panel-beside-terminal-p task))))))
         (roost--render-task-info)))))
 
 (defun roost--task-info-width ()
@@ -5339,7 +5343,7 @@ Windows showing the panel keep their scroll position, and the mark stays."
              (base (roost--field task 'baseRef))
              (integration (roost--field task 'integrationBranch))
              ;; With the agent's terminal on screen, the conversation is its.
-             (beside (setq roost--beside-terminal (roost--terminal-on-screen-p task))))
+             (beside (setq roost--beside-terminal (roost--panel-beside-terminal-p task))))
         (insert (propertize (roost--field task 'name) 'face 'roost-title) "   "
                 (roost--status-light task (cons 'panel (current-buffer)) t)
                 (propertize (concat " " status) 'face (roost--status-word-face (roost--attention-status task)))
