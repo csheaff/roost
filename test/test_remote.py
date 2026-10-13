@@ -1919,7 +1919,8 @@ elif args[:2] == ["auth", "status"]:
         polled = self.request("list", pullRequests=True)["result"][0]
         self.assertEqual(len(self.gh_calls()), calls + 1)
         self.assertEqual((polled["prStatus"]["state"], polled["landed"]), ("MERGED", True))
-        self.assertNotIn("diff", polled)
+        # Measured with it, as one to retire must be.
+        self.assertIs(polled["dirty"], False)
         self.assertEqual(store.read(task["id"])["pr"]["state"], "MERGED")
         # A commit after the merge is new work, and measuring it needs no GitHub.
         again = self.commit_in(task, "more")
@@ -1969,6 +1970,60 @@ elif args[:2] == ["auth", "status"]:
         self.assertEqual(store.read(task["id"])["pr"], newer)
         self.assertEqual(listed["pr"], newer)
         self.assertNotIn("prStatus", listed)
+
+    def test_a_lookup_that_found_what_was_recorded_still_leaves_a_newer_one(self):
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        url = "https://github.com/octo/repo/pull/%d"
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(number=9, url=url % 9, state="OPEN",
+                                                                headRefOid=tip)]))
+        store = roost.Store(str(self.state))
+        self.request("list", full=True)
+        newer = dict(number=10, url=url % 10, state="OPEN", head=tip)
+        original = roost.task_pull_requests
+
+        def meanwhile(*args, **kwargs):
+            prs = original(*args, **kwargs)
+            with store.locked():
+                record = store.read(task["id"])
+                record["pr"] = newer
+                store.save(record)
+            return prs
+
+        with patch.object(roost, "task_pull_requests", meanwhile):
+            listed = self.request("list", pullRequests=True)["result"][0]
+        self.assertEqual((store.read(task["id"])["pr"], listed["pr"]), (newer, newer))
+        self.assertNotIn("prStatus", listed)
+
+    def test_a_merge_found_on_github_comes_with_whether_the_task_is_clean(self):
+        # A file changed since the last measurement moves no Git stamp.
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        self.assertIs(self.request("list", full=True)["result"][0]["dirty"], False)
+        (Path(task["worktree"]) / "hello").write_text("edited since\n")
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(number=9, state="MERGED", headRefOid=tip)]))
+        polled = self.request("list", pullRequests=True)["result"][0]
+        self.assertEqual((polled["landed"], polled["dirty"]), (True, True))
+
+    def test_a_same_named_pull_request_on_main_is_not_a_task_with_no_work(self):
+        # Someone else's fork, with a branch of the same name at main's commit.
+        self.github()
+        task = self.create()
+        (self.repo / "later").write_text("later\n")
+        self.git("add", "later")
+        self.git("commit", "-qm", "Later on main")
+        self.assertTrue(self.request("update", id=task["id"])["ok"])
+        self.push(task)
+        tip = self.git("rev-parse", "main")
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(number=4, state="MERGED", headRefOid=tip)]))
+        listed = self.request("list", full=True)["result"][0]
+        self.assertNotIn("pr", listed)
+        self.assertIs(listed["landed"], False)
+        self.assertIsNone(roost.merged_pull_request_head(roost.Store(str(self.state)).read(task["id"])))
 
     def test_asking_github_keeps_within_its_deadline(self):
         # A stalled GitHub must not hold up the reply past Emacs's wait for it.

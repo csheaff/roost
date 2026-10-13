@@ -1086,8 +1086,9 @@ def task_pull_requests(task, tip, timeout=15):
     """The task's pull requests, newest first, or None when gh cannot say
     within TIMEOUT seconds. They are those from its branch whose head is a
     commit of its own, made since it started and still on its branch at
-    TIP: a task retired earlier may have had a branch of the same name. The
-    recorded one counts too."""
+    TIP, of a task that made commits: a task retired earlier, or someone
+    else's fork, may have had a branch of the same name. The recorded one
+    counts too."""
     try:
         listed = json.loads(gh(task["repo"] if Path(task["repo"]).is_dir() else None,
                                "pr", "list", "--head", task["branch"], "--state", "all", "--limit", "10",
@@ -1098,13 +1099,20 @@ def task_pull_requests(task, tip, timeout=15):
         return None
     number = recorded_pull_request(task).get("number")
     base = task.get("baseCommit")
+    # An update that fast-forwarded a task with no commits brought only main's.
+    committed = None
 
     def ours(pr):
+        nonlocal committed
         head = pr.get("headRefOid")
         if pr.get("number") == number:
             return True
-        return (isinstance(head, str) and bool(head) and head != base and is_ancestor(task["repo"], head, tip)
-                and not (base and is_ancestor(task["repo"], head, base)))
+        if not (isinstance(head, str) and head and head != base and is_ancestor(task["repo"], head, tip)
+                and not (base and is_ancestor(task["repo"], head, base))):
+            return False
+        if committed is None:
+            committed = committed_on(task)
+        return committed
 
     return sorted((pr for pr in listed if isinstance(pr, dict) and isinstance(pr.get("number"), int) and ours(pr)),
                   key=lambda pr: pr["number"], reverse=True)
@@ -1153,22 +1161,21 @@ def check_pull_requests(store, tasks):
         task["prStatus"] = dict(state=pr.get("state"), draft=bool(pr.get("isDraft")),
                                 review=pr.get("reviewDecision") or None, checks=checks, head=pr.get("headRefOid"))
         record = dict(number=pr["number"], url=pr.get("url"), state=pr.get("state"), head=pr.get("headRefOid"))
-        if task.get("pr") != record:
-            try:
-                with store.locked():
-                    current = store.read(task["id"])
-                    # Unless another request recorded a pull request while this one asked.
-                    stale = current.get("branch") != task["branch"] or current.get("pr") != task.get("pr")
-                    if not stale:
-                        current["pr"] = record
-                        store.save(current)
-            except (RoostError, ValueError, OSError):
-                continue  # Retired meanwhile, or not to be written: shown, not recorded.
-            if stale:
-                task["pr"] = current.get("pr")
-                task.pop("prStatus", None)
-                continue
-            task["pr"] = record
+        try:
+            with store.locked():
+                current = store.read(task["id"])
+                # Unless another request recorded a pull request while this one asked.
+                stale = current.get("branch") != task["branch"] or current.get("pr") != task.get("pr")
+                if not stale and current.get("pr") != record:
+                    current["pr"] = record
+                    store.save(current)
+        except (RoostError, ValueError, OSError):
+            continue  # Retired meanwhile, or not to be written: shown, not recorded.
+        if stale:
+            task["pr"] = current.get("pr")
+            task.pop("prStatus", None)
+            continue
+        task["pr"] = record
     return [task for task, _ in asked]
 
 
@@ -2973,8 +2980,13 @@ def rpc(request):
             checked = check_pull_requests(store, result) if full is True or request.get("pullRequests") else []
             add_git_stats(measured)
             for task in checked:
+                # Merged since, it is measured whole, or its cleanliness
+                # would be older than the news that it can be retired.
                 if "landed" not in task:
-                    task["landed"] = landed(task, branch_tip(task))
+                    if landed(task, branch_tip(task)):
+                        add_git_stats([task])
+                    else:
+                        task["landed"] = False
         elif action in ("retire", "merge") and result.pop("remoteCleanup", None):
             delete_remote_branch(result["repo"], result["branch"])
         return {"ok": True, "result": outgoing(result)}
