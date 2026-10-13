@@ -6,6 +6,9 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.8.1:
 
+- A task's panel shows what its host says when you open the task, such as
+  that you have answered its agent, rather than keeping what it showed
+  before until the next refresh. Nothing to do when upgrading.
 - With tmux-control later than 0.7.2, a task's terminal split into panes,
   as with `t`'s shell, keeps its window tabs above the panes, and each
   pane's mode line names the task and keeps the rest of your mode line,
