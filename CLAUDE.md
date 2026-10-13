@@ -71,6 +71,11 @@ they can do themselves.
 - Reloading `roost.el` into a running Emacs doesn't redefine keymaps made
   with `defvar-keymap`: set changed keys with `keymap-set`, or restart.
 - A checkout runs uncompiled, so measure performance uncompiled too.
+- `make qa` does all this with a fake agent: a GUI Emacs of its own, journeys
+  through the menu, terminal, panel and merge, each step checked and, on
+  macOS, captured (see the manual's Development section). Run it for changes
+  to what Roost shows, and put its screenshots in the pull request. Give a new
+  flow a journey in `test/qa/qa.py`.
 
 ## Docs and changes
 

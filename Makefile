@@ -12,6 +12,16 @@ test:
 	  -l test/roost-test.el -l test/roost-sweep.el -f ert-run-tests-batch-and-exit
 	python3 -m unittest discover -s test -p 'test_*.py' -v
 
+# Roost used as you would, in a GUI Emacs of its own with a fake agent,
+# each step checked and captured: see test/qa/qa.py.  Emacs needs
+# tmux-control, and Magit for review, as in
+#   make qa QA_FLAGS="-L ../tmux-control --package-dir ~/.emacs.d/elpa"
+QA_FLAGS ?=
+
+.PHONY: qa
+qa:
+	python3 test/qa/qa.py --emacs "$(EMACS)" $(QA_FLAGS)
+
 .PHONY: compile
 compile:
 	$(EMACS) -Q --batch -L . --eval '(setq byte-compile-error-on-warn t)' \
