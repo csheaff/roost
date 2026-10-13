@@ -11,6 +11,10 @@ Since 0.8.1:
   `RET` on a message from a task that is gone, or `TAB` on one its line
   already shows whole, says so, rather than repeating the message under
   it. Nothing to do when upgrading.
+- The manual recommends tramp-rpc for remote hosts, with a setup to copy,
+  and `roost-doctor` names it for a host whose Magit goes over a shell
+  method. Magit opened a remote task in 0.4 s with it, against 3.6 s over
+  `scp`. Nothing to do when upgrading, unless you want it.
 - With tmux-control later than 0.7.2, a task's terminal split into panes,
   as with `t`'s shell, keeps its window tabs above the panes, and each
   pane's mode line names the task and keeps the rest of your mode line,
