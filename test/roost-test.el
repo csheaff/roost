@@ -341,6 +341,20 @@
        (kill-buffer terminal)
        (kill-buffer magit)))))
 
+(ert-deftest roost-a-shared-session-is-no-tasks-terminal ()
+  ;; Tasks from before each had a session of its own can share one.
+  (roost-test--isolated
+   (let ((terminal (generate-new-buffer " terminal")))
+     (unwind-protect
+         (roost-test--with-tmux-buffers
+          (let ((one (roost--cache-task "dev" (roost-test--task "1111111111111111"))))
+            (with-current-buffer terminal
+              (setq roost-test--tmux (list :host "dev" :socket "main" :session (roost--field one 'session))))
+            (should (eq (roost--terminal-task terminal) one))
+            (roost--cache-task "dev" (roost-test--task "2222222222222222"))
+            (should-not (roost--terminal-task terminal))))
+       (kill-buffer terminal)))))
+
 (ert-deftest roost-a-frame-whose-task-is-gone-follows-the-terminal-it-shows ()
   ;; Once a task is merged, its window shows another task's terminal; the
   ;; panel follows that task, rather than no task at all.
@@ -356,12 +370,17 @@
             (set-window-buffer (selected-window) terminal)
             (set-frame-parameter nil 'roost-task '("dev" "2222222222222222"))
             (setq roost--current-task '("dev" "2222222222222222"))
+            ;; Looking does not change it; a redraw, panel or not, does.
+            (should-not (roost--frame-task))
+            (let ((roost-task-panel-mode nil))
+              (roost--redraw))
             (should (eq (roost--frame-task) shown))
             ;; The sidebar marks it, the task last opened being gone too.
             (should (equal roost--current-task (roost--key shown)))
             ;; It keeps it, as if opened there, when a draft then covers
             ;; the terminal: the panel stays, and so do the widths.
             (set-window-buffer (selected-window) (get-buffer-create "*scratch*"))
+            (roost--redraw)
             (should (eq (roost--frame-task) shown))
             ;; While the task it names is there, the frame keeps that one.
             (let ((own (roost--cache-task "dev" (roost-test--task "2222222222222222"))))

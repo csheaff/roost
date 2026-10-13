@@ -325,8 +325,10 @@ class Run:
             if name == "*Backtrace*":
                 problems.append("A backtrace is showing")
         task = screen.get("task")
-        if task and qa_sidebar(screen) and screen.get("marked") != task["name"]:
-            problems.append("The sidebar marks %s, not %s, the frame's task" % (screen.get("marked"), task["name"]))
+        # By key: tasks can share a name.
+        if task and qa_sidebar(screen) and screen.get("marked") != task["key"]:
+            problems.append("The sidebar marks %s, not %s, the frame's task (%s)"
+                            % (screen.get("marked"), task["key"], task["name"]))
         for window in screen["windows"]:
             if window.get("terminal") and not window.get("child"):
                 if not task:
