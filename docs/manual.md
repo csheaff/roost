@@ -515,7 +515,10 @@ late as a remote host's do, which is where races between them show. Magit's
 review is left out there: over TRAMP's `ssh` method it takes most of a minute.
 `--tuned` gives Emacs settings many configurations have: pixel scrolling, a
 1 GB garbage collection threshold, tmux-control's idle collection, and pane
-directories, which make a remote terminal's directory a TRAMP one.
+directories, which make a remote terminal's directory a TRAMP one. Pass them
+in `QA_FLAGS`, as make takes long options for itself:
+
+    make qa QA_FLAGS="--remote --tuned -L ../tmux-control --package-dir ~/.emacs.d/elpa"
 
 Claude Code updates itself often, and Roost relies on what it reports and
 does. `make contract` scans the installed Claude Code for the hook events,

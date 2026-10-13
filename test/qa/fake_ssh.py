@@ -87,7 +87,9 @@ def relay(source, sink, done):
                 return
 
     threading.Thread(target=read, daemon=True).start()
-    writer = threading.Thread(target=write)
+    # A daemon, as what goes in may never end: ssh exits with the command
+    # it ran.  What comes out, its callers wait for.
+    writer = threading.Thread(target=write, daemon=True)
     writer.start()
     return writer
 

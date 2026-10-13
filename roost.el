@@ -1709,17 +1709,21 @@ worktree; explicit HEAD uses DIRECTORY.  Nil AGENT uses
 On a project's heading in the dashboard or sidebar, that project."
   (cond (task (if fork (roost--remote-directory task) (roost--project-directory task)))
         ((get-text-property (point) 'roost-directory))
-        ((ignore-errors (vc-root-dir)))
-        ;; Buffers VC does not track, such as Dired or a shell, in a checkout:
-        ;; one Roost knows, by name, or else the checkout on disk.  On a host
-        ;; TRAMP has not connected to yet, looking there would connect, while
-        ;; you wait.
+        ;; On a host TRAMP has not connected to yet, looking there would
+        ;; connect, while you wait: then a project Roost knows the directory
+        ;; is in, by name.
+        ((and (roost--may-look-in-p default-directory) (ignore-errors (vc-root-dir))))
         ((roost--known-project-of default-directory))
-        ((when-let* (((or (not (file-remote-p default-directory))
-                          (file-remote-p default-directory nil t)))
+        ;; Buffers VC does not track, such as Dired or a shell, in a checkout.
+        ((when-let* (((roost--may-look-in-p default-directory))
                      (root (ignore-errors (locate-dominating-file default-directory ".git"))))
            (file-name-as-directory (expand-file-name root))))
         ((car (roost--known-projects)))))
+
+(defun roost--may-look-in-p (directory)
+  "Whether looking in DIRECTORY opens no connection: it is local, or on a
+host TRAMP is connected to."
+  (or (not (file-remote-p directory)) (file-remote-p directory nil t)))
 
 (defun roost--known-project-of (directory)
   "The project Roost knows that DIRECTORY is in, the deepest, or nil.

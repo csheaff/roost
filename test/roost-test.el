@@ -1756,7 +1756,7 @@
          (roost--projects-loaded t)
          looked)
      (cl-letf (((symbol-function 'locate-dominating-file) (lambda (&rest _) (setq looked t) nil))
-               ((symbol-function 'vc-root-dir) #'ignore))
+               ((symbol-function 'vc-root-dir) (lambda (&rest _) (setq looked t) nil)))
        (with-temp-buffer
          (setq default-directory "/ssh:dev:/srv/ledger/src/")
          (should (equal (roost--compose-default-directory nil nil) "/ssh:dev:/srv/ledger/"))
