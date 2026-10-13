@@ -684,6 +684,13 @@ def selected_terminal(screen):
     return next((w for w in screen["windows"] if w.get("terminal") and w["selected"]), None)
 
 
+def tabs_shown(screen):
+    """The tabs over the selected terminal: in its window, or, split into
+    panes, in the top-left one."""
+    selected = selected_terminal(screen) or {}
+    return next((w["tabs"] for w in terminals(screen, selected.get("terminal")) if w.get("tabs")), "")
+
+
 def new_task(qa, prompt):
     """Start a task with PROMPT from the menu; return its name once listed."""
     before = {t["name"] for t in qa.screen()["tasks"]}
@@ -717,7 +724,9 @@ def panes(qa, repo):
     own = screen["task"]["terminal"]
     qa.keys("C-c |")
     qa.step("Split in two", expect=[
-        ("two panes of its own", lambda s: len(terminals(s, own)) == 2)])
+        ("two panes of its own", lambda s: len(terminals(s, own)) == 2),
+        ("its tabs over them", lambda s: tabs_shown(s)),
+        ("each naming the task", lambda s: all(first in w["mode-line"] for w in terminals(s, own)))])
     qa.keys("M-x")
     qa.type("tmux-control-new-window\r")
     qa.wait("the name prompt", lambda s: s["prompt"])
@@ -726,15 +735,13 @@ def panes(qa, repo):
     qa.wait("a second window", lambda s: len(qa.tmux("list-windows", "-t", session)) == 2)
     # As tmux numbers them: your configuration may start at 1.
     window_a, window_b = qa.tmux("list-windows", "-t", session, "-F", "#{window_index}")
-    # tmux-control shows no tabs while a session is split into panes.
     qa.step("A second tmux window", expect=[
-        Known(("its tab is the highlighted one",
-               lambda s: "[%s:" % window_b in (selected_terminal(s).get("tabs") or "")))])
+        ("its tab is the highlighted one", lambda s: "[%s:" % window_b in tabs_shown(s))])
     qa.keys("C-c C-p")
     qa.step("Back to the first window", expect=[
-        Known(("its tab is the highlighted one",
-               lambda s: "[%s:" % window_a in (selected_terminal(s).get("tabs") or ""))),
-        ("with both its panes", lambda s: len(terminals(s, own)) == 2)])
+        ("its tab is the highlighted one", lambda s: "[%s:" % window_a in tabs_shown(s)),
+        ("with both its panes", lambda s: len(terminals(s, own)) == 2),
+        ("each naming the task", lambda s: all(first in w["mode-line"] for w in terminals(s, own)))])
     qa.keys("C-c C-w")
     qa.wait("the window chooser", lambda s: any("chooser" in w["buffer"] for w in s["windows"]))
     qa.step("Choosing a window", expect=[
@@ -760,8 +767,7 @@ def panes(qa, repo):
     qa.wait("the shell to go", lambda s: len(terminals(s, own)) == 1)
     qa.step("One pane again", expect=[
         ("its panel back beside it", lambda s: panel_text(qa, s).startswith(first)),
-        ("its tabs back, its window highlighted",
-         lambda s: "[%s:" % window_a in (selected_terminal(s).get("tabs") or ""))])
+        ("its tabs back, its window highlighted", lambda s: "[%s:" % window_a in tabs_shown(s))])
 
 
 def to_shell(qa):
@@ -1044,7 +1050,7 @@ def shell(qa, repo):
     qa.type("exit\r")
     qa.wait("the shell to go", lambda s: len(terminals(s, own)) == 1 and not s["prompt"])
     qa.step("The agent alone again", expect=[
-        ("its tabs back", lambda s: (selected_terminal(s) or {}).get("tabs")),
+        ("its tabs back", lambda s: tabs_shown(s)),
         ("its panel beside it", lambda s: panel_text(qa, s).startswith(name))])
 
 
