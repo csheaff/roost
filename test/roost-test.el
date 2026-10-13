@@ -2342,6 +2342,25 @@ Read from the layout transient keeps, whose form varies by version."
        (should (string-prefix-p " " (roost--sidebar-row a 30)))
        (should (string-prefix-p "▸" (roost--sidebar-row b 30)))))))
 
+(ert-deftest roost-tasks-of-one-name-show-their-ids ()
+  (roost-test--isolated
+   (let* ((a (roost--cache-task "dev" (roost-test--task)))
+          (b (roost--cache-task "dev" (roost-test--task "1111111111111111")))
+          (elsewhere (roost--cache-task "ci" (roost-test--task "2222222222222222")))
+          (alone (roost--cache-task "dev" (append '((name . "tidy notes"))
+                                                  (roost-test--task "3333333333333333"))))
+          (layout (roost--dashboard-layout (roost-tasks) 120)))
+     (should (string-match-p "fix auth 012345" (roost--sidebar-row a 30)))
+     (should (string-match-p "fix auth 111111" (roost--sidebar-row b 30)))
+     (let ((row (roost--dashboard-row b layout 120)))
+       (should (string-match "fix auth \\(111111\\)" row))
+       (should (eq (get-text-property (match-beginning 1) 'face row) 'roost-dim)))
+     ;; On another host, or with a name of its own, a task shows its name alone.
+     (should-not (string-match-p "222222" (roost--sidebar-row elsewhere 30)))
+     (should-not (string-match-p "333333" (roost--dashboard-row alone layout 120)))
+     ;; A name cut to fit keeps the ID.
+     (should (equal (substring-no-properties (roost--row-name a 9)) "f… 012345")))))
+
 (ert-deftest roost-files-from-the-sidebar-leaves-the-side-window ()
   (roost-test--isolated
    (save-window-excursion

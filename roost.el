@@ -5805,10 +5805,31 @@ Refreshes are asynchronous; rendering uses only cached state.
                      ("offline" nil "offline"))))
      (propertize " · " 'face 'roost-dim))))
 
+(defun roost--row-name (task &optional width face)
+  "TASK's name in FACE for its row under its project, cut to WIDTH columns.
+When another task in the project has the same name, the start of its ID
+follows, dim, as in `roost-open-task' and tab names; cutting the name to
+fit keeps the ID."
+  (let* ((name (roost--field task 'name))
+         (id (roost--field task 'id))
+         (twin (seq-some (lambda (other)
+                           (and (equal (roost--field other 'name) name)
+                                (not (equal (roost--field other 'id) id))
+                                (equal (roost--field other 'host) (roost--field task 'host))
+                                (equal (roost--field other 'repo) (roost--field task 'repo))))
+                         (roost-tasks)))
+         (suffix (if (and twin id) (concat " " (substring id 0 (min 6 (length id)))) "")))
+    (concat (propertize (if width
+                            (truncate-string-to-width name (max 1 (- width (length suffix)))
+                                                      nil nil "…")
+                          name)
+                        'face face)
+            (propertize suffix 'face 'roost-dim))))
+
 (defun roost--dashboard-layout (tasks width)
   "Column widths for TASKS in a window WIDTH columns wide.
 The changes column shrinks first, then the agent column is dropped."
-  (let* ((name (min 28 (max 8 (apply #'max (mapcar (lambda (task) (string-width (roost--field task 'name)))
+  (let* ((name (min 28 (max 8 (apply #'max (mapcar (lambda (task) (string-width (roost--row-name task)))
                                                    tasks)))))
          (agent (> (length (delete-dups (mapcar (lambda (task) (or (roost--field task 'agent) "claude"))
                                                 tasks)))
@@ -5833,8 +5854,10 @@ The changes column shrinks first, then the agent column is dropped."
          (face (roost--status-word-face (roost--attention-status task)))
          (cell (lambda (text size &optional cell-face)
                  (propertize (truncate-string-to-width text size nil ?\s "…") 'face cell-face)))
+         (name (roost--row-name task (plist-get layout :name)))
          (line (concat "  " (roost--status-light task 'dashboard) " "
-                       (funcall cell (roost--field task 'name) (plist-get layout :name)) "  "
+                       name (make-string (max 0 (- (plist-get layout :name) (string-width name))) ?\s)
+                       "  "
                        (funcall cell status 11 face) " "
                        (funcall cell (roost--elapsed (roost--field task 'updatedAt)) 6 'roost-dim) "  "
                        (if (> (plist-get layout :pr) 0)
@@ -6468,14 +6491,14 @@ MARGIN says that its status light shows in the margin, taking no column."
          (face (roost--status-word-face (roost--attention-status task)))
          ;; The marker, the dot unless it shows in the margin, and a space.
          (room (- width (if margin 2 3)))
-         (name (roost--field task 'name))
-         (label (when (>= room (+ (min (string-width name) 12) 1 (string-width status)))
+         (label (when (>= room (+ (min (string-width (roost--row-name task)) 12) 1
+                                  (string-width status)))
                   status))
-         (name (truncate-string-to-width name (if label (- room (string-width label) 1) room)
-                                         nil nil "…")))
+         (name (roost--row-name task (if label (- room (string-width label) 1) room)
+                                (if current 'roost-heading 'default))))
     (concat (if current (propertize "▸" 'face 'roost-heading) " ")
             (roost--status-light task 'sidebar) " "
-            (propertize name 'face (if current 'roost-heading 'default))
+            name
             (when label
               (concat (make-string (max 1 (- room (string-width name) (string-width label))) ?\s)
                       (propertize label 'face face))))))
