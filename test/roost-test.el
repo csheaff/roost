@@ -3972,14 +3972,16 @@ Read from the layout transient keeps, whose form varies by version."
   ;; A poll that took a while, read before the agent's turn ended, put the
   ;; task back to running after a newer reply had it ready.
   (roost-test--isolated
-   (roost--cache-task "dev" (append '((updatedAt . "2026-10-13T10:31:36.627905+00:00") (lastEvent . "Stop"))
+   (roost--cache-task "dev" (append '((updatedAt . "2026-10-13T10:31:36.627905+00:00") (lastEvent . "Stop")
+                                      (agentSession . "after-clear"))
                                     (roost-test--task nil "ready")))
    (roost--cache-task "dev" (append '((updatedAt . "2026-10-13T10:31:36.510719+00:00") (lastEvent . "PostToolUse")
-                                      (diff . "1 file changed"))
+                                      (agentSession . "before-clear") (diff . "1 file changed"))
                                     (roost-test--task nil "running")))
    (let ((task (gethash '("dev" "0123456789abcdef") roost--tasks)))
      (should (equal (roost--field task 'status) "ready"))
      (should (equal (roost--field task 'lastEvent) "Stop"))
+     (should (equal (roost--field task 'agentSession) "after-clear"))
      ;; What else it read is still news.
      (should (equal (roost--field task 'diff) "1 file changed")))
    ;; A newer one is taken whole.

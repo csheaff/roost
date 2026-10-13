@@ -744,7 +744,8 @@ and a newer notification about TASK replaces it."
         (t (message "%s: %s" title body))))
 
 (defconst roost--event-fields
-  '(status updatedAt lastEvent error lastReply request requestCommand exitCode statusBeforeCrash)
+  '(status updatedAt lastEvent error lastReply request requestCommand exitCode statusBeforeCrash
+    agentSession claudeSession transcript)
   "A task's fields that its agent's events and its runner change.
 They are as of its `updatedAt'.")
 
