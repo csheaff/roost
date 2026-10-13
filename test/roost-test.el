@@ -4592,13 +4592,14 @@ ssh: connect to host dev port 22: Operation timed out"
      (should (roost--menu-applies-p 'roost-shell)))))
 
 (ert-deftest roost-doctor-says-how-magit-reaches-a-host ()
-  (let ((tramp-default-method "scp"))
-    (pcase-let ((`(,name ,ok ,detail ,hint) (roost--doctor-review-check "dev")))
-      (should (equal name "Magit"))
-      (should (eq ok 'optional))
-      (should (equal detail "over TRAMP's scp method"))
-      (should (string-match-p "tramp-rpc" hint))
-      (should (string-match-p "Remote review" hint)))))
+  (roost-test--isolated
+   (let ((tramp-default-method "scp"))
+     (pcase-let ((`(,name ,ok ,detail ,hint) (roost--doctor-review-check "dev")))
+       (should (equal name "Magit"))
+       (should (eq ok 'optional))
+       (should (equal detail "over TRAMP's scp method"))
+       (should (string-match-p "tramp-rpc" hint))
+       (should (string-match-p "Remote review" hint))))))
 
 ;;;; Review notes
 

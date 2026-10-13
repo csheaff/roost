@@ -105,9 +105,10 @@ Magit is optional (review falls back to Dired).
   default `scp` method on a host on the same network, Magit took 3.6 s to open
   a task and 1.7 s to refresh or stage a file; with tramp-rpc, which runs
   commands through a small server on the host, 0.4 s. tramp-rpc needs Emacs
-  30.1, a newer TRAMP from GNU ELPA and msgpack, and puts its server on each
-  host, downloaded from its GitHub releases or built with Cargo. It first
-  appeared in 2026. With Emacs 30:
+  30.1, TRAMP 2.8.1.4 or later from GNU ELPA and msgpack, and a host running
+  Linux or macOS on x86_64 or aarch64, where it puts its server, downloaded
+  from its GitHub releases or built with Cargo. It first appeared in 2026.
+  With Emacs 30:
 
   ```elisp
   (use-package tramp-rpc
