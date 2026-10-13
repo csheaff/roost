@@ -1073,6 +1073,13 @@ def recorded_pull_request(task):
     return pr if isinstance(pr, dict) and pr.get("number") else {}
 
 
+def recorded_merge_at(task, tip):
+    """Whether GitHub said, as recorded, that one of the task's pull requests
+    merged TIP. A merge stays one, whatever later lookups list."""
+    pr = recorded_pull_request(task)
+    return bool(tip) and (pr.get("mergedHead") == tip or (pr.get("state") == "MERGED" and pr.get("head") == tip))
+
+
 def pushed(task):
     """Whether the task's branch was pushed, so GitHub may have a pull
     request for it that its agent opened."""
@@ -1161,8 +1168,10 @@ def check_pull_requests(store, tasks):
         task["prStatus"] = dict(state=pr.get("state"), draft=bool(pr.get("isDraft")),
                                 review=pr.get("reviewDecision") or None, checks=checks, head=pr.get("headRefOid"))
         record = dict(number=pr["number"], url=pr.get("url"), state=pr.get("state"), head=pr.get("headRefOid"))
-        # Shown or not, as when an open one goes to another base.
-        if any(other.get("state") == "MERGED" and other.get("headRefOid") == tip for other in prs):
+        # Shown or not, as when an open one goes to another base, or listed
+        # or not, as when the branch has had more than a page of them.
+        if (any(other.get("state") == "MERGED" and other.get("headRefOid") == tip for other in prs)
+                or recorded_merge_at(task, tip)):
             record["mergedHead"] = tip
         try:
             with store.locked():
@@ -1189,8 +1198,7 @@ def landed(task, tip):
     for a task that never committed. Takes no optional Git locks, for polls."""
     if not tip or tip == task.get("baseCommit"):
         return False
-    pr = recorded_pull_request(task)
-    if pr.get("mergedHead") == tip or (pr.get("state") == "MERGED" and pr.get("head") == tip):
+    if recorded_merge_at(task, tip):
         return True
     integration = task.get("integrationBranch")
     return bool(integration) and is_ancestor(task["repo"], tip, "refs/heads/" + integration) and committed_on(task)
@@ -1600,19 +1608,17 @@ def squash_merge(task, integration, here):
 def merged_pull_request_head(task):
     """The task branch's tip when GitHub merged it as one of the task's pull
     requests, or None. GitHub is asked for a task with a pull request
-    recorded or a pushed branch; when gh cannot say, a merge recorded
-    earlier counts. Slow: call it without the registry lock and pass the
-    answer to `retire`."""
+    recorded or a pushed branch; a merge it recorded earlier counts too.
+    Slow: call it without the registry lock and pass the answer to `retire`."""
     tip = branch_tip(task)
     if not tip:
         return None
     recorded = recorded_pull_request(task)
     if recorded or pushed(task):
         prs = task_pull_requests(task, tip)
-        if prs is not None:
-            return tip if any(pr.get("state") == "MERGED" and pr.get("headRefOid") == tip for pr in prs) else None
-    return tip if recorded.get("mergedHead") == tip or (recorded.get("state") == "MERGED"
-                                                         and recorded.get("head") == tip) else None
+        if prs and any(pr.get("state") == "MERGED" and pr.get("headRefOid") == tip for pr in prs):
+            return tip
+    return tip if recorded_merge_at(task, tip) else None
 
 
 def safe_to_delete(task, commit, merged_head=None):

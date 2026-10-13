@@ -2071,6 +2071,20 @@ elif args[:2] == ["auth", "status"]:
         with patch.object(roost, "agent_path", lambda inherited: str(self.gh_dir)):
             self.assertEqual(roost.merged_pull_request_head(roost.Store(str(self.state)).read(task["id"])), tip)
 
+    def test_a_merge_at_the_tip_stays_when_a_later_lookup_lists_it_no_more(self):
+        # A branch with more than a page of pull requests.
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(number=3, state="MERGED", headRefOid=tip)]))
+        self.assertIs(self.request("list", full=True)["result"][0]["landed"], True)
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(number=n, state="CLOSED", headRefOid=tip)
+                                                           for n in range(20, 10, -1)]))
+        listed = self.request("list", full=True)["result"][0]
+        self.assertEqual((listed["pr"]["mergedHead"], listed["landed"]), (tip, True))
+        self.assertEqual(roost.merged_pull_request_head(roost.Store(str(self.state)).read(task["id"])), tip)
+
     def test_without_a_reflog_a_task_brought_up_to_date_is_not_merged(self):
         self.git("config", "core.logAllRefUpdates", "false")
         task = self.create()
