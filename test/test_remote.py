@@ -739,6 +739,10 @@ class Lifecycle(unittest.TestCase):
         self.assertIn(dict(path="image", uncommitted=True), files)
         self.assertIn(dict(path="new file", untracked=True), files)
         self.assertIn(dict(path="greeting", added=2, deleted=0, uncommitted=True), files)
+        # A list cut short keeps the files not yet committed.
+        self.assertEqual([file["path"] for file in roost.changed_files(wt, "main", {"image"}, limit=2)],
+                         ["image", "new file"])
+        self.assertEqual(roost.status_paths("R  new\0old\0 M a b\0?? c\0"), {"new", "a b", "c"})
         # Like the other statistics, the list is never saved in the record.
         store = roost.Store(str(self.state))
         store.save(dict(store.read(task["id"]), files=files))

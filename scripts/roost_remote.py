@@ -1067,28 +1067,32 @@ def status_paths(porcelain):
     """The paths in STATUS --porcelain -z output: what is changed and not
     yet committed, staged or not, untracked files included."""
     paths = set()
-    fields = porcelain.split("\0")
-    while fields and fields[0]:
-        entry = fields.pop(0)
+    fields = iter(porcelain.split("\0"))
+    for entry in fields:
+        if not entry:
+            break
         paths.add(entry[3:])
         if "R" in entry[:2] or "C" in entry[:2]:
             # A rename or copy: its old path follows.
-            fields.pop(0)
+            next(fields, None)
     return paths
 
 
 def changed_files(worktree, base, uncommitted=frozenset(), limit=50):
-    """The task's changed files since BASE, committed or not. Line counts
-    are absent for binary files, and untracked files are marked so, as are
-    files among UNCOMMITTED, those with changes not yet committed."""
+    """The task's changed files since BASE, committed or not, at most
+    LIMIT of them. Line counts are absent for binary files, and untracked
+    files are marked so, as are files among UNCOMMITTED, those with changes
+    not yet committed; both come first."""
     files = []
-    fields = read_git(worktree, "diff", "--numstat", "-z", base).stdout.split("\0")
-    while fields and fields[0]:
-        added, deleted, path = fields.pop(0).split("\t", 2)
+    fields = iter(read_git(worktree, "diff", "--numstat", "-z", base).stdout.split("\0"))
+    for entry in fields:
+        if not entry:
+            break
+        added, deleted, path = entry.split("\t", 2)
         if not path:
             # A rename: its old and new paths follow.
-            path = fields[1]
-            del fields[:2]
+            next(fields, None)
+            path = next(fields, "")
         file = dict(path=path)
         if added != "-":
             file.update(added=int(added), deleted=int(deleted))
@@ -1097,6 +1101,8 @@ def changed_files(worktree, base, uncommitted=frozenset(), limit=50):
         files.append(file)
     untracked = read_git(worktree, "ls-files", "--others", "--exclude-standard", "-z")
     files += [dict(path=path, untracked=True) for path in untracked.stdout.split("\0") if path]
+    # The panel lists them first, so a long list keeps them.
+    files.sort(key=lambda file: not (file.get("uncommitted") or file.get("untracked")))
     return files[:limit]
 
 
