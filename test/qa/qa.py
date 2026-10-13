@@ -1035,7 +1035,9 @@ def search(qa, repo):
     qa.keys("C-c r /")
     qa.wait("the search prompt", lambda s: s["prompt"])
     qa.type("needle\r")
-    qa.wait("the results", lambda s: name in (qa.window(s, "roost-search-mode") or {}).get("text", ""))
+    # From every host searched: with --remote, two.
+    qa.wait("the results", lambda s: name in (qa.window(s, "roost-search-mode") or {}).get("text", "")
+            and "Searching" not in qa.window(s, "roost-search-mode")["text"])
     qa.step("Messages with the word", expect=[
         ("yours", lambda s: "You" in qa.window(s, "roost-search-mode")["text"]),
         ("and the agent's", lambda s: "PROMPT Find the needle" in qa.window(s, "roost-search-mode")["text"])])
