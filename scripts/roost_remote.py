@@ -1401,13 +1401,14 @@ def seen(store, task, updated):
 def rename(store, task, name):
     """Name TASK NAME, here and on its agent's tmux window. Its branch and
     worktree keep the name it started with: a pull request, or the agent's
-    conversation, may know them. Not an event of the agent's, so whether
-    you have seen it stays as it was."""
+    conversation, may know them. Not an event of the agent's, so its
+    `updatedAt`, and whether you have seen it, stay as they were;
+    `renamedAt` tells Emacs a reply read before this from one read since."""
     name = task_name(name)
     if not task.get("prompt") and task.get("task") == task["name"]:
         # Started without a prompt, the task is described by its name.
         task["task"] = name
-    task["name"] = name
+    task.update(name=name, renamedAt=now())
     store.save(task)
     pane = owned_pane(task, pane_inventory(task["socket"]) or {})
     if pane:

@@ -4563,6 +4563,25 @@ Read from the layout transient keeps, whose form varies by version."
        (while (cdr (roost--tabs)) (tab-bar-close-tab))
        (unless original-tab-bar-mode (tab-bar-mode -1))))))
 
+(ert-deftest roost-a-reply-read-before-a-rename-keeps-the-new-name ()
+  (roost-test--isolated
+   (let ((stale (roost-test--task)))
+     (roost--cache-task "dev" (copy-tree stale))
+     (roost--cache-task "dev" (append '((name . "login fix") (task . "login fix")
+                                        (renamedAt . "2026-10-03T20:05:00+00:00"))
+                                      (assq-delete-all 'name (assq-delete-all 'task (roost-test--task)))))
+     ;; As one to opening it, sent before the rename and answered after.
+     (let ((cached (roost--cache-task "dev" (cons '(status . "permission")
+                                                  (assq-delete-all 'status (copy-tree stale))))))
+       (should (equal (roost--field cached 'name) "login fix"))
+       (should (equal (roost--field cached 'task) "login fix"))
+       ;; The rest of the reply is as new as ever.
+       (should (equal (roost--field cached 'status) "permission")))
+     ;; Renamed again since, as from another Emacs, it takes that name.
+     (let ((cached (roost--cache-task "dev" (append '((name . "auth") (renamedAt . "2026-10-03T20:09:00+00:00"))
+                                                    (assq-delete-all 'name (copy-tree stale))))))
+       (should (equal (roost--field cached 'name) "auth"))))))
+
 (ert-deftest roost-a-renamed-task-keeps-its-perspective ()
   (roost-test--isolated
    (let* ((roost-workspace 'perspective) (persp-mode t)

@@ -1472,6 +1472,7 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(reply["ok"], reply)
         renamed = reply["result"]
         self.assertEqual(renamed["name"], "fix #12 in the parser")
+        self.assertTrue(renamed["renamedAt"])
         # Started without a prompt, it is described by its name.
         self.assertEqual(renamed["task"], "fix #12 in the parser")
         self.assertEqual((renamed["branch"], renamed["worktree"]), (task["branch"], task["worktree"]))

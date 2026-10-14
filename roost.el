@@ -780,12 +780,26 @@ host measured, such as Git statistics, is as new as anything."
           (when-let* ((cell (assq field task)))
             (setq kept (cons cell (assq-delete-all field kept)))))))))
 
+(defun roost--newer-name (task old)
+  "TASK, with OLD's name when OLD was renamed since TASK was read.
+A reply its host read before you renamed the task, such as one to
+opening it, can arrive after the rename's.  Renaming is no event of the
+agent's, which `roost--newer-events' goes by: this keeps the reply from
+bringing back the old name, which the task's tab and panel no longer have."
+  (let ((renamed (roost--field old 'renamedAt)))
+    (if (not (and (stringp renamed)
+                  (string< (or (roost--field task 'renamedAt) "") renamed)))
+        task
+      (dolist (field '(name task renamedAt) task)
+        (when-let* ((cell (assq field old)))
+          (setq task (cons cell (assq-delete-all field task))))))))
+
 (defun roost--cache-task (host task)
   "Cache TASK from HOST and notify only on attention transitions."
   (setf (alist-get 'host task) host)
   (setq task (assq-delete-all 'pushed task))
   (when-let* ((old (gethash (roost--key task) roost--tasks)))
-    (setq task (roost--newer-events task old)))
+    (setq task (roost--newer-name (roost--newer-events task old) old)))
   (let* ((key (roost--key task))
          (old (gethash key roost--tasks))
          (status (roost--field task 'status))
