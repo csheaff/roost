@@ -369,9 +369,10 @@ A ready agent you have seen since its last event is no longer waiting.")
 (defvar roost--current-task nil
   "Key of the task most recently opened.")
 (defvar roost--perspectives (make-hash-table :test 'equal)
-  "Perspectives of renamed tasks, by task key, named for what each was called.
-perspective.el renames only the current perspective; another keeps its
-name until its task is next opened.")
+  "Names the perspectives of renamed tasks may have, by task key.
+perspective.el renames only the current perspective, of each frame's
+own; another keeps the name its task had until the task is next opened
+in that frame.")
 (defvar roost--watch-timer nil)
 (defvar roost--watching-on-demand nil
   "Non-nil when Roost began watching after your configuration had loaded.
@@ -1218,8 +1219,9 @@ made now."
          (id (substring (roost--field task 'id) 0 6))
          (name (format "roost:%s:%s:%s" host (roost--field task 'name) id))
          (names (and (not new) (bound-and-true-p persp-mode) (fboundp 'persp-names) (persp-names)))
-         (kept (gethash (roost--key task) roost--perspectives)))
-    (or (and names (not (member name names)) (member kept names) kept)
+         (kept (and names (seq-find (lambda (kept) (member kept names))
+                                    (gethash (roost--key task) roost--perspectives)))))
+    (or (and kept (not (member name names)) kept)
         (and names (not (member name names))
              ;; As restored after Emacs restarted.  The name holds the
              ;; ID's first characters only: none
@@ -1393,28 +1395,35 @@ was renamed takes the name when TASK is next opened."
 That is its tab in each frame, or its perspective where that is current."
   (dolist (frame (frame-list))
     (with-selected-frame frame
-      (pcase (roost--workspace-backend)
-        ('perspective
-         (puthash (roost--key new) (roost--perspective-name old) roost--perspectives)
-         (roost--rename-perspective new))
-        ('tab-bar
-         ;; Not a tab of an elder namesake's, which has the plain name.
-         (let* ((tab (roost--task-tab old))
-                (name (roost--tab-name new))
-                (taken (lambda () (member name (remove tab (roost--tabs)))))
-                (namesake (car (roost--namesakes new))))
-           ;; NEW is now the eldest of its name: the namesake whose tab has
-           ;; the plain name finds its tab by its ID from now on, though
-           ;; NEW has no tab here.
-           (when (and (funcall taken) namesake (not (roost--started-before namesake new))
-                      ;; Unless that tab is another's: the namesake has its own.
-                      (not (member (roost--tab-name namesake t) (roost--tabs))))
-             (tab-bar-rename-tab (roost--tab-name namesake t)
-                                 (1+ (seq-position (roost--tabs) name))))
-           (when tab
-             ;; Any other tab of that name is no task's that Roost knows.
-             (tab-bar-rename-tab (if (funcall taken) (roost--tab-name new t) name)
-                                 (1+ (seq-position (roost--tabs) tab))))))))))
+      (roost--rename-frame-workspace old new))))
+
+(defun roost--rename-frame-workspace (old new)
+  "Name the selected frame's workspace of task OLD for NEW, the task renamed."
+  (pcase (roost--workspace-backend)
+    ('perspective
+     ;; Each frame has perspectives of its own, which may still have
+     ;; any name the task had.
+     (cl-pushnew (roost--perspective-name old) (gethash (roost--key new) roost--perspectives)
+                 :test #'equal)
+     (roost--rename-perspective new))
+    ('tab-bar
+     ;; Not a tab of an elder namesake's, which has the plain name.
+     (let* ((tab (roost--task-tab old))
+            (name (roost--tab-name new))
+            (taken (lambda () (member name (remove tab (roost--tabs)))))
+            (namesake (car (roost--namesakes new))))
+       ;; NEW is now the eldest of its name: the namesake whose tab has
+       ;; the plain name finds its tab by its ID from now on, though
+       ;; NEW has no tab here.
+       (when (and (funcall taken) namesake (not (roost--started-before namesake new))
+                  ;; Unless that tab is another's: the namesake has its own.
+                  (not (member (roost--tab-name namesake t) (roost--tabs))))
+         (tab-bar-rename-tab (roost--tab-name namesake t)
+                             (1+ (seq-position (roost--tabs) name))))
+       (when tab
+         ;; Any other tab of that name is no task's that Roost knows.
+         (tab-bar-rename-tab (if (funcall taken) (roost--tab-name new t) name)
+                             (1+ (seq-position (roost--tabs) tab))))))))
 
 ;;;; Opening tasks
 

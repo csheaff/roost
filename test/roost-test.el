@@ -4728,6 +4728,38 @@ Read from the layout transient keeps, whose form varies by version."
                                           (assq-delete-all 'name (copy-tree docs))))
          (should (equal current "roost:dev:guide:012345")))))))
 
+(ert-deftest roost-a-renamed-task-keeps-its-perspective-in-each-frame ()
+  ;; Batch Emacs has one frame: two lists of perspectives stand in for two
+  ;; frames' own, with the task's current in the first only.
+  (roost-test--isolated
+   (let* ((roost-workspace 'perspective) (persp-mode t)
+          (docs (roost--cache-task "dev" (cons '(name . "docs")
+                                               (assq-delete-all 'name (roost-test--task "012345fedcba9876")))))
+          (frames (list (list :names (list "main" "roost:dev:docs:012345") :current "roost:dev:docs:012345")
+                        (list :names (list "main" "roost:dev:docs:012345") :current "main")))
+          frame)
+     ;; Its ID starts as docs's does, so finding a perspective by ID is off.
+     (roost--cache-task "dev" (roost-test--task))
+     (cl-letf (((symbol-function 'persp-names) (lambda () (plist-get frame :names)))
+               ((symbol-function 'persp-current-name) (lambda () (plist-get frame :current)))
+               ((symbol-function 'persp-rename)
+                (lambda (name)
+                  (plist-put frame :names (cons name (delete (plist-get frame :current) (plist-get frame :names))))
+                  (plist-put frame :current name))))
+       (dolist (name '("manual" "guide"))
+         (let* ((old (gethash (roost--key docs) roost--tasks))
+                (new (cons `(name . ,name) (assq-delete-all 'name (copy-tree old)))))
+           (puthash (roost--key docs) new roost--tasks)
+           (dolist (each frames)
+             (setq frame each)
+             (roost--rename-frame-workspace old new))))
+       (setq frame (nth 0 frames))
+       (should (equal (plist-get frame :current) "roost:dev:guide:012345"))
+       ;; The other frame's still has the name docs first had.
+       (setq frame (nth 1 frames))
+       (should (equal (roost--perspective-name (gethash (roost--key docs) roost--tasks))
+                      "roost:dev:docs:012345"))))))
+
 (ert-deftest roost-workspace-backend-is-chosen-automatically ()
   (roost-test--isolated
    (let ((roost-workspace 'auto) (persp-mode nil) (tab-bar-mode nil))
