@@ -3232,6 +3232,46 @@ Read from the layout transient keeps, whose form varies by version."
          (set-face-background 'default default)
          (when (facep 'margin) (set-face-attribute 'margin nil :inherit inherit)))))))
 
+(ert-deftest roost-status-lights-leave-the-sidebar-its-width ()
+  ;; The lights' margin narrows the sidebar's text, after which Emacs no
+  ;; longer kept its width: it grew and shrank with the frame.
+  (roost-test--isolated
+   (roost-test--with-canvases t
+     (let ((buffer (get-buffer-create " *roost light margins*")))
+       (unwind-protect
+           (save-window-excursion
+             (delete-other-windows)
+             (let ((window (roost--show-side-window buffer 'left 30)))
+               (should (window--preserve-size window t))
+               (with-current-buffer buffer (roost--light-margins))
+               (should (equal (window-margins window) '(2)))
+               (should (window--preserve-size window t))
+               (cl-letf (((symbol-function 'roost--animations-p) #'ignore))
+                 (with-current-buffer buffer (roost--light-margins)))
+               (should (equal (window-margins window) '(nil)))
+               (should (window--preserve-size window t))))
+         (kill-buffer buffer))))))
+
+(ert-deftest roost-status-lights-take-their-margin-before-a-view-is-measured ()
+  ;; Drawn first in a window with no margin yet, the sidebar fitted the
+  ;; columns the margin then took, until it was drawn again.
+  (roost-test--isolated
+   (roost-test--with-canvases t
+     (roost--cache-task "dev" (append '((name . "a-task-with-a-long-name-indeed") (repo . "/srv/ledger"))
+                                      (roost-test--task "1111111111111111" "permission")))
+     (let ((buffer (get-buffer-create " *roost light sidebar*")))
+       (unwind-protect
+           (save-window-excursion
+             (delete-other-windows)
+             (with-current-buffer buffer (roost-sidebar-list-mode))
+             (roost--show-side-window buffer 'left 30)
+             (with-current-buffer buffer
+               (roost--render-sidebar)
+               (let ((first (buffer-substring-no-properties (point-min) (point-max))))
+                 (roost--render-sidebar)
+                 (should (equal (buffer-substring-no-properties (point-min) (point-max)) first)))))
+         (kill-buffer buffer))))))
+
 (ert-deftest roost-status-lights-move-until-their-agents-rest ()
   (roost-test--isolated
    (let ((on t))

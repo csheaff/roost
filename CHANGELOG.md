@@ -6,6 +6,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.8.1:
 
+- With `roost-animations` on, the sidebar keeps its width when you resize
+  the frame, where it grew and shrank with it, and the sidebar and
+  dashboard fit their window when first drawn there, rather than at the
+  next redraw. The lights' margin had narrowed the window after Roost
+  measured it. Nothing to do when upgrading.
 - The sidebar marks the task you are working on with a band across its
   row, face `roost-current`, where it had a small arrow, so you find it at
   a glance. A running agent's light is no longer coloured, so a coloured

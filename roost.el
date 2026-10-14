@@ -4808,7 +4808,11 @@ margin then."
                          0))
                (width (and (> left 0) left)))
           (unless (eql (car (window-margins window)) width)
-            (set-window-margins window left (cdr (window-margins window)))))))))
+            (set-window-margins window left (cdr (window-margins window)))
+            ;; Emacs keeps a side window's width only while its text is as
+            ;; wide as when it was shown, which the margin changes.
+            (when (window-preserved-size window t)
+              (window-preserve-size window t t))))))))
 
 (defun roost--animations-changed ()
   "Show a change of `roost-animations' at once, in the buffers that show.
@@ -6035,6 +6039,8 @@ says only that the host is unreachable."
 (defun roost--render-dashboard ()
   "Render the dashboard from cached state, keeping point on the same row.
 The mark stays where it was."
+  ;; Before measuring: the lights' margin narrows the window.
+  (roost--light-margins)
   (let* ((window (get-buffer-window (current-buffer) t))
          (position (if window (window-point window) (point)))
          (key (get-text-property position 'roost-task))
@@ -6090,8 +6096,7 @@ The mark stays where it was."
                                                  (forward-line (1- start-line))
                                                  (point)))
         (set-window-point window target)))
-    (roost--lights-forget 'dashboard (mapcar #'roost--key tasks))
-    (roost--light-margins)))
+    (roost--lights-forget 'dashboard (mapcar #'roost--key tasks))))
 
 (defun roost--dashboard-task ()
   "The task on the current dashboard line, if any."
@@ -6651,6 +6656,8 @@ MARGIN says that its status light shows in the margin, taking no column."
 
 (defun roost--render-sidebar ()
   "Render the task sidebar from cached state, keeping point on its row."
+  ;; Before measuring: the lights' margin narrows the window.
+  (roost--light-margins)
   (let* ((window (get-buffer-window (current-buffer) t))
          (width (max 12 (if window (roost--usable-width window) roost-sidebar-width)))
          ;; A light in the margin gives its dot's column back, unless a text
@@ -6713,7 +6720,6 @@ MARGIN says that its status light shows in the margin, taking no column."
                    (point-min)))
     (when window (set-window-point window (point)))
     (roost--lights-forget 'sidebar (mapcar #'roost--key tasks))
-    (roost--light-margins)
     ;; Redrawing removed the highlight with the text.
     (roost--sidebar-mark-selection)))
 
