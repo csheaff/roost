@@ -1404,14 +1404,16 @@ def rename(store, task, name):
     conversation, may know them. Not an event of the agent's, so whether
     you have seen it stays as it was."""
     name = task_name(name)
-    if task.get("task") == task["name"]:
+    if not task.get("prompt") and task.get("task") == task["name"]:
         # Started without a prompt, the task is described by its name.
         task["task"] = name
     task["name"] = name
     store.save(task)
     pane = owned_pane(task, pane_inventory(task["socket"]) or {})
     if pane:
-        tmux(task["socket"], "rename-window", "-t", pane["window"], name.replace("#", "##"), check=False)
+        # A name may start with -, which tmux would take for an option.
+        tmux(task["socket"], "rename-window", "-t", pane["window"], "--", name.replace("#", "##"),
+             check=False)
     return task
 
 

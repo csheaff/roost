@@ -1476,6 +1476,9 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(renamed["task"], "fix #12 in the parser")
         self.assertEqual((renamed["branch"], renamed["worktree"]), (task["branch"], task["worktree"]))
         self.assertEqual(window(), "fix #12 in the parser")
+        self.assertTrue(self.request("rename", id=task["id"], name="-v for the parser")["ok"])
+        self.assertEqual(window(), "-v for the parser")
+        self.assertTrue(self.request("rename", id=task["id"], name="fix #12 in the parser")["ok"])
         listed = self.request("list")["result"][0]
         self.assertEqual(listed["name"], "fix #12 in the parser")
         # Not an event: you have still seen it.
@@ -1490,10 +1493,12 @@ class Lifecycle(unittest.TestCase):
         self.request("resume", id=task["id"])
         task = self.wait(task, "ready")
         self.assertEqual(window(), "parser fix")
-        # A prompt stays the prompt.
-        prompted = self.create(name="docs", prompt="Write the docs")
-        self.assertEqual(self.request("rename", id=prompted["id"], name="manual")["result"]["task"],
-                         "Write the docs")
+        # A prompt stays the prompt, though the task was named after it.
+        for prompt in ("Write the docs", "docs"):
+            with self.subTest(prompt=prompt):
+                prompted = self.create(name="docs", prompt=prompt)
+                self.assertEqual(self.request("rename", id=prompted["id"], name="manual")["result"]["task"],
+                                 prompt)
 
     def test_seen_is_recorded_for_every_emacs_until_the_next_event(self):
         task = self.create()
