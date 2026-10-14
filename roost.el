@@ -1388,7 +1388,9 @@ That is its tab in each frame, or its perspective where that is current."
            ;; NEW is now the eldest of its name: the namesake whose tab has
            ;; the plain name finds its tab by its ID from now on, though
            ;; NEW has no tab here.
-           (when (and (funcall taken) namesake (not (roost--started-before namesake new)))
+           (when (and (funcall taken) namesake (not (roost--started-before namesake new))
+                      ;; Unless that tab is another's: the namesake has its own.
+                      (not (member (roost--tab-name namesake t) (roost--tabs))))
              (tab-bar-rename-tab (roost--tab-name namesake t)
                                  (1+ (seq-position (roost--tabs) name))))
            (when tab

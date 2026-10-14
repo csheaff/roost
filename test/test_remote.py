@@ -1471,6 +1471,7 @@ class Lifecycle(unittest.TestCase):
         reply = self.request("rename", id=task["id"], name="  fix #12 in the parser ")
         self.assertTrue(reply["ok"], reply)
         renamed = reply["result"]
+        self.assertTrue(renamed["live"])
         self.assertEqual(renamed["name"], "fix #12 in the parser")
         self.assertTrue(renamed["renamedAt"])
         # Started without a prompt, it is described by its name.
@@ -1493,7 +1494,7 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(store.read(task["id"])["name"], "fix #12 in the parser")
         # A stopped task has no window to name; the one it resumes in has its name.
         self.assertTrue(self.request("stop", id=task["id"])["ok"])
-        self.assertTrue(self.request("rename", id=task["id"], name="parser fix")["ok"])
+        self.assertIs(self.request("rename", id=task["id"], name="parser fix")["result"]["live"], False)
         self.request("resume", id=task["id"])
         task = self.wait(task, "ready")
         self.assertEqual(window(), "parser fix")

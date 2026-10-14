@@ -4625,6 +4625,30 @@ Read from the layout transient keeps, whose form varies by version."
        (while (cdr (roost--tabs)) (tab-bar-close-tab))
        (unless original-tab-bar-mode (tab-bar-mode -1))))))
 
+(ert-deftest roost-a-rename-leaves-a-tab-no-task-of-the-name-has ()
+  (roost-test--isolated
+   (let* ((roost-workspace 'tab-bar)
+          (task (lambda (id name started)
+                  (append `((name . ,name) (startedAt . ,started))
+                          (assq-delete-all 'name (roost-test--task id)))))
+          (parser (roost--cache-task "dev" (funcall task "1111111111111111" "parser" "2026-10-03T20:00:00Z")))
+          (docs (roost--cache-task "dev" (funcall task "3333333333333333" "docs" "2026-10-03T20:02:00Z")))
+          (original-tab-bar-mode tab-bar-mode))
+     (unwind-protect
+         (progn
+           ;; Its tab kept its ID when an elder of its name went; you named
+           ;; another tab as a task might be.
+           (dolist (name '("dev/docs:333333" "dev/docs"))
+             (tab-bar-new-tab)
+             (tab-bar-rename-tab name))
+           (setq parser (roost--cache-task "dev" (append '((name . "docs") (renamedAt . "2026-10-03T21:00:00+00:00"))
+                                                         (assq-delete-all 'name (copy-tree parser)))))
+           (should (equal (seq-count (apply-partially #'equal "dev/docs:333333") (roost--tabs)) 1))
+           (should (member "dev/docs" (roost--tabs)))
+           (should (equal (roost--task-tab docs) "dev/docs:333333")))
+       (while (cdr (roost--tabs)) (tab-bar-close-tab))
+       (unless original-tab-bar-mode (tab-bar-mode -1))))))
+
 (ert-deftest roost-a-reply-read-before-a-rename-keeps-the-new-name ()
   (roost-test--isolated
    (let ((stale (roost-test--task)))

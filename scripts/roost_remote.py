@@ -1413,6 +1413,8 @@ def rename(store, task, name):
         task["task"] = name
     task.update(name=name, renamedAt=now())
     store.save(task)
+    # Not saved, but Emacs takes the reply for what the task is now.
+    task["live"] = bool(pane and not pane["dead"])
     if pane:
         # A name may start with -, which tmux would take for an option.
         tmux(task["socket"], "rename-window", "-t", pane["window"], "--", name.replace("#", "##"),
