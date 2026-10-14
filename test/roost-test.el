@@ -3213,6 +3213,7 @@ Read from the layout transient keeps, whose form varies by version."
    (roost-test--with-canvases t
      (let ((task (roost--cache-task "dev" (roost-test--task "1111111111111111" "permission")))
            (default (face-background 'default))
+           (foreground (face-foreground 'default))
            (inherit (and (facep 'margin) (face-attribute 'margin :inherit))))
        (unwind-protect
            (with-temp-buffer
@@ -3220,7 +3221,14 @@ Read from the layout transient keeps, whose form varies by version."
              (when (facep 'margin) (set-face-attribute 'margin nil :inherit 'unspecified))
              (roost--status-light task 'sidebar)
              (should (= (plist-get (gethash (cons 'sidebar (roost--key task)) roost--lights) :background)
-                        (roost--light-pixel "#123456"))))
+                        (roost--light-pixel "#123456")))
+             ;; A running agent's light is in the text's colour, not mid-gray.
+             (set-face-foreground 'default "#ABCDEF")
+             (let ((running (roost--cache-task "dev" (roost-test--task "2222222222222222" "running"))))
+               (roost--status-light running 'sidebar)
+               (should (= (plist-get (gethash (cons 'sidebar (roost--key running)) roost--lights) :color)
+                          (roost--light-pixel "#ABCDEF")))))
+         (set-face-foreground 'default foreground)
          (set-face-background 'default default)
          (when (facep 'margin) (set-face-attribute 'margin nil :inherit inherit)))))))
 

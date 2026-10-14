@@ -4701,7 +4701,8 @@ for the mode line."
                     (selected-frame)))
          (width (* 2 (frame-char-width frame)))
          (height (max 8 (if (eq frame (selected-frame)) (default-line-height) (frame-char-height frame))))
-         (color (roost--light-pixel (face-foreground face frame t)))
+         ;; A plain face, such as a running agent's, has the default one.
+         (color (roost--light-pixel (face-foreground face frame 'default)))
          ;; A face without a background shows the default one: a theme
          ;; can leave `margin' so, as modus-themes does for no fringe.
          (back (roost--light-pixel (face-background background frame 'default))))
