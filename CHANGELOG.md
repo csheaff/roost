@@ -6,6 +6,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.8.1:
 
+- `R` renames a task, in the dashboard, sidebar and task panel, and in
+  the `h` menu (`roost-rename`). The new name shows in Roost, the task's
+  tab or perspective, and its agent's tmux window; its branch and
+  worktree keep the name the task started with. Nothing to do when
+  upgrading.
 - Clicking a task whose row is out of date, such as one retired
   elsewhere, says so instead of asking "Task: " in the minibuffer, where
   an unseen question held every later open of a task. A task that waits

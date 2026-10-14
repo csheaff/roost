@@ -64,6 +64,7 @@
 (declare-function persp-current-name "perspective" ())
 (declare-function persp-names "perspective" ())
 (declare-function persp-format-name "perspective" (name))
+(declare-function persp-rename "perspective" (name))
 (declare-function evil-set-initial-state "evil-core" (mode state))
 (declare-function svg-create "svg" (width height &rest args))
 (declare-function svg-rectangle "svg" (svg x y width height &rest args))
@@ -367,6 +368,11 @@ A ready agent you have seen since its last event is no longer waiting.")
 
 (defvar roost--current-task nil
   "Key of the task most recently opened.")
+(defvar roost--perspectives (make-hash-table :test 'equal)
+  "Names the perspectives of renamed tasks may have, by task key.
+perspective.el renames only the current perspective, of each frame's
+own; another keeps the name its task had until the task is next opened
+in that frame.")
 (defvar roost--watch-timer nil)
 (defvar roost--watching-on-demand nil
   "Non-nil when Roost began watching after your configuration had loaded.
@@ -779,12 +785,26 @@ host measured, such as Git statistics, is as new as anything."
           (when-let* ((cell (assq field task)))
             (setq kept (cons cell (assq-delete-all field kept)))))))))
 
+(defun roost--newer-name (task old)
+  "TASK, with OLD's name when OLD was renamed since TASK was read.
+A reply its host read before you renamed the task, such as one to
+opening it, can arrive after the rename's.  Renaming is no event of the
+agent's, which `roost--newer-events' goes by: this keeps the reply from
+bringing back the old name, which the task's tab and panel no longer have."
+  (let ((renamed (roost--field old 'renamedAt)))
+    (if (not (and (stringp renamed)
+                  (string< (or (roost--field task 'renamedAt) "") renamed)))
+        task
+      (dolist (field '(name task renamedAt) task)
+        (when-let* ((cell (assq field old)))
+          (setq task (cons cell (assq-delete-all field task))))))))
+
 (defun roost--cache-task (host task)
   "Cache TASK from HOST and notify only on attention transitions."
   (setf (alist-get 'host task) host)
   (setq task (assq-delete-all 'pushed task))
   (when-let* ((old (gethash (roost--key task) roost--tasks)))
-    (setq task (roost--newer-events task old)))
+    (setq task (roost--newer-name (roost--newer-events task old) old)))
   (let* ((key (roost--key task))
          (old (gethash key roost--tasks))
          (status (roost--field task 'status))
@@ -802,6 +822,12 @@ host measured, such as Git statistics, is as new as anything."
         (puthash key task roost--tasks)
       (remhash key roost--tasks)
       (roost--remove-notes (lambda (note) (equal (roost--note-key note) key))))
+    ;; Renamed, here or from another Emacs: its workspace and the panels
+    ;; follow, before the views are drawn.
+    (when (and old (gethash key roost--tasks)
+               (not (equal (roost--field old 'name) (roost--field task 'name))))
+      (roost--rename-workspace old task)
+      (roost--name-panels))
     ;; Record the status before notifying, which may cache this task again.
     (puthash key status roost--statuses)
     (when (and roost-notify previous
@@ -1183,12 +1209,34 @@ nobody is looking."
 
 ;;;; Perspectives
 
-(defun roost--perspective-name (task)
-  "Unique workspace name for TASK."
-  (format "roost:%s:%s:%s"
-          (roost--host-label (roost--field task 'host))
-          (roost--field task 'name)
-          (substring (roost--field task 'id) 0 6)))
+(defun roost--perspective-name (task &optional new)
+  "Unique workspace name for TASK.
+That is the name of its perspective, which may be named for what TASK
+was called before a rename: as this Emacs saw it renamed, or else found
+by its host and ID.  With NEW, or when it has none, the name for one
+made now."
+  (let* ((host (roost--host-label (roost--field task 'host)))
+         (id (substring (roost--field task 'id) 0 6))
+         (name (format "roost:%s:%s:%s" host (roost--field task 'name) id))
+         (names (and (not new) (bound-and-true-p persp-mode) (fboundp 'persp-names) (persp-names)))
+         (kept (and names (seq-find (lambda (kept) (member kept names))
+                                    (gethash (roost--key task) roost--perspectives)))))
+    (or (and kept (not (member name names)) kept)
+        (and names (not (member name names))
+             ;; As restored after Emacs restarted.  The name holds the
+             ;; ID's first characters only: none
+             ;; another task's ID starts with, or its perspective could be
+             ;; the one found.
+             (not (seq-some (lambda (other)
+                              (and (equal (roost--field other 'host) (roost--field task 'host))
+                                   (not (equal (roost--field other 'id) (roost--field task 'id)))
+                                   (string-prefix-p id (roost--field other 'id))))
+                            (roost-tasks)))
+             (seq-find (lambda (other)
+                         (and (string-prefix-p (format "roost:%s:" host) other)
+                              (string-suffix-p (concat ":" id) other)))
+                       names))
+        name)))
 
 (defvar roost--workspace-mode-line-map
   (let ((map (make-sparse-keymap)))
@@ -1263,26 +1311,32 @@ nobody is looking."
       ('perspective (and perspective 'perspective))
       ('tab-bar 'tab-bar))))
 
+(defun roost--started-before (a b)
+  "Whether task A started before task B; their IDs order tasks started at once."
+  (let ((a-started (or (roost--field a 'startedAt) ""))
+        (b-started (or (roost--field b 'startedAt) "")))
+    (if (equal a-started b-started)
+        (string< (roost--field a 'id) (roost--field b 'id))
+      (string< a-started b-started))))
+
+(defun roost--namesakes (task)
+  "The other tasks on TASK's host with its name, eldest first."
+  (sort (seq-filter (lambda (other)
+                      (and (equal (roost--field other 'host) (roost--field task 'host))
+                           (equal (roost--field other 'name) (roost--field task 'name))
+                           (not (equal (roost--field other 'id) (roost--field task 'id)))))
+                    (roost-tasks))
+        #'roost--started-before))
+
 (defun roost--tab-name (task &optional with-id)
   "Name for a new tab of TASK's: its host and name.
 With WITH-ID, or when a task of the same name started before it, its
 ID follows the name."
-  (let* ((host (roost--field task 'host))
-         (name (roost--field task 'name))
-         (id (roost--field task 'id))
-         (started (or (roost--field task 'startedAt) ""))
-         (elder (and (not with-id)
-                     (seq-find (lambda (other)
-                                 (let ((other-started (or (roost--field other 'startedAt) "")))
-                                   (and (equal (roost--field other 'host) host)
-                                        (equal (roost--field other 'name) name)
-                                        (not (equal (roost--field other 'id) id))
-                                        (if (equal other-started started)
-                                            (string< (roost--field other 'id) id)
-                                          (string< other-started started)))))
-                               (roost-tasks)))))
-    (format "%s/%s%s" (roost--host-label host) name
-            (if (or with-id elder) (concat ":" (substring id 0 6)) ""))))
+  (let ((elder (and (not with-id)
+                    (seq-find (lambda (other) (roost--started-before other task))
+                              (roost--namesakes task)))))
+    (format "%s/%s%s" (roost--host-label (roost--field task 'host)) (roost--field task 'name)
+            (if (or with-id elder) (concat ":" (substring (roost--field task 'id) 0 6)) ""))))
 
 (defun roost--tabs ()
   "Names of the tab bar's tabs."
@@ -1313,7 +1367,9 @@ started or gone since."
   (roost--leave-side-window)
   (pcase (roost--workspace-backend)
     ('perspective
-     (when (fboundp 'persp-switch) (persp-switch (roost--perspective-name task))))
+     (when (fboundp 'persp-switch)
+       (persp-switch (roost--perspective-name task))
+       (roost--rename-perspective task)))
     ('tab-bar
      (if-let* ((name (roost--task-tab task)))
          (tab-bar-select-tab-by-name name)
@@ -1323,6 +1379,51 @@ started or gone since."
   ;; Without workspaces, the frame's task panel follows the last task used.
   (set-frame-parameter nil 'roost-task (roost--key task))
   (roost--leave-side-window))
+
+(defun roost--rename-perspective (task)
+  "Name the current perspective, when it is TASK's, for what TASK is called now.
+perspective.el renames no other, so one that wasn't current when TASK
+was renamed takes the name when TASK is next opened."
+  (let ((name (roost--perspective-name task t)))
+    (when (and (fboundp 'persp-rename)
+               (equal (persp-current-name) (roost--perspective-name task))
+               (not (member name (persp-names))))
+      (persp-rename name))))
+
+(defun roost--rename-workspace (old new)
+  "Name the workspace of task OLD for NEW, the same task renamed.
+That is its tab in each frame, or its perspective where that is current."
+  (dolist (frame (frame-list))
+    (with-selected-frame frame
+      (roost--rename-frame-workspace old new))))
+
+(defun roost--rename-frame-workspace (old new)
+  "Name the selected frame's workspace of task OLD for NEW, the task renamed."
+  (pcase (roost--workspace-backend)
+    ('perspective
+     ;; Each frame has perspectives of its own, which may still have
+     ;; any name the task had.
+     (cl-pushnew (roost--perspective-name old) (gethash (roost--key new) roost--perspectives)
+                 :test #'equal)
+     (roost--rename-perspective new))
+    ('tab-bar
+     ;; Not a tab of an elder namesake's, which has the plain name.
+     (let* ((tab (roost--task-tab old))
+            (name (roost--tab-name new))
+            (taken (lambda () (member name (remove tab (roost--tabs)))))
+            (namesake (car (roost--namesakes new))))
+       ;; NEW is now the eldest of its name: the namesake whose tab has
+       ;; the plain name finds its tab by its ID from now on, though
+       ;; NEW has no tab here.
+       (when (and (funcall taken) namesake (not (roost--started-before namesake new))
+                  ;; Unless that tab is another's: the namesake has its own.
+                  (not (member (roost--tab-name namesake t) (roost--tabs))))
+         (tab-bar-rename-tab (roost--tab-name namesake t)
+                             (1+ (seq-position (roost--tabs) name))))
+       (when tab
+         ;; Any other tab of that name is no task's that Roost knows.
+         (tab-bar-rename-tab (if (funcall taken) (roost--tab-name new t) name)
+                             (1+ (seq-position (roost--tabs) tab))))))))
 
 ;;;; Opening tasks
 
@@ -4147,6 +4248,21 @@ Without a status from GitHub yet, it is as its host recorded, or open."
                              (roost--field task 'name)))
     (roost--act task "stop")))
 
+;;;###autoload
+(defun roost-rename (&optional task name)
+  "Rename TASK to NAME, in Roost and on its agent's tmux window.
+Its branch and worktree keep the name it started with."
+  (interactive)
+  (setq task (roost--choose task))
+  (let* ((old (roost--field task 'name))
+         (name (string-trim (or name (read-string (format "Rename %s to: " old) old)))))
+    (cond ((not (string-match-p "[[:alnum:]]" name))
+           (user-error "Give the task a name containing letters or numbers"))
+          ((equal name old) (message "%s keeps its name" old))
+          (t (roost--act task "rename" `((name . ,name))
+                         ;; Caching the reply renames its workspace and panel.
+                         (lambda (_) (message "Renamed %s to %s" old name)))))))
+
 (defun roost--landed (task &optional measured)
   "Whether TASK's commits are all merged, as its host last measured.
 That is, in its integration branch or a pull request GitHub merged at
@@ -4328,7 +4444,8 @@ it showed before."
     ('perspective
      (when (fboundp 'persp-kill)
        (let ((persp-autokill-buffer-on-remove nil))
-         (persp-kill (roost--perspective-name task)))))
+         (persp-kill (roost--perspective-name task))))
+     (remhash (roost--key task) roost--perspectives))
     ('tab-bar
      (let ((name (roost--task-tab task)))
        (when (and name (cdr (roost--tabs)))
@@ -5214,7 +5331,8 @@ there are no tasks at all."
     "---"
     ["Stop…" roost-stop :active (roost--menu-applies-p 'roost-stop)]
     ["Resume" roost-resume :active (roost--menu-applies-p 'roost-resume)]
-    ["Details" roost-task-info :active (roost--menu-applies-p 'roost-task-info)])
+    ["Details" roost-task-info :active (roost--menu-applies-p 'roost-task-info)]
+    ["Rename…" roost-rename :active (roost--menu-applies-p 'roost-rename)])
   "Menu items acting on the task at point.")
 
 (easy-menu-define roost-task-menu nil
@@ -5256,7 +5374,7 @@ With no task at all, none of the task commands do."
 ;; `roost--stop-inapt-p': older transient doesn't say which entry it asks about.
 (dolist (command '(roost-open-task roost-shell roost-files roost-send roost-task-info roost-review
                    roost-diff roost-update roost-pr roost-merge-retire roost-retire roost-forget
-                   roost-stop roost-resume roost-goto-note))
+                   roost-stop roost-resume roost-goto-note roost-rename))
   (defalias (intern (format "roost--%s-inapt-p" (string-remove-prefix "roost-" (symbol-name command))))
     (lambda () (roost--dispatch-inapt-p command))
     (format "Whether `%s' does not apply to the task of `roost-dispatch'." command)))
@@ -5349,7 +5467,8 @@ terminal or worktree, or ask which task."
     ("t" "Shell" roost-shell :inapt-if roost--shell-inapt-p)
     ("f" "Files" roost-files :inapt-if roost--files-inapt-p)
     ("e" "Send prompt" roost-send :inapt-if roost--send-inapt-p)
-    ("i" "Details" roost-task-info :inapt-if roost--task-info-inapt-p)]
+    ("i" "Details" roost-task-info :inapt-if roost--task-info-inapt-p)
+    ("R" "Rename" roost-rename :inapt-if roost--rename-inapt-p)]
    ["Review"
     ("r" "Magit" roost-review :inapt-if roost--review-inapt-p)
     ("D" "Diff" roost-diff :inapt-if roost--diff-inapt-p)
@@ -5391,6 +5510,7 @@ terminal or worktree, or ask which task."
   "P" #'roost-pr
   "X" #'roost-forget
   "u" #'roost-update
+  "R" #'roost-rename
   "I" #'roost-task-panel-mode
   ;; Commands beyond this task, as in the dashboard and sidebar.
   "n" #'roost-next-waiting
@@ -5818,6 +5938,17 @@ same name keep drafts of their own."
       (roost--render-task-info))
     buffer))
 
+(defun roost--name-panels ()
+  "Name each task panel for its task, as `roost--task-label' says now.
+A panel's name depends on the other tasks' names too: tasks of one name
+are told apart."
+  (dolist (buffer (buffer-list))
+    (when-let* (((eq (buffer-local-value 'major-mode buffer) 'roost-task-info-mode))
+                (task (gethash (buffer-local-value 'roost--buffer-task-key buffer) roost--tasks))
+                (name (roost--task-info-buffer-name task))
+                ((not (equal name (buffer-name buffer)))))
+      (with-current-buffer buffer (rename-buffer name t)))))
+
 (defun roost-task-info-refresh ()
   "Refresh the task's status and Git statistics."
   (interactive)
@@ -5851,6 +5982,7 @@ same name keep drafts of their own."
   "P" #'roost-pr
   "X" #'roost-forget
   "u" #'roost-update
+  "R" #'roost-rename
   "n" #'roost-next-waiting
   "/" #'roost-search
   ;; As in Magit, `h' and `?' show every command.

@@ -1136,7 +1136,7 @@ def tabs(qa, repo):
             ("its tab is gone", lambda s: qa.host_label + "/" + first not in s["workspaces"]),
             ("the other's is still there", lambda s: len(s["workspaces"]) == 2)])
     finally:
-        qa.emacs.eval("(progn (tab-bar-close-other-tabs) (tab-bar-mode -1) (setq roost-workspace nil))")
+        qa.emacs.eval("(progn (tab-bar-close-other-tabs) (tab-bar-rename-tab \"\") (tab-bar-mode -1) (setq roost-workspace nil))")
         qa.settle()
 
 
@@ -1191,6 +1191,43 @@ def forget(qa, repo):
         ("and its worktree", lambda s: worktree in qa.git(repo, "worktree", "list", "--porcelain")),
         ("its agent's session is gone",
          lambda s: task["terminal"].split("/")[-1] not in qa.tmux("list-sessions", "-F", "#S"))])
+
+
+@journey("Rename a task")
+def rename(qa, repo):
+    """R renames a task: in Roost, its tab and its agent's tmux window. Its
+    branch keeps the name it started with."""
+    qa.emacs.eval("(progn (switch-to-buffer \"*scratch*\") (setq roost-workspace 'tab-bar) (tab-bar-mode 1))")
+    try:
+        name = start_task(qa, "Name me later")
+        open_task(qa, name)
+        branch = qa.git(repo, "branch", "--list", "--format=%(refname:short)", "roost/%s-*" % name)
+        qa.keys("C-c r R")
+        qa.wait("the question", lambda s: s["prompt"])
+        qa.step("Renaming asks for the name", expect=[
+            ("it names the task", lambda s: name in (s["prompt"] or "")),
+            ("its name is there to edit", lambda s: s["minibuffer"] == name)])
+        qa.keys("C-a C-k")
+        qa.type("Parser fix\r")
+        qa.wait("the new name", lambda s: qa.task(s, "Parser fix"))
+        qa.step("Renamed", expect=[
+            ("the echo area says so", lambda s: "Renamed %s to Parser fix" % name in (s["echo"] or "")),
+            ("its panel has the name", lambda s: panel_text(qa, s).startswith("Parser fix")),
+            ("so has the sidebar", lambda s: "Parser fix" in qa.window(s, "roost-sidebar-list-mode")["text"]),
+            ("and its tab", lambda s: s["workspace"] == qa.host_label + "/Parser fix"
+             and qa.host_label + "/" + name not in s["workspaces"]),
+            ("and its agent's tmux window", lambda s: "Parser fix" in qa.tmux("list-windows", "-a", "-F", "#W")),
+            ("its branch keeps its name", lambda s: branch and qa.git(repo, "branch", "--list", branch))])
+        qa.keys("C-c r l")
+        qa.type("Parser fix\r")
+        qa.wait("its terminal", lambda s: (s.get("task") or {}).get("name") == "Parser fix"
+                and selected_terminal(s))
+        qa.step("Opened by its new name", expect=[
+            ("in the tab it had", lambda s: s["workspace"] == qa.host_label + "/Parser fix"),
+            ("no tab was added", lambda s: len(s["workspaces"]) == 2)])
+    finally:
+        qa.emacs.eval("(progn (tab-bar-close-other-tabs) (tab-bar-rename-tab \"\") (tab-bar-mode -1) (setq roost-workspace nil))")
+        qa.settle()
 
 
 @journey("Fork a task's commits")
@@ -1363,7 +1400,7 @@ def dropped(qa, repo):
 
 JOURNEYS = [sweep, answer, fold, resize, merge, review, panes, shell,
             dashboard, stop_resume, retire, send, update, restart, search, frames, org, tabs,
-            forget, fork, merged, exits, unreachable, scrollback, fleet, dropped]
+            forget, rename, fork, merged, exits, unreachable, scrollback, fleet, dropped]
 
 
 def main():

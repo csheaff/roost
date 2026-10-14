@@ -35,7 +35,8 @@
          (roost--hosts-loaded t) (roost--remembered-hosts nil)
          (roost-notes-file (expand-file-name "notes.json" (nth 1 ,scratch)))
          (roost--notes nil) (roost--notes-loaded t)
-         (roost--requests nil) (roost-notify nil) (roost--current-task nil))
+         (roost--requests nil) (roost-notify nil) (roost--current-task nil)
+         (roost--perspectives (make-hash-table :test 'equal)))
      (set-frame-parameter nil 'roost-task nil)
      ;; Seeing an agent is recorded on its host too; tests that check it say so.
      (cl-letf (((symbol-function 'roost--record-seen) #'ignore)
@@ -4535,6 +4536,247 @@ Read from the layout transient keeps, whose form varies by version."
        (while (cdr (roost--tabs)) (tab-bar-close-tab))
        ;; A second tab shows the tab bar.
        (unless original-tab-bar-mode (tab-bar-mode -1))))))
+
+(ert-deftest roost-renaming-a-task-renames-its-tab-and-panel ()
+  (roost-test--isolated
+   (let* ((roost-workspace 'tab-bar)
+          (task (roost--cache-task "dev" (roost-test--task)))
+          (tabs (length (roost--tabs)))
+          (original-tab-bar-mode tab-bar-mode)
+          sent drawn-for)
+     (unwind-protect
+         (cl-letf (((symbol-function 'roost--redraw) (lambda () (setq drawn-for (roost--frame-task))))
+                   ((symbol-function 'roost--request)
+                    (lambda (_host action parameters success _failure)
+                      (push (cons action parameters) sent)
+                      (funcall success (cons (assq 'name parameters)
+                                             (assq-delete-all 'name (roost-test--task))))))
+                   ((symbol-function 'read-string)
+                    (lambda (prompt initial &rest _)
+                      (should (equal prompt "Rename fix auth to: "))
+                      ;; To edit, rather than type again.
+                      (should (equal initial "fix auth"))
+                      "  login fix ")))
+           (roost--activate-workspace task)
+           (roost--task-info-buffer task)
+           (roost-rename task)
+           (should (equal sent '(("rename" (id . "0123456789abcdef") (name . "login fix")))))
+           (setq task (gethash (roost--key task) roost--tasks))
+           (should (equal (roost--field task 'name) "login fix"))
+           (should (equal (roost--current-workspace) "dev/login fix"))
+           (should-not (member "dev/fix auth" (roost--tabs)))
+           ;; Redrawn last knowing it is the task you are in, as the
+           ;; sidebar marks it.
+           (should (equal (roost--key drawn-for) (roost--key task)))
+           (should (get-buffer "*roost: login fix*"))
+           (should-not (get-buffer "*roost: fix auth*"))
+           ;; Opened again, it is in the same tab.
+           (roost--activate-workspace task)
+           (should (= (length (roost--tabs)) (1+ tabs)))
+           ;; The same name, or none, asks nothing of its host.
+           (setq sent nil)
+           (roost-rename task "login fix ")
+           (should-error (roost-rename task " !") :type 'user-error)
+           (should-not sent))
+       (when-let* ((panel (get-buffer "*roost: login fix*"))) (kill-buffer panel))
+       (while (cdr (roost--tabs)) (tab-bar-close-tab))
+       (unless original-tab-bar-mode (tab-bar-mode -1))))))
+
+(ert-deftest roost-a-rename-from-another-emacs-renames-the-tab-and-panels ()
+  (roost-test--isolated
+   (let* ((roost-workspace 'tab-bar)
+          (task (roost--cache-task "dev" (roost-test--task)))
+          (other (roost--cache-task "dev" (cons '(name . "login fix")
+                                                (assq-delete-all 'name (roost-test--task "fedcba9876543210")))))
+          (original-tab-bar-mode tab-bar-mode)
+          panels)
+     (unwind-protect
+         (progn
+           (roost--activate-workspace task)
+           (setq panels (list (roost--task-info-buffer task) (roost--task-info-buffer other)))
+           (should (equal (mapcar #'buffer-name panels) '("*roost: fix auth*" "*roost: login fix*")))
+           ;; A poll after another Emacs renamed it.
+           (roost--cache-task "dev" (append '((name . "login fix") (renamedAt . "2026-10-03T20:05:00+00:00"))
+                                            (assq-delete-all 'name (roost-test--task))))
+           (should (equal (roost--current-workspace) "dev/login fix"))
+           (should (equal (roost--key (roost--frame-task)) (roost--key task)))
+           ;; Both panels now tell the two apart.
+           (should (equal (mapcar #'buffer-name panels)
+                          '("*roost: login fix on dev (012345)*" "*roost: login fix on dev (fedcba)*"))))
+       (mapc #'kill-buffer panels)
+       (while (cdr (roost--tabs)) (tab-bar-close-tab))
+       (unless original-tab-bar-mode (tab-bar-mode -1))))))
+
+(ert-deftest roost-renaming-one-of-two-tasks-of-a-name-keeps-each-its-tab ()
+  (roost-test--isolated
+   (let* ((roost-workspace 'tab-bar)
+          (task (lambda (id name started)
+                  (append `((name . ,name) (startedAt . ,started))
+                          (assq-delete-all 'name (roost-test--task id)))))
+          (rename (lambda (task name)
+                    (roost--cache-task "dev" (append `((name . ,name) (renamedAt . "2026-10-03T21:00:00+00:00"))
+                                                     (assq-delete-all 'name (copy-tree task))))))
+          (parser (roost--cache-task "dev" (funcall task "1111111111111111" "parser" "2026-10-03T20:00:00Z")))
+          (younger (roost--cache-task "dev" (funcall task "2222222222222222" "parser" "2026-10-03T20:01:00Z")))
+          (docs (roost--cache-task "dev" (funcall task "3333333333333333" "docs" "2026-10-03T20:02:00Z")))
+          (original-tab-bar-mode tab-bar-mode))
+     (unwind-protect
+         (progn
+           (roost--activate-workspace parser)
+           (roost--activate-workspace docs)
+           (should (equal (sort (copy-sequence (cdr (roost--tabs))) #'string<) '("dev/docs" "dev/parser")))
+           ;; The younger of two of a name, with no tab here, takes not the elder's.
+           (setq younger (funcall rename younger "spare"))
+           (should (member "dev/parser" (roost--tabs)))
+           (should-not (member "dev/spare" (roost--tabs)))
+           ;; The elder takes a younger task's name: that task's tab takes its
+           ;; ID, as it would have had, and each still finds its own.
+           (setq parser (funcall rename parser "docs"))
+           (should (equal (roost--task-tab parser) "dev/docs"))
+           (should (equal (roost--task-tab docs) "dev/docs:333333"))
+           (should (equal (sort (copy-sequence (cdr (roost--tabs))) #'string<) '("dev/docs" "dev/docs:333333")))
+           ;; So too when the elder has no tab here.
+           (let ((notes (roost--cache-task "dev" (funcall task "4444444444444444" "notes" "2026-10-03T20:03:00Z"))))
+             (roost--activate-workspace notes)
+             (setq younger (funcall rename younger "notes"))
+             (should (equal (roost--task-tab notes) "dev/notes:444444"))
+             (should-not (roost--task-tab younger))))
+       (while (cdr (roost--tabs)) (tab-bar-close-tab))
+       (unless original-tab-bar-mode (tab-bar-mode -1))))))
+
+(ert-deftest roost-a-rename-leaves-a-tab-no-task-of-the-name-has ()
+  (roost-test--isolated
+   (let* ((roost-workspace 'tab-bar)
+          (task (lambda (id name started)
+                  (append `((name . ,name) (startedAt . ,started))
+                          (assq-delete-all 'name (roost-test--task id)))))
+          (parser (roost--cache-task "dev" (funcall task "1111111111111111" "parser" "2026-10-03T20:00:00Z")))
+          (docs (roost--cache-task "dev" (funcall task "3333333333333333" "docs" "2026-10-03T20:02:00Z")))
+          (original-tab-bar-mode tab-bar-mode))
+     (unwind-protect
+         (progn
+           ;; Its tab kept its ID when an elder of its name went; you named
+           ;; another tab as a task might be.
+           (dolist (name '("dev/docs:333333" "dev/docs"))
+             (tab-bar-new-tab)
+             (tab-bar-rename-tab name))
+           (setq parser (roost--cache-task "dev" (append '((name . "docs") (renamedAt . "2026-10-03T21:00:00+00:00"))
+                                                         (assq-delete-all 'name (copy-tree parser)))))
+           (should (equal (seq-count (apply-partially #'equal "dev/docs:333333") (roost--tabs)) 1))
+           (should (member "dev/docs" (roost--tabs)))
+           (should (equal (roost--task-tab docs) "dev/docs:333333")))
+       (while (cdr (roost--tabs)) (tab-bar-close-tab))
+       (unless original-tab-bar-mode (tab-bar-mode -1))))))
+
+(ert-deftest roost-a-reply-read-before-a-rename-keeps-the-new-name ()
+  (roost-test--isolated
+   (let ((stale (roost-test--task)))
+     (roost--cache-task "dev" (copy-tree stale))
+     (roost--cache-task "dev" (append '((name . "login fix") (task . "login fix")
+                                        (renamedAt . "2026-10-03T20:05:00+00:00"))
+                                      (assq-delete-all 'name (assq-delete-all 'task (roost-test--task)))))
+     ;; As one to opening it, sent before the rename and answered after.
+     (let ((cached (roost--cache-task "dev" (cons '(status . "permission")
+                                                  (assq-delete-all 'status (copy-tree stale))))))
+       (should (equal (roost--field cached 'name) "login fix"))
+       (should (equal (roost--field cached 'task) "login fix"))
+       ;; The rest of the reply is as new as ever.
+       (should (equal (roost--field cached 'status) "permission")))
+     ;; Renamed again since, as from another Emacs, it takes that name.
+     (let ((cached (roost--cache-task "dev" (append '((name . "auth") (renamedAt . "2026-10-03T20:09:00+00:00"))
+                                                    (assq-delete-all 'name (copy-tree stale))))))
+       (should (equal (roost--field cached 'name) "auth"))))))
+
+(ert-deftest roost-a-renamed-task-keeps-its-perspective ()
+  (roost-test--isolated
+   (let* ((roost-workspace 'perspective) (persp-mode t)
+          (task (roost--cache-task "dev" (roost-test--task)))
+          (renamed (cons '(name . "login fix") (assq-delete-all 'name (copy-tree task))))
+          (names (list "main" "roost:dev:fix auth:012345"))
+          (current "main"))
+     (cl-letf (((symbol-function 'persp-names) (lambda () names))
+               ((symbol-function 'persp-current-name) (lambda () current))
+               ((symbol-function 'persp-switch)
+                (lambda (name) (unless (member name names) (push name names)) (setq current name)))
+               ((symbol-function 'persp-rename)
+                (lambda (name) (setq names (cons name (delete current names)) current name))))
+       ;; perspective.el renames only the current perspective; another is
+       ;; still found by the task's host and ID.
+       (roost--rename-workspace task renamed)
+       (should (equal names '("main" "roost:dev:fix auth:012345")))
+       (should (equal (roost--perspective-name renamed) "roost:dev:fix auth:012345"))
+       ;; Opened, it takes the new name.
+       (roost--activate-workspace renamed)
+       (should (equal current "roost:dev:login fix:012345"))
+       (should (equal names '("roost:dev:login fix:012345" "main")))
+       (should (equal (roost--perspective-name task) current))
+       ;; Renamed while current, it is renamed at once.
+       (let ((again (cons '(name . "parser fix") (assq-delete-all 'name (copy-tree renamed)))))
+         (roost--rename-workspace renamed again)
+         (should (equal current "roost:dev:parser fix:012345")))))))
+
+(ert-deftest roost-tasks-whose-ids-start-alike-keep-their-own-perspectives ()
+  (roost-test--isolated
+   (let* ((roost-workspace 'perspective) (persp-mode t)
+          (docs (roost--cache-task "dev" (cons '(name . "docs")
+                                               (assq-delete-all 'name (roost-test--task "012345fedcba9876")))))
+          (parser (roost--cache-task "dev" (cons '(name . "parser")
+                                                 (assq-delete-all 'name (roost-test--task))))))
+     (let ((names (list "main" "roost:dev:docs:012345")) (current "main"))
+       (cl-letf (((symbol-function 'persp-names) (lambda () names))
+                 ((symbol-function 'persp-current-name) (lambda () current))
+                 ((symbol-function 'persp-switch)
+                  (lambda (name) (unless (member name names) (push name names)) (setq current name)))
+                 ((symbol-function 'persp-rename)
+                  (lambda (name) (setq names (cons name (delete current names)) current name))))
+         (should (equal (roost--perspective-name docs) "roost:dev:docs:012345"))
+         ;; Not docs's, though their IDs start alike.
+         (should (equal (roost--perspective-name parser) "roost:dev:parser:012345"))
+         ;; Renamed while another perspective is current, docs keeps its
+         ;; own, and gives it its new name when opened.
+         (roost--cache-task "dev" (append '((name . "manual") (renamedAt . "2026-10-03T21:00:00+00:00"))
+                                          (assq-delete-all 'name (copy-tree docs))))
+         (setq docs (gethash (roost--key docs) roost--tasks))
+         (should (equal (roost--perspective-name docs) "roost:dev:docs:012345"))
+         (roost--activate-workspace docs)
+         (should (equal current "roost:dev:manual:012345"))
+         (should (equal names '("roost:dev:manual:012345" "main")))
+         ;; Renamed while current, at once.
+         (roost--cache-task "dev" (append '((name . "guide") (renamedAt . "2026-10-03T22:00:00+00:00"))
+                                          (assq-delete-all 'name (copy-tree docs))))
+         (should (equal current "roost:dev:guide:012345")))))))
+
+(ert-deftest roost-a-renamed-task-keeps-its-perspective-in-each-frame ()
+  ;; Batch Emacs has one frame: two lists of perspectives stand in for two
+  ;; frames' own, with the task's current in the first only.
+  (roost-test--isolated
+   (let* ((roost-workspace 'perspective) (persp-mode t)
+          (docs (roost--cache-task "dev" (cons '(name . "docs")
+                                               (assq-delete-all 'name (roost-test--task "012345fedcba9876")))))
+          (frames (list (list :names (list "main" "roost:dev:docs:012345") :current "roost:dev:docs:012345")
+                        (list :names (list "main" "roost:dev:docs:012345") :current "main")))
+          frame)
+     ;; Its ID starts as docs's does, so finding a perspective by ID is off.
+     (roost--cache-task "dev" (roost-test--task))
+     (cl-letf (((symbol-function 'persp-names) (lambda () (plist-get frame :names)))
+               ((symbol-function 'persp-current-name) (lambda () (plist-get frame :current)))
+               ((symbol-function 'persp-rename)
+                (lambda (name)
+                  (plist-put frame :names (cons name (delete (plist-get frame :current) (plist-get frame :names))))
+                  (plist-put frame :current name))))
+       (dolist (name '("manual" "guide"))
+         (let* ((old (gethash (roost--key docs) roost--tasks))
+                (new (cons `(name . ,name) (assq-delete-all 'name (copy-tree old)))))
+           (puthash (roost--key docs) new roost--tasks)
+           (dolist (each frames)
+             (setq frame each)
+             (roost--rename-frame-workspace old new))))
+       (setq frame (nth 0 frames))
+       (should (equal (plist-get frame :current) "roost:dev:guide:012345"))
+       ;; The other frame's still has the name docs first had.
+       (setq frame (nth 1 frames))
+       (should (equal (roost--perspective-name (gethash (roost--key docs) roost--tasks))
+                      "roost:dev:docs:012345"))))))
 
 (ert-deftest roost-workspace-backend-is-chosen-automatically ()
   (roost-test--isolated

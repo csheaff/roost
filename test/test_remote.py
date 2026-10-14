@@ -1462,6 +1462,49 @@ class Lifecycle(unittest.TestCase):
         self.assertFalse(own.exists())
         self.assertFalse(roost.ref_exists(self.repo, "worktree-probe"))
 
+    def test_renaming_a_task_names_its_window_and_keeps_its_branch(self):
+        task = self.create(name="parser")
+        store = roost.Store(str(self.state))
+        seen = self.request("seen", id=task["id"], updatedAt=store.read(task["id"])["updatedAt"])["result"]
+        window = lambda: roost.tmux(self.socket, "display-message", "-p", "-t", task["windowId"],
+                                    "#{window_name}").stdout.strip()
+        reply = self.request("rename", id=task["id"], name="  fix #12 in the parser ")
+        self.assertTrue(reply["ok"], reply)
+        renamed = reply["result"]
+        self.assertTrue(renamed["live"])
+        self.assertEqual(renamed["name"], "fix #12 in the parser")
+        self.assertTrue(renamed["renamedAt"])
+        # Started without a prompt, it is described by its name.
+        self.assertEqual(renamed["task"], "fix #12 in the parser")
+        self.assertEqual((renamed["branch"], renamed["worktree"]), (task["branch"], task["worktree"]))
+        self.assertEqual(window(), "fix #12 in the parser")
+        self.assertTrue(self.request("rename", id=task["id"], name="-v for the parser")["ok"])
+        self.assertEqual(window(), "-v for the parser")
+        self.assertTrue(self.request("rename", id=task["id"], name="fix #12 in the parser")["ok"])
+        listed = self.request("list")["result"][0]
+        self.assertEqual(listed["name"], "fix #12 in the parser")
+        # Not an event: you have still seen it.
+        self.assertEqual((listed["seen"], listed["updatedAt"]), (seen["seen"], seen["updatedAt"]))
+        for name in ("", " ", "!!!", "tab\there", None):
+            with self.subTest(name=name):
+                self.assertFalse(self.request("rename", id=task["id"], name=name)["ok"])
+        # tmux not answering is no reason to think the window gone: try again.
+        with patch.object(roost, "pane_inventory", return_value=None):
+            self.assertIn("tmux did not answer", self.request("rename", id=task["id"], name="parser")["error"])
+        self.assertEqual(store.read(task["id"])["name"], "fix #12 in the parser")
+        # A stopped task has no window to name; the one it resumes in has its name.
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        self.assertIs(self.request("rename", id=task["id"], name="parser fix")["result"]["live"], False)
+        self.request("resume", id=task["id"])
+        task = self.wait(task, "ready")
+        self.assertEqual(window(), "parser fix")
+        # A prompt stays the prompt, though the task was named after it.
+        for prompt in ("Write the docs", "docs"):
+            with self.subTest(prompt=prompt):
+                prompted = self.create(name="docs", prompt=prompt)
+                self.assertEqual(self.request("rename", id=prompted["id"], name="manual")["result"]["task"],
+                                 prompt)
+
     def test_seen_is_recorded_for_every_emacs_until_the_next_event(self):
         task = self.create()
         record = self.wait(task, "ready")
