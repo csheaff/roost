@@ -4615,7 +4615,13 @@ Read from the layout transient keeps, whose form varies by version."
            (setq parser (funcall rename parser "docs"))
            (should (equal (roost--task-tab parser) "dev/docs"))
            (should (equal (roost--task-tab docs) "dev/docs:333333"))
-           (should (equal (sort (copy-sequence (cdr (roost--tabs))) #'string<) '("dev/docs" "dev/docs:333333"))))
+           (should (equal (sort (copy-sequence (cdr (roost--tabs))) #'string<) '("dev/docs" "dev/docs:333333")))
+           ;; So too when the elder has no tab here.
+           (let ((notes (roost--cache-task "dev" (funcall task "4444444444444444" "notes" "2026-10-03T20:03:00Z"))))
+             (roost--activate-workspace notes)
+             (setq younger (funcall rename younger "notes"))
+             (should (equal (roost--task-tab notes) "dev/notes:444444"))
+             (should-not (roost--task-tab younger))))
        (while (cdr (roost--tabs)) (tab-bar-close-tab))
        (unless original-tab-bar-mode (tab-bar-mode -1))))))
 

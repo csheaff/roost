@@ -1381,15 +1381,17 @@ That is its tab in each frame, or its perspective where that is current."
         ('perspective (roost--rename-perspective new))
         ('tab-bar
          ;; Not a tab of an elder namesake's, which has the plain name.
-         (when-let* ((tab (roost--task-tab old)))
-           (let* ((name (roost--tab-name new))
-                  (taken (lambda () (member name (remove tab (roost--tabs)))))
-                  (namesake (car (roost--namesakes new))))
-             ;; NEW is now the eldest of its name: the namesake whose tab
-             ;; has the plain name finds its tab by its ID from now on.
-             (when (and (funcall taken) namesake (not (roost--started-before namesake new)))
-               (tab-bar-rename-tab (roost--tab-name namesake t)
-                                   (1+ (seq-position (roost--tabs) name))))
+         (let* ((tab (roost--task-tab old))
+                (name (roost--tab-name new))
+                (taken (lambda () (member name (remove tab (roost--tabs)))))
+                (namesake (car (roost--namesakes new))))
+           ;; NEW is now the eldest of its name: the namesake whose tab has
+           ;; the plain name finds its tab by its ID from now on, though
+           ;; NEW has no tab here.
+           (when (and (funcall taken) namesake (not (roost--started-before namesake new)))
+             (tab-bar-rename-tab (roost--tab-name namesake t)
+                                 (1+ (seq-position (roost--tabs) name))))
+           (when tab
              ;; Any other tab of that name is no task's that Roost knows.
              (tab-bar-rename-tab (if (funcall taken) (roost--tab-name new t) name)
                                  (1+ (seq-position (roost--tabs) tab))))))))))
