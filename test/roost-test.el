@@ -541,6 +541,48 @@
        (roost--when-out-of-minibuffer (lambda () (push 'again shown)))
        (should (equal shown '(again shown)))))))
 
+(ert-deftest roost-opening-a-task-quits-a-question-left-open ()
+  ;; A question left open in the minibuffer, which vertico-posframe hides
+  ;; once you click elsewhere and C-g there leaves open, held back every
+  ;; task you opened, unseen: clicks in the sidebar did nothing.
+  (roost-test--isolated
+   (let ((depth 2) (recursion 2) (in-minibuffer nil) quit later requested said)
+     (cl-letf (((symbol-function 'active-minibuffer-window) (lambda () (> depth 0)))
+               ((symbol-function 'minibuffer-depth) (lambda () depth))
+               ((symbol-function 'recursion-depth) (lambda () recursion))
+               ((symbol-function 'minibufferp) (lambda (&rest _) in-minibuffer))
+               ((symbol-function 'minibuffer-prompt) (lambda () "M-x "))
+               ((symbol-function 'minibuffer-quit-recursive-edit)
+                (lambda (levels) (setq quit levels depth 0 recursion 0) (throw 'quit nil)))
+               ((symbol-function 'run-at-time) (lambda (_time _repeat function) (setq later function)))
+               ((symbol-function 'roost--request) (lambda (_host action &rest _) (push action requested)))
+               ((symbol-function 'message) (lambda (format &rest args) (push (apply #'format format args) said))))
+       (let ((this-command 'roost-dashboard-mouse-open))
+         (catch 'quit (roost-open-task (roost-test--task)))
+         ;; Each of them, before the task: quitting one gives back the
+         ;; windows it found.
+         (should (equal quit 2))
+         (should-not requested))
+       (funcall later)
+       (should (equal requested '("inspect")))
+       (should (equal said '("Quit 2 questions left open in the minibuffer")))
+       (setq depth 1 recursion 1 quit nil requested nil)
+       (let ((this-command 'roost-open-task))
+         ;; Not the one you are answering, ...
+         (setq in-minibuffer t)
+         (roost-open-task (roost-test--task))
+         ;; ... nor below a recursive edit of another kind, such as the
+         ;; debugger's, ...
+         (setq in-minibuffer nil recursion 2)
+         (roost-open-task (roost-test--task)))
+       ;; ... nor when the task is opened other than by a command of
+       ;; Roost's, as when a host replies.
+       (setq recursion 1)
+       (let ((this-command nil))
+         (roost-open-task (roost-test--task)))
+       (should-not quit)
+       (should (equal requested '("inspect" "inspect" "inspect")))))))
+
 (ert-deftest roost-clicking-a-task-no-longer-listed-does-not-ask-which ()
   ;; The click asked "Task: " in the minibuffer, unseen, and every later
   ;; open waited behind it.

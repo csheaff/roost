@@ -1559,20 +1559,52 @@ not another task's: they keep their grid."
   "Call FUNCTION now, or once the minibuffer you are in is done.
 A task is shown when its host replies, which can be while you answer a
 question that came up since; changing windows then would send your
-answer to the task's terminal."
+answer to the task's terminal.  A question you had left open when you
+asked for the task is quit first, by `roost--quit-questions-left-open'."
   (if (not (active-minibuffer-window))
       (funcall function)
-    (message "Waiting for you to answer the question in the minibuffer; C-g drops it")
     (letrec ((done (lambda ()
                      (remove-hook 'minibuffer-exit-hook done)
                      ;; Once its window has given the selection back.
                      (run-at-time 0 nil #'roost--when-out-of-minibuffer function))))
       (add-hook 'minibuffer-exit-hook done))))
 
+(defun roost--questions-left-open ()
+  "How many questions you left open in the minibuffer for this Roost command.
+That is, the command was given from another window, as by clicking a
+task in the sidebar.  A completion popup, such as vertico-posframe's,
+hides a question you leave, and \\[keyboard-quit] there leaves it open.
+Nil when you are in the minibuffer, or when a recursive edit of another
+kind, such as the debugger's, is open as well."
+  (and (symbolp this-command)
+       (string-prefix-p "roost-" (symbol-name this-command))
+       (active-minibuffer-window)
+       (not (minibufferp (window-buffer (selected-window)) t))
+       (= (recursion-depth) (minibuffer-depth))
+       (minibuffer-depth)))
+
+(defun roost--quit-questions-left-open (then)
+  "Quit the questions you left open in the minibuffer, then call THEN.
+Return nil, without calling THEN, when there are none.  Otherwise this
+doesn't return: quitting a question gives back the windows it found,
+which would undo what THEN shows, so THEN runs after."
+  (when-let* ((count (roost--questions-left-open)))
+    (let ((questions (if (> count 1)
+                         (format "%d questions" count)
+                       (format "\"%s\"" (truncate-string-to-width
+                                         (string-trim (or (minibuffer-prompt) "")) 50 nil nil "…")))))
+      (run-at-time 0 nil (lambda ()
+                           (message "Quit %s left open in the minibuffer" questions)
+                           (funcall then)))
+      (minibuffer-quit-recursive-edit count))))
+
 (defun roost-open-task (&optional task)
   "Validate TASK's tmux ownership, then restore its perspective and terminal."
   (interactive)
   (setq task (roost--choose task))
+  ;; Otherwise a question you left open would hold the task back, unseen,
+  ;; until you answered it.
+  (roost--quit-questions-left-open (lambda () (roost-open-task task)))
   (let* ((generation (cl-incf roost--open-generation))
          (window (if (window-minibuffer-p) (minibuffer-selected-window) (selected-window)))
          (shown (window-buffer window)))
@@ -3868,6 +3900,7 @@ stamp, so polls would not notice it."
   "Open or reuse a shell beside the agent, in TASK's worktree."
   (interactive)
   (setq task (roost--choose task))
+  (roost--quit-questions-left-open (lambda () (roost-shell task)))
   (let ((generation (cl-incf roost--open-generation)))
     (roost--act task "shell" nil
                 (lambda (updated)

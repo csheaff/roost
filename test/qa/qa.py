@@ -1053,6 +1053,24 @@ def search(qa, repo):
     qa.step("RET opens its task", expect=[("its panel beside it", lambda s: panel_text(qa, s).startswith(name))])
 
 
+@journey("Open a task with a question left open")
+def question_left(qa, repo):
+    """A question you leave open in the minibuffer, by clicking in the
+    sidebar, doesn't hold back the task you click: a completion popup such
+    as vertico-posframe's hides the question then."""
+    first = start_task(qa, "List the notes")
+    second = start_task(qa, "Count the notes")
+    open_task(qa, first)
+    qa.keys("M-x")
+    qa.wait("the question", lambda s: s["prompt"])
+    qa.click_text(second, "roost-sidebar-list-mode")
+    qa.wait(second + "'s terminal", lambda s: (s.get("task") or {}).get("name") == second
+            and selected_terminal(s))
+    qa.step("Clicked another task", expect=[
+        ("the question is gone", lambda s: not s["prompt"]),
+        ("its panel is beside it", lambda s: panel_text(qa, s).startswith(second))])
+
+
 @journey("A second frame")
 def frames(qa, repo):
     """Each frame keeps its own task: what one shows, the other leaves alone."""
@@ -1399,7 +1417,7 @@ def dropped(qa, repo):
 
 
 JOURNEYS = [sweep, answer, fold, resize, merge, review, panes, shell,
-            dashboard, stop_resume, retire, send, update, restart, search, frames, org, tabs,
+            dashboard, stop_resume, retire, send, update, restart, search, question_left, frames, org, tabs,
             forget, rename, fork, merged, exits, unreachable, scrollback, fleet, dropped]
 
 
@@ -1444,6 +1462,8 @@ def main():
                 for _ in range(3):
                     if not qa.screen()["prompt"] and qa.emacs.eval("(and transient--prefix t)") != "t":
                         break
+                    # C-g quits a question only from within it.
+                    qa.emacs.eval("(when-let* ((window (active-minibuffer-window))) (select-window window))")
                     qa.keys("C-g")
                 qa.emacs.eval("(qa-fresh-start)")
                 qa.settle()

@@ -1086,6 +1086,35 @@ panel now leaves much of its column empty.
 All 225 ERT tests pass on Emacs 32 with Magit and Evil, and 141 Python
 tests pass.
 
+### A question left open, 2026-10-14
+
+On another machine (Emacs 31, perspective, vertico-posframe, recursive
+minibuffers, hosts `dev` and `nebius-0`), clicks on tasks in the sidebar
+did nothing until Emacs restarted. That Emacs had `Task: ` questions
+open in the minibuffer, none on screen.
+
+Tried in a `make qa` Emacs 32 with vertico, vertico-posframe and
+perspective added as in that configuration, and two tasks. With `M-x`
+open, a click on the other task's row hid the popup within half a
+second and the minibuffer window stayed scrolled out of sight, so the
+question was gone from the screen but still open. The task waited for
+it, as Roost holds a task back until the minibuffer is done; more clicks
+did the same, and `C-g` in the sidebar left the question open. A message
+saying so didn't show either. Showing the task anyway was no answer: a
+perspective switch left the mini-window on another minibuffer, and
+quitting the question then restored the windows it had found, with the
+first task's terminal in the second task's perspective.
+
+Opening a task from a Roost command now quits the questions you left
+open first, then opens it. Tried with one and two questions open, with
+a click, `RET` and `t`; each opened the task in its perspective, with
+its panel, and said what it quit. The new `question_left` journey fails
+without the change and passes with it, with and without vertico-posframe.
+
+Not found: what opened the first `Task: ` there, and why clicks added
+more. Here a click found its row each time; `RET` or another task key on
+a project heading asks `Task: `.
+
 ### Codex and Pi adapters
 
 Used another disposable remote `hello-service` project, an isolated registry and

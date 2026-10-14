@@ -11,12 +11,13 @@ Since 0.8.1:
   tab or perspective, and its agent's tmux window; its branch and
   worktree keep the name the task started with. Nothing to do when
   upgrading.
-- Clicking a task whose row is out of date, such as one retired
-  elsewhere, says so instead of asking "Task: " in the minibuffer, where
-  an unseen question held every later open of a task. A task that waits
-  for a question you are answering now says so. Nothing to do when
-  upgrading; if clicks do nothing now, press `C-g' until the minibuffer
-  is clear.
+- Opening a task, with a click in the sidebar or dashboard or with `RET`,
+  `l`, `n` or `t`, quits a question you left open in the minibuffer, and
+  says so. The task waited until that question was done, and a
+  completion popup such as vertico-posframe's hides a question once you
+  click away from it, where `C-g` doesn't reach it: clicks did nothing
+  until Emacs restarted. A click on a task no longer listed says so
+  rather than asking which task. Nothing to do when upgrading.
 - The sidebar shows each task's name and its status, with no dot, so
   names are cut less. The status is in its colour when there is something
   to look at, dim when the agent is only working or stopped, and left out
