@@ -4730,11 +4730,19 @@ ssh: connect to host dev port 22: Operation timed out"
                ((symbol-function 'roost-resume) (lambda (task) (push task resumed)))
                ((symbol-function 'message) (lambda (format &rest args) (push (apply #'format format args) messages))))
        (roost-open-task task)
+       (accept-process-output nil 0.05)
        (should (equal asked '("fix auth's agent isn't running.  Resume its conversation? ")))
        (should (equal resumed (list task)))
        (setq answer nil)
        (roost-open-task task)
+       (accept-process-output nil 0.05)
        (should (= (length resumed) 1))
+       ;; Not asked once you have opened something else meanwhile.
+       (setq asked nil answer t)
+       (roost-open-task task)
+       (cl-incf roost--open-generation)
+       (accept-process-output nil 0.05)
+       (should-not asked)
        ;; Other failures are reported, not offered.
        (setq reply "ssh: connect to host dev port 22: Operation timed out" asked nil)
        (roost-open-task task)
@@ -4748,6 +4756,7 @@ ssh: connect to host dev port 22: Operation timed out"
            (should-not asked)
            (setq minibuffer nil)
            (run-hooks 'minibuffer-exit-hook)
+           (accept-process-output nil 0.05)
            (accept-process-output nil 0.05)
            (should asked)))))))
 

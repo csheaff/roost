@@ -1497,12 +1497,20 @@ answer to the task's terminal."
                        (lambda ()
                          (if (and (= generation roost--open-generation)
                                   (string-prefix-p "The agent's tmux window is gone" err))
-                             (when (progn
-                                     ;; You know now; `n' moves on to the next.
-                                     (roost--mark-seen (or (gethash (roost--key task) roost--tasks) task))
-                                     (y-or-n-p (format "%s's agent isn't running.  Resume its conversation? "
-                                                     (roost--field task 'name))))
-                               (roost-resume task))
+                             (progn
+                               ;; You know now; `n' moves on to the next.
+                               (roost--mark-seen (or (gethash (roost--key task) roost--tasks) task))
+                               ;; Asked from a timer, not from this reply's
+                               ;; sentinel, and only if you haven't moved on
+                               ;; or started a question since: a prompt nobody
+                               ;; saw held every later switch behind it.
+                               (run-at-time
+                                0 nil #'roost--when-out-of-minibuffer
+                                (lambda ()
+                                  (when (and (= generation roost--open-generation)
+                                             (y-or-n-p (format "%s's agent isn't running.  Resume its conversation? "
+                                                               (roost--field task 'name))))
+                                    (roost-resume task)))))
                            (message "Roost %s: %s" (roost--host-label (roost--field task 'host)) err))))))))
 
 ;;;###autoload

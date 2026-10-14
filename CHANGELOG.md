@@ -6,6 +6,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.8.1:
 
+- Opening a task whose agent has stopped asks to resume it only if you
+  haven't opened another task or started a question since, and asks from a
+  timer, not inside the host's reply. A question that came up unseen could
+  otherwise sit under the next task switch, which then waited behind it.
+  Nothing to do when upgrading.
 - Opening a task on this machine, and Roost's other requests here, no
   longer take seconds, or a minute, when the temporary directory is
   crowded. Python searched that directory for the modules the helper
