@@ -1293,26 +1293,32 @@ has none, the name for one made now."
       ('perspective (and perspective 'perspective))
       ('tab-bar 'tab-bar))))
 
+(defun roost--started-before (a b)
+  "Whether task A started before task B; their IDs order tasks started at once."
+  (let ((a-started (or (roost--field a 'startedAt) ""))
+        (b-started (or (roost--field b 'startedAt) "")))
+    (if (equal a-started b-started)
+        (string< (roost--field a 'id) (roost--field b 'id))
+      (string< a-started b-started))))
+
+(defun roost--namesakes (task)
+  "The other tasks on TASK's host with its name, eldest first."
+  (sort (seq-filter (lambda (other)
+                      (and (equal (roost--field other 'host) (roost--field task 'host))
+                           (equal (roost--field other 'name) (roost--field task 'name))
+                           (not (equal (roost--field other 'id) (roost--field task 'id)))))
+                    (roost-tasks))
+        #'roost--started-before))
+
 (defun roost--tab-name (task &optional with-id)
   "Name for a new tab of TASK's: its host and name.
 With WITH-ID, or when a task of the same name started before it, its
 ID follows the name."
-  (let* ((host (roost--field task 'host))
-         (name (roost--field task 'name))
-         (id (roost--field task 'id))
-         (started (or (roost--field task 'startedAt) ""))
-         (elder (and (not with-id)
-                     (seq-find (lambda (other)
-                                 (let ((other-started (or (roost--field other 'startedAt) "")))
-                                   (and (equal (roost--field other 'host) host)
-                                        (equal (roost--field other 'name) name)
-                                        (not (equal (roost--field other 'id) id))
-                                        (if (equal other-started started)
-                                            (string< (roost--field other 'id) id)
-                                          (string< other-started started)))))
-                               (roost-tasks)))))
-    (format "%s/%s%s" (roost--host-label host) name
-            (if (or with-id elder) (concat ":" (substring id 0 6)) ""))))
+  (let ((elder (and (not with-id)
+                    (seq-find (lambda (other) (roost--started-before other task))
+                              (roost--namesakes task)))))
+    (format "%s/%s%s" (roost--host-label (roost--field task 'host)) (roost--field task 'name)
+            (if (or with-id elder) (concat ":" (substring (roost--field task 'id) 0 6)) ""))))
 
 (defun roost--tabs ()
   "Names of the tab bar's tabs."
@@ -1374,16 +1380,19 @@ That is its tab in each frame, or its perspective where that is current."
       (pcase (roost--workspace-backend)
         ('perspective (roost--rename-perspective new))
         ('tab-bar
-         (let* ((tabs (roost--tabs))
-                (tab (seq-find (lambda (name) (member name tabs))
-                               (list (roost--tab-name old t)
-                                     (format "%s/%s" (roost--host-label (roost--field old 'host))
-                                             (roost--field old 'name))))))
-           (when tab
-             (let ((name (roost--tab-name new)))
-               ;; Another tab of that name is another task's.
-               (tab-bar-rename-tab (if (member name (remove tab tabs)) (roost--tab-name new t) name)
-                                   (1+ (seq-position tabs tab)))))))))))
+         ;; Not a tab of an elder namesake's, which has the plain name.
+         (when-let* ((tab (roost--task-tab old)))
+           (let* ((name (roost--tab-name new))
+                  (taken (lambda () (member name (remove tab (roost--tabs)))))
+                  (namesake (car (roost--namesakes new))))
+             ;; NEW is now the eldest of its name: the namesake whose tab
+             ;; has the plain name finds its tab by its ID from now on.
+             (when (and (funcall taken) namesake (not (roost--started-before namesake new)))
+               (tab-bar-rename-tab (roost--tab-name namesake t)
+                                   (1+ (seq-position (roost--tabs) name))))
+             ;; Any other tab of that name is no task's that Roost knows.
+             (tab-bar-rename-tab (if (funcall taken) (roost--tab-name new t) name)
+                                 (1+ (seq-position (roost--tabs) tab))))))))))
 
 ;;;; Opening tasks
 

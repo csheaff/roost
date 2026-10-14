@@ -4588,6 +4588,37 @@ Read from the layout transient keeps, whose form varies by version."
        (while (cdr (roost--tabs)) (tab-bar-close-tab))
        (unless original-tab-bar-mode (tab-bar-mode -1))))))
 
+(ert-deftest roost-renaming-one-of-two-tasks-of-a-name-keeps-each-its-tab ()
+  (roost-test--isolated
+   (let* ((roost-workspace 'tab-bar)
+          (task (lambda (id name started)
+                  (append `((name . ,name) (startedAt . ,started))
+                          (assq-delete-all 'name (roost-test--task id)))))
+          (rename (lambda (task name)
+                    (roost--cache-task "dev" (append `((name . ,name) (renamedAt . "2026-10-03T21:00:00+00:00"))
+                                                     (assq-delete-all 'name (copy-tree task))))))
+          (parser (roost--cache-task "dev" (funcall task "1111111111111111" "parser" "2026-10-03T20:00:00Z")))
+          (younger (roost--cache-task "dev" (funcall task "2222222222222222" "parser" "2026-10-03T20:01:00Z")))
+          (docs (roost--cache-task "dev" (funcall task "3333333333333333" "docs" "2026-10-03T20:02:00Z")))
+          (original-tab-bar-mode tab-bar-mode))
+     (unwind-protect
+         (progn
+           (roost--activate-workspace parser)
+           (roost--activate-workspace docs)
+           (should (equal (sort (copy-sequence (cdr (roost--tabs))) #'string<) '("dev/docs" "dev/parser")))
+           ;; The younger of two of a name, with no tab here, takes not the elder's.
+           (setq younger (funcall rename younger "spare"))
+           (should (member "dev/parser" (roost--tabs)))
+           (should-not (member "dev/spare" (roost--tabs)))
+           ;; The elder takes a younger task's name: that task's tab takes its
+           ;; ID, as it would have had, and each still finds its own.
+           (setq parser (funcall rename parser "docs"))
+           (should (equal (roost--task-tab parser) "dev/docs"))
+           (should (equal (roost--task-tab docs) "dev/docs:333333"))
+           (should (equal (sort (copy-sequence (cdr (roost--tabs))) #'string<) '("dev/docs" "dev/docs:333333"))))
+       (while (cdr (roost--tabs)) (tab-bar-close-tab))
+       (unless original-tab-bar-mode (tab-bar-mode -1))))))
+
 (ert-deftest roost-a-reply-read-before-a-rename-keeps-the-new-name ()
   (roost-test--isolated
    (let ((stale (roost-test--task)))
