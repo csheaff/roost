@@ -4696,6 +4696,18 @@ Read from the layout transient keeps, whose form varies by version."
          (roost--rename-workspace renamed again)
          (should (equal current "roost:dev:parser fix:012345")))))))
 
+(ert-deftest roost-tasks-whose-ids-start-alike-keep-their-own-perspectives ()
+  (roost-test--isolated
+   (let* ((roost-workspace 'perspective) (persp-mode t)
+          (docs (roost--cache-task "dev" (cons '(name . "docs")
+                                               (assq-delete-all 'name (roost-test--task "012345fedcba9876")))))
+          (parser (roost--cache-task "dev" (cons '(name . "parser")
+                                                 (assq-delete-all 'name (roost-test--task))))))
+     (cl-letf (((symbol-function 'persp-names) (lambda () '("main" "roost:dev:docs:012345"))))
+       (should (equal (roost--perspective-name docs) "roost:dev:docs:012345"))
+       ;; Not docs's, though their IDs start alike.
+       (should (equal (roost--perspective-name parser) "roost:dev:parser:012345"))))))
+
 (ert-deftest roost-workspace-backend-is-chosen-automatically ()
   (roost-test--isolated
    (let ((roost-workspace 'auto) (persp-mode nil) (tab-bar-mode nil))

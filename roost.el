@@ -1214,6 +1214,14 @@ has none, the name for one made now."
          (name (format "roost:%s:%s:%s" host (roost--field task 'name) id))
          (names (and (not new) (bound-and-true-p persp-mode) (fboundp 'persp-names) (persp-names))))
     (or (and names (not (member name names))
+             ;; The name holds the ID's first characters only: none
+             ;; another task's ID starts with, or its perspective could be
+             ;; the one found.
+             (not (seq-some (lambda (other)
+                              (and (equal (roost--field other 'host) (roost--field task 'host))
+                                   (not (equal (roost--field other 'id) (roost--field task 'id)))
+                                   (string-prefix-p id (roost--field other 'id))))
+                            (roost-tasks)))
              (seq-find (lambda (other)
                          (and (string-prefix-p (format "roost:%s:" host) other)
                               (string-suffix-p (concat ":" id) other)))
