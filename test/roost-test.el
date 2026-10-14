@@ -1731,11 +1731,19 @@
          (roost--render-sidebar)
          ;; Each project's heading ends with a + that starts a task in it.
          (should (member (concat "dev · ledger" (make-string 17 ?\s) "+") lines))
-         ;; The current task is marked; statuses are right-aligned.
-         (should (member "▸● budget-alerts    permission" lines))
-         (should (= (string-width "▸● budget-alerts    permission") roost-sidebar-width))
+         ;; The current task is marked to the window's edge; statuses are
+         ;; right-aligned, with no dot.
+         (should (member (concat " budget-alerts" (make-string 6 ?\s) "permission") lines))
+         (should-not (string-match-p "●" (buffer-string)))
+         (goto-char (roost--task-row '("dev" "1111111111111111")))
+         (should (memq 'roost-current (ensure-list (get-text-property (point) 'face))))
+         (should (memq 'roost-current (ensure-list (get-text-property (line-end-position) 'face))))
+         (should (eq (face-attribute 'roost-current :extend) t))
+         (forward-line)
+         (should-not (memq 'roost-current (ensure-list (get-text-property (point) 'face))))
          ;; Long names are cut to fit, keeping the status when it fits.
-         (should (seq-some (lambda (line) (and (string-prefix-p " ● a-task" line)
+         (should (seq-some (lambda (line) (and (string-prefix-p " a-task" line)
+                                                (string-suffix-p "running" line)
                                                 (string-match-p "…" line)
                                                 (<= (string-width line) roost-sidebar-width)))
                            lines)))
@@ -2513,8 +2521,79 @@ Read from the layout transient keeps, whose form varies by version."
           (roost--current-task (roost--key a)) (roost-workspace 'perspective)
           (persp-mode t))
      (cl-letf (((symbol-function 'persp-current-name) (lambda () (roost--perspective-name b))))
-       (should (string-prefix-p " " (roost--sidebar-row a 30)))
-       (should (string-prefix-p "▸" (roost--sidebar-row b 30)))))))
+       (should-not (memq 'roost-current (ensure-list (get-text-property 0 'face (roost--sidebar-row a 30)))))
+       (should (memq 'roost-current (ensure-list (get-text-property 0 'face (roost--sidebar-row b 30)))))))))
+
+(ert-deftest roost-the-sidebar-says-a-status-only-when-it-tells-you-something ()
+  ;; One signal for each task, the status: in its colour when there is
+  ;; something to look at, dim when there is only something to know, and
+  ;; none for an agent you have seen that waits for nothing.
+  (roost-test--isolated
+   (let* ((task (lambda (id name status &optional seen)
+                  (let ((task (roost--cache-task "dev" (append `((name . ,name) (repo . "/srv/ledger"))
+                                                               (roost-test--task id status)))))
+                    (when seen (puthash (roost--key task) (roost--field task 'updatedAt) roost--seen))
+                    task)))
+          (asking (funcall task "1111111111111111" "budget-alerts" "permission"))
+          (working (funcall task "2222222222222222" "parser-rewrite-for-speed" "running"))
+          (finished (funcall task "3333333333333333" "docs" "ready"))
+          (seen (funcall task "4444444444444444" "cleanup" "ready" t))
+          (failed (funcall task "5555555555555555" "deploy" "failed" t))
+          (word-face (lambda (row word)
+                       (when (string-match (concat word "\\'") row)
+                         (get-text-property (match-beginning 0) 'face row)))))
+     (should (eq (funcall word-face (roost--sidebar-row asking 30) "permission") 'roost-status-permission))
+     (should (eq (funcall word-face (roost--sidebar-row working 30) "running") 'roost-dim))
+     (should (eq (funcall word-face (roost--sidebar-row finished 30) "ready") 'roost-status-ready))
+     (should (eq (funcall word-face (roost--sidebar-row failed 30) "failed") 'roost-status-failed))
+     (should (equal (substring-no-properties (roost--sidebar-row seen 30)) " cleanup"))
+     ;; Where there is little room, what you should look at still shows,
+     ;; and the rest gives way to the name.
+     (let ((row (roost--sidebar-row asking 16)))
+       (should (string-suffix-p "permission" row))
+       (should (<= (string-width row) 16)))
+     (should-not (string-match-p "running" (roost--sidebar-row working 16)))
+     (should (<= (string-width (roost--sidebar-row asking 12)) 12))
+     ;; A name another task shares keeps the ID that tells them apart.
+     (let ((twin (funcall task "6666666666666666" "budget-alerts" "permission")))
+       (dolist (width '(12 16 30))
+         (let ((row (roost--sidebar-row twin width)))
+           (should (<= (string-width row) width))
+           (should (string-match-p "666666" row))
+           (should (eq (get-text-property (1- (length row)) 'face row) 'roost-status-permission)))))
+     ;; Drawn by an earlier Roost with moving lights, a sidebar gives back
+     ;; their margin and lights when drawn again.
+     (roost-test--with-canvases t
+       (let ((buffer (get-buffer-create " *roost sidebar before*")))
+         (unwind-protect
+             (save-window-excursion
+               (delete-other-windows)
+               (with-current-buffer buffer (roost-sidebar-list-mode))
+               (let ((window (roost--show-side-window buffer 'left 30)))
+                 (with-current-buffer buffer
+                   (roost--light-margins)
+                   (puthash (cons 'sidebar (roost--key asking)) (list :motion 'pulse :buffer buffer) roost--lights)
+                   (should (equal (window-margins window) '(2)))
+                   (roost--render-sidebar)
+                   (should (equal (window-margins window) '(nil)))
+                   (should (= left-margin-width 0))
+                   (should-not (memq #'roost--light-margins-shown window-buffer-change-functions))
+                   (should-not (gethash (cons 'sidebar (roost--key asking)) roost--lights))
+                   (should (window--preserve-size window t)))))
+           (kill-buffer buffer))))
+     ;; Moving lights or not, the sidebar has no light and no margin for one.
+     (roost-test--with-canvases t
+       (let ((buffer (get-buffer-create " *roost sidebar words*")))
+         (unwind-protect
+             (save-window-excursion
+               (delete-other-windows)
+               (with-current-buffer buffer (roost-sidebar-list-mode))
+               (let ((window (roost--show-side-window buffer 'left 30)))
+                 (with-current-buffer buffer
+                   (roost--render-sidebar)
+                   (should-not (text-property-not-all (point-min) (point-max) 'display nil))
+                   (should (equal (window-margins window) '(nil))))))
+           (kill-buffer buffer)))))))
 
 (ert-deftest roost-tasks-of-one-name-show-their-ids ()
   (roost-test--isolated
@@ -3206,6 +3285,7 @@ Read from the layout transient keeps, whose form varies by version."
    (roost-test--with-canvases t
      (let ((task (roost--cache-task "dev" (roost-test--task "1111111111111111" "permission")))
            (default (face-background 'default))
+           (foreground (face-foreground 'default))
            (inherit (and (facep 'margin) (face-attribute 'margin :inherit))))
        (unwind-protect
            (with-temp-buffer
@@ -3213,9 +3293,83 @@ Read from the layout transient keeps, whose form varies by version."
              (when (facep 'margin) (set-face-attribute 'margin nil :inherit 'unspecified))
              (roost--status-light task 'sidebar)
              (should (= (plist-get (gethash (cons 'sidebar (roost--key task)) roost--lights) :background)
-                        (roost--light-pixel "#123456"))))
+                        (roost--light-pixel "#123456")))
+             ;; A running agent's light is in the text's colour, not mid-gray.
+             (set-face-foreground 'default "#ABCDEF")
+             (let ((running (roost--cache-task "dev" (roost-test--task "2222222222222222" "running"))))
+               (roost--status-light running 'sidebar)
+               (should (= (plist-get (gethash (cons 'sidebar (roost--key running)) roost--lights) :color)
+                          (roost--light-pixel "#ABCDEF")))))
+         (set-face-foreground 'default foreground)
          (set-face-background 'default default)
          (when (facep 'margin) (set-face-attribute 'margin nil :inherit inherit)))))))
+
+(ert-deftest roost-status-lights-leave-the-sidebar-its-width ()
+  ;; The lights' margin narrows the sidebar's text, after which Emacs no
+  ;; longer kept its width: it grew and shrank with the frame.
+  (roost-test--isolated
+   (roost-test--with-canvases t
+     (let ((buffer (get-buffer-create " *roost light margins*")))
+       (unwind-protect
+           (save-window-excursion
+             (delete-other-windows)
+             (let ((window (roost--show-side-window buffer 'left 30)))
+               (should (window--preserve-size window t))
+               (with-current-buffer buffer (roost--light-margins))
+               (should (equal (window-margins window) '(2)))
+               (should (window--preserve-size window t))
+               (cl-letf (((symbol-function 'roost--animations-p) #'ignore))
+                 (with-current-buffer buffer (roost--light-margins)))
+               (should (equal (window-margins window) '(nil)))
+               (should (window--preserve-size window t))))
+         (kill-buffer buffer))))))
+
+(ert-deftest roost-status-lights-take-their-margin-before-a-view-is-measured ()
+  ;; Drawn first in a window with no margin yet, the dashboard fitted the
+  ;; columns the margin then took, until it was drawn again.
+  (roost-test--isolated
+   (roost-test--with-canvases t
+     (roost--cache-task "dev" (append '((name . "a-task-with-a-long-name-indeed") (repo . "/srv/ledger"))
+                                      (roost-test--task "1111111111111111" "permission")))
+     (let ((buffer (get-buffer-create " *roost light dashboard*")))
+       (unwind-protect
+           (save-window-excursion
+             (delete-other-windows)
+             (with-current-buffer buffer (roost-dashboard-mode))
+             (roost--show-side-window buffer 'left 60)
+             (with-current-buffer buffer
+               (roost--render-dashboard)
+               (let ((first (buffer-substring-no-properties (point-min) (point-max))))
+                 (roost--render-dashboard)
+                 (should (equal (buffer-substring-no-properties (point-min) (point-max)) first)))))
+         (kill-buffer buffer))))))
+
+(ert-deftest roost-the-sidebar-and-dashboard-fit-their-narrowest-window ()
+  ;; One buffer can show in windows of different widths: on a graphical
+  ;; frame with the lights' margin, and on a text frame without.
+  (roost-test--isolated
+   (roost--cache-task "dev" (append '((name . "a-task-with-a-very-long-name-indeed") (repo . "/srv/ledger"))
+                                    (roost-test--task "1111111111111111" "permission")))
+   (dolist (view '((roost-sidebar-list-mode . roost--render-sidebar)
+                   (roost-dashboard-mode . roost--render-dashboard)))
+     (let ((buffer (get-buffer-create " *roost narrowest*")))
+       (unwind-protect
+           (save-window-excursion
+             (delete-other-windows)
+             (let* ((wide (selected-window))
+                    (narrow (split-window wide nil t)))
+               (set-window-buffer narrow buffer)
+               (set-window-margins narrow 6)
+               (with-current-buffer buffer
+                 (funcall (car view))
+                 (funcall (cdr view))
+                 (let ((alone (buffer-substring-no-properties (point-min) (point-max))))
+                   ;; Shown in a wider window too, it is drawn as before.
+                   (set-window-buffer wide buffer)
+                   (should (< (roost--usable-width narrow) (roost--usable-width wide)))
+                   (funcall (cdr view))
+                   (should (equal (buffer-substring-no-properties (point-min) (point-max)) alone))))))
+         (kill-buffer buffer))))))
 
 (ert-deftest roost-status-lights-move-until-their-agents-rest ()
   (roost-test--isolated
@@ -3321,9 +3475,7 @@ Read from the layout transient keeps, whose form varies by version."
                (should (= left-margin-width 0))
                (should-not (memq #'roost--light-margins-shown window-buffer-change-functions))
                (setq on t)))
-           ;; A sidebar row whose light is in the margin has the dot's column
-           ;; for its name: 31 characters, one of them not shown.
-           (should (= (string-width (roost--sidebar-row asking 30 t)) 31))
+           ;; The sidebar has no lights, so none of its row is in a margin.
            (should (= (string-width (roost--sidebar-row asking 30)) 30)))
          ;; A margin the buffer had is kept, and there again after.
          (with-temp-buffer
@@ -4723,9 +4875,10 @@ ssh: connect to host dev port 22: Operation timed out"
   (roost-test--isolated
    (let ((task (roost--cache-task "dev" (roost-test--task nil "crashed")))
          (reply "The agent's tmux window is gone; resume the task")
-         (answer t) asked resumed messages)
+         (answer t) asked resumed messages marked)
      (cl-letf (((symbol-function 'roost--request)
                 (lambda (_host _action _params _success failure) (funcall failure reply)))
+               ((symbol-function 'roost--mark-seen) (lambda (task) (push task marked)))
                ((symbol-function 'y-or-n-p) (lambda (question) (push question asked) answer))
                ((symbol-function 'roost-resume) (lambda (task) (push task resumed)))
                ((symbol-function 'message) (lambda (format &rest args) (push (apply #'format format args) messages))))
@@ -4738,11 +4891,13 @@ ssh: connect to host dev port 22: Operation timed out"
        (accept-process-output nil 0.05)
        (should (= (length resumed) 1))
        ;; Not asked once you have opened something else meanwhile.
-       (setq asked nil answer t)
+       ;; Nor is the task marked seen, which would hide its notification.
+       (setq asked nil answer t marked nil)
        (roost-open-task task)
        (cl-incf roost--open-generation)
        (accept-process-output nil 0.05)
        (should-not asked)
+       (should-not marked)
        ;; Other failures are reported, not offered.
        (setq reply "ssh: connect to host dev port 22: Operation timed out" asked nil)
        (roost-open-task task)

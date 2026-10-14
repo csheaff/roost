@@ -284,8 +284,9 @@ to show all of it in that font.")
   "A task waiting for a permission answer in its terminal.")
 (defface roost-status-ready '((t :inherit success))
   "A task waiting for your next prompt.")
-(defface roost-status-running '((t :inherit font-lock-keyword-face))
-  "A task whose agent is working.")
+(defface roost-status-running '((t))
+  "A task whose agent is working.
+Plain, so that a coloured light always means the agent needs you.")
 (defface roost-status-failed '((t :inherit error))
   "A task whose agent failed or disappeared.")
 (defface roost-status-inactive '((t :inherit shadow))
@@ -303,6 +304,10 @@ to show all of it in that font.")
 Their windows have no mode line to show that you are, and the
 sidebar's keys act on this row.")
 (define-obsolete-face-alias 'roost-sidebar-selection 'roost-selection "0.9")
+(defface roost-current '((t :inherit region :extend t))
+  "The sidebar's row for the task you are working on.
+It shows whether or not you are in the sidebar, and `roost-selection'
+covers it on the line you are on.")
 (defface roost-search-match '((t :inherit match))
   "The words searched for, in search results.")
 (defface roost-diff-added '((t :inherit success))
@@ -1497,19 +1502,18 @@ answer to the task's terminal."
                        (lambda ()
                          (if (and (= generation roost--open-generation)
                                   (string-prefix-p "The agent's tmux window is gone" err))
-                             (progn
-                               ;; You know now; `n' moves on to the next.
-                               (roost--mark-seen (or (gethash (roost--key task) roost--tasks) task))
-                               ;; Asked from a timer, not from this reply's
-                               ;; sentinel, and only if you haven't moved on
-                               ;; or started a question since: a prompt nobody
-                               ;; saw held every later switch behind it.
-                               (run-at-time
-                                0 nil #'roost--when-out-of-minibuffer
-                                (lambda ()
-                                  (when (and (= generation roost--open-generation)
-                                             (y-or-n-p (format "%s's agent isn't running.  Resume its conversation? "
-                                                               (roost--field task 'name))))
+                             ;; Asked from a timer, not from this reply's
+                             ;; sentinel, and only if you haven't moved on
+                             ;; or started a question since: a prompt nobody
+                             ;; saw held every later switch behind it.
+                             (run-at-time
+                              0 nil #'roost--when-out-of-minibuffer
+                              (lambda ()
+                                (when (= generation roost--open-generation)
+                                  ;; You know now; `n' moves on to the next.
+                                  (roost--mark-seen (or (gethash (roost--key task) roost--tasks) task))
+                                  (when (y-or-n-p (format "%s's agent isn't running.  Resume its conversation? "
+                                                          (roost--field task 'name)))
                                     (roost-resume task)))))
                            (message "Roost %s: %s" (roost--host-label (roost--field task 'host)) err))))))))
 
@@ -4704,7 +4708,8 @@ for the mode line."
                     (selected-frame)))
          (width (* 2 (frame-char-width frame)))
          (height (max 8 (if (eq frame (selected-frame)) (default-line-height) (frame-char-height frame))))
-         (color (roost--light-pixel (face-foreground face frame t)))
+         ;; A plain face, such as a running agent's, has the default one.
+         (color (roost--light-pixel (face-foreground face frame 'default)))
          ;; A face without a background shows the default one: a theme
          ;; can leave `margin' so, as modus-themes does for no fringe.
          (back (roost--light-pixel (face-background background frame 'default))))
@@ -4785,12 +4790,12 @@ they are made to, and one that shows it asks for it."
   "A list of the left margin this buffer had before status lights widened it.
 Nil while they haven't; the margin itself can be nil, meaning none.")
 
-(defun roost--light-margins ()
+(defun roost--light-margins (&optional none)
   "Give the windows showing this buffer a margin for status lights.
 A margin at least as wide is kept, and the one the buffer had comes back
-once the lights are off.  A window that shows the buffer later gets its
-margin then."
-  (let ((on (roost--animations-p))
+once the lights are off, or with NONE, which says the buffer shows no
+lights.  A window that shows the buffer later gets its margin then."
+  (let ((on (and (not none) (roost--animations-p)))
         (had roost--light-margin))
     (if on
         (add-hook 'window-buffer-change-functions #'roost--light-margins-shown nil t)
@@ -4810,7 +4815,11 @@ margin then."
                          0))
                (width (and (> left 0) left)))
           (unless (eql (car (window-margins window)) width)
-            (set-window-margins window left (cdr (window-margins window)))))))))
+            (set-window-margins window left (cdr (window-margins window)))
+            ;; Emacs keeps a side window's width only while its text is as
+            ;; wide as when it was shown, which the margin changes.
+            (when (window-preserved-size window t)
+              (window-preserve-size window t t))))))))
 
 (defun roost--animations-changed ()
   "Show a change of `roost-animations' at once, in the buffers that show.
@@ -5449,10 +5458,16 @@ window without it, such as in another frame, keeps the conversation."
                             (not (roost--panel-beside-terminal-p task))))))
         (roost--render-task-info)))))
 
+(defun roost--narrowest-width (otherwise)
+  "Columns in the narrowest window showing the current buffer, or OTHERWISE.
+Windows showing one buffer can differ: a window on a graphical frame
+has a margin for status lights, and one on a text frame doesn't."
+  (let ((windows (get-buffer-window-list (current-buffer) nil t)))
+    (if windows (apply #'min (mapcar #'roost--usable-width windows)) otherwise)))
+
 (defun roost--task-info-width ()
   "Columns in the narrowest window showing the current task panel."
-  (let ((windows (get-buffer-window-list (current-buffer) nil t)))
-    (if windows (apply #'min (mapcar #'roost--usable-width windows)) 80)))
+  (roost--narrowest-width 80))
 
 (defun roost--usable-width (window)
   "Columns WINDOW shows on a line without truncating or continuing it.
@@ -6037,6 +6052,8 @@ says only that the host is unreachable."
 (defun roost--render-dashboard ()
   "Render the dashboard from cached state, keeping point on the same row.
 The mark stays where it was."
+  ;; Before measuring: the lights' margin narrows the window.
+  (roost--light-margins)
   (let* ((window (get-buffer-window (current-buffer) t))
          (position (if window (window-point window) (point)))
          (key (get-text-property position 'roost-task))
@@ -6045,7 +6062,7 @@ The mark stays where it was."
          (start-line (when window (line-number-at-pos (window-start window))))
          ;; Without fringes, as in a terminal, a full line would lose its last
          ;; column to the truncation mark; this leaves room for it.
-         (width (if window (roost--usable-width window) 120))
+         (width (roost--narrowest-width 120))
          (tasks (roost-tasks))
          (inhibit-read-only t))
     (erase-buffer)
@@ -6092,8 +6109,7 @@ The mark stays where it was."
                                                  (forward-line (1- start-line))
                                                  (point)))
         (set-window-point window target)))
-    (roost--lights-forget 'dashboard (mapcar #'roost--key tasks))
-    (roost--light-margins)))
+    (roost--lights-forget 'dashboard (mapcar #'roost--key tasks))))
 
 (defun roost--dashboard-task ()
   "The task on the current dashboard line, if any."
@@ -6334,8 +6350,7 @@ than WIDTH, such as a URL, is broken within, as in `roost--reply-preview'."
          ;; Lines stay unwrapped, so each message is one line; a whole
          ;; message is wrapped to the window, inside its indentation.
          ;; Fitted to the narrowest window showing them, as a task's panel is.
-         (columns (let ((windows (get-buffer-window-list nil nil t)))
-                    (if windows (apply #'min (mapcar #'roost--usable-width windows)) 80)))
+         (columns (roost--narrowest-width 80))
          ;; Within the body's indentation of 6 columns, and 2 more.
          (width (max 1 (- columns 8))))
     (pcase-dolist (`(,host . ,reply) roost--search-replies)
@@ -6622,37 +6637,55 @@ An agent asking, then one that failed, then one that finished."
          'roost-status-failed)
         (t 'roost-status-ready)))
 
-(defun roost--sidebar-row (task width &optional margin)
-  "TASK's sidebar line, within WIDTH columns.
-MARGIN says that its status light shows in the margin, taking no column."
-  (let* ((current (if (roost--workspace-backend)
-                      (equal (roost--workspace-name task) (roost--current-workspace))
-                    (equal (roost--key task) roost--current-task)))
-         (status (roost--display-status task))
-         (face (roost--status-word-face (roost--attention-status task)))
-         ;; The marker, the dot unless it shows in the margin, and a space.
-         (room (- width (if margin 2 3)))
-         (label (when (>= room (+ (min (string-width (roost--row-name task)) 12) 1
-                                  (string-width status)))
-                  status))
-         (name (roost--row-name task (if label (- room (string-width label) 1) room)
+(defun roost--current-task-p (task)
+  "Whether TASK is the one you are working on, which the sidebar marks."
+  (if (roost--workspace-backend)
+      (equal (roost--workspace-name task) (roost--current-workspace))
+    (equal (roost--key task) roost--current-task)))
+
+(defun roost--sidebar-row (task width)
+  "TASK's sidebar line, within WIDTH columns: its name, then its status.
+The status is in its colour when you have something to look at, dim
+when there is only something to know, and not there for an agent you
+have seen that waits for nothing."
+  (let* ((current (roost--current-task-p task))
+         (attention (roost--attention-status task))
+         (face (if (roost--waiting-p task)
+                   (roost--status-face attention)
+                 (roost--status-word-face attention)))
+         (urgent (and face (not (eq face 'roost-dim))))
+         ;; After an indent.
+         (room (1- width))
+         (status (unless (equal attention "idle") (roost--display-status task)))
+         ;; The fewest columns the name takes: one, and the ID that tells
+         ;; it from a task of the same name.
+         (least (string-width (roost--row-name task 1)))
+         ;; A status you should look at shows even where the name then has
+         ;; little room; the others, where its name keeps a dozen columns.
+         (label (cond ((not status) nil)
+                      ((>= room (+ (min (string-width (roost--row-name task)) 12) 1
+                                   (string-width status)))
+                       status)
+                      (urgent (truncate-string-to-width status (max 1 (- room least 1)) nil nil "…"))))
+         (name (roost--row-name task (if label (max 1 (- room (string-width label) 1)) room)
                                 (if current 'roost-heading 'default))))
-    (concat (if current (propertize "▸" 'face 'roost-heading) " ")
-            (roost--status-light task 'sidebar) " "
-            name
-            (when label
-              (concat (make-string (max 1 (- room (string-width name) (string-width label))) ?\s)
-                      (propertize label 'face face))))))
+    (let ((row (concat " " name
+                       (when label
+                         (concat (make-string (max 1 (- room (string-width name) (string-width label))) ?\s)
+                                 (propertize label 'face face))))))
+      ;; Behind the row's own faces, so its status keeps its colour.
+      (when current
+        (add-face-text-property 0 (length row) 'roost-current t row))
+      row)))
 
 (defun roost--render-sidebar ()
   "Render the task sidebar from cached state, keeping point on its row."
+  ;; A sidebar drawn before Roost was loaded again may have lights, and a
+  ;; margin for them, which it has no more.
+  (roost--light-margins t)
+  (roost--lights-forget 'sidebar nil)
   (let* ((window (get-buffer-window (current-buffer) t))
-         (width (max 12 (if window (roost--usable-width window) roost-sidebar-width)))
-         ;; A light in the margin gives its dot's column back, unless a text
-         ;; frame shows the sidebar too, with the dot in its text.
-         (margin (and (roost--animations-p)
-                      (not (seq-some (lambda (shown) (not (roost--light-frame-p (window-frame shown))))
-                                     (get-buffer-window-list nil nil t)))))
+         (width (max 12 (roost--narrowest-width roost-sidebar-width)))
          (position (if window (window-point window) (point)))
          (key (get-text-property position 'roost-task))
          (heading (unless key (get-text-property position 'roost-directory)))
@@ -6691,21 +6724,22 @@ MARGIN says that its status light shows in the margin, taking no column."
                                (roost--project-directory (cadr group))))
           (dolist (task (cdr group))
             (let ((row (list 'roost-task (roost--key task) 'keymap roost--dashboard-row-map)))
-              (insert (apply #'propertize (roost--sidebar-row task width margin)
+              (insert (apply #'propertize (roost--sidebar-row task width)
                              'mouse-face 'highlight
                              'help-echo (format "%s\n%s · %s\nmouse-1: open · mouse-3: actions"
                                                 (roost--field task 'name)
                                                 (roost--host-label host)
                                                 (or repo "?"))
                              row)
-                      ;; As in the dashboard: unhighlighted, still the task's.
-                      (apply #'propertize "\n" row)))))))
+                      ;; As in the dashboard: unhighlighted, still the task's,
+                      ;; and the current task's band reaches the window's edge.
+                      (apply #'propertize "\n" (if (roost--current-task-p task)
+                                                   (append '(face roost-current) row)
+                                                 row))))))))
     (goto-char (or (and key (roost--task-row key))
                    (and heading (roost--heading-row heading))
                    (point-min)))
     (when window (set-window-point window (point)))
-    (roost--lights-forget 'sidebar (mapcar #'roost--key tasks))
-    (roost--light-margins)
     ;; Redrawing removed the highlight with the text.
     (roost--sidebar-mark-selection)))
 

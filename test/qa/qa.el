@@ -419,9 +419,11 @@ A window parameter of that name takes the buffer's place, as in redisplay."
                     (with-current-buffer sidebar
                       (save-excursion
                         (goto-char (point-min))
-                        ;; At a row's start: a task's name can hold one too.
-                        (when-let* (((re-search-forward "^▸" nil t))
-                                    (key (get-text-property (point) 'roost-task)))
+                        ;; The row behind its band.
+                        (when-let* ((match (text-property-search-forward
+                                            'face 'roost-current
+                                            (lambda (face value) (memq face (ensure-list value)))))
+                                    (key (get-text-property (prop-match-beginning match) 'roost-task)))
                           (format "%s/%s" (or (car key) "local") (cadr key)))))))
        (task . ,(qa--task-info (with-selected-frame frame (roost--frame-task))))
        ;; Each frame's task, by its id: the checks hold per frame.

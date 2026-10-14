@@ -6,6 +6,23 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.8.1:
 
+- The sidebar shows each task's name and its status, with no dot, so
+  names are cut less. The status is in its colour when there is something
+  to look at, dim when the agent is only working or stopped, and left out
+  for an agent you have seen that waits for nothing. With
+  `roost-animations` on, the lights move in the dashboard, the task panel
+  and the mode line. Nothing to do when upgrading.
+- With `roost-animations` on, the sidebar keeps its width when you resize
+  the frame, where it grew and shrank with it, and the sidebar and
+  dashboard fit their window when first drawn there, rather than at the
+  next redraw. The lights' margin had narrowed the window after Roost
+  measured it. Nothing to do when upgrading.
+- The sidebar marks the task you are working on with a band across its
+  row, face `roost-current`, where it had a small arrow, so you find it at
+  a glance. A running agent's light is no longer coloured, so a coloured
+  light always means an agent needs you; to colour it again, make
+  `roost-status-running` inherit `font-lock-keyword-face`. Nothing to do
+  when upgrading.
 - Opening a task whose agent has stopped asks to resume it only if you
   haven't opened another task or started a question since, and asks from a
   timer, not inside the host's reply. A question that came up unseen could
