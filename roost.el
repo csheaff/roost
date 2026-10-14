@@ -6636,40 +6636,42 @@ An agent asking, then one that failed, then one that finished."
       (equal (roost--workspace-name task) (roost--current-workspace))
     (equal (roost--key task) roost--current-task)))
 
-(defun roost--sidebar-row (task width &optional margin)
-  "TASK's sidebar line, within WIDTH columns.
-MARGIN says that its status light shows in the margin, taking no column."
+(defun roost--sidebar-row (task width)
+  "TASK's sidebar line, within WIDTH columns: its name, then its status.
+The status is in its colour when you have something to look at, dim
+when there is only something to know, and not there for an agent you
+have seen that waits for nothing."
   (let* ((current (roost--current-task-p task))
-         (status (roost--display-status task))
-         (face (roost--status-word-face (roost--attention-status task)))
-         ;; An indent, the dot unless it shows in the margin, and a space.
-         (room (- width (if margin 2 3)))
-         (label (when (>= room (+ (min (string-width (roost--row-name task)) 12) 1
-                                  (string-width status)))
-                  status))
-         (name (roost--row-name task (if label (- room (string-width label) 1) room)
+         (attention (roost--attention-status task))
+         (face (if (roost--waiting-p task)
+                   (roost--status-face attention)
+                 (roost--status-word-face attention)))
+         (urgent (and face (not (eq face 'roost-dim))))
+         ;; After an indent.
+         (room (1- width))
+         (status (unless (equal attention "idle") (roost--display-status task)))
+         ;; A status you should look at shows even where the name then has
+         ;; little room; the others, where its name keeps a dozen columns.
+         (label (cond ((not status) nil)
+                      ((>= room (+ (min (string-width (roost--row-name task)) 12) 1
+                                   (string-width status)))
+                       status)
+                      (urgent (truncate-string-to-width status (max 1 (- room 2)) nil nil "…"))))
+         (name (roost--row-name task (if label (max 1 (- room (string-width label) 1)) room)
                                 (if current 'roost-heading 'default))))
-    (let ((row (concat " " (roost--status-light task 'sidebar) " "
-                       name
+    (let ((row (concat " " name
                        (when label
                          (concat (make-string (max 1 (- room (string-width name) (string-width label))) ?\s)
                                  (propertize label 'face face))))))
-      ;; Behind the row's own faces, so its dot and status keep their colours.
+      ;; Behind the row's own faces, so its status keeps its colour.
       (when current
         (add-face-text-property 0 (length row) 'roost-current t row))
       row)))
 
 (defun roost--render-sidebar ()
   "Render the task sidebar from cached state, keeping point on its row."
-  ;; Before measuring: the lights' margin narrows the window.
-  (roost--light-margins)
   (let* ((window (get-buffer-window (current-buffer) t))
          (width (max 12 (roost--narrowest-width roost-sidebar-width)))
-         ;; A light in the margin gives its dot's column back, unless a text
-         ;; frame shows the sidebar too, with the dot in its text.
-         (margin (and (roost--animations-p)
-                      (not (seq-some (lambda (shown) (not (roost--light-frame-p (window-frame shown))))
-                                     (get-buffer-window-list nil nil t)))))
          (position (if window (window-point window) (point)))
          (key (get-text-property position 'roost-task))
          (heading (unless key (get-text-property position 'roost-directory)))
@@ -6708,7 +6710,7 @@ MARGIN says that its status light shows in the margin, taking no column."
                                (roost--project-directory (cadr group))))
           (dolist (task (cdr group))
             (let ((row (list 'roost-task (roost--key task) 'keymap roost--dashboard-row-map)))
-              (insert (apply #'propertize (roost--sidebar-row task width margin)
+              (insert (apply #'propertize (roost--sidebar-row task width)
                              'mouse-face 'highlight
                              'help-echo (format "%s\n%s · %s\nmouse-1: open · mouse-3: actions"
                                                 (roost--field task 'name)
@@ -6724,7 +6726,6 @@ MARGIN says that its status light shows in the margin, taking no column."
                    (and heading (roost--heading-row heading))
                    (point-min)))
     (when window (set-window-point window (point)))
-    (roost--lights-forget 'sidebar (mapcar #'roost--key tasks))
     ;; Redrawing removed the highlight with the text.
     (roost--sidebar-mark-selection)))
 

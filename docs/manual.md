@@ -166,7 +166,10 @@ and the next session.
 **Keep them in view.** `b` in the dashboard, or `M-x roost-sidebar-mode`, keeps a
 compact task list at the left of every frame, through perspective and tab
 switches and `C-x 1`; add `(roost-sidebar-mode 1)` to your configuration to have
-it from the start. `I` docks a panel at the right of an open task's terminal,
+it from the start. Each task there is its name and, at the right, its status:
+in its colour when there is something to look at, such as `permission` or a
+`ready` you haven't seen, dim when the agent is only working or stopped, and
+none once you've seen an agent that waits for nothing. `I` docks a panel at the right of an open task's terminal,
 kept current as the agent works: what to do next, the task's prompt, and the
 files it changed, those not yet committed first. A click or `RET` on a file
 opens its diff in Magit, where `;` writes a note for the agent (more under
