@@ -817,6 +817,12 @@ bringing back the old name, which the task's tab and panel no longer have."
         (puthash key task roost--tasks)
       (remhash key roost--tasks)
       (roost--remove-notes (lambda (note) (equal (roost--note-key note) key))))
+    ;; Renamed, here or from another Emacs: its workspace and the panels
+    ;; follow, before the views are drawn.
+    (when (and old (gethash key roost--tasks)
+               (not (equal (roost--field old 'name) (roost--field task 'name))))
+      (roost--rename-workspace old task)
+      (roost--name-panels))
     ;; Record the status before notifying, which may cache this task again.
     (puthash key status roost--statuses)
     (when (and roost-notify previous
@@ -4206,13 +4212,8 @@ Its branch and worktree keep the name it started with."
            (user-error "Give the task a name containing letters or numbers"))
           ((equal name old) (message "%s keeps its name" old))
           (t (roost--act task "rename" `((name . ,name))
-                         (lambda (renamed)
-                           (roost--rename-workspace task renamed)
-                           (roost--rename-panel renamed)
-                           ;; Drawn before, the views found no task's
-                           ;; workspace current: the sidebar marked none.
-                           (roost--redraw)
-                           (message "Renamed %s to %s" old name)))))))
+                         ;; Caching the reply renames its workspace and panel.
+                         (lambda (_) (message "Renamed %s to %s" old name)))))))
 
 (defun roost--landed (task &optional measured)
   "Whether TASK's commits are all merged, as its host last measured.
@@ -5888,14 +5889,16 @@ same name keep drafts of their own."
       (roost--render-task-info))
     buffer))
 
-(defun roost--rename-panel (task)
-  "Name TASK's panel buffer for what TASK is called now."
-  (let ((key (roost--key task)))
-    (dolist (buffer (buffer-list))
-      (when (and (equal (buffer-local-value 'roost--buffer-task-key buffer) key)
-                 (eq (buffer-local-value 'major-mode buffer) 'roost-task-info-mode))
-        (with-current-buffer buffer
-          (rename-buffer (roost--task-info-buffer-name task) t))))))
+(defun roost--name-panels ()
+  "Name each task panel for its task, as `roost--task-label' says now.
+A panel's name depends on the other tasks' names too: tasks of one name
+are told apart."
+  (dolist (buffer (buffer-list))
+    (when-let* (((eq (buffer-local-value 'major-mode buffer) 'roost-task-info-mode))
+                (task (gethash (buffer-local-value 'roost--buffer-task-key buffer) roost--tasks))
+                (name (roost--task-info-buffer-name task))
+                ((not (equal name (buffer-name buffer)))))
+      (with-current-buffer buffer (rename-buffer name t)))))
 
 (defun roost-task-info-refresh ()
   "Refresh the task's status and Git statistics."

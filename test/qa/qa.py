@@ -1136,7 +1136,7 @@ def tabs(qa, repo):
             ("its tab is gone", lambda s: qa.host_label + "/" + first not in s["workspaces"]),
             ("the other's is still there", lambda s: len(s["workspaces"]) == 2)])
     finally:
-        qa.emacs.eval("(progn (tab-bar-close-other-tabs) (tab-bar-mode -1) (setq roost-workspace nil))")
+        qa.emacs.eval("(progn (tab-bar-close-other-tabs) (tab-bar-rename-tab \"\") (tab-bar-mode -1) (setq roost-workspace nil))")
         qa.settle()
 
 
@@ -1226,7 +1226,7 @@ def rename(qa, repo):
             ("in the tab it had", lambda s: s["workspace"] == qa.host_label + "/Parser fix"),
             ("no tab was added", lambda s: len(s["workspaces"]) == 2)])
     finally:
-        qa.emacs.eval("(progn (tab-bar-close-other-tabs) (tab-bar-mode -1) (setq roost-workspace nil))")
+        qa.emacs.eval("(progn (tab-bar-close-other-tabs) (tab-bar-rename-tab \"\") (tab-bar-mode -1) (setq roost-workspace nil))")
         qa.settle()
 
 

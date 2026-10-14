@@ -1405,12 +1405,14 @@ def rename(store, task, name):
     `updatedAt`, and whether you have seen it, stay as they were;
     `renamedAt` tells Emacs a reply read before this from one read since."""
     name = task_name(name)
+    # Before anything changes: tmux not answering is an error to retry,
+    # not a task without a window.
+    pane = owned_pane(task, inventory_for(task))
     if not task.get("prompt") and task.get("task") == task["name"]:
         # Started without a prompt, the task is described by its name.
         task["task"] = name
     task.update(name=name, renamedAt=now())
     store.save(task)
-    pane = owned_pane(task, pane_inventory(task["socket"]) or {})
     if pane:
         # A name may start with -, which tmux would take for an option.
         tmux(task["socket"], "rename-window", "-t", pane["window"], "--", name.replace("#", "##"),

@@ -4563,6 +4563,31 @@ Read from the layout transient keeps, whose form varies by version."
        (while (cdr (roost--tabs)) (tab-bar-close-tab))
        (unless original-tab-bar-mode (tab-bar-mode -1))))))
 
+(ert-deftest roost-a-rename-from-another-emacs-renames-the-tab-and-panels ()
+  (roost-test--isolated
+   (let* ((roost-workspace 'tab-bar)
+          (task (roost--cache-task "dev" (roost-test--task)))
+          (other (roost--cache-task "dev" (cons '(name . "login fix")
+                                                (assq-delete-all 'name (roost-test--task "fedcba9876543210")))))
+          (original-tab-bar-mode tab-bar-mode)
+          panels)
+     (unwind-protect
+         (progn
+           (roost--activate-workspace task)
+           (setq panels (list (roost--task-info-buffer task) (roost--task-info-buffer other)))
+           (should (equal (mapcar #'buffer-name panels) '("*roost: fix auth*" "*roost: login fix*")))
+           ;; A poll after another Emacs renamed it.
+           (roost--cache-task "dev" (append '((name . "login fix") (renamedAt . "2026-10-03T20:05:00+00:00"))
+                                            (assq-delete-all 'name (roost-test--task))))
+           (should (equal (roost--current-workspace) "dev/login fix"))
+           (should (equal (roost--key (roost--frame-task)) (roost--key task)))
+           ;; Both panels now tell the two apart.
+           (should (equal (mapcar #'buffer-name panels)
+                          '("*roost: login fix on dev (012345)*" "*roost: login fix on dev (fedcba)*"))))
+       (mapc #'kill-buffer panels)
+       (while (cdr (roost--tabs)) (tab-bar-close-tab))
+       (unless original-tab-bar-mode (tab-bar-mode -1))))))
+
 (ert-deftest roost-a-reply-read-before-a-rename-keeps-the-new-name ()
   (roost-test--isolated
    (let ((stale (roost-test--task)))

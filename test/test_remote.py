@@ -1487,6 +1487,9 @@ class Lifecycle(unittest.TestCase):
         for name in ("", " ", "!!!", "tab\there", None):
             with self.subTest(name=name):
                 self.assertFalse(self.request("rename", id=task["id"], name=name)["ok"])
+        # tmux not answering is no reason to think the window gone: try again.
+        with patch.object(roost, "pane_inventory", return_value=None):
+            self.assertIn("tmux did not answer", self.request("rename", id=task["id"], name="parser")["error"])
         self.assertEqual(store.read(task["id"])["name"], "fix #12 in the parser")
         # A stopped task has no window to name; the one it resumes in has its name.
         self.assertTrue(self.request("stop", id=task["id"])["ok"])
