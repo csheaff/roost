@@ -1462,6 +1462,39 @@ class Lifecycle(unittest.TestCase):
         self.assertFalse(own.exists())
         self.assertFalse(roost.ref_exists(self.repo, "worktree-probe"))
 
+    def test_renaming_a_task_names_its_window_and_keeps_its_branch(self):
+        task = self.create(name="parser")
+        store = roost.Store(str(self.state))
+        seen = self.request("seen", id=task["id"], updatedAt=store.read(task["id"])["updatedAt"])["result"]
+        window = lambda: roost.tmux(self.socket, "display-message", "-p", "-t", task["windowId"],
+                                    "#{window_name}").stdout.strip()
+        reply = self.request("rename", id=task["id"], name="  fix #12 in the parser ")
+        self.assertTrue(reply["ok"], reply)
+        renamed = reply["result"]
+        self.assertEqual(renamed["name"], "fix #12 in the parser")
+        # Started without a prompt, it is described by its name.
+        self.assertEqual(renamed["task"], "fix #12 in the parser")
+        self.assertEqual((renamed["branch"], renamed["worktree"]), (task["branch"], task["worktree"]))
+        self.assertEqual(window(), "fix #12 in the parser")
+        listed = self.request("list")["result"][0]
+        self.assertEqual(listed["name"], "fix #12 in the parser")
+        # Not an event: you have still seen it.
+        self.assertEqual((listed["seen"], listed["updatedAt"]), (seen["seen"], seen["updatedAt"]))
+        for name in ("", " ", "!!!", "tab\there", None):
+            with self.subTest(name=name):
+                self.assertFalse(self.request("rename", id=task["id"], name=name)["ok"])
+        self.assertEqual(store.read(task["id"])["name"], "fix #12 in the parser")
+        # A stopped task has no window to name; the one it resumes in has its name.
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        self.assertTrue(self.request("rename", id=task["id"], name="parser fix")["ok"])
+        self.request("resume", id=task["id"])
+        task = self.wait(task, "ready")
+        self.assertEqual(window(), "parser fix")
+        # A prompt stays the prompt.
+        prompted = self.create(name="docs", prompt="Write the docs")
+        self.assertEqual(self.request("rename", id=prompted["id"], name="manual")["result"]["task"],
+                         "Write the docs")
+
     def test_seen_is_recorded_for_every_emacs_until_the_next_event(self):
         task = self.create()
         record = self.wait(task, "ready")

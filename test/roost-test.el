@@ -4518,6 +4518,79 @@ Read from the layout transient keeps, whose form varies by version."
        ;; A second tab shows the tab bar.
        (unless original-tab-bar-mode (tab-bar-mode -1))))))
 
+(ert-deftest roost-renaming-a-task-renames-its-tab-and-panel ()
+  (roost-test--isolated
+   (let* ((roost-workspace 'tab-bar)
+          (task (roost--cache-task "dev" (roost-test--task)))
+          (tabs (length (roost--tabs)))
+          (original-tab-bar-mode tab-bar-mode)
+          sent drawn-for)
+     (unwind-protect
+         (cl-letf (((symbol-function 'roost--redraw) (lambda () (setq drawn-for (roost--frame-task))))
+                   ((symbol-function 'roost--request)
+                    (lambda (_host action parameters success _failure)
+                      (push (cons action parameters) sent)
+                      (funcall success (cons (assq 'name parameters)
+                                             (assq-delete-all 'name (roost-test--task))))))
+                   ((symbol-function 'read-string)
+                    (lambda (prompt initial &rest _)
+                      (should (equal prompt "Rename fix auth to: "))
+                      ;; To edit, rather than type again.
+                      (should (equal initial "fix auth"))
+                      "  login fix ")))
+           (roost--activate-workspace task)
+           (roost--task-info-buffer task)
+           (roost-rename task)
+           (should (equal sent '(("rename" (id . "0123456789abcdef") (name . "login fix")))))
+           (setq task (gethash (roost--key task) roost--tasks))
+           (should (equal (roost--field task 'name) "login fix"))
+           (should (equal (roost--current-workspace) "dev/login fix"))
+           (should-not (member "dev/fix auth" (roost--tabs)))
+           ;; Redrawn last knowing it is the task you are in, as the
+           ;; sidebar marks it.
+           (should (equal (roost--key drawn-for) (roost--key task)))
+           (should (get-buffer "*roost: login fix*"))
+           (should-not (get-buffer "*roost: fix auth*"))
+           ;; Opened again, it is in the same tab.
+           (roost--activate-workspace task)
+           (should (= (length (roost--tabs)) (1+ tabs)))
+           ;; The same name, or none, asks nothing of its host.
+           (setq sent nil)
+           (roost-rename task "login fix ")
+           (should-error (roost-rename task " !") :type 'user-error)
+           (should-not sent))
+       (when-let* ((panel (get-buffer "*roost: login fix*"))) (kill-buffer panel))
+       (while (cdr (roost--tabs)) (tab-bar-close-tab))
+       (unless original-tab-bar-mode (tab-bar-mode -1))))))
+
+(ert-deftest roost-a-renamed-task-keeps-its-perspective ()
+  (roost-test--isolated
+   (let* ((roost-workspace 'perspective) (persp-mode t)
+          (task (roost--cache-task "dev" (roost-test--task)))
+          (renamed (cons '(name . "login fix") (assq-delete-all 'name (copy-tree task))))
+          (names (list "main" "roost:dev:fix auth:012345"))
+          (current "main"))
+     (cl-letf (((symbol-function 'persp-names) (lambda () names))
+               ((symbol-function 'persp-current-name) (lambda () current))
+               ((symbol-function 'persp-switch)
+                (lambda (name) (unless (member name names) (push name names)) (setq current name)))
+               ((symbol-function 'persp-rename)
+                (lambda (name) (setq names (cons name (delete current names)) current name))))
+       ;; perspective.el renames only the current perspective; another is
+       ;; still found by the task's host and ID.
+       (roost--rename-workspace task renamed)
+       (should (equal names '("main" "roost:dev:fix auth:012345")))
+       (should (equal (roost--perspective-name renamed) "roost:dev:fix auth:012345"))
+       ;; Opened, it takes the new name.
+       (roost--activate-workspace renamed)
+       (should (equal current "roost:dev:login fix:012345"))
+       (should (equal names '("roost:dev:login fix:012345" "main")))
+       (should (equal (roost--perspective-name task) current))
+       ;; Renamed while current, it is renamed at once.
+       (let ((again (cons '(name . "parser fix") (assq-delete-all 'name (copy-tree renamed)))))
+         (roost--rename-workspace renamed again)
+         (should (equal current "roost:dev:parser fix:012345")))))))
+
 (ert-deftest roost-workspace-backend-is-chosen-automatically ()
   (roost-test--isolated
    (let ((roost-workspace 'auto) (persp-mode nil) (tab-bar-mode nil))

@@ -63,9 +63,12 @@ Small, and probably worth the most.
   draft makes sibling tasks; compare them in Magit, merge one, and finish
   the rest. From Orca ("fan one prompt across 5 agents"), dmux and workmux
   (`-a`, `-n`).
-- **Better task names.** Names come from a prompt's first words. A quick
-  model call on the host, or the agent's own session title, would name the
-  work instead. From dmux, workmux (`-A`), Orca and agent-deck.
+- **Better task names.** Names come from a prompt's first words, and `R`
+  renames a task. Claude Code titles its sessions itself, in an `ai-title`
+  line of the transcript (or the name its `/rename` gave), which `R` could
+  offer, doing nothing for an agent that keeps no title; Pi's sessions
+  hold none, and Codex's CLI is unchecked. A model call on the host is
+  the other way. From dmux, workmux (`-A`), Orca and agent-deck.
 - **Review notes from file buffers**, for diff-hl users who review in the
   file rather than in Magit.
 - **Ghostel in place of Eat.** [Ghostel](https://github.com/dakra/ghostel)

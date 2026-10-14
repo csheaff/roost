@@ -824,6 +824,14 @@ def name_slug(name):
     return re.sub(r"[^a-zA-Z0-9_]+", "-", folded).strip("-")[:50].rstrip("-") or "task"
 
 
+def task_name(value):
+    """VALUE, trimmed, as a task's name, or an error when it can't be one."""
+    name = value.strip() if isinstance(value, str) else ""
+    if not any(c.isalnum() for c in name) or any(ord(c) < 32 or ord(c) == 127 for c in name):
+        raise RoostError("Give the task a printable name containing letters or numbers")
+    return name
+
+
 def create(store, request):
     """Create a worktree and agent window. Preparation and `git worktree add`
     run without the registry lock; only the tmux spawn is serialized."""
@@ -836,9 +844,7 @@ def create(store, request):
     if "bare" in primary or not primary[0].startswith("worktree "):
         raise RoostError("Roost needs a primary working checkout")
     repo = primary[0][len("worktree "):]
-    name = request["name"].strip()
-    if not any(c.isalnum() for c in name) or any(ord(c) < 32 or ord(c) == 127 for c in name):
-        raise RoostError("Give the task a printable name containing letters or numbers")
+    name = task_name(request.get("name"))
     slug = name_slug(name)
     agent_name = text(request.get("agent")) or "claude"
     agent = agent_for(dict(agent=agent_name))
@@ -1389,6 +1395,23 @@ def seen(store, task, updated):
     if isinstance(updated, str) and updated:
         task["seen"] = updated
         store.save(task)
+    return task
+
+
+def rename(store, task, name):
+    """Name TASK NAME, here and on its agent's tmux window. Its branch and
+    worktree keep the name it started with: a pull request, or the agent's
+    conversation, may know them. Not an event of the agent's, so whether
+    you have seen it stays as it was."""
+    name = task_name(name)
+    if task.get("task") == task["name"]:
+        # Started without a prompt, the task is described by its name.
+        task["task"] = name
+    task["name"] = name
+    store.save(task)
+    pane = owned_pane(task, pane_inventory(task["socket"]) or {})
+    if pane:
+        tmux(task["socket"], "rename-window", "-t", pane["window"], name.replace("#", "##"), check=False)
     return task
 
 
@@ -2936,6 +2959,7 @@ TASK_ACTIONS = {
     "shell": lambda store, task, request: shell(store, task),
     "inspect": lambda store, task, request: inspect(store, task),
     "seen": lambda store, task, request: seen(store, task, request.get("updatedAt")),
+    "rename": lambda store, task, request: rename(store, task, request.get("name")),
     "retire": lambda store, task, request: retire(store, task, merged_head=request.get("mergedHead")),
     "merge": lambda store, task, request: retire(store, task, merge=True, merged_head=request.get("mergedHead"),
                                                  squash=request.get("style") == "squash"),

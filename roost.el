@@ -64,6 +64,7 @@
 (declare-function persp-current-name "perspective" ())
 (declare-function persp-names "perspective" ())
 (declare-function persp-format-name "perspective" (name))
+(declare-function persp-rename "perspective" (name))
 (declare-function evil-set-initial-state "evil-core" (mode state))
 (declare-function svg-create "svg" (width height &rest args))
 (declare-function svg-rectangle "svg" (svg x y width height &rest args))
@@ -1183,12 +1184,21 @@ nobody is looking."
 
 ;;;; Perspectives
 
-(defun roost--perspective-name (task)
-  "Unique workspace name for TASK."
-  (format "roost:%s:%s:%s"
-          (roost--host-label (roost--field task 'host))
-          (roost--field task 'name)
-          (substring (roost--field task 'id) 0 6)))
+(defun roost--perspective-name (task &optional new)
+  "Unique workspace name for TASK.
+That is the name of its perspective, found by its host and ID, so one
+made before the task was renamed is still its.  With NEW, or when it
+has none, the name for one made now."
+  (let* ((host (roost--host-label (roost--field task 'host)))
+         (id (substring (roost--field task 'id) 0 6))
+         (name (format "roost:%s:%s:%s" host (roost--field task 'name) id))
+         (names (and (not new) (bound-and-true-p persp-mode) (fboundp 'persp-names) (persp-names))))
+    (or (and names (not (member name names))
+             (seq-find (lambda (other)
+                         (and (string-prefix-p (format "roost:%s:" host) other)
+                              (string-suffix-p (concat ":" id) other)))
+                       names))
+        name)))
 
 (defvar roost--workspace-mode-line-map
   (let ((map (make-sparse-keymap)))
@@ -1313,7 +1323,9 @@ started or gone since."
   (roost--leave-side-window)
   (pcase (roost--workspace-backend)
     ('perspective
-     (when (fboundp 'persp-switch) (persp-switch (roost--perspective-name task))))
+     (when (fboundp 'persp-switch)
+       (persp-switch (roost--perspective-name task))
+       (roost--rename-perspective task)))
     ('tab-bar
      (if-let* ((name (roost--task-tab task)))
          (tab-bar-select-tab-by-name name)
@@ -1323,6 +1335,35 @@ started or gone since."
   ;; Without workspaces, the frame's task panel follows the last task used.
   (set-frame-parameter nil 'roost-task (roost--key task))
   (roost--leave-side-window))
+
+(defun roost--rename-perspective (task)
+  "Name the current perspective, when it is TASK's, for what TASK is called now.
+perspective.el renames no other, so one that wasn't current when TASK
+was renamed takes the name when TASK is next opened."
+  (let ((name (roost--perspective-name task t)))
+    (when (and (fboundp 'persp-rename)
+               (equal (persp-current-name) (roost--perspective-name task))
+               (not (member name (persp-names))))
+      (persp-rename name))))
+
+(defun roost--rename-workspace (old new)
+  "Name the workspace of task OLD for NEW, the same task renamed.
+That is its tab in each frame, or its perspective where that is current."
+  (dolist (frame (frame-list))
+    (with-selected-frame frame
+      (pcase (roost--workspace-backend)
+        ('perspective (roost--rename-perspective new))
+        ('tab-bar
+         (let* ((tabs (roost--tabs))
+                (tab (seq-find (lambda (name) (member name tabs))
+                               (list (roost--tab-name old t)
+                                     (format "%s/%s" (roost--host-label (roost--field old 'host))
+                                             (roost--field old 'name))))))
+           (when tab
+             (let ((name (roost--tab-name new)))
+               ;; Another tab of that name is another task's.
+               (tab-bar-rename-tab (if (member name (remove tab tabs)) (roost--tab-name new t) name)
+                                   (1+ (seq-position tabs tab)))))))))))
 
 ;;;; Opening tasks
 
@@ -4139,6 +4180,26 @@ Without a status from GitHub yet, it is as its host recorded, or open."
                              (roost--field task 'name)))
     (roost--act task "stop")))
 
+;;;###autoload
+(defun roost-rename (&optional task name)
+  "Rename TASK to NAME, in Roost and on its agent's tmux window.
+Its branch and worktree keep the name it started with."
+  (interactive)
+  (setq task (roost--choose task))
+  (let* ((old (roost--field task 'name))
+         (name (string-trim (or name (read-string (format "Rename %s to: " old) old)))))
+    (cond ((not (string-match-p "[[:alnum:]]" name))
+           (user-error "Give the task a name containing letters or numbers"))
+          ((equal name old) (message "%s keeps its name" old))
+          (t (roost--act task "rename" `((name . ,name))
+                         (lambda (renamed)
+                           (roost--rename-workspace task renamed)
+                           (roost--rename-panel renamed)
+                           ;; Drawn before, the views found no task's
+                           ;; workspace current: the sidebar marked none.
+                           (roost--redraw)
+                           (message "Renamed %s to %s" old name)))))))
+
 (defun roost--landed (task &optional measured)
   "Whether TASK's commits are all merged, as its host last measured.
 That is, in its integration branch or a pull request GitHub merged at
@@ -5206,7 +5267,8 @@ there are no tasks at all."
     "---"
     ["Stop…" roost-stop :active (roost--menu-applies-p 'roost-stop)]
     ["Resume" roost-resume :active (roost--menu-applies-p 'roost-resume)]
-    ["Details" roost-task-info :active (roost--menu-applies-p 'roost-task-info)])
+    ["Details" roost-task-info :active (roost--menu-applies-p 'roost-task-info)]
+    ["Rename…" roost-rename :active (roost--menu-applies-p 'roost-rename)])
   "Menu items acting on the task at point.")
 
 (easy-menu-define roost-task-menu nil
@@ -5248,7 +5310,7 @@ With no task at all, none of the task commands do."
 ;; `roost--stop-inapt-p': older transient doesn't say which entry it asks about.
 (dolist (command '(roost-open-task roost-shell roost-files roost-send roost-task-info roost-review
                    roost-diff roost-update roost-pr roost-merge-retire roost-retire roost-forget
-                   roost-stop roost-resume roost-goto-note))
+                   roost-stop roost-resume roost-goto-note roost-rename))
   (defalias (intern (format "roost--%s-inapt-p" (string-remove-prefix "roost-" (symbol-name command))))
     (lambda () (roost--dispatch-inapt-p command))
     (format "Whether `%s' does not apply to the task of `roost-dispatch'." command)))
@@ -5341,7 +5403,8 @@ terminal or worktree, or ask which task."
     ("t" "Shell" roost-shell :inapt-if roost--shell-inapt-p)
     ("f" "Files" roost-files :inapt-if roost--files-inapt-p)
     ("e" "Send prompt" roost-send :inapt-if roost--send-inapt-p)
-    ("i" "Details" roost-task-info :inapt-if roost--task-info-inapt-p)]
+    ("i" "Details" roost-task-info :inapt-if roost--task-info-inapt-p)
+    ("R" "Rename" roost-rename :inapt-if roost--rename-inapt-p)]
    ["Review"
     ("r" "Magit" roost-review :inapt-if roost--review-inapt-p)
     ("D" "Diff" roost-diff :inapt-if roost--diff-inapt-p)
@@ -5383,6 +5446,7 @@ terminal or worktree, or ask which task."
   "P" #'roost-pr
   "X" #'roost-forget
   "u" #'roost-update
+  "R" #'roost-rename
   "I" #'roost-task-panel-mode
   ;; Commands beyond this task, as in the dashboard and sidebar.
   "n" #'roost-next-waiting
@@ -5810,6 +5874,15 @@ same name keep drafts of their own."
       (roost--render-task-info))
     buffer))
 
+(defun roost--rename-panel (task)
+  "Name TASK's panel buffer for what TASK is called now."
+  (let ((key (roost--key task)))
+    (dolist (buffer (buffer-list))
+      (when (and (equal (buffer-local-value 'roost--buffer-task-key buffer) key)
+                 (eq (buffer-local-value 'major-mode buffer) 'roost-task-info-mode))
+        (with-current-buffer buffer
+          (rename-buffer (roost--task-info-buffer-name task) t))))))
+
 (defun roost-task-info-refresh ()
   "Refresh the task's status and Git statistics."
   (interactive)
@@ -5843,6 +5916,7 @@ same name keep drafts of their own."
   "P" #'roost-pr
   "X" #'roost-forget
   "u" #'roost-update
+  "R" #'roost-rename
   "n" #'roost-next-waiting
   "/" #'roost-search
   ;; As in Magit, `h' and `?' show every command.

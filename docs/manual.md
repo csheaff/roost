@@ -242,6 +242,7 @@ keep it from saying so.
 | `D` | `roost-diff` | Diff the task's own changes, including uncommitted ones |
 | `e` | `roost-send` | Paste a prompt into the agent and press Enter |
 | `i` | `roost-task-info` | The task's next step, prompt, latest reply, changes and details |
+| `R` | `roost-rename` | Rename the task, in Roost, its tab or perspective, and its agent's tmux window; its branch and worktree keep the name it started with |
 | `l` | `roost-switch-task` | Choose a task by name, waiting tasks first |
 | `/` | `roost-search` | Find messages in your tasks' conversations, retired tasks' too; `RET` opens a live task, `TAB` shows more of a message (its first 1,500 characters) |
 | `b` | `roost-sidebar-mode` | Keep the task list at the left of every frame |
@@ -291,7 +292,7 @@ also drafts a prompt holding them.
 In the new task draft: `C-c C-c` creates, `C-c C-k` cancels, and `C-c C-p`,
 `C-c C-a`, `C-c C-b` and `C-c C-n` change the project, agent, starting ref and
 name. `C-c C-t` starts from a GitHub issue (with `gh` on the project's host). An
-empty name is derived from the prompt.
+empty name is derived from the prompt; `R` renames the task later.
 
 In the pull request draft: `C-c C-c` creates the pull request (`C-u` as a draft)
 and `C-c C-k` cancels. A failed creation keeps the draft.
