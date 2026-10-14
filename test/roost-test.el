@@ -35,7 +35,8 @@
          (roost--hosts-loaded t) (roost--remembered-hosts nil)
          (roost-notes-file (expand-file-name "notes.json" (nth 1 ,scratch)))
          (roost--notes nil) (roost--notes-loaded t)
-         (roost--requests nil) (roost-notify nil) (roost--current-task nil))
+         (roost--requests nil) (roost-notify nil) (roost--current-task nil)
+         (roost--perspectives (make-hash-table :test 'equal)))
      (set-frame-parameter nil 'roost-task nil)
      ;; Seeing an agent is recorded on its host too; tests that check it say so.
      (cl-letf (((symbol-function 'roost--record-seen) #'ignore)
@@ -4703,10 +4704,29 @@ Read from the layout transient keeps, whose form varies by version."
                                                (assq-delete-all 'name (roost-test--task "012345fedcba9876")))))
           (parser (roost--cache-task "dev" (cons '(name . "parser")
                                                  (assq-delete-all 'name (roost-test--task))))))
-     (cl-letf (((symbol-function 'persp-names) (lambda () '("main" "roost:dev:docs:012345"))))
-       (should (equal (roost--perspective-name docs) "roost:dev:docs:012345"))
-       ;; Not docs's, though their IDs start alike.
-       (should (equal (roost--perspective-name parser) "roost:dev:parser:012345"))))))
+     (let ((names (list "main" "roost:dev:docs:012345")) (current "main"))
+       (cl-letf (((symbol-function 'persp-names) (lambda () names))
+                 ((symbol-function 'persp-current-name) (lambda () current))
+                 ((symbol-function 'persp-switch)
+                  (lambda (name) (unless (member name names) (push name names)) (setq current name)))
+                 ((symbol-function 'persp-rename)
+                  (lambda (name) (setq names (cons name (delete current names)) current name))))
+         (should (equal (roost--perspective-name docs) "roost:dev:docs:012345"))
+         ;; Not docs's, though their IDs start alike.
+         (should (equal (roost--perspective-name parser) "roost:dev:parser:012345"))
+         ;; Renamed while another perspective is current, docs keeps its
+         ;; own, and gives it its new name when opened.
+         (roost--cache-task "dev" (append '((name . "manual") (renamedAt . "2026-10-03T21:00:00+00:00"))
+                                          (assq-delete-all 'name (copy-tree docs))))
+         (setq docs (gethash (roost--key docs) roost--tasks))
+         (should (equal (roost--perspective-name docs) "roost:dev:docs:012345"))
+         (roost--activate-workspace docs)
+         (should (equal current "roost:dev:manual:012345"))
+         (should (equal names '("roost:dev:manual:012345" "main")))
+         ;; Renamed while current, at once.
+         (roost--cache-task "dev" (append '((name . "guide") (renamedAt . "2026-10-03T22:00:00+00:00"))
+                                          (assq-delete-all 'name (copy-tree docs))))
+         (should (equal current "roost:dev:guide:012345")))))))
 
 (ert-deftest roost-workspace-backend-is-chosen-automatically ()
   (roost-test--isolated

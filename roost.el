@@ -368,6 +368,10 @@ A ready agent you have seen since its last event is no longer waiting.")
 
 (defvar roost--current-task nil
   "Key of the task most recently opened.")
+(defvar roost--perspectives (make-hash-table :test 'equal)
+  "Perspectives of renamed tasks, by task key, named for what each was called.
+perspective.el renames only the current perspective; another keeps its
+name until its task is next opened.")
 (defvar roost--watch-timer nil)
 (defvar roost--watching-on-demand nil
   "Non-nil when Roost began watching after your configuration had loaded.
@@ -1206,15 +1210,19 @@ nobody is looking."
 
 (defun roost--perspective-name (task &optional new)
   "Unique workspace name for TASK.
-That is the name of its perspective, found by its host and ID, so one
-made before the task was renamed is still its.  With NEW, or when it
-has none, the name for one made now."
+That is the name of its perspective, which may be named for what TASK
+was called before a rename: as this Emacs saw it renamed, or else found
+by its host and ID.  With NEW, or when it has none, the name for one
+made now."
   (let* ((host (roost--host-label (roost--field task 'host)))
          (id (substring (roost--field task 'id) 0 6))
          (name (format "roost:%s:%s:%s" host (roost--field task 'name) id))
-         (names (and (not new) (bound-and-true-p persp-mode) (fboundp 'persp-names) (persp-names))))
-    (or (and names (not (member name names))
-             ;; The name holds the ID's first characters only: none
+         (names (and (not new) (bound-and-true-p persp-mode) (fboundp 'persp-names) (persp-names)))
+         (kept (gethash (roost--key task) roost--perspectives)))
+    (or (and names (not (member name names)) (member kept names) kept)
+        (and names (not (member name names))
+             ;; As restored after Emacs restarted.  The name holds the
+             ;; ID's first characters only: none
              ;; another task's ID starts with, or its perspective could be
              ;; the one found.
              (not (seq-some (lambda (other)
@@ -1386,7 +1394,9 @@ That is its tab in each frame, or its perspective where that is current."
   (dolist (frame (frame-list))
     (with-selected-frame frame
       (pcase (roost--workspace-backend)
-        ('perspective (roost--rename-perspective new))
+        ('perspective
+         (puthash (roost--key new) (roost--perspective-name old) roost--perspectives)
+         (roost--rename-perspective new))
         ('tab-bar
          ;; Not a tab of an elder namesake's, which has the plain name.
          (let* ((tab (roost--task-tab old))
@@ -4417,7 +4427,8 @@ it showed before."
     ('perspective
      (when (fboundp 'persp-kill)
        (let ((persp-autokill-buffer-on-remove nil))
-         (persp-kill (roost--perspective-name task)))))
+         (persp-kill (roost--perspective-name task))))
+     (remhash (roost--key task) roost--perspectives))
     ('tab-bar
      (let ((name (roost--task-tab task)))
        (when (and name (cdr (roost--tabs)))
