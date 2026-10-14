@@ -5451,10 +5451,16 @@ window without it, such as in another frame, keeps the conversation."
                             (not (roost--panel-beside-terminal-p task))))))
         (roost--render-task-info)))))
 
+(defun roost--narrowest-width (otherwise)
+  "Columns in the narrowest window showing the current buffer, or OTHERWISE.
+Windows showing one buffer can differ: a window on a graphical frame
+has a margin for status lights, and one on a text frame doesn't."
+  (let ((windows (get-buffer-window-list (current-buffer) nil t)))
+    (if windows (apply #'min (mapcar #'roost--usable-width windows)) otherwise)))
+
 (defun roost--task-info-width ()
   "Columns in the narrowest window showing the current task panel."
-  (let ((windows (get-buffer-window-list (current-buffer) nil t)))
-    (if windows (apply #'min (mapcar #'roost--usable-width windows)) 80)))
+  (roost--narrowest-width 80))
 
 (defun roost--usable-width (window)
   "Columns WINDOW shows on a line without truncating or continuing it.
@@ -6049,7 +6055,7 @@ The mark stays where it was."
          (start-line (when window (line-number-at-pos (window-start window))))
          ;; Without fringes, as in a terminal, a full line would lose its last
          ;; column to the truncation mark; this leaves room for it.
-         (width (if window (roost--usable-width window) 120))
+         (width (roost--narrowest-width 120))
          (tasks (roost-tasks))
          (inhibit-read-only t))
     (erase-buffer)
@@ -6337,8 +6343,7 @@ than WIDTH, such as a URL, is broken within, as in `roost--reply-preview'."
          ;; Lines stay unwrapped, so each message is one line; a whole
          ;; message is wrapped to the window, inside its indentation.
          ;; Fitted to the narrowest window showing them, as a task's panel is.
-         (columns (let ((windows (get-buffer-window-list nil nil t)))
-                    (if windows (apply #'min (mapcar #'roost--usable-width windows)) 80)))
+         (columns (roost--narrowest-width 80))
          ;; Within the body's indentation of 6 columns, and 2 more.
          (width (max 1 (- columns 8))))
     (pcase-dolist (`(,host . ,reply) roost--search-replies)
@@ -6659,7 +6664,7 @@ MARGIN says that its status light shows in the margin, taking no column."
   ;; Before measuring: the lights' margin narrows the window.
   (roost--light-margins)
   (let* ((window (get-buffer-window (current-buffer) t))
-         (width (max 12 (if window (roost--usable-width window) roost-sidebar-width)))
+         (width (max 12 (roost--narrowest-width roost-sidebar-width)))
          ;; A light in the margin gives its dot's column back, unless a text
          ;; frame shows the sidebar too, with the dot in its text.
          (margin (and (roost--animations-p)

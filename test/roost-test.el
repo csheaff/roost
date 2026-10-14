@@ -3272,6 +3272,33 @@ Read from the layout transient keeps, whose form varies by version."
                  (should (equal (buffer-substring-no-properties (point-min) (point-max)) first)))))
          (kill-buffer buffer))))))
 
+(ert-deftest roost-the-sidebar-and-dashboard-fit-their-narrowest-window ()
+  ;; One buffer can show in windows of different widths: on a graphical
+  ;; frame with the lights' margin, and on a text frame without.
+  (roost-test--isolated
+   (roost--cache-task "dev" (append '((name . "a-task-with-a-very-long-name-indeed") (repo . "/srv/ledger"))
+                                    (roost-test--task "1111111111111111" "permission")))
+   (dolist (view '((roost-sidebar-list-mode . roost--render-sidebar)
+                   (roost-dashboard-mode . roost--render-dashboard)))
+     (let ((buffer (get-buffer-create " *roost narrowest*")))
+       (unwind-protect
+           (save-window-excursion
+             (delete-other-windows)
+             (let* ((wide (selected-window))
+                    (narrow (split-window wide nil t)))
+               (set-window-buffer narrow buffer)
+               (set-window-margins narrow 6)
+               (with-current-buffer buffer
+                 (funcall (car view))
+                 (funcall (cdr view))
+                 (let ((alone (buffer-substring-no-properties (point-min) (point-max))))
+                   ;; Shown in a wider window too, it is drawn as before.
+                   (set-window-buffer wide buffer)
+                   (should (< (roost--usable-width narrow) (roost--usable-width wide)))
+                   (funcall (cdr view))
+                   (should (equal (buffer-substring-no-properties (point-min) (point-max)) alone))))))
+         (kill-buffer buffer))))))
+
 (ert-deftest roost-status-lights-move-until-their-agents-rest ()
   (roost-test--isolated
    (let ((on t))
