@@ -2554,6 +2554,33 @@ Read from the layout transient keeps, whose form varies by version."
        (should (<= (string-width row) 16)))
      (should-not (string-match-p "running" (roost--sidebar-row working 16)))
      (should (<= (string-width (roost--sidebar-row asking 12)) 12))
+     ;; A name another task shares keeps the ID that tells them apart.
+     (let ((twin (funcall task "6666666666666666" "budget-alerts" "permission")))
+       (dolist (width '(12 16 30))
+         (let ((row (roost--sidebar-row twin width)))
+           (should (<= (string-width row) width))
+           (should (string-match-p "666666" row))
+           (should (eq (get-text-property (1- (length row)) 'face row) 'roost-status-permission)))))
+     ;; Drawn by an earlier Roost with moving lights, a sidebar gives back
+     ;; their margin and lights when drawn again.
+     (roost-test--with-canvases t
+       (let ((buffer (get-buffer-create " *roost sidebar before*")))
+         (unwind-protect
+             (save-window-excursion
+               (delete-other-windows)
+               (with-current-buffer buffer (roost-sidebar-list-mode))
+               (let ((window (roost--show-side-window buffer 'left 30)))
+                 (with-current-buffer buffer
+                   (roost--light-margins)
+                   (puthash (cons 'sidebar (roost--key asking)) (list :motion 'pulse :buffer buffer) roost--lights)
+                   (should (equal (window-margins window) '(2)))
+                   (roost--render-sidebar)
+                   (should (equal (window-margins window) '(nil)))
+                   (should (= left-margin-width 0))
+                   (should-not (memq #'roost--light-margins-shown window-buffer-change-functions))
+                   (should-not (gethash (cons 'sidebar (roost--key asking)) roost--lights))
+                   (should (window--preserve-size window t)))))
+           (kill-buffer buffer))))
      ;; Moving lights or not, the sidebar has no light and no margin for one.
      (roost-test--with-canvases t
        (let ((buffer (get-buffer-create " *roost sidebar words*")))

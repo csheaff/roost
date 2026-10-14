@@ -4783,12 +4783,12 @@ they are made to, and one that shows it asks for it."
   "A list of the left margin this buffer had before status lights widened it.
 Nil while they haven't; the margin itself can be nil, meaning none.")
 
-(defun roost--light-margins ()
+(defun roost--light-margins (&optional none)
   "Give the windows showing this buffer a margin for status lights.
 A margin at least as wide is kept, and the one the buffer had comes back
-once the lights are off.  A window that shows the buffer later gets its
-margin then."
-  (let ((on (roost--animations-p))
+once the lights are off, or with NONE, which says the buffer shows no
+lights.  A window that shows the buffer later gets its margin then."
+  (let ((on (and (not none) (roost--animations-p)))
         (had roost--light-margin))
     (if on
         (add-hook 'window-buffer-change-functions #'roost--light-margins-shown nil t)
@@ -6650,13 +6650,16 @@ have seen that waits for nothing."
          ;; After an indent.
          (room (1- width))
          (status (unless (equal attention "idle") (roost--display-status task)))
+         ;; The fewest columns the name takes: one, and the ID that tells
+         ;; it from a task of the same name.
+         (least (string-width (roost--row-name task 1)))
          ;; A status you should look at shows even where the name then has
          ;; little room; the others, where its name keeps a dozen columns.
          (label (cond ((not status) nil)
                       ((>= room (+ (min (string-width (roost--row-name task)) 12) 1
                                    (string-width status)))
                        status)
-                      (urgent (truncate-string-to-width status (max 1 (- room 2)) nil nil "…"))))
+                      (urgent (truncate-string-to-width status (max 1 (- room least 1)) nil nil "…"))))
          (name (roost--row-name task (if label (max 1 (- room (string-width label) 1)) room)
                                 (if current 'roost-heading 'default))))
     (let ((row (concat " " name
@@ -6670,6 +6673,10 @@ have seen that waits for nothing."
 
 (defun roost--render-sidebar ()
   "Render the task sidebar from cached state, keeping point on its row."
+  ;; A sidebar drawn before Roost was loaded again may have lights, and a
+  ;; margin for them, which it has no more.
+  (roost--light-margins t)
+  (roost--lights-forget 'sidebar nil)
   (let* ((window (get-buffer-window (current-buffer) t))
          (width (max 12 (roost--narrowest-width roost-sidebar-width)))
          (position (if window (window-point window) (point)))
