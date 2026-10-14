@@ -546,7 +546,7 @@
   ;; once you click elsewhere and C-g there leaves open, held back every
   ;; task you opened, unseen: clicks in the sidebar did nothing.
   (roost-test--isolated
-   (let ((depth 2) (recursion 2) (in-minibuffer nil) quit later requested said)
+   (let ((depth 2) (recursion 2) (in-minibuffer nil) quit later opened asked said)
      (cl-letf (((symbol-function 'active-minibuffer-window) (lambda () (> depth 0)))
                ((symbol-function 'minibuffer-depth) (lambda () depth))
                ((symbol-function 'recursion-depth) (lambda () recursion))
@@ -555,17 +555,43 @@
                ((symbol-function 'minibuffer-quit-recursive-edit)
                 (lambda (levels) (setq quit levels depth 0 recursion 0) (throw 'quit nil)))
                ((symbol-function 'run-at-time) (lambda (_time _repeat function) (setq later function)))
-               ((symbol-function 'roost--request) (lambda (_host action &rest _) (push action requested)))
+               ((symbol-function 'roost--request)
+                (lambda (_host _action params &rest _) (push (alist-get 'id params) opened)))
+               ((symbol-function 'roost--task-at-point) #'ignore)
+               ;; Asked only once the question left open is gone: without
+               ;; recursive minibuffers, asking first fails.
+               ((symbol-function 'roost--read-task)
+                (lambda (prompt) (should (zerop depth)) (push prompt asked)
+                  (roost-test--task "2222222222222222")))
                ((symbol-function 'message) (lambda (format &rest args) (push (apply #'format format args) said))))
-       (catch 'quit (roost-open-task (roost-test--task) t))
+       (catch 'quit (roost-open-task (roost-test--task "1111111111111111") t))
        ;; Each of them, before the task: quitting one gives back the
        ;; windows it found.
        (should (equal quit 2))
-       (should-not requested)
+       (should-not opened)
        (funcall later)
-       (should (equal requested '("inspect")))
+       (should (equal opened '("1111111111111111")))
        (should (equal said '("Quit 2 questions left open in the minibuffer")))
-       (setq depth 1 recursion 1 quit nil requested nil)
+       ;; With no task at point, which one is asked after.
+       (setq depth 1 recursion 1 opened nil)
+       (catch 'quit (roost-open-task nil t))
+       (should-not asked)
+       (funcall later)
+       (should (equal asked '("Task: ")))
+       (should (equal opened '("2222222222222222")))
+       (setq depth 1 recursion 1 opened nil asked nil)
+       (catch 'quit (roost-switch-task))
+       (should-not asked)
+       (funcall later)
+       (should (equal asked '("Switch task: ")))
+       (should (equal opened '("2222222222222222")))
+       ;; A task opened before the quitting is done is the one shown.
+       (setq depth 1 recursion 1 opened nil)
+       (catch 'quit (roost-open-task (roost-test--task "1111111111111111") t))
+       (roost-open-task (roost-test--task "3333333333333333") t)
+       (funcall later)
+       (should (equal opened '("3333333333333333")))
+       (setq depth 1 recursion 1 quit nil opened nil)
        ;; Not the one you are answering, ...
        (setq in-minibuffer t)
        (roost-open-task (roost-test--task) t)
@@ -579,7 +605,7 @@
        (let ((this-command 'roost-discard))
          (roost-open-task (roost-test--task)))
        (should-not quit)
-       (should (equal requested '("inspect" "inspect" "inspect")))))))
+       (should (= (length opened) 3))))))
 
 (ert-deftest roost-clicking-a-task-no-longer-listed-does-not-ask-which ()
   ;; The click asked "Task: " in the minibuffer, unseen, and every later

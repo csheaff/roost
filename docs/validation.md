@@ -1106,10 +1106,12 @@ quitting the question then restored the windows it had found, with the
 first task's terminal in the second task's perspective.
 
 Opening a task from a Roost command now quits the questions you left
-open first, then opens it. Tried with one and two questions open, with
-a click, `RET` and `t`; each opened the task in its perspective, with
-its panel, and said what it quit. The new `question_left` journey fails
-without the change and passes with it, with and without vertico-posframe.
+open first, then opens it, and asks which task only after. Tried with
+one and two questions open, with a click, `RET` and `t`; each opened
+the task in its perspective, with its panel, and said what it quit. The
+new `question_left` journey, a click and then `l` with `M-x` open, fails
+without the change and passes with it, with and without vertico-posframe;
+without recursive minibuffers, `l` had failed to ask.
 
 Not found: what opened the first `Task: ` there, and why clicks added
 more. Here a click found its row each time; `RET` or another task key on

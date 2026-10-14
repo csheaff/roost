@@ -1584,17 +1584,20 @@ debugger's, is open as well."
   "Quit the questions you left open in the minibuffer, then call THEN.
 Return nil, without calling THEN, when there are none.  Otherwise this
 doesn't return: quitting a question gives back the windows it found,
-which would undo what THEN shows, so THEN runs after.  Only for a
-command you gave, never from a host's reply, which can arrive while
-another command waits: the quitting would end that command too."
+which would undo what THEN shows, so THEN runs after, unless you have
+opened another task meanwhile.  Only for a command you gave, never from
+a host's reply, which can arrive while another command waits: the
+quitting would end that command too."
   (when-let* ((count (roost--questions-left-open)))
     (let ((questions (if (> count 1)
                          (format "%d questions" count)
                        (format "\"%s\"" (truncate-string-to-width
-                                         (string-trim (or (minibuffer-prompt) "")) 50 nil nil "…")))))
+                                         (string-trim (or (minibuffer-prompt) "")) 50 nil nil "…"))))
+          (generation (cl-incf roost--open-generation)))
       (run-at-time 0 nil (lambda ()
                            (message "Quit %s left open in the minibuffer" questions)
-                           (funcall then)))
+                           (when (= generation roost--open-generation)
+                             (funcall then))))
       (minibuffer-quit-recursive-edit count))))
 
 (defun roost-open-task (&optional task quit-questions)
@@ -1603,9 +1606,14 @@ With QUIT-QUESTIONS, as when you give a command, first quit the
 questions you left open in the minibuffer, which would hold the task
 back, unseen, until you answered them."
   (interactive (list nil t))
+  (when (and quit-questions (roost--questions-left-open))
+    ;; The task at point is where you are now, before quitting gives
+    ;; back the windows; asking which comes after, as the question left
+    ;; open can keep another from being asked.
+    (let ((task (or task (roost--task-at-point))))
+      (roost--quit-questions-left-open
+       (lambda () (roost-open-task (or task (roost--read-task "Task: ")))))))
   (setq task (roost--choose task))
-  (when quit-questions
-    (roost--quit-questions-left-open (lambda () (roost-open-task task))))
   (let* ((generation (cl-incf roost--open-generation))
          (window (if (window-minibuffer-p) (minibuffer-selected-window) (selected-window)))
          (shown (window-buffer window)))
@@ -1656,7 +1664,10 @@ back, unseen, until you answered them."
 (defun roost-switch-task ()
   "Choose a task across hosts and restore its workspace."
   (interactive)
-  (roost-open-task (roost--read-task "Switch task: ") t))
+  ;; Before asking, which a question left open can keep from happening.
+  (roost--quit-questions-left-open
+   (lambda () (roost-open-task (roost--read-task "Switch task: "))))
+  (roost-open-task (roost--read-task "Switch task: ")))
 
 ;;;; Creating tasks
 
@@ -3902,9 +3913,11 @@ stamp, so polls would not notice it."
 With QUIT-QUESTIONS, as when you give a command, first quit the
 questions you left open in the minibuffer, as `roost-open-task' does."
   (interactive (list nil t))
+  (when (and quit-questions (roost--questions-left-open))
+    (let ((task (or task (roost--task-at-point))))
+      (roost--quit-questions-left-open
+       (lambda () (roost-shell (or task (roost--read-task "Task: ")))))))
   (setq task (roost--choose task))
-  (when quit-questions
-    (roost--quit-questions-left-open (lambda () (roost-shell task))))
   (let ((generation (cl-incf roost--open-generation)))
     (roost--act task "shell" nil
                 (lambda (updated)

@@ -1069,6 +1069,20 @@ def question_left(qa, repo):
     qa.step("Clicked another task", expect=[
         ("the question is gone", lambda s: not s["prompt"]),
         ("its panel is beside it", lambda s: panel_text(qa, s).startswith(second))])
+    # Into the sidebar on its project's heading, which opens nothing, and
+    # `l' there, which asks once the question is gone: without recursive
+    # minibuffers, as here, asking first fails.
+    qa.keys("M-x")
+    qa.wait("the question", lambda s: s["prompt"])
+    qa.click_text(qa.host_label + " · ", "roost-sidebar-list-mode")
+    qa.keys("l")
+    qa.wait("which task to switch to", lambda s: (s["prompt"] or "").startswith("Switch task"))
+    qa.type(first + "\r")
+    qa.wait(first + "'s terminal", lambda s: (s.get("task") or {}).get("name") == first
+            and selected_terminal(s))
+    qa.step("Switched with l", expect=[
+        ("the question is gone", lambda s: not s["prompt"]),
+        ("its panel is beside it", lambda s: panel_text(qa, s).startswith(first))])
 
 
 @journey("A second frame")
