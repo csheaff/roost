@@ -346,8 +346,9 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
   requests) in `variable-pitch`, keeping tables and code in the fixed-pitch
   font; make it inherit `default` for one font throughout. `roost-field` is
   for actions and files you can click, plain until the mouse is over them;
-  make it inherit `link` to underline them. `M-x customize-group RET roost`
-  lists the rest.
+  make it inherit `link` to underline them. `roost-current` is the band
+  across the sidebar's row for the task you are working on.
+  `M-x customize-group RET roost` lists the rest.
 - `roost-notify`, `roost-notify-function`: notifications use
   [terminal-notifier](https://github.com/julienXX/terminal-notifier) when it is
   installed (`brew install terminal-notifier`), otherwise macOS's own or Emacs's

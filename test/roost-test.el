@@ -1731,9 +1731,16 @@
          (roost--render-sidebar)
          ;; Each project's heading ends with a + that starts a task in it.
          (should (member (concat "dev · ledger" (make-string 17 ?\s) "+") lines))
-         ;; The current task is marked; statuses are right-aligned.
-         (should (member "▸● budget-alerts    permission" lines))
-         (should (= (string-width "▸● budget-alerts    permission") roost-sidebar-width))
+         ;; The current task is marked to the window's edge; statuses are
+         ;; right-aligned.
+         (should (member " ● budget-alerts    permission" lines))
+         (should (= (string-width " ● budget-alerts    permission") roost-sidebar-width))
+         (goto-char (roost--task-row '("dev" "1111111111111111")))
+         (should (memq 'roost-current (ensure-list (get-text-property (point) 'face))))
+         (should (memq 'roost-current (ensure-list (get-text-property (line-end-position) 'face))))
+         (should (eq (face-attribute 'roost-current :extend) t))
+         (forward-line)
+         (should-not (memq 'roost-current (ensure-list (get-text-property (point) 'face))))
          ;; Long names are cut to fit, keeping the status when it fits.
          (should (seq-some (lambda (line) (and (string-prefix-p " ● a-task" line)
                                                 (string-match-p "…" line)
@@ -2513,8 +2520,8 @@ Read from the layout transient keeps, whose form varies by version."
           (roost--current-task (roost--key a)) (roost-workspace 'perspective)
           (persp-mode t))
      (cl-letf (((symbol-function 'persp-current-name) (lambda () (roost--perspective-name b))))
-       (should (string-prefix-p " " (roost--sidebar-row a 30)))
-       (should (string-prefix-p "▸" (roost--sidebar-row b 30)))))))
+       (should-not (memq 'roost-current (ensure-list (get-text-property 0 'face (roost--sidebar-row a 30)))))
+       (should (memq 'roost-current (ensure-list (get-text-property 0 'face (roost--sidebar-row b 30)))))))))
 
 (ert-deftest roost-tasks-of-one-name-show-their-ids ()
   (roost-test--isolated

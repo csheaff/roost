@@ -284,8 +284,9 @@ to show all of it in that font.")
   "A task waiting for a permission answer in its terminal.")
 (defface roost-status-ready '((t :inherit success))
   "A task waiting for your next prompt.")
-(defface roost-status-running '((t :inherit font-lock-keyword-face))
-  "A task whose agent is working.")
+(defface roost-status-running '((t))
+  "A task whose agent is working.
+Plain, so that a coloured light always means the agent needs you.")
 (defface roost-status-failed '((t :inherit error))
   "A task whose agent failed or disappeared.")
 (defface roost-status-inactive '((t :inherit shadow))
@@ -303,6 +304,10 @@ to show all of it in that font.")
 Their windows have no mode line to show that you are, and the
 sidebar's keys act on this row.")
 (define-obsolete-face-alias 'roost-sidebar-selection 'roost-selection "0.9")
+(defface roost-current '((t :inherit region :extend t))
+  "The sidebar's row for the task you are working on.
+It shows whether or not you are in the sidebar, and `roost-selection'
+covers it on the line you are on.")
 (defface roost-search-match '((t :inherit match))
   "The words searched for, in search results.")
 (defface roost-diff-added '((t :inherit success))
@@ -6614,27 +6619,34 @@ An agent asking, then one that failed, then one that finished."
          'roost-status-failed)
         (t 'roost-status-ready)))
 
+(defun roost--current-task-p (task)
+  "Whether TASK is the one you are working on, which the sidebar marks."
+  (if (roost--workspace-backend)
+      (equal (roost--workspace-name task) (roost--current-workspace))
+    (equal (roost--key task) roost--current-task)))
+
 (defun roost--sidebar-row (task width &optional margin)
   "TASK's sidebar line, within WIDTH columns.
 MARGIN says that its status light shows in the margin, taking no column."
-  (let* ((current (if (roost--workspace-backend)
-                      (equal (roost--workspace-name task) (roost--current-workspace))
-                    (equal (roost--key task) roost--current-task)))
+  (let* ((current (roost--current-task-p task))
          (status (roost--display-status task))
          (face (roost--status-word-face (roost--attention-status task)))
-         ;; The marker, the dot unless it shows in the margin, and a space.
+         ;; An indent, the dot unless it shows in the margin, and a space.
          (room (- width (if margin 2 3)))
          (label (when (>= room (+ (min (string-width (roost--row-name task)) 12) 1
                                   (string-width status)))
                   status))
          (name (roost--row-name task (if label (- room (string-width label) 1) room)
                                 (if current 'roost-heading 'default))))
-    (concat (if current (propertize "▸" 'face 'roost-heading) " ")
-            (roost--status-light task 'sidebar) " "
-            name
-            (when label
-              (concat (make-string (max 1 (- room (string-width name) (string-width label))) ?\s)
-                      (propertize label 'face face))))))
+    (let ((row (concat " " (roost--status-light task 'sidebar) " "
+                       name
+                       (when label
+                         (concat (make-string (max 1 (- room (string-width name) (string-width label))) ?\s)
+                                 (propertize label 'face face))))))
+      ;; Behind the row's own faces, so its dot and status keep their colours.
+      (when current
+        (add-face-text-property 0 (length row) 'roost-current t row))
+      row)))
 
 (defun roost--render-sidebar ()
   "Render the task sidebar from cached state, keeping point on its row."
@@ -6690,8 +6702,11 @@ MARGIN says that its status light shows in the margin, taking no column."
                                                 (roost--host-label host)
                                                 (or repo "?"))
                              row)
-                      ;; As in the dashboard: unhighlighted, still the task's.
-                      (apply #'propertize "\n" row)))))))
+                      ;; As in the dashboard: unhighlighted, still the task's,
+                      ;; and the current task's band reaches the window's edge.
+                      (apply #'propertize "\n" (if (roost--current-task-p task)
+                                                   (append '(face roost-current) row)
+                                                 row))))))))
     (goto-char (or (and key (roost--task-row key))
                    (and heading (roost--heading-row heading))
                    (point-min)))

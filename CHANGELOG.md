@@ -6,6 +6,12 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.8.1:
 
+- The sidebar marks the task you are working on with a band across its
+  row, face `roost-current`, where it had a small arrow, so you find it at
+  a glance. A running agent's light is no longer coloured, so a coloured
+  light always means an agent needs you; to colour it again, make
+  `roost-status-running` inherit `font-lock-keyword-face`. Nothing to do
+  when upgrading.
 - Opening a task on this machine, and Roost's other requests here, no
   longer take seconds, or a minute, when the temporary directory is
   crowded. Python searched that directory for the modules the helper
