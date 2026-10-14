@@ -540,6 +540,24 @@
        (roost--when-out-of-minibuffer (lambda () (push 'again shown)))
        (should (equal shown '(again shown)))))))
 
+(ert-deftest roost-clicking-a-task-no-longer-listed-does-not-ask-which ()
+  ;; The click asked "Task: " in the minibuffer, unseen, and every later
+  ;; open waited behind it.
+  (roost-test--isolated
+   (with-temp-buffer
+     (roost-sidebar-list-mode)
+     (let ((inhibit-read-only t))
+       (insert (propertize "gone\n" 'roost-task '("dev" "0000000000000000"))))
+     (save-window-excursion
+       (set-window-buffer (selected-window) (current-buffer))
+       ;; Whichever buffer is current, the row clicked is the task.
+       (cl-letf (((symbol-function 'mouse-set-point) #'ignore)
+                 ((symbol-function 'roost--read-task)
+                  (lambda (&rest _) (ert-fail "asked which task"))))
+         (should-error (roost-dashboard-mouse-open
+                        (list 'mouse-1 (list (selected-window) (point-min) '(0 . 0) 0)))
+                       :type 'user-error))))))
+
 (ert-deftest roost-closing-a-frame-marks-the-task-of-the-frame-left ()
   ;; The sidebar marked the task opened in a frame since closed.
   (roost-test--isolated

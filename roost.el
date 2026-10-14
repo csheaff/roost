@@ -1461,6 +1461,7 @@ question that came up since; changing windows then would send your
 answer to the task's terminal."
   (if (not (active-minibuffer-window))
       (funcall function)
+    (message "Waiting for you to answer the question in the minibuffer; C-g drops it")
     (letrec ((done (lambda ()
                      (remove-hook 'minibuffer-exit-hook done)
                      ;; Once its window has given the selection back.
@@ -6135,7 +6136,16 @@ The mark stays where it was."
   "Open the task clicked in EVENT."
   (interactive "e")
   (mouse-set-point event)
-  (roost-open-task))
+  ;; Never ask which task: a click that fell through to that question
+  ;; left it open, unseen, and held every later open behind it.  The
+  ;; row clicked says which, whatever buffer is current.
+  (let* ((posn (event-start event))
+         (window (posn-window posn))
+         (key (and (windowp window) (window-live-p window) (posn-point posn)
+                   (with-current-buffer (window-buffer window)
+                     (get-text-property (posn-point posn) 'roost-task)))))
+    (roost-open-task (or (and key (gethash key roost--tasks))
+                         (user-error "That task is no longer listed; refresh with `g'")))))
 
 (defun roost-dashboard-mouse-menu (event)
   "Show the actions for the task clicked in EVENT."
