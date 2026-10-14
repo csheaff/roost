@@ -1570,15 +1570,12 @@ asked for the task is quit first, by `roost--quit-questions-left-open'."
       (add-hook 'minibuffer-exit-hook done))))
 
 (defun roost--questions-left-open ()
-  "How many questions you left open in the minibuffer for this Roost command.
-That is, the command was given from another window, as by clicking a
-task in the sidebar.  A completion popup, such as vertico-posframe's,
-hides a question you leave, and \\[keyboard-quit] there leaves it open.
-Nil when you are in the minibuffer, or when a recursive edit of another
-kind, such as the debugger's, is open as well."
-  (and (symbolp this-command)
-       (string-prefix-p "roost-" (symbol-name this-command))
-       (active-minibuffer-window)
+  "How many questions you left open in the minibuffer, by going to another window.
+A completion popup, such as vertico-posframe's, hides a question you
+leave, and \\[keyboard-quit] there leaves it open.  Nil when you are in
+the minibuffer, or when a recursive edit of another kind, such as the
+debugger's, is open as well."
+  (and (active-minibuffer-window)
        (not (minibufferp (window-buffer (selected-window)) t))
        (= (recursion-depth) (minibuffer-depth))
        (minibuffer-depth)))
@@ -1587,7 +1584,9 @@ kind, such as the debugger's, is open as well."
   "Quit the questions you left open in the minibuffer, then call THEN.
 Return nil, without calling THEN, when there are none.  Otherwise this
 doesn't return: quitting a question gives back the windows it found,
-which would undo what THEN shows, so THEN runs after."
+which would undo what THEN shows, so THEN runs after.  Only for a
+command you gave, never from a host's reply, which can arrive while
+another command waits: the quitting would end that command too."
   (when-let* ((count (roost--questions-left-open)))
     (let ((questions (if (> count 1)
                          (format "%d questions" count)
@@ -1598,13 +1597,15 @@ which would undo what THEN shows, so THEN runs after."
                            (funcall then)))
       (minibuffer-quit-recursive-edit count))))
 
-(defun roost-open-task (&optional task)
-  "Validate TASK's tmux ownership, then restore its perspective and terminal."
-  (interactive)
+(defun roost-open-task (&optional task quit-questions)
+  "Validate TASK's tmux ownership, then restore its perspective and terminal.
+With QUIT-QUESTIONS, as when you give a command, first quit the
+questions you left open in the minibuffer, which would hold the task
+back, unseen, until you answered them."
+  (interactive (list nil t))
   (setq task (roost--choose task))
-  ;; Otherwise a question you left open would hold the task back, unseen,
-  ;; until you answered it.
-  (roost--quit-questions-left-open (lambda () (roost-open-task task)))
+  (when quit-questions
+    (roost--quit-questions-left-open (lambda () (roost-open-task task))))
   (let* ((generation (cl-incf roost--open-generation))
          (window (if (window-minibuffer-p) (minibuffer-selected-window) (selected-window)))
          (shown (window-buffer window)))
@@ -1655,7 +1656,7 @@ which would undo what THEN shows, so THEN runs after."
 (defun roost-switch-task ()
   "Choose a task across hosts and restore its workspace."
   (interactive)
-  (roost-open-task (roost--read-task "Switch task: ")))
+  (roost-open-task (roost--read-task "Switch task: ") t))
 
 ;;;; Creating tasks
 
@@ -3896,11 +3897,14 @@ stamp, so polls would not notice it."
   (dired (roost--remote-directory task)))
 
 ;;;###autoload
-(defun roost-shell (&optional task)
-  "Open or reuse a shell beside the agent, in TASK's worktree."
-  (interactive)
+(defun roost-shell (&optional task quit-questions)
+  "Open or reuse a shell beside the agent, in TASK's worktree.
+With QUIT-QUESTIONS, as when you give a command, first quit the
+questions you left open in the minibuffer, as `roost-open-task' does."
+  (interactive (list nil t))
   (setq task (roost--choose task))
-  (roost--quit-questions-left-open (lambda () (roost-shell task)))
+  (when quit-questions
+    (roost--quit-questions-left-open (lambda () (roost-shell task))))
   (let ((generation (cl-incf roost--open-generation)))
     (roost--act task "shell" nil
                 (lambda (updated)
@@ -4506,7 +4510,7 @@ that failed, crashed or exited, in turn."
                       (seq-find (lambda (key) (not (equal key viewing))) blocked))
                 (or (cadr (member (or viewing roost--current-task) keys)) (car keys)))))
     (unless key (user-error "No tasks are waiting for you"))
-    (roost-open-task (gethash key roost--tasks))))
+    (roost-open-task (gethash key roost--tasks) t)))
 
 (defun roost--project-name (task)
   "Short primary repository name for TASK."
@@ -6310,7 +6314,8 @@ The mark stays where it was."
                    (with-current-buffer (window-buffer window)
                      (get-text-property (posn-point posn) 'roost-task)))))
     (roost-open-task (or (and key (gethash key roost--tasks))
-                         (user-error "That task is no longer listed; refresh with `g'")))))
+                         (user-error "That task is no longer listed; refresh with `g'"))
+                     t)))
 
 (defun roost-dashboard-mouse-menu (event)
   "Show the actions for the task clicked in EVENT."
@@ -6655,7 +6660,7 @@ Then showing more of it would only repeat it."
   (interactive)
   (let ((key (get-text-property (line-beginning-position) 'roost-task)))
     (cond ((and key (gethash key roost--tasks))
-           (roost-open-task (gethash key roost--tasks)))
+           (roost-open-task (gethash key roost--tasks) t))
           (key
            (roost--refresh-host (car key) nil (cdr key))
            (user-error "Roost is still fetching the tasks on %s; try again in a moment"

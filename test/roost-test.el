@@ -557,28 +557,26 @@
                ((symbol-function 'run-at-time) (lambda (_time _repeat function) (setq later function)))
                ((symbol-function 'roost--request) (lambda (_host action &rest _) (push action requested)))
                ((symbol-function 'message) (lambda (format &rest args) (push (apply #'format format args) said))))
-       (let ((this-command 'roost-dashboard-mouse-open))
-         (catch 'quit (roost-open-task (roost-test--task)))
-         ;; Each of them, before the task: quitting one gives back the
-         ;; windows it found.
-         (should (equal quit 2))
-         (should-not requested))
+       (catch 'quit (roost-open-task (roost-test--task) t))
+       ;; Each of them, before the task: quitting one gives back the
+       ;; windows it found.
+       (should (equal quit 2))
+       (should-not requested)
        (funcall later)
        (should (equal requested '("inspect")))
        (should (equal said '("Quit 2 questions left open in the minibuffer")))
        (setq depth 1 recursion 1 quit nil requested nil)
-       (let ((this-command 'roost-open-task))
-         ;; Not the one you are answering, ...
-         (setq in-minibuffer t)
-         (roost-open-task (roost-test--task))
-         ;; ... nor below a recursive edit of another kind, such as the
-         ;; debugger's, ...
-         (setq in-minibuffer nil recursion 2)
-         (roost-open-task (roost-test--task)))
-       ;; ... nor when the task is opened other than by a command of
-       ;; Roost's, as when a host replies.
+       ;; Not the one you are answering, ...
+       (setq in-minibuffer t)
+       (roost-open-task (roost-test--task) t)
+       ;; ... nor below a recursive edit of another kind, such as the
+       ;; debugger's, ...
+       (setq in-minibuffer nil recursion 2)
+       (roost-open-task (roost-test--task) t)
+       ;; ... nor when a host's reply opens the task, though it arrives
+       ;; while a command of Roost's waits: that command would end too.
        (setq recursion 1)
-       (let ((this-command nil))
+       (let ((this-command 'roost-discard))
          (roost-open-task (roost-test--task)))
        (should-not quit)
        (should (equal requested '("inspect" "inspect" "inspect")))))))
@@ -1094,7 +1092,7 @@
      (cl-letf (((symbol-function 'hack-dir-local-variables-non-file-buffer) #'ignore)
                ((symbol-function 'roost--remember-host) #'ignore)
                ((symbol-function 'roost-watch-mode) #'ignore)
-               ((symbol-function 'roost-open-task) (lambda (task) (setq opened task)))
+               ((symbol-function 'roost-open-task) (lambda (task &rest _) (setq opened task)))
                ((symbol-function 'roost--request)
                 (lambda (_host _action _params success &optional _failure) (funcall success (roost-test--task)))))
        (roost-new-task "/ssh:dev:/repo/" "fix")
@@ -1467,7 +1465,7 @@
                 (lambda (host action params success failure)
                   (push (list host action params success failure) requests)))
                ((symbol-function 'roost--refresh-host) (lambda (host &rest _) (push host fetched)))
-               ((symbol-function 'roost-open-task) (lambda (task) (setq opened task))))
+               ((symbol-function 'roost-open-task) (lambda (task &rest _) (setq opened task))))
        (unwind-protect
            (save-window-excursion
              (roost-search "  csv COMMAS ")
@@ -2243,7 +2241,7 @@
                (should (equal (seq-take command 4)
                               (list client "--socket-name" "/tmp/emacs501/server" "--no-wait")))
                ;; What the click evaluates opens the task.
-               (cl-letf (((symbol-function 'roost-open-task) (lambda (task) (setq opened task)))
+               (cl-letf (((symbol-function 'roost-open-task) (lambda (task &rest _) (setq opened task)))
                          ((symbol-function 'select-frame-set-input-focus) #'ignore))
                  (eval (read (car (last command))) t))))
            (should (equal (roost--field opened 'id) "0123456789abcdef"))
@@ -2290,7 +2288,7 @@
      (roost--cache-task "dev" (append '((session . "roost-p-111111")) (roost-test--task "1111111111111111")))
      (roost--cache-task "dev" (append '((session . "roost-shared")) (roost-test--task "2222222222222222")))
      (roost--cache-task "dev" (append '((session . "roost-shared")) (roost-test--task "3333333333333333")))
-     (cl-letf (((symbol-function 'roost-open-task) (lambda (task) (setq opened (roost--field task 'id)))))
+     (cl-letf (((symbol-function 'roost-open-task) (lambda (task &rest _) (setq opened (roost--field task 'id)))))
        (should (roost--switch-session "dev" "main" "roost-p-111111"))
        (should (equal opened "1111111111111111"))
        ;; Not a task's own: tmux-control switches as usual.
@@ -2954,7 +2952,7 @@ Read from the layout transient keeps, whose form varies by version."
    (roost--cache-task "c" (roost-test--task nil "running"))
    (let (opened)
      (cl-letf (((symbol-function 'roost-open-task)
-                (lambda (task) (setq opened (roost--key task) roost--current-task opened))))
+                (lambda (task &rest _) (setq opened (roost--key task) roost--current-task opened))))
        ;; The permission request comes first, then the ready task, in turn.
        (roost-next-waiting) (should (equal (car opened) "b"))
        (roost-next-waiting) (should (equal (car opened) "a"))
@@ -2978,7 +2976,7 @@ Read from the layout transient keeps, whose form varies by version."
    (roost--cache-task "d" (roost-test--task))
    (let (opened)
      (cl-letf (((symbol-function 'roost-open-task)
-                (lambda (task) (setq opened (roost--key task) roost--current-task opened))))
+                (lambda (task &rest _) (setq opened (roost--key task) roost--current-task opened))))
        (should (equal (cl-loop repeat 4 do (roost-next-waiting) collect (car opened))
                       '("a" "b" "c" "a")))))))
 
@@ -3660,7 +3658,7 @@ Read from the layout transient keeps, whose form varies by version."
    (let ((roost-mode-line-count t) recorded opened)
      (cl-letf (((symbol-function 'roost--record-seen)
                 (lambda (task updated) (push (list (roost--field task 'id) updated) recorded)))
-               ((symbol-function 'roost-open-task) (lambda (task) (push (roost--field task 'id) opened))))
+               ((symbol-function 'roost-open-task) (lambda (task &rest _) (push (roost--field task 'id) opened))))
        (dolist (status '("failed" "crashed" "exited"))
          (clrhash roost--tasks)
          (clrhash roost--seen)
@@ -4052,7 +4050,7 @@ Read from the layout transient keeps, whose form varies by version."
      (should (string-prefix-p "1 at a startup prompt · 1 ready · 1 running" (roost--summary (roost-tasks))))
      (let (opened)
        (cl-letf (((symbol-function 'roost-open-task)
-                  (lambda (task) (setq opened (roost--field task 'name) roost--current-task (roost--key task)))))
+                  (lambda (task &rest _) (setq opened (roost--field task 'name) roost--current-task (roost--key task)))))
          (roost-next-waiting) (should (equal opened "stuck"))
          (roost-next-waiting) (should (equal opened "idle"))
          (roost-next-waiting) (should (equal opened "stuck"))
