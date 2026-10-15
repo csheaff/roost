@@ -3995,8 +3995,9 @@ Read from the layout transient keeps, whose form varies by version."
 (ert-deftest roost-a-click-on-a-task-closes-a-menu-left-open ()
   ;; With the menu open, a click on a task in the sidebar only said
   ;; "Unbound suffix": the menu goes, and the click does what it does.
-  (dolist (command '(roost-dashboard-mouse-open roost-dashboard-mouse-menu))
-    (should (eq (lookup-key transient-predicate-map (vector command)) #'transient--do-exit))))
+  (roost-test--isolated
+   (dolist (command '(roost-dashboard-mouse-open roost-dashboard-mouse-menu))
+     (should (eq (lookup-key transient-predicate-map (vector command)) #'transient--do-exit)))))
 
 (ert-deftest roost-task-panel-shows-prompt-changes-and-details ()
   (roost-test--isolated
