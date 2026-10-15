@@ -2286,9 +2286,15 @@
                              (push (cons function args) later))))
                  (eval (read (car (last command))) t)
                  (should-not opened)
-                 (pcase-dolist (`(,function . ,args) later) (apply function args)))))
-           (should (equal (roost--field (car opened) 'id) "0123456789abcdef"))
-           (should (cadr opened))
+                 (pcase-dolist (`(,function . ,args) later) (apply function args))
+                 (should (equal (roost--field (car opened) 'id) "0123456789abcdef"))
+                 (should (cadr opened))
+                 ;; A task opened before then is the one shown.
+                 (setq later nil opened nil)
+                 (eval (read (car (last command))) t)
+                 (cl-incf roost--open-generation)
+                 (pcase-dolist (`(,function . ,args) later) (apply function args))
+                 (should-not opened))))
            ;; Without a server, a click can't reach Emacs.
            (let ((server-process nil))
              (should-not (member "-execute" (roost--terminal-notifier-arguments "t" "b" task)))))

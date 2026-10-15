@@ -733,10 +733,14 @@ Call SUCCESS with the result, or FAILURE with an error message."
 As a click in Roost does, this quits a question you left open in the
 minibuffer, which would hold the task back unseen.  It does so once
 Emacs waits for you: the click comes through Emacs's server, which can
-run while a command of yours waits, and quitting would end it too."
+run while a command of yours waits, and quitting would end it too.  A
+task you open before then is the one shown."
   (when-let* ((task (gethash (list host id) roost--tasks)))
     (select-frame-set-input-focus (selected-frame))
-    (run-with-idle-timer 0 nil #'roost-open-task task t)))
+    (let ((generation (cl-incf roost--open-generation)))
+      (run-with-idle-timer 0 nil (lambda ()
+                                   (when (= generation roost--open-generation)
+                                     (roost-open-task task t)))))))
 
 (defun roost--terminal-notifier-arguments (title body task)
   "Arguments for terminal-notifier to show TITLE and BODY about TASK.

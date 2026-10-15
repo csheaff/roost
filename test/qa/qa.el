@@ -439,18 +439,33 @@ A window parameter of that name takes the buffer's place, as in redisplay."
       ;; The agent's own pane.
       (pane . ,(roost--field task 'paneId)))))
 
+(defvar qa--questions-asked 0
+  "How many questions the minibuffer has asked.")
+
+(defvar-local qa--question nil
+  "Which question this minibuffer asks, counting from the first asked.
+A minibuffer's buffer is used again for the next question at its depth.")
+
+(defun qa--question-asked ()
+  "Number the question the minibuffer asks now, for `qa--questions'."
+  (setq qa--question (cl-incf qa--questions-asked)))
+
+(add-hook 'minibuffer-setup-hook #'qa--question-asked)
+
 (defun qa--questions ()
-  "The prompts of the questions open in the minibuffer, the first asked first.
-On screen or not: a completion popup can hide one you leave."
-  (let (prompts)
+  "The questions open in the minibuffer, the first asked first, each ((id . N) (prompt . TEXT)).
+On screen or not: a completion popup can hide one you leave.  N tells a
+question from another of the same prompt asked after it."
+  (let (questions)
     (dolist (buffer (buffer-list))
       (when (and (minibufferp buffer t)
                  (string-match " \\*Minibuf-\\([0-9]+\\)\\*" (buffer-name buffer)))
         (push (cons (string-to-number (match-string 1 (buffer-name buffer)))
                     (with-current-buffer buffer
-                      (buffer-substring-no-properties (point-min) (minibuffer-prompt-end))))
-              prompts)))
-    (mapcar #'cdr (sort prompts (lambda (a b) (< (car a) (car b)))))))
+                      `((id . ,qa--question)
+                        (prompt . ,(buffer-substring-no-properties (point-min) (minibuffer-prompt-end))))))
+              questions)))
+    (mapcar #'cdr (sort questions (lambda (a b) (< (car a) (car b)))))))
 
 (defun qa-screen ()
   "What is on screen now, as JSON."

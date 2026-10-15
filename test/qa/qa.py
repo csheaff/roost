@@ -153,9 +153,9 @@ class Run:
         self.process = None
         self.steps = []
         self.journey = None
-        # How many of the questions open the journey left so, as you would
-        # by clicking elsewhere with one open.
-        self.left_open = 0
+        # The questions the journey left open, by id, as you would by
+        # clicking elsewhere with one open.
+        self.left_open = set()
         self.shots = 0
         self.winid = None
 
@@ -408,8 +408,8 @@ class Run:
 
     def leave_question(self):
         """Note the questions open now as left so, as you would by clicking
-        elsewhere: not a problem by themselves, unlike those that come after."""
-        self.left_open = len(self.screen()["questions"])
+        elsewhere: not a problem by themselves, unlike those asked after."""
+        self.left_open = {question["id"] for question in self.screen()["questions"]}
 
     def wait(self, what, check, timeout=40):
         """Wait until CHECK, given the screen, holds."""
@@ -440,7 +440,7 @@ class Run:
             self.emacs.eval("(when-let* ((window (active-minibuffer-window))) (select-window window))")
             self.keys("C-g")
         self.emacs.eval("(qa-forget-drafts)")
-        self.left_open = 0
+        self.left_open = set()
 
     def task(self, screen, name):
         return next((task for task in screen["tasks"] if task["name"] == name), None)
@@ -504,14 +504,15 @@ class Run:
         # popup hides one you click away from: what waits for it waits
         # unseen.
         questions = screen["questions"]
-        self.left_open = min(self.left_open, len(questions))
+        self.left_open &= {question["id"] for question in questions}
         if not screen["in-question"]:
             if screen["held"]:
                 problems.append("Roost holds %d back until questions you aren't in are done: %s"
-                                % (screen["held"], ", ".join(map(repr, questions))))
-            if len(questions) > self.left_open:
+                                % (screen["held"], ", ".join(repr(q["prompt"]) for q in questions)))
+            asked = [q for q in questions if q["id"] not in self.left_open]
+            if asked:
                 problems.append("A question is open that you aren't in: %s"
-                                % ", ".join(map(repr, questions[self.left_open:])))
+                                % ", ".join(repr(q["prompt"]) for q in asked))
         task = screen.get("task")
         frames = screen.get("frames") or {}
         # By key: tasks can share a name.  The sidebar, one for every frame,
