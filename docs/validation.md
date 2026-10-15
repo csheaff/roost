@@ -1147,16 +1147,24 @@ in the last, it found:
 - With perspectives, closing the second frame left the sidebar marking
   its task. Fixed: closing a frame draws the sidebar again.
 - With Roost's menu open, a click on a task in the sidebar only says
-  "Unbound suffix: `<mouse-1>`". Left as it is; `walk_away` marks it
-  `Known`.
+  "Unbound suffix: `<mouse-1>`". Fixed after: a click on a task's row
+  closes any menu and does what it does.
 - With perspectives and the tasks on `qa-remote`, a shell pane opened
   again with `t` shows a line or two of history for a second or more:
   the perspective restores the window's start from the last visit, after
-  the pane has scrolled since, and tmux-control anchors a window to the
-  screen's top only when output comes. Not fixed here.
+  the pane has scrolled since, and tmux-control anchors a split view's
+  window to the screen's top only when output comes. Fixed after, in
+  tmux-control, which now anchors it when it comes back: with that
+  tmux-control, the shell pane started at its screen's top on each of
+  four visits, a second after `t`.
 - With perspectives, a frame made with `C-x 5 2` shows the task's
   terminal in a perspective of its own, which is no task's, so it has no
-  panel. Not changed.
+  panel. Fixed after: a workspace that is no task's follows the task
+  whose terminal it shows.
+- A click on the perspective bar's `Roost:` entry asked `Switch task: `
+  in the minibuffer, the question a popup hides once you click
+  elsewhere. Fixed after: it shows a menu at the pointer, as the
+  project's choice does.
 
 ### Codex and Pi adapters
 

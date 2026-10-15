@@ -11,6 +11,15 @@ Since 0.8.1:
   tab or perspective, and its agent's tmux window; its branch and
   worktree keep the name the task started with. Nothing to do when
   upgrading.
+- With a menu open, Roost's or another's, a click on a task in the
+  sidebar or dashboard closes the menu and opens the task, rather than
+  saying "Unbound suffix". Nothing to do when upgrading.
+- With perspectives or tabs, a frame or workspace that is no task's,
+  such as a frame made with `C-x 5 2`, gets the panel and sidebar marker
+  of the task whose terminal it shows. Nothing to do when upgrading.
+- A click on the perspective bar's `Roost:` entry shows the tasks in a
+  menu at the pointer, rather than asking in the minibuffer. Nothing to
+  do when upgrading.
 - A click on a task's notification quits a question you left open in the
   minibuffer, as a click in the sidebar does, once Emacs is waiting for
   you. The task waited for that question, hidden by a completion popup

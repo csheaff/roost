@@ -1292,9 +1292,6 @@ def walk_away(qa, repo):
             shell = go is go_shell
             opens = ((target + "'s " + ("shell" if shell else "terminal") + " opens", shows(qa, target, shell))
                      if target else (home + "'s terminal stays", shows(qa, home)))
-            # Roost's menu takes a click elsewhere for one of its keys.
-            if leave is leave_menu and go is go_click:
-                opens = Known(opens)
             screen = qa.until(opens[1], timeout)
             if go is go_notification and screen["in-question"]:
                 # You are answering a question: the task waits until you are done.

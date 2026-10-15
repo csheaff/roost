@@ -1151,16 +1151,23 @@ nobody is looking."
                                   'face 'roost-dim))))))
     (unless tasks
       (user-error "No tasks yet; create one with `roost-new-task'"))
-    (cdr (assoc (completing-read
-                 prompt
-                 (lambda (string predicate action)
-                   (if (eq action 'metadata)
-                       `(metadata (category . roost-task)
-                                  (annotation-function . ,annotate)
-                                  (display-sort-function . identity))
-                     (complete-with-action action choices string predicate)))
-                 nil t)
-                choices))))
+    (if (and (mouse-event-p last-nonmenu-event) (display-popup-menus-p))
+        ;; A click, as on the mode line's workspace, shows a menu at the
+        ;; pointer, as `roost--choose-from' does: a question in the
+        ;; minibuffer, which a completion popup hides once you click
+        ;; elsewhere, would hold back every task opened after.
+        (or (x-popup-menu last-nonmenu-event (list prompt (cons "" choices)))
+            (keyboard-quit))
+      (cdr (assoc (completing-read
+                   prompt
+                   (lambda (string predicate action)
+                     (if (eq action 'metadata)
+                         `(metadata (category . roost-task)
+                                    (annotation-function . ,annotate)
+                                    (display-sort-function . identity))
+                       (complete-with-action action choices string predicate)))
+                   nil t)
+                  choices)))))
 
 ;; String comparisons avoid opening a remote connection just to infer context.
 (defun roost--task-in-directory (directory &optional tasks)
@@ -6072,6 +6079,12 @@ are told apart."
   "<mouse-1>" #'roost-dashboard-mouse-open
   "<mouse-3>" #'roost-dashboard-mouse-menu)
 
+;; With a menu open, Roost's or another package's, a click on a task's
+;; row closes the menu and does what it does, rather than being refused
+;; as none of the menu's keys.
+(dolist (command '(roost-dashboard-mouse-open roost-dashboard-mouse-menu))
+  (define-key transient-predicate-map (vector command) #'transient--do-exit))
+
 (define-derived-mode roost-dashboard-mode special-mode "Roost"
   "Coding agent tasks across hosts, grouped by project.
 Refreshes are asynchronous; rendering uses only cached state.
@@ -6844,11 +6857,17 @@ An agent asking, then one that failed, then one that finished."
          'roost-status-failed)
         (t 'roost-status-ready)))
 
+(defvar roost--marked-key 'unset
+  "The key of the task the sidebar marks, while it is drawn.
+With workspaces, found once for the whole sidebar, not for each row.")
+
 (defun roost--current-task-p (task)
-  "Whether TASK is the one you are working on, which the sidebar marks."
-  (if (roost--workspace-backend)
-      (equal (roost--workspace-name task) (roost--current-workspace))
-    (equal (roost--key task) roost--current-task)))
+  "Whether TASK is the one you are working on, which the sidebar marks.
+With workspaces, the task of the frame you are in: see `roost--frame-task'."
+  (equal (roost--key task)
+         (cond ((not (roost--workspace-backend)) roost--current-task)
+               ((not (eq roost--marked-key 'unset)) roost--marked-key)
+               (t (when-let* ((task (roost--frame-task))) (roost--key task))))))
 
 (defun roost--sidebar-row (task width)
   "TASK's sidebar line, within WIDTH columns: its name, then its status.
@@ -6897,6 +6916,9 @@ have seen that waits for nothing."
          (key (get-text-property position 'roost-task))
          (heading (unless key (get-text-property position 'roost-directory)))
          (tasks (roost-tasks))
+         (roost--marked-key (if (roost--workspace-backend)
+                                (when-let* ((task (roost--frame-task))) (roost--key task))
+                              'unset))
          (inhibit-read-only t))
     (erase-buffer)
     (insert (propertize "Roost" 'face 'roost-title)
@@ -6992,14 +7014,26 @@ Ediff's control frame, are left alone."
 
 (defun roost--frame-task ()
   "Return the task for the selected frame's task panel.
-With workspaces, that is the task whose workspace is current; without,
-the task last used in the frame, or taken up since; see
-`roost--adopt-shown-task'."
+With workspaces, that is the task whose workspace is current, or, in a
+workspace that is no task's, the task whose terminal the frame shows: a
+frame made with \\[make-frame-command] under perspective.el starts in a
+perspective of its own, showing the terminal you were in.  Without
+workspaces, it is the task last used in the frame, or taken up since;
+see `roost--adopt-shown-task'."
   (if (roost--workspace-backend)
-      (when-let* ((current (roost--current-workspace)))
-        (seq-find (lambda (task) (equal (roost--workspace-name task) current))
-                  (roost-tasks)))
+      (let ((current (roost--current-workspace)))
+        (or (and current
+                 (seq-find (lambda (task) (equal (roost--workspace-name task) current))
+                           (roost-tasks)))
+            (roost--shown-task)))
     (gethash (frame-parameter nil 'roost-task) roost--tasks)))
+
+(defun roost--shown-task ()
+  "The task whose terminal the selected frame shows, the one used last.
+That is its terminal used last, though Magit or a file was used since."
+  (seq-some (lambda (window) (roost--terminal-task (window-buffer window)))
+            (sort (roost--main-windows)
+                  (lambda (a b) (> (window-use-time a) (window-use-time b))))))
 
 (defun roost--adopt-shown-task ()
   "Take up the task whose terminal the selected frame shows, if its own is gone.
@@ -7010,10 +7044,7 @@ marker, and keeps it when a draft later covers the terminal.  Without
 workspaces only, where the frame records its task."
   (unless (or (roost--workspace-backend)
               (gethash (frame-parameter nil 'roost-task) roost--tasks))
-    ;; The terminal used last, though Magit or a file was used since.
-    (when-let* ((task (seq-some (lambda (window) (roost--terminal-task (window-buffer window)))
-                                (sort (roost--main-windows)
-                                      (lambda (a b) (> (window-use-time a) (window-use-time b)))))))
+    (when-let* ((task (roost--shown-task)))
       (set-frame-parameter nil 'roost-task (roost--key task))
       ;; The task last opened is likely the one gone: the sidebar, one for
       ;; every frame, marks the task opened last, now this one.
@@ -7211,6 +7242,8 @@ Beside a terminal, that turns off `roost-task-panel-mode'."
   (when roost-watch-mode (roost-watch-mode -1))
   (when (timerp roost--lights-timer) (cancel-timer roost--lights-timer))
   (advice-remove 'persp-mode-line #'roost--compact-perspective-mode-line)
+  (dolist (command '(roost-dashboard-mouse-open roost-dashboard-mouse-menu))
+    (define-key transient-predicate-map (vector command) nil t))
   ;; Continue with the standard unloading.
   nil)
 

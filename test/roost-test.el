@@ -705,6 +705,40 @@
               (should (eq (roost--frame-task) own)))))
        (kill-buffer terminal)))))
 
+(ert-deftest roost-a-workspace-of-no-task-follows-the-terminal-it-shows ()
+  ;; Under perspective.el, a frame made with C-x 5 2 starts in a
+  ;; perspective of its own, showing the terminal you were in: it had no
+  ;; task, so no panel, and the sidebar marked none.
+  (roost-test--isolated
+   (let ((shown (roost--cache-task "dev" (roost-test--task "1111111111111111")))
+         (other (roost--cache-task "dev" (append '((session . "roost-222222"))
+                                                 (roost-test--task "2222222222222222"))))
+         (terminal (generate-new-buffer " terminal"))
+         (current "main"))
+     (unwind-protect
+         (roost-test--with-tmux-buffers
+          (save-window-excursion
+            (delete-other-windows)
+            (with-current-buffer terminal
+              (setq major-mode 'tmux-control-mode
+                    roost-test--tmux (list :host "dev" :socket "main" :session (roost--field shown 'session))))
+            (set-window-buffer (selected-window) terminal)
+            (cl-letf (((symbol-function 'roost--workspace-backend) (lambda () 'perspective))
+                      ((symbol-function 'roost--current-workspace) (lambda () current)))
+              (should (eq (roost--frame-task) shown))
+              (should (roost--current-task-p shown))
+              (should-not (roost--current-task-p other))
+              ;; In a task's workspace, that task, whatever is shown.
+              (setq current (roost--workspace-name other))
+              (should (eq (roost--frame-task) other))
+              (should (roost--current-task-p other))
+              (should-not (roost--current-task-p shown))
+              ;; With no terminal shown, none.
+              (setq current "main")
+              (set-window-buffer (selected-window) (get-buffer-create "*scratch*"))
+              (should-not (roost--frame-task)))))
+       (kill-buffer terminal)))))
+
 (ert-deftest roost-task-panel-keeps-the-status-on-one-line ()
   (roost-test--isolated
    (let ((task (roost--cache-task "dev" (append '((name . "ask-git-status-short"))
@@ -3937,7 +3971,32 @@ Read from the layout transient keeps, whose form varies by version."
                   (car candidates))))
        (should (equal (roost--field (roost--read-task "Task: ") 'id) "2222222222222222")))
      (should (equal candidates '("beta  dev · unknown  [222222]" "alpha  dev · unknown" "beta  dev · unknown  [333333]")))
-     (should (string-match-p "permission  fix authentication" (funcall annotation (car candidates)))))))
+     (should (string-match-p "permission  fix authentication" (funcall annotation (car candidates)))))
+   ;; A click, as on the mode line's workspace, asks with a menu at the
+   ;; pointer: a question in the minibuffer, which a completion popup
+   ;; hides once you click elsewhere, held back every task opened after.
+   (let ((last-nonmenu-event (list 'mouse-1 (list (selected-window) 1 '(0 . 0) 0)))
+         menu (choice t))
+     (cl-letf (((symbol-function 'display-popup-menus-p) (lambda (&rest _) t))
+               ((symbol-function 'completing-read) (lambda (&rest _) (ert-fail "asked in the minibuffer")))
+               ((symbol-function 'x-popup-menu)
+                (lambda (_position items)
+                  (setq menu items)
+                  (and choice (cdr (cadr (cadr items)))))))
+       (should (equal (roost--field (roost--read-task "Switch task: ") 'id) "2222222222222222"))
+       (should (equal (car menu) "Switch task: "))
+       (should (equal (mapcar #'car (cdr (cadr menu)))
+                      '("beta  dev · unknown  [222222]" "alpha  dev · unknown" "beta  dev · unknown  [333333]")))
+       ;; Dismissed, it asks nothing more.
+       (setq choice nil)
+       (should (eq (condition-case nil (progn (roost--read-task "Switch task: ") 'chose) (quit 'quit))
+                   'quit))))))
+
+(ert-deftest roost-a-click-on-a-task-closes-a-menu-left-open ()
+  ;; With the menu open, a click on a task in the sidebar only said
+  ;; "Unbound suffix": the menu goes, and the click does what it does.
+  (dolist (command '(roost-dashboard-mouse-open roost-dashboard-mouse-menu))
+    (should (eq (lookup-key transient-predicate-map (vector command)) #'transient--do-exit))))
 
 (ert-deftest roost-task-panel-shows-prompt-changes-and-details ()
   (roost-test--isolated

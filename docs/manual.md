@@ -170,8 +170,8 @@ it from the start. Each task there is its name and, at the right, its status:
 in its colour when there is something to look at, such as `permission` or a
 `ready` you haven't seen, dim when the agent is only working or stopped, and
 none once you've seen an agent that waits for nothing. A click opens the task,
-quitting any question you left open in the minibuffer, which would hold it back.
-`I` docks a panel at the right of an open task's terminal,
+quitting any question you left open in the minibuffer, which would hold it back,
+and closing a menu left open. `I` docks a panel at the right of an open task's terminal,
 kept current as the agent works: what to do next, the task's prompt, and the
 files it changed, those not yet committed first. A click or `RET` on a file
 opens its diff in Magit, where `;` writes a note for the agent (more under
@@ -339,7 +339,10 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
   the panel docked beside a task's terminal.
 - `roost-workspace`, `roost-compact-mode-line`: how tasks get their own windows
   (see above); with perspective.el, task perspectives share one
-  `Roost: host/task +N` entry in the perspective bar.
+  `Roost: host/task +N` entry in the perspective bar, and a click on it shows
+  the tasks in a menu. In a workspace that is no task's, such as the one a
+  frame made with `C-x 5 2` starts in, the panel and the sidebar follow the
+  task whose terminal it shows.
 - `roost-mode-line-count`: the waiting count in `global-mode-string`. For a
   mode line of your own, set it to nil and place
   `(:eval (and (fboundp 'roost-mode-line-waiting) (roost-mode-line-waiting)))`
