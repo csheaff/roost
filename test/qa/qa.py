@@ -1303,11 +1303,15 @@ def walk_away(qa, repo):
                 qa.keys("C-g")
                 pair += ", and that question quit"
                 qa.until(opens[1], timeout)
-            if leave is leave_opening:
-                # Until the first task's late reply has come.
-                qa.until(lambda s: qa.emacs.eval("(qa-held-replies)") == "0", timeout)
-                qa.settle()
             expect = [opens]
+            if leave is leave_opening:
+                # Once the first task's late reply has come, which must not
+                # take the place of what you went to.
+                late = ("the first task's late reply came",
+                        lambda s: qa.emacs.eval("(qa-held-replies)") == "0")
+                qa.until(late[1], timeout)
+                qa.settle()
+                expect.append(late)
             if leave is leave_draft:
                 expect.append(("the draft is kept", lambda s: any(
                     "Half a thought" in draft for draft in qa.emacs.json("(json-encode (vconcat (qa-drafts)))"))))
@@ -1360,11 +1364,19 @@ def org(qa, repo):
          not in ("nil", ""))])
 
 
+def tab_per_task(qa):
+    """Keep a tab for each task; return `roost-workspace' as it was, to set
+    back after: with --popular, perspectives, for the journeys after."""
+    workspace = qa.emacs.eval("roost-workspace")
+    qa.emacs.eval("(progn (switch-to-buffer \"*scratch*\") (setq roost-workspace 'tab-bar) (tab-bar-mode 1))")
+    return workspace
+
+
 @journey("A tab per task")
 def tabs(qa, repo):
     """With tab-bar-mode, each task has a tab of its own, which a task of the
     same name leaves alone, and which goes with its task."""
-    qa.emacs.eval("(progn (switch-to-buffer \"*scratch*\") (setq roost-workspace 'tab-bar) (tab-bar-mode 1))")
+    workspace = tab_per_task(qa)
     try:
         first = start_task(qa, "Draw a tab")
         qa.step("A task in its own tab", expect=[
@@ -1397,7 +1409,8 @@ def tabs(qa, repo):
             ("its tab is gone", lambda s: qa.host_label + "/" + first not in s["workspaces"]),
             ("the other's is still there", lambda s: len(s["workspaces"]) == 2)])
     finally:
-        qa.emacs.eval("(progn (tab-bar-close-other-tabs) (tab-bar-rename-tab \"\") (tab-bar-mode -1) (setq roost-workspace nil))")
+        qa.emacs.eval("(progn (tab-bar-close-other-tabs) (tab-bar-rename-tab \"\") (tab-bar-mode -1) "
+                      "(setq roost-workspace '%s))" % workspace)
         qa.settle()
 
 
@@ -1458,7 +1471,7 @@ def forget(qa, repo):
 def rename(qa, repo):
     """R renames a task: in Roost, its tab and its agent's tmux window. Its
     branch keeps the name it started with."""
-    qa.emacs.eval("(progn (switch-to-buffer \"*scratch*\") (setq roost-workspace 'tab-bar) (tab-bar-mode 1))")
+    workspace = tab_per_task(qa)
     try:
         name = start_task(qa, "Name me later")
         open_task(qa, name)
@@ -1487,7 +1500,8 @@ def rename(qa, repo):
             ("in the tab it had", lambda s: s["workspace"] == qa.host_label + "/Parser fix"),
             ("no tab was added", lambda s: len(s["workspaces"]) == 2)])
     finally:
-        qa.emacs.eval("(progn (tab-bar-close-other-tabs) (tab-bar-rename-tab \"\") (tab-bar-mode -1) (setq roost-workspace nil))")
+        qa.emacs.eval("(progn (tab-bar-close-other-tabs) (tab-bar-rename-tab \"\") (tab-bar-mode -1) "
+                      "(setq roost-workspace '%s))" % workspace)
         qa.settle()
 
 

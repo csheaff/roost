@@ -14,7 +14,8 @@
 ;;   asks; it never ends in a Lisp error.
 ;; - A click on a task, there or gone since, opens it, shows a menu, or
 ;;   says why it can't; it never asks in the minibuffer, where a
-;;   completion popup hides a question once you click elsewhere.
+;;   completion popup hides a question once you click elsewhere, and
+;;   never does nothing.
 ;; - A button or key that changes only the view keeps that change through
 ;;   a redraw, and another button or key changes it back.
 ;; - A key the view tells you to press is bound there, and its command
@@ -439,7 +440,8 @@ out: the other rules press them."
 With GONE, STATE's task is no longer listed by then, as when a host
 dropped it since the view was drawn.  Return a plist: :asked, the
 questions asked, and :reached, what else it reached outside the view,
-each (FUNCTION ARGS...), and :error, a Lisp error."
+each (FUNCTION ARGS...); :refused, the `user-error' saying why it
+couldn't; and :error, a Lisp error."
   (roost-sweep--world
     (save-window-excursion
       (let ((buffer (roost-sweep--draw view state width layout)))
@@ -447,6 +449,7 @@ each (FUNCTION ARGS...), and :error, a Lisp error."
             (pcase-let* ((`(,event ,pos . ,command) click)
                          (window (get-buffer-window buffer))
                          (click (list event (list window pos '(0 . 0) 0)))
+                         (refused nil)
                          (error nil))
               (when gone (remhash (roost-sweep--key state) roost--tasks))
               ;; As the command loop runs it: in the buffer of the window
@@ -458,12 +461,14 @@ each (FUNCTION ARGS...), and :error, a Lisp error."
                     (condition-case err
                         (roost-sweep--at-width width
                           (call-interactively command nil (vector click)))
-                      ((user-error quit roost-sweep-outside) nil)
+                      (user-error (setq refused (error-message-string err)))
+                      ((quit roost-sweep-outside) nil)
                       (error (setq error err))))))
               (list :asked (seq-filter (lambda (effect) (memq (car effect) roost-sweep--questions))
                                        roost-sweep--effects)
                     :reached (seq-remove (lambda (effect) (memq (car effect) roost-sweep--questions))
                                          roost-sweep--effects)
+                    :refused refused
                     :error error))
           (kill-buffer buffer))))))
 
@@ -544,8 +549,11 @@ From the window it is in, or the one beside it, as from a terminal."
                  (name (format "%s (%s) on %s, %s," event command
                                (if gone "the row of a task gone since" "its row")
                                (roost-sweep--layout layout))))
-            (when (plist-get result :error)
-              (push (format "%s fails: %S" name (plist-get result :error)) problems))
+            (cond ((plist-get result :error)
+                   (push (format "%s fails: %S" name (plist-get result :error)) problems))
+                  ((not (or (plist-get result :asked) (plist-get result :reached)
+                            (plist-get result :refused)))
+                   (push (format "%s does nothing, and says nothing" name) problems)))
             (dolist (asked (plist-get result :asked))
               (push (format "%s asks %S" name (if (stringp (cadr asked)) (cadr asked) (car asked)))
                     problems))))))
@@ -652,6 +660,12 @@ Return them as (PROBLEM . PLACES), PLACES naming the view, state and width."
        ;; From beside the list too, the click reaches the task's host.
        (should (assq 'roost--request
                      (plist-get (roost-sweep--click view "running" nil 'other (assq 'mouse-1 clicks) nil)
+                                :reached)))
+       ;; Its task gone, it says so; the other button shows a menu.
+       (should (plist-get (roost-sweep--click view "running" nil 'selected (assq 'mouse-1 clicks) t)
+                          :refused))
+       (should (assq 'popup-menu
+                     (plist-get (roost-sweep--click view "running" nil 'selected (assq 'mouse-3 clicks) nil)
                                 :reached)))))
    ;; A button is pressed, not the same words in plain text before it:
    ;; the prompt says "the report" too.
