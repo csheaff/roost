@@ -11,6 +11,13 @@ Since 0.8.1:
   tab or perspective, and its agent's tmux window; its branch and
   worktree keep the name the task started with. Nothing to do when
   upgrading.
+- A click on a task's notification quits a question you left open in the
+  minibuffer, as a click in the sidebar does, once Emacs is waiting for
+  you. The task waited for that question, hidden by a completion popup
+  such as vertico-posframe's. Nothing to do when upgrading.
+- With perspectives, closing a frame marks the task of the frame you are
+  left in, in the sidebar, rather than the one closed. Nothing to do when
+  upgrading.
 - Opening a task, with a click in the sidebar or dashboard or with `RET`,
   `l`, `n` or `t`, quits a question you left open in the minibuffer, and
   says so. The task waited until that question was done, and a

@@ -12,6 +12,9 @@
 ;;   you type in), or two.
 ;; - A button or key does its job, says why it can't (`user-error'), or
 ;;   asks; it never ends in a Lisp error.
+;; - A click on a task, there or gone since, opens it, shows a menu, or
+;;   says why it can't; it never asks in the minibuffer, where a
+;;   completion popup hides a question once you click elsewhere.
 ;; - A button or key that changes only the view keeps that change through
 ;;   a redraw, and another button or key changes it back.
 ;; - A key the view tells you to press is bound there, and its command
@@ -155,7 +158,7 @@ place here, so the dashboard and sidebar show them all at once.")
       start-file-process call-process roost--notify
       ;; A task's terminal, the menu, other packages and the browser
       roost--display-task transient-setup magit-status magit-diff-working-tree magit-diff-dwim
-      find-file find-file-other-window dired browse-url)
+      find-file find-file-other-window dired browse-url popup-menu x-popup-menu)
     "Functions that reach outside the view.
 Called, they are recorded and stop the command.")
 
@@ -412,6 +415,58 @@ keys there are then."
           (dolist (new (buffer-list))
             (unless (memq new existing) (kill-buffer new))))))))
 
+(defun roost-sweep--clicks (state)
+  "The clicks on STATE's task in the current buffer, each (EVENT POS . COMMAND).
+A task's row binds the mouse with a keymap of its own.  Buttons are left
+out: the other rules press them."
+  (let ((key (roost-sweep--key state)) (pos (point-min)) found)
+    (while (< pos (point-max))
+      (let ((map (or (get-char-property pos 'keymap) (get-char-property pos 'local-map))))
+        (when (and (keymapp map) (not (get-char-property pos 'button))
+                   (equal (get-text-property pos 'roost-task) key))
+          (dolist (event '(mouse-1 mouse-2 mouse-3))
+            (let ((command (lookup-key map (vector event))))
+              (when (and (commandp command) (not (assq event found)))
+                (push (cons event (cons pos command)) found))))))
+      ;; Rows side by side share their keymap: each has its task.
+      (setq pos (min (next-single-char-property-change pos 'keymap)
+                     (next-single-char-property-change pos 'local-map)
+                     (next-single-char-property-change pos 'roost-task))))
+    (nreverse found)))
+
+(defun roost-sweep--click (view state width layout click gone)
+  "Draw VIEW for STATE at WIDTH in LAYOUT, and CLICK, from `roost-sweep--clicks'.
+With GONE, STATE's task is no longer listed by then, as when a host
+dropped it since the view was drawn.  Return a plist: :asked, the
+questions asked, and :reached, what else it reached outside the view,
+each (FUNCTION ARGS...), and :error, a Lisp error."
+  (roost-sweep--world
+    (save-window-excursion
+      (let ((buffer (roost-sweep--draw view state width layout)))
+        (unwind-protect
+            (pcase-let* ((`(,event ,pos . ,command) click)
+                         (window (get-buffer-window buffer))
+                         (click (list event (list window pos '(0 . 0) 0)))
+                         (error nil))
+              (when gone (remhash (roost-sweep--key state) roost--tasks))
+              ;; As the command loop runs it: in the buffer of the window
+              ;; you are in, which needn't be the one clicked; and in a
+              ;; frame that shows menus, as a click's choices are.
+              (with-current-buffer (window-buffer (selected-window))
+                (cl-letf (((symbol-function 'display-popup-menus-p) (lambda (&rest _) t)))
+                  (let ((last-input-event click) (last-nonmenu-event click))
+                    (condition-case err
+                        (roost-sweep--at-width width
+                          (call-interactively command nil (vector click)))
+                      ((user-error quit roost-sweep-outside) nil)
+                      (error (setq error err))))))
+              (list :asked (seq-filter (lambda (effect) (memq (car effect) roost-sweep--questions))
+                                       roost-sweep--effects)
+                    :reached (seq-remove (lambda (effect) (memq (car effect) roost-sweep--questions))
+                                         roost-sweep--effects)
+                    :error error))
+          (kill-buffer buffer))))))
+
 (defun roost-sweep--describe (action)
   "ACTION, from `roost-sweep--do', as text."
   (pcase action
@@ -473,6 +528,28 @@ keys there are then."
                          (plist-get result :actions)))
           (push (format "%s changes the view, and nothing changes it back" name) problems)))))
     problems))
+
+(defun roost-sweep--check-clicks (view state width)
+  "Problems clicking on STATE's task in VIEW at WIDTH, there or gone since.
+From the window it is in, or the one beside it, as from a terminal."
+  (let ((clicks (roost-sweep--world
+                  (save-window-excursion
+                    (let ((buffer (roost-sweep--draw view state width)))
+                      (prog1 (roost-sweep--clicks state) (kill-buffer buffer))))))
+        problems)
+    (pcase-dolist (`(,event ,_ . ,command) clicks)
+      (dolist (layout '(selected other))
+        (dolist (gone '(nil t))
+          (let* ((result (roost-sweep--click view state width layout (assq event clicks) gone))
+                 (name (format "%s (%s) on %s, %s," event command
+                               (if gone "the row of a task gone since" "its row")
+                               (roost-sweep--layout layout))))
+            (when (plist-get result :error)
+              (push (format "%s fails: %S" name (plist-get result :error)) problems))
+            (dolist (asked (plist-get result :asked))
+              (push (format "%s asks %S" name (if (stringp (cadr asked)) (cadr asked) (car asked)))
+                    problems))))))
+    (nreverse problems)))
 
 (defun roost-sweep--check-named-keys (view state width)
   "Problems with the keys VIEW for STATE at WIDTH tells you to press.
@@ -564,6 +641,18 @@ Return them as (PROBLEM . PLACES), PLACES naming the view, state and width."
        (should-not (plist-get changed :outside))
        (should-not (plist-get changed :error))
        (should-not (equal (plist-get changed :text) (plist-get start :text)))))
+   ;; Each list's rows open their task with a click, and show a menu.
+   (dolist (view '(dashboard sidebar))
+     (let ((clicks (roost-sweep--world
+                     (save-window-excursion
+                       (roost-sweep--draw view "running" nil)
+                       (roost-sweep--clicks "running")))))
+       (should (eq (cddr (assq 'mouse-1 clicks)) 'roost-dashboard-mouse-open))
+       (should (assq 'mouse-3 clicks))
+       ;; From beside the list too, the click reaches the task's host.
+       (should (assq 'roost--request
+                     (plist-get (roost-sweep--click view "running" nil 'other (assq 'mouse-1 clicks) nil)
+                                :reached)))))
    ;; A button is pressed, not the same words in plain text before it:
    ;; the prompt says "the report" too.
    (let ((link (roost-sweep--try 'panel "permission" 40 '((button "the report" . 0)))))
@@ -576,6 +665,15 @@ Return them as (PROBLEM . PLACES), PLACES naming the view, state and width."
 (ert-deftest roost-sweep-buttons-and-keys-work-and-their-changes-go-back ()
   (roost-test--isolated
    (roost-sweep--report (roost-sweep--run #'roost-sweep--check-actions (mapcar #'car roost-sweep--views)))))
+
+(ert-deftest roost-sweep-clicks-never-ask ()
+  ;; A click that asked which task left the question open, hidden by a
+  ;; completion popup once you clicked again, and every later open
+  ;; waited behind it.
+  (roost-test--isolated
+   (roost-sweep--report (roost-sweep--run #'roost-sweep--check-clicks
+                                          (seq-filter (lambda (view) (roost-sweep--view view :point))
+                                                      (mapcar #'car roost-sweep--views))))))
 
 (ert-deftest roost-sweep-named-keys-apply ()
   ;; Only the task panel says what to do next.

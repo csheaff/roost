@@ -201,6 +201,73 @@ Return nil when it isn't on screen."
             (append unread-command-events (list (list 'down-mouse-1 posn) (list 'mouse-1 posn))))
       t)))
 
+(defun qa-click-terminal ()
+  "Click in the first terminal on screen, as to type in it.
+Return nil when no terminal is on screen."
+  (when-let* ((window (seq-find (lambda (window) (qa--terminal (window-buffer window))) (qa--windows)))
+              (posn (posn-at-point (window-start window) window)))
+    (setq unread-command-events
+          (append unread-command-events (list (list 'down-mouse-1 posn) (list 'mouse-1 posn))))
+    t))
+
+(defun qa-goto-row (name)
+  "Move point to task NAME's row in the selected window, a list of tasks.
+Return nil when it isn't there."
+  (when-let* ((task (seq-find (lambda (task) (equal (roost--field task 'name) name)) (roost-tasks)))
+              (row (with-current-buffer (window-buffer (selected-window))
+                     (roost--task-row (roost--key task)))))
+    (set-window-point (selected-window) row)
+    t))
+
+(defvar qa--slow-opens nil
+  "(COUNT . SECONDS): hold the replies to the next COUNT tasks opened, SECONDS each.")
+
+(defvar qa--held-replies 0
+  "How many replies `qa-slow-opens' holds now.")
+
+(defun qa-slow-opens (count seconds)
+  "Hold the replies to the next COUNT tasks opened for SECONDS, as from a slow host."
+  (setq qa--slow-opens (cons count seconds))
+  t)
+
+(defun qa-held-replies ()
+  "How many replies `qa-slow-opens' holds now."
+  qa--held-replies)
+
+(defun qa--slow-request (args)
+  "ARGS of `roost--request', its reply held if `qa-slow-opens' says so."
+  (pcase-let ((`(,host ,action ,params ,success . ,rest) args))
+    (if (not (and (equal action "inspect") success qa--slow-opens (> (car qa--slow-opens) 0)))
+        args
+      (cl-decf (car qa--slow-opens))
+      (let ((seconds (cdr qa--slow-opens)))
+        (cl-incf qa--held-replies)
+        (append (list host action params
+                      (lambda (&rest reply)
+                        (run-at-time seconds nil (lambda ()
+                                                   (cl-decf qa--held-replies)
+                                                   (apply success reply)))))
+                rest)))))
+
+(advice-add 'roost--request :filter-args #'qa--slow-request)
+
+(defun qa-drafts ()
+  "The text of each draft of a new task."
+  (let (drafts)
+    (dolist (buffer (buffer-list) drafts)
+      (with-current-buffer buffer
+        (when (derived-mode-p 'roost-compose-mode)
+          (push (buffer-substring-no-properties (point-min) (point-max)) drafts))))))
+
+(defun qa-forget-drafts ()
+  "Kill every draft of a new task, without asking."
+  (dolist (buffer (buffer-list))
+    (when (with-current-buffer buffer (derived-mode-p 'roost-compose-mode))
+      (with-current-buffer buffer (set-buffer-modified-p nil))
+      (let ((kill-buffer-query-functions nil))
+        (kill-buffer buffer))))
+  t)
+
 (defun qa-fresh-start ()
   "Leave one frame, its window on *scratch* beside Roost's side windows.
 Each journey starts here, rather than amid the windows the last one left,
@@ -372,6 +439,19 @@ A window parameter of that name takes the buffer's place, as in redisplay."
       ;; The agent's own pane.
       (pane . ,(roost--field task 'paneId)))))
 
+(defun qa--questions ()
+  "The prompts of the questions open in the minibuffer, the first asked first.
+On screen or not: a completion popup can hide one you leave."
+  (let (prompts)
+    (dolist (buffer (buffer-list))
+      (when (and (minibufferp buffer t)
+                 (string-match " \\*Minibuf-\\([0-9]+\\)\\*" (buffer-name buffer)))
+        (push (cons (string-to-number (match-string 1 (buffer-name buffer)))
+                    (with-current-buffer buffer
+                      (buffer-substring-no-properties (point-min) (minibuffer-prompt-end))))
+              prompts)))
+    (mapcar #'cdr (sort prompts (lambda (a b) (< (car a) (car b)))))))
+
 (defun qa-screen ()
   "What is on screen now, as JSON."
   (let ((frame (or (frame-parent) (selected-frame))))
@@ -383,6 +463,11 @@ A window parameter of that name takes the buffer's place, as in redisplay."
                 (when-let* ((button (button-at (window-point))))
                   (button-label button))))
        (prompt . ,(minibuffer-prompt))
+       ;; Every question open, the first asked first, whether you are in
+       ;; one, and what Roost holds back until they are done.
+       (questions . ,(vconcat (qa--questions)))
+       (in-question . ,(if (minibufferp (window-buffer (selected-window)) t) t :json-false))
+       (held . ,roost--held-for-minibuffer)
        (minibuffer . ,(when (active-minibuffer-window)
                         (with-current-buffer (window-buffer (active-minibuffer-window))
                           (buffer-substring-no-properties (minibuffer-prompt-end) (point-max)))))

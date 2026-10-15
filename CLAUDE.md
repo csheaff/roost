@@ -76,7 +76,10 @@ they can do themselves.
   macOS, captured (see the manual's Development section). Run it for changes
   to what Roost shows, and look at every screenshot before asking for review:
   the checks don't see what merely looks wrong. Give a new flow a journey in
-  `test/qa/qa.py`.
+  `test/qa/qa.py`. A new way to open a task, or something new you can leave
+  unfinished (a question, a menu, a buffer), goes in the `walk_away` grid,
+  `WALK_INTERRUPTERS` or `WALK_STARTERS`, which tries it against all the
+  others. `--popular` and `--remote` find what a plain local run doesn't.
 
 ## Docs and changes
 

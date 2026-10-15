@@ -1117,6 +1117,47 @@ Not found: what opened the first `Task: ` there, and why clicks added
 more. Here a click found its row each time; `RET` or another task key on
 a project heading asks `Task: `.
 
+### Leaving things unfinished, 2026-10-14
+
+Why the question left open (above) went unseen by the tests: the sweep
+answered every question at once, every journey answered or cancelled
+what it opened, `make qa`'s Emacs had no completion popup or
+perspectives, and no check failed a click that did nothing. Each step of
+`make qa` now fails a question open that you aren't in, unless the
+journey left it so, and anything Roost holds back until such a question
+is done; the sweep fails a click on a task's row that asks in the
+minibuffer, the task listed or gone since. With the change above taken
+out, both fail: the sweep with `Task: ` asked by a click on a gone task's
+row, and `make qa` in 17 steps, each saying "Roost holds 1 back until
+questions you aren't in are done", where only a timeout had said so.
+
+The new `walk_away` journey leaves six things unfinished (`M-x` open,
+`M-x` left behind in a terminal, Roost's `Switch task: `, its menu, a
+draft, a task whose host hasn't replied) and then goes to a task six
+ways (a click, `l`, `n` and `t` in the sidebar, a click on a
+notification, a click in the terminal). `--popular` adds vertico,
+vertico-posframe, recursive minibuffers and perspective.el. Run plain,
+with `--popular`, and with `--popular --remote`, the whole of `make qa`
+in the last, it found:
+
+- With `M-x` left behind in a terminal, a click on a notification held
+  its task back unseen, as clicks in the sidebar had. Fixed: the click
+  quits the question once Emacs is waiting for you, not from the
+  server's reply, which can come while a command waits.
+- With perspectives, closing the second frame left the sidebar marking
+  its task. Fixed: closing a frame draws the sidebar again.
+- With Roost's menu open, a click on a task in the sidebar only says
+  "Unbound suffix: `<mouse-1>`". Left as it is; `walk_away` marks it
+  `Known`.
+- With perspectives and the tasks on `qa-remote`, a shell pane opened
+  again with `t` shows a line or two of history for a second or more:
+  the perspective restores the window's start from the last visit, after
+  the pane has scrolled since, and tmux-control anchors a window to the
+  screen's top only when output comes. Not fixed here.
+- With perspectives, a frame made with `C-x 5 2` shows the task's
+  terminal in a perspective of its own, which is no task's, so it has no
+  panel. Not changed.
+
 ### Codex and Pi adapters
 
 Used another disposable remote `hello-service` project, an isolated registry and

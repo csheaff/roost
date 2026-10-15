@@ -359,8 +359,9 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
   [terminal-notifier](https://github.com/julienXX/terminal-notifier) when it is
   installed (`brew install terminal-notifier`), otherwise macOS's own or Emacs's
   `notifications-notify`. With terminal-notifier and an Emacs server
-  (`server-start`), clicking one opens its task, and a newer one about the same
-  task replaces it.
+  (`server-start`), clicking one opens its task, quitting a question you left
+  open in the minibuffer as a click in the sidebar does, and a newer one about
+  the same task replaces it.
 - `roost-watch-interval` (3 s), `roost-watch-unfocused-interval` (15 s),
   `roost-request-timeout` (60 s), `roost-ssh-share-connections`.
 
@@ -463,6 +464,10 @@ and fails on:
   or saying why it can't (`user-error`);
 - a button or key that changes only the view, when a redraw undoes the change
   or nothing changes it back;
+- a click on a task's row, from that window or the one beside it, and with
+  the task still listed or gone since, that asks in the minibuffer rather
+  than opening the task, showing a menu, or saying why it can't: a
+  completion popup hides a question once you click elsewhere;
 - a key the task panel tells you to press that isn't bound there, or whose
   command doesn't apply to the task.
 
@@ -489,12 +494,17 @@ keep a tab per task, two of the same name among them, forget a task, fork
 one's commits, resume an agent that exited, see a host it can't reach,
 read back through a long reply in tmux-control's scrollback, move between
 agents that all print at once, and reconnect a terminal whose connection
-dropped. They press keys
+dropped. One leaves something unfinished, as you do (`M-x` or Roost's own
+question open, its menu, a draft, a task whose host hasn't replied yet), and
+then goes to a task another way: a click, `l`, `n` or `t` in the sidebar, a
+click on a notification, or a click in the terminal. They press keys
 and click through Emacs's command loop. After each step it checks for Lisp errors, in
 commands, timers and process filters alike, for a backtrace, for lines of
 Roost's views cut off at the window's edge, for another task's terminal
-beside the current task's, and for a terminal that shows other than what
-tmux has in its pane, or history nobody scrolled it to. With tmux-control's
+beside the current task's, for a terminal that shows other than what
+tmux has in its pane, or history nobody scrolled it to, and for a question
+open in the minibuffer that you aren't in, unless the journey left it so,
+or anything Roost holds back until such a question is done. With tmux-control's
 `tmux-control-pause-log-mode`, it also fails a step in which Emacs stopped
 responding for a second or more, and says what Emacs was doing. It runs the
 sweep where text is measured in pixels, too. It takes about five minutes,
@@ -513,7 +523,7 @@ Package directories are read, never written. `--load FILE` in `QA_FLAGS` loads
 Emacs Lisp after Roost, such as a change to try, and `--keep` leaves the Emacs
 and its tmux server running. A new flow gets a journey in `test/qa/qa.py`.
 
-Two options take the same journeys elsewhere. `--remote` puts the tasks on
+Three options take the same journeys elsewhere. `--remote` puts the tasks on
 `qa-remote`, a host reached over SSH as yours are: `test/qa/fake_ssh.py` stands
 in for `ssh` and runs each command here, with its own home, delaying what goes
 each way by `--latency` seconds (0.15 by default). Roost's requests,
@@ -522,8 +532,12 @@ late as a remote host's do, which is where races between them show. Magit's
 review is left out there: over TRAMP's `ssh` method it takes most of a minute.
 `--tuned` gives Emacs settings many configurations have: pixel scrolling, a
 1 GB garbage collection threshold, tmux-control's idle collection, and pane
-directories, which make a remote terminal's directory a TRAMP one. Pass them
-in `QA_FLAGS`, as make takes long options for itself:
+directories, which make a remote terminal's directory a TRAMP one.
+`--popular` adds packages many configurations have, from `-L` or
+`--package-dir`: vertico in vertico-posframe's popup, which hides a question
+you click away from, recursive minibuffers, and perspective.el, a
+perspective for each task. Pass them in `QA_FLAGS`, as make takes long
+options for itself:
 
     make qa QA_FLAGS="--remote --tuned -L ../tmux-control --package-dir ~/.emacs.d/elpa"
 

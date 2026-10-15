@@ -729,10 +729,14 @@ Call SUCCESS with the result, or FAILURE with an error message."
                " ")))
 
 (defun roost--open-from-notification (host id)
-  "Open the task with ID on HOST, from a click on its notification."
+  "Open the task with ID on HOST, from a click on its notification.
+As a click in Roost does, this quits a question you left open in the
+minibuffer, which would hold the task back unseen.  It does so once
+Emacs waits for you: the click comes through Emacs's server, which can
+run while a command of yours waits, and quitting would end it too."
   (when-let* ((task (gethash (list host id) roost--tasks)))
     (select-frame-set-input-focus (selected-frame))
-    (roost-open-task task)))
+    (run-with-idle-timer 0 nil #'roost-open-task task t)))
 
 (defun roost--terminal-notifier-arguments (title body task)
   "Arguments for terminal-notifier to show TITLE and BODY about TASK.
@@ -1554,6 +1558,10 @@ not another task's: they keep their grid."
   (when (roost--task-panel-window)
     (roost--refresh-host (roost--field task 'host) nil)))
 
+(defvar roost--held-for-minibuffer 0
+  "How many things Roost holds back until the minibuffer is done.
+Such as a task to show, by `roost--when-out-of-minibuffer'.")
+
 ;;;###autoload
 (defun roost--when-out-of-minibuffer (function)
   "Call FUNCTION now, or once the minibuffer you are in is done.
@@ -1563,7 +1571,9 @@ answer to the task's terminal.  A question you had left open when you
 asked for the task is quit first, by `roost--quit-questions-left-open'."
   (if (not (active-minibuffer-window))
       (funcall function)
+    (cl-incf roost--held-for-minibuffer)
     (letrec ((done (lambda ()
+                     (cl-decf roost--held-for-minibuffer)
                      (remove-hook 'minibuffer-exit-hook done)
                      ;; Once its window has given the selection back.
                      (run-at-time 0 nil #'roost--when-out-of-minibuffer function))))
@@ -7086,14 +7096,16 @@ Called when Roost first shows a side window, rather than when it loads;
   "Mark the selected frame's task once the task marked is in no frame.
 For `after-delete-frame-functions'.  The sidebar, one for every frame,
 marks the task opened last; when the frame it was opened in is gone,
-the task of the frame you are left in."
-  (unless (or (roost--workspace-backend)
-              (seq-some (lambda (frame)
+the task of the frame you are left in.  With workspaces, it marks the
+task whose workspace is current where it was drawn last, perhaps the
+frame gone: it is drawn again."
+  (cond ((roost--workspace-backend) (roost--redraw))
+        ((not (seq-some (lambda (frame)
                           (equal (frame-parameter frame 'roost-task) roost--current-task))
                         (frame-list)))
-    (when-let* ((task (roost--frame-task)))
-      (setq roost--current-task (roost--key task))
-      (roost--redraw))))
+         (when-let* ((task (roost--frame-task)))
+           (setq roost--current-task (roost--key task))
+           (roost--redraw)))))
 
 (defun roost--mru-main-window ()
   "The most recently used main window, or nil."

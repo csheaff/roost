@@ -54,6 +54,10 @@ class Stuck(Exception):
     """A journey can't go on: what it waited for never came."""
 
 
+class NotApplicable(Exception):
+    """A step that can't be taken here, as clicking a terminal none shows."""
+
+
 class Known(tuple):
     """An expectation that fails for a known reason, reported but not a problem:
     Known((DESCRIPTION, CHECK)).  The report says when it starts to hold."""
@@ -126,6 +130,8 @@ class Run:
         self.tmux_env = dict(self.env)
         if args.tuned:
             self.notes.add("Emacs had pixel scrolling, a 1 GB GC threshold, idle collection and pane directories")
+        if args.popular:
+            self.notes.add("Emacs had vertico in a posframe, recursive minibuffers and a perspective per task")
         if args.remote:
             self.notes.add("The tasks were on qa-remote, %g s away each way" % args.latency)
             bin = self.work / "bin"
@@ -147,6 +153,9 @@ class Run:
         self.process = None
         self.steps = []
         self.journey = None
+        # How many of the questions open the journey left so, as you would
+        # by clicking elsewhere with one open.
+        self.left_open = 0
         self.shots = 0
         self.winid = None
 
@@ -210,6 +219,19 @@ class Run:
 (when %(remote)s
   ;; TRAMP's ssh runs ssh from PATH, as Roost does; scp would not.
   (setq tramp-default-method "ssh"))
+(when %(popular)s
+  ;; As many configurations have: completion in a popup, which hides a
+  ;; question you click away from, questions within questions, and a
+  ;; perspective for each task.
+  (setq enable-recursive-minibuffers t)
+  (require 'vertico)
+  (require 'vertico-posframe)
+  (vertico-mode 1)
+  (vertico-posframe-mode 1)
+  (require 'perspective)
+  (setq persp-suppress-no-prefix-key-warning t)
+  (persp-mode 1)
+  (setq roost-workspace 'perspective))
 (when %(tuned)s
   ;; Settings many configurations have, which change how Emacs scrolls,
   ;; collects garbage and names a terminal's directory.
@@ -236,6 +258,7 @@ class Run:
            hosts=self.hosts,
            remote="t" if self.host else "nil",
            tuned="t" if self.args.tuned else "nil",
+           popular="t" if self.args.popular else "nil",
            # The project as Emacs reaches it: on the host, over TRAMP.
            project=lisp(("/ssh:%s:" % self.host if self.host else "") + str(repo) + "/")))
         return init
@@ -275,6 +298,10 @@ class Run:
             sys.exit("Emacs didn't start its server; see %s" % (self.work / "emacs.log"))
         if not self.emacs.eval("(and (require 'tmux-control nil t) t)") == "t":
             sys.exit("Emacs can't load tmux-control: give its directory with -L, or --package-dir")
+        if self.args.popular and self.emacs.eval("(and (bound-and-true-p vertico-posframe-mode) "
+                                                 "(bound-and-true-p persp-mode) t)") != "t":
+            sys.exit("With --popular, Emacs needs vertico, vertico-posframe and perspective; see %s"
+                     % (self.work / "emacs.log"))
         # Set once it runs: a new frame is kept within the screen, and the
         # panel needs room beside a terminal of 80 columns.
         self.emacs.eval("(set-frame-size nil %d %d)" % FRAME)
@@ -379,6 +406,11 @@ class Run:
         """How Roost names the host the tasks are on."""
         return self.host or "local"
 
+    def leave_question(self):
+        """Note the questions open now as left so, as you would by clicking
+        elsewhere: not a problem by themselves, unlike those that come after."""
+        self.left_open = len(self.screen()["questions"])
+
     def wait(self, what, check, timeout=40):
         """Wait until CHECK, given the screen, holds."""
         deadline = time.monotonic() + timeout
@@ -389,6 +421,26 @@ class Run:
             time.sleep(0.5)
         self.step("Still waiting: " + what)
         raise Stuck("Waited %ds for %s" % (timeout, what))
+
+    def until(self, check, timeout):
+        """The screen once CHECK holds, or as it is after TIMEOUT seconds."""
+        deadline = time.monotonic() + timeout
+        while True:
+            screen = self.screen()
+            if check(screen) or time.monotonic() > deadline:
+                return screen
+            time.sleep(0.5)
+
+    def dismiss(self):
+        """Quit the questions and menu left open, and the drafts."""
+        for _ in range(3):
+            if not self.screen()["questions"] and self.emacs.eval("(and transient--prefix t)") != "t":
+                break
+            # C-g quits a question only from within it.
+            self.emacs.eval("(when-let* ((window (active-minibuffer-window))) (select-window window))")
+            self.keys("C-g")
+        self.emacs.eval("(qa-forget-drafts)")
+        self.left_open = 0
 
     def task(self, screen, name):
         return next((task for task in screen["tasks"] if task["name"] == name), None)
@@ -448,6 +500,18 @@ class Run:
         for name in screen["buffers"]:
             if name == "*Backtrace*":
                 problems.append("A backtrace is showing")
+        # A question you aren't in can be out of sight, as a completion
+        # popup hides one you click away from: what waits for it waits
+        # unseen.
+        questions = screen["questions"]
+        self.left_open = min(self.left_open, len(questions))
+        if not screen["in-question"]:
+            if screen["held"]:
+                problems.append("Roost holds %d back until questions you aren't in are done: %s"
+                                % (screen["held"], ", ".join(map(repr, questions))))
+            if len(questions) > self.left_open:
+                problems.append("A question is open that you aren't in: %s"
+                                % ", ".join(map(repr, questions[self.left_open:])))
         task = screen.get("task")
         frames = screen.get("frames") or {}
         # By key: tasks can share a name.  The sidebar, one for every frame,
@@ -1085,6 +1149,170 @@ def question_left(qa, repo):
         ("its panel is beside it", lambda s: panel_text(qa, s).startswith(first))])
 
 
+# Walking away: something left unfinished, then a task opened another way.
+
+def leave_question(qa, tasks):
+    qa.keys("M-x")
+    qa.wait("the question", lambda s: s["questions"])
+    qa.leave_question()
+
+
+def leave_question_behind(qa, tasks):
+    leave_question(qa, tasks)
+    go_terminal(qa, None)
+
+
+def leave_roost_question(qa, tasks):
+    qa.keys("C-c r l")
+    qa.wait("which task to switch to", lambda s: (s["prompt"] or "").startswith("Switch task"))
+    qa.leave_question()
+
+
+def leave_menu(qa, tasks):
+    qa.keys("C-c r")
+    qa.wait("the menu", lambda s: qa.emacs.eval("(and transient--prefix t)") == "t")
+
+
+def leave_draft(qa, tasks):
+    qa.keys("C-c r c")
+    qa.wait("the draft", lambda s: (qa.window(s, "roost-compose-mode") or {}).get("selected"))
+    qa.type("Half a thought")
+
+
+def leave_opening(qa, tasks):
+    # Its host replies after what comes next.
+    qa.emacs.eval("(qa-slow-opens 1 3)")
+    qa.click_text(tasks["opening"], "roost-sidebar-list-mode")
+
+
+WALK_STARTERS = [
+    ("M-x left open", leave_question),
+    ("M-x left behind in the terminal", leave_question_behind),
+    ("Roost's Switch task left open", leave_roost_question),
+    ("Roost's menu left open", leave_menu),
+    ("a draft half written", leave_draft),
+    ("another task still opening", leave_opening),
+]
+
+
+def to_sidebar(qa):
+    """Click the sidebar where no task is: on the project's heading."""
+    qa.click_text(qa.host_label + " · ", "roost-sidebar-list-mode")
+
+
+def go_click(qa, target):
+    qa.click_text(target, "roost-sidebar-list-mode")
+
+
+def go_switch(qa, target):
+    to_sidebar(qa)
+    qa.keys("l")
+    qa.wait("which task to switch to", lambda s: (s["prompt"] or "").startswith("Switch task"))
+    qa.type(target + "\r")
+
+
+def go_next(qa, target):
+    to_sidebar(qa)
+    qa.keys("n")
+
+
+def go_shell(qa, target):
+    to_sidebar(qa)
+    if qa.emacs.eval("(qa-goto-row %s)" % lisp(target)) != "t":
+        raise Stuck("No row for %s in the sidebar" % target)
+    qa.keys("t")
+
+
+def go_notification(qa, target):
+    host, id = next(t["key"] for t in qa.screen()["tasks"] if t["name"] == target).split("/")
+    qa.emacs.eval("(roost--open-from-notification %s %s)"
+                  % ("nil" if host == "local" else lisp(host), lisp(id)))
+    qa.settle()
+
+
+def go_terminal(qa, target):
+    if qa.emacs.eval("(qa-click-terminal)") != "t":
+        raise NotApplicable("No terminal on screen to click")
+    qa.settle()
+
+
+def shows(qa, name, shell=False):
+    """Whether the screen shows NAME's terminal, selected, in its own frame:
+    its agent, or with SHELL, the shell beside it."""
+    def check(screen):
+        task, selected = screen.get("task") or {}, selected_terminal(screen)
+        return (task.get("name") == name and selected is not None
+                and selected["terminal"] == task["terminal"]
+                and (selected["pane"] != task["pane"]) == shell)
+    return check
+
+
+# Each: what you do, whose task it opens (None: none, you stay), and with
+# which pane.
+WALK_INTERRUPTERS = [
+    ("a click on another task", go_click, "other"),
+    ("l in the sidebar", go_switch, "other"),
+    ("n in the sidebar", go_next, "waiting"),
+    ("t on another task's row", go_shell, "other"),
+    ("a click on a notification", go_notification, "other"),
+    ("a click in the terminal", go_terminal, None),
+]
+
+
+@journey("Walk away from something unfinished")
+def walk_away(qa, repo):
+    """Leave something unfinished, as you do: a question, Roost's menu, a
+    draft, a task still opening.  Then go to a task another way.  The task
+    you went to opens, what you left is quit or kept, and nothing waits
+    unseen."""
+    home = start_task(qa, "Sort the notes")
+    other = start_task(qa, "Tally the notes")
+    waiting = new_task(qa, "ask git log")
+    qa.status(waiting, "permission")
+    timeout = 15 if qa.host else 8
+    for title, leave in WALK_STARTERS:
+        for going, go, whose in WALK_INTERRUPTERS:
+            tasks = dict(home=home, other=other, waiting=waiting)
+            target = tasks.get(whose)
+            # Still opening: the one you aren't going to.
+            tasks["opening"] = waiting if whose == "other" else other
+            pair = "%s, then %s" % (title, going)
+            qa.dismiss()
+            qa.emacs.eval("(qa-fresh-start)")
+            open_task(qa, home)
+            try:
+                leave(qa, tasks)
+                go(qa, target)
+            except NotApplicable:
+                continue
+            except Stuck as stuck:
+                qa.step(pair, expect=[(str(stuck), lambda s: False)])
+                continue
+            shell = go is go_shell
+            opens = ((target + "'s " + ("shell" if shell else "terminal") + " opens", shows(qa, target, shell))
+                     if target else (home + "'s terminal stays", shows(qa, home)))
+            # Roost's menu takes a click elsewhere for one of its keys.
+            if leave is leave_menu and go is go_click:
+                opens = Known(opens)
+            screen = qa.until(opens[1], timeout)
+            if go is go_notification and screen["in-question"]:
+                # You are answering a question: the task waits until you are done.
+                qa.step(pair, expect=[("it waits for the question you are in",
+                                       lambda s: s["held"] and not opens[1](s))])
+                qa.keys("C-g")
+                pair += ", and that question quit"
+                qa.until(opens[1], timeout)
+            if leave is leave_opening:
+                # Until the first task's late reply has come.
+                qa.until(lambda s: qa.emacs.eval("(qa-held-replies)") == "0", timeout)
+                qa.settle()
+            expect = [opens]
+            if leave is leave_draft:
+                expect.append(("the draft is kept", lambda s: any(
+                    "Half a thought" in draft for draft in qa.emacs.json("(json-encode (vconcat (qa-drafts)))"))))
+            qa.step(pair, expect=expect)
+
+
 @journey("A second frame")
 def frames(qa, repo):
     """Each frame keeps its own task: what one shows, the other leaves alone."""
@@ -1431,7 +1659,8 @@ def dropped(qa, repo):
 
 
 JOURNEYS = [sweep, answer, fold, resize, merge, review, panes, shell,
-            dashboard, stop_resume, retire, send, update, restart, search, question_left, frames, org, tabs,
+            dashboard, stop_resume, retire, send, update, restart, search, question_left, walk_away,
+            frames, org, tabs,
             forget, rename, fork, merged, exits, unreachable, scrollback, fleet, dropped]
 
 
@@ -1455,6 +1684,9 @@ def main():
     parser.add_argument("--tuned", action="store_true",
                         help="With settings many configurations have: pixel scrolling, a large GC "
                         "threshold, tmux-control's idle collection and pane directories")
+    parser.add_argument("--popular", action="store_true",
+                        help="With packages many configurations have: vertico in a posframe, "
+                        "recursive minibuffers and a perspective per task, from -L or --package-dir")
     args = parser.parse_args()
     known = {j.__name__: j for j in JOURNEYS}
     unknown = [name for name in args.journeys if name not in known]
@@ -1473,12 +1705,7 @@ def main():
             print(chosen_journey.title)
             try:
                 # A question or menu the last journey left open goes first.
-                for _ in range(3):
-                    if not qa.screen()["prompt"] and qa.emacs.eval("(and transient--prefix t)") != "t":
-                        break
-                    # C-g quits a question only from within it.
-                    qa.emacs.eval("(when-let* ((window (active-minibuffer-window))) (select-window window))")
-                    qa.keys("C-g")
+                qa.dismiss()
                 qa.emacs.eval("(qa-fresh-start)")
                 qa.settle()
                 chosen_journey(qa, repo)

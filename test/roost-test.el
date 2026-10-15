@@ -638,7 +638,14 @@
      (setq roost--current-task (roost--key left))
      (set-frame-parameter nil 'roost-task (roost--key left))
      (roost--frame-deleted nil)
-     (should (equal roost--current-task (roost--key left))))))
+     (should (equal roost--current-task (roost--key left)))
+     ;; With workspaces, the sidebar marks the current one where it is
+     ;; drawn, which was perhaps the frame gone: it is drawn again.
+     (let ((drawn 0))
+       (cl-letf (((symbol-function 'roost--workspace-backend) (lambda () 'perspective))
+                 ((symbol-function 'roost--redraw) (lambda () (cl-incf drawn))))
+         (roost--frame-deleted nil))
+       (should (= drawn 1))))))
 
 (ert-deftest roost-a-shared-session-is-no-tasks-terminal ()
   ;; Tasks from before each had a session of its own can share one.
@@ -2266,11 +2273,22 @@
              (let ((command (split-string-shell-command (cadr (member "-execute" arguments)))))
                (should (equal (seq-take command 4)
                               (list client "--socket-name" "/tmp/emacs501/server" "--no-wait")))
-               ;; What the click evaluates opens the task.
-               (cl-letf (((symbol-function 'roost-open-task) (lambda (task &rest _) (setq opened task)))
-                         ((symbol-function 'select-frame-set-input-focus) #'ignore))
-                 (eval (read (car (last command))) t))))
-           (should (equal (roost--field opened 'id) "0123456789abcdef"))
+               ;; What the click evaluates opens the task once Emacs waits
+               ;; for you, quitting a question you left open, as a click
+               ;; in Roost does: the server can run while a command waits.
+               (cl-letf* ((later nil)
+                          ((symbol-function 'roost-open-task)
+                           (lambda (task &optional quit-questions) (setq opened (list task quit-questions))))
+                          ((symbol-function 'select-frame-set-input-focus) #'ignore)
+                          ((symbol-function 'run-with-idle-timer)
+                           (lambda (secs _repeat function &rest args)
+                             (should (zerop secs))
+                             (push (cons function args) later))))
+                 (eval (read (car (last command))) t)
+                 (should-not opened)
+                 (pcase-dolist (`(,function . ,args) later) (apply function args)))))
+           (should (equal (roost--field (car opened) 'id) "0123456789abcdef"))
+           (should (cadr opened))
            ;; Without a server, a click can't reach Emacs.
            (let ((server-process nil))
              (should-not (member "-execute" (roost--terminal-notifier-arguments "t" "b" task)))))
