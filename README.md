@@ -10,11 +10,42 @@ worktree, a branch and a terminal, here or on any SSH host. It tells you which
 agents need you, and you review and merge their work with Magit. If you've
 used Orca or Conductor, it's that idea, inside the Emacs you already use.
 
-![Emacs with three columns: Roost's sidebar listing six agents on two machines, one asking permission; that agent's Claude Code terminal on the SSH host claylien, asking to run its tests; and the task's panel, which says to answer it in its terminal and shows the prompt it was given and the files it has changed](docs/images/roost-hero.png)
+![Emacs with three columns: Roost's sidebar listing six agents on two machines, the one you are on marked with a band and asking permission, four ready and one working; that agent's Claude Code terminal on the SSH host claylien, asking to run python3 -m unittest; and the task's panel, which says to answer it in its terminal and shows the prompt it was given and the files it has changed](docs/images/roost-hero.png)
 
 *Six Claude Code agents on two machines. The one on `claylien` wants to run
 its tests: its own terminal in the middle, every task at the left, and at the
 right what to do next, what you asked it and what it changed.*
+
+## A task, start to finish
+
+https://github.com/user-attachments/assets/674d01cc-2a8d-491a-ba9f-6605e48f997e
+
+*One task, from a heading in an Org file to `main`, in about a minute. The
+agent's work plays four times faster, and the title bar shows the keys
+pressed.*
+
+1. **Start where the work is.** `c` on an Org heading drafts a task, with the
+   heading and its notes as the prompt; a selected region or a GitHub issue
+   works the same way. `C-c C-c` makes the worktree and branch and starts the
+   agent.
+2. **Go where you're needed.** While it works, an agent on `claylien` asks to
+   run its tests. `n` takes you to the next agent waiting for you, and you
+   answer it in its own terminal.
+3. **Review, and reply in place.** The panel beside the terminal lists the
+   files the agent changed. A click opens one's diff in Magit, `;` writes a
+   note on a line, and `@` sends your notes to the agent. `r` opens Magit on
+   the whole worktree, over TRAMP for a remote task.
+4. **Finish.** The agent revises and commits. `m` squashes the task into the
+   branch it started from and removes its worktree, branch and terminal. `u`
+   brings a task up to date first, and `P` opens a pull request instead.
+
+**Watch them all.** `M-x roost-status` lists every agent on every host: what
+it's doing, what it changed, and its latest reply or what it asks. A
+notification says the same when one finishes or asks for something.
+
+![The dashboard: two tasks on claylien, one asking to run python3 -m unittest, and four local ones, three finished and one working, each with its changes and latest reply](docs/images/roost-dashboard.png)
+
+## How it differs
 
 Other Emacs packages run coding agents too, among them
 [agent-shell](https://github.com/xenodium/agent-shell),
@@ -35,34 +66,7 @@ three ways:
 
 Each agent keeps its own terminal interface, so its prompts, menus and slash
 commands work as they always do, new ones included. Roost adds what lives
-outside the agent, starting with which agents are waiting for you: `n` takes
-you to the next.
-
-## How it goes
-
-**Start where the work is.** `c` drafts a task. An Org heading, a selected
-region or a GitHub issue becomes its prompt, and `C-c C-c` makes the worktree
-and starts the agent.
-
-![An Org file of plans beside Roost's new task draft: the heading and its notes are the prompt, with the project, agent, starting branch and name above](docs/images/roost-new-task.png)
-
-**Watch them all.** `M-x roost-status` lists every agent on every host: what
-it's doing, what it changed, and its latest reply or what it asks. A
-notification says the same when one finishes or asks for something, and `RET`
-opens its terminal.
-
-![The dashboard: two tasks on claylien, one asking to run python3 -m unittest, and four local ones, three finished and one working, each with its changes and latest reply](docs/images/roost-dashboard.png)
-
-**Review, and reply in place.** `r` opens Magit on the task's worktree, over
-TRAMP for a remote one, with the agent's latest reply at the top. Stage what
-you've checked; `;`, or the `+` beside a line, writes a note for the agent
-on it, and `@` sends it your notes.
-
-<p align="center"><img src="docs/images/roost-review.png" width="600" alt="Magit on a task's worktree: the task, the agent's reply folded, a note for the agent under a line of its change, and the box for another, opened from the + beside a line further down"></p>
-
-**Finish.** `m` squashes the task into the branch it started from and removes
-its worktree, branch and terminal. `u` brings it up to date first, with its
-agent resolving any conflicts, and `P` opens a pull request instead.
+outside the agent.
 
 ## Get started
 
@@ -125,8 +129,8 @@ These work in the dashboard, the sidebar and a task's panel, and on the menu.
 - [A possible roadmap](docs/roadmap.md): ideas being considered, and the
   tools they come from.
 - [Validation](docs/validation.md): live runs with Claude Code and Codex, on
-  local and remote hosts. [How the screenshots were made](docs/demo.md), and
-  [the MELPA recipes](docs/melpa.md).
+  local and remote hosts. [How the screenshots and the clip were
+  made](docs/demo.md), and [the MELPA recipes](docs/melpa.md).
 
 [Orca](https://www.onorca.dev/) shaped the workflow: a worktree per task, a
 terminal nearby, review before finishing. See the
