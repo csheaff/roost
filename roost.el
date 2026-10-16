@@ -4292,9 +4292,12 @@ An agent that watches its own pull request starts a turn by then.")
   "What GitHub last said of TASK's open pull request, if it covers its work.
 That is when its agent neither works nor asks, and GitHub was asked
 `roost--pr-settle' seconds or more after the agent's last event, so it
-knew of every push the agent made.  Nil otherwise."
+knew of every push the agent made.  Its head is the one TASK's host
+records, which another Emacs's lookup may have moved on, as the commits
+the pull request lacks are counted from it.  Nil otherwise."
   (when-let* ((status (roost--field task 'prStatus))
               ((equal (alist-get 'state status) "OPEN"))
+              ((equal (alist-get 'head status) (alist-get 'head (roost--field task 'pr))))
               ((not (member (roost--status-name task) '("starting" "running" "background" "permission"))))
               (checked (roost--time (alist-get 'checkedAt status)))
               ((let ((updated (roost--time (roost--field task 'updatedAt))))

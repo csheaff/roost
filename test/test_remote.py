@@ -2208,6 +2208,21 @@ elif args[:2] == ["auth", "status"]:
         polled = self.request("list", pullRequests=True)["result"][0]
         self.assertEqual((polled["landed"], polled["dirty"]), (True, True))
 
+    def test_an_open_pull_request_comes_with_whether_the_task_is_clean(self):
+        # An edit not yet staged moves no Git stamp: a poll that asks
+        # GitHub measures a task it may say waits to be merged.
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        url = "https://github.com/octo/repo/pull/9"
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(number=9, url=url, state="OPEN", headRefOid=tip)]))
+        self.assertIs(self.request("list", full=True)["result"][0]["dirty"], False)
+        (Path(task["worktree"]) / "work").write_text("edited since\n")
+        polled = self.request("list", pullRequests=True)["result"][0]
+        self.assertEqual((polled["prStatus"]["state"], polled["dirty"], polled["unpushed"]), ("OPEN", True, 0))
+        self.assertNotIn("dirty", self.request("list")["result"][0])
+
     def test_a_same_named_pull_request_on_main_is_not_a_task_with_no_work(self):
         # Someone else's fork, with a branch of the same name at main's commit.
         self.github()

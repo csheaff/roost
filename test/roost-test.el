@@ -4629,12 +4629,13 @@ Read from the layout transient keeps, whose form varies by version."
 passed everything, as GitHub said a minute after.  STATUS, fields of its
 `prStatus', go over those; a field (FIELD . :none) is left out."
   (let ((fields (append status
-                        `((state . "OPEN") (checks . ((passing . 3) (failing . 0) (pending . 0)))
+                        `((state . "OPEN") (head . "a1") (checks . ((passing . 3) (failing . 0) (pending . 0)))
                           (mergeable . "MERGEABLE") (requested) (threads . 0)
                           (checkedAt . "2026-10-03T20:01:00+00:00")))))
     (roost-test--pr-task
      `(prStatus . ,(seq-remove (lambda (field) (eq (cdr field) :none))
                                (seq-uniq fields (lambda (a b) (eq (car a) (car b))))))
+     '(pr . ((number . 12) (url . "https://github.com/o/r/pull/12") (state . "OPEN") (head . "a1")))
      '(unpushed . 0) '(live . t) '(ahead . 1) '(dirty) '(seen . "2026-10-03T20:00:00+00:00"))))
 
 (ert-deftest roost-a-pull-request-waiting-on-you-counts-as-waiting ()
@@ -4710,6 +4711,23 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
                                                    (roost-test--turn-task)))))
      (should (equal (roost--display-status stopped) "to merge"))
      (should (string-prefix-p "#12 passed" (roost--next-step stopped))))))
+
+(ert-deftest roost-a-pull-request-is-yours-only-at-the-head-its-host-records ()
+  ;; Another Emacs's lookup recorded a newer head, which the commits the
+  ;; pull request lacks are counted from: checks of the old one say
+  ;; nothing of it.
+  (roost-test--isolated
+   (should (equal (roost--display-status (roost--cache-task "dev" (roost-test--turn-task))) "to merge"))
+   ;; A quiet poll brings the record, and nothing from GitHub.
+   (let ((polled (roost--cache-task
+                  "dev" (assq-delete-all
+                         'prStatus (append '((pr . ((number . 12) (url . "https://github.com/o/r/pull/12")
+                                                    (state . "OPEN") (head . "b2"))))
+                                           (roost-test--turn-task))))))
+     (should (equal (alist-get 'head (roost--field polled 'prStatus)) "a1"))
+     (should (equal (roost--display-status polled) "ready"))
+     (should (equal (substring-no-properties (roost--next-step polled))
+                    "P pushes new commits to its pull request")))))
 
 (ert-deftest roost-a-failed-check-or-open-thread-is-left-to-the-agent-first ()
   (roost-test--isolated
