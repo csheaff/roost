@@ -6081,6 +6081,39 @@ With INITIAL, the box must start out holding it."
               (should-not (string-match-p "\n.*\n" (overlay-get notes 'after-string)))))
         (setq roost--note-box nil)))))
 
+(ert-deftest roost-a-note-box-goes-under-a-line-wider-than-the-window ()
+  ;; Where lines are truncated, as in Magit, a long line ends past the
+  ;; window's edge, and `posn-at-point' puts that end in the window
+  ;; beside, or on the row below.  The box then found no room, stayed
+  ;; hidden, and what you typed went to Magit.
+  (roost-test--isolated
+    (with-temp-buffer
+      (insert "short\n" (make-string 120 ?x) "\nafter\n")
+      (let* ((window (selected-window))
+             (anchor (save-excursion (goto-char (point-min)) (forward-line 1) (line-end-position)))
+             (room (make-overlay (1+ anchor) (1+ anchor))))
+        (set-window-buffer window (current-buffer))
+        (overlay-put room 'roost-note-box 100)
+        (overlay-put room 'roost-note-anchor anchor)
+        (setq roost--note-overlays (list room))
+        (let ((roost--note-box (list :source (current-buffer) :window window)))
+          ;; The long line is the second row, under an 18-pixel header line,
+          ;; and the room for the box the third.
+          (cl-letf (((symbol-function 'redisplay) #'ignore)
+                    ((symbol-function 'pos-visible-in-window-p)
+                     (lambda (position &optional _window partially)
+                       (and partially (= position anchor) (list 900 36))))
+                    ((symbol-function 'window-tab-line-height) (lambda (&optional _) 0))
+                    ((symbol-function 'window-header-line-height) (lambda (&optional _) 18))
+                    ((symbol-function 'posn-at-point)
+                     (lambda (&rest _) (list 'beside 'left-fringe '(0 . 36))))
+                    ((symbol-function 'window-lines-pixel-dimensions)
+                     (lambda (&rest _) '((40 . 18) (900 . 36) (40 . 138) (40 . 156))))
+                    ((symbol-function 'window-inside-pixel-edges)
+                     (lambda (&optional _) '(10 20 810 420))))
+            (should (equal (roost--line-top anchor window) 18))
+            (should (equal (roost--note-box-spot) '(10 . 61)))))))))
+
 (ert-deftest roost-the-note-button-slows-down-while-the-mouse-rests ()
   (roost-test--with-magit-task
     (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")

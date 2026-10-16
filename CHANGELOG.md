@@ -6,6 +6,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.8.1:
 
+- The box for a review note opens under a diff line wider than its
+  window. It stayed hidden there, so what you typed next went to Magit,
+  and the menu of a note under such a line opened beside the window. When
+  you scroll the box's line out of sight, it says that the box is hidden.
+  Nothing to do when upgrading.
 - `R` renames a task, in the dashboard, sidebar and task panel, and in
   the `h` menu (`roost-rename`). The new name shows in Roost, the task's
   tab or perspective, and its agent's tmux window; its branch and

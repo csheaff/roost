@@ -3435,6 +3435,15 @@ Its fringes and border take 18 pixels more."
             (with-selected-window window
               (if display-line-numbers (line-number-display-width t) 0))))))
 
+(defun roost--line-top (position window)
+  "The top of the screen line showing POSITION in WINDOW, or nil.
+In pixels from the top of WINDOW's text, under any tab and header line.
+POSITION may be past the window's right edge, as a long line's end is
+where lines are truncated: `posn-at-point' then names the window beside
+WINDOW, measuring from its top, or the row below."
+  (when-let* ((shown (pos-visible-in-window-p position window t)))
+    (- (cadr shown) (window-tab-line-height window) (window-header-line-height window))))
+
 (defun roost--note-box-spot ()
   "Where the note box goes, as pixels in its window's frame, or nil.
 It goes over the room left under its line, while that room is in sight
@@ -3458,8 +3467,7 @@ in the window it was opened from."
                                        roost--note-overlays)))
                   (room (overlay-get overlay 'roost-note-box))
                   ((progn (overlay-put overlay 'window window) t))
-                  (line (posn-at-point (overlay-get overlay 'roost-note-anchor) window))
-                  (below (cdr (posn-x-y line)))
+                  (below (roost--line-top (overlay-get overlay 'roost-note-anchor) window))
                   ;; The room is the first row that tall below its line,
                   ;; and has to be in sight whole.  Each row is given by
                   ;; its bottom.
@@ -3494,7 +3502,10 @@ buffer it came from is gone, it closes, keeping what you wrote."
             (let ((window (plist-get roost--note-box :window)))
               (when (window-live-p window)
                 (select-frame-set-input-focus (window-frame window))
-                (select-window window))))
+                (select-window window)
+                ;; What you type now goes to Magit.
+                (message "The note on %s is hidden while its line is out of sight"
+                         (roost--note-location (plist-get roost--note-box :place))))))
           (make-frame-invisible frame))))))
 
 (defun roost--note-box-follow (&rest _)
@@ -3736,11 +3747,14 @@ offers; with more than one note there, first choose which."
                                 (overlays-in (line-end-position) (1+ (line-end-position))))
                       (user-error "No review note under this line")))
          (notes (overlay-get overlay 'roost-notes))
-         (where (let ((posn (posn-at-point (line-end-position))))
-                  (if posn
-                      (list (list (car (posn-x-y posn)) (+ (cdr (posn-x-y posn)) (default-line-height)))
-                            (selected-window))
-                    (list '(0 0) (selected-window)))))
+         (where (let ((top (roost--line-top (line-end-position) (selected-window))))
+                  (list (if top
+                            ;; A long line's end may be past the window's edge.
+                            (list (min (car (pos-visible-in-window-p (line-end-position) nil t))
+                                       (window-body-width nil t))
+                                  (+ top (default-line-height)))
+                          '(0 0))
+                        (selected-window))))
          (note (if (not (cdr notes))
                    (car notes)
                  (or (x-popup-menu where `("Review notes"
