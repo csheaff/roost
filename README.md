@@ -22,22 +22,24 @@ https://github.com/user-attachments/assets/674d01cc-2a8d-491a-ba9f-6605e48f997e
 
 *One task, from a heading in an Org file to `main`, in about a minute. The
 agent's work plays four times faster, and the title bar shows the keys
-pressed.*
+pressed. `C-c r` opens Roost's menu, as in the setup [below](#get-started);
+in the dashboard, the sidebar and a task's panel its keys work alone.*
 
-1. **Start where the work is.** `c` on an Org heading drafts a task, with the
-   heading and its notes as the prompt; a selected region or a GitHub issue
-   works the same way. `C-c C-c` makes the worktree and branch and starts the
-   agent.
+1. **Start where the work is.** `C-c r c` on an Org heading drafts a task,
+   with the heading and its notes as the prompt; a selected region or a
+   GitHub issue works the same way. `C-c C-c` makes the worktree and branch
+   and starts the agent.
 2. **Go where you're needed.** While it works, an agent on `claylien` asks to
-   run its tests. `n` takes you to the next agent waiting for you, and you
-   answer it in its own terminal.
+   run its tests. `C-c r n` takes you to the next agent waiting for you, and
+   you answer it in its own terminal.
 3. **Review, and reply in place.** The panel beside the terminal lists the
    files the agent changed. A click opens one's diff in Magit, `;` writes a
-   note on a line, and `@` sends your notes to the agent. `r` opens Magit on
-   the whole worktree, over TRAMP for a remote task.
-4. **Finish.** The agent revises and commits. `m` squashes the task into the
-   branch it started from and removes its worktree, branch and terminal. `u`
-   brings a task up to date first, and `P` opens a pull request instead.
+   note on a line, and `@` sends your notes to the agent. `C-c r r` opens
+   Magit on the whole worktree, over TRAMP for a remote task.
+4. **Finish.** The agent revises and commits. `C-c r m` squashes the task
+   into the branch it started from and removes its worktree, branch and
+   terminal. On the same menu, `u` brings a task up to date first, and `P`
+   opens a pull request instead.
 
 **Watch them all.** `M-x roost-status` lists every agent on every host: what
 it's doing, what it changed, and its latest reply or what it asks. A
