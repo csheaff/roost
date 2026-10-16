@@ -39,6 +39,7 @@ HERE = Path(__file__).resolve().parent
 CHECKOUT = HERE.parent.parent
 FAKE = HERE.parent / "fake_claude.py"
 FAKE_SSH = HERE / "fake_ssh.py"
+FAKE_GH = HERE / "fake_gh.py"
 
 FRAME = (172, 40)
 PANEL = 44  # roost-task-panel-width
@@ -121,6 +122,16 @@ class Run:
         # be running this in.
         for name in ("ZDOTDIR", "BASH_ENV", "ENV", "TMUX", "TMUX_PANE"):
             self.env.pop(name, None)
+        # GitHub, as journeys set it: test/qa/fake_gh.py, first on PATH as gh.
+        self.github = self.work / "github"
+        self.github.mkdir()
+        tools = self.work / "tools"
+        tools.mkdir()
+        (tools / "gh").write_text('#!/bin/sh\nexec %s %s "$@"\n'
+                                  % (shlex.quote(sys.executable), shlex.quote(str(FAKE_GH))))
+        (tools / "gh").chmod(0o755)
+        self.env["PATH"] = "%s:%s" % (tools, self.env.get("PATH", ""))
+        self.env["QA_GITHUB"] = str(self.github)
         self.notes = set()
         # Commands run in an Emacs since restarted.
         self.ran = set()
@@ -1553,6 +1564,100 @@ def merged(qa, repo):
         ("its branch is gone", lambda s: not qa.git(repo, "branch", "--list", branch))])
 
 
+def github(qa, **canned):
+    """Have the fake GitHub say CANNED: list.json and reviews.json, as JSON."""
+    for name, value in canned.items():
+        (qa.github / (name + ".json")).write_text(json.dumps(value))
+
+
+def sidebar_row(qa, screen, name):
+    """NAME's row in the sidebar, as shown, or "". The name may be cut
+    short there, to leave room for its status."""
+    return next((line.strip() for line in (qa.window(screen, "roost-sidebar-list-mode") or {}).get("text", "")
+                 .splitlines() if line.strip().startswith(name[:12])), "")
+
+
+@journey("A pull request that waits on you")
+def pull_request(qa, repo):
+    """Once its agent is done, a pull request whose checks and review are
+    done waits on you, and its status says why: to merge, ci failed or
+    comments. While GitHub is still at work, the panel says on what."""
+    origin = qa.work / "origin.git"
+    if not origin.exists():
+        qa.git(qa.work, "init", "-q", "--bare", "-b", "main", str(origin))
+        qa.git(repo, "remote", "add", "origin", str(origin))
+    name = new_task(qa, "ask sh -c \"printf 'Due dates\\n' > DUE.md && git add DUE.md "
+                        "&& git commit -qm 'Add due dates'\"")
+    answer_yes(qa, name)
+    # GitHub's word counts once asked half a minute after the agent's last event.
+    settled = time.monotonic() + 31
+    qa.wait("its commit", lambda s: "Committed" in panel_text(qa, s))
+    qa.keys("C-c r P")
+    qa.wait("the pull request's draft", lambda s: (qa.window(s, "roost-pr-mode") or {}).get("selected"))
+    qa.keys("C-c C-c")
+    qa.wait("its pull request", lambda s: "#21" in panel_text(qa, s))
+    branch = qa.git(repo, "branch", "--list", "--format=%(refname:short)", "roost/%s-*" % name)
+    tip = qa.git(repo, "rev-parse", branch)
+    url = "https://github.com/qa/notes/pull/21"
+    copilot = dict(requestedReviewer=dict(login="copilot-pull-request-reviewer"))
+    long_ago = "2026-01-01T00:00:00Z"
+
+    def says(checks, requested=(), threads=()):
+        github(qa, list=[dict(number=21, url=url, state="OPEN", headRefOid=tip, statusCheckRollup=checks)],
+               reviews={"21": dict(mergeable="MERGEABLE", reviewRequests=dict(nodes=list(requested)),
+                                   reviewThreads=dict(totalCount=len(threads), nodes=list(threads)))})
+        qa.keys("C-c r g")
+
+    time.sleep(max(0, settled - time.monotonic()))
+    says([dict(__typename="CheckRun", name="test", status="IN_PROGRESS", conclusion="")], [copilot])
+    qa.wait("what it waits for", lambda s: "#21 waits for" in panel_text(qa, s))
+    qa.step("GitHub at work", expect=[
+        ("the panel says it waits for its check and Copilot's review",
+         lambda s: "#21 waits for 1 check and Copilot's review" in panel_text(qa, s)),
+        ("and that a review is asked of Copilot", lambda s: "review requested from Copilot" in panel_text(qa, s)),
+        ("the sidebar has no status for it",
+         lambda s: not sidebar_row(qa, s, name).endswith(("to merge", "ci failed", "comments", "ready")))])
+    passed = dict(__typename="CheckRun", name="test", status="COMPLETED", conclusion="SUCCESS",
+                  completedAt=long_ago)
+    says([passed])
+    qa.status(name, "to merge")
+    qa.step("Your turn to merge", expect=[
+        ("the sidebar says to merge", lambda s: sidebar_row(qa, s, name).endswith("to merge")),
+        ("the panel says P opens it", lambda s: "#21 passed its checks and review: P opens it to merge"
+         in panel_text(qa, s))])
+    # n finds it, among whatever else waits.
+    qa.keys("C-c r S")
+    qa.wait("the dashboard", lambda s: (qa.window(s, "roost-dashboard-mode") or {}).get("selected"))
+
+    def opened(screen):
+        return (screen.get("task") or {}).get("name") == name and selected_terminal(screen)
+
+    for _ in range(int(qa.emacs.eval("(seq-count #'roost--waiting-p (roost-tasks))"))):
+        qa.keys("C-c r n")
+        if opened(qa.until(opened, 5)):
+            break
+    qa.step("n goes to it", expect=[("its terminal", opened)])
+    says([passed, dict(__typename="CheckRun", name="lint", status="COMPLETED", conclusion="FAILURE",
+                       completedAt=long_ago)])
+    qa.status(name, "ci failed")
+    qa.step("A check failed", expect=[
+        ("the sidebar says ci failed", lambda s: sidebar_row(qa, s, name).endswith("ci failed")),
+        ("the panel says e tells its agent",
+         lambda s: "A check failed on #21: e tells its agent, P opens it" in panel_text(qa, s))])
+    thread = dict(isResolved=False, comments=dict(nodes=[dict(createdAt=long_ago)]))
+    says([passed], threads=[thread, dict(thread, isResolved=True), thread])
+    qa.status(name, "comments")
+    qa.step("Review threads open", expect=[
+        ("the sidebar says comments", lambda s: sidebar_row(qa, s, name).endswith("comments")),
+        ("the panel counts the unresolved ones",
+         lambda s: "#21 has 2 unresolved review threads: e tells its agent to answer them" in panel_text(qa, s))])
+    github(qa, list=[dict(number=21, url=url, state="MERGED", headRefOid=tip)])
+    qa.keys("C-c r g")
+    qa.status(name, "merged")
+    qa.step("Merged on GitHub", expect=[
+        ("the sidebar says merged", lambda s: sidebar_row(qa, s, name).endswith("merged"))])
+
+
 @journey("An agent that exits")
 def exits(qa, repo):
     """An agent that exits on its own shows as such, and s resumes its conversation."""
@@ -1673,7 +1778,7 @@ def dropped(qa, repo):
 JOURNEYS = [sweep, answer, fold, resize, merge, review, panes, shell,
             dashboard, stop_resume, retire, send, update, restart, search, question_left, walk_away,
             frames, org, tabs,
-            forget, rename, fork, merged, exits, unreachable, scrollback, fleet, dropped]
+            forget, rename, fork, merged, pull_request, exits, unreachable, scrollback, fleet, dropped]
 
 
 def main():

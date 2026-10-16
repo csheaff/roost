@@ -22,6 +22,7 @@
          (roost--projects-loaded t) (roost--remembered-projects nil)
          (user-login-name "user")
          (roost--statuses (make-hash-table :test 'equal))
+         (roost--pr-verdicts (make-hash-table :test 'equal))
          (roost--seen (make-hash-table :test 'equal))
          (roost--errors (make-hash-table :test 'equal))
          (roost--installed (make-hash-table :test 'equal))
@@ -4618,6 +4619,173 @@ Read from the layout transient keeps, whose form varies by version."
    (should (eq (roost--pr-state (append '((prStatus . ((state . "OPEN"))) (pr . ((number . 12) (state . "MERGED"))))
                                         (roost-test--task)))
                'open))))
+
+(defun roost-test--ago (seconds)
+  "The time SECONDS ago, as GitHub writes it."
+  (format-time-string "%Y-%m-%dT%H:%M:%SZ" (time-subtract nil seconds) t))
+
+(defun roost-test--turn-task (&rest status)
+  "A task whose agent you have seen finish, and whose open pull request
+passed everything, as GitHub said a minute after.  STATUS, fields of its
+`prStatus', go over those; a field (FIELD . :none) is left out."
+  (let ((fields (append status
+                        `((state . "OPEN") (checks . ((passing . 3) (failing . 0) (pending . 0)))
+                          (mergeable . "MERGEABLE") (requested) (threads . 0) (unpushed . 0)
+                          (checkedAt . "2026-10-03T20:01:00+00:00")))))
+    (roost-test--pr-task
+     `(prStatus . ,(seq-remove (lambda (field) (eq (cdr field) :none))
+                               (seq-uniq fields (lambda (a b) (eq (car a) (car b))))))
+     '(live . t) '(ahead . 1) '(dirty) '(seen . "2026-10-03T20:00:00+00:00"))))
+
+(ert-deftest roost-a-pull-request-waiting-on-you-counts-as-waiting ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (roost-test--turn-task))))
+     (should (equal (roost--display-status task) "to merge"))
+     (should (roost--waiting-p task))
+     (should-not (roost--blocked-p task))
+     (should (< (roost--attention-rank task) (roost--attention-rank (roost-test--task nil "running"))))
+     (should (equal (substring-no-properties (roost--next-step task))
+                    "#12 passed its checks and review: P opens it to merge"))
+     (should (equal (substring-no-properties (roost--summary (list task))) "1 to merge"))
+     (let ((row (roost--sidebar-row task 40)))
+       (should (string-suffix-p "to merge" row))
+       (should (eq (get-text-property (1- (length row)) 'face row) 'roost-status-ready))))
+   ;; What its agent last said comes first, and the next step is the same.
+   (let ((news (roost--cache-task "dev" (assq-delete-all 'seen (roost-test--turn-task)))))
+     (should (equal (roost--display-status news) "ready"))
+     (should (string-prefix-p "#12 passed its checks" (roost--next-step news))))
+   (should (string-prefix-p "Draft #12 passed its checks and review"
+                            (roost--next-step (roost--cache-task "dev" (roost-test--turn-task '(draft . t))))))))
+
+(ert-deftest roost-a-pull-request-is-yours-only-once-github-knows-the-agent-s-work ()
+  (roost-test--isolated
+   (let ((status (lambda (&rest fields)
+                   (roost--display-status (roost--cache-task "dev" (apply #'roost-test--turn-task fields)))))
+         (step (lambda (&rest fields)
+                 (substring-no-properties
+                  (roost--next-step (roost--cache-task "dev" (apply #'roost-test--turn-task fields)))))))
+     ;; Asked too soon after the agent's last event, GitHub may not have
+     ;; had its push.
+     (should (equal (funcall status '(checkedAt . "2026-10-03T20:00:20+00:00")) "ready"))
+     (should (equal (funcall step '(checkedAt . "2026-10-03T20:00:20+00:00"))
+                    "P pushes new commits to its pull request"))
+     (should (equal (funcall status '(checkedAt . :none)) "ready"))
+     ;; The branch has commits the pull request lacks, or can't tell.
+     (should (equal (funcall status '(unpushed . 2)) "ready"))
+     (should (equal (funcall step '(unpushed . 2)) "P pushes 2 new commits to #12"))
+     (should (equal (funcall status '(unpushed)) "ready"))
+     ;; GitHub is still at work.
+     (should (equal (funcall status '(checks . ((passing . 2) (failing . 0) (pending . 1)))) "ready"))
+     (should (equal (funcall step '(checks . ((passing . 2) (failing . 0) (pending . 1))))
+                    "#12 waits for 1 check"))
+     (should (equal (funcall status '(requested "copilot-pull-request-reviewer")) "ready"))
+     (should (equal (funcall step '(checks . ((passing . 2) (failing . 0) (pending . 2)))
+                             '(requested "copilot-pull-request-reviewer"))
+                    "#12 waits for 2 checks and Copilot's review"))
+     (should (equal (funcall step '(requested "alice" "core")) "#12 waits for reviews from alice, core"))
+     ;; What it doesn't know, or what isn't yours to settle here.
+     (should (equal (funcall status '(threads . :none)) "ready"))
+     (should (equal (funcall status '(requested . :none)) "ready"))
+     (should (equal (funcall status '(checks)) "ready"))
+     (should (equal (funcall status '(mergeable . "UNKNOWN")) "ready"))
+     (should (equal (funcall status '(review . "REVIEW_REQUIRED")) "ready"))
+     (should (equal (funcall status '(review . "CHANGES_REQUESTED")) "ready"))
+     (should (equal (funcall status '(mergeable . "CONFLICTING")) "ready"))
+     (should (equal (funcall step '(mergeable . "CONFLICTING"))
+                    "#12 conflicts with the branch it merges into: e tells its agent, P opens it"))
+     (should (equal (funcall status '(state . "MERGED")) "ready"))
+     (should (equal (funcall status '(state . "CLOSED")) "ready")))
+   ;; Its agent at work, or with work left uncommitted or unmerged.
+   (dolist (fields '(((status . "running")) ((status . "background")) ((status . "permission"))
+                     ((dirty . t)) ((merging (conflicts "a.py")))))
+     (let ((task (roost--cache-task "dev" (append fields '((id . "1111111111111111")) (roost-test--turn-task)))))
+       (should-not (member (roost--display-status task) roost--pr-turns))
+       (should-not (roost--pr-verdict task))))
+   ;; A stopped agent's pull request waits on you all the same.
+   (let ((stopped (roost--cache-task "dev" (append '((status . "stopped") (live))
+                                                   (roost-test--turn-task)))))
+     (should (equal (roost--display-status stopped) "to merge"))
+     (should (string-prefix-p "#12 passed" (roost--next-step stopped))))))
+
+(ert-deftest roost-a-failed-check-or-open-thread-is-left-to-the-agent-first ()
+  (roost-test--isolated
+   (let* ((failed (lambda (ago &rest fields)
+                    (roost--cache-task "dev" (apply #'roost-test--turn-task
+                                                    (append fields
+                                                            `((checks . ((passing . 2) (failing . 1) (pending . 0)))
+                                                              (failedAt . ,(roost-test--ago ago))))))))
+          (early (funcall failed 60))
+          (late (funcall failed 180)))
+     ;; An agent that watches its pull request has started a turn by now.
+     (should-not (roost--waiting-p early))
+     (should (equal (roost--pr-verdict early) "ci failed"))
+     (should (equal (substring-no-properties (roost--next-step early))
+                    "A check failed on #12: e tells its agent, P opens it"))
+     (should (equal (roost--display-status late) "ci failed"))
+     (should (roost--waiting-p late))
+     (should (eq (roost--status-face "ci failed") 'roost-status-failed))
+     ;; Without a time, from when GitHub was asked.
+     (should (equal (roost--display-status (funcall failed 0 '(failedAt) `(checkedAt . ,(roost-test--ago 150))))
+                    "ci failed"))
+     (should (equal (roost--display-status (funcall failed 0 '(failedAt) `(checkedAt . ,(roost-test--ago 90))))
+                    "ready"))
+     (let ((stopped (roost--cache-task "dev" (append '((status . "stopped") (live))
+                                                     (roost-test--turn-task
+                                                      '(checks . ((passing . 0) (failing . 2) (pending . 0)))
+                                                      `(failedAt . ,(roost-test--ago 600)))))))
+       (should (equal (substring-no-properties (roost--next-step stopped))
+                      "2 checks failed on #12: s resumes its agent, P opens it"))))
+   (let ((threads (lambda (ago)
+                    (roost--cache-task "dev" (roost-test--turn-task
+                                              '(threads . 2) `(threadAt . ,(roost-test--ago ago)))))))
+     (should (equal (roost--display-status (funcall threads 30)) "ready"))
+     (let ((task (funcall threads 300)))
+       (should (equal (roost--display-status task) "comments"))
+       (should (roost--waiting-p task))
+       (should (equal (substring-no-properties (roost--next-step task))
+                      "#12 has 2 unresolved review threads: e tells its agent to answer them, P opens it"))
+       (should (equal (substring-no-properties (roost--summary (list task))) "1 with review comments"))))))
+
+(ert-deftest roost-a-pull-request-that-comes-to-wait-on-you-notifies ()
+  (roost-test--isolated
+   (let ((roost-notify t) notices)
+     (cl-letf (((symbol-function 'roost--notify) (lambda (title body &rest _) (push (list title body) notices)))
+               ((symbol-function 'roost--watched-task) #'ignore))
+       ;; One that waited when Roost first saw it is no news.
+       (roost--cache-task "dev" (roost-test--turn-task))
+       (should-not notices)
+       (roost--cache-task "dev" (roost-test--turn-task '(checks . ((passing . 2) (failing . 0) (pending . 1)))))
+       (should-not notices)
+       (roost--cache-task "dev" (roost-test--turn-task))
+       (should (equal notices '(("Roost: fix auth — to merge" "dev · #12 passed its checks and review"))))
+       ;; Nor again while it waits, nor once you look at it.
+       (roost--cache-task "dev" (roost-test--turn-task))
+       (should (= (length notices) 1))
+       (roost--cache-task "dev" (roost-test--turn-task '(threads . 1) `(threadAt . ,(roost-test--ago 300))))
+       (should (equal (car notices) '("Roost: fix auth — comments" "dev · #12 has 1 unresolved review thread")))
+       (cl-letf (((symbol-function 'roost--watched-task)
+                  (lambda () (gethash '("dev" "0123456789abcdef") roost--tasks))))
+         (roost--cache-task "dev" (roost-test--turn-task))
+         (should (= (length notices) 2)))
+       ;; Forgotten with the task.
+       (roost--apply-snapshot "dev" nil)
+       (should (eq (gethash '("dev" "0123456789abcdef") roost--pr-verdicts 'gone) 'gone))))))
+
+(ert-deftest roost-the-panel-says-what-a-pull-request-waits-for ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (roost-test--turn-task
+                                         '(threads . 2) `(threadAt . ,(roost-test--ago 30))
+                                         '(requested "copilot-pull-request-reviewer" "core")
+                                         '(mergeable . "CONFLICTING")))))
+     (cl-letf (((symbol-function 'roost--refresh-host) #'ignore))
+       (save-window-excursion
+         (roost-task-info task)
+         (with-current-buffer "*roost: fix auth*"
+           (unwind-protect
+               (should (string-match-p
+                        "^Open · 3 passing · 2 unresolved review threads · review requested from Copilot, core · conflicts$"
+                        (buffer-string)))
+             (kill-buffer))))))))
 
 (ert-deftest roost-commits-since-a-merge-are-work-to-lose ()
   (roost-test--isolated

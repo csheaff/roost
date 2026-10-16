@@ -221,6 +221,26 @@ to the agent with `e`; when it has committed, `P` pushes the new commits and
 opens the pull request. Once it is merged, `x` retires the task and deletes the
 branch. Needs `gh` on the task's host, and Git credentials there that can push.
 
+**When a pull request waits on you.** Roost notifies you when a task's pull
+request comes to wait on you, and once you've seen what its agent last said,
+the task counts as waiting: `n` visits it, the mode line counts it, and the
+sidebar and dashboard say why:
+
+- `to merge`: every check passed, no review is asked for or unresolved, and
+  GitHub finds no conflicts. `P` opens it.
+- `ci failed`: a check failed.
+- `comments`: a review thread is unresolved, Copilot's too, even one the agent
+  answered and left open.
+
+A failed check or a new thread waits two minutes first: an agent that watches
+its own pull request takes it up by then, and shows as working. The status
+lasts until the pull request changes or the agent starts again, whether or not
+you've looked. Before that, the task panel says what the pull request waits
+for, such as its checks or Copilot's review. Roost only says when it's your
+turn: `e` tells the agent what to fix. It goes by what GitHub said after the
+agent's last push, while the branch has no commits the pull request lacks and
+nothing is left uncommitted.
+
 **See what's done.** A task whose work is merged, on GitHub or into the branch it
 merges into, says `merged` in the dashboard and sidebar once you've seen its
 agent's last reply, so you can tell which tasks to retire without opening them.
@@ -269,7 +289,8 @@ Also available: `roost-send-region` (adds the selection, with its file and
 lines, to the prompt you are drafting). Roost watches its hosts once you open the dashboard or sidebar or start
 a task: every 3 seconds while Emacs is in front, every 15 otherwise.
 Every two minutes, and whenever you open the dashboard or refresh it with `g`, it also
-asks GitHub about the pull requests of tasks whose branch was pushed.
+asks GitHub about the pull requests of tasks whose branch was pushed, with one
+`gh api graphql` query per repository for review threads.
 `roost-watch-mode` turns that off and on.
 
 In Magit on a task's worktree, Roost adds a few keys, and a Roost menu:
@@ -482,7 +503,8 @@ an entry in `roost-sweep--views`.
 `make qa` uses Roost as you would, in a GUI Emacs of its own: a plain
 configuration with its own server, state directory and tmux socket, and
 `test/fake_claude.py` for Claude Code, so Git, tmux and the host helper are
-real and no model is called. The run has a home directory of its own, so your
+real and no model is called. `test/qa/fake_gh.py` stands in for `gh`, with
+what each journey has GitHub say. The run has a home directory of its own, so your
 tmux, shell and Git configuration don't change it, and the fake agent writes
 its transcripts there, as Claude Code would in yours, for search. Its journeys start a task from the menu, answer
 it in its terminal, fold and unfold a long prompt with the mouse, resize the
@@ -494,7 +516,8 @@ resume an agent, retire a task or discard its work, send a prompt, bring a
 task up to date, restart Emacs with agents at work, search the
 conversations, work in a second frame, start a task from an Org heading,
 keep a tab per task, two of the same name among them, forget a task, fork
-one's commits, resume an agent that exited, see a host it can't reach,
+one's commits, follow a pull request from GitHub's checks and review to
+its merge, resume an agent that exited, see a host it can't reach,
 read back through a long reply in tmux-control's scrollback, move between
 agents that all print at once, and reconnect a terminal whose connection
 dropped. One leaves something unfinished, as you do (`M-x` or Roost's own

@@ -1040,24 +1040,122 @@ def list_tasks(store, request):
     return tasks
 
 
+def check_state(check):
+    """Whether one of a statusCheckRollup's check runs or commit statuses
+    is passing, failing or pending."""
+    if check.get("status") not in (None, "COMPLETED"):
+        return "pending"
+    state = check.get("conclusion") or check.get("state")
+    if state in ("SUCCESS", "NEUTRAL", "SKIPPED"):
+        return "passing"
+    return "pending" if state in ("PENDING", "EXPECTED", None, "") else "failing"
+
+
 def summarize_checks(rollup):
     """Count a statusCheckRollup's check runs and commit statuses."""
     counts = dict(passing=0, failing=0, pending=0)
     for check in rollup or []:
-        if check.get("status") not in (None, "COMPLETED"):
-            counts["pending"] += 1
-        elif (check.get("conclusion") or check.get("state")) in ("SUCCESS", "NEUTRAL", "SKIPPED"):
-            counts["passing"] += 1
-        elif (check.get("conclusion") or check.get("state")) in ("PENDING", "EXPECTED", None, ""):
-            counts["pending"] += 1
-        else:
-            counts["failing"] += 1
+        counts[check_state(check)] += 1
     return counts
+
+
+def last_failure(rollup):
+    """When the last of a statusCheckRollup's failing checks finished, as
+    GitHub wrote it, or None. A commit status has only when it was set."""
+    times = [check.get("completedAt") or check.get("createdAt") or check.get("startedAt")
+             for check in rollup or [] if check_state(check) == "failing"]
+    return max((t for t in times if parse_time(t)), key=parse_time, default=None)
 
 
 PULL_REQUEST_FIELDS = "number,url,state,isDraft,reviewDecision,statusCheckRollup,headRefOid"
 # Seconds that asking GitHub about every task's pull requests may take.
 PULL_REQUEST_DEADLINE = 20
+# What `gh pr list` leaves out, for each of a repository's open pull
+# requests: whether it conflicts, who is yet to review it, Copilot among
+# them, and its review threads, the last 100 of them.
+PULL_REQUEST_REVIEWS = """
+  pr%d: pullRequest(number: %d) {
+    mergeable
+    reviewRequests(first: 20) { nodes { requestedReviewer { ... on Actor { login } ... on Team { slug } } } }
+    reviewThreads(last: 100) { totalCount nodes { isResolved comments(last: 1) { nodes { createdAt } } } }
+  }"""
+
+
+def pull_request_reviews(prs, deadline):
+    """For the open pull requests PRS, what `gh pr list` can't say, by
+    URL: whether each conflicts, who is yet to review it, and how many of
+    its review threads are unresolved, with the time of the last comment on
+    them. One query for each repository, all of them by DEADLINE, as
+    time.monotonic() has it; pull requests GitHub doesn't answer for by
+    then are left out."""
+    repositories = {}
+    for pr in prs:
+        match = re.match(r"https?://([^/]+)/([^/]+)/([^/]+)/pull/(\d+)\Z", pr.get("url") or "")
+        if match and int(match.group(4)) == pr["number"]:
+            repositories.setdefault(match.group(1, 2, 3), []).append(pr)
+
+    def ask(repository):
+        left = deadline - time.monotonic()
+        if left < 1:
+            return {}
+        host, owner, name = repository
+        query = ("query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) {%s\n} }"
+                 % "".join(PULL_REQUEST_REVIEWS % (pr["number"], pr["number"])
+                           for pr in repositories[repository]))
+        try:
+            answer = json.loads(gh(None, "api", "graphql", "--hostname", host, "-f", "query=" + query,
+                                   "-f", "owner=" + owner, "-f", "name=" + name, timeout=left))
+            found = answer["data"]["repository"]
+        except (RoostError, ValueError, OSError, KeyError, TypeError):
+            return {}
+        reviews = {}
+        for pr in repositories[repository]:
+            try:
+                reviews[pr["url"]] = review_state(found["pr%d" % pr["number"]])
+            except (KeyError, TypeError, AttributeError):
+                continue
+        return reviews
+
+    if not repositories:
+        return {}
+    reviews = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(repositories))) as pool:
+        for answered in pool.map(ask, repositories):
+            reviews.update(answered)
+    return reviews
+
+
+def review_state(pr):
+    """The fields of prStatus that PR, one pull request of a
+    PULL_REQUEST_REVIEWS answer, gives. Unresolved threads aren't counted
+    when there are more than were asked for."""
+    requested = [(request.get("requestedReviewer") or {}) for request in pr["reviewRequests"]["nodes"]]
+    threads = pr["reviewThreads"]
+    unresolved = [thread for thread in threads["nodes"] if not thread["isResolved"]]
+    times = [comment["createdAt"] for thread in unresolved for comment in thread["comments"]["nodes"]
+             if parse_time(comment.get("createdAt"))]
+    state = dict(mergeable=pr.get("mergeable"),
+                 requested=[reviewer.get("login") or reviewer.get("slug") or "someone" for reviewer in requested])
+    if threads["totalCount"] <= len(threads["nodes"]):
+        state.update(threads=len(unresolved), threadAt=max(times, key=parse_time, default=None))
+    return state
+
+
+def unpushed(task, head, tip):
+    """How many of its branch's commits, at TIP, the task's pull request,
+    at HEAD, lacks, or None when one isn't before the other here, as when
+    a commit made on GitHub is not fetched. Zero when the pull request has
+    them all, commits made on GitHub too."""
+    if head == tip:
+        return 0
+    if not (isinstance(head, str) and re.fullmatch(r"[0-9a-f]{40,64}", head)):
+        return None
+    if is_ancestor(task["repo"], tip, head):
+        return 0
+    if not is_ancestor(task["repo"], head, tip):
+        return None
+    count = read_git(task["repo"], "rev-list", "--count", head + ".." + tip)
+    return int(count.stdout) if count.returncode == 0 and count.stdout.strip().isdigit() else None
 
 
 def branch_tip(task):
@@ -1141,11 +1239,12 @@ def shown_pull_request(prs, tip):
 def check_pull_requests(store, tasks):
     """Ask GitHub about the pull requests of TASKS with one recorded or a
     pushed branch, several at once, and add each one's state, review and
-    checks. Record the one each shows when it changed, as when its agent
-    opened one or it was merged. All within PULL_REQUEST_DEADLINE seconds,
-    well inside Emacs's wait for the reply: a task GitHub hasn't answered
-    for by then keeps what it had. Runs without the registry lock; returns
-    the tasks asked about."""
+    checks, and for an open one, its review threads and whether it has the
+    branch's every commit. Record the one each shows when it changed, as
+    when its agent opened one or it was merged. All within
+    PULL_REQUEST_DEADLINE seconds, well inside Emacs's wait for the reply:
+    a task GitHub hasn't answered for by then keeps what it had. Runs
+    without the registry lock; returns the tasks asked about."""
     asked = []
     for task in tasks:
         if task.get("removing"):
@@ -1155,6 +1254,9 @@ def check_pull_requests(store, tasks):
             asked.append((task, tip))
     if not asked:
         return []
+    # What GitHub says is as new as this, at least, for Emacs to tell
+    # whether it knew of the agent's latest push.
+    checked = now()
     deadline = time.monotonic() + PULL_REQUEST_DEADLINE
 
     def ask(pair):
@@ -1163,16 +1265,21 @@ def check_pull_requests(store, tasks):
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(asked))) as pool:
         answers = list(pool.map(ask, asked))
-    for (task, tip), prs in zip(asked, answers):
-        pr = shown_pull_request(prs or [], tip)
+    shown = [shown_pull_request(prs or [], tip) for (_, tip), prs in zip(asked, answers)]
+    reviews = pull_request_reviews([pr for pr in shown if pr and pr.get("state") == "OPEN"], deadline)
+    for (task, tip), prs, pr in zip(asked, answers, shown):
         if not pr:
             continue
         try:
             checks = summarize_checks(pr.get("statusCheckRollup"))
+            failed = last_failure(pr.get("statusCheckRollup"))
         except (AttributeError, TypeError):
-            checks = None
+            checks = failed = None
         task["prStatus"] = dict(state=pr.get("state"), draft=bool(pr.get("isDraft")),
                                 review=pr.get("reviewDecision") or None, checks=checks, head=pr.get("headRefOid"))
+        if pr.get("state") == "OPEN":
+            task["prStatus"].update(reviews.get(pr.get("url"), {}), failedAt=failed, checkedAt=checked,
+                                    unpushed=unpushed(task, pr.get("headRefOid"), tip))
         record = dict(number=pr["number"], url=pr.get("url"), state=pr.get("state"), head=pr.get("headRefOid"))
         # Shown or not, as when an open one goes to another base, or listed
         # or not, as when the branch has had more than a page of them.

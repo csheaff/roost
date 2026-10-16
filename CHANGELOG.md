@@ -6,6 +6,15 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.8.1:
 
+- A task whose pull request waits on you counts as waiting, so `n`, the
+  status lights, the mode line and notifications find it once its agent is
+  done. Its status says why: `to merge` when every check passed and no
+  review is asked for or unresolved, `ci failed` when a check failed, and
+  `comments` when a review thread, Copilot's too, is unresolved. A failure
+  or thread waits two minutes first, for an agent that watches its own
+  pull request. The task panel says what a pull request waits for. Roost
+  asks GitHub about review threads with `gh api graphql`, once per
+  repository every two minutes. Nothing to do when upgrading.
 - The box for a review note opens under a diff line wider than its
   window. It stayed hidden there, so what you typed next went to Magit,
   and the menu of a note under such a line opened beside the window. When
