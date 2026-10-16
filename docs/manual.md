@@ -239,7 +239,7 @@ you've looked. Before that, the task panel says what the pull request waits
 for, such as its checks or Copilot's review. Roost only says when it's your
 turn: `e` tells the agent what to fix. It goes by what GitHub said after the
 agent's last push, while the branch has no commits the pull request lacks and
-nothing is left uncommitted.
+nothing is left uncommitted or in the agent's own worktrees.
 
 **See what's done.** A task whose work is merged, on GitHub or into the branch it
 merges into, says `merged` in the dashboard and sidebar once you've seen its

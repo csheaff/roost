@@ -4630,12 +4630,12 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
 `prStatus', go over those; a field (FIELD . :none) is left out."
   (let ((fields (append status
                         `((state . "OPEN") (checks . ((passing . 3) (failing . 0) (pending . 0)))
-                          (mergeable . "MERGEABLE") (requested) (threads . 0) (unpushed . 0)
+                          (mergeable . "MERGEABLE") (requested) (threads . 0)
                           (checkedAt . "2026-10-03T20:01:00+00:00")))))
     (roost-test--pr-task
      `(prStatus . ,(seq-remove (lambda (field) (eq (cdr field) :none))
                                (seq-uniq fields (lambda (a b) (eq (car a) (car b))))))
-     '(live . t) '(ahead . 1) '(dirty) '(seen . "2026-10-03T20:00:00+00:00"))))
+     '(unpushed . 0) '(live . t) '(ahead . 1) '(dirty) '(seen . "2026-10-03T20:00:00+00:00"))))
 
 (ert-deftest roost-a-pull-request-waiting-on-you-counts-as-waiting ()
   (roost-test--isolated
@@ -4671,9 +4671,11 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
                     "P pushes new commits to its pull request"))
      (should (equal (funcall status '(checkedAt . :none)) "ready"))
      ;; The branch has commits the pull request lacks, or can't tell.
-     (should (equal (funcall status '(unpushed . 2)) "ready"))
-     (should (equal (funcall step '(unpushed . 2)) "P pushes 2 new commits to #12"))
-     (should (equal (funcall status '(unpushed)) "ready"))
+     (let ((ahead (roost--cache-task "dev" (append '((unpushed . 2)) (roost-test--turn-task)))))
+       (should (equal (roost--display-status ahead) "ready"))
+       (should (equal (substring-no-properties (roost--next-step ahead)) "P pushes 2 new commits to #12")))
+     (should (equal (roost--display-status (roost--cache-task "dev" (append '((unpushed)) (roost-test--turn-task))))
+                    "ready"))
      ;; GitHub is still at work.
      (should (equal (funcall status '(checks . ((passing . 2) (failing . 0) (pending . 1)))) "ready"))
      (should (equal (funcall step '(checks . ((passing . 2) (failing . 0) (pending . 1))))
@@ -4695,9 +4697,11 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
                     "#12 conflicts with the branch it merges into: e tells its agent, P opens it"))
      (should (equal (funcall status '(state . "MERGED")) "ready"))
      (should (equal (funcall status '(state . "CLOSED")) "ready")))
-   ;; Its agent at work, or with work left uncommitted or unmerged.
+   ;; Its agent at work, or with work left uncommitted or unmerged, or in
+   ;; a worktree of its own.
    (dolist (fields '(((status . "running")) ((status . "background")) ((status . "permission"))
-                     ((dirty . t)) ((merging (conflicts "a.py")))))
+                     ((dirty . t)) ((merging (conflicts "a.py")))
+                     ((agentWork ((path . "/repo/.claude/worktrees/probe") (ahead . 1))))))
      (let ((task (roost--cache-task "dev" (append fields '((id . "1111111111111111")) (roost-test--turn-task)))))
        (should-not (member (roost--display-status task) roost--pr-turns))
        (should-not (roost--pr-verdict task))))
@@ -4724,11 +4728,11 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
      (should (equal (roost--display-status late) "ci failed"))
      (should (roost--waiting-p late))
      (should (eq (roost--status-face "ci failed") 'roost-status-failed))
-     ;; Without a time, from when GitHub was asked.
-     (should (equal (roost--display-status (funcall failed 0 '(failedAt) `(checkedAt . ,(roost-test--ago 150))))
-                    "ci failed"))
-     (should (equal (roost--display-status (funcall failed 0 '(failedAt) `(checkedAt . ,(roost-test--ago 90))))
-                    "ready"))
+     ;; Without a time, which gh may leave out, at once, however often
+     ;; GitHub is asked again.
+     (dolist (ago '(150 60 0))
+       (should (equal (roost--display-status (funcall failed 0 '(failedAt) `(checkedAt . ,(roost-test--ago ago))))
+                      "ci failed")))
      (let ((stopped (roost--cache-task "dev" (append '((status . "stopped") (live))
                                                      (roost-test--turn-task
                                                       '(checks . ((passing . 0) (failing . 2) (pending . 0)))

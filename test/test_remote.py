@@ -1824,6 +1824,22 @@ elif args[:2] == ["auth", "status"]:
         reply = self.request("pr", id=task["id"])
         self.assertIn("Commit the task's changes", reply["error"])
 
+    def test_pr_opens_a_pull_request_with_a_commit_made_on_github(self):
+        # As when a review's suggestion was committed there and fetched:
+        # pushing the branch as it is would be refused.
+        self.github()
+        task = self.create()
+        self.commit_in(task, "one")
+        self.assertTrue(self.request("pr", id=task["id"], title="Fix it")["ok"])
+        wt = Path(task["worktree"])
+        suggested = self.git("commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "Apply suggestion", cwd=wt)
+        self.git("push", "-q", "origin", "%s:refs/heads/%s" % (suggested, task["branch"]), cwd=wt)
+        self.git("fetch", "-q", "origin", cwd=wt)
+        reply = self.request("pr", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(reply["result"]["pushed"], 0)
+        self.assertEqual(self.git("rev-parse", "refs/heads/" + task["branch"], cwd=self.origin), suggested)
+
     def test_issues_lists_open_issues_and_create_records_the_chosen_one(self):
         self.github()
         (self.gh_dir / "issues.json").write_text(json.dumps([
@@ -1879,12 +1895,14 @@ elif args[:2] == ["auth", "status"]:
         # GitHub didn't say what it has of reviews (reviews.json is missing).
         self.assertEqual(listed["prStatus"], dict(
             state="OPEN", draft=True, review="APPROVED", head=tip,
-            checks=dict(passing=3, failing=1, pending=2), failedAt=None, unpushed=0))
+            checks=dict(passing=3, failing=1, pending=2), failedAt=None))
+        self.assertEqual(listed["unpushed"], 0)
         self.assertEqual(self.gh_calls()[-2],
                          ["pr", "list", "--head", task["branch"], "--state", "all", "--limit", "10", "--json",
                           "number,url,state,isDraft,reviewDecision,statusCheckRollup,headRefOid"])
         self.assertEqual(self.gh_calls()[-1][:3], ["api", "graphql", "--hostname"])
         self.assertNotIn("prStatus", store.read(task["id"]))
+        self.assertNotIn("unpushed", store.read(task["id"]))
         # What it shows is recorded, for views that ask GitHub nothing.
         self.assertEqual(store.read(task["id"])["pr"], dict(number=7, url="https://github.com/octo/repo/pull/7",
                                                             state="OPEN", head=tip))
@@ -1927,11 +1945,10 @@ elif args[:2] == ["auth", "status"]:
                 self.thread(False, "2026-10-16T21:41:00Z"),
                 self.thread(False, "2026-10-16T21:43:00Z")]))}))
         status = self.request("list", full=True)["result"][0]["prStatus"]
-        self.assertEqual({key: status[key] for key in ("failedAt", "mergeable", "requested", "threads", "threadAt",
-                                                       "unpushed")},
+        self.assertEqual({key: status[key] for key in ("failedAt", "mergeable", "requested", "threads", "threadAt")},
                          dict(failedAt="2026-10-16T21:47:50Z", mergeable="MERGEABLE",
                               requested=["copilot-pull-request-reviewer", "core", "someone"],
-                              threads=2, threadAt="2026-10-16T21:43:00Z", unpushed=0))
+                              threads=2, threadAt="2026-10-16T21:43:00Z"))
         query = self.gh_calls()[-1]
         self.assertEqual(query[:5] + query[6:], ["api", "graphql", "--hostname", "github.com", "-f",
                                                  "-f", "owner=octo", "-f", "name=repo"])
@@ -1998,19 +2015,26 @@ elif args[:2] == ["auth", "status"]:
         url = "https://github.com/octo/repo/pull/7"
         listed = self.gh_dir / "list.json"
         listed.write_text(json.dumps([dict(number=7, url=url, state="OPEN", headRefOid=tip)]))
-        self.assertEqual(self.request("list", full=True)["result"][0]["prStatus"]["unpushed"], 0)
+        self.assertEqual(self.request("list", full=True)["result"][0]["unpushed"], 0)
+        # Committed since, as in Magit: measuring the task says so, asking GitHub nothing.
         self.commit_in(task, "two")
         self.commit_in(task, "three")
-        self.assertEqual(self.request("list", full=True)["result"][0]["prStatus"]["unpushed"], 2)
+        calls = len(self.gh_calls())
+        self.assertEqual(self.request("list", full=[task["id"]])["result"][0]["unpushed"], 2)
+        self.assertEqual(len(self.gh_calls()), calls)
+        self.assertEqual(self.request("list", full=True)["result"][0]["unpushed"], 2)
+        self.assertNotIn("unpushed", self.request("list")["result"][0])
         # A commit made on GitHub, fetched here, which the branch lacks.
         wt = Path(task["worktree"])
-        tip = self.git("rev-parse", "HEAD", cwd=wt)
         suggested = self.git("commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "Apply suggestion", cwd=wt)
         listed.write_text(json.dumps([dict(number=7, url=url, state="OPEN", headRefOid=suggested)]))
-        self.assertEqual(self.request("list", full=True)["result"][0]["prStatus"]["unpushed"], 0)
+        self.assertEqual(self.request("list", full=True)["result"][0]["unpushed"], 0)
         # One not fetched, or not after the branch's tip: it can't tell.
         listed.write_text(json.dumps([dict(number=7, url=url, state="OPEN", headRefOid="f" * 40)]))
-        self.assertIsNone(self.request("list", full=True)["result"][0]["prStatus"]["unpushed"])
+        self.assertIsNone(self.request("list", full=True)["result"][0]["unpushed"])
+        # Nor is it said of one that is no longer open.
+        listed.write_text(json.dumps([dict(number=7, url=url, state="CLOSED", headRefOid="f" * 40)]))
+        self.assertNotIn("unpushed", self.request("list", full=True)["result"][0])
 
     def test_retire_accepts_a_squash_merged_pull_request_and_deletes_the_remote_branch(self):
         self.github()

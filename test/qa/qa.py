@@ -1586,8 +1586,8 @@ def pull_request(qa, repo):
     if not origin.exists():
         qa.git(qa.work, "init", "-q", "--bare", "-b", "main", str(origin))
         qa.git(repo, "remote", "add", "origin", str(origin))
-    name = new_task(qa, "ask sh -c \"printf 'Due dates\\n' > DUE.md && git add DUE.md "
-                        "&& git commit -qm 'Add due dates'\"")
+    # Named apart from the tasks of other journeys, which `new_task' needs.
+    name = new_task(qa, "ask printf 'Due dates\\n' > DUE.md && git add DUE.md && git commit -qm 'Add due dates'")
     answer_yes(qa, name)
     # GitHub's word counts once asked half a minute after the agent's last event.
     settled = time.monotonic() + 31

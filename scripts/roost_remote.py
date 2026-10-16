@@ -41,7 +41,7 @@ ACTIVE = ("starting", "running", "permission", "background")
 ENDED = ("stopped", "exited", "failed", "crashed")
 # Computed per request and never persisted in a task record.
 TRANSIENT = ("live", "diff", "dirty", "files", "ahead", "behind", "update", "worktreeMissing",
-             "prStatus", "lastMessage", "gitStamp", "agentWork", "merging", "landed")
+             "prStatus", "unpushed", "lastMessage", "gitStamp", "agentWork", "merging", "landed")
 LAST_MESSAGE_TAIL = 256 * 1024
 LAST_MESSAGE_LIMIT = 2000
 INTERRUPT_TAIL = 64 * 1024
@@ -1239,8 +1239,8 @@ def shown_pull_request(prs, tip):
 def check_pull_requests(store, tasks):
     """Ask GitHub about the pull requests of TASKS with one recorded or a
     pushed branch, several at once, and add each one's state, review and
-    checks, and for an open one, its review threads and whether it has the
-    branch's every commit. Record the one each shows when it changed, as
+    checks, and for an open one, its review threads, and how many of the
+    branch's commits it lacks. Record the one each shows when it changed, as
     when its agent opened one or it was merged. All within
     PULL_REQUEST_DEADLINE seconds, well inside Emacs's wait for the reply:
     a task GitHub hasn't answered for by then keeps what it had. Runs
@@ -1278,8 +1278,8 @@ def check_pull_requests(store, tasks):
         task["prStatus"] = dict(state=pr.get("state"), draft=bool(pr.get("isDraft")),
                                 review=pr.get("reviewDecision") or None, checks=checks, head=pr.get("headRefOid"))
         if pr.get("state") == "OPEN":
-            task["prStatus"].update(reviews.get(pr.get("url"), {}), failedAt=failed, checkedAt=checked,
-                                    unpushed=unpushed(task, pr.get("headRefOid"), tip))
+            task["prStatus"].update(reviews.get(pr.get("url"), {}), failedAt=failed, checkedAt=checked)
+            task["unpushed"] = unpushed(task, pr.get("headRefOid"), tip)
         record = dict(number=pr["number"], url=pr.get("url"), state=pr.get("state"), head=pr.get("headRefOid"))
         # Shown or not, as when an open one goes to another base, or listed
         # or not, as when the branch has had more than a page of them.
@@ -1299,6 +1299,7 @@ def check_pull_requests(store, tasks):
         if stale:
             task["pr"] = current.get("pr")
             task.pop("prStatus", None)
+            task.pop("unpushed", None)
             continue
         task["pr"] = record
     return [task for task, _ in asked]
@@ -1430,7 +1431,13 @@ def add_git_stats(tasks):
             task["lastMessage"] = reply
         if task.get("agentWorktrees"):
             task["agentWork"] = agent_work(task)
-        task["landed"] = landed(task, branch_tip(task))
+        tip = branch_tip(task)
+        task["landed"] = landed(task, tip)
+        # Commits made since GitHub was last asked, as in Magit, are ones
+        # its open pull request lacks.
+        pr = recorded_pull_request(task)
+        if pr.get("state") == "OPEN" and tip:
+            task["unpushed"] = unpushed(task, pr.get("head"), tip)
         worktree = Path(task["worktree"])
         task["worktreeMissing"] = not worktree.is_dir()
         if task["worktreeMissing"]:
@@ -1871,7 +1878,10 @@ def push_pull_request(store, task):
                  check=False)
     since = remote.stdout.strip() if remote.returncode == 0 else task["baseCommit"]
     pushed = int(git(worktree, "rev-list", "--count", since + "..HEAD").stdout.strip())
-    remote_git(worktree, "push", "-u", "origin", branch)
+    # With nothing new, pushing could only be refused, as when the pull
+    # request has a commit made on GitHub since.
+    if pushed:
+        remote_git(worktree, "push", "-u", "origin", branch)
     return pushed
 
 

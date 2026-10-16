@@ -775,7 +775,7 @@ and a newer notification about TASK replaces it."
         (t (message "%s: %s" title body))))
 
 (defconst roost--measured-fields
-  '(diff dirty files ahead behind update worktreeMissing prStatus gitStamp agentWork merging landed pr)
+  '(diff dirty files ahead behind update worktreeMissing prStatus unpushed gitStamp agentWork merging landed pr)
   "A task's fields its host measures for each reply, such as Git statistics.
 They are as new as the reply, whatever its `updatedAt': its pull
 request too, which the host records as it finds one on GitHub.")
@@ -825,8 +825,8 @@ bringing back the old name, which the task's tab and panel no longer have."
                         (not (equal (roost--field task 'updatedAt)
                                     (roost--field old 'updatedAt))))))
     ;; Quiet polls skip Git and the latest reply; keep the last full refresh's.
-    (dolist (field '(diff dirty files ahead behind worktreeMissing prStatus lastMessage gitStamp agentWork merging
-                            landed))
+    (dolist (field '(diff dirty files ahead behind worktreeMissing prStatus unpushed lastMessage gitStamp agentWork
+                            merging landed))
       (unless (assoc field task)
         (when (assoc field old) (push (assoc field old) task))))
     (if (not (member status '("retired" "forgotten" "discarded")))
@@ -4307,23 +4307,21 @@ knew of every push the agent made.  Nil otherwise."
 unresolved, its agent's reply in it or not; \"to merge\" when every check
 passed, no review is still asked for, none requested changes, and GitHub
 finds no conflicts.  Only as `roost--pr-status' has it, and while the
-pull request has every commit of the task's, none left uncommitted.
-PATIENT leaves a failure or thread to the agent for `roost--pr-grace'
-seconds."
+pull request has every commit of the task's, with none left uncommitted
+nor in its agent's own worktrees.  PATIENT leaves a failure or thread to
+the agent for `roost--pr-grace' seconds after it came."
   (when-let* ((status (roost--pr-status task))
-              ((eql (alist-get 'unpushed status) 0))
+              ((eql (roost--field task 'unpushed) 0))
               ((not (roost--field task 'dirty)))
-              ((not (roost--field task 'merging))))
+              ((not (roost--field task 'merging)))
+              ((not (roost--agent-work-left task))))
     (let* ((checks (alist-get 'checks status))
            (failing (alist-get 'failing checks))
            (threads (alist-get 'threads status))
            (due (lambda (field)
-                  (or (not patient)
-                      ;; Without a time, since GitHub was asked.
-                      (>= (or (roost--seconds-since (or (alist-get field status)
-                                                        (alist-get 'checkedAt status)))
-                              0)
-                          roost--pr-grace)))))
+                  (let ((seconds (roost--seconds-since (alist-get field status))))
+                    ;; Without a time, which gh may leave out, at once.
+                    (or (not patient) (not seconds) (>= seconds roost--pr-grace))))))
       (cond ((and (numberp failing) (> failing 0) (funcall due 'failedAt)) "ci failed")
             ((and (numberp threads) (> threads 0) (funcall due 'threadAt)) "comments")
             ((and checks (eql failing 0) (eql (alist-get 'pending checks) 0) (eql threads 0)
@@ -4347,8 +4345,9 @@ changes nothing, as it does nothing to the pull request."
     (roost--pr-verdict task t)))
 
 (defun roost--reviewer-name (reviewer)
-  "How to name REVIEWER, a login or team slug that a review is asked of."
-  (if (string-prefix-p "copilot" (downcase reviewer)) "Copilot" reviewer))
+  "How to name REVIEWER, a login or team slug that a review is asked of.
+GitHub's GraphQL API names Copilot's reviewer by its bot's login."
+  (if (member (downcase reviewer) '("copilot" "copilot-pull-request-reviewer")) "Copilot" reviewer))
 
 (defun roost--pr-reason (task verdict)
   "Why TASK's pull request waits on you for VERDICT, from `roost--pr-verdict'."
@@ -4369,7 +4368,7 @@ changes nothing, as it does nothing to the pull request."
 KEY is a function that formats a key, as in `roost--next-step'."
   (let* ((status (roost--pr-status task))
          (number (format "#%s" (alist-get 'number (roost--field task 'pr))))
-         (unpushed (alist-get 'unpushed status))
+         (unpushed (and status (roost--field task 'unpushed)))
          (verdict (roost--pr-verdict task))
          (tell (if (roost--agent-running-p task)
                    (concat (funcall key "e") " tells its agent")

@@ -23,10 +23,28 @@ happened in a section below:
 6. Two tasks that change the same lines: merge one, then `u` in the other
    brings the conflict into its worktree for its agent to resolve, and `m`
    merges it.
-7. `P` opens a pull request; once it merges on GitHub, `x` retires the task.
-   So does one the agent opens itself, and the sidebar then says `merged`.
+7. `P` opens a pull request; while its checks run and Copilot reviews it, the
+   panel says so, and once they pass, the sidebar says `to merge` and `n`
+   reaches it. Once it merges on GitHub, `x` retires the task. So does one
+   the agent opens itself, and the sidebar then says `merged`.
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
+
+## A pull request waiting on you — 2026-10-16
+
+- **Copilot's pending review.** On #60, right after Copilot's review was asked
+  for with `gh pr edit --add-reviewer @copilot`, the helper's GraphQL query
+  listed `copilot-pull-request-reviewer` as a review still to come, while
+  `gh pr list --json reviewRequests` (gh 2.88.1) listed none. A pull request
+  with Copilot still reviewing is therefore not `to merge`, which it would
+  have been had the helper read `gh pr list`. #58 and #59 had Copilot's
+  review asked for seven seconds after they opened; #60, opened with
+  `gh pr create` alone, had none until asked.
+- **Review threads.** Against #46 and #54, whose Copilot threads were all
+  resolved before they merged (11 and 7), the query counted none unresolved.
+- **`make qa`.** The new journey passes locally and with `--remote`: a pull
+  request from `P`, then GitHub still at work, `to merge`, `n` reaching it,
+  `ci failed`, `comments`, and its merge.
 
 ## Merged at a glance — 2026-10-13
 
