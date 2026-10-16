@@ -825,9 +825,13 @@ bringing back the old name, which the task's tab and panel no longer have."
                         (not (equal (roost--field task 'updatedAt)
                                     (roost--field old 'updatedAt))))))
     ;; Quiet polls skip Git and the latest reply; keep the last full refresh's.
+    ;; Not what GitHub said of a pull request since recorded otherwise, as
+    ;; by another Emacs: closed, or another in its place.
     (dolist (field '(diff dirty files ahead behind worktreeMissing prStatus unpushed lastMessage gitStamp agentWork
                             merging landed))
-      (unless (assoc field task)
+      (unless (or (assoc field task)
+                  (and (eq field 'prStatus)
+                       (not (equal (roost--field task 'pr) (roost--field old 'pr)))))
         (when (assoc field old) (push (assoc field old) task))))
     (if (not (member status '("retired" "forgotten" "discarded")))
         (puthash key task roost--tasks)
@@ -4333,18 +4337,14 @@ the agent for `roost--pr-grace' seconds after it came."
                   (equal (alist-get 'mergeable status) "MERGEABLE"))
              "to merge")))))
 
-(defun roost--agent-news-p (task)
-  "Whether TASK's agent finished, failed or exited since you last saw it."
-  (and (member (roost--status-name task) '("ready" "interrupted" "error" "failed" "crashed" "exited"))
-       (not (roost--seen-p task))))
-
 (defun roost--pr-turn (task)
   "TASK's status while its pull request waits on you, or nil.
 One of `roost--pr-turns', from `roost--pr-verdict' giving its agent time
 to take up a failure or thread, once you have seen what the agent last
-did.  It lasts until the pull request or the agent moves: seeing it
-changes nothing, as it does nothing to the pull request."
-  (unless (roost--agent-news-p task)
+did, as for one merged: stopped too, its host keeps it seen only if it
+was before.  It lasts until the pull request or the agent moves: seeing
+it changes nothing, as it does nothing to the pull request."
+  (when (roost--seen-p task)
     (roost--pr-verdict task t)))
 
 (defun roost--reviewer-name (reviewer)

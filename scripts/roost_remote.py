@@ -1059,12 +1059,14 @@ def summarize_checks(rollup):
     return counts
 
 
-def last_failure(rollup):
-    """When the last of a statusCheckRollup's failing checks finished, as
-    GitHub wrote it, or None. A commit status has only when it was set."""
+def first_failure(rollup):
+    """When the first of a statusCheckRollup's failing checks finished, as
+    GitHub wrote it: a newer failure leaves an older one overdue. None when
+    none fails, or one has no time. A commit status has only when it was
+    set."""
     times = [check.get("completedAt") or check.get("createdAt") or check.get("startedAt")
              for check in rollup or [] if check_state(check) == "failing"]
-    return max((t for t in times if parse_time(t)), key=parse_time, default=None)
+    return min(times, key=parse_time) if times and all(parse_time(t) for t in times) else None
 
 
 PULL_REQUEST_FIELDS = "number,url,state,isDraft,reviewDecision,statusCheckRollup,headRefOid"
@@ -1128,16 +1130,20 @@ def pull_request_reviews(prs, deadline):
 def review_state(pr):
     """The fields of prStatus that PR, one pull request of a
     PULL_REQUEST_REVIEWS answer, gives. Unresolved threads aren't counted
-    when there are more than were asked for."""
+    when there are more than were asked for. Of each one's last comment,
+    the first is when they came to wait: a comment in one leaves another
+    overdue. Without the time of one, there is none."""
     requested = [(request.get("requestedReviewer") or {}) for request in pr["reviewRequests"]["nodes"]]
     threads = pr["reviewThreads"]
     unresolved = [thread for thread in threads["nodes"] if not thread["isResolved"]]
-    times = [comment["createdAt"] for thread in unresolved for comment in thread["comments"]["nodes"]
-             if parse_time(comment.get("createdAt"))]
+    times = [next((comment.get("createdAt") for comment in thread["comments"]["nodes"]), None)
+             for thread in unresolved]
     state = dict(mergeable=pr.get("mergeable"),
                  requested=[reviewer.get("login") or reviewer.get("slug") or "someone" for reviewer in requested])
     if threads["totalCount"] <= len(threads["nodes"]):
-        state.update(threads=len(unresolved), threadAt=max(times, key=parse_time, default=None))
+        state.update(threads=len(unresolved),
+                     threadAt=(min(times, key=parse_time) if times and all(parse_time(t) for t in times)
+                               else None))
     return state
 
 
@@ -1272,7 +1278,7 @@ def check_pull_requests(store, tasks):
             continue
         try:
             checks = summarize_checks(pr.get("statusCheckRollup"))
-            failed = last_failure(pr.get("statusCheckRollup"))
+            failed = first_failure(pr.get("statusCheckRollup"))
         except (AttributeError, TypeError):
             checks = failed = None
         task["prStatus"] = dict(state=pr.get("state"), draft=bool(pr.get("isDraft")),

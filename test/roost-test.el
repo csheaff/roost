@@ -4706,11 +4706,16 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
      (let ((task (roost--cache-task "dev" (append fields '((id . "1111111111111111")) (roost-test--turn-task)))))
        (should-not (member (roost--display-status task) roost--pr-turns))
        (should-not (roost--pr-verdict task))))
-   ;; A stopped agent's pull request waits on you all the same.
+   ;; A stopped agent's pull request waits on you all the same, once you
+   ;; have seen what it last did.
    (let ((stopped (roost--cache-task "dev" (append '((status . "stopped") (live))
                                                    (roost-test--turn-task)))))
      (should (equal (roost--display-status stopped) "to merge"))
-     (should (string-prefix-p "#12 passed" (roost--next-step stopped))))))
+     (should (string-prefix-p "#12 passed" (roost--next-step stopped))))
+   (let ((unread (roost--cache-task "dev" (append '((status . "stopped") (live) (seen))
+                                                  (roost-test--turn-task)))))
+     (should (equal (roost--display-status unread) "stopped"))
+     (should-not (roost--waiting-p unread)))))
 
 (ert-deftest roost-a-pull-request-is-yours-only-at-the-head-its-host-records ()
   ;; Another Emacs's lookup recorded a newer head, which the commits the
@@ -4718,16 +4723,27 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
   ;; nothing of it.
   (roost-test--isolated
    (should (equal (roost--display-status (roost--cache-task "dev" (roost-test--turn-task))) "to merge"))
+   (should-not (roost--pr-verdict (append '((pr . ((number . 12) (state . "OPEN") (head . "b2"))))
+                                          (roost-test--turn-task))))
    ;; A quiet poll brings the record, and nothing from GitHub.
    (let ((polled (roost--cache-task
                   "dev" (assq-delete-all
                          'prStatus (append '((pr . ((number . 12) (url . "https://github.com/o/r/pull/12")
                                                     (state . "OPEN") (head . "b2"))))
                                            (roost-test--turn-task))))))
-     (should (equal (alist-get 'head (roost--field polled 'prStatus)) "a1"))
+     (should-not (roost--field polled 'prStatus))
      (should (equal (roost--display-status polled) "ready"))
      (should (equal (substring-no-properties (roost--next-step polled))
-                    "P pushes new commits to its pull request")))))
+                    "P pushes new commits to its pull request")))
+   ;; Nor what GitHub said of one since recorded closed, or replaced by
+   ;; another at the same head.
+   (dolist (record '(((number . 12) (url . "https://github.com/o/r/pull/12") (state . "CLOSED") (head . "a1"))
+                     ((number . 13) (url . "https://github.com/o/r/pull/13") (state . "OPEN") (head . "a1"))))
+     (roost--cache-task "dev" (roost-test--turn-task))
+     (let ((polled (roost--cache-task "dev" (assq-delete-all 'prStatus (append `((pr . ,record))
+                                                                                 (roost-test--turn-task))))))
+       (should-not (roost--field polled 'prStatus))
+       (should-not (member (roost--display-status polled) roost--pr-turns))))))
 
 (ert-deftest roost-a-failed-check-or-open-thread-is-left-to-the-agent-first ()
   (roost-test--isolated

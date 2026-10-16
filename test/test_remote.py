@@ -1945,14 +1945,26 @@ elif args[:2] == ["auth", "status"]:
                 self.thread(False, "2026-10-16T21:41:00Z"),
                 self.thread(False, "2026-10-16T21:43:00Z")]))}))
         status = self.request("list", full=True)["result"][0]["prStatus"]
+        # From the first failure and the first of the unresolved threads'
+        # last comments: a newer one leaves those overdue.
         self.assertEqual({key: status[key] for key in ("failedAt", "mergeable", "requested", "threads", "threadAt")},
-                         dict(failedAt="2026-10-16T21:47:50Z", mergeable="MERGEABLE",
+                         dict(failedAt="2026-10-16T21:40:00Z", mergeable="MERGEABLE",
                               requested=["copilot-pull-request-reviewer", "core", "someone"],
-                              threads=2, threadAt="2026-10-16T21:43:00Z"))
+                              threads=2, threadAt="2026-10-16T21:41:00Z"))
         query = self.gh_calls()[-1]
         self.assertEqual(query[:5] + query[6:], ["api", "graphql", "--hostname", "github.com", "-f",
                                                  "-f", "owner=octo", "-f", "name=repo"])
         self.assertIn("pr7: pullRequest(number: 7)", query[5])
+        # A failure or thread without a time has none to wait from.
+        listed = json.loads((self.gh_dir / "list.json").read_text())
+        listed[0]["statusCheckRollup"].append(dict(__typename="StatusContext", state="FAILURE"))
+        (self.gh_dir / "list.json").write_text(json.dumps(listed))
+        reviews = json.loads((self.gh_dir / "reviews.json").read_text())
+        reviews["7"]["reviewThreads"]["nodes"].append(dict(isResolved=False, comments=dict(nodes=[])))
+        reviews["7"]["reviewThreads"]["totalCount"] += 1
+        (self.gh_dir / "reviews.json").write_text(json.dumps(reviews))
+        status = self.request("list", full=True)["result"][0]["prStatus"]
+        self.assertEqual((status["failedAt"], status["threads"], status["threadAt"]), (None, 3, None))
         # Nothing unresolved, nor too many threads to tell.
         (self.gh_dir / "reviews.json").write_text(json.dumps({"7": dict(
             mergeable="CONFLICTING", reviewRequests=dict(nodes=[]),
