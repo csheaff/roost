@@ -1824,21 +1824,46 @@ elif args[:2] == ["auth", "status"]:
         reply = self.request("pr", id=task["id"])
         self.assertIn("Commit the task's changes", reply["error"])
 
+    def elsewhere(self, task):
+        """A clone of the origin with the task's branch checked out, as on
+        GitHub or another machine, whose pushes this repository hasn't fetched."""
+        clone = self.root / ("elsewhere-" + task["id"][:6])
+        self.git("clone", "-q", "--branch", task["branch"], str(self.origin), str(clone))
+        for key, value in (("user.name", "Elsewhere"), ("user.email", "elsewhere@example.invalid")):
+            self.git("config", key, value, cwd=clone)
+        return clone
+
     def test_pr_opens_a_pull_request_with_a_commit_made_on_github(self):
-        # As when a review's suggestion was committed there and fetched:
-        # pushing the branch as it is would be refused.
+        # As when a review's suggestion was committed there: pushing the
+        # branch as it is would be refused.
         self.github()
         task = self.create()
         self.commit_in(task, "one")
         self.assertTrue(self.request("pr", id=task["id"], title="Fix it")["ok"])
-        wt = Path(task["worktree"])
-        suggested = self.git("commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "Apply suggestion", cwd=wt)
-        self.git("push", "-q", "origin", "%s:refs/heads/%s" % (suggested, task["branch"]), cwd=wt)
-        self.git("fetch", "-q", "origin", cwd=wt)
+        clone = self.elsewhere(task)
+        self.git("commit", "-q", "--allow-empty", "-m", "Apply suggestion", cwd=clone)
+        self.git("push", "-q", "origin", task["branch"], cwd=clone)
+        suggested = self.git("rev-parse", "HEAD", cwd=clone)
         reply = self.request("pr", id=task["id"])
         self.assertTrue(reply["ok"], reply)
         self.assertEqual(reply["result"]["pushed"], 0)
         self.assertEqual(self.git("rev-parse", "refs/heads/" + task["branch"], cwd=self.origin), suggested)
+
+    def test_pr_pushes_to_a_branch_rewound_elsewhere(self):
+        # Taken back a commit from another machine since last fetched here:
+        # the commit is pushed again, not taken as already there.
+        self.github()
+        task = self.create()
+        first = self.commit_in(task, "one")
+        self.assertTrue(self.request("pr", id=task["id"], title="Fix it")["ok"])
+        tip = self.commit_in(task, "two")
+        self.assertEqual(self.request("pr", id=task["id"])["result"]["pushed"], 1)
+        clone = self.elsewhere(task)
+        self.git("push", "-q", "-f", "origin", "%s:refs/heads/%s" % (first, task["branch"]), cwd=clone)
+        reply = self.request("pr", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(reply["result"]["pushed"], 1)
+        self.assertEqual(self.git("rev-parse", "refs/heads/" + task["branch"], cwd=self.origin), tip)
 
     def test_issues_lists_open_issues_and_create_records_the_chosen_one(self):
         self.github()

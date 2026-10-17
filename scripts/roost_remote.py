@@ -1880,6 +1880,9 @@ def push_pull_request(store, task):
     if git(worktree, "status", "--porcelain", "--untracked-files=no").stdout.strip():
         raise RoostError("Commit the task's changes before pushing")
     branch = task["branch"]
+    # The branch as the remote has it now: a commit made on GitHub, or a
+    # rewind elsewhere, may have moved it since it was last fetched.
+    remote_git(worktree, "fetch", "--quiet", "origin", branch, check=False)
     remote = git(worktree, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/" + branch + "^{commit}",
                  check=False)
     since = remote.stdout.strip() if remote.returncode == 0 else task["baseCommit"]

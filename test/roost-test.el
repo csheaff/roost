@@ -4743,7 +4743,18 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
      (let ((polled (roost--cache-task "dev" (assq-delete-all 'prStatus (append `((pr . ,record))
                                                                                  (roost-test--turn-task))))))
        (should-not (roost--field polled 'prStatus))
-       (should-not (member (roost--display-status polled) roost--pr-turns))))))
+       (should-not (member (roost--display-status polled) roost--pr-turns))))
+   ;; Even in a reply read before the agent's latest event.
+   (roost--cache-task "dev" (roost-test--turn-task))
+   (let ((older (roost--cache-task
+                 "dev" (assq-delete-all
+                        'prStatus (append '((updatedAt . "2026-10-03T19:59:00+00:00")
+                                            (pr . ((number . 12) (url . "https://github.com/o/r/pull/12")
+                                                   (state . "CLOSED") (head . "a1"))))
+                                          (roost-test--turn-task))))))
+     (should (equal (roost--field older 'updatedAt) "2026-10-03T20:00:00+00:00"))
+     (should-not (roost--field older 'prStatus))
+     (should-not (member (roost--display-status older) roost--pr-turns)))))
 
 (ert-deftest roost-a-failed-check-or-open-thread-is-left-to-the-agent-first ()
   (roost-test--isolated

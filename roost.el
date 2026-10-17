@@ -792,9 +792,13 @@ host measured, such as Git statistics, is as new as anything."
     (if (not (and (stringp new) (stringp had) (string< new had)))
         task
       (let ((kept (copy-sequence old)))
-        (dolist (field roost--measured-fields kept)
+        (dolist (field roost--measured-fields)
           (when-let* ((cell (assq field task)))
-            (setq kept (cons cell (assq-delete-all field kept)))))))))
+            (setq kept (cons cell (assq-delete-all field kept)))))
+        ;; Not what GitHub said of a pull request since recorded otherwise.
+        (if (or (assq 'prStatus task) (equal (roost--field task 'pr) (roost--field old 'pr)))
+            kept
+          (assq-delete-all 'prStatus kept))))))
 
 (defun roost--newer-name (task old)
   "TASK, with OLD's name when OLD was renamed since TASK was read.

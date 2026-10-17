@@ -15,10 +15,10 @@ Since 0.8.1:
   pull request. The task panel says what a pull request waits for. Roost
   asks GitHub about review threads with `gh api graphql`, once per
   repository every two minutes. Nothing to do when upgrading.
-- `P` on a task whose branch has nothing new opens its pull request
-  without pushing, so a commit made on GitHub since, such as an applied
-  review suggestion, no longer makes it fail. Nothing to do when
-  upgrading.
+- `P` fetches a task's branch first and pushes only what the pull
+  request lacks. With nothing new, it just opens the pull request, so a
+  commit made on GitHub since, such as an applied review suggestion, no
+  longer makes it fail. Nothing to do when upgrading.
 - The box for a review note opens under a diff line wider than its
   window. It stayed hidden there, so what you typed next went to Magit,
   and the menu of a note under such a line opened beside the window. When
