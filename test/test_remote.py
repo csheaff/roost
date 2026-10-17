@@ -2115,6 +2115,13 @@ elif args[:2] == ["auth", "status"]:
         self.commit_in(task, "aside")
         self.assertIsNone(self.request("list", full=True)["result"][0]["unpushed"])
         self.assertIsNone(self.request("list", full=[task["id"]])["result"][0]["unpushed"])
+        # With its branch gone too, it says it can't tell, rather than nothing.
+        tip = self.git("rev-parse", task["branch"])
+        self.git("branch", "-D", task["branch"])
+        measured = self.request("list", full=[task["id"]])["result"][0]
+        self.assertIn("unpushed", measured)
+        self.assertIsNone(measured["unpushed"])
+        self.git("branch", task["branch"], tip)
         self.git("checkout", "-q", task["branch"], cwd=wt)
         # Nor is it said of one that is no longer open.
         listed.write_text(json.dumps([dict(number=7, url=url, state="CLOSED", headRefOid="f" * 40)]))

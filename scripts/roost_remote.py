@@ -1446,8 +1446,9 @@ def add_git_stats(tasks):
         # Commits made since GitHub was last asked, as in Magit, are ones
         # its open pull request lacks.
         pr = recorded_pull_request(task)
-        if pr.get("state") == "OPEN" and tip:
-            task["unpushed"] = unpushed(task, pr.get("head"), tip)
+        if pr.get("state") == "OPEN":
+            # Unknown without the branch, rather than what Emacs had.
+            task["unpushed"] = unpushed(task, pr.get("head"), tip) if tip else None
         worktree = Path(task["worktree"])
         task["worktreeMissing"] = not worktree.is_dir()
         if task["worktreeMissing"]:
