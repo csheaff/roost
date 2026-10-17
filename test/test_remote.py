@@ -1849,6 +1849,29 @@ elif args[:2] == ["auth", "status"]:
         self.assertEqual(reply["result"]["pushed"], 0)
         self.assertEqual(self.git("rev-parse", "refs/heads/" + task["branch"], cwd=self.origin), suggested)
 
+    def test_pr_pushes_when_it_cannot_fetch(self):
+        # Rewound elsewhere, and not to be fetched: what was last fetched,
+        # the commit itself, is no sign the pull request has it.
+        self.github()
+        task = self.create()
+        first = self.commit_in(task, "one")
+        self.assertTrue(self.request("pr", id=task["id"], title="Fix it")["ok"])
+        tip = self.commit_in(task, "two")
+        self.assertEqual(self.request("pr", id=task["id"])["result"]["pushed"], 1)
+        clone = self.elsewhere(task)
+        self.git("push", "-q", "-f", "origin", "%s:refs/heads/%s" % (first, task["branch"]), cwd=clone)
+        original = roost.remote_git
+
+        def unreachable(repo, *args, **kwargs):
+            if args[0] == "fetch":
+                return subprocess.CompletedProcess(args, 128, "", "fatal: unable to access")
+            return original(repo, *args, **kwargs)
+
+        with patch.object(roost, "remote_git", unreachable):
+            reply = self.request("pr", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(self.git("rev-parse", "refs/heads/" + task["branch"], cwd=self.origin), tip)
+
     def test_pr_pushes_to_a_branch_rewound_elsewhere(self):
         # Taken back a commit from another machine since last fetched here:
         # the commit is pushed again, not taken as already there.
@@ -2069,6 +2092,14 @@ elif args[:2] == ["auth", "status"]:
         # One not fetched, or not after the branch's tip: it can't tell.
         listed.write_text(json.dumps([dict(number=7, url=url, state="OPEN", headRefOid="f" * 40)]))
         self.assertIsNone(self.request("list", full=True)["result"][0]["unpushed"])
+        # Nor while its agent has the worktree on another branch, whose
+        # commits it would miss.
+        listed.write_text(json.dumps([dict(number=7, url=url, state="OPEN", headRefOid=suggested)]))
+        self.git("checkout", "-q", "-b", "side", cwd=wt)
+        self.commit_in(task, "aside")
+        self.assertIsNone(self.request("list", full=True)["result"][0]["unpushed"])
+        self.assertIsNone(self.request("list", full=[task["id"]])["result"][0]["unpushed"])
+        self.git("checkout", "-q", task["branch"], cwd=wt)
         # Nor is it said of one that is no longer open.
         listed.write_text(json.dumps([dict(number=7, url=url, state="CLOSED", headRefOid="f" * 40)]))
         self.assertNotIn("unpushed", self.request("list", full=True)["result"][0])

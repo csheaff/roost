@@ -1150,8 +1150,12 @@ def review_state(pr):
 def unpushed(task, head, tip):
     """How many of its branch's commits, at TIP, the task's pull request,
     at HEAD, lacks, or None when one isn't before the other here, as when
-    a commit made on GitHub is not fetched. Zero when the pull request has
-    them all, commits made on GitHub too."""
+    a commit made on GitHub is not fetched, or when the task's worktree is
+    on another branch, whose commits the count would miss. Zero when the
+    pull request has them all, commits made on GitHub too."""
+    current = read_git(task["worktree"], "symbolic-ref", "--short", "-q", "HEAD")
+    if current.returncode or current.stdout.strip() != task["branch"]:
+        return None
     if head == tip:
         return 0
     if not (isinstance(head, str) and re.fullmatch(r"[0-9a-f]{40,64}", head)):
@@ -1882,14 +1886,15 @@ def push_pull_request(store, task):
     branch = task["branch"]
     # The branch as the remote has it now: a commit made on GitHub, or a
     # rewind elsewhere, may have moved it since it was last fetched.
-    remote_git(worktree, "fetch", "--quiet", "origin", branch, check=False)
+    fetched = remote_git(worktree, "fetch", "--quiet", "origin", branch, check=False).returncode == 0
     remote = git(worktree, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/" + branch + "^{commit}",
                  check=False)
     since = remote.stdout.strip() if remote.returncode == 0 else task["baseCommit"]
     pushed = int(git(worktree, "rev-list", "--count", since + "..HEAD").stdout.strip())
     # With nothing new, pushing could only be refused, as when the pull
-    # request has a commit made on GitHub since.
-    if pushed:
+    # request has a commit made on GitHub since; unfetched, what was last
+    # fetched says nothing.
+    if pushed or not fetched:
         remote_git(worktree, "push", "-u", "origin", branch)
     return pushed
 
