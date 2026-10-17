@@ -1849,6 +1849,22 @@ elif args[:2] == ["auth", "status"]:
         self.assertEqual(reply["result"]["pushed"], 0)
         self.assertEqual(self.git("rev-parse", "refs/heads/" + task["branch"], cwd=self.origin), suggested)
 
+    def test_pr_fetches_the_branch_in_a_clone_that_fetches_only_some(self):
+        # As a single-branch clone does: fetching the branch by name alone
+        # would not update its remote-tracking branch.
+        self.github()
+        task = self.create()
+        self.commit_in(task, "one")
+        self.assertTrue(self.request("pr", id=task["id"], title="Fix it")["ok"])
+        self.git("config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main")
+        self.git("update-ref", "-d", "refs/remotes/origin/" + task["branch"])
+        clone = self.elsewhere(task)
+        self.git("commit", "-q", "--allow-empty", "-m", "Apply suggestion", cwd=clone)
+        self.git("push", "-q", "origin", task["branch"], cwd=clone)
+        reply = self.request("pr", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(reply["result"]["pushed"], 0)
+
     def test_pr_pushes_when_it_cannot_fetch(self):
         # Rewound elsewhere, and not to be fetched: what was last fetched,
         # the commit itself, is no sign the pull request has it.

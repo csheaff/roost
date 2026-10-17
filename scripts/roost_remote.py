@@ -1886,7 +1886,10 @@ def push_pull_request(store, task):
     branch = task["branch"]
     # The branch as the remote has it now: a commit made on GitHub, or a
     # rewind elsewhere, may have moved it since it was last fetched.
-    fetched = remote_git(worktree, "fetch", "--quiet", "origin", branch, check=False).returncode == 0
+    # Into its remote-tracking branch by name, which a clone that fetches
+    # only some branches would not update by itself.
+    fetched = remote_git(worktree, "fetch", "--quiet", "origin",
+                         "+refs/heads/%s:refs/remotes/origin/%s" % (branch, branch), check=False).returncode == 0
     remote = git(worktree, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/" + branch + "^{commit}",
                  check=False)
     since = remote.stdout.strip() if remote.returncode == 0 else task["baseCommit"]
