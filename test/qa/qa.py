@@ -1200,6 +1200,16 @@ def leave_opening(qa, tasks):
     qa.click_text(tasks["opening"], "roost-sidebar-list-mode")
 
 
+def leave_mouse_press(qa, tasks):
+    # In a terminal whose program takes the mouse, a press whose release
+    # the terminal never gets, as when tmux wasn't replying.
+    qa.type("mouse\r")
+    qa.wait("the terminal to take the mouse", lambda s: qa.emacs.eval("(qa-terminal-takes-mouse)") == "t")
+    if qa.emacs.eval("(qa-press-terminal)") != "t":
+        raise Stuck("No terminal selected to press in")
+    qa.settle()
+
+
 WALK_STARTERS = [
     ("M-x left open", leave_question),
     ("M-x left behind in the terminal", leave_question_behind),
@@ -1207,6 +1217,7 @@ WALK_STARTERS = [
     ("Roost's menu left open", leave_menu),
     ("a draft half written", leave_draft),
     ("another task still opening", leave_opening),
+    ("a mouse press in the terminal never let go", leave_mouse_press),
 ]
 
 
@@ -1277,9 +1288,9 @@ WALK_INTERRUPTERS = [
 @journey("Walk away from something unfinished")
 def walk_away(qa, repo):
     """Leave something unfinished, as you do: a question, Roost's menu, a
-    draft, a task still opening.  Then go to a task another way.  The task
-    you went to opens, what you left is quit or kept, and nothing waits
-    unseen."""
+    draft, a task still opening, a mouse press in a terminal.  Then go to
+    a task another way.  The task you went to opens, what you left is quit
+    or kept, and nothing waits unseen."""
     home = start_task(qa, "Sort the notes")
     other = start_task(qa, "Tally the notes")
     waiting = new_task(qa, "ask git log")

@@ -1672,6 +1672,9 @@ quitting would end that command too."
                              (funcall then))))
       (minibuffer-quit-recursive-edit count))))
 
+(defconst roost--opening-delay 0.5
+  "Seconds a task's host can take to reply before Roost says it is opening.")
+
 ;;;###autoload
 (defun roost-open-task (&optional task quit-questions)
   "Validate TASK's tmux ownership, then restore its perspective and terminal.
@@ -1689,10 +1692,19 @@ back, unseen, until you answered them."
   (setq task (roost--choose task))
   (let* ((generation (cl-incf roost--open-generation))
          (window (if (window-minibuffer-p) (minibuffer-selected-window) (selected-window)))
-         (shown (window-buffer window)))
+         (shown (window-buffer window))
+         (name (roost--field task 'name))
+         (opening (format "Roost: opening %s…" name))
+         ;; A host slow to reply, as over SSH, looked like a click that
+         ;; did nothing.
+         (timer (run-at-time roost--opening-delay nil
+                             (lambda ()
+                               (when (= generation roost--open-generation)
+                                 (message "%s" opening))))))
     (roost--request (roost--field task 'host) "inspect"
                     (list (cons 'id (roost--field task 'id)))
                     (lambda (current)
+                      (cancel-timer timer)
                       (setq current (roost--cache-task (roost--field task 'host) current))
                       ;; The reply can be newer than what is shown, as when
                       ;; you answered the agent meanwhile: show it everywhere,
@@ -1700,17 +1712,22 @@ back, unseen, until you answered them."
                       (roost--redraw)
                       (roost--when-out-of-minibuffer
                        (lambda ()
-                         (when (and (= generation roost--open-generation)
-                                    ;; Unless you have shown something else
-                                    ;; since, such as tmux-control's pager.
-                                    (eq (selected-window) window)
-                                    (eq (window-buffer window) shown))
-                           (roost--display-task current)
-                           (when (and (assq 'live current) (not (roost--field current 'live)))
-                             (message "%s's agent has %s; its last output is shown. Resume with `s'."
-                                      (roost--field current 'name)
-                                      (roost--field current 'status)))))))
+                         (when (= generation roost--open-generation)
+                           ;; Unless you have shown something else since,
+                           ;; such as tmux-control's pager.
+                           (if (not (and (eq (selected-window) window)
+                                         (eq (window-buffer window) shown)))
+                               (message "Roost: didn't open %s, as you went to another window or buffer while its host replied"
+                                        name)
+                             (when (equal (current-message) opening)
+                               (message nil))
+                             (roost--display-task current)
+                             (when (and (assq 'live current) (not (roost--field current 'live)))
+                               (message "%s's agent has %s; its last output is shown. Resume with `s'."
+                                        (roost--field current 'name)
+                                        (roost--field current 'status))))))))
                     (lambda (err)
+                      (cancel-timer timer)
                       ;; Stopped, or its tmux server gone, as after a crash:
                       ;; resuming is the way to its terminal.  Asked once
                       ;; any question you are answering is done, too.

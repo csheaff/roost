@@ -6,6 +6,15 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.9.0:
 
+- With tmux-control 0.8.2, clicks in the sidebar and elsewhere work again
+  after a mouse press in a terminal whose release never reached it, as
+  when tmux wasn't replying. Until a click in a terminal, every click
+  went to the terminal of that press, while `RET` still opened tasks. To
+  upgrade, update tmux-control too.
+- A task whose host takes more than half a second to reply, as over SSH,
+  says "opening" while you wait, and one you moved away from before the
+  reply says it wasn't opened. Before, either looked like a click that
+  did nothing. Nothing to do when upgrading.
 - Codex and Pi tasks show their status as surely as Claude's. A Pi task
   shows `permission` while an extension's dialog, such as one asking
   whether a command may run, waits on you, and `interrupted` after Esc.

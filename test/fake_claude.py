@@ -5,6 +5,7 @@ import base64
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import termios
@@ -102,6 +103,9 @@ def lines():
 
 
 for line in lines():
+    # Once it takes the mouse, tmux sends presses and releases along with
+    # what is typed.
+    line = re.sub(r"\x1b\[<\d+;\d+;\d+[Mm]", "", line)
     record("user", line.strip())
     event("UserPromptSubmit")
     status("working", "Thinking")
@@ -165,6 +169,13 @@ for line in lines():
         print("STREAM %s DONE" % label, flush=True)
         record("assistant", "Streamed " + label)
         event("Stop", last_assistant_message="Streamed " + label)
+        status("done")
+    elif line.strip() == "mouse":
+        # Take the mouse, as a program in a terminal can: tmux then sends
+        # it presses and releases.
+        os.write(1, b"\x1b[?1002h\x1b[?1006h")
+        print("MOUSE ON", flush=True)
+        event("Stop", last_assistant_message="MOUSE ON")
         status("done")
     elif line.strip() == "exit":
         break

@@ -1143,24 +1143,30 @@
   ;; C-c C-e just after opening a task showed the pager, which the host's
   ;; reply then replaced with the terminal.
   (roost-test--isolated
-   (let (callback displayed)
+   (let (callback displayed messages)
      (cl-letf (((symbol-function 'roost--request)
                 (lambda (_host _action _params success &optional _failure) (setq callback success)))
-               ((symbol-function 'roost--display-task) (lambda (task) (setq displayed (roost--field task 'id)))))
+               ((symbol-function 'roost--display-task) (lambda (task) (setq displayed (roost--field task 'id))))
+               ((symbol-function 'message)
+                (lambda (format &rest args) (when format (push (apply #'format format args) messages)))))
        (save-window-excursion
          (switch-to-buffer (get-buffer-create " *before*"))
          (roost-open-task (roost-test--task))
          (switch-to-buffer (get-buffer-create " *pager*"))
          (funcall callback (roost-test--task))
          (should-not displayed)
+         ;; It says so, rather than seeming to ignore the click.
+         (should (equal (car messages) "Roost: didn't open fix auth, as you went to another window or buffer while its host replied"))
          ;; Nor when you have moved to another window since, the one it was
          ;; opened from still showing what it did.
          (delete-other-windows)
          (switch-to-buffer " *before*")
          (roost-open-task (roost-test--task))
          (select-window (split-window))
+         (setq messages nil)
          (funcall callback (roost-test--task))
          (should-not displayed)
+         (should (string-prefix-p "Roost: didn't open fix auth" (car messages)))
          (delete-other-windows)
          (switch-to-buffer " *before*")
          (roost-open-task (roost-test--task))
@@ -1168,6 +1174,46 @@
          (should (equal displayed "0123456789abcdef")))
        (kill-buffer " *before*")
        (kill-buffer " *pager*")))))
+
+(ert-deftest roost-open-says-so-while-its-host-replies ()
+  ;; A click on a task on a slow host showed nothing until it replied, and
+  ;; looked like a click that did nothing.
+  (roost-test--isolated
+   (let ((roost--opening-delay 0.01)
+         callback failure displayed messages)
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host _action _params success &optional on-failure)
+                  (setq callback success failure on-failure)))
+               ((symbol-function 'roost--display-task) (lambda (task) (setq displayed (roost--field task 'id))))
+               ((symbol-function 'message)
+                (lambda (format &rest args) (push (and format (apply #'format format args)) messages)))
+               ((symbol-function 'current-message) (lambda () (car messages))))
+       (save-window-excursion
+         (roost-open-task (roost-test--task))
+         (accept-process-output nil 0.05)
+         (should (equal messages '("Roost: opening fix auth…")))
+         ;; Once it opens, that is done.
+         (funcall callback (roost-test--task))
+         (should (equal displayed "0123456789abcdef"))
+         (should (equal messages '(nil "Roost: opening fix auth…")))
+         ;; A reply sooner says nothing.
+         (setq messages nil displayed nil)
+         (roost-open-task (roost-test--task))
+         (funcall callback (roost-test--task))
+         (accept-process-output nil 0.05)
+         (should displayed)
+         (should-not messages)
+         ;; Nor a failed one, which says what failed.
+         (roost-open-task (roost-test--task))
+         (funcall failure "ssh: connect to host dev port 22: Operation timed out")
+         (accept-process-output nil 0.05)
+         (should (equal messages '("Roost local: ssh: connect to host dev port 22: Operation timed out")))
+         ;; Nor an open you have since followed with another.
+         (setq messages nil)
+         (roost-open-task (roost-test--task))
+         (cl-incf roost--open-generation)
+         (accept-process-output nil 0.05)
+         (should-not messages))))))
 
 (ert-deftest roost-create-and-resume-callbacks-retain-remote-host ()
   (roost-test--isolated

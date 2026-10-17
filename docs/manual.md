@@ -535,7 +535,8 @@ its merge, resume an agent that exited, see a host it can't reach,
 read back through a long reply in tmux-control's scrollback, move between
 agents that all print at once, and reconnect a terminal whose connection
 dropped. One leaves something unfinished, as you do (`M-x` or Roost's own
-question open, its menu, a draft, a task whose host hasn't replied yet), and
+question open, its menu, a draft, a task whose host hasn't replied yet, a
+mouse press in a terminal that never let go), and
 then goes to a task another way: a click, `l`, `n` or `t` in the sidebar, a
 click on a notification, or a click in the terminal. They press keys
 and click through Emacs's command loop. After each step it checks for Lisp errors, in

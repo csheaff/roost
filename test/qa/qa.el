@@ -210,6 +210,24 @@ Return nil when no terminal is on screen."
           (append unread-command-events (list (list 'down-mouse-1 posn) (list 'mouse-1 posn))))
     t))
 
+(defun qa-terminal-takes-mouse ()
+  "Whether the program in the selected terminal takes the mouse."
+  (let ((buffer (window-buffer (selected-window))))
+    (and (qa--terminal buffer)
+         (buffer-local-value 'eat--mouse-grabbing-type buffer)
+         t)))
+
+(defun qa-press-terminal ()
+  "Press the mouse in the selected terminal, and never let go.
+So a release the terminal never gets, as when tmux wasn't replying.
+Return nil unless the selected window is a terminal."
+  (let ((window (selected-window)))
+    (when-let* (((qa--terminal (window-buffer window)))
+                (posn (posn-at-point (window-start window) window)))
+      (setq unread-command-events
+            (append unread-command-events (list (list 'down-mouse-1 posn))))
+      t)))
+
 (defun qa-goto-row (name)
   "Move point to task NAME's row in the selected window, a list of tasks.
 Return nil when it isn't there."
@@ -273,6 +291,13 @@ Return nil when it isn't there."
 Each journey starts here, rather than amid the windows the last one left,
 so that one going wrong doesn't take the rest with it.  A question left
 open is dismissed first, with keys."
+  ;; A mouse press left in a terminal: Eat holds every mouse event for it
+  ;; until it sees the release.
+  (when (bound-and-true-p eat--mouse-drag-transient-map-exit)
+    (funcall eat--mouse-drag-transient-map-exit)
+    (setq eat--mouse-drag-transient-map-exit nil
+          eat--mouse-pressed-buttons nil
+          eat--mouse-last-position nil))
   (dolist (frame (frame-list))
     (when (frame-parent frame) (delete-frame frame)))
   (dolist (frame (frame-list))
