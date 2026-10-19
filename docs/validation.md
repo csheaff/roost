@@ -51,6 +51,12 @@ happened in a section below:
   `--remote --popular` too. Its screenshots showed point left on the line of
   what was attached, where your words would run on from the path; an empty
   line you were on now stays empty below it.
+- **Walking away from it.** The walk-away grid leaves a prompt draft with
+  its file question open against each way of going to another task, locally
+  and with `--remote --popular`: 7 more rows, none with problems, and the
+  draft kept each time. Its shots showed the question opening in a remote
+  task's worktree, over SSH; it now starts on this machine, where what you
+  attach is.
 - **Not yet tried:** a capture from Scrawl itself, and whether an agent asks
   before reading a file outside its worktree.
 

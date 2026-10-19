@@ -4451,6 +4451,50 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
               (should (string-suffix-p "\"This badge collides.\"" (buffer-string)))))
         (delete-directory parent t))))))
 
+(ert-deftest roost-attach-checks-every-file-first-and-keeps-what-it-copied ()
+  (roost-test--isolated
+   (roost-test--with-send-buffers
+    (let ((task (roost--cache-task "dev" (roost-test--task)))
+          (one (make-temp-file "one" nil ".png" "1"))
+          (two (make-temp-file "two" nil ".png" "2"))
+          (folder (make-temp-file "plain" t))
+          (calls 0) sent)
+      (unwind-protect
+          (cl-letf (((symbol-function 'roost--choose) (lambda (&optional _) task)))
+            ;; A folder among them: nothing is copied.
+            (roost-test--attaching sent
+              (should-error (roost-attach (list one folder)) :type 'user-error))
+            (should-not sent)
+            (should-not (get-buffer "*roost send: fix auth*"))
+            ;; The second copy fails: the draft holds the first.
+            (cl-letf (((symbol-function 'pop-to-buffer) #'set-buffer)
+                      ((symbol-function 'roost--request)
+                       (lambda (_host _action params success failure)
+                         (if (= (cl-incf calls) 1)
+                             (funcall success `((paths . (,(concat "/host/a/" (alist-get 'name (aref (alist-get 'files params) 0)))))))
+                           (funcall failure "Disk full")))))
+              (should-error (roost-attach (list one two)) :type 'user-error))
+            (with-current-buffer "*roost send: fix auth*"
+              (should (string-match-p (regexp-quote (concat "/host/a/" (file-name-nondirectory one)))
+                                      (buffer-string)))
+              (should-not (string-match-p (regexp-quote (file-name-nondirectory two)) (buffer-string)))))
+        (delete-file one)
+        (delete-file two)
+        (delete-directory folder))))))
+
+(ert-deftest roost-attach-asks-for-a-file-on-this-machine ()
+  (roost-test--isolated
+   (let (asked-in)
+     (cl-letf (((symbol-function 'roost--scrawl-latest) #'ignore)
+               ((symbol-function 'read-file-name)
+                (lambda (&rest _) (setq asked-in default-directory) "/x")))
+       (let ((default-directory "/ssh:dev:/home/user/work/fix auth/"))
+         (roost--read-attachment))
+       (should-not (file-remote-p asked-in))
+       (let ((default-directory "/tmp/"))
+         (roost--read-attachment))
+       (should (equal asked-in "/tmp/"))))))
+
 (ert-deftest roost-send-attach-image-copies-the-clipboard-image ()
   (roost-test--isolated
    (roost-test--with-send-buffers

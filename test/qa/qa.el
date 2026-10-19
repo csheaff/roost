@@ -304,17 +304,17 @@ still come and reconnect it, as after Roost opened the task it created."
 (advice-add 'roost--request :filter-args #'qa--count-open)
 
 (defun qa-drafts ()
-  "The text of each draft of a new task."
+  "The text of each draft of a new task or a prompt."
   (let (drafts)
     (dolist (buffer (buffer-list) drafts)
       (with-current-buffer buffer
-        (when (derived-mode-p 'roost-compose-mode)
+        (when (derived-mode-p 'roost-compose-mode 'roost-send-mode)
           (push (buffer-substring-no-properties (point-min) (point-max)) drafts))))))
 
 (defun qa-forget-drafts ()
-  "Kill every draft of a new task, without asking."
+  "Kill every draft of a new task or a prompt, without asking."
   (dolist (buffer (buffer-list))
-    (when (with-current-buffer buffer (derived-mode-p 'roost-compose-mode))
+    (when (with-current-buffer buffer (derived-mode-p 'roost-compose-mode 'roost-send-mode))
       (with-current-buffer buffer (set-buffer-modified-p nil))
       (let ((kill-buffer-query-functions nil))
         (kill-buffer buffer))))

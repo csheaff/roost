@@ -1305,6 +1305,17 @@ def leave_draft(qa, tasks):
     qa.type("Half a thought")
 
 
+def leave_attaching(qa, tasks):
+    qa.keys("M-x")
+    qa.wait("the question", lambda s: s["prompt"])
+    qa.type("roost-send\r")
+    qa.wait("the draft", lambda s: (qa.window(s, "roost-send-mode") or {}).get("selected"))
+    qa.type("Half a thought")
+    qa.keys("C-c C-a")
+    qa.wait("which file", lambda s: (s["prompt"] or "").startswith("Attach file"))
+    qa.leave_question()
+
+
 def leave_opening(qa, tasks):
     # Its host replies after what comes next.
     qa.emacs.eval("(qa-slow-opens 1 3)")
@@ -1327,6 +1338,7 @@ WALK_STARTERS = [
     ("Roost's Switch task left open", leave_roost_question),
     ("Roost's menu left open", leave_menu),
     ("a draft half written", leave_draft),
+    ("a prompt's file to attach not yet chosen", leave_attaching),
     ("another task still opening", leave_opening),
     ("a mouse press in the terminal never let go", leave_mouse_press),
 ]
@@ -1445,7 +1457,7 @@ def walk_away(qa, repo):
                 qa.until(late[1], timeout)
                 qa.settle()
                 expect.append(late)
-            if leave is leave_draft:
+            if leave in (leave_draft, leave_attaching):
                 expect.append(("the draft is kept", lambda s: any(
                     "Half a thought" in draft for draft in qa.emacs.json("(json-encode (vconcat (qa-drafts)))"))))
             qa.step(pair, expect=expect)

@@ -2678,8 +2678,19 @@ Its video, audio and uncropped frames, nearly all of its size, stay.")
 (defun roost--attachment-files (file)
   "The files to copy for FILE, as (NAME . LOCAL-FILE).
 A Scrawl capture gives its folder's name and what of it an agent
-reads; see `roost--scrawl-files'."
+reads; see `roost--scrawl-files'.  Signal a `user-error' for what Roost
+won't attach: a folder, or more than `roost--attach-limit' bytes."
   (setq file (directory-file-name (expand-file-name file)))
+  (let* ((files (roost--attachment-entries file))
+         (size (apply #'+ (mapcar (lambda (entry) (file-attribute-size (file-attributes (cdr entry))))
+                                  files))))
+    (when (> size roost--attach-limit)
+      (user-error "%s is %s; Roost attaches up to %s at once" (file-name-nondirectory file)
+                  (file-size-human-readable size) (file-size-human-readable roost--attach-limit)))
+    files))
+
+(defun roost--attachment-entries (file)
+  "The files to copy for FILE, an absolute name; see `roost--attachment-files'."
   (cond ((roost--scrawl-capture-p file)
          (let ((top (file-name-nondirectory file)))
            (mapcan (lambda (name)
@@ -2724,21 +2735,15 @@ number to keep it apart from those already there."
   "Copy FILE to TASK's host, returning what a prompt says of it.
 That is its path there; for a Scrawl capture, also where its contact
 sheet and frames are, and its summary."
-  (let* ((files (roost--attachment-files file))
-         (size (apply #'+ (mapcar (lambda (entry) (file-attribute-size (file-attributes (cdr entry))))
-                                  files))))
-    (when (> size roost--attach-limit)
-      (user-error "%s is %s; Roost attaches up to %s at once" (file-name-nondirectory file)
-                  (file-size-human-readable size) (file-size-human-readable roost--attach-limit)))
-    (let ((path (roost--attach task (mapcar (lambda (entry) (cons (car entry) (roost--file-bytes (cdr entry))))
-                                            files))))
-      (if (not (roost--scrawl-capture-p file))
-          path
-        (concat (format "A Scrawl recording of my screen, in %s: contact-sheet.png shows its keyframes, numbered as below, each in frames/; scrawl.json has the rest.\n\n"
-                        path)
-                (string-trim (with-temp-buffer
-                               (insert-file-contents (expand-file-name "summary.md" file))
-                               (buffer-string))))))))
+  (let ((path (roost--attach task (mapcar (lambda (entry) (cons (car entry) (roost--file-bytes (cdr entry))))
+                                          (roost--attachment-files file)))))
+    (if (not (roost--scrawl-capture-p file))
+        path
+      (concat (format "A Scrawl recording of my screen, in %s: contact-sheet.png shows its keyframes, numbered as below, each in frames/; scrawl.json has the rest.\n\n"
+                      path)
+              (string-trim (with-temp-buffer
+                             (insert-file-contents (expand-file-name "summary.md" file))
+                             (buffer-string)))))))
 
 (defconst roost--clipboard-png-script
   "on run argv
@@ -2776,8 +2781,13 @@ an empty line, that stays empty, to write on."
   (insert text "\n"))
 
 (defun roost--read-attachment ()
-  "Read a file or Scrawl capture to attach; \\`M-n' gives the newest capture."
-  (read-file-name "Attach file or Scrawl capture: " nil (roost--scrawl-latest) t))
+  "Read a file or Scrawl capture to attach; \\`M-n' gives the newest capture.
+It is on this machine: the question starts here, not in a remote task's
+worktree."
+  (let ((default-directory (if (file-remote-p default-directory)
+                               (expand-file-name "~/")
+                             default-directory)))
+    (read-file-name "Attach file or Scrawl capture: " nil (roost--scrawl-latest) t)))
 
 (defun roost-send-attach (file)
   "Attach FILE to the drafted prompt.
@@ -2808,13 +2818,21 @@ Roost copies it to the task's host as a PNG file and adds its path."
   "Draft a prompt to TASK attaching FILES, a file name or a list of them.
 In Dired, FILES are the marked files.  Roost copies each to the task's
 host and adds its path; see `roost-send-attach'.  TASK is the task of
-the current terminal or worktree file, or one you choose."
+the current terminal or worktree file, or one you choose.  Roost checks
+them all before copying any, and should one fail to copy, the draft
+holds those copied before it."
   (interactive (list (if (derived-mode-p 'dired-mode)
                          (dired-get-marked-files)
                        (roost--read-attachment))))
   (when (stringp files) (setq files (list files)))
+  (mapc #'roost--attachment-files files)
   (setq task (roost--choose task))
-  (roost--send-draft task (mapconcat (lambda (file) (roost--attach-file task file)) files "\n")))
+  (let (texts)
+    (unwind-protect
+        (dolist (file files)
+          (push (roost--attach-file task file) texts))
+      (when texts
+        (roost--send-draft task (string-join (nreverse texts) "\n"))))))
 
 ;;;; Review notes
 
