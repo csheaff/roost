@@ -4376,6 +4376,96 @@ Read from the layout transient keeps, whose form varies by version."
         (should (string-match-p "boom" header-line-format))
         (should (equal (buffer-string) "hello")))))))
 
+;; Attachments
+
+(defmacro roost-test--attaching (sent &rest body)
+  "Run BODY with requests to attach recording their files in SENT.
+Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
+  (declare (indent 1))
+  `(cl-letf (((symbol-function 'pop-to-buffer) #'set-buffer)
+             ((symbol-function 'roost--request)
+              (lambda (_host action params success &rest _)
+                (should (equal action "attach"))
+                (should (equal (alist-get 'id params) "0123456789abcdef"))
+                (let ((files (mapcar (lambda (file)
+                                       (cons (alist-get 'name file)
+                                             (base64-decode-string (alist-get 'data file))))
+                                     (alist-get 'files params))))
+                  (setq ,sent (append ,sent files))
+                  (funcall success
+                           `((paths . (,(concat "/host/a/" (car (split-string (caar files) "/")))))))))))
+     ,@body))
+
+(ert-deftest roost-send-attach-copies-a-file-and-adds-its-path-on-its-host ()
+  (roost-test--isolated
+   (roost-test--with-send-buffers
+    (let ((task (roost--cache-task "dev" (roost-test--task)))
+          (file (make-temp-file "shot" nil ".png" "\211PNG\0"))
+          sent)
+      (unwind-protect
+          (roost-test--attaching sent
+            (roost--send-draft task)
+            (insert "Look at this")
+            (roost-send-attach file)
+            (should (equal sent `((,(file-name-nondirectory file) . "\211PNG\0"))))
+            (should (equal (buffer-string)
+                           (format "Look at this\n/host/a/%s\n" (file-name-nondirectory file))))
+            ;; On an empty line, above text, the line stays empty to write on.
+            (goto-char (point-min))
+            (insert "\n\n")
+            (goto-char (point-min))
+            (roost-send-attach file)
+            (should (string-prefix-p (format "/host/a/%s\n\n\nLook" (file-name-nondirectory file))
+                                     (buffer-string)))
+            (should (and (bolp) (eolp) (= (line-number-at-pos) 2)))
+            (let ((directory (make-temp-file "plain" t)))
+              (should-error (roost-send-attach directory) :type 'user-error)
+              (delete-directory directory)))
+        (delete-file file))))))
+
+(ert-deftest roost-attach-copies-what-an-agent-reads-of-a-scrawl-capture ()
+  (roost-test--isolated
+   (roost-test--with-send-buffers
+    (let* ((task (roost--cache-task "dev" (roost-test--task)))
+           (parent (make-temp-file "captures" t))
+           (bundle (expand-file-name "20261019-101500.scrawl" parent))
+           sent)
+      (unwind-protect
+          (progn
+            (dolist (name '("frames" "frames-full"))
+              (make-directory (expand-file-name name bundle) t))
+            (dolist (name '("scrawl.json" "contact-sheet.png" "frames/frame-01.png"
+                            "frames-full/frame-01.png" "contact-sheet-full.png" "recording.mov"))
+              (write-region name nil (expand-file-name name bundle)))
+            (write-region "- #1 (0:01) \"This badge collides.\"\n\n" nil (expand-file-name "summary.md" bundle))
+            (cl-letf (((symbol-function 'roost--choose) (lambda (&optional _) task)))
+              (roost-test--attaching sent
+                (roost-attach bundle)))
+            (should (equal (sort (mapcar #'car sent) #'string<)
+                           '("20261019-101500.scrawl/contact-sheet.png"
+                             "20261019-101500.scrawl/frames/frame-01.png"
+                             "20261019-101500.scrawl/scrawl.json"
+                             "20261019-101500.scrawl/summary.md")))
+            (with-current-buffer "*roost send: fix auth*"
+              (should (string-match-p "in /host/a/20261019-101500.scrawl: contact-sheet.png" (buffer-string)))
+              (should (string-suffix-p "\"This badge collides.\"" (buffer-string)))))
+        (delete-directory parent t))))))
+
+(ert-deftest roost-send-attach-image-copies-the-clipboard-image ()
+  (roost-test--isolated
+   (roost-test--with-send-buffers
+    (let ((task (roost--cache-task "dev" (roost-test--task))) image sent)
+      (cl-letf (((symbol-function 'roost--clipboard-image) (lambda () image)))
+        (roost-test--attaching sent
+          (roost--send-draft task)
+          (should-error (roost-send-attach-image) :type 'user-error)
+          (should-not sent)
+          (setq image "\211PNG")
+          (roost-send-attach-image)
+          (should (string-match-p "\\`clipboard-[0-9]+-[0-9]+\\.png\\'" (caar sent)))
+          (should (equal (cdar sent) "\211PNG"))
+          (should (equal (buffer-string) (concat "/host/a/" (caar sent) "\n")))))))))
+
 ;; Pull requests
 
 (defmacro roost-test--with-pr-buffers (&rest body)

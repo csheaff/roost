@@ -6,6 +6,13 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.9.0:
 
+- Attach files to a prompt: in its draft, `C-c C-a` attaches a file and
+  `C-c C-v` the image on the clipboard. Roost copies each to the task's
+  host, so an agent on another machine can read it too, and adds its path
+  to the prompt. A [Scrawl](https://scrawl.kitlangton.com) capture's
+  folder brings its summary, contact sheet and keyframes. `M-x roost-attach`
+  starts a draft with a file, or Dired's marked files. Nothing to do when
+  upgrading.
 - `n` reaches every waiting task while one asks for permission or is
   stuck at a startup prompt, going back to that one between each of the
   others. Before, it went back and forth between that task and one

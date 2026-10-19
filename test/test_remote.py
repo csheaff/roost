@@ -13,6 +13,7 @@ import select
 import shlex
 import shutil
 import signal
+import stat
 from pathlib import Path
 import subprocess
 import sys
@@ -112,6 +113,32 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(self.request("retire", id=task["id"])["ok"])
         self.assertFalse(Path(task["worktree"]).exists())
         self.assertEqual(self.request("list")["result"], [])
+
+    def test_attachments_keep_their_names_and_go_with_the_task(self):
+        task = self.create()
+        encode = lambda data: base64.b64encode(data).decode()
+        files = [dict(name="shot.png", data=encode(b"\x89PNG")),
+                 dict(name="a.scrawl/summary.md", data=encode(b"look\n")),
+                 dict(name="a.scrawl/frames/frame-01.png", data=encode(b"1"))]
+        reply = self.request("attach", id=task["id"], files=files)
+        self.assertTrue(reply["ok"], reply)
+        shot, bundle = map(Path, reply["result"]["paths"])
+        self.assertEqual((shot.name, shot.read_bytes()), ("shot.png", b"\x89PNG"))
+        self.assertEqual((bundle / "frames" / "frame-01.png").read_bytes(), b"1")
+        self.assertEqual(stat.S_IMODE(shot.stat().st_mode), 0o600)
+        # A name taken already gets a number, as a second clipboard image does.
+        again = self.request("attach", id=task["id"], files=files[:2])["result"]["paths"]
+        self.assertEqual([Path(path).name for path in again], ["shot-2.png", "a-2.scrawl"])
+        self.assertEqual(Path(again[0]).parent, shot.parent)
+        for name in ("../out", "/etc/out", "", None):
+            self.assertFalse(self.request("attach", id=task["id"], files=[dict(name=name, data="")])["ok"])
+        self.assertFalse(self.request("attach", id=task["id"], files=[dict(name="x", data="not base64!")])["ok"])
+        self.assertFalse(self.request("attach", id=task["id"], files=[])["ok"])
+        self.assertFalse((self.state / "out").exists())
+        self.request("stop", id=task["id"])
+        self.wait_for_pane_exit(task)
+        self.assertTrue(self.request("forget", id=task["id"])["ok"])
+        self.assertFalse(shot.parent.exists())
 
     def test_permissions_and_stop_are_attention_not_completion(self):
         task = self.create()

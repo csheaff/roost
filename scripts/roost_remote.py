@@ -14,7 +14,7 @@ import hashlib
 import heapq
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import pty
 import queue
 import re
@@ -254,6 +254,7 @@ class Store:
         and found by searching under the repository noted beside the worktrees,
         also for tasks created before Roost noted it."""
         path = self.path(task_id)
+        shutil.rmtree(self.root / "attachments" / task_id, ignore_errors=True)
         with contextlib.suppress(OSError, ValueError, AttributeError):
             repo = json.loads(path.read_text()).get("repo")
             if isinstance(repo, str):
@@ -1662,6 +1663,43 @@ def send(task, text, force=False):
     finally:
         tmux(task["socket"], "delete-buffer", "-b", buffer, check=False)
     return task
+
+
+def attach(store, task, files):
+    """Copy FILES, each {"name": a relative path, "data": its bytes in base64},
+    to the task's attachments on this host, where its agent can read them.
+    Files whose names start with one folder go in one folder. Return the path
+    each file or folder got: a name already taken gets a number. They go with
+    the task's record."""
+    if not isinstance(files, list) or not files:
+        raise RoostError("Nothing to attach")
+    folder = store.root / "attachments" / task["id"]
+    decoded = []
+    for item in files:
+        name = item.get("name") if isinstance(item, dict) else None
+        parts = PurePosixPath(name).parts if isinstance(name, str) and "\0" not in name else ()
+        if not parts or PurePosixPath(name).is_absolute() or ".." in parts:
+            raise RoostError("Not a name to attach: %r" % (name,))
+        try:
+            data = base64.b64decode(item.get("data") or "", validate=True)
+        except (TypeError, ValueError):
+            raise RoostError("Not base64: " + name)
+        decoded.append((parts, data))
+    chosen = {}
+    for parts, data in decoded:
+        top = parts[0]
+        if top not in chosen:
+            stem, suffix = os.path.splitext(top)
+            candidate, number = top, 1
+            while os.path.lexists(folder / candidate):
+                number += 1
+                candidate = "%s-%d%s" % (stem, number, suffix)
+            chosen[top] = candidate
+        path = folder.joinpath(chosen[top], *parts[1:])
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "wb") as output:
+            output.write(data)
+    return {"paths": [str(folder / name) for name in chosen.values()]}
 
 
 def shell(store, task):
@@ -3214,6 +3252,7 @@ TASK_ACTIONS = {
     "stop": lambda store, task, request: stop(store, task),
     "send": lambda store, task, request: send(task, request["text"], request.get("force") is True),
     "shell": lambda store, task, request: shell(store, task),
+    "attach": lambda store, task, request: attach(store, task, request.get("files")),
     "inspect": lambda store, task, request: inspect(store, task),
     "seen": lambda store, task, request: seen(store, task, request.get("updatedAt")),
     "rename": lambda store, task, request: rename(store, task, request.get("name")),

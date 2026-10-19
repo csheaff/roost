@@ -32,6 +32,28 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## Attachments — 2026-10-19
+
+- **To `claylien` over SSH.** Ubuntu with Python 3.14.4, from Emacs 32 in
+  batch, with a scratch state directory and a scratch task record. Roost
+  installed its helper there and, in about a second for all four, attached a
+  549 KB PNG twice, a Scrawl-shaped capture folder and the same image as a
+  clipboard image. Each copy matched its original's SHA-256. The second PNG
+  became `shot-2.png`. Of the capture, only `summary.md`, `scrawl.json`,
+  `contact-sheet.png` and `frames/` went, not its 3 MB video or uncropped
+  frames. The files were mode 600 and their folders 700. A plain folder was
+  refused. Forgetting the task removed its attachments.
+- **The same locally,** and on macOS the clipboard image came through as PNG
+  bytes from `osascript`, as `the clipboard as «class PNGf»`.
+- **`make qa`.** 150 steps, none with problems, with the new journey
+  "Attach files to a prompt": `M-x roost-attach`, `C-c C-v` with a stubbed
+  clipboard, `C-c C-a` with a capture, and sending. It and `send` pass with
+  `--remote --popular` too. Its screenshots showed point left on the line of
+  what was attached, where your words would run on from the path; an empty
+  line you were on now stays empty below it.
+- **Not yet tried:** a capture from Scrawl itself, and whether an agent asks
+  before reading a file outside its worktree.
+
 ## tmux-control's terminal interface — 2026-10-18
 
 - **tmux-control main (34a6ec7).** tmux-control now uses Eat through one
