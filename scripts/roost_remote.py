@@ -239,6 +239,11 @@ class Store:
             raise RoostError("Invalid task ID")
         return self.tasks_dir / (task_id + ".json")
 
+    def attachments(self, task_id):
+        """The folder of the files attached to the task's prompts."""
+        self.path(task_id)
+        return self.root / "attachments" / task_id
+
     def read(self, task_id):
         try:
             task = json.loads(self.path(task_id).read_text())
@@ -257,7 +262,7 @@ class Store:
         and found by searching under the repository noted beside the worktrees,
         also for tasks created before Roost noted it."""
         path = self.path(task_id)
-        shutil.rmtree(self.root / "attachments" / task_id, ignore_errors=True)
+        shutil.rmtree(self.attachments(task_id), ignore_errors=True)
         with contextlib.suppress(OSError, ValueError, AttributeError):
             repo = json.loads(path.read_text()).get("repo")
             if isinstance(repo, str):
@@ -484,7 +489,13 @@ class ClaudeAgent:
             raise RoostError("Roost owns worktrees, conversation resume, and hook settings; remove conflicting Claude flags")
 
     def launch(self, store, task, resume_conversation):
-        argv = task["command"] + ["--settings", claude_hook_settings(store, task)]
+        # Claude asks before reading outside its worktree; a file attached
+        # to a prompt is read without asking. With "=": --add-dir takes
+        # every argument after it that isn't an option.
+        attachments = store.attachments(task["id"])
+        attachments.mkdir(mode=0o700, parents=True, exist_ok=True)
+        argv = task["command"] + ["--settings", claude_hook_settings(store, task),
+                                  "--add-dir=" + str(attachments)]
         session = task.get("agentSession") or task.get("claudeSession")
         if resume_conversation and session:
             argv += ["--resume", session]
@@ -1723,7 +1734,7 @@ def attach(store, task, files):
     the task's record."""
     if not isinstance(files, list) or not files:
         raise RoostError("Nothing to attach")
-    folder = store.root / "attachments" / task["id"]
+    folder = store.attachments(task["id"])
     decoded = []
     for item in files:
         name = item.get("name") if isinstance(item, dict) else None

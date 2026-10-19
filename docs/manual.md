@@ -325,8 +325,9 @@ In a prompt draft (`e` or `@`): `C-c C-c` sends, `C-c C-k` cancels, `C-c C-a`
 attaches a file and `C-c C-v` the image on the clipboard (as does
 `M-x yank-media`, where Emacs reads images from the clipboard). Roost copies
 an attachment to the task's host, under `attachments` in its state directory
-there, where the agent can read it, and adds its path to the prompt. The copies
-go when the task does. For the folder of a [Scrawl](https://scrawl.kitlangton.com)
+there, where the agent can read it, and adds its path to the prompt. Claude
+reads a task's attachments without asking: Roost starts it with `--add-dir` for
+them. The copies go when the task does. For the folder of a [Scrawl](https://scrawl.kitlangton.com)
 capture (`M-n` at the prompt gives the newest), Roost copies its summary,
 contact sheet and keyframes, and adds the summary. `M-x roost-attach` drafts a
 prompt with a file attached, or with the files marked in Dired.

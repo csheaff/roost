@@ -57,8 +57,16 @@ happened in a section below:
   draft kept each time. Its shots showed the question opening in a remote
   task's worktree, over SSH; it now starts on this machine, where what you
   attach is.
-- **Not yet tried:** a capture from Scrawl itself, and whether an agent asks
-  before reading a file outside its worktree.
+- **Claude asks to read outside its worktree.** Claude Code 2.1.303 in
+  `-p` with Haiku, `--permission-mode default` and only the project's
+  settings, in a scratch repository, told to describe an image in a folder
+  beside it: its Read was denied. With `--add-dir=` that folder, it described
+  the image. So Roost now starts Claude with `--add-dir=` the task's own
+  attachments folder, and `make contract` checks the option is there.
+  `make contract-live` passed with it; one run alongside `make test` timed out
+  waiting for an interrupted turn to be noticed, and passed when rerun alone,
+  as `main` did.
+- **Not yet tried:** a capture from Scrawl itself.
 
 ## tmux-control's terminal interface — 2026-10-18
 

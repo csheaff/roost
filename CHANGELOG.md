@@ -11,8 +11,9 @@ Since 0.9.0:
   host, so an agent on another machine can read it too, and adds its path
   to the prompt. A [Scrawl](https://scrawl.kitlangton.com) capture's
   folder brings its summary, contact sheet and keyframes. `M-x roost-attach`
-  starts a draft with a file, or Dired's marked files. Nothing to do when
-  upgrading.
+  starts a draft with a file, or Dired's marked files. Claude reads a
+  task's attachments without asking; a task already running when you
+  upgrade asks until you stop and resume it (`K`, then `s`).
 - A task started from a branch merges into that branch: `m`, `u`, `P` and
   the `↑`/`↓` counts use it, and the new task draft says "merges into
   release" next to the starting ref, as does `m`'s question. A

@@ -1270,6 +1270,19 @@ class Lifecycle(unittest.TestCase):
                     self.assertEqual(resumed[-1], "recorded-session")
                     self.assertNotIn(prompt, resumed)
 
+    def test_claude_reads_its_tasks_attachments_without_asking(self):
+        store = roost.Store(str(self.state))
+        task = dict(id="1234567890abcdef", command=["claude"], prompt="Look", agentSession="recorded-session",
+                    runId="run")
+        folder = store.attachments(task["id"])
+        for resume in (False, True):
+            argv = roost.ClaudeAgent().launch(store, task, resume)
+            # Its own folder only, which exists, and named with "=", so
+            # nothing after it is taken for another folder.
+            self.assertIn("--add-dir=" + str(folder), argv)
+            self.assertTrue(folder.is_dir())
+        self.assertEqual(argv[-2:], ["--resume", "recorded-session"])
+
     def test_adapter_launch_failure_marks_the_task_failed(self):
         task = self.create()
         self.request("stop", id=task["id"])

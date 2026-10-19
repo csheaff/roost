@@ -143,6 +143,10 @@ def static_check():
     base = re.search(rb'baseRef:[\w$]+\(\["fresh","head"\]\)', data)
     report(bool(base), "worktree.baseRef takes \"head\"" if base
            else "worktree.baseRef changed; check claude_hook_settings")
+    # A task's attachments are read without asking through --add-dir.
+    add_dir = re.search(rb"--add-dir <", data)
+    report(bool(add_dir), "--add-dir is an option" if add_dir
+           else "--add-dir is gone; check ClaudeAgent.launch")
     # Transcripts are found by the path hooks report, else by Claude's folder naming.
     naming = re.search(rb'replace\(/\[\^a-zA-Z0-9\]/g,"-"\).{0,120}\.length<=', data, re.S)
     report(bool(naming), "transcript folders named as claude_project_folder expects" if naming
