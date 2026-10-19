@@ -4556,6 +4556,19 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
         (delete-file two)
         (delete-directory folder))))))
 
+(ert-deftest roost-attach-measures-what-a-link-points-to ()
+  (roost-test--isolated
+   ;; Bigger than the limit, and the link, which holds its name, is not.
+   (let* ((file (make-temp-file "big" nil ".png" (make-string 4096 ?x)))
+          (link (concat file "-link.png"))
+          (roost--attach-limit 2048))
+     (unwind-protect
+         (progn
+           (make-symbolic-link file link)
+           (should-error (roost--attachment-files link) :type 'user-error))
+       (delete-file link)
+       (delete-file file)))))
+
 (ert-deftest roost-attach-asks-for-a-file-on-this-machine ()
   (roost-test--isolated
    (let (asked-in)

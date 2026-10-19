@@ -2723,7 +2723,9 @@ reads; see `roost--scrawl-files'.  Signal a `user-error' for what Roost
 won't attach: a folder, or more than `roost--attach-limit' bytes."
   (setq file (directory-file-name (expand-file-name file)))
   (let* ((files (roost--attachment-entries file))
-         (size (apply #'+ (mapcar (lambda (entry) (file-attribute-size (file-attributes (cdr entry))))
+         ;; What a link points to, which is what Roost reads.
+         (size (apply #'+ (mapcar (lambda (entry)
+                                    (file-attribute-size (file-attributes (file-truename (cdr entry)))))
                                   files))))
     (when (> size roost--attach-limit)
       (user-error "%s is %s; Roost attaches up to %s at once" (file-name-nondirectory file)
