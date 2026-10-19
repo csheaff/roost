@@ -70,7 +70,7 @@ class Lifecycle(unittest.TestCase):
         return roost.rpc(dict(root=str(self.state), action=action, **args))
 
     def create(self, **args):
-        reply = self.request("create", directory=str(self.repo), name=args.pop("name", "task"),
+        reply = self.request("create", directory=args.pop("directory", str(self.repo)), name=args.pop("name", "task"),
                              socket=self.socket, command=args.pop("command", [sys.executable, str(FAKE)]), **args)
         self.assertTrue(reply["ok"], reply)
         task = reply["result"]
@@ -793,6 +793,8 @@ class Lifecycle(unittest.TestCase):
         (wt / "hello").write_text("main and task\n")
         self.git("add", "hello", cwd=wt)
         self.git("commit", "-q", "--no-edit", cwd=wt)
+        # The message a merge of the branch's short name has.
+        self.assertEqual(self.git("log", "-1", "--format=%s", cwd=wt), "Merge branch 'main' into " + task["branch"])
         self.assertTrue(self.request("merge", id=task["id"])["ok"])
         self.assertEqual((self.repo / "hello").read_text(), "main and task\n")
 
@@ -915,6 +917,109 @@ class Lifecycle(unittest.TestCase):
         # The old session stays, with whatever else it holds.
         sessions = roost.tmux(self.socket, "list-sessions", "-F", "#{session_name}").stdout.split()
         self.assertEqual(sorted(sessions), sorted([shared, resumed["session"]]))
+
+    def test_a_task_merges_into_the_branch_it_starts_from(self):
+        self.git("branch", "release")
+        self.git("commit", "--allow-empty", "-m", "newer main")
+        release = self.create(name="on release", base="release")
+        self.assertEqual((release["integrationBranch"], release["baseRef"]), ("release", "release"))
+        self.assertEqual(release["baseCommit"], self.git("rev-parse", "release"))
+        # A fork, or a task started from another's branch, merges where that one does.
+        fork = self.create(name="fork", directory=release["worktree"], base="HEAD")
+        self.assertEqual(fork["integrationBranch"], "release")
+        stacked = self.create(name="stacked", base=release["branch"])
+        self.assertEqual(stacked["integrationBranch"], "release")
+        # A tag or commit merges into the primary checkout's branch.
+        self.git("tag", "v1", "release")
+        self.assertEqual(self.create(name="tagged", base="v1")["integrationBranch"], "main")
+        self.assertEqual(self.create(name="commit", base=self.git("rev-parse", "release"))["integrationBranch"],
+                         "main")
+
+    def test_an_update_takes_the_branch_and_not_a_tag_of_its_name(self):
+        self.git("branch", "release")
+        self.git("tag", "release")
+        task = self.create(name="on release", base="heads/release")
+        self.assertEqual(task["integrationBranch"], "release")
+        self.git("commit", "--allow-empty", "-qm", "release moved")
+        roost.git(self.repo, "update-ref", "refs/heads/release", self.git("rev-parse", "HEAD"))
+        reply = self.request("update", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(self.git("log", "-1", "--format=%s", cwd=task["worktree"]), "release moved")
+        # With the primary checkout on it, the tag hides neither it nor that it is checked out there.
+        self.request("stop", id=task["id"])
+        self.git("switch", "-q", "release")
+        self.git("commit", "--allow-empty", "-qm", "past the tag")
+        default = self.create(name="default")
+        self.assertEqual(default["integrationBranch"], "release")
+        self.assertEqual(default["baseCommit"], self.git("rev-parse", "HEAD"))
+        wt = Path(task["worktree"])
+        (wt / "work").write_text("work\n")
+        self.git("add", ".", cwd=wt)
+        self.git("commit", "-qm", "work", cwd=wt)
+        merge = self.request("merge", id=task["id"])
+        self.assertTrue(merge["ok"], merge)
+        self.assertEqual((self.repo / "work").read_text(), "work\n")
+        self.assertEqual(default["integrationRef"], "refs/heads/release")
+        # Older helpers recorded heads/release, and no integrationRef; such
+        # a task still updates from release and merges into it.
+        store = roost.Store(str(self.state))
+        record = store.read(default["id"])
+        record["integrationBranch"] = "heads/release"
+        del record["integrationRef"]
+        store.save(record)
+        self.request("stop", id=default["id"])
+        listed = next(t for t in self.request("list")["result"] if t["id"] == default["id"])
+        self.assertEqual(listed["integrationBranch"], "release")
+        # A fork of it merges into release, as it does.
+        fork = self.create(name="legacy fork", directory=default["worktree"], base="HEAD")
+        self.assertEqual((fork["integrationBranch"], fork["integrationRef"]), ("release", "refs/heads/release"))
+        self.request("stop", id=fork["id"])
+        self.assertTrue(self.request("retire", id=fork["id"])["ok"])
+        self.git("commit", "--allow-empty", "-qm", "release moved on")
+        reply = self.request("update", id=default["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(self.git("log", "-1", "--format=%s", cwd=default["worktree"]), "release moved on")
+        (Path(default["worktree"]) / "older").write_text("older\n")
+        self.git("add", ".", cwd=default["worktree"])
+        self.git("commit", "-qm", "older", cwd=default["worktree"])
+        merge = self.request("merge", id=default["id"])
+        self.assertTrue(merge["ok"], merge)
+        self.assertEqual((self.repo / "older").read_text(), "older\n")
+        # A branch that is named heads/release is not taken for release once it is gone.
+        roost.git(self.repo, "update-ref", "refs/heads/heads/release", "HEAD")
+        literal = self.create(name="literal", base="refs/heads/heads/release")
+        self.assertEqual(literal["integrationBranch"], "heads/release")
+        self.request("stop", id=literal["id"])
+        self.commit_in(literal, "literal")
+        roost.git(self.repo, "update-ref", "-d", "refs/heads/heads/release")
+        self.assertIn("heads/release no longer exists", self.request("merge", id=literal["id"])["error"])
+
+    def test_a_remote_tracking_start_merges_into_its_local_branch(self):
+        remote = self.root / "remote.git"
+        roost.git(self.root, "clone", "-q", "--bare", str(self.repo), str(remote))
+        self.git("remote", "add", "origin", str(remote))
+        self.git("commit", "--allow-empty", "-m", "pushed")
+        self.git("push", "-q", "origin", "main:main", "main:release")
+        self.git("fetch", "-q", "origin")
+        self.git("reset", "-q", "--hard", "HEAD~1")
+        # Local main lags origin/main; the task starts from origin's and merges into main.
+        lagging = self.create(name="lagging", base="origin/main")
+        self.assertEqual(lagging["integrationBranch"], "main")
+        self.assertEqual(lagging["baseCommit"], self.git("rev-parse", "origin/main"))
+        # With no local release, Roost makes one that tracks origin's.
+        released = self.create(name="released", base="origin/release")
+        self.assertEqual(released["integrationBranch"], "release")
+        self.assertEqual(self.git("rev-parse", "--abbrev-ref", "release@{upstream}"), "origin/release")
+        # A remote's name may hold a slash.
+        self.git("remote", "add", "team/origin", str(remote))
+        self.git("fetch", "-q", "team/origin")
+        slashed = self.create(name="slashed", base="team/origin/release")
+        self.assertEqual(slashed["integrationBranch"], "release")
+        self.assertFalse(roost.ref_exists(self.repo, "origin/release"))
+        # Made meanwhile by another task's start, as tasks prepare unlocked.
+        with patch.object(roost, "ref_exists", side_effect=[False, True]):
+            self.assertEqual(roost.integration_for(roost.Store(str(self.state)), str(self.repo.resolve()),
+                                                   str(self.repo), "origin/release", "main"), "release")
 
     def test_new_tasks_default_to_primary_branch_and_explicit_head_forks(self):
         first = self.create()
@@ -1417,6 +1522,13 @@ class Lifecycle(unittest.TestCase):
         self.git("checkout", "-q", "--detach")
         empty = self.create(name="empty")
         self.assertEqual(empty["integrationBranch"], "")
+        # A fork has no branch to merge into either, though the primary has one now.
+        self.git("checkout", "-q", "main")
+        fork = self.create(name="fork", directory=empty["worktree"], base="HEAD")
+        self.assertEqual(fork["integrationBranch"], "")
+        self.request("stop", id=fork["id"])
+        self.assertTrue(self.request("retire", id=fork["id"])["ok"])
+        self.git("checkout", "-q", "--detach")
         self.request("stop", id=empty["id"])
         self.assertTrue(self.request("retire", id=empty["id"])["ok"])
         worked = self.create(name="worked")
@@ -1904,6 +2016,29 @@ elif args[:2] == ["auth", "status"]:
         again = self.request("pr", id=task["id"], title="Again")
         self.assertEqual(again["result"]["pr"]["number"], 3)
         self.assertFalse([call for call in self.gh_calls()[before:] if call[:2] == ["pr", "create"]])
+
+    def test_pr_from_an_older_helpers_task_targets_the_branch_it_lists(self):
+        # Older helpers recorded heads/release, when a tag was also named release.
+        self.github()
+        self.git("branch", "release")
+        self.git("tag", "release")
+        task = self.create(name="on release", base="heads/release")
+        self.commit_in(task)
+        store = roost.Store(str(self.state))
+        record = store.read(task["id"])
+        record["integrationBranch"] = "heads/release"
+        del record["integrationRef"]
+        store.save(record)
+        listed = next(t for t in self.request("list")["result"] if t["id"] == task["id"])
+        self.assertEqual(listed["integrationBranch"], "release")
+        reply = self.request("pr", id=task["id"], title="Fix it")
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(self.gh_calls()[-1][:4], ["pr", "create", "--base", "release"])
+        # Every action reads it so: merged into release by hand, it retires.
+        self.git("update-ref", "refs/heads/release", task["branch"])
+        self.request("stop", id=task["id"])
+        reply = self.request("retire", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
 
     def test_pr_without_draft_and_refusals(self):
         self.github()

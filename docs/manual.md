@@ -217,8 +217,8 @@ other tasks of the project that change the same files, committed or not
 ("ledger totals also changes report.py"), which may conflict once one
 of them merges. `u` merges the integration branch into the task's
 own worktree. If that conflicts, Roost offers to have the task's agent resolve
-it, run the tests and commit. Then `m` merges the task into the branch it
-started from and removes its worktree, branch and window. For work you don't
+it, run the tests and commit. Then `m` merges the task into its integration
+branch and removes its worktree, branch and window. For work you don't
 want, `x` discards the task, first saying what that loses.
 
 **Or open a pull request.** To finish on GitHub instead, `P` drafts one: the first
@@ -335,6 +335,15 @@ In the new task draft: `C-c C-c` creates, `C-c C-k` cancels, and `C-c C-p`,
 `C-c C-a`, `C-c C-b` and `C-c C-n` change the project, agent, starting ref and
 name. `C-c C-t` starts from a GitHub issue (with `gh` on the project's host). An
 empty name is derived from the prompt; `R` renames the task later.
+
+A task's integration branch is the one `m` merges it into, `u` updates it
+from, `P` opens its pull request against, and `↑`/`↓` count from. It is the
+branch the task starts from, and the draft says so next to the starting ref
+("merges into release"). A remote-tracking branch, such as `origin/main`,
+gives the local branch of its name, which Roost makes to track it if there
+isn't one, as `git switch` would. A task's branch, as when you fork one with
+`C-u c`, gives that task's integration branch. With no starting ref, or a
+tag or commit, it is the branch the primary checkout has checked out.
 
 In the pull request draft: `C-c C-c` creates the pull request (`C-u` as a draft)
 and `C-c C-k` cancels. A failed creation keeps the draft.

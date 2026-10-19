@@ -1394,12 +1394,20 @@
 
 (ert-deftest roost-new-task-defaults-to-primary-checkout-and-prefix-forks ()
   (roost-test--isolated
-   (roost--cache-task "dev" (append '((repo . "/home/user/repo")) (roost-test--task)))
+   (roost--cache-task "dev" (append '((repo . "/home/user/repo") (integrationBranch . "release"))
+                                    (roost-test--task)))
    (setq roost--current-task '("dev" "0123456789abcdef"))
    (let ((default-directory "/tmp/"))
      (save-window-excursion
        (unwind-protect
-           (progn
+           (cl-letf (((symbol-function 'roost--git-in)
+                      (lambda (directory &rest args)
+                        (pcase args
+                          ;; The task's HEAD, in its worktree.
+                          (`("rev-parse" "--symbolic-full-name" "HEAD")
+                           (should (string-suffix-p "/work/fix auth/" directory))
+                           "refs/heads/codex/roost/fix-auth-123456\n")
+                          (`("worktree" "list" "--porcelain") "worktree /home/user/repo\n")))))
              (roost--compose)
              (with-current-buffer roost--compose-buffer
                (should (string-suffix-p ":/home/user/repo/" (plist-get roost--compose-fields :directory)))
@@ -1409,7 +1417,73 @@
              (with-current-buffer roost--compose-buffer
                (should (string-suffix-p ":/home/user/work/fix auth/" (plist-get roost--compose-fields :directory)))
                (should (equal (plist-get roost--compose-fields :base) "HEAD"))
-               (should (string-match-p "HEAD of fix auth  C-c C-b · fork: includes its commits" (buffer-string)))))
+               (should (string-match-p "HEAD of fix auth  C-c C-b · fork: includes its commits; merges into release"
+                                       (buffer-string)))))
+         (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-compose-says-which-branch-a-start-merges-into ()
+  (roost-test--isolated
+   (roost--cache-task "dev" (append '((repo . "/repo") (integrationBranch . "release")) (roost-test--task)))
+   (let ((default-directory "/tmp/") answer (primary "/repo")
+         ;; What Git resolves each ref to, as `rev-parse --symbolic-full-name' does.
+         (refs '(("main" . "refs/heads/main")
+                 ("origin/release/1.2" . "refs/remotes/origin/release/1.2")
+                 ("team/origin/main" . "refs/remotes/team/origin/main")
+                 ("codex/roost/fix-auth-123456" . "refs/heads/codex/roost/fix-auth-123456")
+                 ;; HEAD in the task's worktree, as in a fork.
+                 ("HEAD" . "refs/heads/codex/roost/fix-auth-123456")
+                 ;; A tag of the same name as a branch wins, as in Git.
+                 ("release" . "refs/tags/release")
+                 ("origin/HEAD" . "refs/remotes/origin/HEAD"))))
+     (save-window-excursion
+       (unwind-protect
+           (cl-letf (((symbol-function 'process-file)
+                      (lambda (_program _infile _buffer _display &rest args)
+                        (pcase args
+                          (`("for-each-ref" . ,_) (insert "main\norigin/release/1.2\n") 0)
+                          (`("remote") (insert "origin\nteam\nteam/origin\n") 0)
+                          (`("worktree" "list" "--porcelain")
+                           (insert "worktree " primary "\nHEAD 0123\nbranch refs/heads/main\n\n") 0)
+                          (`("rev-parse" "--symbolic-full-name" ,ref)
+                           (insert (or (cdr (assoc ref refs)) "")) 0)
+                          (_ 1))))
+                     ((symbol-function 'completing-read) (lambda (&rest _) answer)))
+             (roost--compose)
+             (with-current-buffer roost--compose-buffer
+               (setq roost--compose-fields (plist-put roost--compose-fields :directory "/ssh:dev:/repo/"))
+               (dolist (case '(("main" . "main")
+                               ;; A remote-tracking branch merges into its local one.
+                               ("origin/release/1.2" . "release/1.2")
+                               ;; A remote's name may hold a slash.
+                               ("team/origin/main" . "main")
+                               ;; A task's branch merges where that task does.
+                               ("codex/roost/fix-auth-123456" . "release")
+                               ("HEAD" . "release")
+                               ("release" . "the primary checkout's branch")
+                               ("v1.0" . "the primary checkout's branch")
+                               ("origin/HEAD" . "the primary checkout's branch")))
+                 (setq answer (car case))
+                 (roost-compose-set-base)
+                 (should (string-match-p (concat "Start    " (regexp-quote (car case))
+                                                 "  C-c C-b · merges into " (regexp-quote (cdr case)) "$")
+                                         (buffer-string))))
+               ;; The same branch in another repository is not the task's.
+               (setq primary "/other" answer "codex/roost/fix-auth-123456")
+               (roost-compose-set-base)
+               (should (string-match-p "merges into codex/roost/fix-auth-123456$" (buffer-string)))
+               ;; Another project's HEAD is on its own branch, not a fork.
+               (setq refs '(("HEAD" . "refs/heads/trunk")))
+               (setq roost--compose-fields (thread-first roost--compose-fields
+                                                         (plist-put :base "HEAD")
+                                                         (plist-put :source "fix auth")))
+               (cl-letf (((symbol-function 'roost--choose-from) (lambda (&rest _) "/ssh:dev:/other/")))
+                 (roost-compose-set-project))
+               (should-not (plist-get roost--compose-fields :source))
+               (should (string-match-p "Start    HEAD  C-c C-b · merges into trunk$" (buffer-string)))
+               (setq answer "")
+               (roost-compose-set-base)
+               (should (string-match-p "Start    primary checkout's current branch  C-c C-b$"
+                                       (buffer-string)))))
          (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
 
 (ert-deftest roost-compose-derives-a-name-and-submits-the-draft ()
@@ -6039,7 +6113,8 @@ ssh: connect to host dev port 22: Operation timed out"
 
 (ert-deftest roost-merge-style-squashes-unless-asked-to-merge ()
   (roost-test--isolated
-   (let ((task (roost--cache-task "dev" (roost-test--task))) params question)
+   (let ((task (roost--cache-task "dev" (append '((integrationBranch . "release")) (roost-test--task))))
+         params question)
      (cl-letf (((symbol-function 'roost--request)
                 (lambda (_host action request &rest _)
                   (when (equal action "merge") (setq params request))))
@@ -6047,12 +6122,12 @@ ssh: connect to host dev port 22: Operation timed out"
                ((symbol-function 'roost--release-terminal) #'ignore))
        (roost-merge-retire task)
        (should (equal (alist-get 'style params) "squash"))
-       (should (string-prefix-p "Squash committed work from fix auth into one commit" question))
+       (should (string-prefix-p "Squash committed work from fix auth into one commit on release" question))
        (let ((roost-merge-style 'merge))
          (roost-merge-retire task))
        (should (assq 'id params))
        (should-not (assq 'style params))
-       (should (string-prefix-p "Merge committed work from fix auth" question))))))
+       (should (string-prefix-p "Merge committed work from fix auth into release" question))))))
 
 (ert-deftest roost-task-commands-are-greyed-out-with-no-tasks ()
   (roost-test--isolated
@@ -6982,6 +7057,9 @@ With INITIAL, the box must start out holding it."
   ;; and the work an agent committed had no place in the status.
   (roost-test--with-magit-task
     (call-process "git" nil nil nil "branch" "-M" "main")
+    ;; An older tag of the branch's name, which Git would take for it.
+    (call-process "git" nil nil nil "tag" "main")
+    (call-process "git" nil nil nil "commit" "-q" "--allow-empty" "-m" "Already on main")
     (call-process "git" nil nil nil "checkout" "-qb" "task")
     (magit-status-setup-buffer dir)
     (with-current-buffer (magit-get-mode-buffer 'magit-status-mode)
@@ -6994,10 +7072,12 @@ With INITIAL, the box must start out holding it."
       (re-search-forward "^Unmerged into main")
       (let ((section (magit-current-section)))
         (should (eq (eieio-oref section 'type) 'unpushed))
-        (should (equal (eieio-oref section 'value) "main.."))
+        (should (equal (eieio-oref section 'value) "refs/heads/main.."))
         (should (= (length (eieio-oref section 'children)) 1))
+        (should-not (string-match-p "Already on main"
+                                    (buffer-substring (eieio-oref section 'start) (eieio-oref section 'end))))
         ;; RET on the heading shows the task's changes since it left main.
-        (should (equal (magit-diff--dwim) "main...")))
+        (should (equal (magit-diff--dwim) "refs/heads/main...")))
       (should (string-match-p "Add a line" (buffer-string))))
     (let ((roost-magit-status-sections nil))
       (with-current-buffer (magit-get-mode-buffer 'magit-status-mode)

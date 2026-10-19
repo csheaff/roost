@@ -1674,6 +1674,40 @@ def fork(qa, repo):
                                               "roost/%s-*" % fork_name)))])
 
 
+@journey("Start from another branch")
+def other_branch(qa, repo):
+    """A task started from a branch merges into it, not the primary checkout's."""
+    qa.git(repo, "branch", "release")
+    qa.keys("C-c r c")
+    qa.wait("the draft", lambda s: (qa.window(s, "roost-compose-mode") or {}).get("selected"))
+    qa.keys("C-c C-b")
+    qa.wait("the question", lambda s: s["prompt"])
+    qa.type("release\r")
+    qa.wait("the starting ref", lambda s: "merges into release" in qa.window(s, "roost-compose-mode")["text"])
+    qa.step("A draft from release", expect=[
+        ("it says the task merges into release",
+         lambda s: re.search(r"Start +release .*merges into release", qa.window(s, "roost-compose-mode")["text"]))])
+    # Named, as another journey's task may have the name its prompt gives.
+    name = "for-the-release"
+    qa.keys("C-c C-n")
+    qa.wait("the question", lambda s: s["prompt"])
+    qa.type(name + "\r")
+    qa.type("ask sh -c \"printf 'x\\n' > RELEASE.md && git add RELEASE.md && git commit -qm 'For the release'\"")
+    qa.keys("C-c C-c")
+    qa.wait("the task", lambda s: qa.task(s, name))
+    answer_yes(qa, name)
+    qa.wait("its commit", lambda s: "Committed" in panel_text(qa, s))
+    qa.keys("C-c r m")
+    qa.wait("the question", lambda s: s["prompt"])
+    qa.step("Merging names release", expect=[("it asks to merge into release",
+                                              lambda s: "release" in (s["prompt"] or ""))])
+    qa.type("y")
+    qa.wait("the task to go", lambda s: qa.task(s, name) is None)
+    qa.step("Merged into release", expect=[
+        ("release has the commit", lambda s: "For the release" in qa.git(repo, "log", "--format=%s", "-3", "release")),
+        ("main doesn't", lambda s: "For the release" not in qa.git(repo, "log", "--format=%s", "-3", "main"))])
+
+
 @journey("A task merged elsewhere")
 def merged(qa, repo):
     """A task whose commits reach its branch some other way says so, and x retires it."""
@@ -1919,7 +1953,7 @@ def dropped(qa, repo):
 JOURNEYS = [sweep, answer, fold, resize, merge, review, panes, shell,
             dashboard, stop_resume, retire, send, attach, update, conflicts, restart, search, question_left, walk_away,
             frames, org, tabs,
-            forget, rename, fork, merged, pull_request, exits, unreachable, scrollback, fleet, dropped]
+            forget, rename, fork, other_branch, merged, pull_request, exits, unreachable, scrollback, fleet, dropped]
 
 
 def main():

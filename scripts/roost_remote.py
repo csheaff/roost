@@ -241,9 +241,12 @@ class Store:
 
     def read(self, task_id):
         try:
-            return json.loads(self.path(task_id).read_text())
+            task = json.loads(self.path(task_id).read_text())
         except FileNotFoundError:
             raise RoostError("Task no longer exists: " + task_id)
+        # An older helper's record may name its integration branch heads/X.
+        recorded_integration(task)
+        return task
 
     def save(self, task):
         atomic_json(self.path(task["id"]),
@@ -269,6 +272,8 @@ class Store:
             # One unreadable record must not hide every other task.
             with contextlib.suppress(OSError, ValueError):
                 tasks.append(json.loads(path.read_text()))
+        for task in tasks:
+            recorded_integration(task)
         return tasks
 
 
@@ -880,6 +885,44 @@ def task_name(value):
     return name
 
 
+def current_branch(repo):
+    """The branch REPO has checked out, or "" if HEAD is detached. Not
+    `--short`, which gives heads/X when a tag is also named X."""
+    ref = git(repo, "symbolic-ref", "-q", "HEAD", check=False).stdout.strip()
+    return ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else ""
+
+
+def integration_for(store, repo, directory, base, current):
+    """The branch a task started at BASE merges into: the branch BASE
+    names, or for a remote-tracking branch the local one of its name, made
+    to track it as `git switch` would if there is none. A task's branch, as
+    HEAD in its worktree is, gives that task's, even none. A tag, a commit or a
+    detached HEAD gives CURRENT, the primary checkout's branch."""
+    full = git(directory, "rev-parse", "--symbolic-full-name", base, check=False).stdout.strip()
+    if full.startswith("refs/heads/"):
+        branch = full[len("refs/heads/"):]
+        source = next((task for task in store.all()
+                       if task.get("repo") == repo and task.get("branch") == branch), None)
+        if source:
+            # Empty when that task started with the primary checkout detached.
+            recorded = source.get("integrationBranch")
+            return current if recorded is None else recorded
+        return branch
+    # Remote names may hold slashes, so take the longest that fits.
+    remotes = sorted(git(repo, "remote", check=False).stdout.split(), key=len, reverse=True)
+    branch = next((full[len("refs/remotes/%s/" % remote):] for remote in remotes
+                   if full.startswith("refs/remotes/%s/" % remote)), None)
+    if branch and branch != "HEAD":
+        if not ref_exists(repo, branch):
+            made = git(repo, "branch", "--track", branch, full, check=False)
+            # Another task starting from it at the same moment may have made it.
+            if made.returncode and not ref_exists(repo, branch):
+                raise RoostError("Could not make a local branch %s to merge into: %s"
+                                 % (branch, made.stderr.strip()))
+        return branch
+    return current
+
+
 def create(store, request):
     """Create a worktree and agent window. Preparation and `git worktree add`
     run without the registry lock; only the tmux spawn is serialized."""
@@ -898,12 +941,15 @@ def create(store, request):
     agent = agent_for(dict(agent=agent_name))
     command = request.get("command", agent.default_command)
     agent.validate(command)
-    integration = git(repo, "symbolic-ref", "--short", "HEAD", check=False).stdout.strip()
+    current = current_branch(repo)
     # Independent tasks start at the primary checkout. HEAD only forks the
     # source worktree when explicitly requested, rather than accidentally.
     explicit_base = text(request.get("base"))
-    base = explicit_base or integration or "HEAD"
-    resolved = git(directory if explicit_base else repo, "rev-parse", "--verify", "--quiet", base + "^{commit}",
+    base = explicit_base or current or "HEAD"
+    # The primary checkout's branch by its full name, which a tag of the
+    # same name would otherwise shadow.
+    resolved = git(directory if explicit_base else repo, "rev-parse", "--verify", "--quiet",
+                   (explicit_base or ("refs/heads/" + current if current else "HEAD")) + "^{commit}",
                    check=False)
     if resolved.returncode:
         # Git says only "Needed a single revision".
@@ -912,6 +958,8 @@ def create(store, request):
                              "(git commit --allow-empty -m 'Start' will do)" % repo)
         raise RoostError("No branch, tag or commit named %r to start from" % base)
     commit = resolved.stdout.strip()
+    integration = (integration_for(store, repo, directory, explicit_base, current) if explicit_base
+                   else current)
     task_id = uuid.uuid4().hex[:16]
     prefix = text(request.get("branchPrefix")) or DEFAULT_BRANCH_PREFIX
     branch = prefix + slug + "-" + task_id[:6]
@@ -932,6 +980,8 @@ def create(store, request):
     task = dict(id=task_id, name=name, task=prompt or name, repo=repo,
                 worktree=str(worktree), branch=branch, baseRef=base, baseCommit=commit,
                 integrationBranch=integration, socket=socket,
+                # Its full name, which also tells this record from an older helper's.
+                integrationRef="refs/heads/" + integration if integration else None,
                 session=session_name(repo, task_id),
                 agent=agent_name, command=command, setup=setup, prompt=prompt,
                 status="starting", startedAt=now(), updatedAt=now(), claudeSession=None)
@@ -1759,6 +1809,21 @@ def require_removable(worktree):
 MERGE_TREE_GIT = (2, 38)  # `git merge-tree --write-tree`
 
 
+def recorded_integration(task):
+    """The task's integration branch, as the store reads every record.
+    Records without integrationRef come from older helpers, which wrote
+    heads/X when a tag was also named X: that reads as X while a branch and
+    a tag X exist and no branch heads/X does."""
+    branch = task.get("integrationBranch")
+    if (isinstance(branch, str) and branch.startswith("heads/") and "integrationRef" not in task
+            and isinstance(task.get("repo"), str)):
+        repo, short = task["repo"], branch[len("heads/"):]
+        if (not ref_exists(repo, branch) and ref_exists(repo, short)
+                and git(repo, "show-ref", "--verify", "--quiet", "refs/tags/" + short, check=False).returncode == 0):
+            task["integrationBranch"] = branch = short
+    return branch
+
+
 def integration_branch(task):
     """The task's integration branch, and whether the primary checkout has it
     checked out. Otherwise Git merges into it without a working tree, which
@@ -1767,7 +1832,7 @@ def integration_branch(task):
     repo = task["repo"]
     if not branch:
         raise RoostError("The task has no integration branch (it was created from a detached HEAD); merge it manually, then retire")
-    if git(repo, "symbolic-ref", "--short", "HEAD", check=False).stdout.strip() == branch:
+    if current_branch(repo) == branch:
         if git(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0:
             raise RoostError("The primary repository already has a merge in progress")
         return branch, True
@@ -2076,7 +2141,10 @@ def update(store, task):
     if git(worktree, "status", "--porcelain", "--untracked-files=no").stdout.strip():
         raise RoostError("Commit the task's changes before updating it from " + integration)
     before = git(worktree, "rev-parse", "HEAD").stdout.strip()
-    result = git(worktree, "merge", "--no-edit", integration, check=False)
+    # The full name, which a tag of the same name would otherwise shadow,
+    # and the message a merge of the short one has.
+    result = git(worktree, "merge", "--no-edit", "-m", "Merge branch '%s' into %s" % (integration, task["branch"]),
+                 "refs/heads/" + integration, check=False)
     conflicts = conflicted_files(worktree)
     if result.returncode and not conflicts:
         if git(worktree, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0:
