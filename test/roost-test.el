@@ -6383,7 +6383,10 @@ Its a.txt has ten lines, committed.  Skipped without Magit."
                                                   (roost-test--task)))))
         (ignore task)
         (unwind-protect
-            (cl-letf (((symbol-function 'roost--redraw) #'ignore))
+            (cl-letf (((symbol-function 'roost--redraw) #'ignore)
+                      ;; `magit-refresh' measures the task, which would ask the
+                      ;; real helper and leave it running into later tests.
+                      ((symbol-function 'roost--refresh-host) #'ignore))
               (call-process "git" nil nil nil "init" "-q")
               (roost-test--write-lines "a.txt" (number-sequence 1 10))
               (call-process "git" nil nil nil "add" ".")
