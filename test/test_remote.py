@@ -3846,29 +3846,64 @@ class ProgramStatus(unittest.TestCase):
             store = roost.Store(root)
             agent = roost.OpenCodeAgent()
             task = dict(id="1234567890abcdef")
+            env = agent.environment(store, task, {})
             folder = str(store.attachments(task["id"])) + "/*"
-            config = lambda env: json.loads(agent.environment(store, task, env)["OPENCODE_CONFIG_CONTENT"])
-            # Its own agents' rules, which follow your config's own and so
-            # leave a word you gave all outside folders to the rest.
-            agents = config({})["agent"]
-            self.assertEqual(set(agents), {"build", "plan", "general", "explore"})
-            self.assertEqual(agents["build"], dict(permission=dict(external_directory={folder: "allow"})))
-            self.assertNotIn("permission", config({}))
-            # Your inline config keeps what it says, and the folder comes last.
-            yours = dict(permission="deny", agent=dict(
-                build=dict(model="m", permission=dict(external_directory="deny", bash="ask")),
-                plan=dict(permission="allow"),
-                general=dict(permission=dict(external_directory={"/x/*": "allow"})),
-                mine=dict(permission="ask")))
-            agents = config(dict(OPENCODE_CONFIG_CONTENT=json.dumps(yours)))["agent"]
+            self.assertEqual(env["ROOST_OPENCODE_ATTACHMENTS"], folder)
+            # The plugin gives the rule once your config is merged; the inline
+            # config Roost writes leaves your permissions alone.
+            self.assertEqual(set(json.loads(env["OPENCODE_CONFIG_CONTENT"])), {"plugin"})
+
+    @unittest.skipUnless(shutil.which("node"), "needs Node")
+    def test_opencode_plugin_allows_attachments_after_your_rules(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            plugin = roost.OpenCodeAgent().plugin(roost.Store(str(root / "state")))
+            folder = "/state/attachments/1234567890abcdef/*"
+            configs = [
+                # Nothing set: each of OpenCode's agents allows the folder.
+                {},
+                # A word for outside folders, and one for everything, stay
+                # theirs: the rule follows them, and leaves other rules be.
+                dict(permission=dict(external_directory="deny"),
+                     agent=dict(build=dict(model="m", permission=dict(external_directory="deny", bash="ask")),
+                                plan=dict(permission="allow"),
+                                # After an outside folder's word, a word for everything decides.
+                                general=dict(permission={"external_directory": "ask", "*": "deny", "read": "allow"}),
+                                explore=dict(permission=dict(external_directory={"/x/*": "allow", folder: "deny"})),
+                                mine=dict(permission={"*": {"/y/*": "deny"}})))]
+            driver = root / "driver.mjs"
+            driver.write_text(
+                "const { RoostObserver } = await import(%s);\n"
+                "const hooks = await RoostObserver({});\n"
+                "const configs = %s;\n"
+                "for (const config of configs) await hooks.config(config);\n"
+                "console.log(JSON.stringify(configs));\n"
+                % (json.dumps(plugin.as_uri()), json.dumps(configs)))
+            env = dict(os.environ, ROOST_PYTHON=sys.executable, ROOST_HELPER="/dev/null",
+                       ROOST_OPENCODE_ATTACHMENTS=folder)
+            env.pop("ROOST_OPENCODE_OBSERVER", None)
+            done = subprocess.run(["node", str(driver)], env=env, check=True, timeout=30,
+                                  capture_output=True, text=True)
+            empty, yours = json.loads(done.stdout.splitlines()[-1])
+            self.assertEqual(empty["agent"], {name: dict(permission=dict(external_directory={folder: "allow"}))
+                                              for name in ("build", "plan", "general", "explore")})
+            agents = yours["agent"]
+            self.assertEqual(yours["permission"], dict(external_directory="deny"))
             self.assertEqual(agents["build"], dict(model="m", permission=dict(
-                external_directory={"*": "deny", folder: "allow"}, bash="ask")))
+                bash="ask", external_directory={"*": "deny", folder: "allow"})))
             self.assertEqual(agents["plan"]["permission"],
                              {"*": "allow", "external_directory": {"*": "allow", folder: "allow"}})
-            self.assertEqual(list(agents["general"]["permission"]["external_directory"].items()),
+            self.assertEqual(list(agents["general"]["permission"].items()),
+                             [("*", "deny"), ("read", "allow"), ("external_directory", {"*": "deny", folder: "allow"})])
+            self.assertEqual(list(agents["explore"]["permission"]["external_directory"].items()),
                              [("/x/*", "allow"), (folder, "allow")])
-            self.assertEqual(agents["mine"], dict(permission="ask"))
-            self.assertEqual(config(dict(OPENCODE_CONFIG_CONTENT=json.dumps(yours)))["permission"], "deny")
+            self.assertEqual(agents["mine"]["permission"],
+                             {"*": {"/y/*": "deny"}, "external_directory": {"/y/*": "deny", folder: "allow"}})
+            # Without a folder, as for an OpenCode Roost didn't start, nothing changes.
+            env.pop("ROOST_OPENCODE_ATTACHMENTS")
+            done = subprocess.run(["node", str(driver)], env=env, check=True, timeout=30,
+                                  capture_output=True, text=True)
+            self.assertEqual(json.loads(done.stdout.splitlines()[-1]), configs)
 
     def test_a_pi_dialog_at_startup_ends_no_turn(self):
         # It can open before Pi's first report, while its hooks still set

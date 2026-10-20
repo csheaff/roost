@@ -93,17 +93,19 @@ happened in a section below:
   its project, `opencode run` asked `external_directory` for that folder,
   and turned it down unanswered. It has no option like Claude's
   `--add-dir`.
-- **A rule for its agents.** An `external_directory` rule in the inline
+- **A rule after yours.** An `external_directory` rule in the inline
   config's own `permission` took the place of a one-word setting in the
   config files: `"external_directory": "deny"` became ask for every other
-  folder, and `"permission": "allow"` would have gone. OpenCode puts an
-  agent's rules after the config's, and the last that applies decides, so
-  Roost gives the rule to `build`, `plan`, `general` and `explore` instead.
-  With that, a file in the attachments folder, and one in a folder in it,
-  were read without asking, whether the config said nothing, `deny` for
-  outside folders, or `allow` for everything, and those words still held
-  for another folder: refused, or read. Run with the inline config the
-  adapter writes, the attachment was read and another folder refused.
+  folder. Given to each agent in the inline config instead, it still took
+  the place of a word an agent had in the files. OpenCode calls each
+  plugin's `config` hook with the config it merged from all of them, so
+  Roost's plugin adds the rule there, to each agent, after what applied to
+  `external_directory` before. Live: a file in the attachments folder, and
+  one in a folder in it, were read without asking, while another folder
+  stayed denied by `"*": "deny"` set after `external_directory`, and by an
+  agent's own `"external_directory": "deny"` in the config file, or read
+  where everything was allowed. Run with Roost's own plugin and
+  environment, the attachment was read and another folder refused.
 - **First runs stall.** In fresh folders OpenCode spent minutes fetching
   its tools before a first reply, which a short timeout cut off each time;
   once it had them, a run took about 12 s.

@@ -792,6 +792,27 @@ class PiAgent:
 
 
 OPENCODE_PLUGIN = r'''import { spawn } from "node:child_process";
+// PERMISSION, as OpenCode's config has it, a word or rules, with NAME
+// allowed for PATTERN last. OpenCode asks the last rule that applies, so
+// NAME's rules hold all that applied to it before, a word for everything
+// included, and end with PATTERN; other permissions are as they were.
+const allowing = (permission, name, pattern) => {
+  if (typeof permission === "string") permission = { "*": permission };
+  if (!permission || typeof permission !== "object") permission = {};
+  let rules = {};
+  for (const [key, value] of Object.entries(permission)) {
+    if (key !== name && key !== "*") continue;
+    if (typeof value === "string") rules = { "*": value };
+    else if (value && typeof value === "object")
+      for (const [p, action] of Object.entries(value)) { delete rules[p]; rules[p] = action; }
+  }
+  delete rules[pattern];
+  rules[pattern] = "allow";
+  const out = {};
+  for (const [key, value] of Object.entries(permission)) if (key !== name) out[key] = value;
+  out[name] = rules;
+  return out;
+};
 export const RoostObserver = async () => {
   // An OpenCode started from this one, as by its shell tool, inherits the
   // config that loads this plugin: only the one Roost started reports.
@@ -854,6 +875,18 @@ export const RoostObserver = async () => {
   };
   report("start");
   return {
+    // The task's attachments are outside its worktree, which OpenCode asks
+    // about: allowed for every agent once your config, files and inline
+    // alike, is merged, as the last rule, so the rest is as you set it.
+    config: async config => {
+      const pattern = process.env.ROOST_OPENCODE_ATTACHMENTS;
+      if (!pattern || !config || typeof config !== "object") return;
+      if (!config.agent || typeof config.agent !== "object") config.agent = {};
+      for (const name of new Set(["build", "plan", "general", "explore", ...Object.keys(config.agent)])) {
+        const agent = config.agent[name] && typeof config.agent[name] === "object" ? config.agent[name] : {};
+        config.agent[name] = { ...agent, permission: allowing(agent.permission, "external_directory", pattern) };
+      }
+    },
     event: async ({ event }) => {
       const p = event.properties || {};
       switch (event.type) {
@@ -918,21 +951,6 @@ export const RoostObserver = async () => {
 '''
 
 
-def allowing(permission, name, pattern):
-    """OpenCode PERMISSION, a word or rules, with NAME allowed for PATTERN
-    after what it already says. A word for everything, or for NAME, stays
-    the first rule, and the last that applies decides."""
-    if isinstance(permission, str):
-        permission = {"*": permission}
-    elif not isinstance(permission, dict):
-        permission = {}
-    rules = permission.get(name, permission.get("*"))
-    rules = {"*": rules} if isinstance(rules, str) else dict(rules) if isinstance(rules, dict) else {}
-    rules.pop(pattern, None)
-    rules[pattern] = "allow"
-    return dict(permission, **{name: rules})
-
-
 class OpenCodeAgent:
     """Observe OpenCode through a plugin named in its inline config, leaving
     the user's own config, plugins and permissions as they are."""
@@ -988,14 +1006,11 @@ class OpenCodeAgent:
             argv.append("--prompt=" + task["prompt"])
         return argv
 
-    # Its own agents, which a rule given them follows any in your config.
-    agents = ("build", "plan", "general", "explore")
-
     def environment(self, store, task, env):
         """The inline config that loads the plugin, added to any the user set:
         OpenCode merges it over their files rather than in place of them.
-        It lets TASK's agents read its attachments, which OpenCode would
-        ask about, as outside its worktree."""
+        The plugin lets TASK's agents read its attachments, named here, which
+        OpenCode would ask about, as outside its worktree."""
         if (env.get("OPENCODE_PURE") or "").lower() in ("1", "true", "yes", "on"):
             raise RoostError("OPENCODE_PURE leaves out every plugin, Roost's observer too; unset it for Roost's tasks")
         config = {}
@@ -1008,18 +1023,10 @@ class OpenCodeAgent:
                 raise RoostError("Roost adds its observer to OPENCODE_CONFIG_CONTENT, which must be a JSON object")
         plugins = config.get("plugin") if isinstance(config.get("plugin"), list) else []
         config["plugin"] = plugins + [self.plugin(store).as_uri()]
-        # Given each agent, not as config's own permission, which would take
-        # the place of a one-word setting in your files; an agent's rules
-        # follow those, and the last that applies decides.
-        attachments = str(store.attachments(task["id"])) + "/*"
-        agents = config.get("agent") if isinstance(config.get("agent"), dict) else {}
-        config["agent"] = agents
-        for name in self.agents:
-            agent = agents.get(name) if isinstance(agents.get(name), dict) else {}
-            agents[name] = dict(agent, permission=allowing(agent.get("permission"), "external_directory", attachments))
         # Its plugin marks the OpenCode that reports; one Roost starts, as
         # from another task's shell, is a new one.
-        return {"OPENCODE_CONFIG_CONTENT": json.dumps(config), "ROOST_OPENCODE_OBSERVER": ""}
+        return {"OPENCODE_CONFIG_CONTENT": json.dumps(config), "ROOST_OPENCODE_OBSERVER": "",
+                "ROOST_OPENCODE_ATTACHMENTS": str(store.attachments(task["id"])) + "/*"}
 
     def request(self, payload):
         """What a question or permission request asks, in Roost's words."""
