@@ -2724,11 +2724,11 @@ They are most of its size, and an agent reads its frames instead.")
                                 (directory-files captures t "\\.scrawl\\'")))
                #'file-newer-than-file-p))))
 
-(defun roost--file-bytes (file)
-  "FILE's contents, as a unibyte string."
+(defun roost--file-bytes (file &optional limit)
+  "FILE's contents, as a unibyte string; with LIMIT, at most that many bytes."
   (with-temp-buffer
     (set-buffer-multibyte nil)
-    (insert-file-contents-literally file)
+    (insert-file-contents-literally file nil (and limit 0) limit)
     (buffer-string)))
 
 (defun roost--attachment-files (file)
@@ -2811,7 +2811,10 @@ contact sheet and frames are, and its summary."
                    (string-trim (with-temp-buffer
                                   (insert-file-contents (expand-file-name "summary.md" file))
                                   (buffer-string))))))
-    (roost--attach task (mapcar (lambda (entry) (cons (car entry) (roost--file-bytes (cdr entry))))
+    ;; A byte past the limit at most, as it may have grown since: enough
+    ;; for `roost--attach' to refuse it, without reading all of it.
+    (roost--attach task (mapcar (lambda (entry)
+                                  (cons (car entry) (roost--file-bytes (cdr entry) (1+ roost--attach-limit))))
                                 entries)
                    (lambda (path)
                      (funcall success

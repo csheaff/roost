@@ -4759,8 +4759,9 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
          (cl-letf (((symbol-function 'roost--request) (lambda (&rest _) (setq asked t))))
            (let* ((roost--attach-limit 4)
                   (entries (roost--attachment-files file)))
-             ;; It grew while you chose a task.
+             ;; It grew while you chose a task, and isn't read whole.
              (write-region "123456" nil file)
+             (should (equal (roost--file-bytes file 5) "12345"))
              (should (string-match-p "The attachment is"
                                      (cadr (should-error (roost--attach-file (roost-test--task) file entries
                                                                              #'ignore #'ignore)
