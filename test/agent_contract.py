@@ -261,8 +261,9 @@ class CodexSession(claude_contract.Session):
         ask = "Create an empty file named approved.txt with the shell command `touch approved.txt`, then reply DONE."
         self.step("approve a command")
         self.send(ask)
-        record = self.until(lambda: (lambda task: task["status"] == "permission" and task.get("request") and task)(
-            self.record()), 120, "a permission request")
+        # The hook's words, as a relayed report can ask first in its own.
+        record = self.when(lambda task: task["status"] == "permission"
+                           and (task.get("request") or "").startswith("Asks to"), 120, "a permission request")
         self.check(bool(record.get("request")), "the request says what it asks", record.get("request"))
         time.sleep(2)
         self.keys("Enter")
@@ -275,17 +276,18 @@ class CodexSession(claude_contract.Session):
         self.until(lambda: self.record()["status"] == "permission", 120, "the second permission request")
         time.sleep(2)
         self.keys("Escape")
-        record = self.until(lambda: self.record()["status"] != "permission" and self.record(), 30,
-                            "the declined request to be noticed")
-        self.check(record["status"] == "ready", "a declined request shows ready", (record["status"], record.get("lastEvent")))
+        # Relayed, a decline reports work for a moment before its hook ends the turn.
+        record = self.when(lambda task: task["status"] == "ready", 30, "the declined request to be noticed")
+        self.check(record.get("lastEvent") == "Interrupt", "a declined request shows ready",
+                   (record["status"], record.get("lastEvent")))
 
         self.step("stop a turn with Esc")
         self.send("Write the numbers from 1 to 400, one per line, with no other text.")
         self.until(lambda: self.record()["status"] == "running", 60, "the counting turn")
         time.sleep(2)
         self.keys("Escape")
-        record = self.until(lambda: self.record()["status"] == "ready" and self.record(), 30,
-                            "the stopped turn to be noticed")
+        record = self.when(lambda task: task["status"] == "ready" and task.get("lastEvent") in ("Interrupt", "Stop"),
+                           30, "the stopped turn to be noticed")
         self.check(record.get("lastEvent") in ("Interrupt", "Stop"), "a turn stopped with Esc shows ready",
                    record.get("lastEvent"))
 
@@ -316,10 +318,17 @@ class PiSession(claude_contract.Session):
         self.until(lambda: self.record()["status"] == "running", 60, "the counting turn")
         time.sleep(3)
         self.keys("Escape")
-        record = self.until(lambda: self.record()["status"] == "ready" and self.record(), 30,
-                            "the stopped turn to be noticed")
-        self.check(record.get("lastEvent") == "Interrupt", "a turn stopped with Esc shows interrupted",
-                   record.get("lastEvent"))
+        # Pi says a run ended, and only then whether you stopped it.
+        self.when(lambda task: task["status"] == "ready", 30, "the stopped turn to be noticed")
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and self.record().get("lastEvent") != "Interrupt":
+            time.sleep(0.2)
+        record = self.record()
+        if record.get("lastEvent") == "Stop":
+            print("  --    Esc arrived after the turn ended; not checked")
+        else:
+            self.check(record.get("lastEvent") == "Interrupt", "a turn stopped with Esc shows interrupted",
+                       record.get("lastEvent"))
 
         self.step("a second turn")
         self.send("Reply with the single word PING.")

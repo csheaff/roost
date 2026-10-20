@@ -25,6 +25,13 @@ class CaptureTest(unittest.TestCase):
                     with self.subTest(capture=path.name, line=number, step=step):
                         self.assertEqual(then, entry.get("then"))
 
+    def test_captures_keep_no_tool_output_nor_another_sessions_words(self):
+        for path in sorted(agent_captures.CAPTURES.glob("*.jsonl")):
+            meta, entries = agent_captures.read(path)
+            for number, entry in enumerate(entries, 2):
+                with self.subTest(capture=path.name, line=number):
+                    self.assertEqual(entry, agent_captures.withhold(entry))
+
     def test_captures_name_nothing_of_this_machine(self):
         from pathlib import Path
         home = str(Path.home())

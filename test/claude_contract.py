@@ -223,6 +223,11 @@ class Session:
         raise RuntimeError("timed out after %ds waiting for %s; the agent's screen ends:\n%s"
                            % (seconds, what, self.screen()))
 
+    def when(self, condition, seconds, what):
+        """The task's record once CONDITION holds of it, tested and returned
+        as one read: with the relay, one status can pass through another."""
+        return self.until(lambda: (lambda task: condition(task) and task)(self.record()), seconds, what)
+
     def screen(self):
         lines = [line for line in self.pane().splitlines() if line.strip()]
         return "\n".join("        " + line[:100] for line in lines[-8:])
@@ -287,11 +292,15 @@ class Session:
         ask = "Run `python3 contract_check.py` once with your Bash tool, in the foreground, and reply with its output."
         self.step("approve a command")
         self.send(ask)
-        # With the relay, its report can say it waits before the hook says why.
-        record = self.until(lambda: (lambda task: task["status"] == "permission" and task.get("request") and task)(
-            self.record()), 60, "a permission request")
-        self.check(record.get("request") == "Asks to run python3 contract_check.py", "the request says what it asks",
-                   record.get("request"))
+        # With the relay, its report says it waits, in its own words, before
+        # the hook says what for.
+        asks = "Asks to run python3 contract_check.py"
+        try:
+            record = self.when(lambda task: task["status"] == "permission" and task.get("request") == asks,
+                               60, "a permission request")
+        except RuntimeError:
+            record = self.record()
+        self.check(record.get("request") == asks, "the request says what it asks", record.get("request"))
         self.until(lambda: "Do you want to proceed" in self.pane(), 20, "the permission dialog")
         self.keys("Enter")
         listed = self.until(lambda: (lambda task: task.get("lastEvent") == "Approved" and task)(self.listed()), 6,
@@ -306,7 +315,7 @@ class Session:
         self.until(lambda: self.record()["status"] == "permission", 60, "the second permission request")
         self.until(lambda: "Do you want to proceed" in self.pane(), 20, "the permission dialog")
         self.keys("Escape")
-        listed = self.until(lambda: (lambda task: task["status"] != "permission" and task)(self.listed()), 8,
+        listed = self.until(lambda: (lambda task: task["status"] == "ready" and task)(self.listed()), 8,
                             "the declined request to be noticed")
         self.check((listed["status"], listed.get("lastEvent")) == ("ready", "Interrupt"),
                    "a declined request shows ready", (listed["status"], listed.get("lastEvent")))

@@ -19,7 +19,10 @@ It is the task's record alone: a listing adds what the agent's transcript
 says, such as a turn stopped with Esc that Claude Code runs no hook for.
 
 Paths, session and message ids are replaced with stand-ins, so a capture
-names nothing of the machine it was recorded on.
+names nothing of the machine it was recorded on. What a tool returned is
+left out, as the helper never reads it, and so is all that another session
+of the agent says, such as Codex's memory agent working in
+~/.codex/memories: only its events stay, to show what Roost makes of them.
 """
 import datetime
 import importlib.util
@@ -45,6 +48,8 @@ RUN_ID = "run"
 # When a replay starts: times in a capture count from its first event, and
 # the helper takes a time of 0 for one it never noted.
 EPOCH = 1e9
+# What stands in for what a capture leaves out: see `withhold`.
+WITHHELD = "(left out of the capture)"
 # What each event's `then` records of the task.
 FIELDS = ("status", "lastEvent", "request", "error", "lastReply", "agentSession")
 # Ids an agent makes up, as a pattern and the stand-in's form.
@@ -90,8 +95,25 @@ def scrub(entries, task, store_root):
             entry["at"] -= start
         if "report" in entry and "receivedAt" in entry["report"]:
             entry["report"]["receivedAt"] -= start
-        scrubbed.append(entry)
+        scrubbed.append(withhold(entry))
     return scrubbed
+
+
+def withhold(entry):
+    """ENTRY, a scrubbed one, without what a tool returned, nor, from a
+    session of the agent outside the task's repository, what it said or did."""
+    hook = entry.get("hook")
+    if not isinstance(hook, dict):
+        return entry
+    hook = dict(hook)
+    if "tool_response" in hook:
+        hook["tool_response"] = WITHHELD
+    cwd = hook.get("cwd")
+    if isinstance(cwd, str) and not any(cwd == root or cwd.startswith(root + "/") for root in (WORKTREE, REPO)):
+        for key in ("prompt", "tool_input", "last_assistant_message", "message"):
+            if key in hook:
+                hook[key] = WITHHELD
+    return dict(entry, hook=hook)
 
 
 def replay(meta, entries):
