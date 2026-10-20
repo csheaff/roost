@@ -77,8 +77,11 @@ happened in a section below:
   matched by SHA-256, and `M-n`'s newest capture was the new one. Claude
   Haiku, given the drafted prompt and `--add-dir=` the attachments, read
   the frames without asking and named the misspelling the speech pointed
-  at. Claude on `claylien` couldn't run: its login had expired. Pen marks
-  are untried: computer use can't draw on Scrawl's overlay.
+  at. On `claylien`, Claude Code 2.1.304 did the same with `--add-dir`,
+  and without it was refused the frames and asked for that option. The
+  welcome tour's capture, 9.0 MB in 8 files, took 3.5 s to reach `claylien`
+  over the home network, with Emacs waiting. Pen marks are untried:
+  computer use can't draw on Scrawl's overlay.
 
 ## tmux-control's terminal interface — 2026-10-18
 
