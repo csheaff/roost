@@ -2024,6 +2024,21 @@ def send(task, text, force=False):
     return task
 
 
+def numbered(folder, stem, number, suffix):
+    """STEM-NUMBER.SUFFIX, its stem shortened, between characters, to fit
+    the longest name FOLDER takes."""
+    try:
+        limit = os.pathconf(folder, "PC_NAME_MAX")
+    except (OSError, ValueError):
+        limit = 255
+    tail = "-%d%s" % (number, suffix)
+    room = limit - len(tail.encode())
+    if room < 1:
+        # A suffix about as long as a name can be: keep the number alone.
+        return "%d" % number
+    return stem.encode()[:room].decode(errors="ignore") + tail
+
+
 def attach(store, task, files):
     """Copy FILES, each {"name": a relative path, "data": its bytes in base64},
     to the task's attachments on this host, where its agent can read them.
@@ -2059,7 +2074,7 @@ def attach(store, task, files):
                 break
             except FileExistsError:
                 number += 1
-                candidate = "%s-%d%s" % (stem, number, suffix)
+                candidate = numbered(folder, stem, number, suffix)
         chosen[top] = candidate
     # Decoding and writing a large attachment takes a while: hooks must not
     # wait on the registry lock meanwhile. The task stays, with its

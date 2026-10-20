@@ -126,6 +126,14 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual((shot.name, shot.read_bytes()), ("shot.png", b"\x89PNG"))
         self.assertEqual((bundle / "frames" / "frame-01.png").read_bytes(), b"1")
         self.assertEqual(stat.S_IMODE(shot.stat().st_mode), 0o600)
+        # A name as long as names go keeps to that with its number, cut
+        # between characters.
+        long = [dict(name="é" * 123 + "abcde.png", data=encode(b"x"))]
+        first, second = (Path(self.request("attach", id=task["id"], files=long)["result"]["paths"][0])
+                         for _ in range(2))
+        self.assertEqual(len(first.name.encode()), 255)
+        self.assertTrue(second.name.endswith("-2.png") and len(second.name.encode()) <= 255, second.name)
+        self.assertEqual(second.read_bytes(), b"x")
         # A name taken already gets a number, as a second clipboard image does.
         again = self.request("attach", id=task["id"], files=files[:2])["result"]["paths"]
         self.assertEqual([Path(path).name for path in again], ["shot-2.png", "a-2.scrawl"])
