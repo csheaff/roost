@@ -156,10 +156,15 @@ class Lifecycle(unittest.TestCase):
                     free.append(True)
                 except BlockingIOError:
                     free.append(False)
+            # But the task can't go meanwhile, leaving what is written after.
+            self.request("stop", id=task["id"])
+            free.append(self.request("forget", id=task["id"])["ok"])
             return decode(*args, **kwargs)
         with patch.object(roost.base64, "b64decode", decode_and_try_the_lock):
-            self.assertTrue(self.request("attach", id=task["id"], files=files[:1])["ok"])
-        self.assertEqual(free, [True])
+            reply = self.request("attach", id=task["id"], files=files[:1])
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(free, [True, False])
+        self.assertTrue(Path(reply["result"]["paths"][0]).exists())
         self.request("stop", id=task["id"])
         self.wait_for_pane_exit(task)
         self.assertTrue(self.request("forget", id=task["id"])["ok"])

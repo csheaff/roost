@@ -1764,8 +1764,10 @@ def attach(store, task, files):
                 candidate = "%s-%d%s" % (stem, number, suffix)
         chosen[top] = candidate
     # Decoding and writing a large attachment takes a while: hooks must not
-    # wait on the registry lock meanwhile.
-    with store.released():
+    # wait on the registry lock meanwhile. The task stays, with its
+    # attachments: removing it waits until they are written.
+    with holding_worktree(store, task, fcntl.LOCK_SH,
+                          "Roost is still removing this task; refresh in a moment"), store.released():
         try:
             for parts, encoded in entries:
                 try:
