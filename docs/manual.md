@@ -328,9 +328,10 @@ an attachment to the task's host in the background, under `attachments` in its
 state directory there, where the agent can read it. Meanwhile the draft shows
 `[Copying shot.png…]`, and you can go on writing; the path takes its place, or
 a note that it failed, which you delete before sending. `C-c C-c` waits until
-none is left copying. Claude
-reads a task's attachments without asking: Roost starts it with `--add-dir` for
-them. The copies go when the task does. For the folder of a [Scrawl](https://scrawl.kitlangton.com)
+none is left copying. Agents read a task's attachments without asking: Roost
+starts Claude with `--add-dir` for them, and gives OpenCode's own agents a rule
+allowing them, which comes after your permission settings, so those stand for
+every other folder. The copies go when the task does. For the folder of a [Scrawl](https://scrawl.kitlangton.com)
 capture (`M-n` at the prompt gives the newest), Roost copies all of it but its
 video and audio, and adds its summary. `M-x roost-attach` drafts a
 prompt with a file attached, or with the files marked in Dired.

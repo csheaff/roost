@@ -3824,21 +3824,51 @@ class ProgramStatus(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             store = roost.Store(root)
             agent = roost.OpenCodeAgent()
+            task = dict(id="0" * 16)
             plugin = agent.plugin(store).as_uri()
-            config = lambda env: json.loads(agent.environment(store, env)["OPENCODE_CONFIG_CONTENT"])
-            self.assertEqual(config({}), dict(plugin=[plugin]))
-            self.assertEqual(config(dict(OPENCODE_CONFIG_CONTENT='{"model": "m", "plugin": ["theirs"]}')),
-                             dict(model="m", plugin=["theirs", plugin]))
+            config = lambda env: json.loads(agent.environment(store, task, env)["OPENCODE_CONFIG_CONTENT"])
+            self.assertEqual(config({})["plugin"], [plugin])
+            mine = config(dict(OPENCODE_CONFIG_CONTENT='{"model": "m", "plugin": ["theirs"]}'))
+            self.assertEqual((mine["model"], mine["plugin"]), ("m", ["theirs", plugin]))
             for bad in ("{", "[]", '"x"'):
                 with self.assertRaises(roost.RoostError):
-                    agent.environment(store, dict(OPENCODE_CONFIG_CONTENT=bad))
+                    agent.environment(store, task, dict(OPENCODE_CONFIG_CONTENT=bad))
             # OPENCODE_PURE leaves plugins out, as --pure does.
             for pure in ("1", "true", "TRUE"):
                 with self.assertRaises(roost.RoostError):
-                    agent.environment(store, dict(OPENCODE_PURE=pure))
-            self.assertIn("OPENCODE_CONFIG_CONTENT", agent.environment(store, dict(OPENCODE_PURE="0")))
+                    agent.environment(store, task, dict(OPENCODE_PURE=pure))
+            self.assertIn("OPENCODE_CONFIG_CONTENT", agent.environment(store, task, dict(OPENCODE_PURE="0")))
             # The OpenCode Roost starts is a new one to report, even from another's shell.
-            self.assertEqual(agent.environment(store, dict(ROOST_OPENCODE_OBSERVER="42"))["ROOST_OPENCODE_OBSERVER"], "")
+            self.assertEqual(agent.environment(store, task, dict(ROOST_OPENCODE_OBSERVER="42"))["ROOST_OPENCODE_OBSERVER"], "")
+
+    def test_opencode_reads_its_tasks_attachments_without_asking(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = roost.Store(root)
+            agent = roost.OpenCodeAgent()
+            task = dict(id="1234567890abcdef")
+            folder = str(store.attachments(task["id"])) + "/*"
+            config = lambda env: json.loads(agent.environment(store, task, env)["OPENCODE_CONFIG_CONTENT"])
+            # Its own agents' rules, which follow your config's own and so
+            # leave a word you gave all outside folders to the rest.
+            agents = config({})["agent"]
+            self.assertEqual(set(agents), {"build", "plan", "general", "explore"})
+            self.assertEqual(agents["build"], dict(permission=dict(external_directory={folder: "allow"})))
+            self.assertNotIn("permission", config({}))
+            # Your inline config keeps what it says, and the folder comes last.
+            yours = dict(permission="deny", agent=dict(
+                build=dict(model="m", permission=dict(external_directory="deny", bash="ask")),
+                plan=dict(permission="allow"),
+                general=dict(permission=dict(external_directory={"/x/*": "allow"})),
+                mine=dict(permission="ask")))
+            agents = config(dict(OPENCODE_CONFIG_CONTENT=json.dumps(yours)))["agent"]
+            self.assertEqual(agents["build"], dict(model="m", permission=dict(
+                external_directory={"*": "deny", folder: "allow"}, bash="ask")))
+            self.assertEqual(agents["plan"]["permission"],
+                             {"*": "allow", "external_directory": {"*": "allow", folder: "allow"}})
+            self.assertEqual(list(agents["general"]["permission"]["external_directory"].items()),
+                             [("/x/*", "allow"), (folder, "allow")])
+            self.assertEqual(agents["mine"], dict(permission="ask"))
+            self.assertEqual(config(dict(OPENCODE_CONFIG_CONTENT=json.dumps(yours)))["permission"], "deny")
 
     def test_a_pi_dialog_at_startup_ends_no_turn(self):
         # It can open before Pi's first report, while its hooks still set

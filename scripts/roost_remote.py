@@ -918,6 +918,21 @@ export const RoostObserver = async () => {
 '''
 
 
+def allowing(permission, name, pattern):
+    """OpenCode PERMISSION, a word or rules, with NAME allowed for PATTERN
+    after what it already says. A word for everything, or for NAME, stays
+    the first rule, and the last that applies decides."""
+    if isinstance(permission, str):
+        permission = {"*": permission}
+    elif not isinstance(permission, dict):
+        permission = {}
+    rules = permission.get(name, permission.get("*"))
+    rules = {"*": rules} if isinstance(rules, str) else dict(rules) if isinstance(rules, dict) else {}
+    rules.pop(pattern, None)
+    rules[pattern] = "allow"
+    return dict(permission, **{name: rules})
+
+
 class OpenCodeAgent:
     """Observe OpenCode through a plugin named in its inline config, leaving
     the user's own config, plugins and permissions as they are."""
@@ -973,9 +988,14 @@ class OpenCodeAgent:
             argv.append("--prompt=" + task["prompt"])
         return argv
 
-    def environment(self, store, env):
+    # Its own agents, which a rule given them follows any in your config.
+    agents = ("build", "plan", "general", "explore")
+
+    def environment(self, store, task, env):
         """The inline config that loads the plugin, added to any the user set:
-        OpenCode merges it over their files rather than in place of them."""
+        OpenCode merges it over their files rather than in place of them.
+        It lets TASK's agents read its attachments, which OpenCode would
+        ask about, as outside its worktree."""
         if (env.get("OPENCODE_PURE") or "").lower() in ("1", "true", "yes", "on"):
             raise RoostError("OPENCODE_PURE leaves out every plugin, Roost's observer too; unset it for Roost's tasks")
         config = {}
@@ -988,6 +1008,15 @@ class OpenCodeAgent:
                 raise RoostError("Roost adds its observer to OPENCODE_CONFIG_CONTENT, which must be a JSON object")
         plugins = config.get("plugin") if isinstance(config.get("plugin"), list) else []
         config["plugin"] = plugins + [self.plugin(store).as_uri()]
+        # Given each agent, not as config's own permission, which would take
+        # the place of a one-word setting in your files; an agent's rules
+        # follow those, and the last that applies decides.
+        attachments = str(store.attachments(task["id"])) + "/*"
+        agents = config.get("agent") if isinstance(config.get("agent"), dict) else {}
+        config["agent"] = agents
+        for name in self.agents:
+            agent = agents.get(name) if isinstance(agents.get(name), dict) else {}
+            agents[name] = dict(agent, permission=allowing(agent.get("permission"), "external_directory", attachments))
         # Its plugin marks the OpenCode that reports; one Roost starts, as
         # from another task's shell, is a new one.
         return {"OPENCODE_CONFIG_CONTENT": json.dumps(config), "ROOST_OPENCODE_OBSERVER": ""}
@@ -3550,7 +3579,7 @@ def runner(root, task_id, run_id, resume_conversation=False):
             agent = agent_for(task)
             argv = agent.launch(store, task, resume_conversation)
             # What the agent alone needs in its environment, as to load an observer.
-            agent_env = dict(env, **(agent.environment(store, env) if hasattr(agent, "environment") else {}))
+            agent_env = dict(env, **(agent.environment(store, task, env) if hasattr(agent, "environment") else {}))
         setup = text(task.get("setup"))
         # Resume reruns setup only when the first run never finished it.
         if setup and (not resume_conversation or task.get("setupComplete") is False):

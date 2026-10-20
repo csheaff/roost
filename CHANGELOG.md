@@ -11,9 +11,10 @@ Since 0.9.0:
   host in the background, so an agent on another machine can read it too,
   and puts its path in the prompt once there. A [Scrawl](https://scrawl.kitlangton.com) capture's
   folder brings all of it but its video and audio, and its summary. `M-x roost-attach`
-  starts a draft with a file, or Dired's marked files. Claude reads a
-  task's attachments without asking; a task already running when you
-  upgrade asks until you stop and resume it (`K`, then `s`).
+  starts a draft with a file, or Dired's marked files. Claude and
+  OpenCode read a task's attachments without asking; a task already
+  running when you upgrade asks until you stop and resume it (`K`, then
+  `s`).
 - [OpenCode](https://opencode.ai) is a fourth agent, `"opencode"` in
   `roost-agent-commands` and `roost-default-agent`. Its tasks show the
   same statuses as the others, from a plugin Roost names in OpenCode's
