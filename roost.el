@@ -2907,7 +2907,8 @@ worktree."
   (let ((default-directory (if (file-remote-p default-directory)
                                (expand-file-name "~/")
                              default-directory)))
-    (read-file-name "Attach file or Scrawl capture: " nil (roost--scrawl-latest) t)))
+    ;; Expanded here, where a name you typed was meant.
+    (expand-file-name (read-file-name "Attach file or Scrawl capture: " nil (roost--scrawl-latest) t))))
 
 (defun roost-send-attach (file)
   "Attach FILE to the drafted prompt.
@@ -2949,7 +2950,8 @@ them all before copying any."
   (interactive (list (if (derived-mode-p 'dired-mode)
                          (dired-get-marked-files)
                        (roost--read-attachment))))
-  (when (stringp files) (setq files (list files)))
+  ;; Expanded here: the draft has a directory of its own.
+  (setq files (mapcar #'expand-file-name (if (stringp files) (list files) files)))
   (mapc #'roost--attachment-files files)
   (setq task (roost--choose task))
   (roost--send-draft task)

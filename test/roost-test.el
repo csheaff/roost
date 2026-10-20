@@ -4632,13 +4632,37 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
    (let (asked-in)
      (cl-letf (((symbol-function 'roost--scrawl-latest) #'ignore)
                ((symbol-function 'read-file-name)
-                (lambda (&rest _) (setq asked-in default-directory) "/x")))
+                ;; A name typed in place of the directory shown.
+                (lambda (&rest _) (setq asked-in default-directory) "shot.png")))
        (let ((default-directory "/ssh:dev:/home/user/work/fix auth/"))
-         (roost--read-attachment))
+         (should (equal (roost--read-attachment) (expand-file-name "~/shot.png"))))
        (should-not (file-remote-p asked-in))
        (let ((default-directory "/tmp/"))
-         (roost--read-attachment))
+         (should (equal (roost--read-attachment) "/tmp/shot.png")))
        (should (equal asked-in "/tmp/"))))))
+
+(ert-deftest roost-attach-finds-a-relative-name-where-it-was-given ()
+  (roost-test--isolated
+   (roost-test--with-send-buffers
+    (let* ((task (roost--cache-task "dev" (roost-test--task)))
+           (here (file-name-as-directory (make-temp-file "here" t)))
+           (elsewhere (file-name-as-directory (make-temp-file "elsewhere" t)))
+           sent)
+      (unwind-protect
+          (progn
+            (write-region "here" nil (expand-file-name "shot.png" here))
+            (write-region "elsewhere" nil (expand-file-name "shot.png" elsewhere))
+            (roost-test--attaching sent
+              ;; A draft begun elsewhere, which the attachment joins.
+              (with-current-buffer (progn (roost--send-draft task) (current-buffer))
+                (setq default-directory elsewhere))
+              (cl-letf (((symbol-function 'roost--choose) (lambda (&optional _) task)))
+                (with-temp-buffer
+                  (setq default-directory here)
+                  (roost-attach "shot.png"))))
+            (should (equal sent '(("shot.png" . "here")))))
+        (delete-directory here t)
+        (delete-directory elsewhere t))))))
 
 (ert-deftest roost-send-attach-image-copies-the-clipboard-image ()
   (roost-test--isolated
