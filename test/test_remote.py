@@ -152,6 +152,12 @@ class Lifecycle(unittest.TestCase):
                                       files=[dict(name="new.png", data="AA=="),
                                              dict(name="bad.png", data="not base64!")])["ok"])
         self.assertEqual(sorted(path.name for path in shot.parent.iterdir()), before)
+        # Nor of the names taken before one too long to take.
+        reply = self.request("attach", id=task["id"], files=[dict(name="ok.png", data="AA=="),
+                                                             dict(name="x" * 300 + ".png", data="AA==")])
+        self.assertFalse(reply["ok"])
+        self.assertIn("Can't attach", reply["error"])
+        self.assertEqual(sorted(path.name for path in shot.parent.iterdir()), before)
         # Hooks aren't held while a large attachment is written.
         decode = base64.b64decode
         free = []

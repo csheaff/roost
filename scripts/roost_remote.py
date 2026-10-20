@@ -2062,20 +2062,35 @@ def attach(store, task, files):
     folder = store.attachments(task["id"])
     folder.mkdir(mode=0o700, parents=True, exist_ok=True)
     chosen = {}
-    for top, is_folder in folders.items():
-        stem, suffix = os.path.splitext(top)
-        candidate, number = top, 1
-        while True:
-            try:
-                if is_folder:
-                    (folder / candidate).mkdir(mode=0o700)
-                else:
-                    os.close(os.open(folder / candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
-                break
-            except FileExistsError:
-                number += 1
-                candidate = numbered(folder, stem, number, suffix)
-        chosen[top] = candidate
+
+    def discard():
+        """What this request reserved or wrote, should it fail."""
+        for name in chosen.values():
+            if (folder / name).is_dir():
+                shutil.rmtree(folder / name, ignore_errors=True)
+            else:
+                with contextlib.suppress(OSError):
+                    (folder / name).unlink()
+    try:
+        for top, is_folder in folders.items():
+            stem, suffix = os.path.splitext(top)
+            candidate, number = top, 1
+            while True:
+                try:
+                    if is_folder:
+                        (folder / candidate).mkdir(mode=0o700)
+                    else:
+                        os.close(os.open(folder / candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+                    break
+                except FileExistsError:
+                    number += 1
+                    candidate = numbered(folder, stem, number, suffix)
+                except OSError as error:
+                    raise RoostError("Can't attach %s: %s" % (top, error.strerror or error))
+            chosen[top] = candidate
+    except BaseException:
+        discard()
+        raise
     # Decoding and writing a large attachment takes a while: hooks must not
     # wait on the registry lock meanwhile. The task stays, with its
     # attachments: removing it waits until they are written.
@@ -2092,12 +2107,7 @@ def attach(store, task, files):
                 with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "wb") as output:
                     output.write(data)
         except BaseException:
-            for name in chosen.values():
-                if (folder / name).is_dir():
-                    shutil.rmtree(folder / name, ignore_errors=True)
-                else:
-                    with contextlib.suppress(OSError):
-                        (folder / name).unlink()
+            discard()
             raise
     return {"paths": [str(folder / name) for name in chosen.values()]}
 
