@@ -4657,6 +4657,26 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
         (should (string-match-p "delete its note, then attach it again"
                                 (cadr (should-error (roost-send-submit) :type 'user-error)))))))))
 
+(ert-deftest roost-scrawl-summary-names-the-copy-wherever-the-capture-was ()
+  (roost-test--isolated
+   (let* ((parent (file-name-as-directory (make-temp-file "captures" t)))
+          (capture (expand-file-name "a.scrawl" parent))
+          (link (expand-file-name "link.scrawl" parent)))
+     (unwind-protect
+         (progn
+           (make-directory capture)
+           (make-symbolic-link capture link)
+           ;; Made elsewhere, and moved since.
+           (should (equal (roost--scrawl-summary-at
+                           "[scrawl 0:05 · TextEdit “notes.txt” · /Users/me/old/a.scrawl]\n- #1 (0:01) “Look”"
+                           capture "/host/a/a.scrawl")
+                          "[scrawl 0:05 · TextEdit “notes.txt” · /host/a/a.scrawl]\n- #1 (0:01) “Look”"))
+           ;; Reached through a link, with the true name written.
+           (should (equal (roost--scrawl-summary-at
+                           (format "Frames in %s/frames" (file-truename capture)) link "/host/a/link.scrawl")
+                          "Frames in /host/a/link.scrawl/frames")))
+       (delete-directory parent t)))))
+
 (ert-deftest roost-attach-refuses-a-file-not-on-this-machine ()
   (roost-test--isolated
    ;; Read over SSH only to be copied back, and while you wait.

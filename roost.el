@@ -2806,9 +2806,20 @@ contact sheet and frames are, and its summary."
                                   path
                                 (concat (format "A Scrawl recording of my screen, in %s: contact-sheet.png shows its keyframes, numbered as below, each in frames/; scrawl.json has the rest.\n\n"
                                                 path)
-                                        (string-replace (directory-file-name (expand-file-name file))
-                                                        path summary)))))
+                                        (roost--scrawl-summary-at summary file path)))))
                    failure)))
+
+(defun roost--scrawl-summary-at (summary capture path)
+  "SUMMARY of Scrawl CAPTURE, naming its copy at PATH instead.
+Its first line names the capture where Scrawl made it, which may have
+moved since, or been reached through a link."
+  (dolist (name (delete-dups
+                 (delq nil (list (and (string-match "\\`\\[scrawl .* · \\(/[^]\n]*\\.scrawl\\)\\]" summary)
+                                      (match-string 1 summary))
+                                 (directory-file-name (expand-file-name capture))
+                                 (directory-file-name (file-truename capture)))))
+           summary)
+    (setq summary (string-replace name path summary))))
 
 (defconst roost--clipboard-png-script
   "on run argv
