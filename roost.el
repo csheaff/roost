@@ -2781,6 +2781,10 @@ Call SUCCESS with their path there, or FAILURE with a message.  NAMES
 share a first part, a file's or a folder's, which the host may number to
 keep it apart from those already there."
   (let ((size (apply #'+ (mapcar (lambda (file) (length (cdr file))) files))))
+    ;; What was read, which may have grown since it was looked at.
+    (when (> size roost--attach-limit)
+      (user-error "The attachment is %s; Roost attaches up to %s at once"
+                  (file-size-human-readable size) (file-size-human-readable roost--attach-limit)))
     (roost--request (roost--field task 'host) "attach"
                     `((id . ,(roost--field task 'id))
                       (files . ,(vconcat
@@ -2984,9 +2988,6 @@ The copies go when the task does."
 
 (defun roost--send-attach-png (png)
   "Attach PNG, an image's bytes, to the draft."
-  (when (> (length png) roost--attach-limit)
-    (user-error "The image is %s; Roost attaches up to %s at once"
-                (file-size-human-readable (length png)) (file-size-human-readable roost--attach-limit)))
   (roost--send-attach-start (roost--attaching-task) "the image"
                             (lambda (task success failure)
                               (roost--attach-image task png success failure))))

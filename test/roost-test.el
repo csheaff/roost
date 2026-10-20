@@ -4752,6 +4752,22 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
                                                         :type 'user-error)))))
         (delete-directory parent t))))))
 
+(ert-deftest roost-attach-measures-what-it-read ()
+  (roost-test--isolated
+   (let ((file (make-temp-file "growing" nil ".log" "12")) asked)
+     (unwind-protect
+         (cl-letf (((symbol-function 'roost--request) (lambda (&rest _) (setq asked t))))
+           (let* ((roost--attach-limit 4)
+                  (entries (roost--attachment-files file)))
+             ;; It grew while you chose a task.
+             (write-region "123456" nil file)
+             (should (string-match-p "The attachment is"
+                                     (cadr (should-error (roost--attach-file (roost-test--task) file entries
+                                                                             #'ignore #'ignore)
+                                                         :type 'user-error))))
+             (should-not asked)))
+       (delete-file file)))))
+
 (ert-deftest roost-attach-measures-what-a-link-points-to ()
   (roost-test--isolated
    ;; Bigger than the limit, and the link, which holds its name, is not.
