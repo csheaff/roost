@@ -2745,6 +2745,10 @@ which an agent can be given by its path, or more than
   (let* ((files (roost--attachment-entries file))
          ;; What a link points to, which is what Roost reads.
          (size (apply #'+ (mapcar (lambda (entry)
+                                    ;; Not a pipe, say, which reading would
+                                    ;; wait on, with Emacs.
+                                    (unless (file-regular-p (cdr entry))
+                                      (user-error "Can't read %s as a file" (cdr entry)))
                                     (file-attribute-size
                                      (or (file-attributes (file-truename (cdr entry)))
                                          (user-error "Can't read %s" (cdr entry)))))

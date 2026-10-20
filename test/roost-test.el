@@ -4768,6 +4768,24 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
              (should-not asked)))
        (delete-file file)))))
 
+(ert-deftest roost-attach-refuses-what-isnt-a-file ()
+  (roost-test--isolated
+   (let* ((parent (make-temp-file "captures" t))
+          (pipe (expand-file-name "pipe.png" parent))
+          (capture (expand-file-name "a.scrawl" parent)))
+     (unwind-protect
+         (progn
+           (should (zerop (call-process "mkfifo" nil nil nil pipe)))
+           (should (string-match-p "Can.t read .*pipe.png as a file"
+                                   (cadr (should-error (roost--attachment-files pipe) :type 'user-error))))
+           ;; Nor among a capture's frames.
+           (make-directory (expand-file-name "frames" capture) t)
+           (dolist (name '("scrawl.json" "summary.md"))
+             (write-region name nil (expand-file-name name capture)))
+           (should (zerop (call-process "mkfifo" nil nil nil (expand-file-name "frames/frame-01.png" capture))))
+           (should-error (roost--attachment-files capture) :type 'user-error))
+       (delete-directory parent t)))))
+
 (ert-deftest roost-attach-measures-what-a-link-points-to ()
   (roost-test--isolated
    ;; Bigger than the limit, and the link, which holds its name, is not.
