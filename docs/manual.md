@@ -328,8 +328,8 @@ an attachment to the task's host, under `attachments` in its state directory
 there, where the agent can read it, and adds its path to the prompt. Claude
 reads a task's attachments without asking: Roost starts it with `--add-dir` for
 them. The copies go when the task does. For the folder of a [Scrawl](https://scrawl.kitlangton.com)
-capture (`M-n` at the prompt gives the newest), Roost copies its summary,
-contact sheet and keyframes, and adds the summary. `M-x roost-attach` drafts a
+capture (`M-n` at the prompt gives the newest), Roost copies all of it but its
+video and audio, and adds its summary. `M-x roost-attach` drafts a
 prompt with a file attached, or with the files marked in Dired.
 
 In the new task draft: `C-c C-c` creates, `C-c C-k` cancels, and `C-c C-p`,

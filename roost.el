@@ -2690,9 +2690,9 @@ chosen one.  A draft already begun keeps its text, and the quote follows."
 (defconst roost--attach-limit (* 64 1024 1024)
   "Most bytes Roost copies to a host for one attachment.")
 
-(defconst roost--scrawl-files '("summary.md" "scrawl.json" "contact-sheet.png" "frames")
-  "What an agent reads of a Scrawl capture.
-Its video, audio and uncropped frames, nearly all of its size, stay.")
+(defconst roost--scrawl-media '("mp4" "mov" "m4v" "wav" "m4a" "caf" "aac" "mp3")
+  "Extensions of what Roost leaves of a Scrawl capture: video and audio.
+They are most of its size, and an agent reads its frames instead.")
 
 (defun roost--scrawl-capture-p (file)
   "Non-nil if FILE is the folder of a Scrawl capture."
@@ -2718,9 +2718,10 @@ Its video, audio and uncropped frames, nearly all of its size, stay.")
 
 (defun roost--attachment-files (file)
   "The files to copy for FILE, as (NAME . LOCAL-FILE).
-A Scrawl capture gives its folder's name and what of it an agent
-reads; see `roost--scrawl-files'.  Signal a `user-error' for what Roost
-won't attach: a folder, or more than `roost--attach-limit' bytes."
+A Scrawl capture gives its folder's name and the files in it but its
+video and audio; see `roost--scrawl-media'.  Signal a `user-error' for
+what Roost won't attach: a folder, or more than `roost--attach-limit'
+bytes."
   (setq file (directory-file-name (expand-file-name file)))
   (let* ((files (roost--attachment-entries file))
          ;; What a link points to, which is what Roost reads.
@@ -2736,17 +2737,13 @@ won't attach: a folder, or more than `roost--attach-limit' bytes."
   "The files to copy for FILE, an absolute name; see `roost--attachment-files'."
   (cond ((roost--scrawl-capture-p file)
          (let ((top (file-name-nondirectory file)))
-           (mapcan (lambda (name)
-                     (let ((path (expand-file-name name file)))
-                       (cond ((file-regular-p path)
-                              (list (cons (concat top "/" name) path)))
-                             ((file-directory-p path)
-                              (mapcar (lambda (frame)
-                                        (cons (concat top "/" name "/" (file-name-nondirectory frame))
-                                              frame))
-                                      (seq-filter #'file-regular-p
-                                                  (directory-files path t "\\`[^.]")))))))
-                   roost--scrawl-files)))
+           ;; Not hidden ones either, as Scrawl's own marks.
+           (mapcan (lambda (path)
+                     (unless (or (member (downcase (or (file-name-extension path) "")) roost--scrawl-media)
+                                 (string-prefix-p "." (file-name-nondirectory path)))
+                       (list (cons (concat top "/" (file-relative-name path file)) path))))
+                   (directory-files-recursively
+                    file "" nil (lambda (folder) (not (string-prefix-p "." (file-name-nondirectory folder))))))))
         ((file-directory-p file)
          (user-error "Roost attaches files and Scrawl captures, not folders"))
         ((file-readable-p file) (list (cons (file-name-nondirectory file) file)))
@@ -2784,9 +2781,11 @@ sheet and frames are, and its summary."
         path
       (concat (format "A Scrawl recording of my screen, in %s: contact-sheet.png shows its keyframes, numbered as below, each in frames/; scrawl.json has the rest.\n\n"
                       path)
-              (string-trim (with-temp-buffer
-                             (insert-file-contents (expand-file-name "summary.md" file))
-                             (buffer-string)))))))
+              ;; Which names the capture where it was made.
+              (string-replace (directory-file-name (expand-file-name file)) path
+                              (string-trim (with-temp-buffer
+                                             (insert-file-contents (expand-file-name "summary.md" file))
+                                             (buffer-string))))))))
 
 (defconst roost--clipboard-png-script
   "on run argv

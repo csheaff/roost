@@ -66,7 +66,19 @@ happened in a section below:
   `make contract-live` passed with it; one run alongside `make test` timed out
   waiting for an interrupted turn to be noticed, and passed when rerun alone,
   as `main` did.
-- **Not yet tried:** a capture from Scrawl itself.
+- **Real Scrawl captures.** Two made with Scrawl on this Mac: one from its
+  welcome tour, one recorded through computer use (TextEdit, a click, and a
+  sentence spoken by `say` that Scrawl transcribed). They differed from
+  what Roost assumed: the summary names the capture's folder on this Mac,
+  and says the uncropped frames are in `frames-full/`, which Roost left
+  behind. Roost now copies all of a capture but its video and audio (3.4 MB
+  of this one's 12) and puts the copy's path in the summary. Attached on
+  this Mac and on `claylien` with scratch state directories, the copies
+  matched by SHA-256, and `M-n`'s newest capture was the new one. Claude
+  Haiku, given the drafted prompt and `--add-dir=` the attachments, read
+  the frames without asking and named the misspelling the speech pointed
+  at. Claude on `claylien` couldn't run: its login had expired. Pen marks
+  are untried: computer use can't draw on Scrawl's overlay.
 
 ## tmux-control's terminal interface — 2026-10-18
 

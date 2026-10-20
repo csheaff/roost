@@ -4497,7 +4497,7 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
               (delete-directory directory)))
         (delete-file file))))))
 
-(ert-deftest roost-attach-copies-what-an-agent-reads-of-a-scrawl-capture ()
+(ert-deftest roost-attach-copies-a-scrawl-capture-but-its-video-and-audio ()
   (roost-test--isolated
    (roost-test--with-send-buffers
     (let* ((task (roost--cache-task "dev" (roost-test--task)))
@@ -4508,20 +4508,29 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
           (progn
             (dolist (name '("frames" "frames-full"))
               (make-directory (expand-file-name name bundle) t))
+            ;; As Scrawl 2026-10 makes one, with a mark it leaves itself.
             (dolist (name '("scrawl.json" "contact-sheet.png" "frames/frame-01.png"
-                            "frames-full/frame-01.png" "contact-sheet-full.png" "recording.mov"))
+                            "frames-full/frame-01.png" "contact-sheet-full.png" "recording.mp4"
+                            "audio.wav" ".pinned"))
               (write-region name nil (expand-file-name name bundle)))
-            (write-region "- #1 (0:01) \"This badge collides.\"\n\n" nil (expand-file-name "summary.md" bundle))
+            (write-region (format "[scrawl 0:05 · %s]\nCropped to: Claude (full frames in frames-full/)\n- #1 (0:01) \"This badge collides.\"\n\n"
+                                  bundle)
+                          nil (expand-file-name "summary.md" bundle))
             (cl-letf (((symbol-function 'roost--choose) (lambda (&optional _) task)))
               (roost-test--attaching sent
                 (roost-attach bundle)))
             (should (equal (sort (mapcar #'car sent) #'string<)
-                           '("20261019-101500.scrawl/contact-sheet.png"
+                           '("20261019-101500.scrawl/contact-sheet-full.png"
+                             "20261019-101500.scrawl/contact-sheet.png"
+                             "20261019-101500.scrawl/frames-full/frame-01.png"
                              "20261019-101500.scrawl/frames/frame-01.png"
                              "20261019-101500.scrawl/scrawl.json"
                              "20261019-101500.scrawl/summary.md")))
             (with-current-buffer "*roost send: fix auth*"
               (should (string-match-p "in /host/a/20261019-101500.scrawl: contact-sheet.png" (buffer-string)))
+              ;; Its summary names the copy, not the capture on this machine.
+              (should (string-match-p "\\[scrawl 0:05 · /host/a/20261019-101500.scrawl\\]" (buffer-string)))
+              (should-not (string-match-p (regexp-quote parent) (buffer-string)))
               (should (string-suffix-p "\"This badge collides.\"" (buffer-string)))))
         (delete-directory parent t))))))
 
