@@ -6,6 +6,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.9.0:
 
+- A Codex task with Codex's memories on no longer shows ready in the middle
+  of a turn, or resumes the wrong conversation with `s`. Codex runs its
+  memory agent as a session of its own beside the task's, and Roost took its
+  events for the task's; it now counts only sessions in the task's worktree.
+  Nothing to do when upgrading.
 - Start a task from more places. `roost-new-task` on an error in a
   compilation buffer, or a match in a grep buffer, quotes that line. With
   Embark, `roost-new-task-from-region`, `-from-file`, `-from-url` and

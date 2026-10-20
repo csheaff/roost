@@ -659,6 +659,19 @@ class CodexAgent:
             argv += ["--", task["prompt"]]
         return argv
 
+    def concerns(self, task, payload):
+        """Whether hook PAYLOAD is about TASK's conversation. Codex runs other
+        sessions of its own in the same process, as its memory agent in
+        ~/.codex/memories, and Roost's hooks report them too; the task's,
+        and its subagents', work in its worktree."""
+        cwd = payload.get("cwd")
+        if not isinstance(cwd, str) or not cwd or not isinstance(task.get("worktree"), str):
+            return True
+        try:
+            return Path(cwd).resolve().is_relative_to(Path(task["worktree"]).resolve())
+        except (OSError, ValueError):
+            return True
+
     def observe(self, payload, current=None):
         event = payload.get("hook_event_name")
         status = {"SessionStart": "ready", "SessionEnd": "exited", "UserPromptSubmit": "running",
@@ -3194,7 +3207,8 @@ def update_hook(store, task_id, payload, run_id=None):
             task["agentWorktrees"] = (task.get("agentWorktrees") or []) + [made]
             store.save(task)
         agent = agent_for(task)
-        updates = agent.observe(payload, before)
+        concerns = getattr(agent, "concerns", None)
+        updates = agent.observe(payload, before) if not concerns or concerns(task, payload) else None
         if updates:
             asks = updates.get("status", before) == "permission"
             relayed = task.get("programStatusRun") == task.get("runId")

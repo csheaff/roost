@@ -3803,6 +3803,30 @@ class ProgramStatus(unittest.TestCase):
             finish()
             self.assertEqual(store.read("0" * 16)["status"], "running")
 
+    def test_codex_sessions_outside_the_worktree_are_not_the_tasks(self):
+        # With memories on, Codex runs its memory agent as a session of its
+        # own in the same process, and Roost's hooks report it too.
+        with tempfile.TemporaryDirectory() as root:
+            store = roost.Store(root)
+            worktree = Path(root) / "w"
+            (worktree / "sub").mkdir(parents=True)
+            store.save(dict(id="0" * 16, agent="codex", worktree=str(worktree), status="starting", runId="run"))
+            hook = lambda event, session, cwd: roost.update_hook(
+                store, "0" * 16, dict(hook_event_name=event, session_id=session, cwd=str(cwd)), "run")
+            hook("SessionStart", "task", worktree)
+            hook("UserPromptSubmit", "task", worktree)
+            memories = Path(root) / "home/.codex/memories"
+            for event in ("SessionStart", "UserPromptSubmit", "Stop"):
+                hook(event, "memory", memories)
+            task = store.read("0" * 16)
+            self.assertEqual((task["status"], task["agentSession"]), ("running", "task"))
+            # Its own subagents, in a folder of the worktree, are the task's.
+            hook("Stop", "task", worktree / "sub")
+            self.assertEqual(store.read("0" * 16)["status"], "ready")
+            # A new conversation in the worktree, as with /new, is the task's.
+            hook("SessionStart", "next", worktree)
+            self.assertEqual(store.read("0" * 16)["agentSession"], "next")
+
     def test_pi_dialogs_wait_on_you(self):
         pi = roost.PiAgent()
         asks = pi.observe(dict(event="ui_prompt_start", title="Allow\x1b[2J\n bash?‮"), "running")

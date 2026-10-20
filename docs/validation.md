@@ -53,7 +53,9 @@ runs on the Mac, each passing every check:
   memory agent runs as a session of its own in the same Codex, in
   `~/.codex/memories`, and Roost's hooks report it too: its `SessionStart`
   showed the task ready in the middle of a turn, and its events took over
-  the task's session. That is not fixed yet; the relayed capture keeps it.
+  the task's session. Roost now leaves out a Codex session whose `cwd` is
+  outside the task's worktree, and the relayed capture shows the task
+  running on its own session throughout.
 - Pi 1.3.0 on LM Studio's qwen3.6-35b-a3b (49152 tokens of context): a turn,
   Esc and another turn.
 
