@@ -80,7 +80,9 @@ happened in a section below:
   at. On `claylien`, Claude Code 2.1.304 did the same with `--add-dir`,
   and without it was refused the frames and asked for that option. The
   welcome tour's capture, 9.0 MB in 8 files, took 3.5 s to reach `claylien`
-  over the home network, with Emacs waiting. Pen marks are untried:
+  over the home network, with Emacs waiting. Copied in the background since,
+  `roost-send-attach` returned in 0.04 s, showing `[Copying …]`, and the
+  path took its place 2.1 s later. Pen marks are untried:
   computer use can't draw on Scrawl's overlay.
 
 ## tmux-control's terminal interface — 2026-10-18

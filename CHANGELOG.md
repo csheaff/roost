@@ -8,8 +8,8 @@ Since 0.9.0:
 
 - Attach files to a prompt: in its draft, `C-c C-a` attaches a file and
   `C-c C-v` the image on the clipboard. Roost copies each to the task's
-  host, so an agent on another machine can read it too, and adds its path
-  to the prompt. A [Scrawl](https://scrawl.kitlangton.com) capture's
+  host in the background, so an agent on another machine can read it too,
+  and puts its path in the prompt once there. A [Scrawl](https://scrawl.kitlangton.com) capture's
   folder brings all of it but its video and audio, and its summary. `M-x roost-attach`
   starts a draft with a file, or Dired's marked files. Claude reads a
   task's attachments without asking; a task already running when you

@@ -3338,7 +3338,7 @@ Read from the layout transient keeps, whose form varies by version."
           (fail-with nil))
      (puthash (list "dev" "~/state") filename roost--installed)
      (cl-letf (((symbol-function 'roost--run)
-                (lambda (_host code _input success fail)
+                (lambda (_host code _input success fail &optional _timeout)
                   (push code codes)
                   (if (and fail-with (string-match-p "runpy" code))
                       (funcall fail (pop fail-with))
@@ -4531,17 +4531,17 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
               ;; Its summary names the copy, not the capture on this machine.
               (should (string-match-p "\\[scrawl 0:05 · /host/a/20261019-101500.scrawl\\]" (buffer-string)))
               (should-not (string-match-p (regexp-quote parent) (buffer-string)))
-              (should (string-suffix-p "\"This badge collides.\"" (buffer-string)))))
+              (should (string-suffix-p "\"This badge collides.\"\n" (buffer-string)))))
         (delete-directory parent t))))))
 
-(ert-deftest roost-attach-checks-every-file-first-and-keeps-what-it-copied ()
+(ert-deftest roost-attach-checks-every-file-first-and-notes-a-failed-copy ()
   (roost-test--isolated
    (roost-test--with-send-buffers
     (let ((task (roost--cache-task "dev" (roost-test--task)))
           (one (make-temp-file "one" nil ".png" "1"))
           (two (make-temp-file "two" nil ".png" "2"))
           (folder (make-temp-file "plain" t))
-          (calls 0) sent)
+          (calls 0) sent said)
       (unwind-protect
           (cl-letf (((symbol-function 'roost--choose) (lambda (&optional _) task)))
             ;; A folder among them: nothing is copied.
@@ -4549,21 +4549,70 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
               (should-error (roost-attach (list one folder)) :type 'user-error))
             (should-not sent)
             (should-not (get-buffer "*roost send: fix auth*"))
-            ;; The second copy fails: the draft holds the first.
+            ;; The second copy fails: the draft holds the first, and says so of the second.
             (cl-letf (((symbol-function 'pop-to-buffer) #'set-buffer)
+                      ((symbol-function 'message)
+                       (lambda (format &rest args) (when format (setq said (apply #'format format args)))))
                       ((symbol-function 'roost--request)
-                       (lambda (_host _action params success failure)
+                       (lambda (_host _action params success failure &rest _)
                          (if (= (cl-incf calls) 1)
                              (funcall success `((paths . (,(concat "/host/a/" (alist-get 'name (aref (alist-get 'files params) 0)))))))
                            (funcall failure "Disk full")))))
-              (should-error (roost-attach (list one two)) :type 'user-error))
+              (roost-attach (list one two)))
+            (should (string-match-p "Disk full" said))
             (with-current-buffer "*roost send: fix auth*"
-              (should (string-match-p (regexp-quote (concat "/host/a/" (file-name-nondirectory one)))
-                                      (buffer-string)))
-              (should-not (string-match-p (regexp-quote (file-name-nondirectory two)) (buffer-string)))))
+              ;; A line to write on, above them.
+              (should (= (point) (point-min)))
+              (should (equal (buffer-string)
+                             (format "\n\n/host/a/%s\n[Not attached: %s: Disk full]\n"
+                                     (file-name-nondirectory one) (file-name-nondirectory two))))
+              (insert "Look")
+              (should-error (roost-send-submit) :type 'user-error)
+              ;; Once you delete the note, it sends.
+              (goto-char (point-max))
+              (forward-line -1)
+              (delete-region (point) (point-max))
+              (cl-letf (((symbol-function 'roost--request)
+                         (lambda (_host _action params success &rest _)
+                           (setq sent (alist-get 'text params))
+                           (funcall success (roost-test--task)))))
+                (roost-send-submit))
+              (should (equal sent (format "Look\n\n/host/a/%s" (file-name-nondirectory one))))))
         (delete-file one)
         (delete-file two)
         (delete-directory folder))))))
+
+(ert-deftest roost-send-attach-copies-in-the-background ()
+  (roost-test--isolated
+   (roost-test--with-send-buffers
+    (let ((task (roost--cache-task "dev" (roost-test--task)))
+          (file (make-temp-file "shot" nil ".png" "1"))
+          done timeout)
+      (unwind-protect
+          (cl-letf (((symbol-function 'pop-to-buffer) #'set-buffer)
+                    ((symbol-function 'roost--request)
+                     (lambda (_host _action _params success _failure &optional seconds)
+                       (setq done success timeout seconds))))
+            (roost--send-draft task)
+            (insert "Look at ")
+            (roost-send-attach file)
+            ;; You write on while it copies, with time for a slow link.
+            (should (string-match-p "\\[Copying shot.*\\.png…\\]\n\\'" (buffer-string)))
+            (should (>= timeout roost-request-timeout))
+            (insert "this")
+            (should-error (roost-send-submit) :type 'user-error)
+            (funcall done '((paths . ("/host/a/shot.png"))))
+            (should (equal (buffer-string) "Look at \n/host/a/shot.png\nthis"))
+            (should (eobp))
+            ;; Deleted meanwhile, or its draft closed: nothing to put back.
+            (roost-send-attach file)
+            (erase-buffer)
+            (funcall done '((paths . ("/host/a/shot-2.png"))))
+            (should (equal (buffer-string) ""))
+            (roost-send-attach file)
+            (kill-buffer)
+            (funcall done '((paths . ("/host/a/shot-3.png")))))
+        (delete-file file))))))
 
 (ert-deftest roost-attach-measures-what-a-link-points-to ()
   (roost-test--isolated

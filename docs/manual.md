@@ -324,8 +324,11 @@ also drafts a prompt holding them.
 In a prompt draft (`e` or `@`): `C-c C-c` sends, `C-c C-k` cancels, `C-c C-a`
 attaches a file and `C-c C-v` the image on the clipboard (as does
 `M-x yank-media`, where Emacs reads images from the clipboard). Roost copies
-an attachment to the task's host, under `attachments` in its state directory
-there, where the agent can read it, and adds its path to the prompt. Claude
+an attachment to the task's host in the background, under `attachments` in its
+state directory there, where the agent can read it. Meanwhile the draft shows
+`[Copying shot.png…]`, and you can go on writing; the path takes its place, or
+a note that it failed, which you delete before sending. `C-c C-c` waits until
+none is left copying. Claude
 reads a task's attachments without asking: Roost starts it with `--add-dir` for
 them. The copies go when the task does. For the folder of a [Scrawl](https://scrawl.kitlangton.com)
 capture (`M-n` at the prompt gives the newest), Roost copies all of it but its
