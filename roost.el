@@ -2652,7 +2652,9 @@ Review notes in it are cleared once it is sent."
       (when (memq 'copying states)
         (user-error "Still copying an attachment; send once its path is in"))
       (when (memq 'failed states)
-        (user-error "An attachment didn't copy: delete its note, or attach it again")))
+        (user-error "An attachment didn't copy: delete its note, then attach it again if you like"))
+      (when (memq 'stale states)
+        (user-error "Undo brought back an attachment's [Copying …]: redo for its path, or delete it")))
     (when roost--send-sending
       (user-error "Already sending"))
     (setq roost--send-sending t)
@@ -2842,6 +2844,10 @@ Call SUCCESS with its path there, or FAILURE with a message."
   (propertize (format "[Copying %s…]" name)
               'roost-attachment id 'roost-attachment-state 'copying 'font-lock-face 'shadow))
 
+(defvar-local roost--attachments-copying nil
+  "This draft's attachments still copying, by number.
+A placeholder of one not among them, as undo brings back, is stale.")
+
 (defun roost--attachment-done (buffer id text &optional error)
   "Put TEXT in place of attachment ID's placeholder in draft BUFFER.
 With ERROR, the attachment, named TEXT, failed to copy: put a note of
@@ -2850,27 +2856,40 @@ that there instead, which stays until you delete it."
     (message "Roost could not attach %s: %s" text error))
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
-      ;; Unless you deleted it meanwhile.
-      (when-let* ((start (text-property-any (point-min) (point-max) 'roost-attachment id)))
-        (let* ((end (or (next-single-property-change start 'roost-attachment) (point-max)))
-               (new (if error
-                        (propertize (format "[Not attached: %s: %s]" text error)
-                                    'roost-attachment id 'roost-attachment-state 'failed
-                                    'font-lock-face 'error)
-                      text))
-               (point (point)))
-          (goto-char start)
-          (delete-region start end)
-          (insert new)
-          (goto-char (cond ((< point start) point)
-                           ((>= point end) (+ point (- (length new) (- end start))))
-                           (t start))))))))
+      (setq roost--attachments-copying (delq id roost--attachments-copying))
+      (save-restriction
+        (widen)
+        ;; Unless you deleted it meanwhile.
+        (when-let* ((start (text-property-any (point-min) (point-max) 'roost-attachment id)))
+          (let* ((end (or (next-single-property-change start 'roost-attachment) (point-max)))
+                 (new (if error
+                          (propertize (format "[Not attached: %s: %s]" text error)
+                                      'roost-attachment id 'roost-attachment-state 'failed
+                                      'font-lock-face 'error)
+                        text))
+                 (point (point)))
+            ;; A step of its own to undo, apart from your writing.
+            (undo-boundary)
+            (goto-char start)
+            (delete-region start end)
+            (insert new)
+            (undo-boundary)
+            (goto-char (cond ((< point start) point)
+                             ((>= point end) (+ point (- (length new) (- end start))))
+                             (t start)))))))))
 
 (defun roost--attachment-states ()
-  "The states of the draft's attachments not yet in it: `copying' or `failed'."
+  "The states of the draft's attachments not yet in it.
+`copying', `failed', or `stale' for the placeholder of a copy since done."
   (let ((position (point-min)) states)
     (while (setq position (text-property-not-all position (point-max) 'roost-attachment-state nil))
-      (push (get-text-property position 'roost-attachment-state) states)
+      (let ((state (get-text-property position 'roost-attachment-state)))
+        (push (if (and (eq state 'copying)
+                       (not (memq (get-text-property position 'roost-attachment)
+                                  roost--attachments-copying)))
+                  'stale
+                state)
+              states))
       (setq position (or (next-single-property-change position 'roost-attachment-state) (point-max))))
     states))
 
@@ -2878,15 +2897,17 @@ that there instead, which stays until you delete it."
   "Attach NAME to the draft for TASK: a placeholder now, COPY's result later.
 COPY is called with TASK, a success and a failure function, and copies
 in the background.  An error it signals at once, as for a file too big,
-leaves no placeholder."
+or a quit while it reads the file, leaves no placeholder."
   (let ((buffer (current-buffer))
         (id (cl-incf roost--attachment-count)))
     (roost--send-insert-attachment (roost--attachment-placeholder id name))
+    (push id roost--attachments-copying)
     (condition-case err
         (funcall copy task
                  (lambda (text) (roost--attachment-done buffer id text))
                  (lambda (error) (roost--attachment-done buffer id name error)))
-      (error
+      ((error quit)
+       (setq roost--attachments-copying (delq id roost--attachments-copying))
        (when-let* ((start (text-property-any (point-min) (point-max) 'roost-attachment id)))
          (delete-region start (min (point-max)
                                    (1+ (or (next-single-property-change start 'roost-attachment)

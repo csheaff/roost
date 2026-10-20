@@ -4614,6 +4614,49 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
             (funcall done '((paths . ("/host/a/shot-3.png")))))
         (delete-file file))))))
 
+(ert-deftest roost-attachment-states-survive-undo-narrowing-and-quit ()
+  (roost-test--isolated
+   (roost-test--with-send-buffers
+    (let ((task (roost--cache-task "dev" (roost-test--task)))
+          done)
+      (cl-letf (((symbol-function 'pop-to-buffer) #'set-buffer))
+        (roost--send-draft task)
+        ;; Undone after it came: stale, not copying.
+        (roost--send-attach-start task "shot.png" (lambda (_task success _failure) (setq done success)))
+        (undo-boundary)
+        (insert "Look")
+        (funcall done "/host/a/shot.png")
+        (should (equal (buffer-string) "/host/a/shot.png\nLook"))
+        (let ((list buffer-undo-list))
+          (while (null (car list)) (setq list (cdr list)))
+          (primitive-undo 1 list))
+        (should (string-prefix-p "[Copying shot.png…]" (buffer-string)))
+        (should (equal (roost--attachment-states) '(stale)))
+        (should (string-match-p "Undo brought back"
+                                (cadr (should-error (roost-send-submit) :type 'user-error))))
+        ;; Finished while you narrowed the draft to elsewhere.
+        (erase-buffer)
+        (insert "Look\n")
+        (roost--send-attach-start task "two.png" (lambda (_task success _failure) (setq done success)))
+        (narrow-to-region (point-min) 5)
+        (funcall done "/host/a/two.png")
+        (widen)
+        (should (equal (buffer-string) "Look\n/host/a/two.png\n"))
+        (should-not (roost--attachment-states))
+        ;; C-g while it reads the file: no placeholder left.
+        (erase-buffer)
+        (should (condition-case nil
+                    (progn (roost--send-attach-start task "big.png" (lambda (&rest _) (signal 'quit nil)))
+                           nil)
+                  (quit t)))
+        (should (equal (buffer-string) ""))
+        (should-not roost--attachments-copying)
+        ;; A failure says to delete its note before attaching again.
+        (roost--send-attach-start task "three.png" (lambda (_task _success failure) (funcall failure "Disk full")))
+        (insert "Look")
+        (should (string-match-p "delete its note, then attach it again"
+                                (cadr (should-error (roost-send-submit) :type 'user-error)))))))))
+
 (ert-deftest roost-attach-measures-what-a-link-points-to ()
   (roost-test--isolated
    ;; Bigger than the limit, and the link, which holds its name, is not.
