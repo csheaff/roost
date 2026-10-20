@@ -331,23 +331,53 @@ class PiSession(claude_contract.Session):
                        record.get("lastEvent"))
 
         self.step("a second turn")
+        # The last turn may have ended on Stop too, if Esc came after it.
+        before = self.record().get("updatedAt")
         self.send("Reply with the single word PING.")
-        record = self.until(lambda: self.record().get("lastEvent") == "Stop" and self.record(), 180, "the reply")
+        record = self.when(lambda task: task.get("lastEvent") == "Stop" and task.get("updatedAt") != before,
+                           180, "the reply")
         self.check("PING" in (record.get("lastReply") or self.listed(full=True).get("lastMessage") or ""),
                    "the reply is read", record.get("lastReply"))
 
 
-# A TOML table's header, on a line of its own.
-TOML_HEADER = re.compile(r"\[\[?[^\]=]+\]\]?\s*(#.*)?")
+# A TOML table's header, on a line of its own: keys bare or quoted, joined by dots.
+TOML_KEY = r"""(?:[A-Za-z0-9_-]+|"(?:[^"\\\n]|\\.)*"|'[^'\n]*')"""
+TOML_HEADER = re.compile(r"\[\[?\s*%s(?:\s*\.\s*%s)*\s*\]\]?\s*(#.*)?" % (TOML_KEY, TOML_KEY))
+# What may open a string, and what closes each.
+TOML_STRING = re.compile(r"""\"\"\"|'''|"|'""")
+TOML_CLOSE = {'"""': re.compile(r'(?<!\\)"""'), "'''": re.compile("'''"),
+              '"': re.compile(r'(?<!\\)"'), "'": re.compile("'")}
 
 
 def toml_tables(text):
     """TEXT as (header, text) pairs, a table's header and the lines it
-    holds, the first of them without a header."""
+    holds, the first of them without a header, which join to TEXT again. A
+    line inside a multi-line string or array is no header."""
     tables = [[None, ""]]
+    depth, string = 0, None
     for line in text.splitlines(keepends=True):
-        if TOML_HEADER.fullmatch(line.strip()):
+        if not depth and not string and TOML_HEADER.fullmatch(line.strip()):
             tables.append([line.strip(), ""])
+        else:
+            i = 0
+            while i < len(line):
+                if string:
+                    closed = TOML_CLOSE[string].search(line, i)
+                    if not closed:
+                        break
+                    i, string = closed.end(), None
+                    continue
+                opened = TOML_STRING.match(line, i)
+                if opened:
+                    string, i = opened.group(0), opened.end()
+                elif line[i] == "#":
+                    break
+                else:
+                    depth = max(0, depth + {"[": 1, "]": -1}.get(line[i], 0))
+                    i += 1
+            # A one-line string ends with its line.
+            if string in ('"', "'"):
+                string = None
         tables[-1][1] += line
     return [tuple(table) for table in tables]
 
@@ -359,7 +389,7 @@ def restore_codex_tables(after, before, repo):
     keys by event alone, so a run replaces the review of Roost's real hooks.
     Whatever else changed meanwhile, as another Codex's, stays."""
     def ours(header):
-        return bool(header) and ((header.startswith("[projects.") and str(repo) in header)
+        return bool(header) and (header == "[projects.%s]" % json.dumps(str(repo))
                                  or header.startswith('[hooks.state."/<session-flags>/'))
     kept = {header: text for header, text in toml_tables(before or "") if ours(header)}
     result = []
