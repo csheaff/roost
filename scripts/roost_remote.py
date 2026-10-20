@@ -1734,32 +1734,56 @@ def attach(store, task, files):
     the task's record."""
     if not isinstance(files, list) or not files:
         raise RoostError("Nothing to attach")
-    folder = store.attachments(task["id"])
-    decoded = []
+    entries = []
+    folders = {}
     for item in files:
         name = item.get("name") if isinstance(item, dict) else None
         parts = PurePosixPath(name).parts if isinstance(name, str) and "\0" not in name else ()
         if not parts or PurePosixPath(name).is_absolute() or ".." in parts:
             raise RoostError("Not a name to attach: %r" % (name,))
-        try:
-            data = base64.b64decode(item.get("data") or "", validate=True)
-        except (TypeError, ValueError):
-            raise RoostError("Not base64: " + name)
-        decoded.append((parts, data))
+        if folders.setdefault(parts[0], len(parts) > 1) != (len(parts) > 1):
+            raise RoostError("Both a file and a folder: " + parts[0])
+        entries.append((parts, item.get("data") or ""))
+    # Each name is taken here, under the lock, so attachments made at once
+    # don't share one; what goes in them is written after.
+    folder = store.attachments(task["id"])
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
     chosen = {}
-    for parts, data in decoded:
-        top = parts[0]
-        if top not in chosen:
-            stem, suffix = os.path.splitext(top)
-            candidate, number = top, 1
-            while os.path.lexists(folder / candidate):
+    for top, is_folder in folders.items():
+        stem, suffix = os.path.splitext(top)
+        candidate, number = top, 1
+        while True:
+            try:
+                if is_folder:
+                    (folder / candidate).mkdir(mode=0o700)
+                else:
+                    os.close(os.open(folder / candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+                break
+            except FileExistsError:
                 number += 1
                 candidate = "%s-%d%s" % (stem, number, suffix)
-            chosen[top] = candidate
-        path = folder.joinpath(chosen[top], *parts[1:])
-        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "wb") as output:
-            output.write(data)
+        chosen[top] = candidate
+    # Decoding and writing a large attachment takes a while: hooks must not
+    # wait on the registry lock meanwhile.
+    with store.released():
+        try:
+            for parts, encoded in entries:
+                try:
+                    data = base64.b64decode(encoded, validate=True)
+                except (TypeError, ValueError):
+                    raise RoostError("Not base64: " + "/".join(parts))
+                path = folder.joinpath(chosen[parts[0]], *parts[1:])
+                path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "wb") as output:
+                    output.write(data)
+        except BaseException:
+            for name in chosen.values():
+                if (folder / name).is_dir():
+                    shutil.rmtree(folder / name, ignore_errors=True)
+                else:
+                    with contextlib.suppress(OSError):
+                        (folder / name).unlink()
+            raise
     return {"paths": [str(folder / name) for name in chosen.values()]}
 
 

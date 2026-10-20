@@ -4632,7 +4632,7 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
           (primitive-undo 1 list))
         (should (string-prefix-p "[Copying shot.png…]" (buffer-string)))
         (should (equal (roost--attachment-states) '(stale)))
-        (should (string-match-p "Undo brought back"
+        (should (string-match-p "from a copy since done"
                                 (cadr (should-error (roost-send-submit) :type 'user-error))))
         ;; Finished while you narrowed the draft to elsewhere.
         (erase-buffer)
@@ -4685,6 +4685,72 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
               "on dev already: give the agent its path there"
               (cadr (should-error (roost--attachment-files "/ssh:dev:/home/user/work/shot.png")
                                   :type 'user-error)))))))
+
+(ert-deftest roost-attach-commands-need-a-draft ()
+  (roost-test--isolated
+   (let ((file (make-temp-file "shot" nil ".png" "1")) asked)
+     (unwind-protect
+         (cl-letf (((symbol-function 'roost--request) (lambda (&rest _) (setq asked t)))
+                   ((symbol-function 'roost--clipboard-image) (lambda () (setq asked t) "png")))
+           (with-temp-buffer
+             (insert "(defun f ())")
+             (should (string-match-p "Not in a prompt draft"
+                                     (cadr (should-error (roost-send-attach file) :type 'user-error))))
+             (should-error (roost-send-attach-image) :type 'user-error)
+             (should (equal (buffer-string) "(defun f ())"))
+             (should-not asked)))
+       (delete-file file)))))
+
+(ert-deftest roost-attachment-start-and-end-leave-the-draft-as-written ()
+  (roost-test--isolated
+   (roost-test--with-send-buffers
+    (let ((task (roost--cache-task "dev" (roost-test--task))) done)
+      (cl-letf (((symbol-function 'pop-to-buffer) #'set-buffer))
+        (roost--send-draft task)
+        ;; Refused at once, in mid-line: the line is as it was.
+        (insert "Look at this")
+        (goto-char 8)
+        (let ((roost--attach-limit 2))
+          (should-error (roost--send-attach-png "png") :type 'user-error))
+        (should-error (roost--send-attach-start task "big.png" (lambda (&rest _) (user-error "Too big")))
+                      :type 'user-error)
+        (should (equal (buffer-string) "Look at this"))
+        (should (= (point) 8))
+        ;; A placeholder you copied gets the path too.
+        (erase-buffer)
+        (roost--send-attach-start task "shot.png" (lambda (_task success _failure) (setq done success)))
+        (insert (buffer-substring (point-min) (point)))
+        (funcall done "/host/a/shot.png")
+        (should (equal (buffer-string) "/host/a/shot.png\n/host/a/shot.png\n"))
+        (should-not (roost--attachment-states)))))))
+
+(ert-deftest roost-attach-reads-a-capture-once-and-names-what-it-cant ()
+  (roost-test--isolated
+   (roost-test--with-send-buffers
+    (let* ((task (roost--cache-task "dev" (roost-test--task)))
+           (parent (make-temp-file "captures" t))
+           (capture (expand-file-name "a.scrawl" parent))
+           (walks 0) sent)
+      (unwind-protect
+          (progn
+            (make-directory (expand-file-name "frames" capture) t)
+            (dolist (name '("scrawl.json" "summary.md" "frames/frame-01.png"))
+              (write-region name nil (expand-file-name name capture)))
+            (cl-letf* ((walk (symbol-function 'roost--attachment-entries))
+                       ((symbol-function 'roost--attachment-entries)
+                        (lambda (file) (cl-incf walks) (funcall walk file)))
+                       ((symbol-function 'roost--choose) (lambda (&optional _) task)))
+              (roost-test--attaching sent
+                (roost-attach capture)))
+            (should (= walks 1))
+            (should (= (length sent) 3))
+            ;; A link to nothing, among its frames.
+            (make-symbolic-link (expand-file-name "gone.png" parent)
+                                (expand-file-name "frames/frame-02.png" capture))
+            (should (string-match-p "Can.t read .*frame-02.png"
+                                    (cadr (should-error (roost--attachment-files capture)
+                                                        :type 'user-error)))))
+        (delete-directory parent t))))))
 
 (ert-deftest roost-attach-measures-what-a-link-points-to ()
   (roost-test--isolated

@@ -2654,7 +2654,7 @@ Review notes in it are cleared once it is sent."
       (when (memq 'failed states)
         (user-error "An attachment didn't copy: delete its note, then attach it again if you like"))
       (when (memq 'stale states)
-        (user-error "Undo brought back an attachment's [Copying …]: redo for its path, or delete it")))
+        (user-error "A [Copying …] is from a copy since done, as undo brings back: redo for its path, or delete it")))
     (when roost--send-sending
       (user-error "Already sending"))
     (setq roost--send-sending t)
@@ -2740,7 +2740,9 @@ which an agent can be given by its path, or more than
   (let* ((files (roost--attachment-entries file))
          ;; What a link points to, which is what Roost reads.
          (size (apply #'+ (mapcar (lambda (entry)
-                                    (file-attribute-size (file-attributes (file-truename (cdr entry)))))
+                                    (file-attribute-size
+                                     (or (file-attributes (file-truename (cdr entry)))
+                                         (user-error "Can't read %s" (cdr entry)))))
                                   files))))
     (when (> size roost--attach-limit)
       (user-error "%s is %s; Roost attaches up to %s at once" (file-name-nondirectory file)
@@ -2774,9 +2776,6 @@ Call SUCCESS with their path there, or FAILURE with a message.  NAMES
 share a first part, a file's or a folder's, which the host may number to
 keep it apart from those already there."
   (let ((size (apply #'+ (mapcar (lambda (file) (length (cdr file))) files))))
-    (when (> size roost--attach-limit)
-      (user-error "That is %s; Roost attaches up to %s at once"
-                  (file-size-human-readable size) (file-size-human-readable roost--attach-limit)))
     (roost--request (roost--field task 'host) "attach"
                     `((id . ,(roost--field task 'id))
                       (files . ,(vconcat
@@ -2788,9 +2787,10 @@ keep it apart from those already there."
                     failure
                     (+ roost-request-timeout (/ size roost--attach-rate)))))
 
-(defun roost--attach-file (task file success failure)
-  "Copy FILE to TASK's host in the background.
-Call SUCCESS with what a prompt says of it, or FAILURE with a message.
+(defun roost--attach-file (task file entries success failure)
+  "Copy FILE, whose ENTRIES `roost--attachment-files' lists, to TASK's host.
+It is copied in the background: call SUCCESS with what a prompt says of
+it, or FAILURE with a message.
 What it says is its path there; for a Scrawl capture, also where its
 contact sheet and frames are, and its summary."
   (let ((summary (when (roost--scrawl-capture-p file)
@@ -2799,7 +2799,7 @@ contact sheet and frames are, and its summary."
                                   (insert-file-contents (expand-file-name "summary.md" file))
                                   (buffer-string))))))
     (roost--attach task (mapcar (lambda (entry) (cons (car entry) (roost--file-bytes (cdr entry))))
-                                (roost--attachment-files file))
+                                entries)
                    (lambda (path)
                      (funcall success
                               (if (not summary)
@@ -2874,24 +2874,35 @@ that there instead, which stays until you delete it."
       (setq roost--attachments-copying (delq id roost--attachments-copying))
       (save-restriction
         (widen)
-        ;; Unless you deleted it meanwhile.
-        (when-let* ((start (text-property-any (point-min) (point-max) 'roost-attachment id)))
-          (let* ((end (or (next-single-property-change start 'roost-attachment) (point-max)))
-                 (new (if error
-                          (propertize (format "[Not attached: %s: %s]" text error)
-                                      'roost-attachment id 'roost-attachment-state 'failed
-                                      'font-lock-face 'error)
-                        text))
-                 (point (point)))
-            ;; A step of its own to undo, apart from your writing.
-            (undo-boundary)
-            (goto-char start)
-            (delete-region start end)
-            (insert new)
-            (undo-boundary)
-            (goto-char (cond ((< point start) point)
-                             ((>= point end) (+ point (- (length new) (- end start))))
-                             (t start)))))))))
+        ;; Each copy of it you made, and none if you deleted it meanwhile.
+        (let (start)
+          (while (setq start (roost--attachment-placeholder-at id))
+            (let* ((end (or (next-single-property-change start 'roost-attachment) (point-max)))
+                   (new (if error
+                            (propertize (format "[Not attached: %s: %s]" text error)
+                                        'roost-attachment id 'roost-attachment-state 'failed
+                                        'font-lock-face 'error)
+                          text))
+                   (point (point)))
+              ;; A step of its own to undo, apart from your writing.
+              (undo-boundary)
+              (goto-char start)
+              (delete-region start end)
+              (insert new)
+              (undo-boundary)
+              (goto-char (cond ((< point start) point)
+                               ((>= point end) (+ point (- (length new) (- end start))))
+                               (t start))))))))))
+
+(defun roost--attachment-placeholder-at (id)
+  "Where a placeholder of attachment ID, still copying, starts, or nil."
+  (let ((position (point-min)) found)
+    (while (and (not found)
+                (setq position (text-property-any position (point-max) 'roost-attachment id)))
+      (if (eq (get-text-property position 'roost-attachment-state) 'copying)
+          (setq found position)
+        (setq position (or (next-single-property-change position 'roost-attachment) (point-max)))))
+    found))
 
 (defun roost--attachment-states ()
   "The states of the draft's attachments not yet in it.
@@ -2914,20 +2925,20 @@ COPY is called with TASK, a success and a failure function, and copies
 in the background.  An error it signals at once, as for a file too big,
 or a quit while it reads the file, leaves no placeholder."
   (let ((buffer (current-buffer))
-        (id (cl-incf roost--attachment-count)))
+        (id (cl-incf roost--attachment-count))
+        (from (point)))
     (roost--send-insert-attachment (roost--attachment-placeholder id name))
     (push id roost--attachments-copying)
-    (condition-case err
-        (funcall copy task
-                 (lambda (text) (roost--attachment-done buffer id text))
-                 (lambda (error) (roost--attachment-done buffer id name error)))
-      ((error quit)
-       (setq roost--attachments-copying (delq id roost--attachments-copying))
-       (when-let* ((start (text-property-any (point-min) (point-max) 'roost-attachment id)))
-         (delete-region start (min (point-max)
-                                   (1+ (or (next-single-property-change start 'roost-attachment)
-                                           (point-max))))))
-       (signal (car err) (cdr err))))))
+    (let ((to (point)))
+      (condition-case err
+          (funcall copy task
+                   (lambda (text) (roost--attachment-done buffer id text))
+                   (lambda (error) (roost--attachment-done buffer id name error)))
+        ((error quit)
+         (setq roost--attachments-copying (delq id roost--attachments-copying))
+         ;; All it inserted, the line it broke included.
+         (delete-region from to)
+         (signal (car err) (cdr err)))))))
 
 (defun roost--send-insert-attachment (text)
   "Insert TEXT, about an attachment, at point in the draft, on lines of its own.
@@ -2953,15 +2964,25 @@ can read it, and puts its path in place of \"[Copying FILE…]\", or a
 note that it failed.  For a Scrawl capture's folder (\\`M-n' gives the
 newest), it copies all but its video and audio, and adds its summary.
 The copies go when the task does."
-  (interactive (list (roost--read-attachment)))
-  (roost--attachment-files file)
-  (roost--send-attach-start roost--send-task (file-name-nondirectory (directory-file-name file))
+  (interactive (progn (roost--attaching-task) (list (roost--read-attachment))))
+  (roost--send-attach-file file (roost--attachment-files file)))
+
+(defun roost--attaching-task ()
+  "The task of the prompt draft you are in, which you attach to."
+  (or roost--send-task (user-error "Not in a prompt draft; M-x roost-attach starts one")))
+
+(defun roost--send-attach-file (file entries)
+  "Attach FILE, whose ENTRIES `roost--attachment-files' lists, to the draft."
+  (roost--send-attach-start (roost--attaching-task) (file-name-nondirectory (directory-file-name file))
                             (lambda (task success failure)
-                              (roost--attach-file task file success failure))))
+                              (roost--attach-file task file entries success failure))))
 
 (defun roost--send-attach-png (png)
   "Attach PNG, an image's bytes, to the draft."
-  (roost--send-attach-start roost--send-task "the image"
+  (when (> (length png) roost--attach-limit)
+    (user-error "The image is %s; Roost attaches up to %s at once"
+                (file-size-human-readable (length png)) (file-size-human-readable roost--attach-limit)))
+  (roost--send-attach-start (roost--attaching-task) "the image"
                             (lambda (task success failure)
                               (roost--attach-image task png success failure))))
 
@@ -2970,6 +2991,7 @@ The copies go when the task does."
 Roost copies it to the task's host as a PNG file and adds its path; see
 `roost-send-attach'."
   (interactive)
+  (roost--attaching-task)
   (roost--send-attach-png (or (roost--clipboard-image) (user-error "No image on the clipboard"))))
 
 (defun roost--send-yank-image (_type png)
@@ -2988,16 +3010,15 @@ them all before copying any."
                        (roost--read-attachment))))
   ;; Expanded here: the draft has a directory of its own.
   (setq files (mapcar #'expand-file-name (if (stringp files) (list files) files)))
-  (mapc #'roost--attachment-files files)
-  (setq task (roost--choose task))
-  (roost--send-draft task)
-  ;; After what the draft holds, and in a new one, under a line to write on.
-  (let ((at (copy-marker (point))))
-    (goto-char (point-max))
-    (if (bobp) (insert "\n\n") (unless (bolp) (insert "\n")))
-    (dolist (file files)
-      (roost-send-attach file))
-    (goto-char at)))
+  (let ((entries (mapcar #'roost--attachment-files files)))
+    (setq task (roost--choose task))
+    (roost--send-draft task)
+    ;; After what the draft holds, and in a new one, under a line to write on.
+    (let ((at (copy-marker (point))))
+      (goto-char (point-max))
+      (if (bobp) (insert "\n\n") (unless (bolp) (insert "\n")))
+      (cl-mapc #'roost--send-attach-file files entries)
+      (goto-char at))))
 
 ;;;; Review notes
 

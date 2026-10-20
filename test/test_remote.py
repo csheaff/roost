@@ -135,6 +135,31 @@ class Lifecycle(unittest.TestCase):
         self.assertFalse(self.request("attach", id=task["id"], files=[dict(name="x", data="not base64!")])["ok"])
         self.assertFalse(self.request("attach", id=task["id"], files=[])["ok"])
         self.assertFalse((self.state / "out").exists())
+        # A name both a file and a folder, and data that isn't base64 after
+        # names were taken: nothing is left of either.
+        before = sorted(path.name for path in shot.parent.iterdir())
+        self.assertFalse(self.request("attach", id=task["id"],
+                                      files=[dict(name="x", data=""), dict(name="x/y", data="")])["ok"])
+        self.assertFalse(self.request("attach", id=task["id"],
+                                      files=[dict(name="new.png", data="AA=="),
+                                             dict(name="bad.png", data="not base64!")])["ok"])
+        self.assertEqual(sorted(path.name for path in shot.parent.iterdir()), before)
+        # Hooks aren't held while a large attachment is written.
+        decode = base64.b64decode
+        free = []
+
+        def decode_and_try_the_lock(*args, **kwargs):
+            with (self.state / "registry.lock").open("a") as lock:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    fcntl.flock(lock, fcntl.LOCK_UN)
+                    free.append(True)
+                except BlockingIOError:
+                    free.append(False)
+            return decode(*args, **kwargs)
+        with patch.object(roost.base64, "b64decode", decode_and_try_the_lock):
+            self.assertTrue(self.request("attach", id=task["id"], files=files[:1])["ok"])
+        self.assertEqual(free, [True])
         self.request("stop", id=task["id"])
         self.wait_for_pane_exit(task)
         self.assertTrue(self.request("forget", id=task["id"])["ok"])
