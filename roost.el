@@ -135,15 +135,20 @@
 (defcustom roost-default-agent "claude"
   "Default agent offered when creating a task.
 Existing tasks retain their agent."
-  :type '(choice (const "claude") (const "codex") (const "pi")))
+  :type '(choice (const "claude") (const "codex") (const "pi") (const "opencode")))
 
-(defcustom roost-agent-commands '(("claude" "claude") ("codex" "codex") ("pi" "pi"))
+(defcustom roost-agent-commands '(("claude" "claude") ("codex" "codex") ("pi" "pi")
+                                  ("opencode" "opencode"))
   "Executable and extra arguments for each agent, evaluated on the task host.
 Such as (\"claude\" \"claude\" \"--model\" \"sonnet\") for Claude Code.
 Roost owns worktree, resume and hook flags, and refuses ones that clash."
   :type '(alist :key-type string :value-type (repeat string)))
 
-(defconst roost--agents '("claude" "codex" "pi"))
+(defconst roost--agents '("claude" "codex" "pi" "opencode"))
+
+(defun roost--agent-name (agent)
+  "AGENT's name as its makers write it."
+  (pcase agent ("pi" "Pi") ("opencode" "OpenCode") (_ (capitalize agent))))
 
 (defcustom roost-setup-command nil
   "Optional project setup shell command, run before the agent in new worktrees.
@@ -6897,7 +6902,7 @@ The changes column shrinks first, then the agent column is dropped."
          (pr (apply #'max (mapcar (lambda (task) (string-width (roost--pr-marker task))) tasks)))
          ;; Bullet, name, status, since and their separators.
          (fixed (+ 4 name 2 11 1 6 2 (if (> pr 0) (+ pr 2) 0)))
-         (over (- (+ fixed (if agent 8 0) (if (> changes 0) (+ changes 2) 0)) width)))
+         (over (- (+ fixed (if agent 10 0) (if (> changes 0) (+ changes 2) 0)) width)))
     (when (> over 0)
       (setq changes (max 0 (- changes over)))
       (when (and agent (< changes 12))
@@ -6923,7 +6928,7 @@ The changes column shrinks first, then the agent column is dropped."
                                    "  ")
                          "")
                        (if (plist-get layout :agent)
-                           (concat (funcall cell (or (roost--field task 'agent) "claude") 6 'roost-dim) "  ")
+                           (concat (funcall cell (or (roost--field task 'agent) "claude") 8 'roost-dim) "  ")
                          "")
                        (if (> (plist-get layout :changes) 0)
                            (concat (roost--fontify-changes
@@ -8085,7 +8090,7 @@ refresh of Magit's status does a dozen times or more."
   (when-let* ((buffer (get-buffer "*roost doctor*")))
     (with-current-buffer buffer
       (let ((inhibit-read-only t)
-            (default (if (equal roost-default-agent "pi") "Pi" (capitalize roost-default-agent))))
+            (default (roost--agent-name roost-default-agent)))
         (erase-buffer)
         (insert (propertize "Roost setup check" 'face 'roost-title) "\n\n"
                 (propertize "Emacs" 'face 'roost-heading) "\n")

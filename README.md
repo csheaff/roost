@@ -4,8 +4,9 @@
 
 **Run a fleet of coding agents from Emacs.** Roost gives each agent
 ([Claude Code](https://claude.com/claude-code),
-[Codex](https://github.com/openai/codex) or
-[Pi](https://github.com/earendil-works/pi)) a task of its own: a Git
+[Codex](https://github.com/openai/codex),
+[Pi](https://github.com/earendil-works/pi) or
+[OpenCode](https://opencode.ai)) a task of its own: a Git
 worktree, a branch and a terminal, here or on any SSH host. It tells you which
 agents need you, and you review and merge their work with Magit. If you've
 used Orca or Conductor, it's that idea, inside the Emacs you already use.
@@ -114,8 +115,8 @@ These work in the dashboard, the sidebar and a task's panel, and on the menu.
 ## Good to know
 
 - Roost is built around Claude Code and checked against each new release of
-  it. Codex and Pi tasks show the same statuses; Codex asks before each
-  commit, and its approvals show only once it moves on unless
+  it. Codex, Pi and OpenCode tasks show the same statuses; Codex asks before
+  each commit, and its approvals show only once it moves on unless
   `roost-program-status` is on.
 - Roost never answers an agent's prompts, never changes your global agent
   settings, and never stages or commits your work. It deletes work only when

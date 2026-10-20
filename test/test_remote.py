@@ -1154,17 +1154,18 @@ class Lifecycle(unittest.TestCase):
         self.assertFalse(reply["ok"], reply)
         self.assertEqual(self.git("worktree", "list", "--porcelain"), before)
 
-    def test_codex_and_pi_create_send_shell_resume_and_retire(self):
-        for agent in ("codex", "pi"):
+    def test_codex_pi_and_opencode_create_send_shell_resume_and_retire(self):
+        for agent in ("codex", "pi", "opencode"):
             with self.subTest(agent=agent):
                 task = self.create(name=agent, agent=agent, command=[sys.executable, str(FAKE_AGENT), agent])
                 record = self.wait(task, "ready")
-                session = record["agentSession"]
-                self.assertTrue(session)
                 self.assertIsNone(record["claudeSession"])
                 self.assertTrue(self.request("send", id=task["id"], text="literal $() `ticks` prompt")["ok"])
                 finished = self.wait(task, "ready", event="Stop")
                 self.assertEqual(finished["lastEvent"], "Stop")
+                # OpenCode starts its session with the first prompt.
+                session = record.get("agentSession") or finished["agentSession"]
+                self.assertTrue(session)
                 pane = self.request("shell", id=task["id"])["result"]["shellPaneId"]
                 self.assertTrue(self.request("stop", id=task["id"])["ok"])
                 self.assertNotIn(pane, roost.pane_inventory(self.socket))
@@ -1173,7 +1174,9 @@ class Lifecycle(unittest.TestCase):
                 self.assertEqual(resumed["agentSession"], session)
                 self.assertNotEqual(resumed["runId"], record["runId"])
                 # Older provider events cannot steer a resumed task.
-                payload = dict(hook_event_name="Stop", session_id="wrong") if agent == "codex" else dict(event="agent_end", session="wrong")
+                payload = {"codex": dict(hook_event_name="Stop", session_id="wrong"),
+                           "pi": dict(event="agent_end", session="wrong"),
+                           "opencode": dict(event="status", status="idle", session="wrong")}[agent]
                 store = roost.Store(str(self.state))
                 roost.update_hook(store, task["id"], payload, record["runId"])
                 self.assertEqual(store.read(task["id"])["agentSession"], session)
@@ -1264,15 +1267,62 @@ class Lifecycle(unittest.TestCase):
                     self.assertNotIn("request", record)
                 self.assertTrue(self.request("retire", id=task["id"])["ok"])
 
+    def test_opencode_says_what_waits_on_you_and_how_turns_end(self):
+        reply = self.request("create", directory=str(self.repo), name="opencode", socket=self.socket,
+                             agent="opencode", prompt="-first", command=[sys.executable, str(FAKE_AGENT), "opencode"])
+        self.assertTrue(reply["ok"], reply)
+        task = reply["result"]
+        record = self.wait(task, "ready", "Stop")
+        session = record["agentSession"]
+        self.assertEqual(roost.last_message(record), "opencode says -first")
+        self.assertTrue(self.request("send", id=task["id"], text="permission")["ok"])
+        self.assertEqual(self.wait(task, "permission")["request"], "Asks to run make deploy")
+        roost.tmux(self.socket, "send-keys", "-t", task["paneId"], "yes", "Enter")
+        self.wait(task, "ready", "Stop")
+        # A subagent's question waits on you, in a session that isn't the task's.
+        self.assertTrue(self.request("send", id=task["id"], text="subagent")["ok"])
+        record = self.wait(task, "permission")
+        self.assertEqual((record["request"], record["agentSession"]), ("Asks: Which branch?", session))
+        roost.tmux(self.socket, "send-keys", "-t", task["paneId"], "main", "Enter")
+        self.assertNotIn("request", self.wait(task, "ready", "Stop"))
+        self.assertTrue(self.request("send", id=task["id"], text="interrupt")["ok"])
+        self.wait(task, "ready", "Interrupt")
+        self.assertTrue(self.request("send", id=task["id"], text="fail")["ok"])
+        record = self.wait(task, "failed", "StopFailure")
+        self.assertEqual(record["error"], "Its turn ended on an error (APIError): Rate limited")
+        self.assertTrue(self.request("retire", id=task["id"])["ok"])
+
     def test_provider_flags_are_checked_before_worktree_creation(self):
         before = self.git("worktree", "list", "--porcelain")
         for agent, flags in (("codex", ["resume", "last"]), ("codex", ["--cd=/other"]),
-                             ("pi", ["--session=other"]), ("pi", ["--mode", "rpc"]), ("pi", ["--print"])):
+                             ("pi", ["--session=other"]), ("pi", ["--mode", "rpc"]), ("pi", ["--print"]),
+                             ("opencode", ["-s", "ses_other"]), ("opencode", ["--prompt=x"]),
+                             ("opencode", ["run", "x"]), ("opencode", ["--fork"]), ("opencode", ["--pure"]),
+                             # A project folder would take the agent out of the task's worktree.
+                             ("opencode", [str(self.repo)]),
+                             ("opencode", ["--model", "lmstudio/qwen", "--port=0", str(self.repo)]),
+                             # Roost's options, after it, would be no options.
+                             ("opencode", ["--"]), ("opencode", ["--port", "4096", "--", "anything"])):
             with self.subTest(agent=agent, flags=flags):
                 reply = self.request("create", directory=str(self.repo), name="bad", socket=self.socket,
                                      agent=agent, command=[agent, *flags])
                 self.assertFalse(reply["ok"], reply)
                 self.assertEqual(self.git("worktree", "list", "--porcelain"), before)
+        # Options' values are no project folder.
+        for flags in (["--model", "lmstudio/qwen", "--agent", "plan"], ["-m", "x", "--cors", "a", "b", "--mini"],
+                      ["--log-level=DEBUG", "--hostname", "localhost"]):
+            with self.subTest(flags=flags):
+                roost.OpenCodeAgent().validate(["opencode", *flags])
+        # Its arguments follow its name, as when a wrapper starts it, and a
+        # project folder named like it is still a project folder.
+        roost.OpenCodeAgent().validate(["npx", "opencode-ai", "--model", "x"])
+        roost.OpenCodeAgent().validate(["env", "OPENCODE_DISABLE_AUTOUPDATE=1", "opencode"])
+        for command in (["npx", "opencode-ai", str(self.repo)], ["opencode", "/tmp/opencode-project"],
+                        ["npx", "opencode-ai", "/tmp/opencode-project"],
+                        # Set by a wrapper, these leave Roost's observer out.
+                        ["env", "OPENCODE_PURE=1", "opencode"], ["env", "OPENCODE_CONFIG_CONTENT={}", "opencode"]):
+            with self.subTest(command=command), self.assertRaises(roost.RoostError):
+                roost.OpenCodeAgent().validate(command)
 
     def test_pi_queued_work_is_background_and_codex_interrupt_is_ready(self):
         self.assertEqual(roost.PiAgent().observe(dict(event="agent_end", pending=True))["status"], "background")
@@ -1285,7 +1335,7 @@ class Lifecycle(unittest.TestCase):
     def test_initial_prompts_are_literal_and_not_replayed_on_resume(self):
         store = roost.Store(str(self.state))
         for name, adapter in (("claude", roost.ClaudeAgent()), ("codex", roost.CodexAgent()),
-                              ("pi", roost.PiAgent())):
+                              ("pi", roost.PiAgent()), ("opencode", roost.OpenCodeAgent())):
             for prompt in ("--help", "- a list\n- of steps", "@private-file", "literal $() `ticks`\nsecond line"):
                 with self.subTest(agent=name, prompt=prompt):
                     task = dict(id="1234567890abcdef", command=[name], prompt=prompt, agentSession="recorded-session",
@@ -1293,6 +1343,8 @@ class Lifecycle(unittest.TestCase):
                     argv = adapter.launch(store, task, False)
                     if name in ("claude", "codex"):
                         self.assertEqual(argv[-2:], ["--", prompt])
+                    elif name == "opencode":
+                        self.assertEqual(argv[-1], "--prompt=" + prompt)
                     else:
                         self.assertNotIn("--", argv)
                         self.assertEqual(argv[-1], "\n" + prompt)
@@ -3469,7 +3521,7 @@ class LastMessage(unittest.TestCase):
         self.assertEqual(roost.last_message(dict(agent="pi", worktree="/w", agentSession=str(path))), "pi says")
 
     def test_missing_or_malformed_transcripts_give_none(self):
-        for agent in ("claude", "codex", "pi"):
+        for agent in ("claude", "codex", "pi", "opencode"):
             for session in (None, "missing", "../escape", str(self.home / "nowhere.jsonl")):
                 self.assertIsNone(roost.last_message(dict(agent=agent, worktree="/w", agentSession=session)))
         self.write(".claude/projects/-w/bad.jsonl", [[], "x", {"message": "str"}, {"message": {"role": "assistant", "content": 5}}])
@@ -3744,6 +3796,50 @@ class ProgramStatus(unittest.TestCase):
         self.assertEqual((stopped["status"], stopped["lastEvent"]), ("ready", "Interrupt"))
         self.assertIsNone(pi.observe(dict(event="agent_settled", aborted=False), "ready"))
 
+    def test_opencode_requests_read_as_roosts(self):
+        agent = roost.OpenCodeAgent()
+        ask = lambda **fields: agent.observe(dict(event="asked", session="ses_a", **fields), "running")["request"]
+        self.assertEqual(ask(permission="bash", patterns=["make *"], metadata=dict(command="make deploy")),
+                         "Asks to run make deploy")
+        self.assertEqual(ask(permission="bash", patterns=["make *"], metadata={}), "Asks to run make *")
+        self.assertEqual(ask(permission="edit", patterns=["a.py"], metadata=dict(filepath="/w/a.py")),
+                         "Asks to edit a.py")
+        self.assertEqual(ask(permission="webfetch", patterns=["https://x"], metadata=dict(url="https://x")),
+                         "Asks to fetch https://x")
+        self.assertEqual(ask(permission="external_directory", patterns=["/etc/*"]),
+                         "Asks to use external directory for /etc/*")
+        self.assertEqual(ask(questions=[dict(question="Which?"), dict(question="And?")]), "Asks: Which? (and 1 more)")
+        self.assertEqual(ask(), "Asks to use a tool")
+        # Between turns it holds up no turn.
+        self.assertEqual(agent.observe(dict(event="asked", questions=[]), "ready")["lastEvent"], "Dialog")
+        self.assertEqual(agent.observe(dict(event="replied"), "permission")["status"], "running")
+        self.assertIsNone(agent.observe(dict(event="replied"), "ready"))
+        self.assertIsNone(agent.observe(dict(event="unknown")))
+        retry = agent.observe(dict(event="status", status="retry", session="ses_a"), "running")
+        self.assertEqual((retry["status"], retry["agentSession"]), ("running", "ses_a"))
+        self.assertNotIn("lastReply", retry)
+        self.assertIsNone(agent.observe(dict(event="status", status="busy"), "ready")["lastReply"])
+
+    def test_opencode_loads_its_observer_beside_the_users_inline_config(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = roost.Store(root)
+            agent = roost.OpenCodeAgent()
+            plugin = agent.plugin(store).as_uri()
+            config = lambda env: json.loads(agent.environment(store, env)["OPENCODE_CONFIG_CONTENT"])
+            self.assertEqual(config({}), dict(plugin=[plugin]))
+            self.assertEqual(config(dict(OPENCODE_CONFIG_CONTENT='{"model": "m", "plugin": ["theirs"]}')),
+                             dict(model="m", plugin=["theirs", plugin]))
+            for bad in ("{", "[]", '"x"'):
+                with self.assertRaises(roost.RoostError):
+                    agent.environment(store, dict(OPENCODE_CONFIG_CONTENT=bad))
+            # OPENCODE_PURE leaves plugins out, as --pure does.
+            for pure in ("1", "true", "TRUE"):
+                with self.assertRaises(roost.RoostError):
+                    agent.environment(store, dict(OPENCODE_PURE=pure))
+            self.assertIn("OPENCODE_CONFIG_CONTENT", agent.environment(store, dict(OPENCODE_PURE="0")))
+            # The OpenCode Roost starts is a new one to report, even from another's shell.
+            self.assertEqual(agent.environment(store, dict(ROOST_OPENCODE_OBSERVER="42"))["ROOST_OPENCODE_OBSERVER"], "")
+
     def test_a_pi_dialog_at_startup_ends_no_turn(self):
         # It can open before Pi's first report, while its hooks still set
         # its status, and close once the relay does.
@@ -3793,6 +3889,132 @@ class ProgramStatus(unittest.TestCase):
             self.assertEqual([(e["event"], e.get("title")) for e in events],
                              [("ui_prompt_start", "First"), ("ui_prompt_end", None), ("ui_prompt_start", "Second")])
             self.assertEqual(events[1]["idle"], False)
+
+
+    @unittest.skipUnless(shutil.which("node"), "needs Node")
+    def test_opencode_plugin_reports_the_task_session(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            store = roost.Store(str(root / "state"))
+            plugin = roost.OpenCodeAgent().plugin(store)
+            log = root / "log"
+            helper = root / "helper.py"
+            helper.write_text("import sys\n"
+                              "open(%r, 'a').write(sys.stdin.read() + '\\n')\n" % str(log))
+            text = lambda part, message, words, session="ses_a": (
+                "message.part.updated", dict(part=dict(id=part, type="text", text=words, messageID=message,
+                                                       sessionID=session)))
+            status = lambda session, kind: ("session.status", dict(sessionID=session, status=dict(type=kind)))
+            events = [
+                ("session.created", dict(info=dict(id="ses_a"))),
+                status("ses_a", "busy"),
+                ("message.updated", dict(info=dict(id="msg_u", role="user"))),
+                text("p0", "msg_u", "hi"),
+                ("message.updated", dict(info=dict(id="msg_a", role="assistant"))),
+                text("p1", "msg_a", "Done."),
+                ("session.created", dict(info=dict(id="ses_c", parentID="ses_a"))),
+                status("ses_c", "busy"),
+                ("question.asked", dict(id="q1", sessionID="ses_c", questions=[dict(question="Which?", header="h")])),
+                ("question.asked", dict(id="q2", sessionID="ses_a", questions=[dict(question="And?", header="h")])),
+                # Answered first, the newer one leaves the older waiting.
+                ("question.replied", dict(requestID="q2", sessionID="ses_a", answers=[["y"]])),
+                ("question.replied", dict(requestID="q1", sessionID="ses_c", answers=[["x"]])),
+                status("ses_c", "idle"),
+                text("p2", "msg_a", "All done."),
+                status("ses_a", "idle"),
+                status("ses_a", "busy"),
+                ("session.error", dict(sessionID="ses_a", error=dict(name="MessageAbortedError", data={}))),
+                status("ses_a", "idle"),
+                # OpenCode says it idles again as the stopped message is saved.
+                status("ses_a", "idle"),
+                status("ses_a", "busy"),
+                ("permission.asked", dict(id="r1", sessionID="ses_a", permission="bash", patterns=["date"],
+                                          metadata=dict(command="date"))),
+                ("permission.replied", dict(requestID="r1", sessionID="ses_a", reply="reject")),
+                status("ses_a", "idle"),
+                # Turns in two sessions at once: the task works while either
+                # does, and waits on you while either asks.
+                status("ses_a", "busy"),
+                status("ses_a", "busy"),
+                status("ses_b", "busy"),
+                ("question.asked", dict(id="q3", sessionID="ses_a", questions=[dict(question="Third?", header="h")])),
+                status("ses_b", "idle"),
+                status("ses_b", "busy"),
+                # Stopped, A's question waits no more, and goes unanswered.
+                status("ses_a", "idle"),
+                ("message.updated", dict(info=dict(id="msg_b", role="assistant"))),
+                text("p8", "msg_b", "B is done.", "ses_b"),
+                ("session.error", dict(sessionID="ses_b", error=dict(name="APIError", data=dict(message="B failed")))),
+                status("ses_b", "idle"),
+                status("ses_a", "busy"),
+                ("permission.asked", dict(id="r2", sessionID="ses_a", permission="bash", patterns=["ls"],
+                                          metadata=dict(command="ls"))),
+                ("permission.replied", dict(requestID="r2", sessionID="ses_a", reply="once")),
+                status("ses_a", "idle"),
+                # A failure in one turn shows when the last one ends.
+                status("ses_a", "busy"),
+                status("ses_b", "busy"),
+                ("session.error", dict(sessionID="ses_b", error=dict(name="APIError", data=dict(message="B limited")))),
+                status("ses_b", "idle"),
+                ("message.updated", dict(info=dict(id="msg_y", role="assistant"))),
+                text("p7", "msg_y", "A ends."),
+                status("ses_a", "idle"),
+                # A session deleted while it works ends its turn.
+                status("ses_d", "busy"),
+                status("ses_e", "busy"),
+                ("session.deleted", dict(sessionID="ses_d", info=dict(id="ses_d"))),
+                status("ses_e", "idle")]
+            driver = root / "driver.mjs"
+            driver.write_text(
+                "const { RoostObserver } = await import(%s);\n"
+                "const hooks = await RoostObserver({});\n"
+                "for (const [type, properties] of %s) await hooks.event({ event: { type, properties } });\n"
+                % (json.dumps(plugin.as_uri()), json.dumps(events)))
+            env = dict(os.environ, ROOST_PYTHON=sys.executable, ROOST_HELPER=str(helper))
+            env.pop("ROOST_OPENCODE_OBSERVER", None)
+            subprocess.run(["node", str(driver)], env=env, check=True, timeout=30)
+            reports = [json.loads(line) for line in log.read_text().splitlines()]
+            self.assertEqual([(r["event"], r.get("session"), r.get("status")) for r in reports],
+                             [("start", None, None), ("status", "ses_a", "busy"), ("asked", "ses_c", None),
+                              ("asked", "ses_a", None), ("asked", "ses_c", None),
+                              ("replied", "ses_c", None), ("status", "ses_a", "idle"),
+                              ("status", "ses_a", "busy"), ("status", "ses_a", "idle"),
+                              ("status", "ses_a", "busy"), ("asked", "ses_a", None), ("replied", "ses_a", None),
+                              ("status", "ses_a", "idle"),
+                              ("status", "ses_a", "busy"), ("status", "ses_b", "busy"), ("asked", "ses_a", None),
+                              ("asked", "ses_a", None), ("status", "ses_b", "busy"), ("status", "ses_b", "idle"),
+                              ("status", "ses_a", "busy"), ("asked", "ses_a", None), ("replied", "ses_a", None),
+                              ("status", "ses_a", "idle"),
+                              ("status", "ses_a", "busy"), ("status", "ses_b", "busy"), ("status", "ses_a", "busy"),
+                              ("status", "ses_a", "idle"),
+                              ("status", "ses_d", "busy"), ("status", "ses_e", "busy"), ("status", "ses_e", "busy"),
+                              ("status", "ses_e", "idle")])
+            self.assertEqual((reports[26]["reply"], reports[26]["error"]),
+                             ("A ends.", dict(name="APIError", message="B limited")))
+            self.assertNotIn("error", reports[30])
+            self.assertEqual(reports[16]["questions"], [dict(question="Third?")])
+            self.assertEqual((reports[18]["reply"], reports[18]["error"]),
+                             ("B is done.", dict(name="APIError", message="B failed")))
+            self.assertEqual(reports[20]["metadata"]["command"], "ls")
+            self.assertEqual((reports[2]["child"], reports[2]["questions"]), (True, [dict(question="Which?")]))
+            self.assertEqual(reports[4], reports[2])
+            self.assertEqual(reports[6]["reply"], "Done.\n\nAll done.")
+            self.assertNotIn("error", reports[6])
+            self.assertEqual(reports[8]["error"]["name"], "MessageAbortedError")
+            # A new turn forgets the last one's reply.
+            self.assertEqual((reports[8]["reply"], reports[10]["metadata"]["command"]), ("", "date"))
+            self.assertIs(reports[12]["declined"], True)
+            self.assertEqual(roost.OpenCodeAgent().observe(reports[12], "running")["lastEvent"], "Interrupt")
+            # An OpenCode started from it, by its shell tool, reports nothing.
+            nested = root / "nested.mjs"
+            nested.write_text(
+                "const { RoostObserver } = await import(%s);\n"
+                "if (process.env.ROOST_OPENCODE_OBSERVER !== '1') throw new Error('marker');\n"
+                "const hooks = await RoostObserver({});\n"
+                "if (hooks.event) throw new Error('reports');\n" % json.dumps(plugin.as_uri()))
+            subprocess.run(["node", str(nested)], env=dict(env, ROOST_OPENCODE_OBSERVER="1"), check=True, timeout=30)
+            self.assertEqual(len(log.read_text().splitlines()), len(reports))
+
 
 
 if __name__ == "__main__":

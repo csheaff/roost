@@ -68,6 +68,8 @@ KIND is `committed', `uncommitted', `untracked' or `binary'."
     ("stuck starting" (status . "starting") (live . t))
     ("codex starting" (status . "starting") (agent . "codex") (live . t))
     ("codex relayed starting" (status . "starting") (agent . "codex") (programStatus . t) (live . t))
+    ("opencode failed turn" (status . "failed") (agent . "opencode") (live . t) (lastEvent . "StopFailure")
+     (error . "Its turn ended on an error (APIError): invalid x-api-key"))
     ("running" (status . "running") (live . t) (task . ,roost-sweep--long-prompt)
      (diff . "") (ahead . 0))
     ("permission" (status . "permission") (live . t) (request . "Asks to run python3 -m unittest")

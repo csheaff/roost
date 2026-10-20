@@ -85,6 +85,39 @@ happened in a section below:
   path took its place 2.1 s later. Pen marks are untried:
   computer use can't draw on Scrawl's overlay.
 
+## OpenCode — 2026-10-19
+
+- **OpenCode 1.19.3, from its source.** Plugins receive every bus event.
+  `session.status` says `busy`, `retry` or `idle`; `permission.asked`,
+  `question.asked` and their replies say what waits on you, in the
+  session that asks, a subagent's included. The docs say
+  `OPENCODE_CONFIG_DIR` adds a config folder, but 1.19.3 uses it in place
+  of `~/.config/opencode`, hiding your settings, so Roost names its plugin
+  in `OPENCODE_CONFIG_CONTENT` instead, which OpenCode merges over the
+  rest, `plugin` lists included.
+- **A live run.** OpenCode 1.19.3 installed in a scratch folder, its XDG
+  folders there too, with LM Studio's qwen3.6-35b-a3b, driven through the
+  helper on a tmux socket of its own. A task with a first prompt went
+  `starting`, `ready`, `running`, `ready` with its reply and session. A
+  command, with `bash` set to `ask`, showed "Asks to run ls -la" and
+  `running` once allowed; declined, the task showed `interrupted`. So did
+  Esc twice. The question tool showed "Asks: Which do you prefer?". A
+  subagent's command showed as `permission`, and the task kept its own
+  session. A wrong API key showed "Its turn ended on an error (APIError):
+  invalid x-api-key" while OpenCode waited. `s` resumed the conversation.
+- **Two things only the live run showed.** OpenCode says a session idles
+  twice when you stop a turn, the second time without the error, which
+  made it `ready` rather than `interrupted`: its plugin now reports one
+  idle per turn. Declining a request ends the turn with no error at all;
+  the plugin now says the turn ended on one you declined.
+- **After review, the same setup.** OpenCode sets `busy` at each step of a
+  turn; the plugin now reports it once. A request whose turn ends unanswered
+  is dropped, as OpenCode drops one whose wait it interrupts with no reply.
+  Esc on a command's approval showed `interrupted`. The agent ran
+  `opencode run` from its shell: that OpenCode answered "nested", inheriting
+  the plugin, and reported nothing, while the task stayed `running` in its
+  own session until its turn ended.
+
 ## tmux-control's terminal interface — 2026-10-18
 
 - **tmux-control main (34a6ec7).** tmux-control now uses Eat through one

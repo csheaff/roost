@@ -4038,7 +4038,7 @@ Read from the layout transient keeps, whose form varies by version."
        (should (string-prefix-p "1 awaiting permission · 1 ready · 1 running\n" text))
        (should (string-match-p "^dev · ledger  ~/ledger$" text))
        (should (string-match-p "^local · site  ~/site$" text))
-       (should (string-match-p "  ● fix auth  permission  [0-9a-z]+ +claude  2 files \\+10 −3 · uncommitted · ↑1 ↓4  Fix the parser\\. Then add tests\\." text))
+       (should (string-match-p "  ● fix auth  permission  [0-9a-z]+ +claude    2 files \\+10 −3 · uncommitted · ↑1 ↓4  Fix the parser\\. Then add tests\\." text))
        ;; Creation order within a project; projects sorted by host.
        (should (< (string-match "fix auth" text) (string-match "totals" text)))
        (should (< (string-match "dev · ledger" text) (string-match "local · site" text))))

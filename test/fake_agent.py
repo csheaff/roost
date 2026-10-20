@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Offline Codex/Pi CLI contract fixture, using Roost's real event subprocesses.
+"""Offline Codex/Pi/OpenCode CLI contract fixture, using Roost's real event subprocesses.
 It reports its status to its terminal as the real agents do: Codex whenever
 that is a terminal, Pi once it answers the probe. As pi-old, it is a Pi
 from before 0.84.4, which says nothing of its dialogs, or of Esc."""
+import itertools
 import json
 import os
 from pathlib import Path
@@ -10,9 +11,46 @@ import subprocess
 import sys
 import termios
 import time
+import urllib.parse
 import uuid
 
 agent, *args = sys.argv[1:]
+if agent == "opencode":
+    # OpenCode loads Roost's plugin from inline config, which reports its
+    # events: these are the reports that plugin makes.
+    assert "--" not in args
+    config = json.loads(os.environ["OPENCODE_CONFIG_CONTENT"])
+    assert "RoostObserver" in Path(urllib.parse.unquote(urllib.parse.urlparse(config["plugin"][-1]).path)).read_text()
+    session = args[args.index("--session") + 1] if "--session" in args else "ses_" + uuid.uuid4().hex
+    prompts = [arg.removeprefix("--prompt=") for arg in args if arg.startswith("--prompt=")]
+
+    def report(event, sid=session, **fields):
+        subprocess.run([os.environ["ROOST_PYTHON"], os.environ["ROOST_HELPER"], "hook-env"],
+                       input=json.dumps(dict(event=event, session=sid, **fields)), text=True, check=True)
+
+    report("start", None)
+    print("FAKE_AGENT_READY " + session, flush=True)
+    for line in itertools.chain(prompts, (line.strip() for line in sys.stdin)):
+        report("status", status="busy")
+        if line == "exit":
+            break
+        if line == "permission":
+            report("asked", permission="bash", patterns=["make deploy"], metadata=dict(command="make deploy"))
+            sys.stdin.readline()
+            report("replied")
+        elif line == "subagent":
+            # A subagent's question waits on you; its session is not the task's.
+            report("asked", "ses_child", child=True, questions=[dict(question="Which branch?")])
+            sys.stdin.readline()
+            report("replied", "ses_child", child=True)
+        if line == "interrupt":
+            report("status", status="idle", reply="", error=dict(name="MessageAbortedError"))
+        elif line == "fail":
+            report("status", status="idle", reply="", error=dict(name="APIError", message="Rate\nlimited"))
+        else:
+            print("PROMPT " + line, flush=True)
+            report("status", status="idle", reply="opencode says " + line)
+    sys.exit(0)
 codex = agent == "codex"
 old = agent == "pi-old"
 agent = "pi" if old else agent
