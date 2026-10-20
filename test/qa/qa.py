@@ -1081,7 +1081,8 @@ def send(qa, repo):
 def attached(text, name):
     """The path in TEXT of the attachment whose name matches NAME, a regexp,
     as copied to the task's host."""
-    match = re.search(r"(/\S*/attachments/[0-9a-f]{16}/%s)" % name, text)
+    # Up to a line's start, as the directory may hold spaces.
+    match = re.search(r"(/[^\n]*/attachments/[0-9a-f]{16}/%s)" % name, text)
     return match and match.group(1)
 
 

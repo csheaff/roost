@@ -2730,9 +2730,13 @@ They are most of its size, and an agent reads its frames instead.")
   "The files to copy for FILE, as (NAME . LOCAL-FILE).
 A Scrawl capture gives its folder's name and the files in it but its
 video and audio; see `roost--scrawl-media'.  Signal a `user-error' for
-what Roost won't attach: a folder, or more than `roost--attach-limit'
-bytes."
+what Roost won't attach: a folder, a file that isn't on this machine,
+which an agent can be given by its path, or more than
+`roost--attach-limit' bytes."
   (setq file (directory-file-name (expand-file-name file)))
+  (when (file-remote-p file)
+    (user-error "%s is on %s already: give the agent its path there"
+                (file-local-name file) (file-remote-p file 'host)))
   (let* ((files (roost--attachment-entries file))
          ;; What a link points to, which is what Roost reads.
          (size (apply #'+ (mapcar (lambda (entry)

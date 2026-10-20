@@ -4657,6 +4657,15 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
         (should (string-match-p "delete its note, then attach it again"
                                 (cadr (should-error (roost-send-submit) :type 'user-error)))))))))
 
+(ert-deftest roost-attach-refuses-a-file-not-on-this-machine ()
+  (roost-test--isolated
+   ;; Read over SSH only to be copied back, and while you wait.
+   (cl-letf (((symbol-function 'roost--file-bytes) (lambda (&rest _) (error "Read it"))))
+     (should (string-match-p
+              "on dev already: give the agent its path there"
+              (cadr (should-error (roost--attachment-files "/ssh:dev:/home/user/work/shot.png")
+                                  :type 'user-error)))))))
+
 (ert-deftest roost-attach-measures-what-a-link-points-to ()
   (roost-test--isolated
    ;; Bigger than the limit, and the link, which holds its name, is not.

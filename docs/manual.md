@@ -322,7 +322,7 @@ terminal, it opens in a window below.
 also drafts a prompt holding them.
 
 In a prompt draft (`e` or `@`): `C-c C-c` sends, `C-c C-k` cancels, `C-c C-a`
-attaches a file and `C-c C-v` the image on the clipboard (as does
+attaches a file from this machine and `C-c C-v` the image on the clipboard (as does
 `M-x yank-media`, where Emacs reads images from the clipboard). Roost copies
 an attachment to the task's host in the background, under `attachments` in its
 state directory there, where the agent can read it. Meanwhile the draft shows
