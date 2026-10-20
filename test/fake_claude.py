@@ -12,6 +12,9 @@ import termios
 import time
 import uuid
 
+if sys.argv[1:] == ["--version"]:
+    print("2.1.303 (Claude Code)")
+    sys.exit()
 settings = json.loads(Path(sys.argv[sys.argv.index("--settings") + 1]).read_text())
 session = sys.argv[sys.argv.index("--resume") + 1] if "--resume" in sys.argv else str(uuid.uuid4())
 

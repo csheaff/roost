@@ -33,6 +33,31 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## Old Claude Code and Roost's hooks — 2026-10-20
+
+- **The question.** Orca's source says Claude Code 1.0.23 through 2.1.100
+  check hook event names against a fixed list and skip a whole settings file
+  that names one they don't know. Roost names `StopFailure`, which came in
+  2.1.78, in the file it passes with `--settings`.
+- **Tried.** Claude Code 2.1.77 and 2.1.78 from npm in a scratch folder, and
+  the installed 2.1.303, each with a scratch `HOME` and `CLAUDE_CONFIG_DIR`,
+  not signed in. Each settings file had hooks that write their event's name
+  to a file.
+- **2.1.77 runs none of them.** With only a `SessionStart` hook, it ran.
+  With a `StopFailure` hook beside it, or with Roost's nine events, no hook
+  ran. In `-p` it said nothing, and its `--debug` log found no hooks
+  in settings. Started as Roost starts it, in a terminal, it opened with
+  "Settings Error … `StopFailure`: Invalid key in record", said files with
+  errors are skipped entirely, and asked whether to exit or go on without
+  them. If you go on, the task stays `starting`.
+- **2.1.78 and 2.1.303 run them.** In `-p`, `SessionStart`,
+  `UserPromptSubmit`, `StopFailure` and `SessionEnd` ran (the turn failed
+  for want of a login). In a terminal, 2.1.78 took Roost's whole file,
+  `worktree.baseRef` included, with no dialog, and ran `SessionStart`.
+- **So** `roost-doctor` now asks for Claude Code 2.1.78 or newer, with a hint
+  to upgrade. A new event in `CLAUDE_HOOK_EVENTS` raises
+  `CLAUDE_MIN_VERSION` to the release that first sends it.
+
 ## Recorded sessions — 2026-10-19
 
 `make contract-live` now keeps what each agent sent in `test/captures`, and

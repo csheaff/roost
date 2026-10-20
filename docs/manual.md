@@ -15,9 +15,9 @@ day of work, every command and option, and how Roost works.
 
 Requirements: Emacs 29.1+ and [tmux-control](https://github.com/csheaff/tmux-control)
 0.8.1+ (which brings [Eat](https://codeberg.org/akib/emacs-eat)). Each task host needs
-Python 3.9+, Git, tmux 3.1+, and an installed, signed-in agent CLI (Codex 0.160.0
-or newer). Remote hosts need key- or agent-based SSH; use SSH config aliases for
-ports and jump hosts. Roost copies its helper to each host itself.
+Python 3.9+, Git, tmux 3.1+, and an installed, signed-in agent CLI (Claude Code
+2.1.78 or newer, Codex 0.160.0 or newer). Remote hosts need key- or agent-based
+SSH; use SSH config aliases for ports and jump hosts. Roost copies its helper to each host itself.
 
 Emacs 30 (built-in `use-package`):
 
@@ -687,7 +687,10 @@ permission request approved and declined, Esc, a minute idle and `/clear`.
 (its default model; trusting the scratch repository and Roost's hooks is
 undone afterwards) and Pi (the model it is set to use). Add
 `CONTRACT_FLAGS=--program-status` to relay their OSC 7501 reports too, as
-`roost-program-status` does. Run them after an agent updates.
+`roost-program-status` does. Run them after an agent updates. A Claude
+Code older than an event Roost listens to runs none of Roost's hooks, so a
+new event in `CLAUDE_HOOK_EVENTS` raises `CLAUDE_MIN_VERSION`, which
+`roost-doctor` checks.
 
 A live run that passes keeps what the agent reported in `test/captures`,
 named after the agent and its version: each hook payload or extension

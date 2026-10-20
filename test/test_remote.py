@@ -2020,6 +2020,21 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(roost.version_of("tmux 3.7c"), (3, 7, 0))
         self.assertEqual(roost.version_of("codex-cli 0.160.0"), (0, 160, 0))
 
+    def test_doctor_asks_for_a_claude_that_runs_the_hooks(self):
+        # Claude Code 2.1.77 runs no hook from a settings file naming
+        # StopFailure, which came in 2.1.78; see docs/validation.md.
+        def claude(version):
+            path = self.root / ("claude-" + version)
+            path.write_text("#!/bin/sh\necho '%s (Claude Code)'\n" % version)
+            path.chmod(0o755)
+            reply = self.request("doctor", commands={"claude": [str(path)]})
+            return {check["name"]: check for check in reply["result"]}["Claude"]
+        old = claude("2.1.77")
+        self.assertFalse(old["ok"], old)
+        self.assertIn("Upgrade to Claude Code 2.1.78", old["hint"])
+        self.assertTrue(claude("2.1.78")["ok"])
+        self.assertTrue(claude("2.1.303")["ok"])
+
     def github(self):
         """A local bare origin and a fake gh first on PATH, recording its arguments."""
         self.origin = self.root / "origin.git"

@@ -175,10 +175,12 @@ the last two are worth trying once those show what the panel has room for.
 - **Ghostel in place of Eat.** [Ghostel](https://github.com/dakra/ghostel)
   runs Ghostty's terminal engine in Emacs as a native module, with the Kitty
   keyboard and graphics protocols and synchronized output, and its author
-  measures it faster than vterm. tmux-control would draw panes with it
-  instead of Eat. First check that Ghostel can show output it doesn't read
-  from its own process. The module is a prebuilt download, one more thing to
-  install.
+  measures it faster than vterm. With four agents streaming, it used less
+  than half the Emacs CPU Eat does (draft
+  [#78](https://github.com/csheaff/roost/pull/78)). tmux-control would draw
+  panes with it instead of Eat. First check that Ghostel can show output it
+  doesn't read from its own process. The module is a prebuilt download, one
+  more thing to install.
 
 ## Exploring
 
@@ -219,6 +221,20 @@ Larger, or undecided.
   with control mode, and Rex servers on Linux outside Superlogical. Ask for
   the first in the beta. Look again once both exist, or once tmux turns
   down OSC 7501 for good.
+- **zmx and Ghostel in place of tmux.** [zmx](https://github.com/neurosnap/zmx)
+  keeps each task's terminal in a small daemon of its own and redraws it
+  from Ghostty's engine when you attach. Emacs would show a task as a plain
+  Ghostel terminal running `zmx attach`, through `ssh -t` for a remote host,
+  with no Eat and no tmux-control. Tracked in
+  [#79](https://github.com/csheaff/roost/issues/79); the draft
+  [#78](https://github.com/csheaff/roost/pull/78) tried it on 2026-10-20:
+  links, Shift+Enter and program status worked without patches, and remote
+  terminals shared one SSH connection, but zmx 0.8.1 isn't ready. Look again
+  once a zmx release keeps the whole scrollback when you reattach
+  ([zmx#296](https://github.com/neurosnap/zmx/pull/296)) and shows a task
+  started with nothing attached (fixed on zmx's main), and once an upgrade
+  leaves running sessions reachable, or at least fails fast: today `kill`
+  and `attach` hang against a daemon of another version.
 - **Claude Code's own background sessions.** Claude Code now runs sessions
   in the background itself (seen in 2.1.302): `claude --bg` starts one,
   `claude agents` lists them, and `attach`, `logs` and `respawn` act on
@@ -300,6 +316,7 @@ in changelogs.
 | [Codex app](https://developers.openai.com/codex/app) | OpenAI's desktop app | Automations and their review queue |
 | [agent-shell](https://github.com/xenodium/agent-shell), [claude-code.el](https://github.com/stevemolitor/claude-code.el), [M-x Machina](https://github.com/eliraz-refael/m-x-machina) | Agents inside Emacs | |
 | [Ghostel](https://github.com/dakra/ghostel) | Emacs terminal on Ghostty's engine | Kitty keyboard and graphics protocols, synchronized output |
+| [zmx](https://github.com/neurosnap/zmx) | Terminal sessions kept by a daemon each, redrawn from Ghostty's engine on attach | Session labels, `zmx send`, `zmx history`; tried in [#78](https://github.com/csheaff/roost/pull/78) |
 
 [awesome-agent-orchestrators](https://github.com/andyrewlee/awesome-agent-orchestrators)
 tracks about 250 more; its terminal section is closest to Roost.

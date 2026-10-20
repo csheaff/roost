@@ -376,6 +376,9 @@ def delete_branch(repo, branch, commit):
 # checks them, and the rest, against the installed Claude Code.
 CLAUDE_HOOK_EVENTS = ("SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse",
                       "PostToolUse", "PermissionRequest", "Notification", "Stop", "StopFailure")
+# The first Claude Code that knows all of them. Older ones skip a whole
+# settings file that names an event they don't know, every hook in it.
+CLAUDE_MIN_VERSION = (2, 1, 78)
 
 
 def claude_hook_settings(store, task):
@@ -2886,6 +2889,10 @@ def doctor(store, request):
         detail = out.splitlines()[0] if out else executable
         if agent == "codex" and not (version and version >= (0, 160, 0)):
             check(label, False, detail, "Upgrade to Codex 0.160.0 or newer for its lifecycle hooks", executable)
+            continue
+        if agent == "claude" and version and version < CLAUDE_MIN_VERSION:
+            check(label, False, detail, "Upgrade to Claude Code %s or newer; older ones ignore Roost's hooks"
+                  % ".".join(map(str, CLAUDE_MIN_VERSION)), executable)
             continue
         if agent == "claude":
             code, out = run([executable, "auth", "status"])
