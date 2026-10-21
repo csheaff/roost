@@ -92,5 +92,13 @@ they can do themselves.
 - Write plainly and briefly, in terms of what the user sees and does, with
   no hype. Messages say what happened ("Sent to X").
 - Commit messages and pull request titles are one imperative sentence
-  ("Shorten the README around new screenshots"). Pull requests get a
-  Copilot review, and its findings are addressed before a squash merge.
+  ("Shorten the README around new screenshots").
+- Review a branch that changes code before opening its pull request (in
+  Claude Code, `/code-review high` for asynchronous Emacs code, the
+  helper's protocol, Git snapshots or merging and remote hosts, `medium`
+  otherwise), and fix what holds up. Docs and one-line edits skip it.
+- Pull requests get a Copilot review. Fix the findings that hold up and
+  answer the rest in a line on their thread. Ask for another round only
+  after a fix that changes behaviour: "Needs a closer look" with no open
+  issues is as far as Copilot goes. Squash-merge once CI passes and every
+  thread is resolved. Main takes no direct pushes.
