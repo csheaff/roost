@@ -716,6 +716,68 @@ def answer(qa, repo):
          lambda s: "Answer it in its terminal" not in qa.window(s, "roost-task-info-mode")["text"])])
 
 
+@journey("n says where it went and why, and goes back")
+def next_waiting(qa, repo):
+    """n from a file you are working on: the echo area says which task it
+    opened and why, and keeps saying so as its terminal takes focus.  Once
+    none waits, n offers the way back to the file, and goes there."""
+    qa.keys("C-x C-f")
+    qa.type(str(repo / "notes.py") + "\r")
+    qa.wait("notes.py", lambda s: s["selected"] == "notes.py")
+    asking = new_task(qa, "ask git branch --list")
+    qa.status(asking, "permission")
+    # Its turn ends while you are back in notes.py, so it waits for you.
+    streaming = new_task(qa, "stream next 16 0.4")
+    if qa.emacs.eval("(roost--workspace-backend)") == "perspective":
+        # In a task's perspective, notes.py would count as that task's.
+        qa.keys("M-x")
+        qa.type("persp-switch\r")
+        qa.wait("which perspective", lambda s: s["prompt"])
+        qa.type("main\r")
+    qa.keys("C-x b")
+    qa.type("notes.py\r")
+    qa.wait("notes.py", lambda s: s["selected"] == "notes.py")
+    qa.status(streaming, "ready")
+    others = [t["name"] for t in qa.screen()["tasks"] if t["waiting"] and t["name"] not in (asking, streaming)]
+    if others:
+        raise Stuck("Other tasks wait as well: %s" % ", ".join(others))
+    qa.step("Two tasks wait, and you are in notes.py", expect=[
+        ("the sidebar says both wait", lambda s: "permission" in qa.window(s, "roost-sidebar-list-mode")["text"]
+         and "ready" in qa.window(s, "roost-sidebar-list-mode")["text"])])
+
+    def opened(name):
+        return lambda s: (s.get("task") or {}).get("name") == name and selected_terminal(s)
+
+    qa.keys("C-c r n")
+    qa.wait(asking + "'s terminal", opened(asking))
+    said = "permission · %s: Asks to run git branch --list; 1 more waiting" % asking
+    qa.step("n opens the one asking", expect=[
+        ("the echo area says which, why and how many more", lambda s: s["echo"] == said)])
+    # Its terminal and panel draw, and its host is asked again.
+    time.sleep(3)
+    qa.step("Still said as its terminal has focus", expect=[
+        ("the echo area says it still", lambda s: s["echo"] == said),
+        ("its terminal is selected", opened(asking))])
+    qa.type("yes\r")
+    qa.status(asking, "ready", "idle")
+    qa.keys("C-c r n")
+    qa.wait(streaming + "'s terminal", opened(streaming))
+    qa.step("n opens the one that finished", expect=[
+        ("the echo area says its reply, and that none else waits",
+         lambda s: s["echo"] == "ready · %s: Streamed next; no more waiting" % streaming)])
+    qa.keys("C-c r n")
+    qa.step("None waits", expect=[
+        ("n says so, and offers the way back",
+         lambda s: s["echo"] == "No tasks are waiting for you; n again goes back to notes.py"),
+        ("it stays", opened(streaming))])
+    qa.keys("C-c r n")
+    qa.wait("notes.py", lambda s: s["selected"] == "notes.py")
+    qa.step("n again goes back", expect=[
+        ("to notes.py", lambda s: s["selected"] == "notes.py"),
+        ("and says so", lambda s: s["echo"] == "Back to notes.py"),
+        ("no terminal is selected", lambda s: not selected_terminal(s))])
+
+
 @journey("Fold and unfold a long prompt")
 def fold(qa, repo):
     qa.keys("C-c r c")
@@ -2216,7 +2278,7 @@ def dropped(qa, repo):
         ("the agent replied", lambda s: "PROMPT After the drop" in selected_terminal(s)["text"])])
 
 
-JOURNEYS = [sweep, answer, fold, resize, merge, review, since_looked, panes, shell,
+JOURNEYS = [sweep, answer, next_waiting, fold, resize, merge, review, since_looked, panes, shell,
             dashboard, stop_resume, retire, send, attach, update, conflicts, restart, search, workload, question_left,
             walk_away,
             frames, org, drafts, tabs,

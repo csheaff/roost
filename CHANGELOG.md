@@ -6,6 +6,14 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.9.0:
 
+- `n` says in the echo area which task it opened, why that one waits and
+  how many more do: `permission · ledger: Asks to run make test; 2 more
+  waiting`, with the first line of a reply, why a pull request waits on
+  you, or how an agent ended. It stays on one line, cutting why it waits
+  first. Once none waits, `n` says so and offers the way back to where
+  you pressed the first `n`; pressed again, it goes there: with
+  workspaces, the perspective or tab you were in, and without, the
+  frame's windows as they were. Nothing to do when upgrading.
 - A task says what changed since you last looked at it. Opening it in
   Magit with `r`, or sending its agent your notes with `@`, records where
   its work stands, uncommitted work too. Once you've seen its agent's
