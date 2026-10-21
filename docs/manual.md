@@ -234,12 +234,13 @@ that passed; for a pull request without the task's newest commits or its
 uncommitted changes, it says the checks didn't run on them. `Open review
 threads` lists the pull request's unresolved threads, Copilot's too, each
 with its file and line, who started it and how. `RET` on one visits that
-line in the task's worktree, in another window; for a thread on a deleted
-line, one the agent has changed since, or one on the whole file, it shows
-the file's changes. The agent's latest reply comes last, marked as its own
-account: `No CI results` beside a reply that says the tests pass means only
-the agent says so, perhaps from a run in its terminal. Roost judges neither,
-and gives no score or verdict on whether to merge.
+line in the task's worktree, in another window, as the pull request has it;
+for a thread on a deleted line, one the agent has changed since, or one on
+the whole file, it shows the file's changes. The agent's latest reply comes
+last, marked as its own account: `No CI results` beside a reply that says
+the tests pass means only the agent says so, perhaps from a run in its
+terminal. Roost judges neither, and gives no score or verdict on whether to
+merge.
 
 **Review in Magit.** `r` opens Magit on the task's worktree, through TRAMP for
 remote tasks. Stage, edit and commit as usual. The status names the task,

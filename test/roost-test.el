@@ -6100,6 +6100,12 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
      (let ((text (funcall panel named 40)))
        (should (string-match-p "^  …/long/path/report\\.py  octo · outdated$" text))
        (should (string-match-p "^The total skips the last row, which…$" text)))
+     ;; A closed one's checks say so; an open one's still show once its
+     ;; work is merged here.
+     (should (string-match-p "^✓ 3 passed\nRun on #12, which is closed$"
+                             (funcall panel (append files (roost-test--turn-task '(state . "CLOSED"))))))
+     (should (string-match-p "^Checks\n✓ 3 passed$"
+                             (funcall panel (append '((landed . t)) (roost-test--turn-task)))))
      ;; Merged, nothing waits on them.
      (should-not (string-match-p "Checks\|Open review threads"
                                  (funcall panel (append files (roost-test--turn-task '(state . "MERGED") (car threads))))))

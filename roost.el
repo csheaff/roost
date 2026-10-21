@@ -5425,12 +5425,13 @@ KEY is a function that formats a key, as in `roost--next-step'."
 
 (defun roost--evidence-p (task)
   "Whether TASK's panel says what a merge of it would rest on.
-That is while it has work to merge, or a pull request not merged."
+That is while it has work to merge, or a pull request open."
   (let ((state (roost--pr-state task)))
-    (and (not (eq state 'merged))
-         (not (roost--merged-p task))
-         (or state (roost--field task 'files))
-         t)))
+    (or (and (memq state '(open draft)) t)
+        (and (not (eq state 'merged))
+             (not (roost--merged-p task))
+             (or state (roost--field task 'files))
+             t))))
 
 (defconst roost--failed-checks-shown 5
   "How many failing checks a task panel names before counting the rest.")
@@ -5475,9 +5476,11 @@ there are no CI results, which looks unlike checks that passed."
         (when (> passing 0)
           (roost--insert-indented (funcall mark "✓" 'roost-status-ready (format "%d passed" passing))))
         ;; Not of work since, which GitHub hasn't seen.
-        (when (and since (memq state '(open draft)))
-          (roost--insert-indented (format "Run on %s as pushed, not on %s" number (string-join since " or "))
-                                  'roost-dim)))))))
+        (cond ((eq state 'closed)
+               (roost--insert-indented (format "Run on %s, which is closed" number) 'roost-dim))
+              (since
+               (roost--insert-indented (format "Run on %s as pushed, not on %s" number (string-join since " or "))
+                                       'roost-dim))))))))
 
 (defconst roost--review-threads-shown 5
   "How many open review threads a task panel lists before counting the rest.")
@@ -5524,7 +5527,8 @@ first comment follows, on a line of its own."
                                          place (string-width place) (- (string-width place) (1- room))))
                           place)
                         'follow-link t 'face 'roost-field
-                        'help-echo (concat place "\nmouse-1: " (if line "visit the line" "show its changes"))
+                        'help-echo (concat place "\nmouse-1: "
+                                           (if line "visit the line, as the pull request has it" "show its changes"))
                         'action (lambda (_)
                                   (roost--quit-questions-left-open visit)
                                   (funcall visit)))
@@ -5536,7 +5540,8 @@ first comment follows, on a line of its own."
 (defun roost--visit-review-thread (task thread)
   "Show where THREAD, one of TASK's open review threads, is.
 On a line of its file as the pull request has it, that line in TASK's
-worktree, in another window: the terminal or panel stays.  Otherwise,
+worktree, in another window: the terminal or panel stays.  Commits or
+changes since the pull request's head can have moved it.  Otherwise,
 as on a deleted line, a line changed since or the whole file, the
 file's changes, as its button in the file list shows them."
   (let ((path (alist-get 'path thread))

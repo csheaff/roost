@@ -2789,7 +2789,12 @@ elif args[:2] == ["auth", "status"]:
                 dict(__typename="CheckRun", name="test (30.1)", status="IN_PROGRESS", conclusion=""),
                 dict(__typename="StatusContext", context="ci/docs", state="ERROR"),
                 # Unnamed, it is counted only.
-                dict(__typename="CheckRun", status="COMPLETED", conclusion="FAILURE")])]))
+                dict(__typename="CheckRun", status="COMPLETED", conclusion="FAILURE"),
+                # A name two workflows share goes with its workflow's.
+                dict(__typename="CheckRun", name="build", workflowName="CI", status="COMPLETED",
+                     conclusion="FAILURE"),
+                dict(__typename="CheckRun", name="build", workflowName="Release", status="COMPLETED",
+                     conclusion="SUCCESS")])]))
 
         def thread(resolved, path, **fields):
             return dict(isResolved=resolved, path=path, comments=dict(nodes=[dict(createdAt="2026-10-16T21:41:00Z")]),
@@ -2808,13 +2813,17 @@ elif args[:2] == ["auth", "status"]:
                 # Its line changed since, or it is on the whole file.
                 thread(False, "ledger.py", line=None, isOutdated=True,
                        opening=dict(nodes=[dict(author=None, bodyText="x" * 300)])),
-                thread(False, "README.md", diffSide="RIGHT", opening=dict(nodes=[]))]))}))
+                thread(False, "README.md", diffSide="RIGHT", opening=dict(nodes=[])),
+                # Whatever else GitHub sends of how it starts.
+                thread(False, "TODO.md", opening=dict(nodes=["?"]))]))}))
         status = self.request("list", full=True)["result"][0]["prStatus"]
-        self.assertEqual((status["failingChecks"], status["pendingChecks"]), (["lint", "ci/docs"], ["test (30.1)"]))
-        self.assertEqual(status["checks"], dict(passing=1, failing=3, pending=1))
-        self.assertEqual(status["threads"], 4)
+        self.assertEqual((status["failingChecks"], status["pendingChecks"]),
+                         (["lint", "ci/docs", "CI / build"], ["test (30.1)"]))
+        self.assertEqual(status["checks"], dict(passing=2, failing=4, pending=1))
+        self.assertEqual((status["threads"], status["mergeable"]), (5, "MERGEABLE"))
         self.assertEqual(status["openThreads"], [
             dict(path="README.md", author=None, text=""),
+            dict(path="TODO.md", author=None, text=""),
             dict(path="ledger.py", author="octo", text="Why remove this?"),
             dict(path="ledger.py", author=None, text="x" * 200, outdated=True),
             dict(path="report.py", author="copilot-pull-request-reviewer", text="The total skips the last row.",

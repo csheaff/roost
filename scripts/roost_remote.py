@@ -4,6 +4,7 @@
 """Roost's host-side task manager. Standard library only; JSON over stdin/stdout."""
 
 import base64
+import collections
 import concurrent.futures
 import contextlib
 import datetime
@@ -1616,9 +1617,19 @@ def summarize_checks(rollup):
 
 def check_names(rollup, state):
     """The names of a statusCheckRollup's checks that are STATE, as
-    check_state has it: the first CHECKS_NAMED of them, of those named."""
-    names = [check.get("name") or check.get("context") for check in rollup or [] if check_state(check) == state]
-    return [name for name in names if isinstance(name, str) and name][:CHECKS_NAMED]
+    check_state has it: the first CHECKS_NAMED of them, of those named. A
+    name that two checks share goes with its workflow's, when it has one."""
+    def name(check):
+        return check.get("name") or check.get("context")
+
+    shared = collections.Counter(name(check) for check in rollup or [])
+    names = []
+    for check in rollup or []:
+        if check_state(check) == state and isinstance(name(check), str) and name(check):
+            workflow = check.get("workflowName")
+            names.append("%s / %s" % (workflow, name(check)) if shared[name(check)] > 1 and workflow
+                         else name(check))
+    return names[:CHECKS_NAMED]
 
 
 def first_failure(rollup):
@@ -1725,9 +1736,13 @@ def open_thread(thread):
     its file; its line in the pull request's version of the file, unless it
     is on a deleted line, a line changed since or the whole file; and who
     started it, with the first line of what they wrote."""
-    first = next(iter((thread.get("opening") or {}).get("nodes") or []), None) or {}
-    text = next((line.strip() for line in (first.get("bodyText") or "").splitlines() if line.strip()), "")
-    entry = dict(path=thread["path"], author=(first.get("author") or {}).get("login"),
+    opening = thread.get("opening")
+    nodes = opening.get("nodes") if isinstance(opening, dict) else None
+    first = nodes[0] if isinstance(nodes, list) and nodes and isinstance(nodes[0], dict) else {}
+    author = first.get("author")
+    body = first.get("bodyText")
+    text = next((line.strip() for line in (body if isinstance(body, str) else "").splitlines() if line.strip()), "")
+    entry = dict(path=thread["path"], author=author.get("login") if isinstance(author, dict) else None,
                  text=text[:THREAD_TEXT_LIMIT])
     if thread.get("diffSide") == "RIGHT" and isinstance(thread.get("line"), int):
         entry["line"] = thread["line"]
