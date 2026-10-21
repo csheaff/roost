@@ -948,7 +948,9 @@ def since_looked(qa, repo):
     answer_yes(qa, name)
     qa.wait("the mark", lambda s: row(s).endswith("not looked at"))
     qa.step("Not looked at yet", expect=[
-        ("the panel says r opens it", lambda s: "Not looked at in Magit yet: r opens it" in panel_text(qa, s)),
+        ("the panel says so, and r once, in the next step",
+         lambda s: "Not looked at in Magit yet\n" in panel_text(qa, s)
+         and "in Magit: r" in panel_text(qa, s) and ": r opens it" not in panel_text(qa, s)),
         ("it doesn't wait on you", lambda s: qa.task(s, name)["status"] == "idle")])
     qa.keys("C-c r r")
     qa.wait("Magit", lambda s: (qa.window(s, "magit-status-mode") or {}).get("selected"))
@@ -2305,9 +2307,10 @@ def large(qa, repo):
     qa.step("Marked", expect=[
         ("the panel counts the lines of its new files", lambda s: "± 3 files +452 −0" in panel_text(qa, s)),
         ("its row in the sidebar has the mark", lambda s: "±" in row(s)),
-        ("and no status, once seen, but, with Magit, that you haven't looked at it",
+        ("and no status, once seen, but, with Magit, that you haven't looked at it where its whole name "
+         "leaves room",
          lambda s: (qa.task(s, name) or {}).get("status") == "idle"
-         and row(s).endswith("± not looked at" if magit else "±"))])
+         and row(s).endswith(("± not looked at", "±") if magit else "±"))])
     qa.keys("C-c r S")
     qa.wait("the dashboard", lambda s: (qa.window(s, "roost-dashboard-mode") or {}).get("selected"))
     # Its row may be below the window's end, after the other journeys' tasks.
