@@ -57,19 +57,6 @@ Small, and probably worth the most.
   so finished turns mixed in slow the answer to a permission request.
   From the cockpit, where one alert sounds at a time and a message counts
   the rest ([FAA](https://hfcc.dot.gov/publications/docs/GeneralGuidance/zz_FAA_GeneralGuidanceDoc_Chapter_04_Section_01.html)).
-- **A warning in the draft when another task changes its files.** When a
-  new task's draft quotes a file, as one started from a region, a file, a
-  diagnostic or a compilation error does, it names the project's running
-  tasks that already change that file ("ledger totals already changes
-  report.py"), from the overlaps the task panel finds. Starting it anyway,
-  waiting, or giving the work to that task stays your choice. Tasks that
-  share files aren't independent: replayed merges of agents' concurrent
-  pull requests conflicted in 20% of pairs from one agent and 42% across
-  agents ([Xu et al.](https://arxiv.org/pdf/2607.04697)), and in
-  ParallelPilot's trial, seeing which tasks shared files was the help whose
-  gains tracked how much got done
-  ([ParallelPilot](https://arxiv.org/html/2609.33113v1)). It's the draft's
-  side of [other tasks' changes in your file buffers](#worth-trying).
 - **`n` says where it went and why.** `n` opens the next task waiting,
   permission requests first, without saying why it chose that one, so you
   arrive somewhere you didn't pick and catch up. The echo area could say
@@ -196,8 +183,9 @@ changed since you last looked.
 - **Other tasks' changes in your file buffers.** Visiting a file that
   another task has changed, a header line names those tasks and their
   status, with a click for that task's diff of the file. Most useful in the
-  primary checkout, where you otherwise find a conflict only at `m`. Roost
-  already finds overlaps between tasks.
+  primary checkout, where you otherwise find a conflict only at `m`. A new
+  task's draft already names the tasks that change a file it quotes, and
+  the task panel those that change its own files.
 - **Since you last looked, in the fringe.** Point diff-hl at the commit
   Roost keeps of where you last looked, in a task's worktree, so a file
   shows only what changed since, in your own buffer.

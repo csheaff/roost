@@ -5857,6 +5857,159 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
      (should (string-match-p "^ledger totals also changes report\\.py\nmerged one also changes report\\.py\nmore 0 also changes ledger\\.py\n3 more tasks change them too$"
                              (funcall panel))))))
 
+(ert-deftest roost-the-draft-names-tasks-changing-files-it-quotes ()
+  (roost-test--isolated
+   (let* ((file (lambda (path) `((path . ,path) (added . 1) (deleted . 0))))
+          (other (lambda (id name repo &rest fields)
+                   (roost--cache-task "dev" (append fields `((id . ,id) (name . ,name) (repo . ,repo))
+                                                    (roost-test--task id)))))
+          (draft (lambda (directory &rest prompt)
+                   (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer))
+                   (roost--compose nil (cons (apply #'concat prompt) t) directory)
+                   (with-current-buffer roost--compose-buffer (buffer-string))))
+          (created nil)
+          (opened nil))
+     (funcall other "1111111111111111" "ledger totals" "/home/user/ledger"
+              '(worktree . "/home/user/work/ledger-totals")
+              `(files ,(funcall file "README.md") ,(funcall file "report.py")))
+     (funcall other "2222222222222222" "elsewhere" "/home/user/other" `(files ,(funcall file "report.py")))
+     ;; Of one merged, only what it changes since.
+     (funcall other "3333333333333333" "merged one" "/home/user/ledger" '(landed . t) '(dirty . t)
+              `(files ,(funcall file "report.py")))
+     (save-window-excursion
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost-open-task)
+                      (lambda (task &optional quit-questions)
+                        (setq opened (list (roost--field task 'name) quit-questions))))
+                     ((symbol-function 'roost--create-task)
+                      (lambda (directory name &rest _) (setq created (list directory name)))))
+             (should (string-match-p "^Name .*\nledger totals already changes report\\.py\n─"
+                                     (funcall draft "/ssh:dev:/home/user/ledger/"
+                                              "\n\n" (roost--quoting "report.py") ":3-4\n\ntotal = 0")))
+             (with-current-buffer roost--compose-buffer
+               (should-not (string-match-p "elsewhere\\|merged one" (buffer-string)))
+               ;; The name opens the task, as a click on its row does.
+               (goto-char (point-min))
+               (search-forward "ledger totals already")
+               (push-button (match-beginning 0))
+               (should (equal opened '("ledger totals" t)))
+               ;; A task that changes it since shows once Roost measures it.
+               (funcall other "4444444444444444" "report chart" "/home/user/ledger"
+                        `(files ,(funcall file "report.py")))
+               (roost--redraw)
+               (should (string-match-p "^ledger totals already changes report\\.py\nreport chart already changes report\\.py\n─"
+                                       (buffer-string)))
+               ;; A refresh with nothing new leaves the draft alone.
+               (let ((rendered 0))
+                 (cl-letf (((symbol-function 'roost--compose-render) (lambda () (cl-incf rendered))))
+                   (roost--redraw))
+                 (should (= rendered 0)))
+               ;; Starting the task anyway is up to you.
+               (goto-char (point-min))
+               (search-forward "Describe the task")
+               (forward-line 1)
+               (insert "Round the totals.")
+               (roost-compose-submit)
+               (should (equal created '("/ssh:dev:/home/user/ledger/" "round-totals")))
+               (setq roost--compose-submitting nil)
+               ;; A task gone since says so.
+               (goto-char (point-min))
+               (search-forward "report chart already")
+               (remhash (list "dev" "4444444444444444") roost--tasks)
+               (should-error (push-button (match-beginning 0)) :type 'user-error)
+               ;; With the quote deleted, the draft names no file.
+               (let ((inhibit-read-only t))
+                 (delete-region roost--compose-body (point-max))
+                 (insert "\n\nreport.py"))
+               (roost--compose-render)
+               (should-not (string-match-p "already changes" (buffer-string))))
+             ;; From a task's worktree, the tasks of its project.
+             (should (string-match-p "^ledger totals already changes report\\.py$"
+                                     (funcall draft "/ssh:dev:/home/user/work/ledger-totals/"
+                                              "\n\n" (roost--quoting "report.py"))))
+             ;; Another project's, or another host's, tasks don't count.
+             (should-not (string-match-p "already changes"
+                                         (funcall draft "/ssh:prod:/home/user/ledger/"
+                                                  "\n\n" (roost--quoting "report.py"))))
+             ;; Nor a file nobody changes.
+             (should-not (string-match-p "already changes"
+                                         (funcall draft "/ssh:dev:/home/user/ledger/"
+                                                  "\n\n" (roost--quoting "notes.py"))))
+             ;; Past three, how many more.
+             (dotimes (n 4)
+               (funcall other (format "%016d" (+ 9 n)) (format "also %d" n) "/home/user/ledger"
+                        `(files ,(funcall file "report.py"))))
+             (should (string-match-p "^2 more tasks change it too\n─"
+                                     (funcall draft "/ssh:dev:/home/user/ledger/"
+                                              "\n\n" (roost--quoting "report.py"))))
+             (dotimes (n 4)
+               (remhash (list "dev" (format "%016d" (+ 9 n))) roost--tasks))
+             (dotimes (n 4)
+               (funcall other (format "%016d" (+ 5 n)) (format "more %d" n) "/home/user/ledger"
+                        `(files ,(funcall file "README.md"))))
+             (should (string-match-p (concat "^ledger totals already changes README\\.md, report\\.py\n"
+                                             "more 0 already changes README\\.md\n"
+                                             "more 1 already changes README\\.md\n"
+                                             "2 more tasks change them too\n─")
+                                     (funcall draft "/ssh:dev:/home/user/ledger/"
+                                              "\n\n" (roost--quoting "report.py") "\n"
+                                              (roost--quoting "README.md")))))
+         (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-drafts-mark-the-files-they-quote ()
+  (roost-test--isolated
+   (let* ((default-directory "/tmp/")
+          (checkout (file-name-as-directory (file-truename (make-temp-file "roost-checkout" t))))
+          (quoted (lambda ()
+                    (prog1 (with-current-buffer roost--compose-buffer (roost--compose-quoted-files))
+                      (kill-buffer roost--compose-buffer)))))
+     (make-directory (expand-file-name ".git" checkout))
+     (make-directory (expand-file-name "src" checkout))
+     (save-window-excursion
+       (unwind-protect
+           (progn
+             (roost-new-task-from-file (expand-file-name "src/a.py" checkout))
+             (should (equal (funcall quoted) '("src/a.py")))
+             (roost-new-task-from-url "https://example.com/issues/4")
+             (should-not (funcall quoted))
+             ;; Code, quoted with its file.
+             (with-temp-buffer
+               (python-mode)
+               (insert "x = 1\ny = 2\n")
+               (setq buffer-file-name (expand-file-name "src/a.py" checkout))
+               (cl-letf (((symbol-function 'vc-root-dir) (lambda () checkout)))
+                 ;; Each in this buffer: the draft becomes current as it shows.
+                 (save-current-buffer (roost-new-task-from-region (point-min) (point-max)))
+                 (should (equal (funcall quoted) '("src/a.py")))
+                 (require 'flymake)
+                 (let ((flymake-mode t))
+                   (cl-letf (((symbol-function 'flymake-diagnostics)
+                              (lambda (&rest _)
+                                (list (flymake-make-diagnostic (current-buffer) 1 2 :error "unused x")))))
+                     (goto-char (point-min))
+                     (save-current-buffer (roost-new-task-from-diagnostic))
+                     (should (equal (funcall quoted) '("src/a.py")))))
+                 (set-buffer-modified-p nil)
+                 (setq buffer-file-name nil)
+                 ;; A buffer visiting no file quotes none.
+                 (save-current-buffer (roost-new-task-from-region (point-min) (point-max)))
+                 (should-not (funcall quoted))))
+             ;; A compilation error, from the top of the checkout wherever it ran.
+             (with-temp-buffer
+               (setq default-directory (expand-file-name "src/" checkout))
+               (compilation-mode)
+               (let ((inhibit-read-only t))
+                 (insert "make: tests\na.py:3: NameError: name 'x'\n"))
+               (compilation--ensure-parse (point-max))
+               (goto-char (point-min))
+               (forward-line 1)
+               (roost--compose)
+               (with-current-buffer roost--compose-buffer
+                 (should (equal (roost--compose-prompt) "a.py:3: NameError: name 'x'")))
+               (should (equal (funcall quoted) '("src/a.py")))))
+         (delete-directory checkout t)
+         (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
+
 (ert-deftest roost-a-pull-request-is-yours-only-once-github-knows-the-agent-s-work ()
   (roost-test--isolated
    (let ((status (lambda (&rest fields)
