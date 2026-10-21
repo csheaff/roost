@@ -5750,53 +5750,53 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
 (ert-deftest roost-review-records-a-look-before-opening-magit ()
   (roost-test--isolated
    (let ((task (roost--cache-task nil (roost-test--task)))
-         (provided (unless (featurep 'magit) (provide 'magit) t))
          requests opened reply)
-     (unwind-protect
-     (cl-letf (((symbol-function 'roost--magit-setup) #'ignore)
-               ((symbol-function 'roost--activate-workspace) #'ignore)
-               ((symbol-function 'roost--redraw) #'ignore)
-               ((symbol-function 'magit-status) (lambda (directory) (push directory opened)))
-               ((symbol-function 'roost--request)
-                (lambda (host action params success failure)
-                  (push (list host action params) requests)
-                  (setq reply (cons success failure)))))
-       (roost-review task)
-       (should (equal requests '((nil "look" ((id . "0123456789abcdef"))))))
-       ;; Magit opens once the host has recorded it, with what changed,
-       ;; for the task as it is then, renamed meanwhile or not.
-       (should-not opened)
-       (let (activated)
-         (cl-letf (((symbol-function 'roost--activate-workspace)
-                    (lambda (task) (push (roost--field task 'name) activated))))
-           (funcall (car reply) (append '((looked (at . "2026-10-03T21:00:00+00:00")) (name . "fixed auth"))
-                                        (roost-test--task))))
-         (should (equal activated '("fixed auth"))))
-       (should (equal (length opened) 1))
-       (should (equal (alist-get 'at (roost--field (gethash (roost--key task) roost--tasks) 'looked))
-                      "2026-10-03T21:00:00+00:00"))
-       ;; A host that can't record it doesn't keep you from Magit.
-       (roost-review task)
-       (cl-letf (((symbol-function 'message) #'ignore))
-         (funcall (cdr reply) "No space left on device"))
-       (should (equal (length opened) 2))
-       ;; Nor, once you have opened something else, does it take you there.
-       (roost-review task)
-       (cl-incf roost--open-generation)
-       (funcall (car reply) (roost-test--task))
-       (should (equal (length opened) 2))
-       ;; Or gone to another buffer meanwhile.
-       (roost-review task)
-       (let ((was (window-buffer)))
-         (unwind-protect
-             (progn
-               (set-window-buffer nil (get-buffer-create " *roost elsewhere*"))
-               (cl-letf (((symbol-function 'message) #'ignore))
-                 (funcall (car reply) (roost-test--task))))
-           (set-window-buffer nil was)
-           (kill-buffer " *roost elsewhere*")))
-       (should (equal (length opened) 2)))
-     (when provided (setq features (delq 'magit features)))))))
+     ;; Magit as if loaded, for this test only: `provide' would also run
+     ;; what waits for Magit to load, which needs the real one.
+     (dlet ((features (cons 'magit features)))
+       (cl-letf (((symbol-function 'roost--magit-setup) #'ignore)
+                 ((symbol-function 'roost--activate-workspace) #'ignore)
+                 ((symbol-function 'roost--redraw) #'ignore)
+                 ((symbol-function 'magit-status) (lambda (directory) (push directory opened)))
+                 ((symbol-function 'roost--request)
+                  (lambda (host action params success failure)
+                    (push (list host action params) requests)
+                    (setq reply (cons success failure)))))
+         (roost-review task)
+         (should (equal requests '((nil "look" ((id . "0123456789abcdef"))))))
+         ;; Magit opens once the host has recorded it, with what changed,
+         ;; for the task as it is then, renamed meanwhile or not.
+         (should-not opened)
+         (let (activated)
+           (cl-letf (((symbol-function 'roost--activate-workspace)
+                      (lambda (task) (push (roost--field task 'name) activated))))
+             (funcall (car reply) (append '((looked (at . "2026-10-03T21:00:00+00:00")) (name . "fixed auth"))
+                                          (roost-test--task))))
+           (should (equal activated '("fixed auth"))))
+         (should (equal (length opened) 1))
+         (should (equal (alist-get 'at (roost--field (gethash (roost--key task) roost--tasks) 'looked))
+                        "2026-10-03T21:00:00+00:00"))
+         ;; A host that can't record it doesn't keep you from Magit.
+         (roost-review task)
+         (cl-letf (((symbol-function 'message) #'ignore))
+           (funcall (cdr reply) "No space left on device"))
+         (should (equal (length opened) 2))
+         ;; Nor, once you have opened something else, does it take you there.
+         (roost-review task)
+         (cl-incf roost--open-generation)
+         (funcall (car reply) (roost-test--task))
+         (should (equal (length opened) 2))
+         ;; Or gone to another buffer meanwhile.
+         (roost-review task)
+         (let ((was (window-buffer)))
+           (unwind-protect
+               (progn
+                 (set-window-buffer nil (get-buffer-create " *roost elsewhere*"))
+                 (cl-letf (((symbol-function 'message) #'ignore))
+                   (funcall (car reply) (roost-test--task))))
+             (set-window-buffer nil was)
+             (kill-buffer " *roost elsewhere*")))
+         (should (equal (length opened) 2)))))))
 
 (ert-deftest roost-a-look-from-another-emacs-is-measured-against ()
   ;; It moves neither the agent's last event nor the task's Git stamp.
