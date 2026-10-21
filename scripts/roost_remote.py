@@ -3634,7 +3634,13 @@ def remove_worktrees(store, task, worktree, agents, force=False, teardown=None):
                     # Twice: also a worktree its agent locked.
                     git(task["repo"], "worktree", "remove", "--force", "--force", str(worktree))
                 elif worktree:
-                    require_clean(str(worktree))
+                    try:
+                        require_clean(str(worktree))
+                    except RoostError as exc:
+                        if teardown:
+                            raise RoostError(str(exc) + ". The teardown command, which ran just now, "
+                                             "may have left them")
+                        raise
                     git(task["repo"], "worktree", "remove", str(worktree))
         finally:
             # The record may have changed meanwhile: clear only this mark.

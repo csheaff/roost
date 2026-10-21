@@ -11,8 +11,9 @@ Since 0.9.0:
   for stopping a Bazel server and deleting its output base, which outlive
   the worktree. Set it per project in `.dir-locals.el`, as
   `roost-setup-command` is. It is stopped after two minutes, and if it
-  fails Roost warns and removes the worktree anyway. Nothing to do when
-  upgrading.
+  fails Roost warns and removes the worktree anyway. Emacs asks before
+  using a command from `.dir-locals.el`; the manual says how to trust
+  one. Nothing to do when upgrading.
 - `n` says in the echo area which task it opened, why that one waits and
   how many more do: `permission · ledger: Asks to run make test; 2 more
   waiting`, with the first line of a reply, why a pull request waits on

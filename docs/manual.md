@@ -445,9 +445,14 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
   Bazel's output base and server:
   `ob=$(bazel info output_base) && bazel shutdown && chmod -R u+w "$ob" && rm -rf "$ob"`.
   It runs on the task's host with the primary checkout in `$ROOST_REPO`, and
-  is stopped after two minutes; to take longer, it can leave work running in
-  the background (`rm -rf "$ob" &`). If it fails, Roost warns, with what it
-  printed, and removes the worktree anyway.
+  is stopped after two minutes; to take longer, it can leave work outside the
+  worktree running in the background (`rm -rf "$ob" &`). If it fails, Roost
+  warns, with what it printed, and removes the worktree anyway. A file it
+  leaves in the worktree keeps the task from retiring, as yours would.
+  Emacs counts a command from `.dir-locals.el` as risky, so it asks each time
+  Roost reads that file, as you create or finish a task. To trust one, add it to `safe-local-variable-values`, such as
+  `(add-to-list 'safe-local-variable-values '(roost-teardown-command . "make clean"))`,
+  or, from Emacs 30, the project to `safe-local-variable-directories`.
 - `roost-merge-style`: `squash` (the default) adds one commit holding all of a
   task's work, with a message made from its commits, so each task is one
   change in your history and the merges that kept it up to date (`u`) leave

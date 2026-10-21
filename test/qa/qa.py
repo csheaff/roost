@@ -1267,16 +1267,27 @@ def teardown(qa, repo):
     settings = repo / ".dir-locals.el"
     if qa.host:
         qa.emacs.eval("(setq enable-remote-dir-locals t)")
+    asked = lambda s: "Please type" in (s["prompt"] or "")
 
     def retire_with(command, prompt):
         settings.write_text("((nil . ((roost-teardown-command . %s))))\n" % lisp(command))
-        name = start_task(qa, prompt)
+        # Creating a task reads the project's variables too, and Emacs asks
+        # about every one it doesn't trust.
+        before = {t["name"] for t in qa.screen()["tasks"]}
+        qa.keys("C-c r c")
+        qa.type(prompt)
+        qa.keys("C-c C-c")
+        qa.wait("whether to take the project's variables", asked)
+        qa.type("y")
+        screen = qa.wait("the task for %r" % prompt, lambda s: {t["name"] for t in s["tasks"]} - before)
+        name = next(t["name"] for t in screen["tasks"] if t["name"] not in before)
+        qa.status(name, "ready", "idle")
         open_task(qa, name)
         qa.keys("C-c r x")
         qa.wait("the question", lambda s: s["prompt"])
         qa.type("y")
         # Emacs's own question, as for any command a project sets.
-        qa.wait("whether to take the command", lambda s: "Please type" in (s["prompt"] or ""))
+        qa.wait("whether to take the command", asked)
         return name
 
     try:
@@ -1300,6 +1311,8 @@ def teardown(qa, repo):
             ("its branch too", lambda s: not qa.git(repo, "branch", "--list", "roost/" + failing + "*"))])
     finally:
         settings.unlink(missing_ok=True)
+        if qa.host:
+            qa.emacs.eval("(setq enable-remote-dir-locals nil)")
 
 
 @journey("Send a prompt")

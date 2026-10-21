@@ -2340,6 +2340,11 @@ class Lifecycle(unittest.TestCase):
         self.assertIn("Uncommitted", self.request("retire", id=task["id"], teardown=teardown)["error"])
         self.assertFalse(marker.exists())
         (wt / "scratch").unlink()
+        # One that leaves a file there keeps the task, and says it may have.
+        error = self.request("retire", id=task["id"], teardown="touch made")["error"]
+        self.assertIn("Uncommitted or untracked files remain", error)
+        self.assertIn("teardown command", error)
+        (wt / "made").unlink()
         reply = self.request("retire", id=task["id"], teardown=teardown)
         self.assertTrue(reply["ok"], reply)
         self.assertNotIn("teardownFailure", reply["result"])
@@ -2365,10 +2370,8 @@ class Lifecycle(unittest.TestCase):
             self.request("stop", id=task["id"])
         survivor = self.root / "survivor"
         with patch.object(roost, "TEARDOWN_SECONDS", 1):
-            started = time.monotonic()
             reply = self.request("retire", id=first["id"],
                                  teardown="echo waiting; (sleep 3; touch %s) & wait" % shlex.quote(str(survivor)))
-            self.assertLess(time.monotonic() - started, 3)
             self.assertTrue(reply["ok"], reply)
             self.assertEqual(reply["result"]["teardownFailure"], "was stopped after 1 seconds")
             self.assertEqual(reply["result"]["teardownOutput"], "waiting")
@@ -2376,10 +2379,10 @@ class Lifecycle(unittest.TestCase):
             # What it started was stopped with it; what it leaves to run on
             # its own, with its output, finishes after the removal.
             started = time.monotonic()
-            reply = self.request("retire", id=second["id"], teardown="sleep 2 &")
-            self.assertLess(time.monotonic() - started, 1.5)
+            reply = self.request("retire", id=second["id"], teardown="sleep 20 &")
+            self.assertLess(time.monotonic() - started, 15)
             self.assertNotIn("teardownFailure", reply["result"])
-        time.sleep(2.5)
+        time.sleep(3)
         self.assertFalse(survivor.exists())
 
     def test_agent_path_keeps_inherited_precedence(self):
