@@ -1216,6 +1216,23 @@ def send(qa, repo):
     qa.step("The panel shows what you last said", expect=[
         ("under the task's prompt", lambda s: latest(s) and panel_text(qa, s).index("Say hi")
          < panel_text(qa, s).index("Your latest prompt"))])
+    # Half a prompt, then another task: the draft waits for its task.
+    other = start_task(qa, "Say bye")
+    open_task(qa, name)
+    qa.keys("M-x")
+    qa.wait("the question", lambda s: s["prompt"])
+    qa.type("roost-send\r")
+    qa.wait("the draft", lambda s: (qa.window(s, "roost-send-mode") or {}).get("selected"))
+    qa.type("Half a thought")
+    open_task(qa, other)
+    kept = ("the draft is kept", lambda s: any(
+        "Half a thought" in draft for draft in qa.emacs.json("(json-encode (vconcat (qa-drafts)))")))
+    qa.step("Another task: the draft waits", expect=[
+        ("it isn't on screen", lambda s: not qa.window(s, "roost-send-mode")), kept])
+    open_task(qa, name)
+    qa.step("Back: the draft too", expect=[
+        ("beside its terminal, which is selected", lambda s: shows(qa, name)(s)
+         and "Half a thought" in (qa.window(s, "roost-send-mode") or {}).get("text", ""))])
 
 
 def attached(text, name):
@@ -1519,6 +1536,7 @@ def to_sidebar(qa):
 
 
 def go_click(qa, target):
+    qa.emacs.eval("(qa-sidebar-show-row %s)" % lisp(target))
     qa.click_text(target, "roost-sidebar-list-mode")
 
 
@@ -1608,6 +1626,13 @@ def shows(qa, name, shell=False):
     return check
 
 
+def drafts_own(screen):
+    """Whether each prompt or pull request draft on screen is for its
+    frame's task: one for another waits until that task is opened."""
+    task = (screen.get("task") or {}).get("key")
+    return all(window.get("draft") in (None, task) for window in screen["windows"])
+
+
 # Each: what you do, whose task it opens (None: none, you stay), and with
 # which pane.
 WALK_INTERRUPTERS = [
@@ -1678,7 +1703,7 @@ def walk_away(qa, repo):
                 qa.keys("C-g")
                 pair += ", and that question quit"
                 qa.until(opens[1], timeout)
-            expect = [opens]
+            expect = [opens, ("no other task's draft beside it", drafts_own)]
             if leave is leave_opening:
                 # Once the first task's late reply has come, which must not
                 # take the place of what you went to.
@@ -1713,6 +1738,49 @@ def frames(qa, repo):
     qa.wait("one frame", lambda s: len(s.get("frames") or {}) == 1)
     qa.step("Back to one frame", expect=[
         ("its task as it was", lambda s: (s.get("task") or {}).get("name") == first)])
+
+
+def drafts_here(screen):
+    """The prompt drafts shown in the frame of the selected window."""
+    here = next((w.get("frame") for w in screen["windows"] if w["selected"]), None)
+    return [w for w in screen["windows"] if w["mode"] == "roost-send-mode" and w.get("frame") == here]
+
+
+@journey("A draft in two frames")
+def draft_frames(qa, repo):
+    """Without workspaces, a prompt draft another task took off two frames
+    comes back in each, once its task is opened there again."""
+    if qa.emacs.eval("(and (roost--workspace-backend) t)") == "t":
+        # Each frame has workspaces of its own, which keep their drafts.
+        qa.notes.add("No two-frame draft journey: with workspaces, drafts stay in each frame's own")
+        return
+    first = start_task(qa, "Write in two frames")
+    second = start_task(qa, "Step between frames")
+    open_task(qa, first)
+    qa.keys("M-x")
+    qa.wait("the question", lambda s: s["prompt"])
+    qa.type("roost-send\r")
+    qa.wait("the draft", lambda s: (qa.window(s, "roost-send-mode") or {}).get("selected"))
+    qa.type("Half a thought")
+    qa.keys("C-x 5 2")
+    qa.wait("the new frame", lambda s: len(s.get("frames") or {}) == 2)
+    qa.emacs.eval("(set-frame-size nil %d %d)" % FRAME)
+    qa.step("The draft in a second frame", expect=[("it shows there", drafts_here)])
+    open_task(qa, second)
+    qa.step("Another task in the second frame", expect=[("the draft waits", lambda s: not drafts_here(s))])
+    qa.keys("C-x 5 o")
+    qa.wait("the first frame", lambda s: (s.get("task") or {}).get("name") == first)
+    open_task(qa, second)
+    qa.step("Another task in the first frame", expect=[("the draft waits", lambda s: not drafts_here(s))])
+    back = ("the draft beside its terminal, which is selected", lambda s: shows(qa, first)(s) and drafts_here(s))
+    open_task(qa, first)
+    qa.step("Back in the first frame", expect=[back])
+    qa.keys("C-x 5 o")
+    qa.wait("the second frame", lambda s: (s.get("task") or {}).get("name") == second)
+    open_task(qa, first)
+    qa.step("Back in the second frame too", expect=[back])
+    qa.keys("C-x 5 0")
+    qa.wait("one frame", lambda s: len(s.get("frames") or {}) == 1)
 
 
 @journey("A draft from an Org heading")
@@ -1996,6 +2064,9 @@ def large(qa, repo):
          and row(s).endswith("± not looked at" if magit else "±"))])
     qa.keys("C-c r S")
     qa.wait("the dashboard", lambda s: (qa.window(s, "roost-dashboard-mode") or {}).get("selected"))
+    # Its row may be below the window's end, after the other journeys' tasks.
+    qa.emacs.eval("(qa-goto-row %s)" % lisp(name))
+    qa.settle()
     qa.step("The dashboard marks it too", expect=[
         ("its row has the mark", lambda s: any(name[:12] in line and "±" in line for line in
                                                qa.window(s, "roost-dashboard-mode")["text"].splitlines()))])
@@ -2125,6 +2196,8 @@ def unreachable(qa, repo):
         qa.step("The sidebar names it")
         qa.keys("C-c r S")
         qa.wait("the dashboard", lambda s: (qa.window(s, "roost-dashboard-mode") or {}).get("selected"))
+        # To its top, where hosts are named, past the other journeys' tasks.
+        qa.keys("M-<")
         qa.step("So does the dashboard", expect=[
             ("with why", lambda s: "is unreachable" in qa.window(s, "roost-dashboard-mode")["text"])])
     finally:
@@ -2219,7 +2292,7 @@ def dropped(qa, repo):
 JOURNEYS = [sweep, answer, fold, resize, merge, review, since_looked, panes, shell,
             dashboard, stop_resume, retire, send, attach, update, conflicts, restart, search, workload, question_left,
             walk_away,
-            frames, org, drafts, tabs,
+            frames, draft_frames, org, drafts, tabs,
             forget, rename, fork, other_branch, merged, large, pull_request, exits, unreachable, scrollback, fleet, dropped]
 
 
