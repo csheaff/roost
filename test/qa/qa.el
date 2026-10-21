@@ -237,6 +237,16 @@ Return nil when it isn't there."
     (set-window-point (selected-window) row)
     t))
 
+(defun qa-sidebar-to-top ()
+  "Scroll each sidebar on screen to its top, as the mouse wheel would.
+Point goes with it, as the wheel takes it along."
+  (dolist (window (window-list-1 nil 'nomini 'visible))
+    (when (eq (buffer-local-value 'major-mode (window-buffer window)) 'roost-sidebar-list-mode)
+      (let ((top (with-current-buffer (window-buffer window) (point-min))))
+        (set-window-start window top)
+        (set-window-point window top))))
+  t)
+
 (defun qa-selected-task ()
   "The name of the task whose worktree holds the selected window's buffer, or nil."
   (with-current-buffer (window-buffer (selected-window))

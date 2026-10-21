@@ -176,10 +176,10 @@ for you, permission requests first. Answer it in the terminal, then `n` again.
 A link the agent shows there, such as the pull request it opened, opens with
 `C-c C-u`, which offers each link on the screen, and with a click when the
 agent marks it as a link, as Claude Code does with tmux 3.4 or later.
-A finished agent you have looked at stops counting, and turns grey, until it
-replies again; one that failed or stopped by itself stops counting once you've
-seen it. What you've seen is kept on the task's host, for your other machines
-and the next session.
+A finished agent whose reply you have seen stops counting, and turns grey,
+until it replies again; one that failed or stopped by itself stops counting
+once you've seen it. What you've seen is kept on the task's host, for your
+other machines and the next session.
 
 **Keep them in view.** `b` in the dashboard, or `M-x roost-sidebar-mode`, keeps a
 compact task list at the left of every frame, through perspective and tab
@@ -187,7 +187,8 @@ switches and `C-x 1`; add `(roost-sidebar-mode 1)` to your configuration to have
 it from the start. Each task there is its name and, at the right, its status:
 in its colour when there is something to look at, such as `permission` or a
 `ready` you haven't seen, dim when the agent is only working or stopped, and
-none once you've seen an agent that waits for nothing. A click opens the task,
+none once you've seen an agent that waits for nothing; then, dim, what changed
+since you last looked at it, if anything (below). A click opens the task,
 quitting any question you left open in the minibuffer, which would hold it back,
 and closing a menu left open. `I` docks a panel at the right of an open task's terminal,
 kept current as the agent works: what to do next, the task's prompt, and the
@@ -229,6 +230,20 @@ keeps the agent's latest reply folded at the top, and lists the commits not
 yet in the branch the task merges into (`Unmerged into main`); `RET` on that
 heading shows all their changes together, as on Magit's own sections of
 unmerged commits.
+
+**Since you last looked.** Opening a task with `r`, or sending its agent
+your notes with `@`, records where its work stands as where you last looked
+at it, uncommitted work too. Once you've seen its agent's reply, the
+sidebar and dashboard say, dim, what changed since (`3 files changed since
+you looked`), and its panel says when you looked: `r` shows the changes. It
+doesn't count as waiting. Roost compares content, so commits the agent
+makes of what you saw, amends or rebases don't count, nor do files only an
+update from the integration branch brought in; anything else changed does,
+whatever prompted it. With Magit, a task you never looked at says `not
+looked at`. In Magit, a section beside `Unmerged into main` lists the files
+that changed between your last two looks; `RET` on its heading shows their
+changes together, and on a file, its own, where `;` writes notes as in any
+diff. `m` and `P` say so too before you merge or push.
 
 Staging doubles as approval: stage what you have checked, and whatever the
 agent changes after that shows up as unstaged, on its own. To ask for changes,
@@ -278,7 +293,7 @@ sidebar and dashboard say why:
 A failed check or a new thread waits two minutes first: an agent that watches
 its own pull request takes it up by then, and shows as working. The status
 lasts until the pull request changes or the agent starts again, whether or not
-you've looked. Before that, the task panel says what the pull request waits
+you've seen it. Before that, the task panel says what the pull request waits
 for, such as its checks or Copilot's review. Roost only says when it's your
 turn: `e` tells the agent what to fix. It goes by what GitHub said after the
 agent's last push, while the branch has no commits the pull request lacks and
@@ -316,7 +331,7 @@ counted once you stop and resume it (`K`, then `s`).
 | `n` | `roost-next-waiting` | Next task waiting for you, permission requests first |
 | `t` | `roost-shell` | Shell beside the agent, in the worktree (reused) |
 | `f` | `roost-files` | Dired in the worktree |
-| `r` | `roost-review` | Magit in the worktree |
+| `r` | `roost-review` | Magit in the worktree, showing what changed since you last looked |
 | `D` | `roost-diff` | Diff the task's own changes, including uncommitted ones |
 | `e` | `roost-send` | Paste a prompt into the agent and press Enter |
 | `i` | `roost-task-info` | The task's next step, prompt, your latest prompt, the agent's latest reply, changes and details |
@@ -356,7 +371,7 @@ In Magit on a task's worktree, Roost adds a few keys, and a Roost menu:
 | `;` | `roost-note` | Write a note for the agent on the line at point, the region's lines, or the file, in a box that opens under it (`C-c C-c` saves, `C-c C-k` cancels); on a noted line, edit its note (saved empty, it is removed) |
 | `'` | `roost-goto-note` | Go to one of the task's notes, chosen in the minibuffer |
 | `C-c ;` | `roost-note-actions` | Edit a note under the line at point, send it alone to the agent, or discard it |
-| `@` | `roost-send` | Draft a prompt to the agent, holding your notes |
+| `@` | `roost-send` | Draft a prompt to the agent, holding your notes; sending them counts as looking |
 | `=` | `roost-diff-whole-file` | Show the whole file with its changes; staging still works (`0` goes back to hunks). A new file opens as it is. With Evil, `g=` |
 
 With the mouse, a `+` shows beside the diff line under the pointer: click it
@@ -610,6 +625,13 @@ Things to know:
   `.git` read-only, so it asks before committing.
 - A GitHub issue's text goes to the agent as written, and anyone can open an
   issue on a public repository. Read it in the draft before pressing `C-c C-c`.
+- Where you last looked at a task is a commit: its `HEAD` when nothing is
+  uncommitted, or else one the helper makes of everything in the worktree,
+  staged in a copy of its index, so your index, staging and branches stay
+  as they are. No branch or other ref points at it, and Git prunes it with
+  other unreachable objects, after two weeks by default
+  (`gc.pruneExpire`); Roost then compares from the `HEAD` of that time.
+  Untracked files over 1 MB are left out, then and since.
 
 ## Development
 

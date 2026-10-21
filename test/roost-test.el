@@ -5625,6 +5625,199 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
      (roost--apply-snapshot "dev" (list (append '((conflicts)) (roost-test--task))))
      (should-not (roost--field (car (roost-tasks)) 'conflicts)))))
 
+;; A look whose host measured 3 files changed since.
+(defun roost-test--looked (&rest fields)
+  "A task you have seen finish and looked at, with FIELDS over its own."
+  (append fields
+          '((looked (commit . "c2") (head . "c2") (base . "b") (at . "2026-10-03T19:00:00+00:00")
+                    (since (start . "c1") (at . "2026-10-03T18:00:00+00:00") (count . 1) (added . 4) (deleted . 1)
+                           (files ((path . "ledger.py") (added . 4) (deleted . 1)))))
+            (sinceLooked (count . 3) (added . 9) (deleted . 2) (at . "2026-10-03T19:00:00+00:00"))
+            (live . t) (lastMessage . "Done.") (diff . " 3 files changed, 9 insertions(+), 2 deletions(-)")
+            (ahead . 1) (landed) (seen . "2026-10-03T20:00:00+00:00"))
+          (roost-test--task)))
+
+(ert-deftest roost-a-row-says-what-changed-since-you-looked-without-waiting ()
+  ;; Once you have seen a ready agent's reply its row went blank, though
+  ;; work may have landed since you last looked at it.
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (roost-test--looked)))
+         (layout (lambda (task) (roost--dashboard-layout (list task) 140))))
+     (should-not (roost--waiting-p task))
+     (should (equal (roost--since-looked task) '(3 . "2026-10-03T19:00:00+00:00")))
+     (should (equal (substring-no-properties (roost--summary (list task))) "1 seen"))
+     (let ((row (roost--sidebar-row task 50)))
+       (should (string-suffix-p "3 files changed since you looked" row))
+       (should (eq (get-text-property (1- (length row)) 'face row) 'roost-dim)))
+     ;; Where the sidebar has less room, fewer words; less still, none.
+     (should (string-suffix-p " 3 files changed" (roost--sidebar-row task 30)))
+     (should (equal (substring-no-properties (roost--sidebar-row task 20)) " fix auth"))
+     (should (string-match-p "3 files changed since you looked · Done\\."
+                             (roost--dashboard-row task (funcall layout task) 140)))
+     ;; Not while its agent works, before you have seen what it said, or
+     ;; once its work is merged.
+     (dolist (other (list (roost-test--looked '(status . "running"))
+                          (roost-test--looked '(seen . "2026-10-03T19:30:00+00:00"))
+                          (roost-test--looked '(landed . t) '(dirty))))
+       (let ((other (roost--cache-task "dev" other)))
+         (should-not (string-match-p "since you looked" (roost--sidebar-row other 50)))
+         (should-not (string-match-p "since you looked" (roost--dashboard-row other (funcall layout other) 140)))))
+     ;; Nothing changed since, or measured against the look before.
+     (let ((nothing (roost--cache-task "dev" (roost-test--looked
+                                              '(sinceLooked (count . 0) (at . "2026-10-03T19:00:00+00:00")))))
+           (stale (roost--cache-task "dev" (roost-test--looked
+                                            '(sinceLooked (count . 3) (at . "2026-10-03T18:00:00+00:00"))))))
+       (should (equal (substring-no-properties (roost--sidebar-row nothing 50)) " fix auth"))
+       (should-not (roost--since-looked stale))
+       (should (equal (substring-no-properties (roost--sidebar-row stale 50)) " fix auth"))))))
+
+(ert-deftest roost-a-task-you-never-looked-at-says-so-with-magit ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (seq-remove (lambda (field) (memq (car field) '(looked sinceLooked)))
+                                                     (roost-test--looked '(files ((path . "new.py")
+                                                                                  (untracked . t))))))))
+     ;; Without Magit there is no way to look.
+     (cl-letf (((symbol-function 'magit-status) nil))
+       (should-not (roost--since-looked task)))
+     (cl-letf (((symbol-function 'magit-status) #'ignore))
+       (should (equal (roost--since-looked task) '(4)))
+       (should (string-suffix-p "4 files not looked at" (roost--sidebar-row task 50)))
+       (should (string-suffix-p " not looked at" (roost--sidebar-row task 30)))
+       (with-temp-buffer
+         (roost-task-info-mode)
+         (setq roost--buffer-task-key (roost--key task))
+         (roost--render-task-info)
+         (should (string-match-p "^Not looked at in Magit yet: r opens it$" (buffer-string))))))))
+
+(ert-deftest roost-the-task-panel-says-what-changed-since-you-looked ()
+  (roost-test--isolated
+   (dolist (case '((3 "^3 files changed since you looked, [0-9]+d ago: r shows them$")
+                   (0 "^Nothing changed since you looked, [0-9]+d ago$")))
+     (let ((task (roost--cache-task "dev" (roost-test--looked
+                                           `(sinceLooked (count . ,(car case))
+                                                         (at . "2026-10-03T19:00:00+00:00"))))))
+       (with-temp-buffer
+         (roost-task-info-mode)
+         (setq roost--buffer-task-key (roost--key task))
+         (roost--render-task-info)
+         (should (string-match-p (cadr case) (buffer-string))))))
+   ;; Not while its agent works on more.
+   (let ((task (roost--cache-task "dev" (roost-test--looked '(status . "running")))))
+     (with-temp-buffer
+       (roost-task-info-mode)
+       (setq roost--buffer-task-key (roost--key task))
+       (roost--render-task-info)
+       (should-not (string-match-p "since you looked" (buffer-string)))))))
+
+(ert-deftest roost-merging-and-pushing-say-what-changed-since-you-looked ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (roost-test--looked '(integrationBranch . "main"))))
+         question messages)
+     (cl-letf (((symbol-function 'roost--request) #'ignore)
+               ((symbol-function 'y-or-n-p) (lambda (prompt) (setq question prompt) nil)))
+       (roost-merge-retire task)
+       (should (string-prefix-p "3 files changed since you looked.  Squash committed work from fix auth"
+                                question)))
+     (let ((task (roost--cache-task "dev" (roost-test--looked
+                                           '(pr (number . 12) (url . "https://github.com/o/r/pull/12"))))))
+       (cl-letf (((symbol-function 'browse-url) #'ignore)
+                 ((symbol-function 'roost--redraw) #'ignore)
+                 ((symbol-function 'message)
+                  (lambda (format &rest args) (push (apply #'format-message format args) messages)))
+                 ((symbol-function 'roost--request)
+                  (lambda (_host _action _params success &rest _)
+                    (funcall success (cons '(pushed . 2) task)))))
+         (roost-pr task)
+         (should (member "Roost: Pushed 2 commits to #12; 3 files changed since you looked" messages))
+         ;; As the task is once pushed: looked at meanwhile, it says nothing.
+         (setq messages nil)
+         (cl-letf (((symbol-function 'roost--request)
+                    (lambda (_host _action _params success &rest _)
+                      (funcall success (append '((pushed . 2) (sinceLooked (count . 0) (at . "2026-10-03T19:00:00+00:00")))
+                                               task)))))
+           (roost-pr task))
+         (should (member "Roost: Pushed 2 commits to #12" messages))))
+     (should (string-match-p "^ Pull request for fix auth (3 files changed since you looked) · "
+                             (roost--pr-header task))))))
+
+(ert-deftest roost-review-records-a-look-before-opening-magit ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task nil (roost-test--task)))
+         (provided (unless (featurep 'magit) (provide 'magit) t))
+         requests opened reply)
+     (unwind-protect
+     (cl-letf (((symbol-function 'roost--magit-setup) #'ignore)
+               ((symbol-function 'roost--activate-workspace) #'ignore)
+               ((symbol-function 'roost--redraw) #'ignore)
+               ((symbol-function 'magit-status) (lambda (directory) (push directory opened)))
+               ((symbol-function 'roost--request)
+                (lambda (host action params success failure)
+                  (push (list host action params) requests)
+                  (setq reply (cons success failure)))))
+       (roost-review task)
+       (should (equal requests '((nil "look" ((id . "0123456789abcdef"))))))
+       ;; Magit opens once the host has recorded it, with what changed,
+       ;; for the task as it is then, renamed meanwhile or not.
+       (should-not opened)
+       (let (activated)
+         (cl-letf (((symbol-function 'roost--activate-workspace)
+                    (lambda (task) (push (roost--field task 'name) activated))))
+           (funcall (car reply) (append '((looked (at . "2026-10-03T21:00:00+00:00")) (name . "fixed auth"))
+                                        (roost-test--task))))
+         (should (equal activated '("fixed auth"))))
+       (should (equal (length opened) 1))
+       (should (equal (alist-get 'at (roost--field (gethash (roost--key task) roost--tasks) 'looked))
+                      "2026-10-03T21:00:00+00:00"))
+       ;; A host that can't record it doesn't keep you from Magit.
+       (roost-review task)
+       (cl-letf (((symbol-function 'message) #'ignore))
+         (funcall (cdr reply) "No space left on device"))
+       (should (equal (length opened) 2))
+       ;; Nor, once you have opened something else, does it take you there.
+       (roost-review task)
+       (cl-incf roost--open-generation)
+       (funcall (car reply) (roost-test--task))
+       (should (equal (length opened) 2))
+       ;; Or gone to another buffer meanwhile.
+       (roost-review task)
+       (let ((was (window-buffer)))
+         (unwind-protect
+             (progn
+               (set-window-buffer nil (get-buffer-create " *roost elsewhere*"))
+               (cl-letf (((symbol-function 'message) #'ignore))
+                 (funcall (car reply) (roost-test--task))))
+           (set-window-buffer nil was)
+           (kill-buffer " *roost elsewhere*")))
+       (should (equal (length opened) 2)))
+     (when provided (setq features (delq 'magit features)))))))
+
+(ert-deftest roost-a-look-from-another-emacs-is-measured-against ()
+  ;; It moves neither the agent's last event nor the task's Git stamp.
+  (roost-test--isolated
+   (roost--cache-task "dev" (append '((looked (at . "2026-10-03T20:00:00+00:00"))) (roost-test--task)))
+   (let ((before (roost--task-states "dev")))
+     (roost--cache-task "dev" (append '((looked (at . "2026-10-03T21:00:00+00:00"))) (roost-test--task)))
+     (should-not (equal (roost--task-states "dev") before)))))
+
+(ert-deftest roost-a-reply-read-before-a-look-keeps-the-look ()
+  (roost-test--isolated
+   (roost--cache-task "dev" (append '((looked (commit . "new") (at . "2026-10-03T21:00:00+00:00")))
+                                    (roost-test--task)))
+   (let ((task (roost--cache-task "dev" (append '((looked (commit . "old") (at . "2026-10-03T20:00:00+00:00"))
+                                                  (sinceLooked (count . 2) (at . "2026-10-03T20:00:00+00:00")))
+                                                (roost-test--task)))))
+     (should (equal (alist-get 'commit (roost--field task 'looked)) "new"))
+     ;; Measured against the look before, its count says nothing.
+     (should-not (roost--since-looked task)))
+   (should (equal (alist-get 'commit (roost--field (roost--cache-task "dev" (roost-test--task)) 'looked)) "new"))
+   ;; A reply with a newer look but an older agent event keeps the look.
+   (roost--cache-task "dev" (append '((updatedAt . "2026-10-03T22:00:00+00:00")) (roost-test--task)))
+   (let ((task (roost--cache-task "dev" (append '((looked (commit . "newest") (at . "2026-10-03T23:00:00+00:00"))
+                                                  (updatedAt . "2026-10-03T21:30:00+00:00"))
+                                                (roost-test--task)))))
+     (should (equal (alist-get 'commit (roost--field task 'looked)) "newest"))
+     (should (equal (roost--field task 'updatedAt) "2026-10-03T22:00:00+00:00")))))
+
 (ert-deftest roost-the-task-panel-names-other-tasks-changing-its-files ()
   (roost-test--isolated
    (let* ((file (lambda (path) `((path . ,path) (added . 1) (deleted . 0))))
@@ -7006,7 +7199,8 @@ ssh: connect to host dev port 22: Operation timed out"
         (should (equal (buffer-name) "*roost send: fix auth on other*"))
         (should (equal (buffer-string) "\n\ny.py\nThere"))
         (roost-send-submit)
-        (should (equal sent '("other" (id . "b") (text . "y.py\nThere"))))
+        ;; Notes sent say you looked at what they are about.
+        (should (equal sent '("other" (id . "b") (text . "y.py\nThere") (look . t))))
         ;; The other task's draft and note are as they were.
         (should (equal (mapcar (lambda (note) (alist-get 'id note)) roost--notes) '("1")))
         (roost--send-draft here)
@@ -7620,7 +7814,10 @@ With INITIAL, the box must start out holding it."
    (let ((task (roost--cache-task "dev" (roost-test--task "a"))) callbacks)
      (setq roost--notes (list (roost-test--note "1" "a" '(file . "x") '(text . "Once"))))
      (cl-letf (((symbol-function 'roost--send-text)
-                (lambda (_task _text done failed) (push (cons done failed) callbacks)))
+                (lambda (_task _text done failed &optional look)
+                  ;; A note sent alone says you looked at what it is about.
+                  (should look)
+                  (push (cons done failed) callbacks)))
                ((symbol-function 'roost--redraw) #'ignore))
        (roost-note-send (car roost--notes))
        (should-error (roost-note-send (car roost--notes)) :type 'user-error)
@@ -7778,6 +7975,65 @@ With INITIAL, the box must start out holding it."
       (with-current-buffer (magit-get-mode-buffer 'magit-status-mode)
         (magit-refresh-buffer)
         (should-not (string-match-p "^Unmerged into main" (buffer-string)))))))
+
+(ert-deftest roost-magit-status-shows-what-changed-since-you-looked ()
+  (roost-test--with-magit-task
+    (let ((rev (lambda () (car (process-lines "git" "rev-parse" "HEAD"))))
+          (start nil))
+      (call-process "git" nil nil nil "branch" "-M" "main")
+      (call-process "git" nil nil nil "checkout" "-qb" "task")
+      (setq start (funcall rev))
+      (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")
+      (call-process "git" nil nil nil "commit" "-qam" "Add a line")
+      (magit-status-setup-buffer dir)
+      (with-current-buffer (magit-get-mode-buffer 'magit-status-mode)
+        (should-not (string-match-p "^Changed since you last looked" (buffer-string))))
+      (setf (alist-get 'looked task)
+            `((commit . ,(funcall rev)) (at . "2026-10-03T21:00:00+00:00")
+              (since (start . ,start) (at . "2026-10-03T20:00:00+00:00") (count . 1) (added . 1) (deleted . 0)
+                     (files ((path . "a.txt") (added . 1) (deleted . 0))))))
+      (puthash (roost--key task) task roost--tasks)
+      (with-current-buffer (magit-get-mode-buffer 'magit-status-mode)
+        (magit-refresh-buffer)
+        (goto-char (point-min))
+        (re-search-forward "^Changed since you last looked, [0-9]+d ago (1)$")
+        (let ((section (magit-current-section)))
+          (should (eq (eieio-oref section 'type) 'roost-since-looked))
+          ;; With every file, as none were only the integration branch's.
+          (should (equal (eieio-oref section 'value) (list (concat start ".." (funcall rev)) nil)))
+          ;; Beside the commits not yet merged.
+          (should (string-match-p "\\`Changed since you last looked.*\n *a\\.txt  \\+1 −0\n\nUnmerged into main"
+                                  (buffer-substring (eieio-oref section 'start) (point-max))))
+          ;; RET on the heading shows their changes together.
+          (should (eq (key-binding (kbd "RET")) 'roost-diff-since-looked))
+          (save-current-buffer (roost-diff-since-looked)))
+        (with-current-buffer (magit-get-mode-buffer 'magit-diff-mode)
+          (should (string-match-p "^\\+new line" (buffer-string)))
+          (should roost-magit-mode))
+        (forward-line)
+        (should (eq (eieio-oref (magit-current-section) 'type) 'roost-since-looked-file))
+        (should (eq (key-binding (kbd "RET")) 'roost-diff-since-looked)))
+      ;; The files its diff is of are the section's, whatever the task's
+      ;; record says by the time you press RET.
+      (setf (alist-get 'paths (alist-get 'since (alist-get 'looked task))) '("a.txt"))
+      (with-current-buffer (magit-get-mode-buffer 'magit-status-mode)
+        (magit-refresh-buffer)
+        (setf (alist-get 'paths (alist-get 'since (alist-get 'looked task))) '("b.txt"))
+        (goto-char (point-min))
+        (re-search-forward "^Changed since you last looked")
+        (let (diffed)
+          (cl-letf (((symbol-function 'magit-diff-range) (lambda (_range _args files) (setq diffed files))))
+            (roost-diff-since-looked))
+          (should (equal diffed '("a.txt")))))
+      ;; Once Git has pruned where it changed from, there is nothing to show.
+      (setf (alist-get 'start (alist-get 'since (alist-get 'looked task))) (make-string 40 ?0))
+      (with-current-buffer (magit-get-mode-buffer 'magit-status-mode)
+        (magit-refresh-buffer)
+        (should-not (string-match-p "^Changed since you last looked" (buffer-string))))
+      (let ((roost-magit-status-sections nil))
+        (with-current-buffer (magit-get-mode-buffer 'magit-status-mode)
+          (magit-refresh-buffer)
+          (should-not (string-match-p "^Changed since you last looked" (buffer-string))))))))
 
 (ert-deftest roost-evil-users-get-roosts-keys-in-magit ()
   (skip-unless (or (featurep 'evil)

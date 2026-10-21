@@ -38,8 +38,8 @@ Small, and probably worth the most.
   with [the recipes and their status](melpa.md) current, and send them,
   tmux-control first, once people ask for them there. Features don't wait
   for it.
-- **[When a merge is your turn](#when-a-merge-is-your-turn)**, its next two
-  parts: what changed since you last looked, and evidence beside the files.
+- **[When a merge is your turn](#when-a-merge-is-your-turn)**, its next
+  part: evidence beside the files.
 - **Notifications by urgency.** Each change to ready, permission, failed,
   crashed or exited sends a notification of its own, all alike, and only a
   newer one about the same task replaces it. A permission request would
@@ -99,21 +99,12 @@ These ideas answer one question about each task: is a merge your turn, and
 what would it rest on? They share the places where Roost already says what
 a task needs: the next step at the top of the task panel and the menu, the
 status word in the sidebar, and `n`. Each adds a line or a status there
-rather than a view of its own. The first two are among the most likely;
-the last is worth trying once those show what the panel has room for. Two
-that came before them are in Roost now: a pull request that waits on you
-counts as waiting, and conflicts show before merge time.
+rather than a view of its own. The first is among the most likely; the
+other is worth trying once it shows what the panel has room for. Three that
+came before them are in Roost now: a pull request that waits on you
+counts as waiting, conflicts show before merge time, and each task says what
+changed since you last looked.
 
-- **Since you last looked.** Record the commit a task was at when you last
-  opened `r` or sent its agent notes, and show "3 commits since you last
-  looked" on its row and panel. `r` shows those commits in a section of
-  their own, beside "Unmerged into main", and `m` and `P` say so when
-  commits landed since. "Looked" rather than "reviewed", since Roost can't
-  tell when a review ends; a key of its own is the other way. Agents that
-  go on fixing after you look, in reply to CI or a reviewer, make this
-  matter. From the Claude Code team's approvals, which hold for one commit
-  and lapse when unreviewed ones land. Rewinding stays the agent's
-  (`/rewind`).
 - **Evidence beside the files in the task panel.** Show what a decision can
   rest on without opening the diff, as facts in the order they're easiest to
   check: the pull request's checks, or a local check command's
@@ -207,9 +198,17 @@ counts as waiting, and conflicts show before merge time.
   status, with a click for that task's diff of the file. Most useful in the
   primary checkout, where you otherwise find a conflict only at `m`. Roost
   already finds overlaps between tasks.
-- **Since you last looked, in the fringe.** With "since you last looked"
-  recorded, point diff-hl at that commit in a task's worktree, so a file
-  shows only what changed since your last review, in your own buffer.
+- **Since you last looked, in the fringe.** Point diff-hl at the commit
+  Roost keeps of where you last looked, in a task's worktree, so a file
+  shows only what changed since, in your own buffer.
+- **Looking without Magit.** Only `r` and the notes you send record a
+  look, so someone who reads the diffs in the agent's terminal, or judges
+  by evidence, sees `not looked at` until they open Magit. A key in the
+  task panel could record one, and `D` could count as one.
+- **Hunks changed since you staged.** Staging is the finest record of what
+  you approved, and Magit shows what changed after it as unstaged. A count
+  on the row, "3 hunks changed since you staged", would say at hunk level
+  what "since you looked" says by file.
 - **Attempts compared with Ediff.** With several attempts at one prompt,
   compare two attempts' worktrees file by file in Ediff and take hunks from
   each, rather than picking one.

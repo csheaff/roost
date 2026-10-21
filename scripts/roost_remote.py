@@ -44,7 +44,8 @@ ACTIVE = ("starting", "running", "permission", "background")
 ENDED = ("stopped", "exited", "failed", "crashed")
 # Computed per request and never persisted in a task record.
 TRANSIENT = ("live", "diff", "dirty", "files", "size", "ahead", "behind", "update", "worktreeMissing",
-             "prStatus", "unpushed", "lastMessage", "gitStamp", "agentWork", "merging", "landed", "conflicts")
+             "prStatus", "unpushed", "lastMessage", "gitStamp", "agentWork", "merging", "landed", "conflicts",
+             "sinceLooked")
 LAST_MESSAGE_TAIL = 256 * 1024
 LAST_MESSAGE_LIMIT = 2000
 INTERRUPT_TAIL = 64 * 1024
@@ -75,10 +76,10 @@ def text(value):
 INHERITED = []
 
 
-def execute(argv, cwd=None, check=True, input=None):
+def execute(argv, cwd=None, check=True, input=None, env=None):
     # A file name that is not UTF-8, possible on Linux, must not fail every
     # listing of the host: undecodable bytes are replaced, here and below.
-    result = subprocess.run(argv, cwd=cwd, input=input, text=True, errors="replace",
+    result = subprocess.run(argv, cwd=cwd, input=input, text=True, errors="replace", env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, pass_fds=tuple(INHERITED))
     if check and result.returncode:
         raise RoostError(result.stderr.strip() or result.stdout.strip()
@@ -86,15 +87,15 @@ def execute(argv, cwd=None, check=True, input=None):
     return result
 
 
-def git(repo, *args, check=True):
-    return execute(["git", "-C", str(repo), *args], check=check)
+def git(repo, *args, check=True, env=None):
+    return execute(["git", "-C", str(repo), *args], check=check, env=env)
 
 
-def read_git(repo, *args):
+def read_git(repo, *args, env=None):
     """Run a read-only git command for statistics, without optional locks.
     `git status` would otherwise refresh the index under its lock, and an
     agent committing in the same worktree at that moment would fail."""
-    return git(repo, "--no-optional-locks", *args, check=False)
+    return git(repo, "--no-optional-locks", *args, check=False, env=env)
 
 
 REMOTE_GIT_TIMEOUT = 120
@@ -2066,6 +2067,175 @@ def git_stamp(task):
     return " ".join(times)
 
 
+# What Roost keeps of where a task stood when you last looked at it, as
+# when you open it in Magit or send its agent your notes, to say what
+# changed since. Untracked files larger than this are left out, then and
+# since: a look stores what it keeps of them in the repository, and data
+# or build output not yet ignored can be large.
+LOOK_FILE_LIMIT = 1024 * 1024
+# Paths named in one `git add`.
+LOOK_ADD_BATCH = 200
+# The files changed between two looks that are listed, for Magit.
+LOOK_FILES_LIMIT = 100
+# The paths a comparison that leaves out files names, for Magit's diff
+# of it; past this many, the diff shows every file.
+LOOK_PATHS_LIMIT = 1000
+# For Git staging in a copy of an index, or reading one: a whole index of
+# its own, and none of your hooks, which Git runs on writing an index.
+SCRATCH_INDEX_GIT = ("--no-optional-locks", "-c", "core.splitIndex=false", "-c", "core.hooksPath=/dev/null")
+# Who the commit a look makes says made it.
+LOOK_IDENTITY = dict(GIT_AUTHOR_NAME="Roost", GIT_AUTHOR_EMAIL="roost@invalid",
+                     GIT_COMMITTER_NAME="Roost", GIT_COMMITTER_EMAIL="roost@invalid")
+
+
+def untracked_files(worktree):
+    """WORKTREE's files that Git neither tracks nor ignores, as (KEPT,
+    LARGE): those a look keeps, files no larger than LOOK_FILE_LIMIT and
+    links, not the repositories inside it; and those it leaves out for
+    their size, which are there, whatever a look before kept of them."""
+    kept, large = [], set()
+    for path in read_git(worktree, "ls-files", "--others", "--exclude-standard", "-z").stdout.split("\0"):
+        file = Path(worktree) / path
+        try:
+            if path and (file.is_symlink() or (file.is_file() and file.stat().st_size <= LOOK_FILE_LIMIT)):
+                kept.append(path)
+            elif path and file.is_file():
+                large.add(path)
+        except OSError:
+            pass  # Gone since, or a name that is not UTF-8.
+    return kept, large
+
+
+@contextlib.contextmanager
+def scratch_index(worktree, untracked, intent):
+    """The environment for Git to stage in a copy of WORKTREE's index, so
+    the one you and its agent use stays as it is, with UNTRACKED files
+    added: with INTENT, as intent to add, which writes nothing in the
+    repository but, if it isn't there yet, Git's empty file; or else
+    whole. A file Git can't add is an error, rather than a comparison
+    that leaves it out. The copy is removed after."""
+    index = read_git(worktree, "rev-parse", "--git-path", "index").stdout.strip()
+    folder = tempfile.mkdtemp(prefix="roost-look-")
+    try:
+        copy = os.path.join(folder, "index")
+        env = dict(os.environ, GIT_INDEX_FILE=copy)
+        try:
+            shutil.copyfile(os.path.join(worktree, index), copy)
+        except OSError:
+            # Slower, as Git then reads every file again, but not empty.
+            git(worktree, *SCRATCH_INDEX_GIT, "read-tree", "HEAD", check=False, env=env)
+        for start in range(0, len(untracked), LOOK_ADD_BATCH):
+            git(worktree, *SCRATCH_INDEX_GIT, "--literal-pathspecs", "add",
+                *(["--intent-to-add"] if intent else []), "--", *untracked[start:start + LOOK_ADD_BATCH],
+                env=env)
+        yield env
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def snapshot(worktree):
+    """Where WORKTREE stands, as (COMMIT, HEAD): COMMIT is HEAD when nothing
+    is left uncommitted, or else a commit of all that is there but ignored
+    and large untracked files, made in a copy of its index. No branch or
+    other ref points at it, nothing you or the agent staged changes, and
+    Git prunes it in time (`gc.pruneExpire`, two weeks by default). None
+    for both when WORKTREE has no commit. Git failing to keep what is
+    there, as with no room for it, is an error: the look before stands."""
+    head = read_git(worktree, "rev-parse", "--verify", "-q", "HEAD^{commit}").stdout.strip()
+    if not head:
+        return None, None
+    with scratch_index(worktree, untracked_files(worktree)[0], intent=False) as env:
+        git(worktree, *SCRATCH_INDEX_GIT, "add", "--update", env=env)
+        tree = git(worktree, *SCRATCH_INDEX_GIT, "write-tree", env=env).stdout.strip()
+    if tree == git(worktree, "--no-optional-locks", "rev-parse", head + "^{tree}").stdout.strip():
+        return head, head
+    made = git(worktree, "--no-optional-locks", "-c", "commit.gpgSign=false", "commit-tree", "-p", head,
+               "-m", "Where the task stood when you looked at it, kept by Roost", tree,
+               env=dict(os.environ, **LOOK_IDENTITY)).stdout.strip()
+    return made, head
+
+
+def changed_between(worktree, start, end=None, env=None, names=False):
+    """The files whose content differs between commit START and commit END,
+    or else WORKTREE as ENV stages it, each as (PATH, ADDED, DELETED), the
+    counts None for a binary file; with NAMES, a set of their paths. A
+    renamed file is one removed and one added. None if Git can't tell."""
+    # A look keeps a submodule's commit, not what is uncommitted inside it.
+    result = git(worktree, *SCRATCH_INDEX_GIT, "diff", "--name-only" if names else "--numstat", "-z",
+                 "--no-renames", "--no-textconv", "--ignore-submodules=dirty",
+                 start, *([end] if end else []), "--", check=False, env=env)
+    if result.returncode:
+        return None
+    if names:
+        return {path for path in result.stdout.split("\0") if path}
+    entries = []
+    for entry in result.stdout.split("\0"):
+        if entry:
+            added, deleted, path = entry.split("\t", 2)
+            entries.append((path, None if added == "-" else int(added), None if deleted == "-" else int(deleted)))
+    return entries
+
+
+def look_start(worktree, looked):
+    """The commit of the look LOOKED that is still in WORKTREE's
+    repository: the one it made, else HEAD as it was then; or None."""
+    for commit in (looked.get("commit"), looked.get("head")):
+        if (isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40,64}", commit)
+                and read_git(worktree, "cat-file", "-e", commit + "^{commit}").returncode == 0):
+            return commit
+    return None
+
+
+def own_changes(worktree, entries, looked, start, base, end=None, env=None):
+    """ENTRIES, files changed since the look LOOKED, at START, without the
+    files that only its integration branch changed, when that was merged
+    into the task since, so its base moved to BASE: those the task changes
+    then or now, at END or else in WORKTREE as ENV stages it, stay. With
+    whether any were left out, as (ENTRIES, LEFT-OUT)."""
+    if not isinstance(looked.get("base"), str) or looked["base"] == base:
+        return entries, False
+    then = changed_between(worktree, looked["base"], start, names=True)
+    now = changed_between(worktree, base, end, env=env, names=True)
+    if then is None or now is None:
+        return entries, False
+    either = then | now
+    own = [entry for entry in entries if entry[0] in either]
+    return own, len(own) < len(entries)
+
+
+def change_count(entries):
+    """How many of ENTRIES, from `changed_between`, and their lines added and removed."""
+    return dict(count=len(entries), added=sum(added or 0 for _, added, _ in entries),
+                deleted=sum(deleted or 0 for _, _, deleted in entries))
+
+
+def since_looked(task, worktree, base):
+    """What changed in TASK's WORKTREE since you last looked at it, by
+    content, so not commits made of what you saw, as when they are amended
+    or rebased, but uncommitted work too: how many files, lines added and
+    removed, and when you looked. BASE is where the task's own work begins
+    now. None if you never looked, or what you looked at is gone."""
+    looked = task.get("looked")
+    start = isinstance(looked, dict) and look_start(worktree, looked)
+    if not start:
+        return None
+    kept, large = untracked_files(worktree)
+    try:
+        with scratch_index(worktree, kept, intent=True) as env:
+            entries = changed_between(worktree, start, env=env)
+            if entries is None:
+                return None
+            # One that grew too large since a look kept it is still there.
+            entries = [entry for entry in entries if entry[0] not in large]
+            entries, _ = own_changes(worktree, entries, looked, start, base, env=env)
+    except (RoostError, OSError):
+        # Unknown, as when a file went before Git could add it, or there
+        # is no room for the copy of the index, rather than nothing
+        # changed: the next measurement tries again.
+        return None
+    return dict(change_count(entries), at=looked.get("at"))
+
+
 def add_git_stats(tasks):
     """Diffstat, dirtiness and divergence from the integration branch,
     whether its work is merged, and the agent's latest reply. Runs outside
@@ -2092,6 +2262,7 @@ def add_git_stats(tasks):
         if task["worktreeMissing"]:
             continue
         base = fork_point(worktree, task)
+        task["sinceLooked"] = since_looked(task, worktree, base)
         stats = read_git(worktree, "diff", "--shortstat", base)
         dirty = read_git(worktree, "status", "--porcelain", "-z")
         task["diff"] = stats.stdout.strip()
@@ -2163,6 +2334,81 @@ def seen(store, task, updated):
         task["seen"] = updated
         store.save(task)
     return task
+
+
+def prepare_look(store, task_id):
+    """Where TASK_ID's work stands, to record as where you last looked at
+    it with `record_look`, as when you open it in Magit or send its agent
+    your notes; and the look it was measured against, as (BEFORE, LOOKED).
+    When it changed since the look before, it says what changed, for
+    Magit: the files, and the two commits to compare. A look at what you
+    looked at before keeps that. Git runs without the registry lock."""
+    with store.locked():
+        task = store.read(task_id)
+        if task["status"] == "retired":
+            raise RoostError("Task is retired")
+        require_not_removing(store, task, "look")
+        worktree = Path(task["worktree"])
+        if not worktree.is_dir():
+            raise RoostError("Task worktree is gone; forget the task to remove it from Roost")
+        before = task.get("looked") if isinstance(task.get("looked"), dict) else {}
+        with holding_worktree(store, task, fcntl.LOCK_SH,
+                              "Roost is still removing this task's worktree; refresh in a moment"):
+            with store.released():
+                base = fork_point(worktree, task)
+                commit, head = snapshot(worktree)
+                if not commit:
+                    raise RoostError("The task's worktree has no commit to look at")
+                looked = dict(commit=commit, head=head, base=base, at=now())
+                start = look_start(worktree, before)
+                entries, left_out = [], False
+                if start:
+                    changed = changed_between(worktree, start, commit)
+                    if changed is None:
+                        # The look before stands, to compare with next time.
+                        raise RoostError("Git could not compare the task's work with where you last looked")
+                    # One that grew too large since a look kept it is still there.
+                    large = untracked_files(worktree)[1]
+                    entries = [entry for entry in changed if entry[0] not in large]
+                    entries, left_out = own_changes(worktree, entries, before, start, base, end=commit)
+                    left_out = left_out or len(entries) < len(changed)
+                since = before.get("since")
+                if entries:
+                    looked["since"] = dict(change_count(entries), start=start, end=commit, at=before.get("at"),
+                                           files=[dict(path=path, added=added, deleted=deleted)
+                                                  for path, added, deleted in entries[:LOOK_FILES_LIMIT]])
+                    if left_out and len(entries) <= LOOK_PATHS_LIMIT:
+                        # Magit's diff of them leaves out the same files.
+                        looked["since"]["paths"] = [path for path, _, _ in entries]
+                elif (start and isinstance(since, dict) and look_start(worktree, dict(commit=since.get("start")))
+                      and look_start(worktree, dict(commit=since.get("end")))):
+                    # Nothing of the task's changed: what changed before
+                    # still did, while Git still has both ends of it.
+                    looked["since"] = since
+    return before, looked
+
+
+def record_look(store, task_id, before, looked):
+    """Record LOOKED, from `prepare_look`, as where you last looked at
+    TASK_ID, unless another look than BEFORE, as from another Emacs, was
+    recorded meanwhile, which stands. Nothing changed since a look this
+    records; since the other, that is measured next."""
+    with store.locked():
+        task = store.read(task_id)
+        require_not_removing(store, task, "look")
+        current = task.get("looked") if isinstance(task.get("looked"), dict) else {}
+        if current != before:
+            return task
+        task["looked"] = looked
+        store.save(task)
+    task["sinceLooked"] = dict(count=0, added=0, deleted=0, at=looked.get("at"))
+    return task
+
+
+def look(store, task_id):
+    """Record where TASK_ID's work stands as where you last looked at it;
+    see `prepare_look`."""
+    return record_look(store, task_id, *prepare_look(store, task_id))
 
 
 TURNS = ("ci failed", "comments", "to merge", "conflicts")
@@ -3993,6 +4239,15 @@ def rpc(request):
                     task["pr"] = pr
                     store.save(task)
             return {"ok": True, "result": outgoing(task)}
+        if action == "look":
+            return {"ok": True, "result": outgoing(look(store, request["id"]))}
+        prepared = None
+        if action == "send" and request.get("look") is True:
+            # Where the work stands as you send your notes, before the agent
+            # can act on them, recorded once they are sent. They go whether
+            # or not that can be.
+            with contextlib.suppress(RoostError, OSError):
+                prepared = prepare_look(store, request["id"])
         if action in ("retire", "merge"):
             # Ask GitHub without the lock; retire then trusts only this answer.
             with store.locked():
@@ -4037,6 +4292,12 @@ def rpc(request):
                         task["landed"] = False
         elif action in ("retire", "merge") and result.pop("remoteCleanup", None):
             delete_remote_branch(result["repo"], result["branch"])
+        elif prepared:
+            with contextlib.suppress(RoostError, OSError):
+                looked = record_look(store, request["id"], *prepared)
+                result["looked"] = looked.get("looked")
+                if "sinceLooked" in looked:
+                    result["sinceLooked"] = looked["sinceLooked"]
         return {"ok": True, "result": outgoing(result)}
     except (RoostError, OSError, ValueError) as exc:
         return {"ok": False, "error": str(exc)}

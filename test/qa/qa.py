@@ -856,6 +856,70 @@ def review(qa, repo):
     qa.step("The agent has the note")
 
 
+@journey("What changed since you looked")
+def since_looked(qa, repo):
+    """A task you never looked at says so; once you look in Magit and its
+    agent changes more, its row, panel, Magit and m say what changed since."""
+    if qa.emacs.eval("(and (require 'magit nil t) t)") != "t":
+        qa.notes.add("No since-you-looked journey: Magit isn't loaded")
+        return
+    if qa.host:
+        qa.notes.add("No since-you-looked journey: Magit over TRAMP's ssh method is too slow on a host "
+                     "this far away")
+        return
+    # A name of its own: a journey after looks for its task by name.
+    name = new_task(qa, "ask echo Milk > LIST.md")
+    # Its name gives way in the sidebar to what changed.
+    row = lambda s: sidebar_row(qa, s, name[:11])
+    answer_yes(qa, name)
+    qa.wait("the mark", lambda s: row(s).endswith("not looked at"))
+    qa.step("Not looked at yet", expect=[
+        ("the panel says r opens it", lambda s: "Not looked at in Magit yet: r opens it" in panel_text(qa, s)),
+        ("it doesn't wait on you", lambda s: qa.task(s, name)["status"] == "idle")])
+    qa.keys("C-c r r")
+    qa.wait("Magit", lambda s: (qa.window(s, "magit-status-mode") or {}).get("selected"))
+    qa.step("Looked at in Magit", expect=[
+        ("it shows LIST.md", lambda s: "LIST.md" in qa.window(s, "magit-status-mode")["text"]),
+        ("with nothing changed since a look before", lambda s: "Changed since you last looked"
+         not in qa.window(s, "magit-status-mode")["text"])])
+    open_task(qa, name)
+    qa.wait("the panel to say so", lambda s: "Nothing changed since you looked" in panel_text(qa, s))
+    qa.step("Nothing changed since", expect=[("the sidebar has no mark", lambda s: row(s) == name)])
+    # More from its agent, committed: what you saw and what's new.
+    qa.keys("C-c r e")
+    qa.wait("the prompt", lambda s: s["prompt"])
+    qa.type("ask echo Eggs >> LIST.md && git add LIST.md && git commit -qm 'Add a list'\r")
+    answer_yes(qa, name)
+    qa.wait("the count", lambda s: "since you looked" in panel_text(qa, s))
+    qa.step("Changed since you looked", expect=[
+        ("the panel says how much, and that r shows it",
+         lambda s: re.search(r"1 file changed since you looked, \d+[smhd]\w* ago: r shows them", panel_text(qa, s))),
+        ("the sidebar says so", lambda s: row(s).endswith("1 file changed")),
+        ("it still doesn't wait on you", lambda s: qa.task(s, name)["status"] == "idle")])
+    qa.keys("C-c r m")
+    qa.wait("the question", lambda s: s["prompt"])
+    qa.step("m says so", expect=[
+        ("before it asks", lambda s: (s["prompt"] or "").startswith("1 file changed since you looked.  "))])
+    qa.type("n")
+    qa.keys("C-c r r")
+    qa.wait("the section", lambda s: "Changed since you last looked" in
+            (qa.window(s, "magit-status-mode") or {}).get("text", ""))
+    qa.step("Magit shows what changed since", expect=[
+        # Fold marks in the fringe, and the cursor, show in the text read.
+        ("beside the unmerged commits", lambda s: re.search(
+            r"Changed since you last looked, \d+[smhd]\w* ago \(1\)\nLIST\.md  \+1 −0\n\n\w*U\w*nmerged into main",
+            qa.window(s, "magit-status-mode")["text"]))])
+    qa.keys("C-s")
+    qa.type("Changed since")
+    qa.keys("RET RET")
+    qa.wait("the diff", lambda s: (qa.window(s, "magit-diff-mode") or {}).get("selected"))
+    qa.step("RET shows the changes", expect=[
+        ("only what's new", lambda s: "+Eggs" in qa.window(s, "magit-diff-mode")["text"]
+         and "+Milk" not in qa.window(s, "magit-diff-mode")["text"])])
+    qa.wait("the mark to go", lambda s: "changed" not in row(s))
+    qa.step("Looked at again", expect=[("the sidebar has no mark", lambda s: row(s) == name)])
+
+
 def panel_text(qa, screen):
     """The docked panel's text, or else that of the first task panel on screen."""
     docked = next((w for w in screen["windows"]
@@ -1447,7 +1511,10 @@ WALK_STARTERS = [
 
 
 def to_sidebar(qa):
-    """Click the sidebar where no task is: on the project's heading."""
+    """Click the sidebar where no task is: on the project's heading, which
+    many tasks can scroll out of sight, as when a menu takes the frame's
+    bottom, so scrolled into it first, as with the mouse wheel."""
+    qa.emacs.eval("(qa-sidebar-to-top)")
     qa.click_text(qa.host_label + " · ", "roost-sidebar-list-mode")
 
 
@@ -1917,12 +1984,16 @@ def large(qa, repo):
     name = new_task(qa, "ask sh -c \"mkdir -p docs src test && seq 450 > src/long.txt"
                         " && echo a > docs/a.md && echo b > test/b.py\"")
     answer_yes(qa, name)
+    # Its name gives way in the sidebar to the mark and what you haven't looked at.
+    row = lambda s: sidebar_row(qa, s, name[:10])
+    magit = qa.emacs.eval("(and (require 'magit nil t) t)") == "t"
     qa.wait("its size", lambda s: "In docs/, src/ and test/" in panel_text(qa, s))
     qa.step("Marked", expect=[
         ("the panel counts the lines of its new files", lambda s: "± 3 files +452 −0" in panel_text(qa, s)),
-        ("its row in the sidebar has the mark", lambda s: "±" in sidebar_row(qa, s, name)),
-        ("and no status, once seen", lambda s: (qa.task(s, name) or {}).get("status") == "idle"
-         and sidebar_row(qa, s, name).endswith("±"))])
+        ("its row in the sidebar has the mark", lambda s: "±" in row(s)),
+        ("and no status, once seen, but, with Magit, that you haven't looked at it",
+         lambda s: (qa.task(s, name) or {}).get("status") == "idle"
+         and row(s).endswith("± not looked at" if magit else "±"))])
     qa.keys("C-c r S")
     qa.wait("the dashboard", lambda s: (qa.window(s, "roost-dashboard-mode") or {}).get("selected"))
     qa.step("The dashboard marks it too", expect=[
@@ -2145,7 +2216,7 @@ def dropped(qa, repo):
         ("the agent replied", lambda s: "PROMPT After the drop" in selected_terminal(s)["text"])])
 
 
-JOURNEYS = [sweep, answer, fold, resize, merge, review, panes, shell,
+JOURNEYS = [sweep, answer, fold, resize, merge, review, since_looked, panes, shell,
             dashboard, stop_resume, retire, send, attach, update, conflicts, restart, search, workload, question_left,
             walk_away,
             frames, org, drafts, tabs,
