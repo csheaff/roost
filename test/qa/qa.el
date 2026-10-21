@@ -401,6 +401,12 @@ open is dismissed first, with keys."
     (select-window main)
     (delete-other-windows main)
     (switch-to-buffer "*scratch*"))
+  ;; Files another journey left open, as a task's own notes.py, which a
+  ;; review thread visits: they would give the file a journey opens here
+  ;; another buffer name, notes.py<notes>, than the one it waits for.
+  (dolist (buffer (buffer-list))
+    (when (and (buffer-file-name buffer) (not (buffer-modified-p buffer)))
+      (kill-buffer buffer)))
   (roost--redraw)
   t)
 

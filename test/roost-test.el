@@ -2139,6 +2139,42 @@
            (push-button (1- (point))))
          (should (string-suffix-p ":dev:/srv/ledger/" started)))))))
 
+(ert-deftest roost-sidebar-shows-the-task-you-work-on ()
+  ;; With more tasks than the sidebar has lines, the one you opened was
+  ;; below them, and its band, status and ± with it.
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let ((roost--current-task nil)
+           (ids (mapcar (lambda (n) (format "%016d" n)) (number-sequence 1 60))))
+       (dolist (id ids)
+         (roost--cache-task "dev" (append `((name . ,(concat "task-" id)) (repo . "/srv/ledger"))
+                                          (roost-test--task id "ready"))))
+       (let ((sidebar (split-window nil nil 'left))
+             (buffer (get-buffer-create "*roost sidebar test*")))
+         (unwind-protect
+             (with-current-buffer buffer
+               (roost-sidebar-list-mode)
+               (set-window-buffer sidebar buffer)
+               (cl-flet ((row (id) (roost--task-row (list "dev" id)))
+                         (open (id) (setq roost--current-task (list "dev" id)) (roost--render-sidebar)))
+                 (open (car (last ids)))
+                 (should (= (window-point sidebar) (row (car (last ids)))))
+                 ;; Scrolled away, as with the mouse wheel, it stays there
+                 ;; through the redraws polls make.
+                 (set-window-point sidebar (row (nth 3 ids)))
+                 (roost--render-sidebar)
+                 (should (= (window-point sidebar) (row (nth 3 ids))))
+                 ;; Until you open another task.
+                 (open (nth 40 ids))
+                 (should (= (window-point sidebar) (row (nth 40 ids))))
+                 ;; In the sidebar, its point is yours.
+                 (select-window sidebar)
+                 (goto-char (row (nth 5 ids)))
+                 (open (nth 50 ids))
+                 (should (= (window-point sidebar) (row (nth 5 ids))))))
+           (kill-buffer buffer)))))))
+
 (ert-deftest roost-a-draft-on-a-host-not-connected-to-takes-a-known-project ()
   ;; Composing in a remote directory looked for its checkout there, which
   ;; held Emacs while TRAMP connected, for a project Roost already knew.
