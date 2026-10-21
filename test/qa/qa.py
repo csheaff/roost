@@ -984,6 +984,20 @@ def since_looked(qa, repo):
          and "+Milk" not in qa.window(s, "magit-diff-mode")["text"])])
     qa.wait("the mark to go", lambda s: "changed" not in row(s))
     qa.step("Looked at again", expect=[("the sidebar has no mark", lambda s: row(s) == name)])
+    # Its whole diff is a look too, with no new file left out of it.
+    open_task(qa, name)
+    qa.keys("C-c r e")
+    qa.wait("the prompt", lambda s: s["prompt"])
+    qa.type("ask echo Bread >> LIST.md && git commit -qam 'Add bread'\r")
+    answer_yes(qa, name)
+    qa.wait("the count", lambda s: "1 file changed since you looked" in panel_text(qa, s))
+    qa.keys("C-c r D")
+    qa.wait("the diff", lambda s: (qa.window(s, "magit-diff-mode") or {}).get("selected"))
+    qa.wait("the mark to go", lambda s: "changed" not in row(s))
+    qa.step("D is a look too", expect=[
+        ("it shows the task's changes", lambda s: "+Bread" in qa.window(s, "magit-diff-mode")["text"]),
+        ("and the sidebar has no mark", lambda s: row(s) == name),
+        ("nor the panel a count", lambda s: "Nothing changed since you looked" in panel_text(qa, s))])
 
 
 def panel_text(qa, screen):
