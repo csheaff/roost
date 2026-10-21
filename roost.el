@@ -2507,8 +2507,11 @@ A task started from a GitHub issue leads with the issue's number."
          (fields roost--compose-fields)
          (derived (roost--compose-name))
          (changing (roost--compose-changing))
-         ;; Point's offset into the prompt, so rewriting the fields keeps it.
-         (offset (max 0 (- (point) roost--compose-body))))
+         ;; Point's offset into the prompt, so rewriting the fields keeps it;
+         ;; in the fields, its line and column, as on a button there.
+         (offset (max 0 (- (point) roost--compose-body)))
+         (field (when (< (point) roost--compose-body)
+                  (cons (line-number-at-pos) (current-column)))))
     (save-excursion
       (delete-region (point-min) roost--compose-body)
       (goto-char (point-min))
@@ -2548,7 +2551,12 @@ A task started from a GitHub issue leads with the issue's number."
                            '(read-only "Write the prompt below the fields" rear-nonsticky t
                              front-sticky t))
       (set-marker roost--compose-body (point)))
-    (goto-char (min (point-max) (+ roost--compose-body offset)))))
+    (if (not field)
+        (goto-char (min (point-max) (+ roost--compose-body offset)))
+      (goto-char (point-min))
+      (forward-line (1- (car field)))
+      (move-to-column (cdr field))
+      (goto-char (min (point) roost--compose-body)))))
 
 (defun roost--compose-quoted-files ()
   "The files the draft's prompt quotes, as paths from the top of the checkout.

@@ -5899,6 +5899,12 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
                (roost--redraw)
                (should (string-match-p "^ledger totals already changes report\\.py\nreport chart already changes report\\.py\n─"
                                        (buffer-string)))
+               ;; Point on a name stays there as the draft is drawn again.
+               (goto-char (point-min))
+               (search-forward "report chart already")
+               (goto-char (match-beginning 0))
+               (roost--compose-render)
+               (should (looking-at "report chart already"))
                ;; A refresh with nothing new leaves the draft alone.
                (let ((rendered 0))
                  (cl-letf (((symbol-function 'roost--compose-render) (lambda () (cl-incf rendered))))
