@@ -8845,6 +8845,9 @@ have seen that waits for nothing."
          (roost--marked-key (if (roost--workspace-backend)
                                 (when-let* ((task (roost--frame-task))) (roost--key task))
                               'unset))
+         ;; The line each window showing it starts at, which erasing loses.
+         (starts (mapcar (lambda (shown) (cons shown (line-number-at-pos (window-start shown))))
+                         (get-buffer-window-list (current-buffer) nil t)))
          (inhibit-read-only t))
     (erase-buffer)
     (insert (propertize "Roost" 'face 'roost-title)
@@ -8896,6 +8899,8 @@ have seen that waits for nothing."
                    (and heading (roost--heading-row heading))
                    (point-min)))
     (when window (set-window-point window (point)))
+    (pcase-dolist (`(,shown . ,line) starts)
+      (set-window-start shown (save-excursion (goto-char (point-min)) (forward-line (1- line)) (point)) t))
     ;; Each sidebar you aren't in goes to the task you work on once it
     ;; changes, so that its band shows however many tasks there are; one
     ;; you scrolled since stays where you left it.
@@ -8909,7 +8914,16 @@ have seen that waits for nothing."
                     (equal (window-parameter shown 'roost-followed) current))
           (set-window-parameter shown 'roost-followed current)
           (when-let* ((row (and current (roost--task-row current))))
-            (set-window-point shown row)))))
+            (set-window-point shown row)
+            ;; Scrolled no further than it shows the row, at the bottom:
+            ;; the top, with how many wait and the hosts it can't reach,
+            ;; stays as long as it can.
+            (let ((height (window-body-height shown))
+                  (top (line-number-at-pos (window-start shown)))
+                  (at (line-number-at-pos row)))
+              (unless (and (>= at top) (< at (+ top height)))
+                (set-window-start shown (save-excursion (goto-char row) (forward-line (- 1 height)) (point))
+                                  t)))))))
     ;; Redrawing removed the highlight with the text.
     (roost--sidebar-mark-selection)))
 

@@ -2446,6 +2446,9 @@ def exits(qa, repo):
 def unreachable(qa, repo):
     """A host that doesn't answer is named, in the sidebar and the dashboard, within their windows."""
     qa.emacs.eval("(progn (setq roost-hosts '(%s \"qa-unreachable.invalid\")) (roost-refresh) t)" % qa.hosts)
+    # To its top, where hosts are named, past the other journeys' tasks,
+    # as for the dashboard below: the sidebar shows the task you are on.
+    qa.emacs.eval("(qa-sidebar-to-top)")
     try:
         qa.wait("the host to be named", lambda s: "unreachab" in
                 (qa.window(s, "roost-sidebar-list-mode") or {}).get("text", ""), timeout=30)

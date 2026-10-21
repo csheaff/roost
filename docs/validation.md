@@ -35,6 +35,37 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## A test pass after 0.9.0 — 2026-10-21
+
+- **The question.** Whether the 30 pull requests since 0.9.0, many made
+  side by side, still work together.
+- **`make test compile`**, with Magit and Evil on the load path: 342 ERT
+  tests, 219 Python tests (one skipped: this file system takes only UTF-8
+  names) and a byte-compile with no warnings. `make contract` passes for
+  Claude Code 2.1.303, Codex 0.163.0 and Pi 1.3.0 here, and for Claude Code
+  2.1.304 on claylien, which only drops `computer_use_enter`, a
+  notification Roost ignores. package-lint finds only what
+  [MELPA](melpa.md) lists; checkdoc found one docstring.
+- **The helper's listing**, timed with 12 tasks in a repository of 15,000
+  files, against the helper of 0.9.0 on the same records: a poll with no
+  agent active takes 172 ms, as before; measuring one active task, 427 ms
+  rather than 348; measuring all of them, as `g` does and Roost does every
+  two minutes, 4.0 s rather than 3.2. The difference is ten Git commands
+  a task, five of them `merge-base`, at about 13 ms each on macOS.
+- **`make qa`** on Emacs 32 and 30.2, and with `--remote --tuned --popular`.
+  Two problems behind most failures. With 40 tasks the sidebar has more
+  rows than lines, and didn't go to the task you opened: its band and
+  status were below its window (six steps on each Emacs), now fixed. And
+  the walk-away grid's click on a review thread (#96) left a task's
+  `notes.py` open, so the drafts journeys (#95), made at the same time,
+  waited for a buffer that was now `notes.py<notes>`; each journey now
+  starts without files earlier ones left open. The GUI sweep ran past its
+  600 s while another QA run's sweep ran at the same time, and passed in
+  3½ minutes alone. The remote run also had a panel that didn't come back
+  after a split closed, a terminal that showed a line of history, and an
+  opened task whose host never replied, after which every journey waited
+  for it; see below.
+
 ## Evidence beside the files — 2026-10-21
 
 - **The question.** Whether the panel can name a pull request's checks and

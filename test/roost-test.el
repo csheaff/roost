@@ -2160,6 +2160,14 @@
                          (open (id) (setq roost--current-task (list "dev" id)) (roost--render-sidebar)))
                  (open (car (last ids)))
                  (should (= (window-point sidebar) (row (car (last ids)))))
+                 ;; At the bottom, the rest as near the top as it can be,
+                 ;; through a redraw too.
+                 (let ((start (save-excursion (goto-char (row (car (last ids))))
+                                              (forward-line (- 1 (window-body-height sidebar)))
+                                              (point))))
+                   (should (= (window-start sidebar) start))
+                   (roost--render-sidebar)
+                   (should (= (window-start sidebar) start)))
                  ;; Scrolled away, as with the mouse wheel, it stays there
                  ;; through the redraws polls make.
                  (set-window-point sidebar (row (nth 3 ids)))
