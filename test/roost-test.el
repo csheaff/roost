@@ -6229,6 +6229,32 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
      (should (string-match-p "^ Pull request for fix auth (3 files changed since you looked) · "
                              (roost--pr-header task))))))
 
+(ert-deftest roost-diff-is-a-look-when-it-shows-all-changes ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task nil (append '((files ((path . "a.py") (added . 1) (deleted . 0))))
+                                              (roost-test--task))))
+         requests opened reply)
+     (dlet ((features (cons 'magit features)))
+       (cl-letf (((symbol-function 'roost--magit-setup) #'ignore)
+                 ((symbol-function 'roost--fork-point) (lambda (_) "base"))
+                 ((symbol-function 'roost--in-task-frame) (lambda (_task view) (funcall view)))
+                 ((symbol-function 'magit-diff-working-tree) (lambda (rev) (push rev opened)))
+                 ((symbol-function 'roost--request)
+                  (lambda (host action params success failure)
+                    (push (list host action params) requests)
+                    (setq reply (cons success failure)))))
+         (roost-diff task)
+         ;; Its whole diff, recorded as a look first, as r does, but only of
+         ;; the files Git tracks: the host records none with a new file
+         ;; there, which the diff leaves out.
+         (pcase-let ((`((,host ,action ,params)) requests))
+           (should (equal (list host action) '(nil "look")))
+           (should (equal (alist-get 'id params) "0123456789abcdef"))
+           (should (eq (alist-get 'tracked params) t)))
+         (should-not opened)
+         (funcall (car reply) (append '((looked (at . "2026-10-03T21:00:00+00:00"))) (roost-test--task)))
+         (should (equal opened '("base"))))))))
+
 (ert-deftest roost-review-records-a-look-before-opening-magit ()
   (roost-test--isolated
    (let ((task (roost--cache-task nil (roost-test--task)))

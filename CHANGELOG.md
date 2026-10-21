@@ -13,6 +13,10 @@ Since 0.9.0:
   ran; Roost now goes by the task worktrees and projects it knows, by
   path, and asks the host only for a file outside them. Nothing to do when
   upgrading.
+- `D`, a task's whole diff, counts as looking at it, as `r` does, when it
+  leaves no new file out: what changed since you looked then starts from
+  there. Git's diff of a worktree leaves out files not yet added, so with
+  one of those, `D` only shows the diff. Nothing to do when upgrading.
 - The task panel says each thing once. Beside the agent's terminal, a task
   without a pull request leaves out `No CI results`, which is there to
   stand beside the agent's reply, as it does in `i`. A conflict the next
