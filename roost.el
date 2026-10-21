@@ -1808,7 +1808,8 @@ took off the frame come back, as when TASK is opened."
   (roost--mark-in-sidebar))
 
 (defvar-local roost--set-aside nil
-  "The frame this draft was taken off when another task took that frame.")
+  "The frames this draft was taken off when other tasks took them.
+A draft can show in more than one frame, and comes back in each.")
 
 (defun roost--draft-task (buffer)
   "The task BUFFER is a prompt or pull request draft for, or nil."
@@ -1830,7 +1831,9 @@ shows what it did before, though not another task's terminal or draft."
              (other (roost--draft-task buffer)))
         (when (and other (not (equal (roost--key other) (roost--key task))))
           (with-current-buffer buffer
-            (setq roost--set-aside (selected-frame)))
+            (setq roost--set-aside (cons (selected-frame)
+                                         (seq-filter #'frame-live-p
+                                                     (remq (selected-frame) roost--set-aside)))))
           (if (eq (window-deletable-p window) t)
               (delete-window window)
             (switch-to-prev-buffer window)))))))
@@ -1839,11 +1842,12 @@ shows what it did before, though not another task's terminal or draft."
   "Show TASK's drafts again that another task took off the selected frame.
 Beside its terminal, which stays selected."
   (dolist (buffer (buffer-list))
-    (when (eq (buffer-local-value 'roost--set-aside buffer) (selected-frame))
+    (when (memq (selected-frame) (buffer-local-value 'roost--set-aside buffer))
       (when-let* ((own (roost--draft-task buffer))
                   ((equal (roost--key own) (roost--key task))))
+        ;; Only this frame's: another may wait for it too.
         (with-current-buffer buffer
-          (setq roost--set-aside nil))
+          (setq roost--set-aside (remq (selected-frame) roost--set-aside)))
         (unless (get-buffer-window buffer)
           (display-buffer buffer '(nil (inhibit-same-window . t))))))))
 

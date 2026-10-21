@@ -3076,6 +3076,47 @@ Read from the layout transient keeps, whose form varies by version."
          (mapc #'kill-buffer (list code draft)))))))
 ;; A frame shows one task: X's terminal beside it, ID 1111..., and Y,
 ;; ID 2222..., the task asked about.
+(ert-deftest roost-a-draft-comes-back-in-each-frame-it-was-taken-off ()
+  ;; A draft shows in any frame.  Taken off a second frame, it was taken
+  ;; off the first no more: opening its task there left it hidden.
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let* ((roost-workspace nil)
+            (a (roost--cache-task "dev" (roost-test--task "1111111111111111")))
+            (b (roost--cache-task "dev" (roost-test--task "2222222222222222")))
+            (code (generate-new-buffer "code.py"))
+            (draft (generate-new-buffer "*roost send: a*"))
+            (frame (selected-frame))
+            ;; Batch Emacs has one frame: what Roost takes for the
+            ;; selected frame stands in for a second.
+            (second (make-symbol "second-frame"))
+            (in-second (lambda (function)
+                         (cl-letf (((symbol-function 'selected-frame) (lambda () second))
+                                   ((symbol-function 'frame-live-p) (lambda (f) (or (eq f second) (eq f frame)))))
+                           (dlet ((native-comp-enable-subr-trampolines nil))
+                             (funcall function))))))
+       (unwind-protect
+           (progn
+             (with-current-buffer draft
+               (roost-send-mode)
+               (setq roost--send-task a))
+             (switch-to-buffer code)
+             (set-window-buffer (split-window) draft)
+             ;; B takes this frame, then the second.
+             (roost--set-aside-drafts b)
+             (set-window-buffer (split-window) draft)
+             (funcall in-second (lambda () (roost--set-aside-drafts b)))
+             (should-not (get-buffer-window draft))
+             ;; A, opened here, brings it back here.
+             (roost--bring-back-drafts a)
+             (should (get-buffer-window draft))
+             ;; And there, once.
+             (should (equal (buffer-local-value 'roost--set-aside draft) (list second)))
+             (funcall in-second (lambda () (roost--bring-back-drafts a)))
+             (should-not (buffer-local-value 'roost--set-aside draft)))
+         (mapc #'kill-buffer (list code draft)))))))
+
 (defmacro roost-test--with-another-task-shown (&rest body)
   "Run BODY with the frame X's, showing its terminal over a code buffer.
 `x', `y', `terminal' and `code' are bound, and `events' collects what
