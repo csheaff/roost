@@ -921,6 +921,8 @@ class Lifecycle(unittest.TestCase):
         # committing at that moment would fail.
         task = self.create()
         self.commit_in(task)
+        (Path(task["worktree"]) / "new").write_text("new\n")
+        self.assertTrue(self.request("look", id=task["id"])["ok"])
         (Path(task["worktree"]) / "hello").write_text("changed\n")
         calls = []
         real = roost.execute
@@ -1913,6 +1915,251 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(listed["updatedAt"], record["updatedAt"])
         # Not an event of the agent's: nothing else changes.
         self.assertEqual(listed["status"], "ready")
+
+    def since_looked(self, task):
+        return self.request("list", full=[task["id"]])["result"][0]["sinceLooked"]
+
+    def test_a_look_keeps_uncommitted_work_without_staging_it_or_adding_refs(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        self.commit_in(task, "done")
+        (wt / "hello").write_text("edited\n")
+        (wt / "new file").write_text("new\n")
+        (wt / "staged").write_text("staged\n")
+        self.git("add", "staged", cwd=wt)
+        index = Path(self.git("rev-parse", "--path-format=absolute", "--git-path", "index", cwd=wt))
+        # Git runs this on writing any index, the copy a look stages in too.
+        hook = Path(self.git("rev-parse", "--path-format=absolute", "--git-path", "hooks", cwd=wt)) / "post-index-change"
+        hook.parent.mkdir(exist_ok=True)
+        hook.write_text("#!/bin/sh\ntouch %s\n" % shlex.quote(str(self.root / "hook ran")))
+        hook.chmod(0o755)
+        before = (index.read_bytes(), self.git("for-each-ref"), self.git("status", "--porcelain", cwd=wt),
+                  self.git("stash", "list"))
+        (self.root / "hook ran").unlink(missing_ok=True)
+        self.assertIsNone(self.since_looked(task), "never looked")
+        reply = self.request("look", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(self.since_looked(task)["count"], 0)
+        self.assertFalse((self.root / "hook ran").exists(), "your hooks run for your own Git commands only")
+        hook.unlink()
+        looked = reply["result"]["looked"]
+        self.assertEqual(reply["result"]["sinceLooked"]["count"], 0)
+        self.assertEqual(looked["head"], self.git("rev-parse", "HEAD", cwd=wt))
+        # A commit of everything there, which nothing points at.
+        self.assertEqual(self.git("show", looked["commit"] + ":new file", cwd=wt), "new")
+        self.assertEqual(self.git("show", looked["commit"] + ":hello", cwd=wt), "edited")
+        self.assertEqual(self.git("rev-parse", looked["commit"] + "^", cwd=wt), looked["head"])
+        self.assertEqual(before, (index.read_bytes(), self.git("for-each-ref"),
+                                  self.git("status", "--porcelain", cwd=wt), self.git("stash", "list")))
+        self.assertEqual(self.since_looked(task)["count"], 0)
+        self.assertEqual(self.since_looked(task)["at"], looked["at"])
+        # Committing what you saw, then amending its message, changes nothing you saw.
+        self.git("add", "-A", cwd=wt)
+        self.git("commit", "-qm", "all", cwd=wt)
+        self.git("commit", "-q", "--amend", "-m", "all of it", cwd=wt)
+        self.assertEqual(self.since_looked(task)["count"], 0)
+        (wt / "new file").write_text("new\nmore\n")
+        (wt / "another").write_text("another\n")
+        self.assertEqual(self.since_looked(task), dict(count=2, added=2, deleted=0, at=looked["at"]))
+        # Committed or not, it changed since.
+        self.git("add", "-A", cwd=wt)
+        self.git("commit", "-q", "--amend", "--no-edit", cwd=wt)
+        self.assertEqual(self.since_looked(task)["count"], 2)
+        self.git("rm", "-q", "staged", cwd=wt)
+        self.assertEqual(self.since_looked(task)["count"], 3, "removed since, staged or not")
+        self.git("commit", "-qm", "Remove staged", cwd=wt)
+        again = self.request("look", id=task["id"])["result"]["looked"]
+        self.assertEqual(again["commit"], again["head"], "nothing uncommitted: HEAD is where it stands")
+        since = again["since"]
+        self.assertEqual((since["start"], since["at"], since["count"]), (looked["commit"], looked["at"], 3))
+        self.assertEqual(sorted(file["path"] for file in since["files"]), ["another", "new file", "staged"])
+        self.assertEqual(self.since_looked(task)["count"], 0)
+        # Looking again at what you saw last keeps what changed before it.
+        self.assertEqual(self.request("look", id=task["id"])["result"]["looked"]["since"], since)
+
+    def test_since_you_looked_leaves_out_what_an_update_brought_in(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        self.commit_in(task, "mine")
+        self.assertTrue(self.request("look", id=task["id"])["ok"])
+        (self.repo / "theirs").write_text("main moved\n")
+        (self.repo / "hello").write_text("main changed it\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "main moved")
+        self.assertTrue(self.request("update", id=task["id"])["result"]["update"]["changed"])
+        self.assertEqual(self.since_looked(task)["count"], 0, "main's changes are not the task's")
+        (wt / "mine").write_text("mine, changed\n")
+        self.assertEqual(self.since_looked(task)["count"], 1)
+        looked = self.request("look", id=task["id"])["result"]["looked"]
+        self.assertEqual([file["path"] for file in looked["since"]["files"]], ["mine"])
+        # Magit's diff of them leaves out what main changed too.
+        self.assertEqual(looked["since"]["paths"], ["mine"])
+        self.assertEqual(looked["since"]["end"], looked["commit"])
+        # Once more from main alone: what changed before keeps both its ends.
+        self.git("commit", "-qam", "Mine, changed", cwd=wt)
+        (self.repo / "more").write_text("main again\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "main again")
+        self.assertTrue(self.request("update", id=task["id"])["result"]["update"]["changed"])
+        again = self.request("look", id=task["id"])["result"]["looked"]
+        self.assertEqual(again["since"], looked["since"])
+        self.assertNotEqual(again["commit"], looked["since"]["end"])
+
+    def test_a_look_git_cannot_keep_leaves_the_look_before(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        before = self.request("look", id=task["id"])["result"]["looked"]
+        (wt / "hello").write_text("edited\n")
+        objects = Path(self.git("rev-parse", "--path-format=absolute", "--git-common-dir", cwd=wt)) / "objects"
+        folders = [objects] + [path for path in objects.rglob("*") if path.is_dir()]
+        for folder in folders:
+            folder.chmod(0o555)
+        try:
+            reply = self.request("look", id=task["id"])
+        finally:
+            for folder in folders:
+                folder.chmod(0o755)
+        self.assertFalse(reply["ok"], reply)
+        self.assertEqual(roost.Store(str(self.state)).read(task["id"])["looked"], before)
+        self.assertEqual(self.since_looked(task)["count"], 1)
+
+    def test_notes_that_fail_to_go_record_no_look(self):
+        task = self.create()
+        (Path(task["worktree"]) / "hello").write_text("edited\n")
+        self.request("stop", id=task["id"])
+        reply = self.request("send", id=task["id"], text="Note", look=True)
+        self.assertFalse(reply["ok"], reply)
+        self.assertNotIn("looked", roost.Store(str(self.state)).read(task["id"]))
+
+    def test_what_git_cannot_stage_since_a_look_is_unknown_not_unchanged(self):
+        task = self.create()
+        self.request("look", id=task["id"])
+        (Path(task["worktree"]) / "new").write_text("new\n")
+        real = roost.execute
+
+        def execute(argv, **kw):
+            if "--intent-to-add" not in argv:
+                return real(argv, **kw)
+            # As Git fails when it can't write its empty file.
+            failed = real(["sh", "-c", "echo 'error: insufficient permission' >&2; exit 128"], check=False)
+            if kw.get("check", True):
+                raise roost.RoostError(failed.stderr.strip())
+            return failed
+
+        with patch.object(roost, "execute", execute):
+            listed = self.request("list", full=[task["id"]])
+        self.assertTrue(listed["ok"], listed)
+        self.assertIsNone(listed["result"][0]["sinceLooked"])
+        # Nor does a temporary folder with no room fail the listing.
+        with patch.object(roost.tempfile, "mkdtemp", side_effect=OSError(28, "No space left on device")):
+            listed = self.request("list", full=[task["id"]])
+        self.assertTrue(listed["ok"], listed)
+        self.assertIsNone(listed["result"][0]["sinceLooked"])
+        self.assertEqual(self.since_looked(task)["count"], 1)
+
+    def test_a_look_counts_a_submodules_commit_not_what_is_uncommitted_in_it(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        library = self.root / "library"
+        library.mkdir()
+        self.git("init", "-q", "-b", "main", cwd=library)
+        (library / "lib").write_text("lib\n")
+        self.git("add", ".", cwd=library)
+        self.git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "lib", cwd=library)
+        self.git("-c", "protocol.file.allow=always", "submodule", "add", "-q", str(library), "lib", cwd=wt)
+        self.git("commit", "-qm", "Add lib", cwd=wt)
+        (wt / "lib" / "lib").write_text("edited inside\n")
+        self.assertTrue(self.request("look", id=task["id"])["ok"])
+        self.assertEqual(self.since_looked(task)["count"], 0)
+        # A new commit there is a change, as the task's own commit of it would be.
+        self.git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "more", cwd=wt / "lib")
+        self.assertEqual(self.since_looked(task)["count"], 1)
+        # Its worktree can't go with a submodule checked out.
+        shutil.rmtree(wt / "lib")
+        self.git("rm", "-q", "--cached", "lib", cwd=wt)
+
+    def test_a_look_git_cannot_compare_leaves_the_look_before(self):
+        task = self.create()
+        self.request("look", id=task["id"])
+        self.commit_in(task, "more")
+        before = roost.Store(str(self.state)).read(task["id"])["looked"]
+        with patch.object(roost, "changed_between", lambda *args, **kw: None):
+            reply = self.request("look", id=task["id"])
+        self.assertIn("could not compare", reply["error"])
+        self.assertEqual(roost.Store(str(self.state)).read(task["id"])["looked"], before)
+
+    def test_a_look_recorded_meanwhile_is_not_overwritten(self):
+        task = self.create()
+        store = roost.Store(str(self.state))
+        real, meanwhile = roost.snapshot, []
+
+        def snapshot(worktree):
+            if not meanwhile:
+                # Another Emacs looks while this look is under way.
+                meanwhile.append(None)
+                meanwhile[0] = roost.look(store, task["id"])["looked"]
+            return real(worktree)
+
+        with patch.object(roost, "snapshot", snapshot):
+            reply = self.request("look", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(store.read(task["id"])["looked"], meanwhile[0])
+        self.assertEqual(reply["result"]["looked"], meanwhile[0])
+        # What changed since that look is for the next measurement to say.
+        self.assertNotIn("sinceLooked", reply["result"])
+
+    def test_what_changed_before_goes_once_git_has_pruned_where_from(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        self.request("look", id=task["id"])
+        self.commit_in(task, "more")
+        since = self.request("look", id=task["id"])["result"]["looked"]["since"]
+        self.assertEqual(self.request("look", id=task["id"])["result"]["looked"]["since"], since)
+        store = roost.Store(str(self.state))
+        record = store.read(task["id"])
+        store.save(dict(record, looked=dict(record["looked"], since=dict(since, start="0" * 40))))
+        self.assertNotIn("since", self.request("look", id=task["id"])["result"]["looked"])
+
+    def test_notes_sent_record_a_look_before_the_agent_has_them(self):
+        task = self.create()
+        (Path(task["worktree"]) / "hello").write_text("edited\n")
+        reply = self.request("send", id=task["id"], text="permission", look=True)
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(reply["result"]["sinceLooked"]["count"], 0)
+        record = self.wait(task, "permission")
+        self.assertEqual(self.git("show", record["looked"]["commit"] + ":hello", cwd=task["worktree"]), "edited")
+        self.assertNotIn("sinceLooked", record, "measured, not recorded")
+        self.assertEqual(reply["result"]["looked"], record["looked"])
+        # Without notes, a prompt is no look.
+        again = self.request("send", id=task["id"], text="interrupt", force=True)
+        self.assertNotIn("sinceLooked", again["result"])
+        self.assertEqual(roost.Store(str(self.state)).read(task["id"])["looked"], record["looked"])
+
+    def test_a_look_leaves_out_large_untracked_files_and_outlives_its_commit(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        (wt / "data").write_bytes(b"x" * (roost.LOOK_FILE_LIMIT + 1))
+        (wt / "small").write_text("small\n")
+        looked = self.request("look", id=task["id"])["result"]["looked"]
+        self.assertEqual(roost.git(wt, "cat-file", "-e", looked["commit"] + ":small", check=False).returncode, 0)
+        self.assertNotEqual(roost.git(wt, "cat-file", "-e", looked["commit"] + ":data", check=False).returncode, 0)
+        (wt / "data").write_bytes(b"y" * (roost.LOOK_FILE_LIMIT + 1))
+        self.assertEqual(self.since_looked(task)["count"], 0)
+        # Kept once, then grown past the limit, it is still there, not gone.
+        (wt / "small").write_bytes(b"z" * (roost.LOOK_FILE_LIMIT + 1))
+        self.assertEqual(self.since_looked(task)["count"], 0)
+        (wt / "other").write_text("other\n")
+        since = self.request("look", id=task["id"])["result"]["looked"]["since"]
+        self.assertEqual((since["count"], since["paths"]), (1, ["other"]))
+        (wt / "other").unlink()
+        (wt / "small").write_text("small\n")
+        looked = self.request("look", id=task["id"])["result"]["looked"]
+        # Once Git has pruned the commit a look made, HEAD as it was then stands in.
+        store = roost.Store(str(self.state))
+        store.save(dict(store.read(task["id"]), looked=dict(looked, commit="0" * 40)))
+        self.assertEqual(self.since_looked(task)["count"], 1, "small was not committed")
+        store.save(dict(store.read(task["id"]), looked=dict(looked, commit="0" * 40, head="1" * 40)))
+        self.assertIsNone(self.since_looked(task))
 
     def test_history_notes_each_change_of_status_seen_and_turn(self):
         started = time.time()

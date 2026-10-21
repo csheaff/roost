@@ -10,6 +10,20 @@ Since 0.9.0:
   stays on screen when you open another. It waits, as you left it, and
   comes back beside its task's terminal when you open that task again, as
   it would in the task's perspective or tab. Nothing to do when upgrading.
+- A task says what changed since you last looked at it. Opening it in
+  Magit with `r`, or sending its agent your notes with `@`, records where
+  its work stands, uncommitted work too. Once you've seen its agent's
+  reply, the sidebar and dashboard say, dim, `3 files changed since you
+  looked`, without counting it as waiting, and with Magit a task you never
+  looked at says `not looked at`. The panel says when you looked, Magit's
+  status lists the files that changed between your last two looks beside
+  `Unmerged into main` (`RET` shows their changes), and `m` and `P` say
+  so too. Roost compares content, so commits made of what you saw, amends
+  and rebases don't count, nor does what an update brought in. Where you
+  looked is kept as a commit no ref points at, which Git prunes after two
+  weeks; your index and branches are left alone. Nothing to do when
+  upgrading; tasks you already have say `not looked at` until you open
+  them with `r`.
 - Without workspaces, `r`, `f` and `D` on another task's row open that task
   first, as `RET` does, then its Magit, files or diff, as from its own
   terminal. They opened beside the terminal on screen, another task's, and

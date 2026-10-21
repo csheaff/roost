@@ -73,6 +73,8 @@
 (declare-function magit--insert-log "magit-log" (keep-error revs &optional args files))
 (declare-function magit-log-insert-child-count "magit-log" ())
 (declare-function magit-rev-verify "magit-git" (rev))
+(declare-function magit-diff-range "magit-diff" (rev-or-range &optional args files))
+(declare-function eieio-oset "eieio-core" (obj slot value))
 (declare-function magit-get-upstream-branch "magit-git" (&optional branch))
 (declare-function persp-switch "perspective" (name))
 (declare-function persp-kill "perspective" (name))
@@ -107,6 +109,7 @@
 (defvar magit-status-sections-hook)
 (defvar magit-refresh-buffer-hook)
 (defvar magit-buffer-log-args)
+(defvar magit-insert-section--current)
 (defvar tmux-control-remote-tmux-socket-setup)
 (defvar tmux-control-ssh-options)
 (defvar tmux-control-session-activity)
@@ -849,7 +852,7 @@ and a newer notification about TASK replaces it."
 
 (defconst roost--measured-fields
   '(diff dirty files size ahead behind update worktreeMissing prStatus unpushed gitStamp agentWork merging
-    landed conflicts pr)
+    landed conflicts pr sinceLooked)
   "A task's fields its host measures for each reply, such as Git statistics.
 They are as new as the reply, whatever its `updatedAt': its pull
 request too, which the host records as it finds one on GitHub.")
@@ -888,12 +891,25 @@ bringing back the old name, which the task's tab and panel no longer have."
         (when-let* ((cell (assq field old)))
           (setq task (cons cell (assq-delete-all field task))))))))
 
+(defun roost--newer-look (task old)
+  "TASK, with OLD's record of where you last looked when that is newer.
+A reply its host read before you last looked at the task, such as a
+poll's, can arrive after the look's: it must not bring back the look
+before, which would count again what you have looked at since.  Nor
+must a reply with a newer look lose it for an older agent event."
+  (let ((looked (roost--field old 'looked)))
+    (if (string< (or (alist-get 'at (roost--field task 'looked)) "") (or (alist-get 'at looked) ""))
+        (cons (cons 'looked looked) (assq-delete-all 'looked task))
+      task)))
+
 (defun roost--cache-task (host task)
   "Cache TASK from HOST and notify only on attention transitions."
   (setf (alist-get 'host task) host)
   (setq task (assq-delete-all 'pushed task))
   (when-let* ((old (gethash (roost--key task) roost--tasks)))
-    (setq task (roost--newer-name (roost--newer-events task old) old)))
+    ;; Looks and the agent's events move apart: the newer of each counts.
+    (let ((looked (roost--newer-look old task)))
+      (setq task (roost--newer-look (roost--newer-name (roost--newer-events task old) old) looked))))
   (let* ((key (roost--key task))
          (old (gethash key roost--tasks))
          (had-merged (and old (roost--pr-merges old)))
@@ -907,7 +923,7 @@ bringing back the old name, which the task's tab and panel no longer have."
     ;; Not what GitHub said of a pull request since recorded otherwise, as
     ;; by another Emacs: closed, or another in its place.
     (dolist (field '(diff dirty files size ahead behind worktreeMissing prStatus unpushed lastMessage gitStamp
-                            agentWork merging landed conflicts))
+                            agentWork merging landed conflicts sinceLooked))
       (unless (or (assoc field task)
                   (and (eq field 'prStatus)
                        (not (equal (roost--field task 'pr) (roost--field old 'pr)))))
@@ -1055,17 +1071,20 @@ in `roost--list-requests'; without one, TASKS count as asked for now."
     (remhash host roost--errors)))
 
 (defun roost--task-states (host)
-  "HOST's cached tasks as an alist of ID to (STATUS UPDATED-AT GIT-STAMP PR).
+  "HOST's tasks, cached, as ID to (STATUS UPDATED-AT GIT-STAMP PR LOOKED).
 Each agent hook event, such as finishing a tool, moves UPDATED-AT; Git
 commands in the worktree, such as your commit, change GIT-STAMP.  PR is
 the state its host recorded of its pull request, which another Emacs
-may have changed: closed, it no longer says whether the task conflicts."
+may have changed: closed, it no longer says whether the task conflicts.
+LOOKED is when you last looked at it, from this Emacs or another, which
+what changed since is measured against."
   (let (states)
     (maphash (lambda (key task)
                (when (equal (car key) host)
                  (push (list (cadr key) (roost--field task 'status)
                              (roost--field task 'updatedAt) (roost--field task 'gitStamp)
-                             (alist-get 'state (roost--field task 'pr)))
+                             (alist-get 'state (roost--field task 'pr))
+                             (alist-get 'at (roost--field task 'looked)))
                        states)))
              roost--tasks)
     states))
@@ -2881,9 +2900,11 @@ permission is declined in the terminal."
       (roost--send-draft task)
     (roost--send-text task (or text (read-string (format "Send to %s: " (roost--field task 'name)))))))
 
-(defun roost--send-text (task text &optional callback failure)
+(defun roost--send-text (task text &optional callback failure look)
   "Send TEXT to TASK's agent, confirming first if it may be at a prompt.
-CALLBACK and FAILURE are passed to `roost--act'."
+CALLBACK and FAILURE are passed to `roost--act'.  With LOOK, as for
+your notes, its host first records where the task stands as where you
+last looked at it."
   (let* ((status (roost--field task 'status))
          (force (when (member status '("starting" "permission"))
                   (or (yes-or-no-p
@@ -2892,7 +2913,8 @@ CALLBACK and FAILURE are passed to `roost--act'."
                                (if (equal status "starting") "starting up" "asking for permission")))
                       (user-error "Open the task with RET to answer it")))))
     (roost--act task "send" (append (list (cons 'text text))
-                                    (when force (list (cons 'force t))))
+                                    (when force (list (cons 'force t)))
+                                    (when look (list (cons 'look t))))
                 callback failure)))
 
 ;;;; Composing a follow-up
@@ -2996,7 +3018,9 @@ Review notes in it are cleared once it is sent."
            (when (buffer-live-p buffer)
              (with-current-buffer buffer
                (setq roost--send-sending nil)
-               (roost--draft-error "Could not send" err 'roost-send-submit)))))
+               (roost--draft-error "Could not send" err 'roost-send-submit))))
+         ;; You have looked at what your notes are about.
+         (and notes t))
       ;; A declined confirmation leaves the draft ready to send again.
       (quit (setq roost--send-sending nil) (signal (car err) (cdr err)))
       (error (setq roost--send-sending nil) (signal (car err) (cdr err))))))
@@ -3561,7 +3585,9 @@ less diff context.
                       '(magit-insert-unpushed-to-upstream-or-recent
                         magit-insert-unpushed-to-upstream magit-insert-recent-commits))))
     (magit-add-section-hook 'magit-status-sections-hook #'roost--magit-insert-unmerged
-                            at (not at))))
+                            at (not at)))
+  (magit-add-section-hook 'magit-status-sections-hook #'roost--magit-insert-since-looked
+                          #'roost--magit-insert-unmerged))
 
 (defun roost--magit-teardown ()
   "Remove what `roost--magit-setup' added, from Magit and its buffers."
@@ -3570,7 +3596,8 @@ less diff context.
     (remove-hook 'magit-refresh-buffer-hook #'roost--magit-buffer-refreshed)
     (remove-hook 'magit-status-headers-hook #'roost--magit-insert-task-header)
     (remove-hook 'magit-status-sections-hook #'roost--magit-insert-reply)
-    (remove-hook 'magit-status-sections-hook #'roost--magit-insert-unmerged))
+    (remove-hook 'magit-status-sections-hook #'roost--magit-insert-unmerged)
+    (remove-hook 'magit-status-sections-hook #'roost--magit-insert-since-looked))
   (roost--note-box-close)
   (when (timerp roost--note-mouse-timer)
     (cancel-timer roost--note-mouse-timer)
@@ -3666,6 +3693,81 @@ their changes together.  See `roost-magit-status-sections'."
          ;; With no commits, Magit leaves the section out.
          (magit--insert-log nil range magit-buffer-log-args)
          (magit-log-insert-child-count))))))
+
+(defvar-keymap roost-since-looked-section-map
+  :doc "Keys on what changed since you last looked, in Magit's status of a task."
+  "<remap> <magit-visit-thing>" #'roost-diff-since-looked)
+
+(defun roost--magit-insert-since-looked ()
+  "In Magit's status of a task's worktree, insert what changed since you looked.
+That is between the last two times you looked at the task, opening it
+in Magit with `roost-review' or sending its agent your notes, the last
+one often this time: its files.  RET on the heading shows their changes
+together, as on Magit's sections of unmerged commits, and on a file,
+its own.  See `roost-magit-status-sections'."
+  (when-let* ((roost-magit-status-sections)
+              (task (roost--task-in-directory default-directory))
+              (looked (roost--field task 'looked))
+              (since (alist-get 'since looked))
+              (files (alist-get 'files since))
+              (start (alist-get 'start since))
+              ;; As recorded by an older helper, the look's own commit.
+              (end (or (alist-get 'end since) (alist-get 'commit looked)))
+              ;; Git prunes what a look kept of uncommitted work in time.
+              ((magit-rev-verify (concat start "^{commit}")))
+              ((magit-rev-verify (concat end "^{commit}"))))
+    ;; The files its diff is of go with the section, as the task's record
+    ;; may change before you press RET: all of them, unless some of the
+    ;; files that changed were only the integration branch's.
+    (roost--magit-insert-section
+     'roost-since-looked (list (concat start ".." end) (alist-get 'paths since)) nil
+     (lambda ()
+       (roost--magit-section-keymap 'roost-since-looked-section-map)
+       (magit-insert-heading
+         (propertize "Changed since you last looked" 'font-lock-face 'magit-section-heading)
+         (propertize (format ", %s ago" (roost--elapsed (alist-get 'at since))) 'font-lock-face 'roost-dim)
+         (format " (%d)" (or (alist-get 'count since) (length files))))
+       (dolist (file files)
+         (let ((path (alist-get 'path file)))
+           (roost--magit-insert-section
+            'roost-since-looked-file path nil
+            (lambda ()
+              (roost--magit-section-keymap 'roost-since-looked-section-map)
+              ;; Magit's font lock would take away faces of other kinds.
+              (insert (propertize path 'font-lock-face 'magit-filename)
+                      (if (alist-get 'added file)
+                          (concat "  " (propertize (format "+%d" (alist-get 'added file))
+                                                   'font-lock-face 'roost-diff-added)
+                                  " " (propertize (format "−%d" (alist-get 'deleted file))
+                                                  'font-lock-face 'roost-diff-removed))
+                        (propertize "  binary" 'font-lock-face 'roost-dim))
+                      "\n")))))
+       (when-let* ((more (- (or (alist-get 'count since) 0) (length files)))
+                   ((> more 0)))
+         (insert (propertize (format "%d more\n" more) 'font-lock-face 'roost-dim)))
+       (insert "\n")))))
+
+(defun roost--magit-section-keymap (keymap)
+  "Give the Magit section being inserted KEYMAP, a symbol.
+As its own sections have, from Magit 3; an older Magit keeps its own keys.
+Magit is optional, so its section classes are unknown when Roost is
+compiled."
+  (let ((slot 'keymap))
+    (ignore-errors (eieio-oset magit-insert-section--current slot keymap))))
+
+(defun roost-diff-since-looked ()
+  "Show what changed since you last looked at the task, in Magit.
+That is between the last two times you looked; on a file, only its
+changes.  As in any diff of the task, \\<roost-magit-mode-map>\\[roost-note] writes a note for its agent."
+  (interactive)
+  (let* ((section (magit-current-section))
+         (file (when (eq (roost--slot section 'type) 'roost-since-looked-file)
+                 (prog1 (roost--slot section 'value)
+                   (setq section (roost--slot section 'parent))))))
+    (unless (eq (roost--slot section 'type) 'roost-since-looked)
+      (user-error "Put point on what changed since you last looked"))
+    (pcase-let ((`(,range ,paths) (roost--slot section 'value)))
+      (magit-diff-range range (car (magit-diff-arguments)) (if file (list file) paths)))))
 
 (defun roost--magit-insert-section (type value hide insert)
   "Insert a Magit section of TYPE with VALUE, folded if HIDE, using INSERT.
@@ -4618,7 +4720,9 @@ sent once at a time."
            (message "Sent the note on %s to %s" (roost--note-location note) (roost--field task 'name)))
          (lambda (err)
            (setq roost--notes-sending (delete id roost--notes-sending))
-           (message "Roost could not send the note to %s: %s" (roost--field task 'name) err)))
+           (message "Roost could not send the note to %s: %s" (roost--field task 'name) err))
+         ;; You have looked at what it is about.
+         t)
       ;; A declined confirmation leaves the note ready to send again.
       ((quit error)
        (setq roost--notes-sending (delete id roost--notes-sending))
@@ -4660,7 +4764,7 @@ For a task other than the frame's, its terminal opens first, as
                                                   (buffer-local-value 'roost-magit-mode buffer))
                                                 (buffer-list))))))
             (buffer (or (funcall find)
-                        (progn (roost-review task) (funcall find))
+                        (progn (roost--magit-status-here task) (funcall find))
                         ;; Committed changes show in the diff since the
                         ;; task's fork point.
                         (progn (roost--diff-file task `((path . ,(alist-get 'file note))))
@@ -4701,6 +4805,8 @@ nothing to compare, opens as it is; stage it from Magit's status."
 ;;;###autoload
 (defun roost-review (&optional task quit-questions)
   "Open Magit on TASK's worktree, through TRAMP for remote tasks.
+Its host first records where the task stands as where you last looked
+at it, and Magit's status shows what changed since you looked before.
 For a task other than the frame's, its terminal opens first, as
 \\[roost-open-task] does, and Magit beside it.  With QUIT-QUESTIONS, as
 when you give a command, first quit the questions you left open in the
@@ -4711,13 +4817,44 @@ minibuffer, as `roost-open-task' does."
       (roost--quit-questions-left-open
        (lambda () (roost-review (or task (roost--read-task "Task: ")))))))
   (setq task (roost--choose task))
-  (roost--in-task-frame
-   task (lambda ()
-          (if (not (require 'magit nil t))
-              (dired (roost--remote-directory task))
-            (add-hook 'magit-post-refresh-hook #'roost--magit-refreshed)
-            (roost--magit-setup)
-            (magit-status (roost--remote-directory task))))))
+  (if (not (require 'magit nil t))
+      (roost--magit-status task)
+    (let* ((generation (cl-incf roost--open-generation))
+           (window (if (window-minibuffer-p) (minibuffer-selected-window) (selected-window)))
+           (shown (window-buffer window))
+           (open (lambda (&rest _)
+                   (roost--when-out-of-minibuffer
+                    (lambda ()
+                      ;; Not once you have opened something else, or gone
+                      ;; to another window or buffer, as `roost-open-task'.
+                      (when (= generation roost--open-generation)
+                        ;; As it is now: renamed meanwhile, as from another
+                        ;; Emacs, its workspace has the new name.
+                        (let ((task (gethash (roost--key task) roost--tasks task)))
+                          (if (not (and (eq (selected-window) window) (eq (window-buffer window) shown)))
+                              (message "Roost: didn't open Magit on %s, as you went to another window or buffer while its host replied"
+                                       (roost--field task 'name))
+                            (roost--magit-status task)))))))))
+      (if (gethash (roost--field task 'host) roost--errors)
+          (funcall open)
+        (roost--act task "look" nil open
+                    (lambda (err)
+                      (message "Roost could not record that you looked at %s: %s" (roost--field task 'name) err)
+                      (funcall open)))))))
+
+(defun roost--magit-status (task)
+  "Open Magit's status of TASK's worktree in TASK's frame.
+Without Magit, Dired.  See `roost--in-task-frame'."
+  (roost--in-task-frame task (lambda () (roost--magit-status-here task))))
+
+(defun roost--magit-status-here (task)
+  "Open Magit's status of TASK's worktree now, where you are.
+Without Magit, Dired."
+  (if (not (require 'magit nil t))
+      (dired (roost--remote-directory task))
+    (add-hook 'magit-post-refresh-hook #'roost--magit-refreshed)
+    (roost--magit-setup)
+    (magit-status (roost--remote-directory task))))
 
 (defun roost--measure-task-in (directory)
   "Fetch the Git statistics of the task whose worktree contains DIRECTORY.
@@ -4969,8 +5106,9 @@ closes it."
 (defun roost--pr-header (task)
   "Header line for TASK's pull request draft."
   (substitute-command-keys
-   (format " Pull request for %s · \\<roost-pr-mode-map>\\[roost-pr-submit] create (C-u: draft) · \\[roost-pr-cancel] cancel"
-           (roost--field task 'name))))
+   (format " Pull request for %s%s · \\<roost-pr-mode-map>\\[roost-pr-submit] create (C-u: draft) · \\[roost-pr-cancel] cancel"
+           (roost--field task 'name)
+           (if-let* ((since (roost--since-looked-text task))) (format " (%s)" since) ""))))
 
 (defun roost--pr-draft (task)
   "Open a draft buffer for TASK's pull request.
@@ -5005,11 +5143,13 @@ only open it."
          task "pr" nil
          (lambda (updated)
            (let ((pushed (or (alist-get 'pushed updated) 0))
-                 (number (alist-get 'number pr)))
+                 (number (alist-get 'number pr))
+                 ;; As the task is now: you may have looked during the push.
+                 (since (if-let* ((text (roost--since-looked-text updated))) (concat "; " text) "")))
              (if (zerop pushed)
-                 (message "Roost: #%s is up to date" number)
-               (message "Roost: Pushed %d commit%s to #%s"
-                        pushed (if (= pushed 1) "" "s") number)))
+                 (message "Roost: #%s is up to date%s" number since)
+               (message "Roost: Pushed %d commit%s to #%s%s"
+                        pushed (if (= pushed 1) "" "s") number since)))
            (browse-url url))))
     (roost--pr-draft task)))
 
@@ -5478,11 +5618,12 @@ comes in as one squashed commit, or a merge commit; see `roost-merge-style'."
     (when (y-or-n-p (format "%s has uncommitted changes to commit first.  Open Magit? "
                             (roost--field task 'name)))
       (roost-review task)))
-   ((y-or-n-p (format (if (eq roost-merge-style 'squash)
-                             "Squash committed work from %s into one commit on %s and retire it? "
-                           "Merge committed work from %s into %s and retire it? ")
-                         (roost--field task 'name)
-                         (or (roost--field task 'integrationBranch) "its branch")))
+   ((y-or-n-p (concat (roost--since-looked-sentence task)
+                      (format (if (eq roost-merge-style 'squash)
+                                  "Squash committed work from %s into one commit on %s and retire it? "
+                                "Merge committed work from %s into %s and retire it? ")
+                              (roost--field task 'name)
+                              (or (roost--field task 'integrationBranch) "its branch"))))
     (roost--act task "merge" (when (eq roost-merge-style 'squash) '((style . "squash")))
                 (lambda (merged)
                   (roost--retired-workspace merged)
@@ -5634,6 +5775,92 @@ in turn."
 (defun roost--project-name (task)
   "Short primary repository name for TASK."
   (file-name-nondirectory (directory-file-name (or (roost--field task 'repo) "unknown"))))
+
+;;;; Since you last looked
+
+(defun roost--since-looked (task)
+  "What changed in TASK since you last looked at it, as (COUNT . AT), or nil.
+You look at a task when you open it in Magit with `roost-review' or
+send its agent your notes.  COUNT is how many files changed since then,
+by content: uncommitted work counts, and commits remade of what you saw,
+as by an amend or a rebase, don't.  AT is when you looked, or nil if you
+never have, and then COUNT is how many files the task changes.  Nil
+until its host has measured it since you looked, and without Magit for
+a task you never looked at."
+  (let ((looked (roost--field task 'looked))
+        (since (roost--field task 'sinceLooked)))
+    (cond (looked
+           ;; Measured since this look, not the one before it.
+           (when (equal (alist-get 'at since) (alist-get 'at looked))
+             (cons (or (alist-get 'count since) 0) (alist-get 'at looked))))
+          ;; You look in Magit, so without it there is no way to.
+          ((and (fboundp 'magit-status) (assq 'diff task))
+           (let ((diff (or (roost--field task 'diff) "")))
+             (cons (or (alist-get 'files (roost--field task 'size))
+                       ;; From a helper that doesn't measure the size.
+                       (+ (if (string-match "\\([0-9]+\\) files? changed" diff)
+                              (string-to-number (match-string 1 diff))
+                            0)
+                          (seq-count (lambda (file) (alist-get 'untracked file)) (roost--field task 'files))))
+                   nil))))))
+
+(defun roost--since-looked-text (task &optional short)
+  "What changed in TASK since you last looked at it, in a few words, or nil.
+SHORT leaves out since when.  Nil when nothing did."
+  (pcase (roost--since-looked task)
+    (`(,count . ,at)
+     (when (> count 0)
+       (let ((files (format "%d file%s" count (if (= count 1) "" "s"))))
+         (cond ((and short at) (concat files " changed"))
+               (short "not looked at")
+               (at (concat files " changed since you looked"))
+               (t (concat files " not looked at"))))))))
+
+(defun roost--since-looked-due-p (task)
+  "Whether to say what changed in TASK since you last looked at it.
+Not while its agent works or asks, which changes more, and not for work
+that is merged."
+  (not (or (member (roost--status-name task) '("starting" "running" "background" "permission"))
+           (member (roost--display-status task) '("merged" "offline")))))
+
+(defun roost--since-looked-shown-p (task)
+  "Whether TASK's row says what changed since you last looked at it.
+Once you have seen its agent, as `roost--since-looked-due-p' has it.
+It is no reason to wait for you."
+  (and (roost--seen-p task) (roost--since-looked-due-p task)))
+
+(defun roost--with-since-looked (task text)
+  "TEXT about TASK, after what changed since you last looked, if a row says so."
+  (if-let* (((roost--since-looked-shown-p task))
+            (since (roost--since-looked-text task)))
+      (if text (concat since " · " text) since)
+    text))
+
+(defun roost--since-looked-sentence (task)
+  "What changed in TASK since you last looked, as a sentence to ask after, or \"\"."
+  (if-let* ((text (roost--since-looked-text task)))
+      (concat (capitalize (substring text 0 1)) (substring text 1) ".  ")
+    ""))
+
+(defun roost--insert-since-looked (task)
+  "Insert, in TASK's panel, what changed since you last looked at it."
+  (pcase (and (roost--since-looked-due-p task) (roost--since-looked task))
+    (`(,count . ,at)
+     (cond ((not at)
+            (when (> count 0)
+              (roost--insert-indented
+               (substitute-command-keys
+                "Not looked at in Magit yet: \\<roost-task-info-mode-map>\\[roost-review] opens it")
+               'roost-dim)))
+           ((= count 0)
+            (roost--insert-indented (format "Nothing changed since you looked, %s ago" (roost--elapsed at))
+                                    'roost-dim))
+           (t
+            (roost--insert-indented
+             (substitute-command-keys
+              (format "%d file%s changed since you looked, %s ago: \\<roost-task-info-mode-map>\\[roost-review] shows them"
+                      count (if (= count 1) "" "s") (roost--elapsed at)))
+             'roost-dim))))))
 
 ;;;; Shared display helpers
 
@@ -7066,6 +7293,7 @@ Windows showing the panel keep their scroll position, and the mark stays."
                     (spread (roost--spread task)))
           (roost--insert-indented spread))
         (roost--insert-changed-files task width)
+        (roost--insert-since-looked task)
         (if-let* ((notes (roost--notes-summary task)))
             (roost--insert-indented notes)
           (when (and (fboundp 'magit-status)
@@ -7437,9 +7665,10 @@ The changes column shrinks first, then the agent column is dropped."
               ;; columns do; it is cut short of three times as many, with
               ;; an ellipsis should that cut be the one that shows.
               (let ((text (truncate-string-to-width
-                           (roost--one-line (or (roost--permission-request task)
-                                                (roost--last-message-summary task)
-                                                (roost--prompt-text task)))
+                           (roost--one-line (roost--with-since-looked
+                                             task (or (roost--permission-request task)
+                                                      (roost--last-message-summary task)
+                                                      (roost--prompt-text task))))
                            (* 3 room) nil nil "…")))
                 (roost--truncate-width (propertize text 'face '(roost-dim roost-prose)) room))))))
 
@@ -8100,17 +8329,24 @@ have seen that waits for nothing."
          (urgent (and face (not (eq face 'roost-dim))))
          ;; After an indent.
          (room (1- width))
-         (status (unless (equal attention "idle") (roost--display-status task)))
+         (idle (equal attention "idle"))
+         ;; For an agent you have seen that waits for nothing, what changed
+         ;; since you last looked, if anything.
+         (status (if idle
+                     (and (roost--since-looked-shown-p task) (roost--since-looked-text task))
+                   (roost--display-status task)))
          ;; The fewest columns the name takes: one, and the ID that tells
          ;; it from a task of the same name.
          (least (string-width (roost--row-name task 1)))
          ;; A status you should look at shows even where the name then has
          ;; little room; the others, where its name keeps a dozen columns.
+         (fits (lambda (label)
+                 (>= room (+ (min (string-width (roost--row-name task)) 12) 1 (string-width label)))))
          (label (cond ((not status) nil)
-                      ((>= room (+ (min (string-width (roost--row-name task)) 12) 1
-                                   (string-width status)))
-                       status)
-                      (urgent (truncate-string-to-width status (max 1 (- room least 1)) nil nil "…"))))
+                      ((funcall fits status) status)
+                      (urgent (truncate-string-to-width status (max 1 (- room least 1)) nil nil "…"))
+                      ((and idle (funcall fits (roost--since-looked-text task t)))
+                       (roost--since-looked-text task t))))
          (name (roost--row-name task (if label (max 1 (- room (string-width label) 1)) room)
                                 (if current 'roost-heading 'default))))
     (let ((row (concat " " name

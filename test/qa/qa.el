@@ -201,15 +201,6 @@ Return nil when it isn't on screen."
             (append unread-command-events (list (list 'down-mouse-1 posn) (list 'mouse-1 posn))))
       t)))
 
-(defun qa-sidebar-to-top ()
-  "Scroll the sidebar to its top, as the mouse wheel would.
-With many tasks and Roost's menu open below, its headings can be out of
-sight."
-  (when-let* ((window (get-buffer-window roost--sidebar-buffer)))
-    (set-window-start window 1)
-    (set-window-point window 1)
-    t))
-
 (defun qa-click-terminal ()
   "Click in the first terminal on screen, as to type in it.
 Return nil when no terminal is on screen."
@@ -245,6 +236,16 @@ Return nil when it isn't there."
                      (roost--task-row (roost--key task)))))
     (set-window-point (selected-window) row)
     t))
+
+(defun qa-sidebar-to-top ()
+  "Scroll each sidebar on screen to its top, as the mouse wheel would.
+Point goes with it, as the wheel takes it along."
+  (dolist (window (window-list-1 nil 'nomini 'visible))
+    (when (eq (buffer-local-value 'major-mode (window-buffer window)) 'roost-sidebar-list-mode)
+      (let ((top (with-current-buffer (window-buffer window) (point-min))))
+        (set-window-start window top)
+        (set-window-point window top))))
+  t)
 
 (defun qa-selected-task ()
   "The name of the task whose worktree holds the selected window's buffer, or nil."
