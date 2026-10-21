@@ -2187,18 +2187,29 @@ def scratch_index(worktree, untracked, intent):
         shutil.rmtree(folder, ignore_errors=True)
 
 
-def snapshot(worktree):
+class LeftOut(Exception):
+    """A look of the files Git tracks only, as a diff of the worktree shows
+    them, found a file it doesn't track, which that view left out."""
+
+
+def snapshot(worktree, tracked=False):
     """Where WORKTREE stands, as (COMMIT, HEAD): COMMIT is HEAD when nothing
     is left uncommitted, or else a commit of all that is there but ignored
     and large untracked files, made in a copy of its index. No branch or
     other ref points at it, nothing you or the agent staged changes, and
     Git prunes it in time (`gc.pruneExpire`, two weeks by default). None
     for both when WORKTREE has no commit. Git failing to keep what is
-    there, as with no room for it, is an error: the look before stands."""
+    there, as with no room for it, is an error: the look before stands.
+    With TRACKED, LeftOut when there is an untracked file it would keep:
+    one scan decides both, so a file the agent makes meanwhile is in
+    neither the look nor what decided it."""
     head = read_git(worktree, "rev-parse", "--verify", "-q", "HEAD^{commit}").stdout.strip()
     if not head:
         return None, None
-    with scratch_index(worktree, untracked_files(worktree)[0], intent=False) as env:
+    untracked = untracked_files(worktree)[0]
+    if tracked and untracked:
+        raise LeftOut()
+    with scratch_index(worktree, untracked, intent=False) as env:
         git(worktree, *SCRATCH_INDEX_GIT, "add", "--update", env=env)
         tree = git(worktree, *SCRATCH_INDEX_GIT, "write-tree", env=env).stdout.strip()
     if tree == git(worktree, "--no-optional-locks", "rev-parse", head + "^{tree}").stdout.strip():
@@ -2390,10 +2401,11 @@ def seen(store, task, updated):
     return task
 
 
-def prepare_look(store, task_id):
+def prepare_look(store, task_id, tracked=False):
     """Where TASK_ID's work stands, to record as where you last looked at
     it with `record_look`, as when you open it in Magit or send its agent
     your notes; and the look it was measured against, as (BEFORE, LOOKED).
+    TRACKED is as for `snapshot`.
     When it changed since the look before, it says what changed, for
     Magit: the files, and the two commits to compare. A look at what you
     looked at before keeps that. Git runs without the registry lock."""
@@ -2410,7 +2422,7 @@ def prepare_look(store, task_id):
                               "Roost is still removing this task's worktree; refresh in a moment"):
             with store.released():
                 base = fork_point(worktree, task)
-                commit, head = snapshot(worktree)
+                commit, head = snapshot(worktree, tracked=tracked)
                 if not commit:
                     raise RoostError("The task's worktree has no commit to look at")
                 looked = dict(commit=commit, head=head, base=base, at=now())
@@ -2463,15 +2475,12 @@ def look(store, task_id, tracked=False):
     """Record where TASK_ID's work stands as where you last looked at it;
     see `prepare_look`. With TRACKED, for a view of the files Git tracks
     only, as a diff of the worktree: unless a file it doesn't track is
-    there, which that view left out, when the look before stands."""
-    if tracked:
-        task = store.read(task_id)
-        worktree = Path(task["worktree"])
-        if worktree.is_dir():
-            kept, large = untracked_files(worktree)
-            if kept or large:
-                return task
-    return record_look(store, task_id, *prepare_look(store, task_id))
+    there, which that view left out, when the look before stands. Large
+    ones don't count, as a look leaves those out anyway."""
+    try:
+        return record_look(store, task_id, *prepare_look(store, task_id, tracked=tracked))
+    except LeftOut:
+        return store.read(task_id)
 
 
 TURNS = ("ci failed", "comments", "to merge", "conflicts")

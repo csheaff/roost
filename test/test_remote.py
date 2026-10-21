@@ -1999,6 +1999,19 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(reply["ok"], reply)
         self.assertTrue(reply["result"]["looked"])
         self.assertEqual(self.since_looked(task)["count"], 0)
+        # A file its agent makes once the look has scanned for them is in
+        # neither the look nor what decided it: it changed since.
+        scan = roost.untracked_files
+
+        def then_a_new_file(worktree):
+            found = scan(worktree)
+            (wt / "late file").write_text("late\n")
+            return found
+        with patch.object(roost, "untracked_files", then_a_new_file):
+            reply = self.request("look", id=task["id"], tracked=True)
+        self.assertTrue(reply["ok"], reply)
+        self.assertTrue(reply["result"]["looked"])
+        self.assertEqual(self.since_looked(task)["count"], 1)
 
     def test_since_you_looked_leaves_out_what_an_update_brought_in(self):
         task = self.create()
@@ -2116,12 +2129,12 @@ class Lifecycle(unittest.TestCase):
         store = roost.Store(str(self.state))
         real, meanwhile = roost.snapshot, []
 
-        def snapshot(worktree):
+        def snapshot(worktree, **args):
             if not meanwhile:
                 # Another Emacs looks while this look is under way.
                 meanwhile.append(None)
                 meanwhile[0] = roost.look(store, task["id"])["looked"]
-            return real(worktree)
+            return real(worktree, **args)
 
         with patch.object(roost, "snapshot", snapshot):
             reply = self.request("look", id=task["id"])
