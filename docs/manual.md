@@ -172,7 +172,13 @@ make test`), so you can tell from the notification whether it needs you now.
 The agent whose terminal you are looking at doesn't notify. The dashboard
 shows the same for every agent, and the mode line counts the agents waiting
 (`Roost:2`; click it for the next one). `n` jumps to the next agent waiting
-for you, permission requests first. Answer it in the terminal, then `n` again.
+for you, permission requests first, and the echo area says which task it
+opened, why that one waits and how many more do, as in `permission ·
+ledger: Asks to run make test; 2 more waiting`; in a narrow frame, why it
+waits is cut short first. Answer it in the terminal, then `n` again. Once
+none waits, `n` says so and offers the way back to where you pressed the
+first `n`: press it again to go there. With workspaces that is the
+perspective or tab you were in; without, the frame's windows as they were.
 A link the agent shows there, such as the pull request it opened, opens with
 `C-c C-u`, which offers each link on the screen, and with a click when the
 agent marks it as a link, as Claude Code does with tmux 3.4 or later.
@@ -328,7 +334,7 @@ counted once you stop and resume it (`K`, then `s`).
 | `h`, `?` | `roost-dispatch` | A Magit-style menu of every command below, naming the task they act on and what to do next |
 | `RET` | `roost-open-task` | Open the task's agent terminal and workspace; for a stopped or crashed agent, offer to resume it |
 | `c` | `roost-new-task` | Draft a new task, from the region or Org entry if any (`C-u` forks the current task's commits) |
-| `n` | `roost-next-waiting` | Next task waiting for you, permission requests first |
+| `n` | `roost-next-waiting` | Next task waiting for you, permission requests first, saying why it waits; once none does, again goes back to where you started |
 | `t` | `roost-shell` | Shell beside the agent, in the worktree (reused) |
 | `f` | `roost-files` | Dired in the worktree |
 | `r` | `roost-review` | Magit in the worktree, showing what changed since you last looked |
@@ -677,7 +683,7 @@ real and no model is called. `test/qa/fake_gh.py` stands in for `gh`, with
 what each journey has GitHub say. The run has a home directory of its own, so your
 tmux, shell and Git configuration don't change it, and the fake agent writes
 its transcripts there, as Claude Code would in yours, for search. Its journeys start a task from the menu, answer
-it in its terminal, fold and unfold a long prompt with the mouse, resize the
+it in its terminal, go through the tasks waiting with `n` and back, fold and unfold a long prompt with the mouse, resize the
 frame, merge a commit, review a change in Magit and send a note, work in the
 terminal with tmux-control's own keys (split a pane, open and move between
 tmux windows, switch to another task and back), open a shell beside the
