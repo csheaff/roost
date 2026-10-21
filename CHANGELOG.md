@@ -13,6 +13,10 @@ Since 0.9.0:
   the changed files the task panel lists, and the line follows them as
   tasks change more, or as you delete the quote. Click a name to open that
   task; `C-c C-c` starts the new one anyway. Nothing to do when upgrading.
+- Without workspaces, a prompt or pull request draft for one task no longer
+  stays on screen when you open another. It waits, as you left it, and
+  comes back beside its task's terminal when you open that task again, as
+  it would in the task's perspective or tab. Nothing to do when upgrading.
 - A task says what changed since you last looked at it. Opening it in
   Magit with `r`, or sending its agent your notes with `@`, records where
   its work stands, uncommitted work too. Once you've seen its agent's

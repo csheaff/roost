@@ -261,6 +261,20 @@ Point goes with it, as the wheel takes it along."
         (set-window-point window top))))
   t)
 
+(defun qa-sidebar-show-row (name)
+  "Scroll each sidebar on screen to task NAME's row, if it is out of sight.
+As the mouse wheel would: many tasks, with a menu open below, take more
+lines than the sidebar has."
+  (when-let* ((task (seq-find (lambda (task) (equal (roost--field task 'name) name)) (roost-tasks))))
+    (dolist (window (window-list-1 nil 'nomini 'visible))
+      (when (eq (buffer-local-value 'major-mode (window-buffer window)) 'roost-sidebar-list-mode)
+        (with-current-buffer (window-buffer window)
+          (when-let* ((row (roost--task-row (roost--key task)))
+                      ((not (pos-visible-in-window-p row window))))
+            (set-window-start window (save-excursion (goto-char row) (line-beginning-position)))
+            (set-window-point window row))))))
+  t)
+
 (defun qa-selected-task ()
   "The name of the task whose worktree holds the selected window's buffer, or nil."
   (with-current-buffer (window-buffer (selected-window))
@@ -587,6 +601,10 @@ question from another of the same prompt asked after it."
                           (selected . ,(if (eq window (selected-window)) t :json-false))
                           (side . ,(window-parameter window 'window-side))
                           (terminal . ,(qa--terminal buffer))
+                          ;; The task a prompt or pull request draft is for.
+                          (draft . ,(when-let* ((task (roost--draft-task buffer)))
+                                      (format "%s/%s" (or (roost--field task 'host) "local")
+                                              (roost--field task 'id))))
                           (history . ,(qa--history-shown window))
                           (pane . ,(with-current-buffer buffer
                                      (and (derived-mode-p 'tmux-control-mode) (fboundp 'tmux-control-active-pane)
