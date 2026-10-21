@@ -8899,13 +8899,17 @@ have seen that waits for nothing."
     ;; Each sidebar you aren't in goes to the task you work on once it
     ;; changes, so that its band shows however many tasks there are; one
     ;; you scrolled since stays where you left it.
-    (when-let* ((current (seq-find #'roost--current-task-p tasks))
-                (row (roost--task-row (roost--key current))))
-      (dolist (shown (get-buffer-window-list (current-buffer) nil t))
+    (dolist (shown (get-buffer-window-list (current-buffer) nil t))
+      ;; With workspaces, each frame's own task.
+      (let ((current (if (roost--workspace-backend)
+                         (with-selected-frame (window-frame shown)
+                           (when-let* ((task (roost--frame-task))) (roost--key task)))
+                       roost--current-task)))
         (unless (or (eq shown (selected-window))
-                    (equal (window-parameter shown 'roost-followed) (roost--key current)))
-          (set-window-parameter shown 'roost-followed (roost--key current))
-          (set-window-point shown row))))
+                    (equal (window-parameter shown 'roost-followed) current))
+          (set-window-parameter shown 'roost-followed current)
+          (when-let* ((row (and current (roost--task-row current))))
+            (set-window-point shown row)))))
     ;; Redrawing removed the highlight with the text.
     (roost--sidebar-mark-selection)))
 
