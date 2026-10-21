@@ -6358,10 +6358,10 @@ The task panel says a key once: a line that would name it again leaves
 it to the next step."
   (and text
        (let ((start 0) found)
-         (while (and (not found)
-                     (setq start (text-property-any start (length text) 'face 'roost-key text)))
+         (while (and (not found) (< start (length text)))
            (let ((end (or (next-single-property-change start 'face text) (length text))))
-             (setq found (equal (substring-no-properties text start end) key)
+             (setq found (and (memq 'roost-key (ensure-list (get-text-property start 'face text)))
+                              (equal (substring-no-properties text start end) key))
                    start end)))
          found)))
 
