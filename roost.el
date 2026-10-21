@@ -5006,28 +5006,35 @@ minibuffer, as `roost-open-task' does."
   (setq task (roost--choose task))
   (if (not (require 'magit nil t))
       (roost--magit-status task)
-    (let* ((generation (cl-incf roost--open-generation))
-           (window (if (window-minibuffer-p) (minibuffer-selected-window) (selected-window)))
-           (shown (window-buffer window))
-           (open (lambda (&rest _)
-                   (roost--when-out-of-minibuffer
-                    (lambda ()
-                      ;; Not once you have opened something else, or gone
-                      ;; to another window or buffer, as `roost-open-task'.
-                      (when (= generation roost--open-generation)
-                        ;; As it is now: renamed meanwhile, as from another
-                        ;; Emacs, its workspace has the new name.
-                        (let ((task (gethash (roost--key task) roost--tasks task)))
-                          (if (not (and (eq (selected-window) window) (eq (window-buffer window) shown)))
-                              (message "Roost: didn't open Magit on %s, as you went to another window or buffer while its host replied"
-                                       (roost--field task 'name))
-                            (roost--magit-status task)))))))))
-      (if (gethash (roost--field task 'host) roost--errors)
-          (funcall open)
-        (roost--act task "look" nil open
-                    (lambda (err)
-                      (message "Roost could not record that you looked at %s: %s" (roost--field task 'name) err)
-                      (funcall open)))))))
+    (roost--look-then task "Magit" #'roost--magit-status)))
+
+(defun roost--look-then (task what show)
+  "Record on TASK's host that you look at it now, then call SHOW with TASK.
+WHAT names what SHOW shows, for when it doesn't: once you have opened
+something else, or gone to another window or buffer, as with
+`roost-open-task'.  A host that can't record the look doesn't keep you
+from it.  Looking at a task, in Magit or its whole diff, is what Roost
+says changed since: see `roost--since-looked'."
+  (let* ((generation (cl-incf roost--open-generation))
+         (window (if (window-minibuffer-p) (minibuffer-selected-window) (selected-window)))
+         (shown (window-buffer window))
+         (open (lambda (&rest _)
+                 (roost--when-out-of-minibuffer
+                  (lambda ()
+                    (when (= generation roost--open-generation)
+                      ;; As it is now: renamed meanwhile, as from another
+                      ;; Emacs, its workspace has the new name.
+                      (let ((task (gethash (roost--key task) roost--tasks task)))
+                        (if (not (and (eq (selected-window) window) (eq (window-buffer window) shown)))
+                            (message "Roost: didn't open %s of %s, as you went to another window or buffer while its host replied"
+                                     what (roost--field task 'name))
+                          (funcall show task)))))))))
+    (if (gethash (roost--field task 'host) roost--errors)
+        (funcall open)
+      (roost--act task "look" nil open
+                  (lambda (err)
+                    (message "Roost could not record that you looked at %s: %s" (roost--field task 'name) err)
+                    (funcall open))))))
 
 (defun roost--magit-status (task)
   "Open Magit's status of TASK's worktree in TASK's frame.
@@ -5138,10 +5145,12 @@ questions you left open in the minibuffer, as `roost-open-task' does."
 ;;;###autoload
 (defun roost-diff (&optional task quit-questions)
   "Diff TASK's tracked files against where its own work begins.
-For a task other than the frame's, its terminal opens first, as
-\\[roost-open-task] does, and the diff beside it.  With QUIT-QUESTIONS,
-as when you give a command, first quit the questions you left open in
-the minibuffer."
+When that is all of its changes, with no new file left out, its host
+first records where the task stands as where you last looked at it, as
+`roost-review' does.  For a task other than the frame's, its terminal
+opens first, as \\[roost-open-task] does, and the diff beside it.  With
+QUIT-QUESTIONS, as when you give a command, first quit the questions you
+left open in the minibuffer."
   (interactive (list nil t))
   (when (and quit-questions (roost--questions-left-open))
     (let ((task (or task (roost--task-at-point))))
@@ -5152,10 +5161,16 @@ the minibuffer."
     (user-error (substitute-command-keys
                  "The diff needs Magit; \\[roost-review] opens the worktree in Dired instead")))
   (roost--magit-setup)
-  (roost--in-task-frame
-   task (lambda ()
-          (let ((default-directory (roost--remote-directory task)))
-            (magit-diff-working-tree (roost--fork-point task))))))
+  (let ((show (lambda (task)
+                (roost--in-task-frame
+                 task (lambda ()
+                        (let ((default-directory (roost--remote-directory task)))
+                          (magit-diff-working-tree (roost--fork-point task))))))))
+    ;; All of its changes, and so a look, as in Magit; but the diff leaves
+    ;; out new files, which a look would count as seen.
+    (if (seq-some (lambda (file) (alist-get 'untracked file)) (roost--field task 'files))
+        (funcall show task)
+      (roost--look-then task "the diff" show))))
 
 ;;;###autoload
 (defun roost-update (&optional task)

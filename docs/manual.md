@@ -265,9 +265,10 @@ yet in the branch the task merges into (`Unmerged into main`); `RET` on that
 heading shows all their changes together, as on Magit's own sections of
 unmerged commits.
 
-**Since you last looked.** Opening a task with `r`, or sending its agent
-your notes with `@`, records where its work stands as where you last looked
-at it, uncommitted work too. Once you've seen its agent's reply, the
+**Since you last looked.** Opening a task with `r`, or its whole diff with
+`D` when no new file is left out of it, or sending its agent your notes with
+`@`, records where its work stands as where you last looked at it,
+uncommitted work too. Once you've seen its agent's reply, the
 sidebar and dashboard say, dim, what changed since (`3 files changed since
 you looked`), and its panel says when you looked: `r` shows the changes. It
 doesn't count as waiting. Roost compares content, so commits the agent
@@ -366,7 +367,7 @@ counted once you stop and resume it (`K`, then `s`).
 | `t` | `roost-shell` | Shell beside the agent, in the worktree (reused) |
 | `f` | `roost-files` | Dired in the worktree |
 | `r` | `roost-review` | Magit in the worktree, showing what changed since you last looked |
-| `D` | `roost-diff` | Diff the task's own changes, including uncommitted ones |
+| `D` | `roost-diff` | Diff the task's own changes, including uncommitted ones; with no new file left out, that counts as looking at it |
 | `e` | `roost-send` | Paste a prompt into the agent and press Enter |
 | `i` | `roost-task-info` | The task's next step, prompt, your latest prompt, changes, checks, open review threads, the agent's latest reply and details |
 | `R` | `roost-rename` | Rename the task, in Roost, its tab or perspective, and its agent's tmux window; its branch and worktree keep the name it started with |
