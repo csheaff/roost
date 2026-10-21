@@ -5800,6 +5800,8 @@ or in that workspace still, to the frame's windows as they were then."
         workspace)
     (unless (frame-live-p frame)
       (user-error "The frame you were in is gone"))
+    ;; A task still opening, on a host slow to reply, stays where it is.
+    (cl-incf roost--open-generation)
     (unless (eq frame (selected-frame))
       (select-frame-set-input-focus frame))
     ;; A task's, by the name it has now: it may have been renamed since.

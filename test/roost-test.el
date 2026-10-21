@@ -3592,6 +3592,28 @@ of its own, which shows in the selected window of its workspace."
        (funcall later)
        (should (equal (length went) 1))))))
 
+(ert-deftest roost-next-going-back-outlasts-a-task-still-opening ()
+  ;; A host's late reply asked to resume a task you had left by going back.
+  (roost-test--isolated
+   (save-window-excursion
+     (let* ((task (roost--cache-task "a" (roost-test--task nil "running")))
+            (roost--next-run (list :frame (selected-frame) :windows (current-window-configuration)
+                                   :opened (list (roost--key task)) :offered t))
+            failure later)
+       (cl-letf (((symbol-function 'roost--request)
+                  (lambda (_host _action _params _success &optional on-failure) (setq failure on-failure)))
+                 ((symbol-function 'run-at-time)
+                  (lambda (_time _repeat function &rest args) (setq later (cons function args))))
+                 ((symbol-function 'cancel-timer) #'ignore)
+                 ((symbol-function 'roost--task-here) (lambda () task))
+                 ((symbol-function 'message) #'ignore))
+         (roost-open-task (roost-test--task "1111111111111111"))
+         (roost-next-waiting)
+         (should-not roost--next-run)
+         (funcall failure "The agent's tmux window is gone")
+         ;; Asked from a timer, which finds you have moved on: no question.
+         (apply (car later) (cdr later)))))))
+
 (ert-deftest roost-next-goes-back-to-the-tab-you-were-in ()
   ;; With workspaces, each task opens in its own: back is the one you
   ;; were in, as you left it.
