@@ -191,14 +191,15 @@ none once you've seen an agent that waits for nothing; then, dim, what changed
 since you last looked at it, if anything (below). A click opens the task,
 quitting any question you left open in the minibuffer, which would hold it back,
 and closing a menu left open. `I` docks a panel at the right of an open task's terminal,
-kept current as the agent works: what to do next, the task's prompt, and the
-files it changed, those not yet committed first. Once you have sent a Claude or
+kept current as the agent works: what to do next, the task's prompt, the
+files it changed, those not yet committed first, and what a merge would rest
+on (below). Once you have sent a Claude or
 Codex agent more, your latest prompt shows under the task's, a reminder of
 where you left off that the terminal may have scrolled away. A click or `RET` on a file
 opens its diff in Magit, where `;` writes a note for the agent (more under
 Review in Magit, below). The terminal shows the agent's replies, so the panel leaves them out
 while the terminal is on screen; `i` shows the same panel in the main area,
-with the latest reply (a click or `RET` opens a link in it). `?` in the panel
+with the latest reply after the changes (a click or `RET` opens a link in it). `?` in the panel
 opens the menu of what you can do with the task. Add
 `(roost-task-panel-mode 1)` to have the panel from the start. It steps aside
 when the terminal would drop below 80 columns, and `q` in it turns it off.
@@ -223,6 +224,22 @@ gives the size: the task doesn't count as waiting for it. Studies of code
 review find that reviewers catch less, and take longer, as changes grow and
 spread; they support marking large changes more than these exact numbers,
 which you can change with `roost-large-change`.
+
+**See what a merge would rest on.** Under the files, the task panel lists
+what you can judge a change by, the easiest to check first. `Checks` names
+each check of the task's pull request that failed or is still pending, as
+GitHub last said, and counts those that passed. Without a pull request, or
+for one with no checks, it says `No CI results`, which looks unlike checks
+that passed; for a pull request without the task's newest commits or its
+uncommitted changes, it says the checks didn't run on them. `Open review
+threads` lists the pull request's unresolved threads, Copilot's too, each
+with its file and line, who started it and how. `RET` on one visits that
+line in the task's worktree, in another window; for a thread on a deleted
+line, one the agent has changed since, or one on the whole file, it shows
+the file's changes. The agent's latest reply comes last, marked as its own
+account: `No CI results` beside a reply that says the tests pass means only
+the agent says so, perhaps from a run in its terminal. Roost judges neither,
+and gives no score or verdict on whether to merge.
 
 **Review in Magit.** `r` opens Magit on the task's worktree, through TRAMP for
 remote tasks. Stage, edit and commit as usual. The status names the task,
@@ -334,7 +351,7 @@ counted once you stop and resume it (`K`, then `s`).
 | `r` | `roost-review` | Magit in the worktree, showing what changed since you last looked |
 | `D` | `roost-diff` | Diff the task's own changes, including uncommitted ones |
 | `e` | `roost-send` | Paste a prompt into the agent and press Enter |
-| `i` | `roost-task-info` | The task's next step, prompt, your latest prompt, the agent's latest reply, changes and details |
+| `i` | `roost-task-info` | The task's next step, prompt, your latest prompt, changes, checks, open review threads, the agent's latest reply and details |
 | `R` | `roost-rename` | Rename the task, in Roost, its tab or perspective, and its agent's tmux window; its branch and worktree keep the name it started with |
 | `l` | `roost-switch-task` | Choose a task by name, waiting tasks first |
 | `/` | `roost-search` | Find messages in your tasks' conversations, retired tasks' too; `RET` opens a live task, `TAB` shows more of a message (its first 1,500 characters) |
@@ -361,7 +378,7 @@ lines, to the prompt you are drafting). Roost watches its hosts once you open th
 a task: every 3 seconds while Emacs is in front, every 15 otherwise.
 Every two minutes, and whenever you open the dashboard or refresh it with `g`, it also
 asks GitHub about the pull requests of tasks whose branch was pushed, with one
-`gh api graphql` query per repository for review threads.
+`gh api graphql` query per repository for review threads and where they are.
 `roost-watch-mode` turns that off and on.
 
 In Magit on a task's worktree, Roost adds a few keys, and a Roost menu:

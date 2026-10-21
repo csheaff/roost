@@ -5423,14 +5423,141 @@ KEY is a function that formats a key, as in `roost--next-step'."
                         'action (lambda (_) (browse-url (alist-get 'url issue))))
     (insert (format "  %s\n" (or (alist-get 'title issue) "")))))
 
+(defun roost--evidence-p (task)
+  "Whether TASK's panel says what a merge of it would rest on.
+That is while it has work to merge, or a pull request not merged."
+  (let ((state (roost--pr-state task)))
+    (and (not (eq state 'merged))
+         (not (roost--merged-p task))
+         (or state (roost--field task 'files))
+         t)))
+
+(defconst roost--failed-checks-shown 5
+  "How many failing checks a task panel names before counting the rest.")
+
+(defun roost--insert-checks (task)
+  "Insert, in TASK's panel, what the checks of its pull request say.
+Each failing and pending check by name, as GitHub last said, and how
+many passed.  Without a pull request, or with one that has no checks,
+there are no CI results, which looks unlike checks that passed."
+  (let* ((state (roost--pr-state task))
+         (status (roost--field task 'prStatus))
+         (number (format "#%s" (alist-get 'number (roost--field task 'pr))))
+         (counts (roost--pr-checks task))
+         (mark (lambda (mark face text) (concat (propertize mark 'face face) " " text))))
+    (roost--insert-heading "Checks")
+    (cond
+     ((not state) (roost--insert-indented "No CI results: no pull request" 'roost-dim))
+     ((not status) (roost--insert-indented (format "Not heard from GitHub about %s yet" number) 'roost-dim))
+     ((not counts) (roost--insert-indented (format "No CI results on %s" number) 'roost-dim))
+     (t
+      (pcase-let* ((`(,passing ,failing ,pending) counts)
+                   (failed (seq-take (alist-get 'failingChecks status) (min failing roost--failed-checks-shown)))
+                   (waiting (seq-take (alist-get 'pendingChecks status) (min pending 3)))
+                   (unpushed (roost--field task 'unpushed))
+                   (since (delq nil (list (when (and (numberp unpushed) (> unpushed 0))
+                                            (format "%d newer commit%s" unpushed (if (= unpushed 1) "" "s")))
+                                          (when (roost--field task 'dirty) "uncommitted changes")))))
+        (dolist (name failed)
+          (roost--insert-indented (funcall mark "✗" 'roost-status-failed (concat name " failed"))))
+        (when (> failing (length failed))
+          (roost--insert-indented (funcall mark "✗" 'roost-status-failed
+                                           (format "%d %sfailed" (- failing (length failed))
+                                                   (if failed "more " "")))))
+        (when (> pending 0)
+          (roost--insert-indented
+           (funcall mark "…" 'roost-dim
+                    (concat (format "%d pending" pending)
+                            (when waiting
+                              (concat ": " (string-join waiting ", ")
+                                      (when (> pending (length waiting))
+                                        (format " and %d more" (- pending (length waiting))))))))))
+        (when (> passing 0)
+          (roost--insert-indented (funcall mark "✓" 'roost-status-ready (format "%d passed" passing))))
+        ;; Not of work since, which GitHub hasn't seen.
+        (when (and since (memq state '(open draft)))
+          (roost--insert-indented (format "Run on %s as pushed, not on %s" number (string-join since " or "))
+                                  'roost-dim)))))))
+
+(defconst roost--review-threads-shown 5
+  "How many open review threads a task panel lists before counting the rest.")
+
+(defun roost--insert-review-threads (task width)
+  "Insert the unresolved review threads of TASK's open pull request.
+Copilot's too, as GitHub last said, each with its file and line as a
+button that visits them, and who started it with what, within WIDTH
+columns."
+  (when-let* (((memq (roost--pr-state task) '(open draft)))
+              (status (roost--field task 'prStatus))
+              (count (alist-get 'threads status))
+              ((natnump count))
+              ((> count 0)))
+    (roost--insert-heading "Open review threads")
+    (let ((listed (seq-take (alist-get 'openThreads status) roost--review-threads-shown)))
+      (dolist (thread listed)
+        (roost--insert-review-thread task thread width))
+      (when (> count (length listed))
+        (roost--insert-indented
+         (if listed
+             (format "and %d more" (- count (length listed)))
+           (format "%d on #%s" count (alist-get 'number (roost--field task 'pr))))
+         'roost-dim)))))
+
+(defun roost--insert-review-thread (task thread width)
+  "Insert THREAD, one of TASK's open review threads, within WIDTH columns.
+Its file and line are a button that visits them; the start of its
+first comment follows, on a line of its own."
+  (let* ((path (alist-get 'path thread))
+         (line (alist-get 'line thread))
+         (place (if line (format "%s:%d" path line) path))
+         (author (alist-get 'author thread))
+         (who (propertize (concat (if (stringp author) (roost--reviewer-name author) "someone")
+                                  (when (alist-get 'outdated thread) " · outdated"))
+                          'face 'roost-dim))
+         (room (max 8 (- width 4 (string-width who))))
+         (text (alist-get 'text thread))
+         (visit (lambda () (roost--visit-review-thread task thread))))
+    (insert "  ")
+    ;; Long paths keep their end, which names the file.
+    (insert-text-button (if (> (string-width place) room)
+                            (concat "…" (truncate-string-to-width
+                                         place (string-width place) (- (string-width place) (1- room))))
+                          place)
+                        'follow-link t 'face 'roost-field
+                        'help-echo (concat place "\nmouse-1: " (if line "visit the line" "show its changes"))
+                        'action (lambda (_)
+                                  (roost--quit-questions-left-open visit)
+                                  (funcall visit)))
+    (insert "  " who "\n")
+    (when (and (stringp text) (not (string-empty-p text)))
+      (insert (propertize (concat (roost--truncate-width (roost--prose text) (max 12 (- width 4))) "\n")
+                          'line-prefix "    " 'wrap-prefix "    ")))))
+
+(defun roost--visit-review-thread (task thread)
+  "Show where THREAD, one of TASK's open review threads, is.
+On a line of its file as the pull request has it, that line in TASK's
+worktree, in another window: the terminal or panel stays.  Otherwise,
+as on a deleted line, a line changed since or the whole file, the
+file's changes, as its button in the file list shows them."
+  (let ((path (alist-get 'path thread))
+        (line (alist-get 'line thread)))
+    (if (not line)
+        (roost--diff-file task (or (seq-find (lambda (file) (equal (alist-get 'path file) path))
+                                             (roost--field task 'files))
+                                   (list (cons 'path path))))
+      (roost--in-task-frame
+       task (lambda ()
+              (let ((default-directory (roost--remote-directory task)))
+                (find-file-other-window (expand-file-name path))
+                (goto-char (point-min))
+                (forward-line (1- line))))))))
+
 (defun roost--insert-pull-request (task)
   "Insert TASK's \"Pull request\" section when it has a pull request."
   (when-let* ((pr (roost--field task 'pr))
               (state (roost--pr-state task)))
     (let* ((status (roost--field task 'prStatus))
-           (counts (roost--pr-checks task))
            (review (alist-get 'review status))
-           (threads (alist-get 'threads status))
            (reviewers (mapcar #'roost--reviewer-name (alist-get 'requested status))))
       (roost--insert-heading "Pull request")
       (insert "  ")
@@ -5442,20 +5569,13 @@ KEY is a function that formats a key, as in `roost--next-step'."
       (roost--insert-indented
        (string-join
         (delq nil
+              ;; Its checks and threads are under headings of their own.
               (list (propertize (pcase state ('draft "Draft") ('merged "Merged") ('closed "Closed")
                                   (_ "Open"))
                                 'face (roost--pr-face state))
-                    (when (and counts (memq state '(open draft)))
-                      (string-join
-                       (delq nil (list (when (> (nth 1 counts) 0) (format "%d failing" (nth 1 counts)))
-                                       (when (> (nth 2 counts) 0) (format "%d pending" (nth 2 counts)))
-                                       (when (> (nth 0 counts) 0) (format "%d passing" (nth 0 counts)))))
-                       ", "))
                     (when (and review (memq state '(open draft)))
                       (pcase review ("APPROVED" "approved") ("CHANGES_REQUESTED" "changes requested")
                         ("REVIEW_REQUIRED" "review required")))
-                    (when (and (memq state '(open draft)) (numberp threads) (> threads 0))
-                      (format "%d unresolved review thread%s" threads (if (= threads 1) "" "s")))
                     (when (and (memq state '(open draft)) reviewers)
                       (concat "review requested from " (string-join reviewers ", ")))
                     (when (and (memq state '(open draft)) (equal (alist-get 'mergeable status) "CONFLICTING"))
@@ -7015,9 +7135,11 @@ the last column is kept for the truncation mark."
   (with-current-buffer (window-buffer window)
     (roost--render-task-info)))
 
-(defun roost--insert-heading (title)
-  "Insert section TITLE."
-  (insert roost--gap (propertize title 'face 'roost-heading) "\n"))
+(defun roost--insert-heading (title &optional note)
+  "Insert section TITLE, followed by NOTE, dim, when given."
+  (insert roost--gap (propertize title 'face 'roost-heading)
+          (if note (concat "  " (propertize note 'face 'roost-dim)) "")
+          "\n"))
 
 (defvar-local roost--show-full-prompt nil
   "The task's prompt when the task panel shows it in full, or nil.")
@@ -7215,18 +7337,6 @@ Windows showing the panel keep their scroll position, and the mark stays."
           (when prompt
             (roost--insert-heading "Your latest prompt")
             (roost--insert-prompt prompt 'latest-prompt 'roost--show-full-latest-prompt)))
-        (when-let* (((not beside))
-                    (reply (roost--last-message task))
-                    (reply (roost--prose reply)))
-          (roost--insert-heading "Agent's latest reply")
-          (let* ((preview (if (< width 72) (roost--reply-preview reply width) reply))
-                 (expanded (equal reply roost--expanded-reply)))
-            (unless expanded (setq roost--expanded-reply nil))
-            (when (and expanded (not (equal preview reply)))
-              (roost--insert-reply-toggle reply t))
-            (roost--insert-indented (if expanded reply preview))
-            (when (and (not expanded) (not (equal preview reply)))
-              (roost--insert-reply-toggle reply nil))))
         (roost--insert-heading "Changes")
         (roost--insert-indented
          (cond ((roost--field task 'worktreeMissing)
@@ -7296,6 +7406,24 @@ Windows showing the panel keep their scroll position, and the mark stays."
               'roost-dim))))
         (when-let* ((error (roost--field task 'error)))
           (roost--insert-indented (concat "Last error: " error) 'roost-status-failed))
+        ;; What a merge would rest on, the easiest to check first: the
+        ;; agent's word comes last, as its own.
+        (let ((evidence (roost--evidence-p task)))
+          (when evidence
+            (roost--insert-checks task)
+            (roost--insert-review-threads task width))
+          (when-let* (((not beside))
+                      (reply (roost--last-message task))
+                      (reply (roost--prose reply)))
+            (roost--insert-heading "Agent's latest reply" (when evidence "its own account"))
+            (let* ((preview (if (< width 72) (roost--reply-preview reply width) reply))
+                   (expanded (equal reply roost--expanded-reply)))
+              (unless expanded (setq roost--expanded-reply nil))
+              (when (and expanded (not (equal preview reply)))
+                (roost--insert-reply-toggle reply t))
+              (roost--insert-indented (if expanded reply preview))
+              (when (and (not expanded) (not (equal preview reply)))
+                (roost--insert-reply-toggle reply nil)))))
         (roost--insert-issue task)
         (roost--insert-pull-request task)
         (roost--insert-heading "Details")
@@ -7366,7 +7494,7 @@ same name keep drafts of their own."
 
 ;;;###autoload
 (defun roost-task-info (&optional task)
-  "Show TASK's next step, prompt, the agent's latest reply, changes and details."
+  "Show TASK's next step, prompt, changes, checks, latest reply and details."
   (interactive)
   (setq task (roost--choose task))
   (let ((buffer (roost--task-info-buffer task)))

@@ -151,7 +151,7 @@
        (roost-task-info-mode)
        (setq roost--buffer-task-key (roost--key asking))
        (roost--render-task-info)
-       (should (string-match-p "^Answer it in its terminal: RET\n\nWaiting for your answer\nAsks to run make test\n\nPrompt\nfix authentication\n\nAgent's latest reply$"
+       (should (string-match-p "^Answer it in its terminal: RET\n\nWaiting for your answer\nAsks to run make test\n\nPrompt\nfix authentication\n\nChanges\nRefreshing…\n\nAgent's latest reply$"
                                (buffer-string))))
      ;; The notification names it, rather than the agent's last words.
      (let (body)
@@ -185,8 +185,10 @@
        (setq roost--buffer-task-key (roost--key task))
        (roost--render-task-info)
        (let ((text (buffer-string)))
+         ;; The agent's word comes after the changes, without a heading's
+         ;; note while there are none.
          (should (< (string-match "^fix auth " text) (string-match "^Prompt$" text)
-                    (string-match "^Agent's latest reply$" text) (string-match "^Changes$" text)))
+                    (string-match "^Changes$" text) (string-match "^Agent's latest reply$" text)))
          (should (string-match-p "^Agent's latest reply\n## Summary\n" text))
          (should (equal (get-text-property (string-match "Fixed the" text) 'line-prefix text) "  "))
          (should (string-match-p "^Fixed the auth bug in login\\.py\\.\n" text))
@@ -257,7 +259,9 @@
                (advice-remove 'roost--render-task-info 'qa-count))
              (with-current-buffer buffer
                (should (string-match-p "^Waiting for your answer$" (buffer-string)))
-               (should (string-match-p "^Agent's latest reply$" (buffer-string)))))
+               ;; After what can be checked, as its agent's own account.
+               (should (string-match-p "^Checks\nNo CI results: no pull request\n\nAgent's latest reply  its own account$"
+                                       (buffer-string)))))
          (kill-buffer buffer))))))
 
 (ert-deftest roost-task-panel-is-beside-a-terminal-only-in-its-frame ()
@@ -381,7 +385,7 @@
        (setq roost--buffer-task-key (roost--key task))
        (cl-letf (((symbol-function 'roost--panel-beside-terminal-p) #'ignore))
          (roost--render-task-info))
-       (should (string-match-p "^Prompt\nFix the login\\.\n\n?Your latest prompt\nNow the logout\\.\nShow the whole prompt\n\n?Agent's latest reply$"
+       (should (string-match-p "^Prompt\nFix the login\\.\n\n?Your latest prompt\nNow the logout\\.\nShow the whole prompt\n\n?Changes$"
                                (buffer-string)))
        (goto-char (point-min))
        (search-forward "Show the whole")
@@ -932,8 +936,8 @@
                (setq roost--buffer-task-key (roost--key task))
                (roost--render-task-info)
                (should (string-prefix-p "fix auth" (buffer-string)))
-               (should (< (string-search "Agent's latest reply" (buffer-string))
-                          (string-search "Changes" (buffer-string))
+               (should (< (string-search "Changes" (buffer-string))
+                          (string-search "Agent's latest reply" (buffer-string))
                           (string-search "Details" (buffer-string)))))
            (delete-window window)))))))
 
@@ -5372,7 +5376,10 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
          (with-current-buffer "*roost: fix auth*"
            (unwind-protect
                (let ((text (buffer-string)))
-                 (should (string-match-p "^Pull request\n  #12  https://github.com/o/r/pull/12\nOpen · 1 failing, 2 passing · approved" text))
+                 ;; Its checks, counted when GitHub didn't name them, are
+                 ;; under a heading of their own.
+                 (should (string-match-p "^Checks\n✗ 1 failed\n✓ 2 passed\n" text))
+                 (should (string-match-p "^Pull request\n  #12  https://github.com/o/r/pull/12\nOpen · approved$" text))
                  (should-not (string-match-p "Merged on GitHub" text))
                  (goto-char (point-min))
                  (search-forward "#12")
@@ -6040,9 +6047,86 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
          (with-current-buffer "*roost: fix auth*"
            (unwind-protect
                (should (string-match-p
-                        "^Open · 3 passing · 2 unresolved review threads · review requested from Copilot, core · conflicts$"
+                        "^Open · review requested from Copilot, core · conflicts$"
                         (buffer-string)))
              (kill-buffer))))))))
+
+(ert-deftest roost-the-panel-shows-what-a-merge-rests-on ()
+  ;; Facts in the order they're easiest to check: the checks, the
+  ;; threads still open, and last the agent's word, as its own.
+  (roost-test--isolated
+   (let* ((files '((files ((path . "ledger.py") (added . 4) (deleted . 1)))))
+          (panel (lambda (task &optional width)
+                   (with-temp-buffer
+                     (roost-task-info-mode)
+                     (setq roost--buffer-task-key (roost--key (roost--cache-task "dev" task)))
+                     (cl-letf (((symbol-function 'roost--task-info-width) (lambda () (or width 80))))
+                       (roost--render-task-info))
+                     (buffer-string))))
+          (threads '((threads . 3)
+                     (openThreads ((path . "ledger.py") (line . 42) (author . "copilot-pull-request-reviewer")
+                                   (text . "The total skips the last row, which a later sum depends on."))
+                                  ((path . "src/a/rather/long/path/report.py") (author . "octo") (outdated . t)
+                                   (text . "Why?")))))
+          (named (roost-test--turn-task '(checks . ((passing . 5) (failing . 3) (pending . 4)))
+                                        '(failingChecks "lint" "docs") '(pendingChecks "a" "b" "c" "d")
+                                        (car threads) (cadr threads))))
+     ;; Without a pull request, no CI results, which looks unlike any that passed.
+     (let ((text (funcall panel (append files '((lastMessage . "All tests pass.")) (roost-test--task)))))
+       (should (string-match-p "^Checks\nNo CI results: no pull request\n\nAgent's latest reply  its own account\nAll tests pass\.$"
+                               text))
+       (should-not (string-match-p "✓\|passed" text)))
+     ;; Nor with nothing to merge.
+     (let ((text (funcall panel (append '((lastMessage . "Which one?")) (roost-test--task)))))
+       (should-not (string-match-p "Checks\|own account" text)))
+     ;; A pull request GitHub hasn't been asked about, or that has no checks.
+     (should (string-match-p "^Checks\nNot heard from GitHub about #12 yet$"
+                             (funcall panel (append files (roost-test--pr-task)))))
+     (should (string-match-p "^Checks\nNo CI results on #12$"
+                             (funcall panel (append files (roost-test--turn-task '(checks . :none))))))
+     ;; Those that fail by name, and pending ones, and how many passed.
+     (let ((text (funcall panel (append files '((unpushed . 2) (dirty . t)) named))))
+       (should (string-match-p (concat "^Checks\n✗ lint failed\n✗ docs failed\n✗ 1 more failed\n"
+                                       "… 4 pending: a, b, c and 1 more\n✓ 5 passed\n"
+                                       "Run on #12 as pushed, not on 2 newer commits or uncommitted changes\n\n"
+                                       "Open review threads\n  ledger\\.py:42  Copilot\n"
+                                       "The total skips the last row, which a later sum depends on\\.\n"
+                                       "  src/a/rather/long/path/report\\.py  octo · outdated\nWhy\\?\nand 1 more\n")
+                               text))
+       ;; The pull request's own line leaves them to those sections.
+       (should (string-match-p "^Open$" text))
+       (should (< (string-search "Changes" text) (string-search "Checks" text) (string-search "Pull request" text))))
+     ;; Narrow, each thread keeps to its lines, the end of its path shown.
+     (let ((text (funcall panel named 40)))
+       (should (string-match-p "^  …/long/path/report\\.py  octo · outdated$" text))
+       (should (string-match-p "^The total skips the last row, which…$" text)))
+     ;; Merged, nothing waits on them.
+     (should-not (string-match-p "Checks\|Open review threads"
+                                 (funcall panel (append files (roost-test--turn-task '(state . "MERGED") (car threads))))))
+     ;; A thread on a line visits it in the worktree; another shows the
+     ;; file's changes, as the file list does.
+     (with-temp-buffer
+       (roost-task-info-mode)
+       (setq roost--buffer-task-key (roost--key (roost--cache-task "dev" (append files named))))
+       (roost--render-task-info)
+       (let (visited diffed)
+         (cl-letf (((symbol-function 'roost--in-task-frame) (lambda (_task view) (funcall view)))
+                   ((symbol-function 'find-file-other-window)
+                    (lambda (file) (push file visited) (set-buffer (get-buffer-create " *visited*"))
+                                                   (erase-buffer) (insert (make-string 50 ?\n))))
+                   ((symbol-function 'roost--diff-file) (lambda (_task file) (push file diffed))))
+           (goto-char (point-min))
+           (search-forward "ledger.py:42")
+           (let ((panel (current-buffer))
+                 (worktree (roost--remote-directory (gethash roost--buffer-task-key roost--tasks))))
+             (push-button (1- (point)))
+             (should (equal visited (list (expand-file-name "ledger.py" worktree))))
+             (should (= (with-current-buffer " *visited*" (line-number-at-pos)) 42))
+             (kill-buffer " *visited*")
+             (set-buffer panel))
+           (search-forward "report.py")
+           (push-button (1- (point)))
+           (should (equal diffed '(((path . "src/a/rather/long/path/report.py")))))))))))
 
 (ert-deftest roost-commits-since-a-merge-are-work-to-lose ()
   (roost-test--isolated
