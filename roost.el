@@ -2508,10 +2508,12 @@ A task started from a GitHub issue leads with the issue's number."
          (derived (roost--compose-name))
          (changing (roost--compose-changing))
          ;; Point's offset into the prompt, so rewriting the fields keeps it;
-         ;; in the fields, its line and column, as on a button there.
+         ;; in the fields, its line and column, as on a button there; on a
+         ;; task's name, that task, wherever it is listed now.
          (offset (max 0 (- (point) roost--compose-body)))
          (field (when (< (point) roost--compose-body)
-                  (cons (line-number-at-pos) (current-column)))))
+                  (cons (line-number-at-pos) (current-column))))
+         (named (get-text-property (point) 'roost-draft-task)))
     (save-excursion
       (delete-region (point-min) roost--compose-body)
       (goto-char (point-min))
@@ -2551,12 +2553,21 @@ A task started from a GitHub issue leads with the issue's number."
                            '(read-only "Write the prompt below the fields" rear-nonsticky t
                              front-sticky t))
       (set-marker roost--compose-body (point)))
-    (if (not field)
-        (goto-char (min (point-max) (+ roost--compose-body offset)))
-      (goto-char (point-min))
-      (forward-line (1- (car field)))
-      (move-to-column (cdr field))
-      (goto-char (min (point) roost--compose-body)))))
+    (cond ((not field)
+           (goto-char (min (point-max) (+ roost--compose-body offset))))
+          (named
+           ;; Gone from the list, nowhere a key would open another.
+           (goto-char (point-min))
+           (while (and (< (point) roost--compose-body)
+                       (not (equal (get-text-property (point) 'roost-draft-task) named)))
+             (goto-char (next-single-property-change (point) 'roost-draft-task nil roost--compose-body))))
+          (t
+           (goto-char (point-min))
+           (forward-line (1- (car field)))
+           (move-to-column (cdr field))
+           (goto-char (min (point) roost--compose-body))
+           (when (get-text-property (point) 'roost-draft-task)
+             (goto-char roost--compose-body))))))
 
 (defun roost--compose-quoted-files ()
   "The files the draft's prompt quotes, as paths from the top of the checkout.
@@ -2578,13 +2589,16 @@ while it watches, that is after their agents' latest edits."
               (place (roost--host-and-path directory)))
     (let* ((host (car place))
            (path (directory-file-name (cdr place)))
+           ;; Through symbolic links, as the helper names the project; a
+           ;; remote one as it is, which opens no connection.
+           (real (if host path (directory-file-name (file-truename path))))
            ;; A task's worktree is of its project.
            (repo (or (seq-some (lambda (task)
                                  (and (equal (roost--field task 'host) host)
-                                      (equal (roost--field task 'worktree) path)
+                                      (member (roost--field task 'worktree) (list path real))
                                       (roost--field task 'repo)))
                                (roost-tasks))
-                     path)))
+                     real)))
       (roost--changing host repo files))))
 
 (defvar-local roost--compose-changing-shown nil
@@ -2623,7 +2637,7 @@ give the work to one of them is yours: this only says so."
     (let ((key (roost--key task))
           (name (roost--field task 'name)))
       (insert-text-button name 'follow-link t 'font-lock-face 'roost-field
-                          'keymap roost--compose-task-map
+                          'keymap roost--compose-task-map 'roost-draft-task key
                           'help-echo (format "mouse-1 or RET: open %s" name)
                           'action (lambda (_)
                                     (roost-open-task

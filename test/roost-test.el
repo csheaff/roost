@@ -5901,12 +5901,33 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
                (roost--redraw)
                (should (string-match-p "^ledger totals already changes report\\.py\nreport chart already changes report\\.py\n─"
                                        (buffer-string)))
-               ;; Point on a name stays there as the draft is drawn again.
+               ;; Point on a name stays there as the draft is drawn again,
+               ;; and on that task's, as others come and go above it.
                (goto-char (point-min))
                (search-forward "report chart already")
                (goto-char (match-beginning 0))
                (roost--compose-render)
                (should (looking-at "report chart already"))
+               (funcall other "0000000000000000" "accounts" "/home/user/ledger"
+                        `(files ,(funcall file "report.py")))
+               (roost--redraw)
+               (should (looking-at "report chart already"))
+               (remhash (list "dev" "0000000000000000") roost--tasks)
+               (remhash (list "dev" "1111111111111111") roost--tasks)
+               (roost--redraw)
+               (should (looking-at "report chart already"))
+               (funcall other "1111111111111111" "ledger totals" "/home/user/ledger"
+                        '(worktree . "/home/user/work/ledger-totals")
+                        `(files ,(funcall file "README.md") ,(funcall file "report.py")))
+               (roost--redraw)
+               (should (looking-at "report chart already"))
+               ;; Its task gone, nowhere a key would open another.
+               (remhash (list "dev" "4444444444444444") roost--tasks)
+               (roost--redraw)
+               (should-not (get-text-property (point) 'button))
+               (funcall other "4444444444444444" "report chart" "/home/user/ledger"
+                        `(files ,(funcall file "report.py")))
+               (roost--redraw)
                ;; A refresh with nothing new leaves the draft alone.
                (let ((rendered 0))
                  (cl-letf (((symbol-function 'roost--compose-render) (lambda () (cl-incf rendered))))
@@ -5931,6 +5952,22 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
                  (insert "\n\nreport.py"))
                (roost--compose-render)
                (should-not (string-match-p "already changes" (buffer-string))))
+             ;; A local project reached through a symbolic link, as the
+             ;; helper names it.
+             (let* ((real (file-name-as-directory (file-truename (make-temp-file "roost-ledger" t))))
+                    (link (concat (make-temp-name (expand-file-name "roost-link" temporary-file-directory)) "/")))
+               (unwind-protect
+                   (progn
+                     (make-symbolic-link (directory-file-name real) (directory-file-name link))
+                     (roost--cache-task nil (append `((repo . ,(directory-file-name real))
+                                                      (files ,(funcall file "report.py")))
+                                                    '((id . "5555555555555555") (name . "local totals"))
+                                                    (roost-test--task "5555555555555555")))
+                     (should (string-match-p "^local totals already changes report\\.py$"
+                                             (funcall draft link "\n\n" (roost--quoting "report.py")))))
+                 (remhash (list nil "5555555555555555") roost--tasks)
+                 (delete-file (directory-file-name link))
+                 (delete-directory real)))
              ;; From a task's worktree, the tasks of its project.
              (should (string-match-p "^ledger totals already changes report\\.py$"
                                      (funcall draft "/ssh:dev:/home/user/work/ledger-totals/"
