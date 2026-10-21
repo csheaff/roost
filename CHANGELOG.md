@@ -6,6 +6,13 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.9.0:
 
+- A new task's draft that quotes a file names the project's tasks that
+  already change it: `ledger-totals already changes report.py`, below the
+  draft's fields. Drafts started from a region of code, a file, a Flymake
+  diagnostic, or a compilation error or grep match quote one. Roost goes by
+  the changed files the task panel lists, and the line follows them as
+  tasks change more, or as you delete the quote. Click a name to open that
+  task; `C-c C-c` starts the new one anyway. Nothing to do when upgrading.
 - The task panel shows what a merge would rest on, under the files:
   `Checks` names each failing or pending check of the task's pull request
   and counts those that passed, `Open review threads` lists its unresolved

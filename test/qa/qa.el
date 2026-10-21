@@ -252,6 +252,20 @@ Return nil when it isn't there."
     (set-window-point (selected-window) row)
     t))
 
+(defun qa-draft-about (name)
+  "Show a new task's draft about the first file task NAME changes.
+As `roost-new-task-from-file' shows it from the window of the terminal
+on screen, or else the frame's first; the window you are in stays
+selected, as with a question you left open there.  Return whether the
+draft names NAME, as a button."
+  (when-let* ((task (seq-find (lambda (task) (equal (roost--field task 'name) name)) (roost-tasks)))
+              (file (car (roost--unmerged-files task))))
+    (with-selected-window (or (seq-find (lambda (window) (qa--terminal (window-buffer window)))
+                                        (window-list nil 'nomini))
+                              (frame-first-window))
+      (roost-new-task-from-file (expand-file-name file (roost--project-directory task))))
+    (and (qa--find-button name 0) t)))
+
 (defun qa-sidebar-to-top ()
   "Scroll each sidebar on screen to its top, as the mouse wheel would.
 Point goes with it, as the wheel takes it along."

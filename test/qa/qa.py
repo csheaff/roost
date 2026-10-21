@@ -1065,6 +1065,42 @@ def drafts(qa, repo):
         ("and not the URL", lambda s: "example.com" not in qa.window(s, "roost-compose-mode")["text"])])
 
 
+@journey("A draft about a file another task changes")
+def overlap(qa, repo):
+    """Code quoted in a new task's draft names the tasks that already
+    change its file, each a click away, and C-c C-c still starts it."""
+    name = new_task(qa, "ask echo '# Totals' >> notes.py")
+    answer_yes(qa, name)
+    qa.wait("its change", lambda s: "notes.py" in panel_text(qa, s))
+    qa.keys("C-x C-f")
+    qa.type(("/ssh:%s:" % qa.host if qa.host else "") + str(repo / "notes.py") + "\r")
+    qa.wait("notes.py", lambda s: s["selected"] == "notes.py")
+    qa.keys("M-< C-SPC C-n C-n C-n")
+    qa.keys("C-c r c")
+    draft = lambda s: (qa.window(s, "roost-compose-mode") or {}).get("text", "")
+    qa.wait("the draft", lambda s: (qa.window(s, "roost-compose-mode") or {}).get("selected"))
+    qa.type("Say what these lines do")
+    qa.step("The draft names the task that changes the file", expect=[
+        ("the code, quoted with its file", lambda s: "Say what these lines do\n\nnotes.py:1-3" in draft(s)),
+        ("and the task", lambda s: "%s already changes notes.py" % name in draft(s))])
+    qa.click(name)
+    qa.wait(name + "'s terminal", shows(qa, name))
+    qa.step("A click on its name opens it")
+    qa.keys("C-c r c")
+    qa.wait("the draft", lambda s: (qa.window(s, "roost-compose-mode") or {}).get("selected"))
+    qa.step("The draft is kept", expect=[
+        ("what you wrote", lambda s: "Say what these lines do" in draft(s)),
+        ("and the task it names", lambda s: "%s already changes notes.py" % name in draft(s))])
+    before = {t["name"] for t in qa.screen()["tasks"]}
+    qa.keys("C-c C-c")
+    screen = qa.wait("the new task", lambda s: {t["name"] for t in s["tasks"]} - before)
+    started = next(t["name"] for t in screen["tasks"] if t["name"] not in before)
+    qa.status(started, "ready", "idle")
+    qa.step("C-c C-c starts it anyway", expect=[
+        ("the task", lambda s: qa.task(s, started)),
+        ("and the one that changes the file", lambda s: qa.task(s, name))])
+
+
 def new_task(qa, prompt):
     """Start a task with PROMPT from the menu; return its name once listed."""
     before = {t["name"] for t in qa.screen()["tasks"]}
@@ -1699,6 +1735,15 @@ def shows_view(qa, name, mode):
     return check
 
 
+def go_draft_name(qa, target):
+    """Click TARGET's name in a new task's draft about a file it changes,
+    shown in the window of the terminal on screen as from a file there.
+    A draft you have written in shows no file, nor names a task."""
+    if qa.emacs.eval("(qa-draft-about %s)" % lisp(target)) != "t":
+        raise NotApplicable()
+    qa.click(target)
+
+
 def go_notification(qa, target):
     host, id = next(t["key"] for t in qa.screen()["tasks"] if t["name"] == target).split("/")
     qa.emacs.eval("(roost--open-from-notification %s %s)"
@@ -1742,6 +1787,7 @@ WALK_INTERRUPTERS = [
     ("r on another task's row", go_review, "other"),
     ("f on another task's row", go_files, "other"),
     ("a click on a file in another task's panel", go_changed_file, "other"),
+    ("a click on another task's name in a draft", go_draft_name, "other"),
     ("a click on a review thread in another task's panel", go_review_thread, "other"),
     ("a click on a notification", go_notification, "other"),
     ("a click in the terminal", go_terminal, None),
@@ -2445,7 +2491,7 @@ def dropped(qa, repo):
 JOURNEYS = [sweep, answer, next_waiting, fold, resize, merge, review, since_looked, panes, shell,
             dashboard, stop_resume, retire, send, attach, update, conflicts, restart, search, workload, question_left,
             walk_away,
-            frames, draft_frames, org, drafts, tabs,
+            frames, draft_frames, org, drafts, overlap, tabs,
             forget, rename, fork, other_branch, merged, large, pull_request, exits, unreachable, scrollback, fleet, dropped]
 
 

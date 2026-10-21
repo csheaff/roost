@@ -165,6 +165,16 @@ starts the agent in tmux, and opens its terminal.
   Its title and text become the prompt, and the task's pull request will close
   it.
 
+A draft that quotes a file, as one from code, a file, a diagnostic, an error
+or a match does, names the project's tasks that already change it, below its
+fields: `ledger-totals already changes report.py`. Two tasks that change one
+file can conflict when the second merges. Starting this one anyway, waiting,
+or giving the work to that task instead is up to you: a click on its name
+opens it, and `C-c C-c` starts the new one as usual. Roost goes by the
+changed files the task panel lists, measured again after each agent's edits
+while it watches, and the line keeps up with them. A file you mention
+yourself doesn't count, nor does a quote you delete.
+
 **Let them work.** Start more tasks; each is independent. Roost watches the
 agents' own lifecycle hooks and notifies you when one finishes or asks for
 permission, with the first line of its reply or what it asks (`Asks to run

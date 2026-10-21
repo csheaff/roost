@@ -327,6 +327,19 @@ It ran for most of an hour, until ten minutes ago, and is as it is since."
                             (tasks ((id . ,id) ,@since))))))
     (roost--workload-compute)))
 
+(defun roost-sweep--draft-setup (state)
+  "Make the current buffer a new task's draft that quotes STATE's task's files.
+The draft names the tasks of the project that change them, STATE's
+among them."
+  (let ((files (mapcar (lambda (file) (alist-get 'path file))
+                       (roost--field (gethash (roost-sweep--key state) roost--tasks) 'files)))
+        (inhibit-modification-hooks t))
+    (setq roost--compose-body (copy-marker (point-min))
+          roost--compose-fields (list :directory "/ssh:dev:/home/user/ledger/" :agent "claude"))
+    (insert "Make the totals add up.")
+    (dolist (file (seq-take files 2))
+      (insert "\n\n" (roost--quoting file) ":3-4\n\ntotal = 0"))))
+
 (defvar roost-sweep--views
   '((panel :mode roost-task-info-mode :render roost--render-task-info :widths (40 100)
            :layouts (selected none other both) :setup roost-sweep--panel-setup)
@@ -339,7 +352,10 @@ It ran for most of an hour, until ten minutes ago, and is as it is since."
             :sized t)
     (workload :mode roost-workload-mode :render roost--render-workload :buffer "*roost workload*"
               :layouts (selected none other both) :setup roost-sweep--workload-setup
-              :keys (roost-workload)))
+              :keys (roost-workload))
+    (draft :mode roost-compose-mode :render roost--compose-render :buffer "*roost new task*"
+           :layouts (selected none other both) :setup roost-sweep--draft-setup
+           :keys (roost-compose-submit roost-compose-cancel roost-compose-set-project)))
   "Roost's views, each (NAME . PLIST).
 :mode makes the buffer, :setup gives it what it shows for a state,
 :render draws it, :point finds the state's task in it, and :buffer names
@@ -410,26 +426,32 @@ OCCURRENCE counts the buttons before it with the same label."
 
 (defun roost-sweep--keys ()
   "The keys the current buffer's mode binds, each (KEY . COMMAND).
-Those of the modes Roost's derive from, such as `special-mode', are left
-out, and so are mouse events, prefix keys, and keys whose commands
-switch global modes, which roost-test.el covers."
+Those of Roost's modes: its own, then those it derives from while they
+are Roost's.  The keys of the others, such as `special-mode' or
+`text-mode', are left out: what they do depends on Emacs and its
+setup, such as the word list `text-mode''s C-M-i completes from.
+Mouse events are left out too, and keys whose commands switch global
+modes, which roost-test.el covers.  A prefix key, such as the draft's
+C-c, counts for the keys after it."
   (let (found)
-    (cl-labels ((walk (map)
+    (cl-labels ((walk (map prefix)
                   (map-keymap-internal
                    (lambda (event binding)
-                     (when (and (symbolp binding) (commandp binding)
-                                (not (memq binding '(roost-task-panel-mode roost-sidebar-mode)))
-                                (not (consp event))
+                     (when (and (not (consp event))
                                 (not (and (symbolp event)
                                           (string-match-p "mouse\\|menu-bar\\|remap"
-                                                          (symbol-name event))))
-                                (not (assoc (vector event) found)))
-                       (push (cons (vector event) binding) found)))
-                   map)
-                  (when-let* ((parent (keymap-parent map))
-                              ((not (eq parent special-mode-map))))
-                    (walk parent))))
-      (walk (current-local-map)))
+                                                          (symbol-name event)))))
+                       (let ((key (vconcat prefix (vector event))))
+                         (cond ((keymapp binding) (walk binding key))
+                               ((and (symbolp binding) (commandp binding)
+                                     (not (memq binding '(roost-task-panel-mode roost-sidebar-mode)))
+                                     (not (assoc key found)))
+                                (push (cons key binding) found))))))
+                   map)))
+      (let ((mode major-mode))
+        (while (and mode (string-prefix-p "roost-" (symbol-name mode)))
+          (walk (symbol-value (derived-mode-map-name mode)) nil)
+          (setq mode (get mode 'derived-mode-parent)))))
     (nreverse found)))
 
 (defun roost-sweep--do (action)
@@ -747,7 +769,8 @@ Return them as (PROBLEM . PLACES), PLACES naming the view, state and width."
                (`(button ,label . ,_) (cl-pushnew label buttons :test #'equal))
                (`(key ,_ . ,command) (cl-pushnew (cons view command) keys :test #'equal)))))))
      (dolist (label '("Show the whole prompt" "Show the whole reply" "ledger.py" "notes.md" "#12" "#70"
-                      "probe" "the report" "https://example.com/ci" "+" "ledger.py:3"))
+                      "probe" "the report" "https://example.com/ci" "+" "conflicts with main"
+                      "ledger.py:3"))
        (should (member label buttons)))
      (dolist (view (mapcar #'car roost-sweep--views))
        (let ((found (seq-filter (lambda (key) (eq (car key) view)) keys)))

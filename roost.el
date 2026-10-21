@@ -2233,7 +2233,7 @@ The draft names FILE from the top of its checkout."
   (setq file (expand-file-name file))
   (let ((root (locate-dominating-file file ".git")))
     (roost--compose nil (cons (concat "\n\n" (if root
-                                                 (file-relative-name file root)
+                                                 (roost--quoting (file-relative-name file root))
                                                (abbreviate-file-name file)))
                               t)
                     (roost--draft-directory (file-name-directory file)))))
@@ -2261,7 +2261,7 @@ on, and you write above them."
                                   (line-beginning-position)))
            (end (save-excursion (goto-char (apply #'max (mapcar #'flymake-diagnostic-end diagnostics)))
                                 (line-end-position)))
-           (file (roost--buffer-file-label)))
+           (file (roost--buffer-file-quote)))
       (roost--compose
        nil (cons (concat "\n\n"
                          (mapconcat (lambda (diagnostic)
@@ -2367,9 +2367,9 @@ The cdr is non-nil when the writer should start above the text."
    ;; An error or a match in a compilation or grep buffer, with its place.
    ((and (derived-mode-p 'compilation-mode)
          (text-property-not-all (line-beginning-position) (line-end-position) 'compilation-message nil))
-    (cons (concat "\n\n" (string-trim (buffer-substring-no-properties
-                                       (line-beginning-position) (line-end-position))))
-          t))
+    (let ((line (string-trim (buffer-substring-no-properties (line-beginning-position) (line-end-position)))))
+      (cons (concat "\n\n" (if-let* ((file (roost--compilation-file))) (roost--quoting line file) line))
+            t)))
    ((and (derived-mode-p 'org-mode) (not (org-before-first-heading-p)))
     (cons (roost--org-entry-text) nil))
    ((and (derived-mode-p 'org-agenda-mode)
@@ -2388,7 +2388,7 @@ Code is quoted with its file and lines, and the writer starts above it."
   (let ((last (if (and (> end start) (eq (char-before end) ?\n)) (1- end) end))
         (text (buffer-substring-no-properties start end)))
     (if (derived-mode-p 'prog-mode)
-        (cons (format "\n\n%s:%d-%d\n\n%s" (roost--buffer-file-label)
+        (cons (format "\n\n%s:%d-%d\n\n%s" (roost--buffer-file-quote)
                       (line-number-at-pos start) (line-number-at-pos last)
                       (string-trim-right text))
               t)
@@ -2401,6 +2401,36 @@ Code is quoted with its file and lines, and the writer starts above it."
                           (file-local-name
                            (or (ignore-errors (vc-root-dir)) default-directory)))
     (buffer-name)))
+
+(defun roost--buffer-file-quote ()
+  "`roost--buffer-file-label', marked as quoting the file if there is one."
+  (if buffer-file-name
+      (roost--quoting (roost--buffer-file-label))
+    (roost--buffer-file-label)))
+
+(defun roost--quoting (text &optional file)
+  "TEXT, marked as quoting FILE, by default TEXT itself.
+FILE is a path from the top of its checkout.  The draft names the tasks
+that change a file its prompt quotes, while the quote is there."
+  (propertize text 'roost-file (or file text)))
+
+(declare-function compilation--message->loc "compile")
+
+(defun roost--compilation-file ()
+  "The file of the compilation error or grep match on point's line, or nil.
+As a path from the top of its checkout, unless that is on a host TRAMP
+is not connected to."
+  (when-let* ((at (text-property-not-all (line-beginning-position) (line-end-position)
+                                         'compilation-message nil))
+              ;; ((FILE DIRECTORY) FORMATS ...), FILE a buffer for one compiled.
+              (spec (ignore-errors
+                      (car (nth 2 (compilation--message->loc
+                                   (get-text-property at 'compilation-message))))))
+              ((stringp (car spec)))
+              (file (expand-file-name (car spec) (expand-file-name (or (cadr spec) default-directory))))
+              ((roost--may-look-in-p file))
+              (root (ignore-errors (locate-dominating-file file ".git"))))
+    (file-relative-name file root)))
 
 (defun roost--org-marker ()
   "Marker at the Org heading at point or on the agenda line, or nil."
@@ -2543,8 +2573,14 @@ A task started from a GitHub issue leads with the issue's number."
          (buffer-undo-list t)
          (fields roost--compose-fields)
          (derived (roost--compose-name))
-         ;; Point's offset into the prompt, so rewriting the fields keeps it.
-         (offset (max 0 (- (point) roost--compose-body))))
+         (changing (roost--compose-changing))
+         ;; Point's offset into the prompt, so rewriting the fields keeps it;
+         ;; in the fields, its line and column, as on a button there; on a
+         ;; task's name, that task, wherever it is listed now.
+         (offset (max 0 (- (point) roost--compose-body)))
+         (field (when (< (point) roost--compose-body)
+                  (cons (line-number-at-pos) (current-column))))
+         (named (get-text-property (point) 'roost-draft-task)))
     (save-excursion
       (delete-region (point-min) roost--compose-body)
       (goto-char (point-min))
@@ -2577,24 +2613,130 @@ A task started from a GitHub issue leads with the issue's number."
                                           (t derived))
                               #'roost-compose-set-name
                               (unless (or name (string-empty-p derived)) "from the prompt")))
+      (roost--compose-insert-changing changing)
       (insert (propertize (make-string 60 ?─) 'font-lock-face 'roost-dim) "\n"
               (propertize "Describe the task for the agent below.\n" 'font-lock-face 'roost-dim))
       (add-text-properties (point-min) (point)
                            '(read-only "Write the prompt below the fields" rear-nonsticky t
                              front-sticky t))
       (set-marker roost--compose-body (point)))
-    (goto-char (min (point-max) (+ roost--compose-body offset)))))
+    (cond ((not field)
+           (goto-char (min (point-max) (+ roost--compose-body offset))))
+          (named
+           ;; Gone from the list, nowhere a key would open another.
+           (goto-char (point-min))
+           (while (and (< (point) roost--compose-body)
+                       (not (equal (get-text-property (point) 'roost-draft-task) named)))
+             (goto-char (next-single-property-change (point) 'roost-draft-task nil roost--compose-body))))
+          (t
+           (goto-char (point-min))
+           (forward-line (1- (car field)))
+           (move-to-column (cdr field))
+           (goto-char (min (point) roost--compose-body))
+           (when (get-text-property (point) 'roost-draft-task)
+             (goto-char roost--compose-body))))))
+
+(defun roost--compose-quoted-files ()
+  "The files the draft's prompt quotes, as paths from the top of the checkout.
+Those that the text started from where you were marks, with
+`roost--quoting', and that you haven't deleted since."
+  (let ((pos roost--compose-body) files)
+    (while (< pos (point-max))
+      (when-let* ((file (get-text-property pos 'roost-file)))
+        (unless (member file files) (push file files)))
+      (setq pos (next-single-property-change pos 'roost-file nil (point-max))))
+    (nreverse files)))
+
+(defun roost--compose-changing ()
+  "The tasks of the draft's project that change files its prompt quotes.
+As `roost--changing' gives them, from what Roost last measured of each:
+while it watches, that is after their agents' latest edits."
+  (when-let* ((directory (plist-get roost--compose-fields :directory))
+              (files (roost--compose-quoted-files))
+              (place (roost--host-and-path directory)))
+    (let* ((host (car place))
+           (path (directory-file-name (cdr place)))
+           ;; Through symbolic links, as the helper names the project; a
+           ;; remote one as it is, which opens no connection.
+           (real (if host path (directory-file-name (file-truename path))))
+           ;; A task's worktree is of its project.
+           (repo (or (seq-some (lambda (task)
+                                 (and (equal (roost--field task 'host) host)
+                                      (member (roost--field task 'worktree) (list path real))
+                                      (roost--field task 'repo)))
+                               (roost-tasks))
+                     real)))
+      (roost--changing host repo files))))
+
+(defvar-local roost--compose-changing-shown nil
+  "What the draft last said of the tasks that change files it quotes.
+Each (KEY NAME . FILES), so that a refresh redraws it only when that changes.")
+
+(defun roost--compose-changing-summary (changing)
+  "CHANGING, from `roost--compose-changing', as `roost--compose-changing-shown'."
+  (mapcar (lambda (entry)
+            (cons (roost--key (car entry)) (cons (roost--field (car entry) 'name) (cdr entry))))
+          changing))
+
+(defun roost-compose-open-task (&optional event)
+  "Open the task whose name is at point in the draft, or clicked in EVENT.
+The draft names the tasks that change files it quotes.  Roost's menu,
+left open, closes rather than refusing the click."
+  (interactive (list last-nonmenu-event))
+  (when (mouse-event-p event)
+    (mouse-set-point event))
+  (or (push-button) (user-error "No task's name here")))
+
+(defvar-keymap roost--compose-task-map
+  :doc "Keys on a task's name in the draft: a click or RET opens it."
+  :parent button-map
+  "RET" #'roost-compose-open-task
+  "<mouse-2>" #'roost-compose-open-task)
+
+(defun roost--compose-insert-changing (changing)
+  "Name the tasks in CHANGING, each opening on a click.
+CHANGING is what `roost--compose-changing' gives: the tasks that change
+files the draft quotes.  Whether to start the task anyway, wait, or
+give the work to one of them is yours: this only says so."
+  (setq roost--compose-changing-shown (roost--compose-changing-summary changing))
+  (when changing (insert "\n"))
+  (pcase-dolist (`(,task . ,files) (seq-take changing 3))
+    (let ((key (roost--key task))
+          (name (roost--field task 'name)))
+      (insert-text-button name 'follow-link t 'font-lock-face 'roost-field
+                          'keymap roost--compose-task-map 'roost-draft-task key
+                          'help-echo (format "mouse-1 or RET: open %s" name)
+                          'action (lambda (_)
+                                    (roost-open-task
+                                     (or (gethash key roost--tasks)
+                                         (user-error "%s is no longer listed" name))
+                                     t)))
+      (insert " already changes " (roost--file-list files) "\n")))
+  (when (length> changing 3)
+    (insert (format "%d more tasks change %s too\n" (- (length changing) 3)
+                    (if (cdr (seq-uniq (apply #'append (mapcar #'cdr changing)))) "them" "it")))))
 
 (defun roost--compose-changed (&rest _)
-  "Refresh the derived name soon after each edit to the prompt."
-  (unless (plist-get roost--compose-fields :name)
-    (when (timerp roost--compose-timer) (cancel-timer roost--compose-timer))
-    (let ((buffer (current-buffer)))
-      (setq roost--compose-timer
-            (run-with-idle-timer 0.3 nil (lambda ()
-                                           (when (buffer-live-p buffer)
-                                             (with-current-buffer buffer
-                                               (roost--compose-render)))))))))
+  "Refresh the fields soon after each edit to the prompt.
+The name derives from it, and a quote you delete no longer counts."
+  (when (timerp roost--compose-timer) (cancel-timer roost--compose-timer))
+  (let ((buffer (current-buffer)))
+    (setq roost--compose-timer
+          (run-with-idle-timer 0.3 nil (lambda ()
+                                         (when (buffer-live-p buffer)
+                                           (with-current-buffer buffer
+                                             (roost--compose-render))))))))
+
+(defun roost--compose-redraw-changing ()
+  "Redraw the draft if the tasks that change files it quotes have changed.
+For `roost--redraw', as new measurements of the tasks arrive."
+  (when-let* ((buffer (get-buffer roost--compose-buffer)))
+    (with-current-buffer buffer
+      (when (and (derived-mode-p 'roost-compose-mode)
+                 (markerp roost--compose-body)
+                 (not (equal (roost--compose-changing-summary (roost--compose-changing))
+                             roost--compose-changing-shown)))
+        (roost--compose-render)))))
 
 (defun roost--in-order (choices)
   "A completion table of CHOICES that completion UIs show in their order.
@@ -5433,17 +5575,23 @@ Of a task whose commits are merged, only those it changes since."
 
 (defun roost--overlaps (task)
   "Other tasks of TASK's project that change files it changes, committed or not.
-A list of (OTHER . FILES), in the order of `roost-tasks', from each
-one's `roost--unmerged-files'."
+A list of (OTHER . FILES), as `roost--changing' gives them."
   (when-let* ((files (roost--unmerged-files task)))
-    (let (overlaps)
-      (dolist (other (roost-tasks))
-        (when-let* (((not (equal (roost--key other) (roost--key task))))
-                    ((equal (roost--field other 'host) (roost--field task 'host)))
-                    ((equal (roost--field other 'repo) (roost--field task 'repo)))
-                    (both (seq-filter (lambda (path) (member path files)) (roost--unmerged-files other))))
-          (push (cons other both) overlaps)))
-      (nreverse overlaps))))
+    (roost--changing (roost--field task 'host) (roost--field task 'repo) files (roost--key task))))
+
+(defun roost--changing (host repo files &optional except)
+  "Tasks of the project REPO on HOST that change any of FILES, but EXCEPT.
+REPO is the project's primary checkout there, EXCEPT a task's key.  A
+list of (TASK . THOSE-FILES), in the order of `roost-tasks', from each
+one's `roost--unmerged-files'."
+  (let (found)
+    (dolist (task (roost-tasks))
+      (when-let* (((not (equal (roost--key task) except)))
+                  ((equal (roost--field task 'host) host))
+                  ((equal (roost--field task 'repo) repo))
+                  (both (seq-filter (lambda (path) (member path files)) (roost--unmerged-files task))))
+        (push (cons task both) found)))
+    (nreverse found)))
 
 (defun roost--conflict-next-step (task key)
   "What to do about TASK's conflicts with the branch it merges into.
@@ -7807,7 +7955,7 @@ are told apart."
 ;; With a menu open, Roost's or another package's, a click on a task's
 ;; row closes the menu and does what it does, rather than being refused
 ;; as none of the menu's keys.
-(dolist (command '(roost-dashboard-mouse-open roost-dashboard-mouse-menu))
+(dolist (command '(roost-dashboard-mouse-open roost-dashboard-mouse-menu roost-compose-open-task))
   (define-key transient-predicate-map (vector command) #'transient--do-exit))
 
 (define-derived-mode roost-dashboard-mode special-mode "Roost"
@@ -8138,6 +8286,7 @@ The mark stays where it was."
   ;; Data that just arrived can name the task a restored workspace shows.
   (when (memq #'roost--layout-changed (default-value 'window-configuration-change-hook))
     (roost--sync-side-windows))
+  (roost--compose-redraw-changing)
   (dolist (buffer (buffer-list))
     (with-current-buffer buffer
       (when (derived-mode-p 'roost-task-info-mode)
@@ -8989,7 +9138,7 @@ Beside a terminal, that turns off `roost-task-panel-mode'."
   (when roost-watch-mode (roost-watch-mode -1))
   (when (timerp roost--lights-timer) (cancel-timer roost--lights-timer))
   (advice-remove 'persp-mode-line #'roost--compact-perspective-mode-line)
-  (dolist (command '(roost-dashboard-mouse-open roost-dashboard-mouse-menu))
+  (dolist (command '(roost-dashboard-mouse-open roost-dashboard-mouse-menu roost-compose-open-task))
     (define-key transient-predicate-map (vector command) nil t))
   ;; Continue with the standard unloading.
   nil)
