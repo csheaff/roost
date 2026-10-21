@@ -707,7 +707,7 @@ open in the minibuffer that you aren't in, unless the journey left it so,
 or anything Roost holds back until such a question is done. With tmux-control's
 `tmux-control-pause-log-mode`, it also fails a step in which Emacs stopped
 responding for a second or more, and says what Emacs was doing. It runs the
-sweep where text is measured in pixels, too. It takes about five minutes,
+sweep where text is measured in pixels, too. It takes about 25 minutes,
 writes `report.html` with each step's windows, the echo area and, on macOS, a
 screenshot, and fails if anything was wrong. The report ends with the commands
 of Roost and tmux-control that no journey ran: where the next journeys should
@@ -722,6 +722,10 @@ tmux-control and its dependencies:
 Package directories are read, never written. `--load FILE` in `QA_FLAGS` loads
 Emacs Lisp after Roost, such as a change to try, and `--keep` leaves the Emacs
 and its tmux server running. A new flow gets a journey in `test/qa/qa.py`.
+Name journeys after the options, as `test/qa/qa.py` names their functions,
+to take only those:
+
+    make qa QA_FLAGS="-L ../tmux-control --package-dir ~/.emacs.d/elpa merge walk_away"
 
 Three options take the same journeys elsewhere. `--remote` puts the tasks on
 `qa-remote`, a host reached over SSH as yours are: `test/qa/fake_ssh.py` stands
