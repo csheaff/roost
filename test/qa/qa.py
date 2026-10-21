@@ -1653,6 +1653,41 @@ def go_changed_file(qa, target):
     qa.click("notes.py")
 
 
+def go_review_thread(qa, target):
+    """Click the review thread on TARGET's pull request, in its panel, which
+    `i' on its row shows beside the terminal on screen."""
+    if qa.host:
+        # Its pull request is set up on this machine only.
+        raise NotApplicable()
+    to_sidebar(qa)
+    if qa.emacs.eval("(qa-goto-row %s)" % lisp(target)) != "t":
+        raise Stuck("No row for %s in the sidebar" % target)
+    qa.keys("i")
+    # Below its files, which a panel under the terminal can leave out of
+    # sight: scrolled to, as with the mouse wheel.
+    qa.wait("its review thread", lambda s: qa.emacs.eval('(qa-scroll-to-text "notes.py:1" "roost-task-info-mode")') == "t"
+            and qa.emacs.eval('(and (qa--find-button "notes.py:1" 0) t)') == "t")
+    qa.click("notes.py:1")
+
+
+def task_worktree(qa, name):
+    """Where task NAME's worktree is, as Roost has it."""
+    return json.loads(qa.emacs.eval("(roost--field (seq-find (lambda (task) (equal (roost--field task 'name) %s))"
+                                    " (roost-tasks)) 'worktree)" % lisp(name)))
+
+
+def shows_file(qa, name, path):
+    """Whether the screen shows PATH of NAME's worktree, selected, in NAME's frame."""
+    def check(screen):
+        # On a remote host, as a TRAMP name: the host's own path is the worktree's.
+        visited = qa.emacs.eval("(with-current-buffer (window-buffer (selected-window))"
+                                " (and buffer-file-name (file-local-name buffer-file-name)))")
+        return bool((screen.get("task") or {}).get("name") == name and visited != "nil"
+                     and Path(json.loads(visited)).resolve() == (Path(task_worktree(qa, name)) / path).resolve()
+                     and qa.emacs.json("(json-encode (qa-selected-task))") == name)
+    return check
+
+
 def shows_view(qa, name, mode):
     """Whether the screen shows a MODE buffer of NAME's worktree, selected,
     in NAME's frame.  Where its terminal went, Magit or Dired chose: the
@@ -1707,6 +1742,7 @@ WALK_INTERRUPTERS = [
     ("r on another task's row", go_review, "other"),
     ("f on another task's row", go_files, "other"),
     ("a click on a file in another task's panel", go_changed_file, "other"),
+    ("a click on a review thread in another task's panel", go_review_thread, "other"),
     ("a click on a notification", go_notification, "other"),
     ("a click in the terminal", go_terminal, None),
 ]
@@ -1726,6 +1762,27 @@ def walk_away(qa, repo):
     qa.wait("the prompt", lambda s: s["prompt"])
     qa.type("ask echo '# Tallied' >> notes.py\r")
     answer_yes(qa, other)
+    if not qa.host:
+        # Committed and pushed, with a pull request a review thread is open on.
+        worktree = task_worktree(qa, other)
+        qa.git(worktree, "commit", "-qam", "Tally the notes")
+        origin = qa.work / "origin.git"
+        if not origin.exists():
+            qa.git(qa.work, "init", "-q", "--bare", "-b", "main", str(origin))
+            qa.git(repo, "remote", "add", "origin", str(origin))
+        branch = qa.git(worktree, "rev-parse", "--abbrev-ref", "HEAD")
+        qa.git(worktree, "push", "-q", "origin", branch)
+        thread = dict(isResolved=False, path="notes.py", line=1, diffSide="RIGHT",
+                      comments=dict(nodes=[dict(createdAt="2026-01-01T00:00:00Z")]),
+                      opening=dict(nodes=[dict(author=dict(login="qa"), bodyText="Say what is tallied.")]))
+        github(qa, list=[dict(number=31, url="https://github.com/qa/notes/pull/31", state="OPEN",
+                              headRefOid=qa.git(worktree, "rev-parse", "HEAD"), statusCheckRollup=[])],
+               reviews={"31": dict(mergeable="MERGEABLE", reviewRequests=dict(nodes=[]),
+                                   reviewThreads=dict(totalCount=1, nodes=[thread]))})
+        qa.keys("C-c r g")
+        qa.wait("its review thread", lambda s: qa.emacs.eval(
+            "(and (alist-get 'openThreads (roost--field (seq-find (lambda (task) (equal (roost--field task 'name) %s))"
+            " (roost-tasks)) 'prStatus)) t)" % lisp(other)) == "t")
     waiting = new_task(qa, "ask git log")
     qa.status(waiting, "permission")
     timeout = 15 if qa.host else 8
@@ -1754,6 +1811,8 @@ def walk_away(qa, repo):
                 opens = (target + "'s files open", shows_view(qa, target, "dired-mode"))
             elif go is go_changed_file:
                 opens = (target + "'s diff of the file opens", shows_view(qa, target, "magit-diff-mode"))
+            elif go is go_review_thread:
+                opens = (target + "'s file opens at the thread", shows_file(qa, target, "notes.py"))
             else:
                 opens = ((target + "'s " + ("shell" if shell else "terminal") + " opens", shows(qa, target, shell))
                          if target else (home + "'s terminal stays", shows(qa, home)))
@@ -1778,6 +1837,8 @@ def walk_away(qa, repo):
                 expect.append(("the draft is kept", lambda s: any(
                     "Half a thought" in draft for draft in qa.emacs.json("(json-encode (vconcat (qa-drafts)))"))))
             qa.step(pair, expect=expect)
+    # GitHub as other journeys find it.
+    github(qa, list=[], reviews={})
 
 
 @journey("A second frame")
@@ -2151,7 +2212,10 @@ def sidebar_row(qa, screen, name):
 def pull_request(qa, repo):
     """Once its agent is done, a pull request whose checks and review are
     done waits on you, and its status says why: to merge, ci failed or
-    comments. While GitHub is still at work, the panel says on what."""
+    comments. While GitHub is still at work, the panel says on what. The
+    panel names the checks and lists the open review threads, a click on
+    one visiting its line, and without a pull request, says there are no
+    CI results."""
     origin = qa.work / "origin.git"
     if not origin.exists():
         qa.git(qa.work, "init", "-q", "--bare", "-b", "main", str(origin))
@@ -2162,6 +2226,9 @@ def pull_request(qa, repo):
     # GitHub's word counts once asked half a minute after the agent's last event.
     settled = time.monotonic() + 31
     qa.wait("its commit", lambda s: "Committed" in panel_text(qa, s))
+    qa.step("No pull request yet", expect=[
+        ("the panel says there are no CI results",
+         lambda s: "Checks\n  No CI results: no pull request" in panel_text(qa, s))])
     qa.keys("C-c r P")
     qa.wait("the pull request's draft", lambda s: (qa.window(s, "roost-pr-mode") or {}).get("selected"))
     qa.keys("C-c C-c")
@@ -2185,6 +2252,7 @@ def pull_request(qa, repo):
         ("the panel says it waits for its check and Copilot's review",
          lambda s: "#21 waits for 1 check and Copilot's review" in panel_text(qa, s)),
         ("and that a review is asked of Copilot", lambda s: "review requested from Copilot" in panel_text(qa, s)),
+        ("its checks name the one pending", lambda s: "Checks\n  … 1 pending: test\n" in panel_text(qa, s)),
         ("the sidebar has no status for it",
          lambda s: not sidebar_row(qa, s, name).endswith(("to merge", "ci failed", "comments", "ready")))])
     passed = dict(__typename="CheckRun", name="test", status="COMPLETED", conclusion="SUCCESS",
@@ -2194,7 +2262,8 @@ def pull_request(qa, repo):
     qa.step("Your turn to merge", expect=[
         ("the sidebar says to merge", lambda s: sidebar_row(qa, s, name).endswith("to merge")),
         ("the panel says P opens it", lambda s: "#21 passed its checks and review: P opens it to merge"
-         in panel_text(qa, s))])
+         in panel_text(qa, s)),
+        ("its checks count the one passed", lambda s: "Checks\n  ✓ 1 passed\n" in panel_text(qa, s))])
     # n finds it, among whatever else waits.
     qa.keys("C-c r S")
     qa.wait("the dashboard", lambda s: (qa.window(s, "roost-dashboard-mode") or {}).get("selected"))
@@ -2215,14 +2284,36 @@ def pull_request(qa, repo):
     qa.step("A check failed", expect=[
         ("the sidebar says ci failed", lambda s: sidebar_row(qa, s, name).endswith("ci failed")),
         ("the panel says e tells its agent",
-         lambda s: "A check failed on #21: e tells its agent, P opens it" in panel_text(qa, s))])
-    thread = dict(isResolved=False, comments=dict(nodes=[dict(createdAt=long_ago)]))
-    says([passed], threads=[thread, dict(thread, isResolved=True), thread])
+         lambda s: "A check failed on #21: e tells its agent, P opens it" in panel_text(qa, s)),
+        ("and names the check", lambda s: "Checks\n  ✗ lint failed\n  ✓ 1 passed\n" in panel_text(qa, s))])
+    thread = dict(isResolved=False, path="DUE.md", line=1, diffSide="RIGHT",
+                  comments=dict(nodes=[dict(createdAt=long_ago)]),
+                  opening=dict(nodes=[dict(author=dict(login="copilot-pull-request-reviewer"),
+                                           bodyText="Say which dates are due, and by when.")]))
+    outdated = dict(thread, line=None, isOutdated=True,
+                    opening=dict(nodes=[dict(author=dict(login="qa"), bodyText="Is this file needed?")]))
+    says([passed], threads=[thread, dict(thread, isResolved=True), outdated])
     qa.status(name, "comments")
     qa.step("Review threads open", expect=[
         ("the sidebar says comments", lambda s: sidebar_row(qa, s, name).endswith("comments")),
         ("the panel counts the unresolved ones",
-         lambda s: "#21 has 2 unresolved review threads: e tells its agent to answer them" in panel_text(qa, s))])
+         lambda s: "#21 has 2 unresolved review threads: e tells its agent to answer them" in panel_text(qa, s)),
+        ("and lists them with file, line and who started them",
+         lambda s: ("Open review threads\n  DUE.md  qa · outdated\n    Is this file needed?\n"
+                    "  DUE.md:1  Copilot\n    Say which dates are due, and by when.\n") in panel_text(qa, s))])
+    worktree = qa.emacs.eval("(roost--field (seq-find (lambda (task) (equal (roost--field task 'name) %s))"
+                             " (roost-tasks)) 'worktree)" % lisp(name)).strip('"')
+    qa.click("DUE.md:1")
+    qa.wait("the file", lambda s: (qa.window(s, "fundamental-mode") or qa.window(s, "text-mode")
+                                   or qa.window(s, "markdown-mode") or {}).get("selected"))
+    in_file = "(with-current-buffer (window-buffer (selected-window)) %s)"
+    qa.step("A click on a thread visits its line", expect=[
+        ("the task's own file", lambda s: Path(json.loads(qa.emacs.eval(in_file % "(file-local-name buffer-file-name)")))
+         .resolve() == (Path(worktree) / "DUE.md").resolve()),
+        ("at the line", lambda s: qa.emacs.eval(in_file % "(line-number-at-pos (window-point))") == "1"),
+        ("in a window of its own, the terminal and panel still there",
+         lambda s: terminals(s) and panel_text(qa, s))])
+    qa.keys("C-x 4 0")
     github(qa, list=[dict(number=21, url=url, state="MERGED", headRefOid=tip)])
     qa.keys("C-c r g")
     qa.status(name, "merged")

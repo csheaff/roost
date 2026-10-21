@@ -201,6 +201,21 @@ Return nil when it isn't on screen."
             (append unread-command-events (list (list 'down-mouse-1 posn) (list 'mouse-1 posn))))
       t)))
 
+(defun qa-scroll-to-text (text mode)
+  "Scroll the first window in MODE that holds TEXT so that TEXT shows.
+Return nil when none holds it."
+  (seq-some (lambda (window)
+              (with-current-buffer (window-buffer window)
+                (when (derived-mode-p (intern mode))
+                  (when-let* ((found (save-excursion
+                                       (goto-char (point-min))
+                                       (search-forward text nil t))))
+                    (unless (pos-visible-in-window-p found window)
+                      (set-window-start window (save-excursion (goto-char found) (line-beginning-position 0)))
+                      (set-window-point window (- found (length text))))
+                    t))))
+            (qa--windows)))
+
 (defun qa-click-terminal ()
   "Click in the first terminal on screen, as to type in it.
 Return nil when no terminal is on screen."

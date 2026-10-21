@@ -6,6 +6,16 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.9.0:
 
+- The task panel shows what a merge would rest on, under the files:
+  `Checks` names each failing or pending check of the task's pull request
+  and counts those that passed, `Open review threads` lists its unresolved
+  threads, Copilot's too, with file and line (`RET` visits the line), and
+  the agent's latest reply follows, marked as its own account. Without a
+  pull request, or with one that has no checks, it says `No CI results`,
+  unlike checks that passed. The reply now comes after the changes rather
+  than before them, and the pull request's own line no longer counts its
+  checks and threads. Roost asks GitHub nothing new: the names come from
+  the lookups it already makes. Nothing to do when upgrading.
 - `n` says in the echo area which task it opened, why that one waits and
   how many more do: `permission · ledger: Asks to run make test; 2 more
   waiting`, with the first line of a reply, why a pull request waits on
