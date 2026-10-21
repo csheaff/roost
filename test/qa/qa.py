@@ -1581,6 +1581,8 @@ def to_sidebar(qa):
 
 
 def go_click(qa, target):
+    # Into view first: a menu can take the frame's bottom.
+    qa.emacs.eval("(qa-sidebar-to-row %s)" % lisp(target))
     qa.click_text(target, "roost-sidebar-list-mode")
 
 
@@ -2058,6 +2060,10 @@ def large(qa, repo):
          and row(s).endswith("± not looked at" if magit else "±"))])
     qa.keys("C-c r S")
     qa.wait("the dashboard", lambda s: (qa.window(s, "roost-dashboard-mode") or {}).get("selected"))
+    # To its row, below the window's end once earlier journeys leave many tasks.
+    qa.keys("C-s")
+    qa.type(name[:12])
+    qa.keys("RET")
     qa.step("The dashboard marks it too", expect=[
         ("its row has the mark", lambda s: any(name[:12] in line and "±" in line for line in
                                                qa.window(s, "roost-dashboard-mode")["text"].splitlines()))])

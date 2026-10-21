@@ -247,6 +247,21 @@ Point goes with it, as the wheel takes it along."
         (set-window-point window top))))
   t)
 
+(defun qa-sidebar-to-row (name)
+  "Scroll each sidebar on screen to task NAME's row, as the mouse wheel would.
+Return nil when it has none."
+  (let (found)
+    (when-let* ((task (seq-find (lambda (task) (equal (roost--field task 'name) name)) (roost-tasks))))
+      (dolist (window (window-list-1 nil 'nomini 'visible))
+        (when (eq (buffer-local-value 'major-mode (window-buffer window)) 'roost-sidebar-list-mode)
+          (when-let* ((row (with-current-buffer (window-buffer window) (roost--task-row (roost--key task)))))
+            (unless (pos-visible-in-window-p row window)
+              (set-window-start window (with-current-buffer (window-buffer window)
+                                         (save-excursion (goto-char row) (line-beginning-position))))
+              (set-window-point window row))
+            (setq found t)))))
+    found))
+
 (defun qa-selected-task ()
   "The name of the task whose worktree holds the selected window's buffer, or nil."
   (with-current-buffer (window-buffer (selected-window))
