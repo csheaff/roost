@@ -185,14 +185,29 @@ place here, so the dashboard and sidebar show them all at once.")
         (index (cl-position name roost-sweep--gallery :key #'car :test #'equal)))
     (list host (format "%016d" index))))
 
+(defun roost-sweep--size (files)
+  "The size of the changes in FILES, as a host measures it, or nil for none."
+  (when files
+    (let ((paths (mapcar (lambda (file) (alist-get 'path file)) files)))
+      `((added . ,(apply #'+ (mapcar (lambda (file) (or (alist-get 'added file) 0)) files)))
+        (deleted . ,(apply #'+ (mapcar (lambda (file) (or (alist-get 'deleted file) 0)) files)))
+        (files . ,(length files))
+        (directories ,@(delete-dups (seq-keep (lambda (path) (car (split-string path "/" nil)))
+                                              (seq-filter (lambda (path) (string-search "/" path)) paths))))
+        (topLevel . ,(and (seq-some (lambda (path) (not (string-search "/" path))) paths) t))))))
+
 (defun roost-sweep--populate ()
-  "Cache a task for each state of the gallery, and what goes with them."
+  "Cache a task for each state of the gallery, and what goes with them.
+Each has what a host lists for every task, as where it started and the
+size of its changes, unless its state says otherwise."
   (cl-loop for (name . fields) in roost-sweep--gallery
            for key = (roost-sweep--key name)
            do (roost--cache-task (car key)
                                  (append (assq-delete-all 'host (copy-tree fields))
                                          `((id . ,(cadr key)) (name . ,name) (repo . "/home/user/ledger")
-                                           (branch . ,(format "roost/%s" (replace-regexp-in-string " " "-" name))))
+                                           (branch . ,(format "roost/%s" (replace-regexp-in-string " " "-" name)))
+                                           (baseRef . "main")
+                                           (size . ,(roost-sweep--size (alist-get 'files fields))))
                                          (roost-test--task (cadr key)))))
   (puthash "gone" "ssh: connect to host gone: Connection refused" roost--errors)
   (setq roost--notes

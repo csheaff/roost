@@ -6,6 +6,10 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.9.0:
 
+- The sidebar shows the task you work on, however many it lists. With
+  more tasks than it had lines, the one you opened could be below them,
+  with its status. It goes to each task you open, and stays where you
+  scroll it until you open another. Nothing to do when upgrading.
 - A new task's draft that quotes a file names the project's tasks that
   already change it: `ledger-totals already changes report.py`, below the
   draft's fields. Drafts started from a region of code, a file, a Flymake
