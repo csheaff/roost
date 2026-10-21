@@ -38,8 +38,6 @@ Small, and probably worth the most.
   with [the recipes and their status](melpa.md) current, and send them,
   tmux-control first, once people ask for them there. Features don't wait
   for it.
-- **[When a merge is your turn](#when-a-merge-is-your-turn)**, its next
-  part: evidence beside the files.
 - **Notifications by urgency.** Each change to ready, permission, failed,
   crashed or exited sends a notification of its own, all alike, and only a
   newer one about the same task replaces it. A permission request would
@@ -57,17 +55,6 @@ Small, and probably worth the most.
   so finished turns mixed in slow the answer to a permission request.
   From the cockpit, where one alert sounds at a time and a message counts
   the rest ([FAA](https://hfcc.dot.gov/publications/docs/GeneralGuidance/zz_FAA_GeneralGuidanceDoc_Chapter_04_Section_01.html)).
-- **`n` says where it went and why.** `n` opens the next task waiting,
-  permission requests first, without saying why it chose that one, so you
-  arrive somewhere you didn't pick and catch up. The echo area could say
-  "permission · ledger: Asks to run make test; 2 more waiting". When none
-  is left it says so already; it could also offer the way back to where
-  you pressed the first `n`. In a rescue-robot simulation, operators sent
-  to a robot they hadn't chosen took longer over each
-  ([Crandall et al. 2011](https://faculty.cs.byu.edu/~crandall/papers/Crandall_tsma2011.pdf)),
-  and a clear sign that interruptions were over raised how often people
-  went back to the task they had set aside from 52% to 90%
-  ([Dodhia and Dismukes 2009](https://interruptions.net/literature/Dodhia-ApplCognitPsychol09.pdf)).
 - **`.worktreeinclude`.** Copy the ignored files it lists, such as `.env`,
   into new worktrees, as Claude Code and Conductor do. Today that takes
   `roost-setup-command`.
@@ -86,29 +73,14 @@ These ideas answer one question about each task: is a merge your turn, and
 what would it rest on? They share the places where Roost already says what
 a task needs: the next step at the top of the task panel and the menu, the
 status word in the sidebar, and `n`. Each adds a line or a status there
-rather than a view of its own. The first is among the most likely; the
-other is worth trying once it shows what the panel has room for. Three that
-came before them are in Roost now: a pull request that waits on you
-counts as waiting, conflicts show before merge time, and each task says what
-changed since you last looked.
+rather than a view of its own. Four that came before are in Roost now: a
+pull request that waits on you counts as waiting, conflicts show before
+merge time, each task says what changed since you last looked, and the
+task panel shows what a merge rests on beside the files: the pull request's
+checks by name, with "No CI results" unlike "passed", its open review
+threads with file and line, and the agent's latest reply, as its own
+account, with no badge or verdict.
 
-- **Evidence beside the files in the task panel.** Show what a decision can
-  rest on without opening the diff, as facts in the order they're easiest to
-  check: the pull request's checks, or a local check command's
-  (in [Worth trying](#worth-trying)), saying which, with "no CI results"
-  looking different from "passed"; the reviewer's findings still open, with
-  file and line; and the agent's latest reply, labelled as its own account.
-  With the size of the change, which the panel gives already, and any paths
-  marked as risky (below), that's enough to finish a small change that
-  passed everything, or to pick the one worth reading closely; the file list
-  and Magit stay as they are. No badge, score or "ready to merge" line: "no
-  CI results" beside a reply that says the tests pass shows that only the
-  agent vouches for them, without Roost judging either. Before a pull
-  request, the agent's own test output stays in its terminal. From the
-  Claude Code team's review, where people judge a change by its evidence
-  more than by its lines, and from studies in which an explanation made
-  people accept advice whether or not it was right
-  ([Bansal et al.](https://arxiv.org/abs/2006.14779)).
 - **Marks for risky changes.** Large changes have theirs: a dim `±` on the
   row once a task's changes reach 400 lines, 10 files or 3 top-level
   directories (`roost-large-change`), with the size in the task panel.
@@ -152,7 +124,8 @@ changed since you last looked.
   session reports what it saw last. Orca shows usage in its status bar.
 - **Scripts beyond setup.** A teardown command before a worktree is removed,
   a check command that must pass before `m` (the local stand-in for the CI
-  a pull request runs, which `m` skips), and a block of ports per task
+  a pull request runs, which `m` skips, its result under the task panel's
+  Checks, saying it ran here), and a block of ports per task
   (`$ROOST_PORT`) so two tasks' servers don't collide. A remote task's port
   can be forwarded over the SSH connection Roost already shares. From
   Conductor (setup, run and archive scripts, ten ports per workspace),
@@ -360,9 +333,8 @@ Larger, or undecided.
   (`to merge`, `ci failed`, `comments`), whether or not the agent watches;
   fixing what it finds is the agent's.
 - **`n` picking by a reckoning of its own.** `n` keeps a plain order,
-  permission requests first, and would say where it went and why
-  ([above](#most-likely-first)) rather than choose more cleverly out of
-  sight. In a rescue-robot simulation, a key that chose the next robot for
+  permission requests first, and says where it went and why rather than
+  choose more cleverly out of sight. In a rescue-robot simulation, a key that chose the next robot for
   the operator added time to each visit, as operators caught up with a
   robot they hadn't picked, raised no score, and was the mode two thirds
   of them liked least

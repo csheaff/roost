@@ -20,6 +20,9 @@
 ;;   a redraw, and another button or key changes it back.
 ;; - A key the view tells you to press is bound there, and its command
 ;;   applies to the task.
+;; - What `n' says on opening a task that waits fits one line of the echo
+;;   area, narrow or wide: its status and name first, then why it waits
+;;   where there is room, and the keys it names apply.
 ;;
 ;; A new button or key is covered without a test of its own; a new kind
 ;; of task gets a state in `roost-sweep--gallery'.  The world outside the
@@ -103,6 +106,9 @@ KIND is `committed', `uncommitted', `untracked' or `binary'."
      (diff . "2 files +24 −6") (files . ,(roost-sweep--files '("ledger.py" . committed) '("report.py" . committed))))
     ("behind" (status . "ready") (live . t) (integrationBranch . "main") (behind . 3) (ahead . 1)
      (diff . "1 file +12 −3") (files . ,(roost-sweep--files '("report.py" . committed))))
+    ("no pull request" (status . "ready") (live . t) (seen . "2026-10-03T20:00:00+00:00") (ahead . 1)
+     (lastMessage . "Done: the report shows each total, and the tests pass.") (diff . "1 file +12 −3")
+     (files . ,(roost-sweep--files '("report.py" . committed))))
     ("pull request open" (status . "ready") (live . t) (ahead . 2) (diff . "1 file +12 −3")
      (pr (number . 12) (url . "https://github.com/o/r/pull/12"))
      (prStatus (state . "OPEN") (review . "REVIEW_REQUIRED")
@@ -113,13 +119,17 @@ KIND is `committed', `uncommitted', `untracked' or `binary'."
                (requested) (threads . 0) (checkedAt . "2026-10-03T20:05:00+00:00")))
     ("pull request, ci failed" (status . "stopped") (live) (seen . "2026-10-03T20:00:00+00:00") (ahead . 1)
      (dirty) (unpushed . 0) (pr (number . 17) (url . "https://github.com/o/r/pull/17"))
-     (prStatus (state . "OPEN") (checks (passing . 2) (failing . 1) (pending . 0)) (mergeable . "MERGEABLE")
-               (requested) (threads . 0) (failedAt . "2026-10-03T20:03:00Z")
+     (prStatus (state . "OPEN") (checks (passing . 2) (failing . 1) (pending . 0)) (failingChecks "test (29.1)")
+               (mergeable . "MERGEABLE") (requested) (threads . 0) (failedAt . "2026-10-03T20:03:00Z")
                (checkedAt . "2026-10-03T20:05:00+00:00")))
     ("pull request with comments" (status . "ready") (live . t) (seen . "2026-10-03T20:00:00+00:00") (ahead . 1)
      (dirty) (unpushed . 0) (pr (number . 18) (url . "https://github.com/o/r/pull/18"))
      (prStatus (state . "OPEN") (draft . t) (checks (passing . 3) (failing . 0) (pending . 0))
                (mergeable . "CONFLICTING") (requested) (threads . 2) (threadAt . "2026-10-03T20:04:00Z")
+               (openThreads ((path . "ledger.py") (line . 3) (author . "copilot-pull-request-reviewer")
+                             (text . "The total leaves out the last row of each budget, so it is short."))
+                            ((path . "src/a/rather/long/path/report.py") (author . "octo") (outdated . t)
+                             (text . "Is this still needed?")))
                (checkedAt . "2026-10-03T20:05:00+00:00")))
     ("pull request in review" (status . "ready") (live . t) (seen . "2026-10-03T20:00:00+00:00") (ahead . 1)
      (dirty) (unpushed . 0) (pr (number . 19) (url . "https://github.com/o/r/pull/19"))
@@ -671,6 +681,40 @@ applies to the task."
           (kill-buffer buffer))
         problems))))
 
+(defun roost-sweep--check-next-message (_view state _width)
+  "Problems with what `roost-next-waiting' says on opening STATE's task.
+Only for a task that waits, which it goes to, in echo areas narrow and wide."
+  (roost-sweep--world
+    (let ((task (gethash (roost-sweep--key state) roost--tasks))
+          problems)
+      (when (roost--waiting-p task)
+        (dolist (width '(30 50 120))
+          (let* ((said (cl-letf (((symbol-function 'window-max-chars-per-line) (lambda (&rest _) width)))
+                         (roost--next-message task)))
+                 (head (concat (roost--display-status task) " · " (roost--field task 'name)))
+                 (why (roost--waiting-reason task))
+                 (pos 0))
+            (when (string-search "\n" said)
+              (push "it says more than one line" problems))
+            (when (> (string-width said) width)
+              (push (format "it is %d columns wide, in an echo area of %d" (string-width said) width) problems))
+            (unless (or (string-prefix-p head said)
+                        (and (string-suffix-p "…" said) (string-prefix-p (string-remove-suffix "…" said) head)))
+              (push (format "it starts %S, not with its status and name, at %d" said width) problems))
+            (when (and why (= width 120) (not (string-search (truncate-string-to-width why 8) said)))
+              (push (format "it doesn't say why, %S, with room to" why) problems))
+            (while (setq pos (text-property-any pos (length said) 'face 'roost-key said))
+              (let* ((end (or (next-single-property-change pos 'face said) (length said)))
+                     (key (substring-no-properties said pos end)))
+                (dolist (map (list roost-task-info-mode-map roost-dashboard-mode-map roost-sidebar-list-mode-map))
+                  (let ((command (keymap-lookup map key)))
+                    (cond ((not (commandp command))
+                           (push (format "it names %s, which a view doesn't bind" key) problems))
+                          ((not (roost--action-applies-p task command))
+                           (push (format "it names %s, but %s doesn't apply to the task" key command) problems)))))
+                (setq pos end))))))
+      (delete-dups (nreverse problems)))))
+
 (defun roost-sweep--face-span (pos face)
   "The next span from POS with FACE among its faces, as (START . END), or nil."
   (let ((start (roost-sweep--face-start pos face)))
@@ -725,7 +769,8 @@ Return them as (PROBLEM . PLACES), PLACES naming the view, state and width."
                (`(button ,label . ,_) (cl-pushnew label buttons :test #'equal))
                (`(key ,_ . ,command) (cl-pushnew (cons view command) keys :test #'equal)))))))
      (dolist (label '("Show the whole prompt" "Show the whole reply" "ledger.py" "notes.md" "#12" "#70"
-                      "probe" "the report" "https://example.com/ci" "+" "conflicts with main"))
+                      "probe" "the report" "https://example.com/ci" "+" "conflicts with main"
+                      "ledger.py:3"))
        (should (member label buttons)))
      (dolist (view (mapcar #'car roost-sweep--views))
        (let ((found (seq-filter (lambda (key) (eq (car key) view)) keys)))
@@ -799,6 +844,15 @@ Return them as (PROBLEM . PLACES), PLACES naming the view, state and width."
   ;; Only the task panel says what to do next.
   (roost-test--isolated
    (roost-sweep--report (roost-sweep--run #'roost-sweep--check-named-keys '(panel)))))
+
+(ert-deftest roost-sweep-n-says-where-it-went-and-why ()
+  (roost-test--isolated
+   (roost-sweep--report (roost-sweep--run #'roost-sweep--check-next-message '(echo)))
+   ;; It looked at tasks of each kind that wait.
+   (roost-sweep--world
+     (dolist (state '("permission" "stuck starting" "ready, reviewing" "crashed" "failed turn"
+                      "conflicts with main" "pull request to merge" "pull request with comments"))
+       (should (roost--waiting-p (gethash (roost-sweep--key state) roost--tasks)))))))
 
 (provide 'roost-sweep)
 

@@ -43,6 +43,7 @@
          (roost-notes-file (expand-file-name "notes.json" (nth 1 ,scratch)))
          (roost--notes nil) (roost--notes-loaded t)
          (roost--requests nil) (roost-notify nil) (roost--current-task nil) (roost--next-unblocked nil)
+         (roost--next-run nil)
          (roost--perspectives (make-hash-table :test 'equal)))
      (set-frame-parameter nil 'roost-task nil)
      ;; Seeing an agent is recorded on its host too, and so is what of its
@@ -151,7 +152,7 @@
        (roost-task-info-mode)
        (setq roost--buffer-task-key (roost--key asking))
        (roost--render-task-info)
-       (should (string-match-p "^Answer it in its terminal: RET\n\nWaiting for your answer\nAsks to run make test\n\nPrompt\nfix authentication\n\nAgent's latest reply$"
+       (should (string-match-p "^Answer it in its terminal: RET\n\nWaiting for your answer\nAsks to run make test\n\nPrompt\nfix authentication\n\nChanges\nRefreshing…\n\nAgent's latest reply$"
                                (buffer-string))))
      ;; The notification names it, rather than the agent's last words.
      (let (body)
@@ -185,8 +186,10 @@
        (setq roost--buffer-task-key (roost--key task))
        (roost--render-task-info)
        (let ((text (buffer-string)))
+         ;; The agent's word comes after the changes, without a heading's
+         ;; note while there are none.
          (should (< (string-match "^fix auth " text) (string-match "^Prompt$" text)
-                    (string-match "^Agent's latest reply$" text) (string-match "^Changes$" text)))
+                    (string-match "^Changes$" text) (string-match "^Agent's latest reply$" text)))
          (should (string-match-p "^Agent's latest reply\n## Summary\n" text))
          (should (equal (get-text-property (string-match "Fixed the" text) 'line-prefix text) "  "))
          (should (string-match-p "^Fixed the auth bug in login\\.py\\.\n" text))
@@ -257,7 +260,9 @@
                (advice-remove 'roost--render-task-info 'qa-count))
              (with-current-buffer buffer
                (should (string-match-p "^Waiting for your answer$" (buffer-string)))
-               (should (string-match-p "^Agent's latest reply$" (buffer-string)))))
+               ;; After what can be checked, as its agent's own account.
+               (should (string-match-p "^Checks\nNo CI results: no pull request\n\nAgent's latest reply  its own account$"
+                                       (buffer-string)))))
          (kill-buffer buffer))))))
 
 (ert-deftest roost-task-panel-is-beside-a-terminal-only-in-its-frame ()
@@ -381,7 +386,7 @@
        (setq roost--buffer-task-key (roost--key task))
        (cl-letf (((symbol-function 'roost--panel-beside-terminal-p) #'ignore))
          (roost--render-task-info))
-       (should (string-match-p "^Prompt\nFix the login\\.\n\n?Your latest prompt\nNow the logout\\.\nShow the whole prompt\n\n?Agent's latest reply$"
+       (should (string-match-p "^Prompt\nFix the login\\.\n\n?Your latest prompt\nNow the logout\\.\nShow the whole prompt\n\n?Changes$"
                                (buffer-string)))
        (goto-char (point-min))
        (search-forward "Show the whole")
@@ -932,8 +937,8 @@
                (setq roost--buffer-task-key (roost--key task))
                (roost--render-task-info)
                (should (string-prefix-p "fix auth" (buffer-string)))
-               (should (< (string-search "Agent's latest reply" (buffer-string))
-                          (string-search "Changes" (buffer-string))
+               (should (< (string-search "Changes" (buffer-string))
+                          (string-search "Agent's latest reply" (buffer-string))
                           (string-search "Details" (buffer-string)))))
            (delete-window window)))))))
 
@@ -3561,6 +3566,235 @@ the stubbed requests, `roost--display-task' and `dired' were asked."
        (roost-next-waiting) (should (equal (car opened) "a"))
        (roost-next-waiting) (should (equal (car opened) "c"))))))
 
+(defmacro roost-test--opening-in-place (opened &rest body)
+  "Run BODY with tasks opening at once, in the selected window, recorded in OPENED.
+Each host replies with the task as cached, and its terminal is a buffer
+of its own, which shows in the selected window of its workspace."
+  (declare (indent 1))
+  `(cl-letf (((symbol-function 'roost--request)
+              (lambda (host _action params success &optional _failure)
+                (funcall success (copy-tree (gethash (list host (alist-get 'id params)) roost--tasks)))))
+             ((symbol-function 'roost--display-task)
+              (lambda (task)
+                (push (roost--field task 'name) ,opened)
+                (roost--activate-workspace task)
+                (switch-to-buffer (get-buffer-create (format " *terminal %s*" (roost--field task 'name))))
+                (roost--mark-seen task))))
+     ,@body))
+
+(ert-deftest roost-next-says-where-it-went-and-why ()
+  (roost-test--isolated
+   (roost--cache-task "a" (append '((name . "ledger") (request . "Asks to run make test"))
+                                  (roost-test--task nil "permission")))
+   (roost--cache-task "b" (append '((name . "report") (lastMessage . "## Done\n\nFixed the **totals**.\nMore."))
+                                  (roost-test--task)))
+   (roost--cache-task "c" (append '((name . "notes") (status . "crashed") (live)
+                                    (error . "The agent exited with status 1"))
+                                  (roost-test--task)))
+   (let (opened messages)
+     (cl-letf (((symbol-function 'message)
+                (lambda (format &rest args) (when format (push (apply #'format format args) messages)))))
+       (roost-test--opening-in-place opened
+         (save-window-excursion
+           ;; Permission requests first, saying what it asks.
+           (roost-next-waiting)
+           (should (equal (car opened) "ledger"))
+           (should (equal (car messages) "permission · ledger: Asks to run make test; 2 more waiting"))
+           ;; Answered, in its terminal.
+           (roost--cache-task "a" (append '((name . "ledger")) (roost-test--task nil "running")))
+           ;; The first line of a reply, without its heading or markers.
+           (roost-next-waiting)
+           (should (equal (car messages) "ready · report: Fixed the totals.; 1 more waiting"))
+           ;; An agent no longer running: how it ended, and how to resume it,
+           ;; in place of what an open says of it.
+           (roost-next-waiting)
+           (should (equal (car messages)
+                          "crashed · notes: The agent exited with status 1; s resumes it; no more waiting"))
+           (should (eq (get-text-property 0 'face (car messages)) 'roost-status-failed))
+           ;; In a narrow frame, why it waits is cut short, its status and
+           ;; name kept, and then the rest from the end.
+           (cl-letf (((symbol-function 'window-max-chars-per-line) (lambda (&rest _) 50)))
+             (let ((task (roost--cache-task "a" (append '((name . "ledger") (request . "Asks to run make test"))
+                                                        (roost-test--task nil "permission")))))
+               (should (equal (roost--next-message task) "permission · ledger: Asks to run…; no more waiting"))
+               (setf (alist-get 'name task) "a rather long name for the task")
+               (let ((said (roost--next-message task)))
+                 (should (string-prefix-p "permission · a rather long name for the task;" said))
+                 (should (string-suffix-p "…" said))
+                 (should (<= (string-width said) 50)))))))))))
+
+(ert-deftest roost-next-offers-the-way-back-once-none-waits ()
+  ;; Back where you pressed the first `n', once you have seen to them all.
+  (roost-test--isolated
+   (roost--cache-task "a" (append '((name . "ledger")) (roost-test--task nil "permission")))
+   (roost--cache-task "b" (append '((name . "report")) (roost-test--task)))
+   (let ((where (get-buffer-create " *where you were*"))
+         opened messages)
+     (cl-letf (((symbol-function 'message)
+                (lambda (format &rest args) (when format (push (apply #'format format args) messages)))))
+       (roost-test--opening-in-place opened
+         (save-window-excursion
+           (delete-other-windows)
+           (switch-to-buffer where)
+           (split-window)
+           (roost-next-waiting)
+           (should (equal (buffer-name) " *terminal ledger*"))
+           (should (= (length (window-list)) 2))
+           ;; Answered, in its terminal.
+           (roost--cache-task "a" (append '((name . "ledger")) (roost-test--task nil "running")))
+           (roost-next-waiting)
+           (should (equal (buffer-name) " *terminal report*"))
+           (roost-next-waiting)
+           (should (equal (car messages) "No tasks are waiting for you; n again goes back to  *where you were*"))
+           (should (equal (buffer-name) " *terminal report*"))
+           ;; A task that comes to wait meanwhile goes first.
+           (roost--cache-task "a" (append '((name . "ledger") (updatedAt . "2026-10-03T20:05:00+00:00"))
+                                          (roost-test--task nil "ready")))
+           (roost-next-waiting)
+           (should (equal (buffer-name) " *terminal ledger*"))
+           (roost-next-waiting)
+           (should (string-prefix-p "No tasks are waiting for you" (car messages)))
+           (delete-other-windows)
+           (roost-next-waiting)
+           (should (equal (car messages) "Back to  *where you were*"))
+           (should (eq (window-buffer (selected-window)) where))
+           (should (= (length (window-list)) 2))
+           ;; The task opened before the run, as the frame had it.
+           (should-not roost--current-task)
+           (should-not (frame-parameter nil 'roost-task))
+           (should-not roost--next-run)
+           (should-error (roost-next-waiting) :type 'user-error)
+           ;; Nor once you have gone elsewhere yourself: a run starts again
+           ;; at the next task waiting.
+           (roost--cache-task "b" (append '((name . "report") (updatedAt . "2026-10-03T20:05:00+00:00"))
+                                          (roost-test--task)))
+           (roost-next-waiting)
+           (switch-to-buffer where)
+           (with-current-buffer where (setq-local buffer-file-name "/tmp/where"))
+           (should-error (roost-next-waiting) :type 'user-error)))
+       (kill-buffer where)
+       (dolist (name '("ledger" "report"))
+         (kill-buffer (format " *terminal %s*" name)))))))
+
+(ert-deftest roost-next-goes-back-once-a-question-left-open-is-quit ()
+  ;; Quitting it after gave back its own windows, undoing the way back.
+  (roost-test--isolated
+   (let* ((task (roost--cache-task "a" (roost-test--task nil "running")))
+          (roost--next-run (list :opened (list (roost--key task)) :offered t))
+          (depth 1) later went)
+     (cl-letf (((symbol-function 'active-minibuffer-window) (lambda () (> depth 0)))
+               ((symbol-function 'minibuffer-depth) (lambda () depth))
+               ((symbol-function 'recursion-depth) (lambda () depth))
+               ((symbol-function 'minibufferp) #'ignore)
+               ((symbol-function 'minibuffer-prompt) (lambda () "M-x "))
+               ((symbol-function 'minibuffer-quit-recursive-edit)
+                (lambda (_levels) (setq depth 0) (throw 'quit nil)))
+               ((symbol-function 'run-at-time) (lambda (_time _repeat function) (setq later function)))
+               ((symbol-function 'roost--task-here) (lambda () task))
+               ((symbol-function 'roost--go-back) (lambda (run) (push run went)))
+               ((symbol-function 'message) #'ignore))
+       (catch 'quit (roost-next-waiting))
+       (should (zerop depth))
+       (should-not went)
+       (funcall later)
+       (should (equal (length went) 1))))))
+
+(ert-deftest roost-next-going-back-outlasts-a-task-still-opening ()
+  ;; A host's late reply asked to resume a task you had left by going back.
+  (roost-test--isolated
+   (save-window-excursion
+     (let* ((task (roost--cache-task "a" (roost-test--task nil "running")))
+            (roost--next-run (list :frame (selected-frame) :windows (current-window-configuration)
+                                   :opened (list (roost--key task)) :offered t))
+            failure later)
+       (cl-letf (((symbol-function 'roost--request)
+                  (lambda (_host _action _params _success &optional on-failure) (setq failure on-failure)))
+                 ((symbol-function 'run-at-time)
+                  (lambda (_time _repeat function &rest args) (setq later (cons function args))))
+                 ((symbol-function 'cancel-timer) #'ignore)
+                 ((symbol-function 'roost--task-here) (lambda () task))
+                 ((symbol-function 'message) #'ignore))
+         (roost-open-task (roost-test--task "1111111111111111"))
+         (roost-next-waiting)
+         (should-not roost--next-run)
+         (funcall failure "The agent's tmux window is gone")
+         ;; Asked from a timer, which finds you have moved on: no question.
+         (apply (car later) (cdr later)))))))
+
+(ert-deftest roost-next-goes-back-to-the-tab-you-were-in ()
+  ;; With workspaces, each task opens in its own: back is the one you
+  ;; were in, as you left it.
+  (roost-test--isolated
+   (save-window-excursion
+     (let ((roost-workspace 'tab-bar)
+           (original-tab-bar-mode tab-bar-mode)
+           opened)
+       (roost--cache-task "a" (append '((name . "ledger")) (roost-test--task nil "permission")))
+       (cl-letf (((symbol-function 'message) #'ignore))
+         (roost-test--opening-in-place opened
+           (unwind-protect
+               (progn
+                 (tab-bar-mode 1)
+                 (tab-bar-rename-tab "mine")
+                 (switch-to-buffer (get-buffer-create " *mine*"))
+                 (split-window)
+                 (roost-next-waiting)
+                 (should (equal (roost--tabs) '("mine" "a/ledger")))
+                 (should (equal (roost--current-workspace) "a/ledger"))
+                 (roost--cache-task "a" (append '((name . "ledger")) (roost-test--task nil "running")))
+                 (roost-next-waiting)
+                 (roost-next-waiting)
+                 (should (equal (roost--current-workspace) "mine"))
+                 (should (eq (window-buffer (selected-window)) (get-buffer " *mine*")))
+                 (should (= (length (window-list)) 2)))
+             (while (cdr (roost--tabs)) (tab-bar-close-tab))
+             (tab-bar-rename-tab nil)
+             (unless original-tab-bar-mode (tab-bar-mode -1))
+             (kill-buffer " *mine*")
+             (kill-buffer " *terminal ledger*"))))))))
+
+(ert-deftest roost-next-goes-back-to-the-perspective-you-were-in ()
+  ;; By its task, which may have been renamed meanwhile, or says it is gone.
+  (roost-test--isolated
+   (save-window-excursion
+     (let* ((roost-workspace 'perspective) (persp-mode t)
+            (home (roost--cache-task "h" (append '((name . "home")) (roost-test--task))))
+            (perspectives (list (roost--perspective-name home)))
+            (current (car perspectives))
+            opened switched)
+       (roost--mark-seen home)
+       (roost--cache-task "a" (append '((name . "ledger")) (roost-test--task nil "permission")))
+       (cl-letf (((symbol-function 'persp-current-name) (lambda () current))
+                 ((symbol-function 'persp-names) (lambda () perspectives))
+                 ((symbol-function 'persp-switch)
+                  (lambda (name) (cl-pushnew name perspectives :test #'equal)
+                    (push name switched) (setq current name)))
+                 ((symbol-function 'persp-rename)
+                  (lambda (name) (setq perspectives (cons name (delete current perspectives))
+                                       current name)))
+                 ((symbol-function 'message) #'ignore))
+         (roost-test--opening-in-place opened
+           (unwind-protect
+               (progn
+                 (roost-next-waiting)
+                 (should (equal current (roost--perspective-name
+                                         (gethash '("a" "0123456789abcdef") roost--tasks))))
+                 ;; Its perspective takes the new name once it is current.
+                 (roost--cache-task "h" (append '((name . "home base")) (roost-test--task)))
+                 (let ((was current))
+                   (setq current (roost--perspective-name home))
+                   (roost--rename-perspective (gethash '("h" "0123456789abcdef") roost--tasks))
+                   (setq current was))
+                 (roost--cache-task "a" (append '((name . "ledger")) (roost-test--task nil "running")))
+                 (roost-next-waiting)
+                 (roost-next-waiting)
+                 (should (equal current "roost:h:home base:012345"))
+                 ;; Gone, it says so.
+                 (setq current (roost--perspective-name (gethash '("a" "0123456789abcdef") roost--tasks)))
+                 (let ((roost--next-run (list :frame (selected-frame) :workspace "gone" :opened nil :offered t)))
+                   (should-error (roost--go-back roost--next-run) :type 'user-error)))
+             (kill-buffer " *terminal ledger*"))))))))
+
 (ert-deftest roost-background-refresh-never-steals-focus ()
   (roost-test--isolated
    (let ((buffer (get-buffer-create "*roost*")) (original (current-buffer)))
@@ -5475,7 +5709,10 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
          (with-current-buffer "*roost: fix auth*"
            (unwind-protect
                (let ((text (buffer-string)))
-                 (should (string-match-p "^Pull request\n  #12  https://github.com/o/r/pull/12\nOpen · 1 failing, 2 passing · approved" text))
+                 ;; Its checks, counted when GitHub didn't name them, are
+                 ;; under a heading of their own.
+                 (should (string-match-p "^Checks\n✗ 1 failed\n✓ 2 passed\n" text))
+                 (should (string-match-p "^Pull request\n  #12  https://github.com/o/r/pull/12\nOpen · approved$" text))
                  (should-not (string-match-p "Merged on GitHub" text))
                  (goto-char (point-min))
                  (search-forward "#12")
@@ -6341,9 +6578,97 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
          (with-current-buffer "*roost: fix auth*"
            (unwind-protect
                (should (string-match-p
-                        "^Open · 3 passing · 2 unresolved review threads · review requested from Copilot, core · conflicts$"
+                        "^Open · review requested from Copilot, core · conflicts$"
                         (buffer-string)))
              (kill-buffer))))))))
+
+(ert-deftest roost-the-panel-shows-what-a-merge-rests-on ()
+  ;; Facts in the order they're easiest to check: the checks, the
+  ;; threads still open, and last the agent's word, as its own.
+  (roost-test--isolated
+   (let* ((files '((files ((path . "ledger.py") (added . 4) (deleted . 1)))))
+          (panel (lambda (task &optional width)
+                   ;; On its own: the cache keeps what a later task leaves out, as its files.
+                   (clrhash roost--tasks)
+                   (with-temp-buffer
+                     (roost-task-info-mode)
+                     (setq roost--buffer-task-key (roost--key (roost--cache-task "dev" task)))
+                     (cl-letf (((symbol-function 'roost--task-info-width) (lambda () (or width 80))))
+                       (roost--render-task-info))
+                     (buffer-string))))
+          (threads '((threads . 3)
+                     (openThreads ((path . "ledger.py") (line . 42) (author . "copilot-pull-request-reviewer")
+                                   (text . "The total skips the last row, which a later sum depends on."))
+                                  ((path . "src/a/rather/long/path/report.py") (author . "octo") (outdated . t)
+                                   (text . "Why?")))))
+          (named (roost-test--turn-task '(checks . ((passing . 5) (failing . 3) (pending . 4)))
+                                        '(failingChecks "lint" "docs") '(pendingChecks "a" "b" "c" "d")
+                                        (car threads) (cadr threads))))
+     ;; Without a pull request, no CI results, which looks unlike any that passed.
+     (let ((text (funcall panel (append files '((lastMessage . "All tests pass.")) (roost-test--task)))))
+       (should (string-match-p "^Checks\nNo CI results: no pull request\n\nAgent's latest reply  its own account\nAll tests pass\\.$"
+                               text))
+       (should-not (string-match-p "✓\\|passed" text)))
+     ;; Nor with nothing to merge.
+     (let ((text (funcall panel (append '((lastMessage . "Which one?")) (roost-test--task)))))
+       (should-not (string-match-p "Checks\\|own account" text)))
+     ;; A pull request GitHub hasn't been asked about, or that has no checks.
+     (should (string-match-p "^Checks\nNot heard from GitHub about #12 yet$"
+                             (funcall panel (append files (roost-test--pr-task)))))
+     (should (string-match-p "^Checks\nNo CI results on #12$"
+                             (funcall panel (append files (roost-test--turn-task '(checks . :none))))))
+     ;; Those that fail by name, and pending ones, and how many passed.
+     (let ((text (funcall panel (append files '((unpushed . 2) (dirty . t)) named))))
+       (should (string-match-p (concat "^Checks\n✗ lint failed\n✗ docs failed\n✗ 1 more failed\n"
+                                       "… 4 pending: a, b, c and 1 more\n✓ 5 passed\n"
+                                       "Run on #12 as pushed, not on 2 newer commits or uncommitted changes\n\n"
+                                       "Open review threads\n  ledger\\.py:42  Copilot\n"
+                                       "The total skips the last row, which a later sum depends on\\.\n"
+                                       "  src/a/rather/long/path/report\\.py  octo · outdated\nWhy\\?\nand 1 more\n")
+                               text))
+       ;; The pull request's own line leaves them to those sections.
+       (should (string-match-p "^Open$" text))
+       (should (< (string-search "Changes" text) (string-search "Checks" text) (string-search "Pull request" text))))
+     ;; Narrow, each thread keeps to its lines, the end of its path shown.
+     (let ((text (funcall panel named 40)))
+       (should (string-match-p "^  …/long/path/report\\.py  octo · outdated$" text))
+       (should (string-match-p "^The total skips the last row, which…$" text)))
+     ;; Nor on a branch that went apart from its head, as once amended.
+     (should (string-match-p "^Run on #12 as pushed, not on the branch as it is here$"
+                             (funcall panel (append files '((unpushed)) (roost-test--turn-task)))))
+     ;; A closed one's checks say so; an open one's still show once its
+     ;; work is merged here.
+     (should (string-match-p "^✓ 3 passed\nRun on #12, which is closed$"
+                             (funcall panel (append files (roost-test--turn-task '(state . "CLOSED"))))))
+     (should (string-match-p "^Checks\n✓ 3 passed$"
+                             (funcall panel (append '((landed . t)) (roost-test--turn-task)))))
+     ;; Merged, nothing waits on them.
+     (should-not (string-match-p "Checks\\|Open review threads"
+                                 (funcall panel (append files (roost-test--turn-task '(state . "MERGED") (car threads))))))
+     ;; A thread on a line visits it in the worktree; another shows the
+     ;; file's changes, as the file list does.
+     (with-temp-buffer
+       (roost-task-info-mode)
+       (setq roost--buffer-task-key (roost--key (roost--cache-task "dev" (append files named))))
+       (roost--render-task-info)
+       (let (visited diffed)
+         (cl-letf (((symbol-function 'roost--in-task-frame) (lambda (_task view) (funcall view)))
+                   ((symbol-function 'find-file-other-window)
+                    (lambda (file) (push file visited) (set-buffer (get-buffer-create " *visited*"))
+                                                   (erase-buffer) (insert (make-string 50 ?\n))))
+                   ((symbol-function 'roost--diff-file) (lambda (_task file) (push file diffed))))
+           (goto-char (point-min))
+           (search-forward "ledger.py:42")
+           (let ((panel (current-buffer))
+                 (worktree (roost--remote-directory (gethash roost--buffer-task-key roost--tasks))))
+             (push-button (1- (point)))
+             (should (equal visited (list (expand-file-name "ledger.py" worktree))))
+             (should (= (with-current-buffer " *visited*" (line-number-at-pos)) 42))
+             (kill-buffer " *visited*")
+             (set-buffer panel))
+           (search-forward "report.py")
+           (push-button (1- (point)))
+           (should (equal diffed '(((path . "src/a/rather/long/path/report.py")))))))))))
 
 (ert-deftest roost-commits-since-a-merge-are-work-to-lose ()
   (roost-test--isolated
