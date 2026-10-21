@@ -6166,13 +6166,14 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
        (should-not (string-match-p "since you looked" (buffer-string)))))))
 
 (ert-deftest roost-a-next-step-says-which-keys-it-names ()
-  (let ((key (lambda (key) (propertize key 'face 'roost-key))))
-    (should (roost--names-key-p (concat "Review and commit its changes in Magit: " (funcall key "r")) "r"))
-    (should (roost--names-key-p (concat (funcall key "m") " merges it, or " (funcall key "P") " opens") "P"))
-    ;; A letter in a word isn't a key, nor is another key.
-    (should-not (roost--names-key-p "Review and commit its changes in Magit: r" "r"))
-    (should-not (roost--names-key-p (concat (funcall key "u") " merges main into it") "r"))
-    (should-not (roost--names-key-p nil "r"))))
+  (roost-test--isolated
+   (let ((key (lambda (key) (propertize key 'face 'roost-key))))
+     (should (roost--names-key-p (concat "Review and commit its changes in Magit: " (funcall key "r")) "r"))
+     (should (roost--names-key-p (concat (funcall key "m") " merges it, or " (funcall key "P") " opens") "P"))
+     ;; A letter in a word isn't a key, nor is another key.
+     (should-not (roost--names-key-p "Review and commit its changes in Magit: r" "r"))
+     (should-not (roost--names-key-p (concat (funcall key "u") " merges main into it") "r"))
+     (should-not (roost--names-key-p nil "r")))))
 
 (ert-deftest roost-merging-and-pushing-say-what-changed-since-you-looked ()
   (roost-test--isolated
