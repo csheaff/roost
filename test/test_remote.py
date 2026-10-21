@@ -1977,6 +1977,29 @@ class Lifecycle(unittest.TestCase):
         # Looking again at what you saw last keeps what changed before it.
         self.assertEqual(self.request("look", id=task["id"])["result"]["looked"]["since"], since)
 
+    def test_a_look_of_tracked_files_only_waits_for_no_new_file(self):
+        # As D asks, whose diff leaves out files Git doesn't track: the
+        # host looks for them itself, however many files changed, rather
+        # than Emacs trusting a capped and possibly old list of them.
+        task = self.create()
+        wt = Path(task["worktree"])
+        for n in range(51):
+            (wt / ("tracked-%02d" % n)).write_text("one\n")
+        self.git("add", ".", cwd=wt)
+        self.git("commit", "-qm", "files", cwd=wt)
+        for n in range(51):
+            (wt / ("tracked-%02d" % n)).write_text("two\n")
+        (wt / "new file").write_text("new\n")
+        reply = self.request("look", id=task["id"], tracked=True)
+        self.assertTrue(reply["ok"], reply)
+        self.assertIsNone(reply["result"].get("looked"))
+        self.assertIsNone(self.since_looked(task), "a look left the new file out")
+        (wt / "new file").unlink()
+        reply = self.request("look", id=task["id"], tracked=True)
+        self.assertTrue(reply["ok"], reply)
+        self.assertTrue(reply["result"]["looked"])
+        self.assertEqual(self.since_looked(task)["count"], 0)
+
     def test_since_you_looked_leaves_out_what_an_update_brought_in(self):
         task = self.create()
         wt = Path(task["worktree"])

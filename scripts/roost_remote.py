@@ -2459,9 +2459,18 @@ def record_look(store, task_id, before, looked):
     return task
 
 
-def look(store, task_id):
+def look(store, task_id, tracked=False):
     """Record where TASK_ID's work stands as where you last looked at it;
-    see `prepare_look`."""
+    see `prepare_look`. With TRACKED, for a view of the files Git tracks
+    only, as a diff of the worktree: unless a file it doesn't track is
+    there, which that view left out, when the look before stands."""
+    if tracked:
+        task = store.read(task_id)
+        worktree = Path(task["worktree"])
+        if worktree.is_dir():
+            kept, large = untracked_files(worktree)
+            if kept or large:
+                return task
     return record_look(store, task_id, *prepare_look(store, task_id))
 
 
@@ -4352,7 +4361,7 @@ def rpc(request):
                     store.save(task)
             return {"ok": True, "result": outgoing(task)}
         if action == "look":
-            return {"ok": True, "result": outgoing(look(store, request["id"]))}
+            return {"ok": True, "result": outgoing(look(store, request["id"], tracked=request.get("tracked") is True))}
         prepared = None
         if action == "send" and request.get("look") is True:
             # Where the work stands as you send your notes, before the agent

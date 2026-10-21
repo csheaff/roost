@@ -6221,17 +6221,16 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
                     (push (list host action params) requests)
                     (setq reply (cons success failure)))))
          (roost-diff task)
-         ;; Its whole diff, recorded as a look first, as r does.
-         (should (equal requests '((nil "look" ((id . "0123456789abcdef"))))))
+         ;; Its whole diff, recorded as a look first, as r does, but only of
+         ;; the files Git tracks: the host records none with a new file
+         ;; there, which the diff leaves out.
+         (pcase-let ((`((,host ,action ,params)) requests))
+           (should (equal (list host action) '(nil "look")))
+           (should (equal (alist-get 'id params) "0123456789abcdef"))
+           (should (eq (alist-get 'tracked params) t)))
          (should-not opened)
          (funcall (car reply) (append '((looked (at . "2026-10-03T21:00:00+00:00"))) (roost-test--task)))
-         (should (equal opened '("base")))
-         ;; A new file the diff leaves out isn't one you looked at.
-         (setq requests nil)
-         (roost-diff (roost--cache-task nil (append '((files ((path . "new.py") (untracked . t))))
-                                                    (roost-test--task))))
-         (should-not requests)
-         (should (equal opened '("base" "base"))))))))
+         (should (equal opened '("base"))))))))
 
 (ert-deftest roost-review-records-a-look-before-opening-magit ()
   (roost-test--isolated

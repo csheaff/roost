@@ -5009,8 +5009,11 @@ minibuffer, as `roost-open-task' does."
       (roost--magit-status task)
     (roost--look-then task "Magit" #'roost--magit-status)))
 
-(defun roost--look-then (task what show)
+(defun roost--look-then (task what show &optional parameters)
   "Record on TASK's host that you look at it now, then call SHOW with TASK.
+PARAMETERS go with the request, as `tracked' for a view of the files Git
+tracks only, which the host records unless a file it doesn't track is
+there.
 WHAT names what SHOW shows, for when it doesn't: once you have opened
 something else, or gone to another window or buffer, as with
 `roost-open-task'.  A host that can't record the look doesn't keep you
@@ -5032,7 +5035,7 @@ says changed since: see `roost--since-looked'."
                           (funcall show task)))))))))
     (if (gethash (roost--field task 'host) roost--errors)
         (funcall open)
-      (roost--act task "look" nil open
+      (roost--act task "look" parameters open
                   (lambda (err)
                     (message "Roost could not record that you looked at %s: %s" (roost--field task 'name) err)
                     (funcall open))))))
@@ -5146,9 +5149,9 @@ questions you left open in the minibuffer, as `roost-open-task' does."
 ;;;###autoload
 (defun roost-diff (&optional task quit-questions)
   "Diff TASK's tracked files against where its own work begins.
-When that is all of its changes, with no new file left out, its host
-first records where the task stands as where you last looked at it, as
-`roost-review' does.  For a task other than the frame's, its terminal
+Its host first records where the task stands as where you last looked
+at it, as `roost-review' does, unless a file Git doesn't track is there,
+which the diff leaves out.  For a task other than the frame's, its terminal
 opens first, as \\[roost-open-task] does, and the diff beside it.  With
 QUIT-QUESTIONS, as when you give a command, first quit the questions you
 left open in the minibuffer."
@@ -5168,10 +5171,9 @@ left open in the minibuffer."
                         (let ((default-directory (roost--remote-directory task)))
                           (magit-diff-working-tree (roost--fork-point task))))))))
     ;; All of its changes, and so a look, as in Magit; but the diff leaves
-    ;; out new files, which a look would count as seen.
-    (if (seq-some (lambda (file) (alist-get 'untracked file)) (roost--field task 'files))
-        (funcall show task)
-      (roost--look-then task "the diff" show))))
+    ;; out new files, which a look would count as seen, so the host looks
+    ;; for them first, rather than trust a list of files that may be old.
+    (roost--look-then task "the diff" show '((tracked . t)))))
 
 ;;;###autoload
 (defun roost-update (&optional task)
