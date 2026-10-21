@@ -8912,8 +8912,10 @@ have seen that waits for nothing."
                        roost--current-task)))
         (unless (or (eq shown (selected-window))
                     (equal (window-parameter shown 'roost-followed) current))
-          (set-window-parameter shown 'roost-followed current)
+          ;; Followed once its row is there, as a new task's may not be yet.
+          (unless current (set-window-parameter shown 'roost-followed nil))
           (when-let* ((row (and current (roost--task-row current))))
+            (set-window-parameter shown 'roost-followed current)
             (set-window-point shown row)
             ;; Scrolled no further than it shows the row, at the bottom:
             ;; the top, with how many wait and the hosts it can't reach,

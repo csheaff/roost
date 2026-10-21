@@ -2176,6 +2176,13 @@
                  ;; Until you open another task.
                  (open (nth 40 ids))
                  (should (= (window-point sidebar) (row (nth 40 ids))))
+                 ;; A task opened before the sidebar lists it, as one just
+                 ;; created, once it does.
+                 (open "9999999999999999")
+                 (roost--cache-task "dev" (append '((name . "task-new") (repo . "/srv/ledger"))
+                                                  (roost-test--task "9999999999999999" "ready")))
+                 (roost--render-sidebar)
+                 (should (= (window-point sidebar) (row "9999999999999999")))
                  ;; In the sidebar, its point is yours.
                  (select-window sidebar)
                  (goto-char (row (nth 5 ids)))
