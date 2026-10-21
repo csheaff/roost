@@ -2352,9 +2352,9 @@ On a project's heading in the dashboard or sidebar, that project."
         ;; directory VC tries, and connects first if TRAMP hasn't, while you
         ;; wait: so first a project Roost knows the directory is in, by name.
         ((and (file-remote-p default-directory)
-              ;; A task's worktree, whose project the host resolves anyway.
+              ;; A task's worktree, as Git would find it.
               (or (when-let* ((task (roost--task-in-directory default-directory)))
-                    (roost--project-directory task))
+                    (roost--remote-directory task))
                   (roost--known-project-of default-directory))))
         ((and (roost--may-look-in-p default-directory) (ignore-errors (vc-root-dir))))
         ((roost--known-project-of default-directory))
