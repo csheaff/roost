@@ -2716,22 +2716,23 @@ CHANGING is what `roost--compose-changing' gives: the tasks that change
 files the draft quotes.  Whether to start the task anyway, wait, or
 give the work to one of them is yours: this only says so."
   (setq roost--compose-changing-shown (roost--compose-changing-summary changing))
-  (when changing (insert "\n"))
-  (pcase-dolist (`(,task . ,files) (seq-take changing 3))
-    (let ((key (roost--key task))
-          (name (roost--field task 'name)))
-      (insert-text-button name 'follow-link t 'font-lock-face 'roost-field
-                          'keymap roost--compose-task-map 'roost-draft-task key
-                          'help-echo (format "mouse-1 or RET: open %s" name)
-                          'action (lambda (_)
-                                    (roost-open-task
-                                     (or (gethash key roost--tasks)
-                                         (user-error "%s is no longer listed" name))
-                                     t)))
-      (insert " already changes " (roost--file-list files) "\n")))
-  (when (length> changing 3)
-    (insert (format "%d more tasks change %s too\n" (- (length changing) 3)
-                    (if (cdr (seq-uniq (apply #'append (mapcar #'cdr changing)))) "them" "it")))))
+  (when changing
+    (insert "\n"
+            (roost--changing-text
+             changing "already changes" "already change"
+             (lambda (task)
+               (let ((key (roost--key task))
+                     (name (roost--field task 'name)))
+                 (make-text-button (copy-sequence name) nil
+                                   'follow-link t 'font-lock-face 'roost-field
+                                   'keymap roost--compose-task-map 'roost-draft-task key
+                                   'help-echo (format "mouse-1 or RET: open %s" name)
+                                   'action (lambda (_)
+                                             (roost-open-task
+                                              (or (gethash key roost--tasks)
+                                                  (user-error "%s is no longer listed" name))
+                                              t))))))
+            "\n")))
 
 (defun roost--compose-changed (&rest _)
   "Refresh the fields soon after each edit to the prompt.
@@ -5595,6 +5596,29 @@ worktrees, nor a merge under way: until then those come first."
     (concat (string-join shown ", ")
             (when (> more 0) (format " and %d more" more)))))
 
+(defun roost--changing-text (changing one many &optional name)
+  "One line naming the tasks in CHANGING, as `roost--changing' gives them.
+The first three by name, the rest counted, with their names and files on
+hover; then ONE, or MANY for more than one task, and their files.  NAME
+makes a task's name, a string, as a button; the task's name by default.
+One line, however many tasks: where every task changes a file, as a
+changelog, a line for each would bury the rest."
+  (let* ((named (mapcar (lambda (overlap)
+                          (if name (funcall name (car overlap)) (roost--field (car overlap) 'name)))
+                        (seq-take changing 3)))
+         (rest (nthcdr 3 changing))
+         (files (seq-uniq (apply #'append (mapcar #'cdr changing)))))
+    (concat (cond (rest (concat (string-join named ", ") " and "
+                                (propertize (format "%d more" (length rest))
+                                            'help-echo (mapconcat (lambda (overlap)
+                                                                    (format "%s changes %s"
+                                                                            (roost--field (car overlap) 'name)
+                                                                            (roost--file-list (cdr overlap))))
+                                                                  rest "\n"))))
+                  ((cdr named) (concat (string-join (butlast named) ", ") " and " (car (last named))))
+                  (t (car named)))
+            " " (if (cdr changing) many one) " " (roost--file-list files))))
+
 (defun roost--unmerged-files (task)
   "The paths of TASK's changed files, as its host last listed them.
 Of a task whose commits are merged, only those it changes since."
@@ -6305,25 +6329,41 @@ It is no reason to wait for you."
       (concat (capitalize (substring text 0 1)) (substring text 1) ".  ")
     ""))
 
-(defun roost--insert-since-looked (task)
-  "Insert, in TASK's panel, what changed since you last looked at it."
-  (pcase (and (roost--since-looked-due-p task) (roost--since-looked task))
-    (`(,count . ,at)
-     (cond ((not at)
-            (when (> count 0)
+(defun roost--insert-since-looked (task &optional named)
+  "Insert, in TASK's panel, what changed since you last looked at it.
+NAMED means the next step names \\[roost-review] already, so this
+doesn't again."
+  (let ((key (unless named
+               (substitute-command-keys "\\<roost-task-info-mode-map>\\[roost-review]"))))
+    (pcase (and (roost--since-looked-due-p task) (roost--since-looked task))
+      (`(,count . ,at)
+       (cond ((not at)
+              (when (> count 0)
+                (roost--insert-indented
+                 (concat "Not looked at in Magit yet" (when key (format ": %s opens it" key)))
+                 'roost-dim)))
+             ((= count 0)
+              (roost--insert-indented (format "Nothing changed since you looked, %s ago" (roost--elapsed at))
+                                      'roost-dim))
+             (t
               (roost--insert-indented
-               (substitute-command-keys
-                "Not looked at in Magit yet: \\<roost-task-info-mode-map>\\[roost-review] opens it")
-               'roost-dim)))
-           ((= count 0)
-            (roost--insert-indented (format "Nothing changed since you looked, %s ago" (roost--elapsed at))
-                                    'roost-dim))
-           (t
-            (roost--insert-indented
-             (substitute-command-keys
-              (format "%d file%s changed since you looked, %s ago: \\<roost-task-info-mode-map>\\[roost-review] shows them"
-                      count (if (= count 1) "" "s") (roost--elapsed at)))
-             'roost-dim))))))
+               (concat (format "%d file%s changed since you looked, %s ago"
+                               count (if (= count 1) "" "s") (roost--elapsed at))
+                       (when key (format ": %s shows them" key)))
+               'roost-dim)))))))
+
+(defun roost--names-key-p (text key)
+  "Whether TEXT, as a next step, tells you to press KEY.
+The task panel says a key once: a line that would name it again leaves
+it to the next step."
+  (and text
+       (let ((start 0) found)
+         (while (and (not found)
+                     (setq start (text-property-any start (length text) 'face 'roost-key text)))
+           (let ((end (or (next-single-property-change start 'face text) (length text))))
+             (setq found (equal (substring-no-properties text start end) key)
+                   start end)))
+         found)))
 
 ;;;; Shared display helpers
 
@@ -7697,6 +7737,7 @@ Windows showing the panel keep their scroll position, and the mark stays."
              (width (roost--task-info-width))
              (base (roost--field task 'baseRef))
              (integration (roost--field task 'integrationBranch))
+             (next (roost--next-step task))
              ;; With the agent's terminal on screen, the conversation is its.
              (beside (setq roost--beside-terminal (roost--panel-beside-terminal-p task))))
         (let ((name (propertize (roost--field task 'name) 'face 'roost-title))
@@ -7716,7 +7757,7 @@ Windows showing the panel keep their scroll position, and the mark stays."
                                     (or (roost--field task 'agent) "claude"))
                             'face 'roost-dim)
                 "\n")
-        (when-let* ((next (roost--next-step task)))
+        (when next
           (insert roost--gap next "\n"))
         (unless beside
           (when-let* ((request (roost--permission-request task)))
@@ -7746,7 +7787,7 @@ Windows showing the panel keep their scroll position, and the mark stays."
                     (spread (roost--spread task)))
           (roost--insert-indented spread))
         (roost--insert-changed-files task width)
-        (roost--insert-since-looked task)
+        (roost--insert-since-looked task (roost--names-key-p next "r"))
         (if-let* ((notes (roost--notes-summary task)))
             (roost--insert-indented notes)
           (when (and (fboundp 'magit-status)
@@ -7767,6 +7808,8 @@ Windows showing the panel keep their scroll position, and the mark stays."
                         integration)))
              'roost-status-permission)
           (cond
+           ;; Said once: the next step may say it already.
+           ((roost--names-key-p next "u"))
            ((consp (roost--conflicts task))
             (roost--insert-indented
              (substitute-command-keys
@@ -7780,14 +7823,8 @@ Windows showing the panel keep their scroll position, and the mark stays."
               (format "%s has moved on; \\<roost-task-info-mode-map>\\[roost-update] merges it into this task before you merge the task back."
                       integration))
              'roost-dim))))
-        (let ((overlaps (roost--overlaps task)))
-          (dolist (overlap (seq-take overlaps 3))
-            (roost--insert-indented
-             (format "%s also changes %s" (roost--field (car overlap) 'name) (roost--file-list (cdr overlap)))
-             'roost-dim))
-          (when (length> overlaps 3)
-            (roost--insert-indented (format "%d more tasks change them too" (- (length overlaps) 3))
-                                    'roost-dim)))
+        (when-let* ((overlaps (roost--overlaps task)))
+          (roost--insert-indented (roost--changing-text overlaps "also changes" "also change") 'roost-dim))
         (roost--insert-agent-work task)
         ;; How an agent ended, or why it waits, is the next step's, above.
         (pcase status
@@ -7805,7 +7842,9 @@ Windows showing the panel keep their scroll position, and the mark stays."
         ;; What a merge would rest on, the easiest to check first: the
         ;; agent's word comes last, as its own.
         (let ((evidence (roost--evidence-p task)))
-          (when evidence
+          ;; Without a pull request, no results stand beside the agent's
+          ;; reply, which the terminal shows rather than the panel.
+          (when (and evidence (or (roost--pr-state task) (not beside)))
             (roost--insert-checks task)
             (roost--insert-review-threads task width))
           (when-let* (((not beside))
@@ -8812,13 +8851,17 @@ have seen that waits for nothing."
          (least (string-width (roost--row-name task 1)))
          ;; A status you should look at shows even where the name then has
          ;; little room; the others, where its name keeps a dozen columns.
-         (fits (lambda (label)
-                 (>= room (+ (min (string-width (roost--row-name task)) 12) 1 (string-width label)))))
+         ;; What changed since you looked shows only beside the whole name.
+         (fits (lambda (label &optional whole)
+                 (>= room (+ (if whole
+                                 (string-width (roost--row-name task))
+                               (min (string-width (roost--row-name task)) 12))
+                             1 (string-width label)))))
          (label (cond ((not status) nil)
+                      (idle (seq-find (lambda (text) (funcall fits text t))
+                                      (list status (roost--since-looked-text task t))))
                       ((funcall fits status) status)
-                      (urgent (truncate-string-to-width status (max 1 (- room least 1)) nil nil "…"))
-                      ((and idle (funcall fits (roost--since-looked-text task t)))
-                       (roost--since-looked-text task t))))
+                      (urgent (truncate-string-to-width status (max 1 (- room least 1)) nil nil "…"))))
          (name (roost--row-name task (if label (max 1 (- room (string-width label) 1)) room)
                                 (if current 'roost-heading 'default))))
     (let ((row (concat " " name

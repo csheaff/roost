@@ -245,7 +245,10 @@
                  (should (string-match-p "^Changes\n1 file \\+1 −0\n" text))
                  (should (string-match-p "^  Committed\n  login\\.py  \\+1 −0\nIn a file's diff, ; writes a note for the agent$"
                                          text))
-                 (should-not (string-match-p "Actions" text))))
+                 (should-not (string-match-p "Actions" text))
+                 ;; No CI results, without a pull request, stand beside a
+                 ;; reply the terminal shows: not here.
+                 (should-not (string-match-p "Checks\\|No CI results" text))))
              ;; With the terminal gone from the screen, it has the conversation.
              (advice-add 'roost--render-task-info :before (lambda () (cl-incf draws)) '((name . qa-count)))
              (unwind-protect
@@ -5964,11 +5967,19 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
        (roost-task-info-mode)
        (setq roost--buffer-task-key (roost--key task))
        (roost--render-task-info)
-       (should (string-match-p "^Merging it into main would conflict in ledger.py, report.py: u merges main into this task, to resolve them here first\\.$"
-                               (buffer-string)))
+       ;; Said once, by the next step.
+       (should (string-match-p "^Conflicts with main in ledger.py, report.py: u merges main into it" (buffer-string)))
+       (should-not (string-match-p "would conflict" (buffer-string)))
        (should-not (string-match-p "has moved on" (buffer-string)))
        ;; Not since its agent last moved: since a branch did.
        (should (string-match-p "\\`fix auth   ● conflicts\n" (buffer-string))))
+     ;; While its agent works there is no next step, and the changes say it.
+     (with-temp-buffer
+       (roost-task-info-mode)
+       (setq roost--buffer-task-key (roost--key (roost--cache-task "dev" (roost-test--conflicted '(status . "running")))))
+       (roost--render-task-info)
+       (should (string-match-p "^Merging it into main would conflict in ledger.py, report.py: u merges main into this task, to resolve them here first\\.$"
+                               (buffer-string))))
      ;; What its agent last said comes first, and the next step is the same.
      (should (equal (funcall status '(seen)) "ready"))
      (should (string-prefix-p "Conflicts with main" (funcall step '(seen))))
@@ -6028,6 +6039,11 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
      ;; Where the sidebar has less room, fewer words; less still, none.
      (should (string-suffix-p " 3 files changed" (roost--sidebar-row task 30)))
      (should (equal (substring-no-properties (roost--sidebar-row task 20)) " fix auth"))
+     ;; Never at the cost of the name, which tells tasks apart.
+     (let ((long (roost--cache-task "dev" (roost-test--looked '(name . "ask-printf-two-n")
+                                                              '(id . "1111111111111111")))))
+       (should (equal (substring-no-properties (roost--sidebar-row long 30))
+                      " ask-printf-two-n")))
      (should (string-match-p "3 files changed since you looked · Done\\."
                              (roost--dashboard-row task (funcall layout task) 140)))
      ;; Not while its agent works, before you have seen what it said, or
@@ -6077,6 +6093,14 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
          (setq roost--buffer-task-key (roost--key task))
          (roost--render-task-info)
          (should (string-match-p (cadr case) (buffer-string))))))
+   ;; With uncommitted changes the next step names r, and it isn't said twice.
+   (let ((task (roost--cache-task "dev" (roost-test--looked '(dirty . t)))))
+     (with-temp-buffer
+       (roost-task-info-mode)
+       (setq roost--buffer-task-key (roost--key task))
+       (roost--render-task-info)
+       (should (string-match-p "^Review and commit its changes in Magit: r$" (buffer-string)))
+       (should (string-match-p "^3 files changed since you looked, [0-9]+d ago$" (buffer-string)))))
    ;; Not while its agent works on more.
    (let ((task (roost--cache-task "dev" (roost-test--looked '(status . "running")))))
      (with-temp-buffer
@@ -6084,6 +6108,15 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
        (setq roost--buffer-task-key (roost--key task))
        (roost--render-task-info)
        (should-not (string-match-p "since you looked" (buffer-string)))))))
+
+(ert-deftest roost-a-next-step-says-which-keys-it-names ()
+  (let ((key (lambda (key) (propertize key 'face 'roost-key))))
+    (should (roost--names-key-p (concat "Review and commit its changes in Magit: " (funcall key "r")) "r"))
+    (should (roost--names-key-p (concat (funcall key "m") " merges it, or " (funcall key "P") " opens") "P"))
+    ;; A letter in a word isn't a key, nor is another key.
+    (should-not (roost--names-key-p "Review and commit its changes in Magit: r" "r"))
+    (should-not (roost--names-key-p (concat (funcall key "u") " merges main into it") "r"))
+    (should-not (roost--names-key-p nil "r"))))
 
 (ert-deftest roost-merging-and-pushing-say-what-changed-since-you-looked ()
   (roost-test--isolated
@@ -6217,7 +6250,7 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
      (should (equal (mapcar (lambda (overlap) (cons (roost--field (car overlap) 'name) (cdr overlap)))
                             (roost--overlaps task))
                     '(("ledger totals" "report.py") ("merged one" "report.py"))))
-     (should (string-match-p "^ledger totals also changes report\\.py$" (funcall panel)))
+     (should (string-match-p "^ledger totals and merged one also change report\\.py$" (funcall panel)))
      ;; Its own work merged, only what it changes since.
      (should-not (roost--overlaps (roost--cache-task "dev" (roost-test--conflicted '(conflicts) '(landed . t)))))
      (should (equal (mapcar #'cdr (roost--overlaps
@@ -6230,8 +6263,13 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
      (dotimes (n 4)
        (funcall other (format "%016d" (+ 5 n)) (format "more %d" n) "/home/user/ledger"
                 `(files ,(funcall file "ledger.py"))))
-     (should (string-match-p "^ledger totals also changes report\\.py\nmerged one also changes report\\.py\nmore 0 also changes ledger\\.py\n3 more tasks change them too$"
-                             (funcall panel))))))
+     (let ((text (funcall panel)))
+       (should (string-match-p "^ledger totals, merged one, more 0 and 3 more also change report\\.py, ledger\\.py$"
+                               text))
+       ;; The rest by name on hover.
+       (should (string-match "3 more" text))
+       (should (equal (get-text-property (match-beginning 0) 'help-echo text)
+                      "more 1 changes ledger.py\nmore 2 changes ledger.py\nmore 3 changes ledger.py"))))))
 
 (ert-deftest roost-the-draft-names-tasks-changing-files-it-quotes ()
   (roost-test--isolated
@@ -6275,7 +6313,7 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
                (funcall other "4444444444444444" "report chart" "/home/user/ledger"
                         `(files ,(funcall file "report.py")))
                (roost--redraw)
-               (should (string-match-p "^ledger totals already changes report\\.py\nreport chart already changes report\\.py\n─"
+               (should (string-match-p "^ledger totals and report chart already change report\\.py\n─"
                                        (buffer-string)))
                ;; Point on a name stays there as the draft is drawn again,
                ;; and on that task's, as others come and go above it.
@@ -6356,11 +6394,11 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
              (should-not (string-match-p "already changes"
                                          (funcall draft "/ssh:dev:/home/user/ledger/"
                                                   "\n\n" (roost--quoting "notes.py"))))
-             ;; Past three, how many more.
+             ;; Past three, how many more, in the same line.
              (dotimes (n 4)
                (funcall other (format "%016d" (+ 9 n)) (format "also %d" n) "/home/user/ledger"
                         `(files ,(funcall file "report.py"))))
-             (should (string-match-p "^2 more tasks change it too\n─"
+             (should (string-match-p " and 2 more already change report\\.py\n─"
                                      (funcall draft "/ssh:dev:/home/user/ledger/"
                                               "\n\n" (roost--quoting "report.py"))))
              (dotimes (n 4)
@@ -6368,10 +6406,7 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
              (dotimes (n 4)
                (funcall other (format "%016d" (+ 5 n)) (format "more %d" n) "/home/user/ledger"
                         `(files ,(funcall file "README.md"))))
-             (should (string-match-p (concat "^ledger totals already changes README\\.md, report\\.py\n"
-                                             "more 0 already changes README\\.md\n"
-                                             "more 1 already changes README\\.md\n"
-                                             "2 more tasks change them too\n─")
+             (should (string-match-p "^ledger totals, more 0, more 1 and 2 more already change README\\.md, report\\.py\n─"
                                      (funcall draft "/ssh:dev:/home/user/ledger/"
                                               "\n\n" (roost--quoting "report.py") "\n"
                                               (roost--quoting "README.md")))))

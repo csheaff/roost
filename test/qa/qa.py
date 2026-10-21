@@ -1065,6 +1065,15 @@ def drafts(qa, repo):
         ("and not the URL", lambda s: "example.com" not in qa.window(s, "roost-compose-mode")["text"])])
 
 
+def names_changing(text, name, how, path):
+    """Whether TEXT has the line naming the tasks that change PATH, HOW
+    ("also" or "already"), and NAME among them: one line, whatever their
+    number, which for more than one says "change"."""
+    return any(re.search(r"\b%s\b" % re.escape(name), line)
+               and re.search(r" %s changes? .*\b%s\b" % (how, re.escape(path)), line)
+               for line in text.splitlines())
+
+
 @journey("A draft about a file another task changes")
 def overlap(qa, repo):
     """Code quoted in a new task's draft names the tasks that already
@@ -1082,7 +1091,7 @@ def overlap(qa, repo):
     qa.type("Say what these lines do")
     qa.step("The draft names the task that changes the file", expect=[
         ("the code, quoted with its file", lambda s: "Say what these lines do\n\nnotes.py:1-3" in draft(s)),
-        ("and the task", lambda s: "%s already changes notes.py" % name in draft(s))])
+        ("and the task", lambda s: names_changing(draft(s), name, "already", "notes.py"))])
     qa.click(name)
     qa.wait(name + "'s terminal", shows(qa, name))
     qa.step("A click on its name opens it")
@@ -1090,7 +1099,7 @@ def overlap(qa, repo):
     qa.wait("the draft", lambda s: (qa.window(s, "roost-compose-mode") or {}).get("selected"))
     qa.step("The draft is kept", expect=[
         ("what you wrote", lambda s: "Say what these lines do" in draft(s)),
-        ("and the task it names", lambda s: "%s already changes notes.py" % name in draft(s))])
+        ("and the task it names", lambda s: names_changing(draft(s), name, "already", "notes.py"))])
     before = {t["name"] for t in qa.screen()["tasks"]}
     qa.keys("C-c C-c")
     screen = qa.wait("the new task", lambda s: {t["name"] for t in s["tasks"]} - before)
@@ -1477,9 +1486,9 @@ def conflicts(qa, repo):
     second = new_task(qa, "ask printf 'two\\n' > SHARED.md && git add SHARED.md && git commit -qm 'Share two'")
     answer_yes(qa, second)
     qa.wait("its commit", lambda s: "Committed" in panel_text(qa, s))
-    qa.wait("the other task's files", lambda s: "also changes" in panel_text(qa, s))
+    qa.wait("the other task's files", lambda s: names_changing(panel_text(qa, s), first, "also", "SHARED.md"))
     qa.step("Two tasks change one file", expect=[
-        ("the panel names the other task", lambda s: "%s also changes SHARED.md" % first in panel_text(qa, s))])
+        ("the panel names the other task", lambda s: names_changing(panel_text(qa, s), first, "also", "SHARED.md"))])
     open_task(qa, first)
     qa.keys("C-c r m")
     qa.wait("the question", lambda s: s["prompt"])

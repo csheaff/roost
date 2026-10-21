@@ -167,8 +167,10 @@ starts the agent in tmux, and opens its terminal.
 
 A draft that quotes a file, as one from code, a file, a diagnostic, an error
 or a match does, names the project's tasks that already change it, below its
-fields: `ledger-totals already changes report.py`. Two tasks that change one
-file can conflict when the second merges. Starting this one anyway, waiting,
+fields: `ledger-totals already changes report.py`, in one line however many
+there are: three by name, then how many more, named when you hover over
+the count. Two tasks that change one file can conflict when the second
+merges. Starting this one anyway, waiting,
 or giving the work to that task instead is up to you: a click on its name
 opens it, and `C-c C-c` starts the new one as usual. Roost goes by the
 changed files the task panel lists, measured again after each agent's edits
@@ -204,7 +206,8 @@ it from the start. Each task there is its name and, at the right, its status:
 in its colour when there is something to look at, such as `permission` or a
 `ready` you haven't seen, dim when the agent is only working or stopped, and
 none once you've seen an agent that waits for nothing; then, dim, what changed
-since you last looked at it, if anything (below). A click opens the task,
+since you last looked at it, if anything (below), where the whole name fits
+beside it. A click opens the task,
 quitting any question you left open in the minibuffer, which would hold it back,
 and closing a menu left open. `I` docks a panel at the right of an open task's terminal,
 kept current as the agent works: what to do next, the task's prompt, the
@@ -255,8 +258,9 @@ request has it; for a thread on a deleted line, one the agent has changed
 since, or one on the whole file, it shows the file's changes. The agent's
 latest reply comes last, marked as its own account: `No CI results` beside a
 reply that says the tests pass means only the agent says so, perhaps from a
-run in its terminal. Roost judges neither, and gives no score or verdict on
-whether to merge.
+run in its terminal. Beside the terminal, where the reply is the terminal's,
+a task without a pull request leaves `Checks` out. Roost judges neither, and
+gives no score or verdict on whether to merge.
 
 **Review in Magit.** `r` opens Magit on the task's worktree, through TRAMP for
 remote tasks. Stage, edit and commit as usual. The status names the task,
@@ -296,9 +300,9 @@ as waiting: `n` visits it. Roost checks whenever the task's branch or the
 integration branch moves, with `git merge-tree` on the task's host (Git
 2.38 or newer; older Git doesn't check). For a task with an open pull
 request, GitHub says whether it conflicts instead. The panel also names
-other tasks of the project that change the same files, committed or not
-("ledger totals also changes report.py"), which may conflict once one
-of them merges. `u` merges the integration branch into the task's
+other tasks of the project that change the same files, committed or not,
+in one line ("ledger totals and report chart also change report.py"),
+which may conflict once one of them merges. `u` merges the integration branch into the task's
 own worktree. If that conflicts, Roost offers to have the task's agent resolve
 it, run the tests and commit. Then `m` merges the task into its integration
 branch and removes its worktree, branch and window. For work you don't
