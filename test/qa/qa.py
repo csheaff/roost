@@ -2193,6 +2193,8 @@ def unreachable(qa, repo):
         qa.step("The sidebar names it")
         qa.keys("C-c r S")
         qa.wait("the dashboard", lambda s: (qa.window(s, "roost-dashboard-mode") or {}).get("selected"))
+        # Hosts come first: from wherever an earlier journey left point.
+        qa.keys("M-<")
         qa.step("So does the dashboard", expect=[
             ("with why", lambda s: "is unreachable" in qa.window(s, "roost-dashboard-mode")["text"])])
     finally:

@@ -5749,6 +5749,9 @@ the workspace you were in; without, the frame's windows as they were."
       (user-error "No tasks are waiting for you"))
      ((plist-get run :offered)
       (setq roost--next-run nil)
+      ;; Quitting a question left open gives back the windows it found,
+      ;; which would undo the way back: so first.
+      (roost--quit-questions-left-open (lambda () (roost--go-back run)))
       (roost--go-back run))
      (t
       (setq roost--next-run (plist-put run :offered t))

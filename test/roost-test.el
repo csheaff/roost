@@ -3569,6 +3569,29 @@ of its own, which shows in the selected window of its workspace."
        (dolist (name '("ledger" "report"))
          (kill-buffer (format " *terminal %s*" name)))))))
 
+(ert-deftest roost-next-goes-back-once-a-question-left-open-is-quit ()
+  ;; Quitting it after gave back its own windows, undoing the way back.
+  (roost-test--isolated
+   (let* ((task (roost--cache-task "a" (roost-test--task nil "running")))
+          (roost--next-run (list :opened (list (roost--key task)) :offered t))
+          (depth 1) later went)
+     (cl-letf (((symbol-function 'active-minibuffer-window) (lambda () (> depth 0)))
+               ((symbol-function 'minibuffer-depth) (lambda () depth))
+               ((symbol-function 'recursion-depth) (lambda () depth))
+               ((symbol-function 'minibufferp) #'ignore)
+               ((symbol-function 'minibuffer-prompt) (lambda () "M-x "))
+               ((symbol-function 'minibuffer-quit-recursive-edit)
+                (lambda (_levels) (setq depth 0) (throw 'quit nil)))
+               ((symbol-function 'run-at-time) (lambda (_time _repeat function) (setq later function)))
+               ((symbol-function 'roost--task-here) (lambda () task))
+               ((symbol-function 'roost--go-back) (lambda (run) (push run went)))
+               ((symbol-function 'message) #'ignore))
+       (catch 'quit (roost-next-waiting))
+       (should (zerop depth))
+       (should-not went)
+       (funcall later)
+       (should (equal (length went) 1))))))
+
 (ert-deftest roost-next-goes-back-to-the-tab-you-were-in ()
   ;; With workspaces, each task opens in its own: back is the one you
   ;; were in, as you left it.
