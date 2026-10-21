@@ -929,10 +929,18 @@ def since_looked(qa, repo):
         qa.notes.add("No since-you-looked journey: Magit over TRAMP's ssh method is too slow on a host "
                      "this far away")
         return
-    # A name of its own: a journey after looks for its task by name.
-    name = new_task(qa, "ask echo Milk > LIST.md")
-    # Its name gives way in the sidebar to what changed.
-    row = lambda s: sidebar_row(qa, s, name[:11])
+    # A name of its own, as a journey after looks for its task by name,
+    # short enough that what changed fits beside it in the sidebar.
+    name = "milk-list"
+    qa.keys("C-c r c")
+    qa.wait("the draft", lambda s: (qa.window(s, "roost-compose-mode") or {}).get("selected"))
+    qa.keys("C-c C-n")
+    qa.wait("the question", lambda s: s["prompt"])
+    qa.type(name + "\r")
+    qa.type("ask echo Milk > LIST.md")
+    qa.keys("C-c C-c")
+    qa.wait("the task", lambda s: qa.task(s, name))
+    row = lambda s: sidebar_row(qa, s, name)
     answer_yes(qa, name)
     qa.wait("the mark", lambda s: row(s).endswith("not looked at"))
     qa.step("Not looked at yet", expect=[
@@ -2326,8 +2334,8 @@ def pull_request(qa, repo):
     done waits on you, and its status says why: to merge, ci failed or
     comments. While GitHub is still at work, the panel says on what. The
     panel names the checks and lists the open review threads, a click on
-    one visiting its line, and without a pull request, says there are no
-    CI results."""
+    one visiting its line; without a pull request, beside the terminal,
+    it leaves checks out."""
     origin = qa.work / "origin.git"
     if not origin.exists():
         qa.git(qa.work, "init", "-q", "--bare", "-b", "main", str(origin))
@@ -2339,8 +2347,8 @@ def pull_request(qa, repo):
     settled = time.monotonic() + 31
     qa.wait("its commit", lambda s: "Committed" in panel_text(qa, s))
     qa.step("No pull request yet", expect=[
-        ("the panel says there are no CI results",
-         lambda s: "Checks\n  No CI results: no pull request" in panel_text(qa, s))])
+        ("beside its terminal, the panel leaves checks out, for the reply the terminal shows",
+         lambda s: "Committed" in panel_text(qa, s) and "No CI results" not in panel_text(qa, s))])
     qa.keys("C-c r P")
     qa.wait("the pull request's draft", lambda s: (qa.window(s, "roost-pr-mode") or {}).get("selected"))
     qa.keys("C-c C-c")
