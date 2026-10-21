@@ -277,9 +277,12 @@ What each task's row, panel and notification say is in
 
 ## What a task says
 
-The sidebar and the dashboard give each task one word, or none, after its
-name. A word in its colour waits for you: `n` goes there, the mode line
-counts it, and a notification says so. A dim one is only for knowing.
+The sidebar and the dashboard give each task a word after its name. The
+table's second column says when a task waits for you: those are the tasks
+`n` visits, the mode line counts and a notification announces. In the
+sidebar, their word is in its colour, and an agent you've seen that waits
+for nothing has none; the dashboard shows every task's word, and counts
+them at its top.
 
 | Word | Waits for you | What it means |
 | --- | --- | --- |
@@ -288,7 +291,8 @@ counts it, and a notification says so. A dim one is only for knowing.
 | `ready` | Until you've seen its reply | Its turn is over and it waits for your next prompt. Not "reviewed" or "done" |
 | `interrupted` | Until you've seen it | You stopped its turn, with Esc or by declining a request |
 | `error` | Until you've seen it | A turn ended on an API error, such as a usage limit; `RET` opens it to try again |
-| `failed`, `exited`, `crashed` | Until you've seen it | The agent's CLI failed, it exited, or its tmux pane went; `RET` shows its last output |
+| `failed`, `exited` | Until you've seen it | The agent's CLI failed, or it exited; `RET` shows its last output |
+| `crashed` | Until you've seen it | Its tmux pane went, as when the tmux server restarted; `RET` or `s` resumes its conversation |
 | `conflicts` | Once you've seen its reply | Merging its commits into the branch it merges into would conflict; `u` brings that branch in |
 | `to merge` | Once you've seen its reply | Its pull request passed its checks and review, and GitHub finds no conflicts; `P` opens it |
 | `ci failed` | Once you've seen its reply | A check of its pull request failed |
