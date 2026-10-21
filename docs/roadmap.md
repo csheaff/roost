@@ -68,17 +68,6 @@ Small, and probably worth the most.
   gains tracked how much got done
   ([ParallelPilot](https://arxiv.org/html/2609.33113v1)). It's the draft's
   side of [other tasks' changes in your file buffers](#worth-trying).
-- **`n` says where it went and why.** `n` opens the next task waiting,
-  permission requests first, without saying why it chose that one, so you
-  arrive somewhere you didn't pick and catch up. The echo area could say
-  "permission · ledger: Asks to run make test; 2 more waiting". When none
-  is left it says so already; it could also offer the way back to where
-  you pressed the first `n`. In a rescue-robot simulation, operators sent
-  to a robot they hadn't chosen took longer over each
-  ([Crandall et al. 2011](https://faculty.cs.byu.edu/~crandall/papers/Crandall_tsma2011.pdf)),
-  and a clear sign that interruptions were over raised how often people
-  went back to the task they had set aside from 52% to 90%
-  ([Dodhia and Dismukes 2009](https://interruptions.net/literature/Dodhia-ApplCognitPsychol09.pdf)).
 - **`.worktreeinclude`.** Copy the ignored files it lists, such as `.env`,
   into new worktrees, as Claude Code and Conductor do. Today that takes
   `roost-setup-command`.
@@ -356,9 +345,8 @@ Larger, or undecided.
   (`to merge`, `ci failed`, `comments`), whether or not the agent watches;
   fixing what it finds is the agent's.
 - **`n` picking by a reckoning of its own.** `n` keeps a plain order,
-  permission requests first, and would say where it went and why
-  ([above](#most-likely-first)) rather than choose more cleverly out of
-  sight. In a rescue-robot simulation, a key that chose the next robot for
+  permission requests first, and says where it went and why rather than
+  choose more cleverly out of sight. In a rescue-robot simulation, a key that chose the next robot for
   the operator added time to each visit, as operators caught up with a
   robot they hadn't picked, raised no score, and was the mode two thirds
   of them liked least

@@ -43,6 +43,7 @@
          (roost-notes-file (expand-file-name "notes.json" (nth 1 ,scratch)))
          (roost--notes nil) (roost--notes-loaded t)
          (roost--requests nil) (roost-notify nil) (roost--current-task nil) (roost--next-unblocked nil)
+         (roost--next-run nil)
          (roost--perspectives (make-hash-table :test 'equal)))
      (set-frame-parameter nil 'roost-task nil)
      ;; Seeing an agent is recorded on its host too, and so is what of its
@@ -3016,8 +3017,111 @@ Read from the layout transient keeps, whose form varies by version."
        (should (window-live-p opened-in))
        (should-not (window-parameter opened-in 'window-side))))))
 
+(ert-deftest roost-another-tasks-draft-steps-aside-and-comes-back ()
+  ;; A prompt half written to one task stayed below the next task's
+  ;; terminal, beside its panel, once you opened that task.
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let* ((roost-workspace nil)
+            (a (roost--cache-task "dev" (roost-test--task "1111111111111111")))
+            (b (roost--cache-task "dev" (roost-test--task "2222222222222222")))
+            (code (generate-new-buffer "code.py"))
+            (draft (generate-new-buffer "*roost send: a*")))
+       (unwind-protect
+           (progn
+             (with-current-buffer draft
+               (roost-send-mode)
+               (setq roost--send-task a)
+               (insert "Half a thought"))
+             (switch-to-buffer code)
+             (set-frame-parameter nil 'roost-task (roost--key a))
+             (let ((top (selected-window)))
+               (set-window-buffer (split-window) draft)
+               ;; A's own: it stays.
+               (roost--activate-workspace a)
+               (should (get-buffer-window draft))
+               ;; B takes the frame: A's draft goes, kept as written.
+               (roost--activate-workspace b)
+               (should-not (get-buffer-window draft))
+               (should (equal (with-current-buffer draft (buffer-string)) "Half a thought"))
+               (should (equal (frame-parameter nil 'roost-task) (roost--key b)))
+               ;; Not for B, but for A, it comes back, the window you were
+               ;; in still selected.
+               (roost--bring-back-drafts b)
+               (should-not (get-buffer-window draft))
+               (roost--activate-workspace a)
+               (roost--bring-back-drafts a)
+               (should (get-buffer-window draft))
+               (should (eq (selected-window) top))
+               ;; Once only: closed again, it stays closed.
+               (delete-window (get-buffer-window draft))
+               (roost--bring-back-drafts a)
+               (should-not (get-buffer-window draft))
+               ;; A view of A, with no terminal, as once stopped, brings
+               ;; it back too.
+               (set-window-buffer (split-window) draft)
+               (roost--activate-workspace b)
+               (should-not (get-buffer-window draft))
+               (roost--take-frame a)
+               (should (get-buffer-window draft))
+               (delete-window (get-buffer-window draft))
+               ;; In the frame's only window, what was there before shows.
+               (switch-to-buffer draft)
+               (roost--activate-workspace b)
+               (should (eq (window-buffer) code))
+               ;; With workspaces, the task's workspace keeps it.
+               (switch-to-buffer draft)
+               (set-frame-parameter nil 'roost-task (roost--key a))
+               (cl-letf (((symbol-function 'roost--workspace-backend) (lambda () 'perspective))
+                         ((symbol-function 'persp-switch) #'ignore)
+                         ((symbol-function 'roost--rename-perspective) #'ignore))
+                 (roost--activate-workspace b))
+               (should (eq (window-buffer) draft))))
+         (mapc #'kill-buffer (list code draft)))))))
 ;; A frame shows one task: X's terminal beside it, ID 1111..., and Y,
 ;; ID 2222..., the task asked about.
+(ert-deftest roost-a-draft-comes-back-in-each-frame-it-was-taken-off ()
+  ;; A draft shows in any frame.  Taken off a second frame, it was taken
+  ;; off the first no more: opening its task there left it hidden.
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let* ((roost-workspace nil)
+            (a (roost--cache-task "dev" (roost-test--task "1111111111111111")))
+            (b (roost--cache-task "dev" (roost-test--task "2222222222222222")))
+            (code (generate-new-buffer "code.py"))
+            (draft (generate-new-buffer "*roost send: a*"))
+            (frame (selected-frame))
+            ;; Batch Emacs has one frame: what Roost takes for the
+            ;; selected frame stands in for a second.
+            (second (make-symbol "second-frame"))
+            (in-second (lambda (function)
+                         (cl-letf (((symbol-function 'selected-frame) (lambda () second))
+                                   ((symbol-function 'frame-live-p) (lambda (f) (or (eq f second) (eq f frame)))))
+                           (dlet ((native-comp-enable-subr-trampolines nil))
+                             (funcall function))))))
+       (unwind-protect
+           (progn
+             (with-current-buffer draft
+               (roost-send-mode)
+               (setq roost--send-task a))
+             (switch-to-buffer code)
+             (set-window-buffer (split-window) draft)
+             ;; B takes this frame, then the second.
+             (roost--set-aside-drafts b)
+             (set-window-buffer (split-window) draft)
+             (funcall in-second (lambda () (roost--set-aside-drafts b)))
+             (should-not (get-buffer-window draft))
+             ;; A, opened here, brings it back here.
+             (roost--bring-back-drafts a)
+             (should (get-buffer-window draft))
+             ;; And there, once.
+             (should (equal (buffer-local-value 'roost--set-aside draft) (list second)))
+             (funcall in-second (lambda () (roost--bring-back-drafts a)))
+             (should-not (buffer-local-value 'roost--set-aside draft)))
+         (mapc #'kill-buffer (list code draft)))))))
+
 (defmacro roost-test--with-another-task-shown (&rest body)
   "Run BODY with the frame X's, showing its terminal over a code buffer.
 `x', `y', `terminal' and `code' are bound, and `events' collects what
@@ -3461,6 +3565,235 @@ the stubbed requests, `roost--display-task' and `dired' were asked."
        (roost--cache-task "b" (roost-test--task nil "running"))
        (roost-next-waiting) (should (equal (car opened) "a"))
        (roost-next-waiting) (should (equal (car opened) "c"))))))
+
+(defmacro roost-test--opening-in-place (opened &rest body)
+  "Run BODY with tasks opening at once, in the selected window, recorded in OPENED.
+Each host replies with the task as cached, and its terminal is a buffer
+of its own, which shows in the selected window of its workspace."
+  (declare (indent 1))
+  `(cl-letf (((symbol-function 'roost--request)
+              (lambda (host _action params success &optional _failure)
+                (funcall success (copy-tree (gethash (list host (alist-get 'id params)) roost--tasks)))))
+             ((symbol-function 'roost--display-task)
+              (lambda (task)
+                (push (roost--field task 'name) ,opened)
+                (roost--activate-workspace task)
+                (switch-to-buffer (get-buffer-create (format " *terminal %s*" (roost--field task 'name))))
+                (roost--mark-seen task))))
+     ,@body))
+
+(ert-deftest roost-next-says-where-it-went-and-why ()
+  (roost-test--isolated
+   (roost--cache-task "a" (append '((name . "ledger") (request . "Asks to run make test"))
+                                  (roost-test--task nil "permission")))
+   (roost--cache-task "b" (append '((name . "report") (lastMessage . "## Done\n\nFixed the **totals**.\nMore."))
+                                  (roost-test--task)))
+   (roost--cache-task "c" (append '((name . "notes") (status . "crashed") (live)
+                                    (error . "The agent exited with status 1"))
+                                  (roost-test--task)))
+   (let (opened messages)
+     (cl-letf (((symbol-function 'message)
+                (lambda (format &rest args) (when format (push (apply #'format format args) messages)))))
+       (roost-test--opening-in-place opened
+         (save-window-excursion
+           ;; Permission requests first, saying what it asks.
+           (roost-next-waiting)
+           (should (equal (car opened) "ledger"))
+           (should (equal (car messages) "permission · ledger: Asks to run make test; 2 more waiting"))
+           ;; Answered, in its terminal.
+           (roost--cache-task "a" (append '((name . "ledger")) (roost-test--task nil "running")))
+           ;; The first line of a reply, without its heading or markers.
+           (roost-next-waiting)
+           (should (equal (car messages) "ready · report: Fixed the totals.; 1 more waiting"))
+           ;; An agent no longer running: how it ended, and how to resume it,
+           ;; in place of what an open says of it.
+           (roost-next-waiting)
+           (should (equal (car messages)
+                          "crashed · notes: The agent exited with status 1; s resumes it; no more waiting"))
+           (should (eq (get-text-property 0 'face (car messages)) 'roost-status-failed))
+           ;; In a narrow frame, why it waits is cut short, its status and
+           ;; name kept, and then the rest from the end.
+           (cl-letf (((symbol-function 'window-max-chars-per-line) (lambda (&rest _) 50)))
+             (let ((task (roost--cache-task "a" (append '((name . "ledger") (request . "Asks to run make test"))
+                                                        (roost-test--task nil "permission")))))
+               (should (equal (roost--next-message task) "permission · ledger: Asks to run…; no more waiting"))
+               (setf (alist-get 'name task) "a rather long name for the task")
+               (let ((said (roost--next-message task)))
+                 (should (string-prefix-p "permission · a rather long name for the task;" said))
+                 (should (string-suffix-p "…" said))
+                 (should (<= (string-width said) 50)))))))))))
+
+(ert-deftest roost-next-offers-the-way-back-once-none-waits ()
+  ;; Back where you pressed the first `n', once you have seen to them all.
+  (roost-test--isolated
+   (roost--cache-task "a" (append '((name . "ledger")) (roost-test--task nil "permission")))
+   (roost--cache-task "b" (append '((name . "report")) (roost-test--task)))
+   (let ((where (get-buffer-create " *where you were*"))
+         opened messages)
+     (cl-letf (((symbol-function 'message)
+                (lambda (format &rest args) (when format (push (apply #'format format args) messages)))))
+       (roost-test--opening-in-place opened
+         (save-window-excursion
+           (delete-other-windows)
+           (switch-to-buffer where)
+           (split-window)
+           (roost-next-waiting)
+           (should (equal (buffer-name) " *terminal ledger*"))
+           (should (= (length (window-list)) 2))
+           ;; Answered, in its terminal.
+           (roost--cache-task "a" (append '((name . "ledger")) (roost-test--task nil "running")))
+           (roost-next-waiting)
+           (should (equal (buffer-name) " *terminal report*"))
+           (roost-next-waiting)
+           (should (equal (car messages) "No tasks are waiting for you; n again goes back to  *where you were*"))
+           (should (equal (buffer-name) " *terminal report*"))
+           ;; A task that comes to wait meanwhile goes first.
+           (roost--cache-task "a" (append '((name . "ledger") (updatedAt . "2026-10-03T20:05:00+00:00"))
+                                          (roost-test--task nil "ready")))
+           (roost-next-waiting)
+           (should (equal (buffer-name) " *terminal ledger*"))
+           (roost-next-waiting)
+           (should (string-prefix-p "No tasks are waiting for you" (car messages)))
+           (delete-other-windows)
+           (roost-next-waiting)
+           (should (equal (car messages) "Back to  *where you were*"))
+           (should (eq (window-buffer (selected-window)) where))
+           (should (= (length (window-list)) 2))
+           ;; The task opened before the run, as the frame had it.
+           (should-not roost--current-task)
+           (should-not (frame-parameter nil 'roost-task))
+           (should-not roost--next-run)
+           (should-error (roost-next-waiting) :type 'user-error)
+           ;; Nor once you have gone elsewhere yourself: a run starts again
+           ;; at the next task waiting.
+           (roost--cache-task "b" (append '((name . "report") (updatedAt . "2026-10-03T20:05:00+00:00"))
+                                          (roost-test--task)))
+           (roost-next-waiting)
+           (switch-to-buffer where)
+           (with-current-buffer where (setq-local buffer-file-name "/tmp/where"))
+           (should-error (roost-next-waiting) :type 'user-error)))
+       (kill-buffer where)
+       (dolist (name '("ledger" "report"))
+         (kill-buffer (format " *terminal %s*" name)))))))
+
+(ert-deftest roost-next-goes-back-once-a-question-left-open-is-quit ()
+  ;; Quitting it after gave back its own windows, undoing the way back.
+  (roost-test--isolated
+   (let* ((task (roost--cache-task "a" (roost-test--task nil "running")))
+          (roost--next-run (list :opened (list (roost--key task)) :offered t))
+          (depth 1) later went)
+     (cl-letf (((symbol-function 'active-minibuffer-window) (lambda () (> depth 0)))
+               ((symbol-function 'minibuffer-depth) (lambda () depth))
+               ((symbol-function 'recursion-depth) (lambda () depth))
+               ((symbol-function 'minibufferp) #'ignore)
+               ((symbol-function 'minibuffer-prompt) (lambda () "M-x "))
+               ((symbol-function 'minibuffer-quit-recursive-edit)
+                (lambda (_levels) (setq depth 0) (throw 'quit nil)))
+               ((symbol-function 'run-at-time) (lambda (_time _repeat function) (setq later function)))
+               ((symbol-function 'roost--task-here) (lambda () task))
+               ((symbol-function 'roost--go-back) (lambda (run) (push run went)))
+               ((symbol-function 'message) #'ignore))
+       (catch 'quit (roost-next-waiting))
+       (should (zerop depth))
+       (should-not went)
+       (funcall later)
+       (should (equal (length went) 1))))))
+
+(ert-deftest roost-next-going-back-outlasts-a-task-still-opening ()
+  ;; A host's late reply asked to resume a task you had left by going back.
+  (roost-test--isolated
+   (save-window-excursion
+     (let* ((task (roost--cache-task "a" (roost-test--task nil "running")))
+            (roost--next-run (list :frame (selected-frame) :windows (current-window-configuration)
+                                   :opened (list (roost--key task)) :offered t))
+            failure later)
+       (cl-letf (((symbol-function 'roost--request)
+                  (lambda (_host _action _params _success &optional on-failure) (setq failure on-failure)))
+                 ((symbol-function 'run-at-time)
+                  (lambda (_time _repeat function &rest args) (setq later (cons function args))))
+                 ((symbol-function 'cancel-timer) #'ignore)
+                 ((symbol-function 'roost--task-here) (lambda () task))
+                 ((symbol-function 'message) #'ignore))
+         (roost-open-task (roost-test--task "1111111111111111"))
+         (roost-next-waiting)
+         (should-not roost--next-run)
+         (funcall failure "The agent's tmux window is gone")
+         ;; Asked from a timer, which finds you have moved on: no question.
+         (apply (car later) (cdr later)))))))
+
+(ert-deftest roost-next-goes-back-to-the-tab-you-were-in ()
+  ;; With workspaces, each task opens in its own: back is the one you
+  ;; were in, as you left it.
+  (roost-test--isolated
+   (save-window-excursion
+     (let ((roost-workspace 'tab-bar)
+           (original-tab-bar-mode tab-bar-mode)
+           opened)
+       (roost--cache-task "a" (append '((name . "ledger")) (roost-test--task nil "permission")))
+       (cl-letf (((symbol-function 'message) #'ignore))
+         (roost-test--opening-in-place opened
+           (unwind-protect
+               (progn
+                 (tab-bar-mode 1)
+                 (tab-bar-rename-tab "mine")
+                 (switch-to-buffer (get-buffer-create " *mine*"))
+                 (split-window)
+                 (roost-next-waiting)
+                 (should (equal (roost--tabs) '("mine" "a/ledger")))
+                 (should (equal (roost--current-workspace) "a/ledger"))
+                 (roost--cache-task "a" (append '((name . "ledger")) (roost-test--task nil "running")))
+                 (roost-next-waiting)
+                 (roost-next-waiting)
+                 (should (equal (roost--current-workspace) "mine"))
+                 (should (eq (window-buffer (selected-window)) (get-buffer " *mine*")))
+                 (should (= (length (window-list)) 2)))
+             (while (cdr (roost--tabs)) (tab-bar-close-tab))
+             (tab-bar-rename-tab nil)
+             (unless original-tab-bar-mode (tab-bar-mode -1))
+             (kill-buffer " *mine*")
+             (kill-buffer " *terminal ledger*"))))))))
+
+(ert-deftest roost-next-goes-back-to-the-perspective-you-were-in ()
+  ;; By its task, which may have been renamed meanwhile, or says it is gone.
+  (roost-test--isolated
+   (save-window-excursion
+     (let* ((roost-workspace 'perspective) (persp-mode t)
+            (home (roost--cache-task "h" (append '((name . "home")) (roost-test--task))))
+            (perspectives (list (roost--perspective-name home)))
+            (current (car perspectives))
+            opened switched)
+       (roost--mark-seen home)
+       (roost--cache-task "a" (append '((name . "ledger")) (roost-test--task nil "permission")))
+       (cl-letf (((symbol-function 'persp-current-name) (lambda () current))
+                 ((symbol-function 'persp-names) (lambda () perspectives))
+                 ((symbol-function 'persp-switch)
+                  (lambda (name) (cl-pushnew name perspectives :test #'equal)
+                    (push name switched) (setq current name)))
+                 ((symbol-function 'persp-rename)
+                  (lambda (name) (setq perspectives (cons name (delete current perspectives))
+                                       current name)))
+                 ((symbol-function 'message) #'ignore))
+         (roost-test--opening-in-place opened
+           (unwind-protect
+               (progn
+                 (roost-next-waiting)
+                 (should (equal current (roost--perspective-name
+                                         (gethash '("a" "0123456789abcdef") roost--tasks))))
+                 ;; Its perspective takes the new name once it is current.
+                 (roost--cache-task "h" (append '((name . "home base")) (roost-test--task)))
+                 (let ((was current))
+                   (setq current (roost--perspective-name home))
+                   (roost--rename-perspective (gethash '("h" "0123456789abcdef") roost--tasks))
+                   (setq current was))
+                 (roost--cache-task "a" (append '((name . "ledger")) (roost-test--task nil "running")))
+                 (roost-next-waiting)
+                 (roost-next-waiting)
+                 (should (equal current "roost:h:home base:012345"))
+                 ;; Gone, it says so.
+                 (setq current (roost--perspective-name (gethash '("a" "0123456789abcdef") roost--tasks)))
+                 (let ((roost--next-run (list :frame (selected-frame) :workspace "gone" :opened nil :offered t)))
+                   (should-error (roost--go-back roost--next-run) :type 'user-error)))
+             (kill-buffer " *terminal ledger*"))))))))
 
 (ert-deftest roost-background-refresh-never-steals-focus ()
   (roost-test--isolated

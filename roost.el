@@ -444,6 +444,15 @@ See `roost--report-turn'.")
   "Key of the last task `roost-next-waiting' went to that wasn't blocked.
 From a blocked task, it goes on from there, or starts again from the
 first if that task no longer waits.")
+(defvar roost--next-run nil
+  "Where you were when you pressed the first `roost-next-waiting' of a run.
+A plist: :frame, :workspace and :windows, the frame you were in, its
+workspace and its windows; :owner, the key of the task whose workspace
+that is, if any, which may be renamed meanwhile; :task and :current,
+the frame's task and the task opened last; :buffer, the buffer you were
+in; :opened, the keys of the tasks the run opened; and :offered, set
+once it has said that none waits, and that pressing it again goes back.
+The run goes on while you press it in a task it opened.")
 (defvar roost--perspectives (make-hash-table :test 'equal)
   "Names the perspectives of renamed tasks may have, by task key.
 perspective.el renames only the current perspective, of each frame's
@@ -1585,6 +1594,9 @@ started or gone since."
        (tab-bar-rename-tab (roost--tab-name task)))))
   (setq roost--current-task (roost--key task))
   ;; Without workspaces, the frame's task panel follows the last task used.
+  (unless (or (roost--workspace-backend)
+              (equal (frame-parameter nil 'roost-task) (roost--key task)))
+    (roost--set-aside-drafts task))
   (set-frame-parameter nil 'roost-task (roost--key task))
   (roost--leave-side-window))
 
@@ -1752,6 +1764,8 @@ not another task's: they keep their grid."
       (tmux-control-send-command (format "select-window -t %s" window))
       (tmux-control-select-pane pane)))
   (roost--mark-seen (or (gethash (roost--key task) roost--tasks) task))
+  (unless (roost--workspace-backend)
+    (roost--bring-back-drafts task))
   (roost--watch-layout)
   (roost--sync-side-windows)
   (roost--mark-in-sidebar)
@@ -1800,9 +1814,10 @@ frame without one: see `roost--take-frame'."
 (defun roost--put-away-other-terminals (task)
   "Put away the terminals of tasks other than TASK in the selected frame.
 Each window goes back to what it showed before, never to another task's
-terminal."
+terminal or a draft."
   (let ((switch-to-prev-buffer-skip
-         (lambda (_window buffer _bury-or-kill) (roost--terminal-task buffer))))
+         (lambda (_window buffer _bury-or-kill)
+           (or (roost--terminal-task buffer) (roost--draft-task buffer)))))
     (dolist (window (roost--main-windows))
       (when-let* ((shown (roost--terminal-task (window-buffer window))))
         (unless (or (equal (roost--key shown) (roost--key task))
@@ -1812,10 +1827,57 @@ terminal."
 (defun roost--take-frame (task)
   "Make the selected frame TASK's, as for a view of it, without its terminal.
 Another task's terminal there goes back to what its window showed
-before, but not to another task's terminal."
+before, but not to another task's terminal.  TASK's drafts another task
+took off the frame come back, as when TASK is opened."
   (roost--put-away-other-terminals task)
   (roost--activate-workspace task)
+  (unless (roost--workspace-backend)
+    (roost--bring-back-drafts task))
   (roost--mark-in-sidebar))
+
+(defvar-local roost--set-aside nil
+  "The frames this draft was taken off when other tasks took them.
+A draft can show in more than one frame, and comes back in each.")
+
+(defun roost--draft-task (buffer)
+  "The task BUFFER is a prompt or pull request draft for, or nil."
+  (or (buffer-local-value 'roost--send-task buffer)
+      (buffer-local-value 'roost--pr-task buffer)))
+
+(defun roost--set-aside-drafts (task)
+  "Take the drafts for tasks other than TASK off the selected frame.
+For when TASK takes the frame: without workspaces a frame shows one
+task.  A prompt or pull request draft for another task stays as it is,
+unseen, until that task is opened in the frame again: see
+`roost--bring-back-drafts'.  Its window closes, or, as the frame's last,
+shows what it did before, though not another task's terminal or draft."
+  (let ((switch-to-prev-buffer-skip
+         (lambda (_window buffer _bury-or-kill)
+           (or (roost--terminal-task buffer) (roost--draft-task buffer)))))
+    (dolist (window (roost--main-windows))
+      (let* ((buffer (window-buffer window))
+             (other (roost--draft-task buffer)))
+        (when (and other (not (equal (roost--key other) (roost--key task))))
+          (with-current-buffer buffer
+            (setq roost--set-aside (cons (selected-frame)
+                                         (seq-filter #'frame-live-p
+                                                     (remq (selected-frame) roost--set-aside)))))
+          (if (eq (window-deletable-p window) t)
+              (delete-window window)
+            (switch-to-prev-buffer window)))))))
+
+(defun roost--bring-back-drafts (task)
+  "Show TASK's drafts again that another task took off the selected frame.
+Beside its terminal, which stays selected."
+  (dolist (buffer (buffer-list))
+    (when (memq (selected-frame) (buffer-local-value 'roost--set-aside buffer))
+      (when-let* ((own (roost--draft-task buffer))
+                  ((equal (roost--key own) (roost--key task))))
+        ;; Only this frame's: another may wait for it too.
+        (with-current-buffer buffer
+          (setq roost--set-aside (remq (selected-frame) roost--set-aside)))
+        (unless (get-buffer-window buffer)
+          (display-buffer buffer '(nil (inhibit-same-window . t))))))))
 
 (defvar roost--held-for-minibuffer 0
   "How many things Roost holds back until the minibuffer is done.
@@ -1872,11 +1934,11 @@ quitting would end that command too."
   "Seconds a task's host can take to reply before Roost says it is opening.")
 
 ;;;###autoload
-(defun roost-open-task (&optional task quit-questions)
+(defun roost-open-task (&optional task quit-questions describe)
   "Validate TASK's tmux ownership, then restore its perspective and terminal.
 With QUIT-QUESTIONS, as when you give a command, first quit the
 questions you left open in the minibuffer, which would hold the task
-back, unseen, until you answered them."
+back, unseen, until you answered them.  DESCRIBE is as for `roost--open'."
   (interactive (list nil t))
   (when (and quit-questions (roost--questions-left-open))
     ;; The task at point is where you are now, before quitting gives
@@ -1884,14 +1946,17 @@ back, unseen, until you answered them."
     ;; open can keep another from being asked.
     (let ((task (or task (roost--task-at-point))))
       (roost--quit-questions-left-open
-       (lambda () (roost-open-task (or task (roost--read-task "Task: ")))))))
-  (roost--open (roost--choose task)))
+       (lambda () (roost-open-task (or task (roost--read-task "Task: ")) nil describe)))))
+  (roost--open (roost--choose task) nil describe))
 
-(defun roost--open (task &optional view)
+(defun roost--open (task &optional view describe)
   "Show TASK's terminal, once its host confirms that Roost owns it.
 VIEW, if given, then shows something of TASK's beside it, such as
 Magit: for a task whose agent's window is gone, VIEW shows without the
-terminal, rather than Roost asking to resume the task."
+terminal, rather than Roost asking to resume the task.  DESCRIBE, if
+given, is called with TASK as its host replied, before it shows, as
+seeing it changes what it waits for; what it returns, the echo area
+says once the terminal shows."
   (let* ((generation (cl-incf roost--open-generation))
          (window (if (window-minibuffer-p) (minibuffer-selected-window) (selected-window)))
          (shown (window-buffer window))
@@ -1927,12 +1992,14 @@ terminal, rather than Roost asking to resume the task."
                          (when (funcall still-wanted)
                            (when (equal (current-message) opening)
                              (message nil))
-                           (roost--display-task current)
-                           (cond (view (funcall view))
-                                 ((and (assq 'live current) (not (roost--field current 'live)))
-                                  (message "%s's agent has %s; its last output is shown. Resume with `s'."
-                                           (roost--field current 'name)
-                                           (roost--field current 'status))))))))
+                           (let ((said (and describe (funcall describe current))))
+                             (roost--display-task current)
+                             (cond (view (funcall view))
+                                   (said (message "%s" said))
+                                   ((and (assq 'live current) (not (roost--field current 'live)))
+                                    (message "%s's agent has %s; its last output is shown. Resume with `s'."
+                                             (roost--field current 'name)
+                                             (roost--field current 'status)))))))))
                     (lambda (err)
                       (cancel-timer timer)
                       ;; Stopped, or its tmux server gone, as after a crash:
@@ -5821,7 +5888,12 @@ it showed before."
 Permission requests and agents stuck at a startup prompt come first,
 since they block their agent; then tasks ready for a prompt, those that
 failed, crashed or exited, and those whose pull request waits on you,
-in turn."
+in turn.  The echo area says which task it opened, why that one
+waits, and how many more do.
+
+Once none does, it offers to go back to where you were when you pressed
+the first of a run: the next press goes there.  With workspaces, that is
+the workspace you were in; without, the frame's windows as they were."
   (interactive)
   (let* ((waiting (sort (seq-filter #'roost--waiting-p (roost-tasks))
                         (lambda (a b) (< (roost--attention-rank a) (roost--attention-rank b)))))
@@ -5842,11 +5914,147 @@ in turn."
                                       roost--next-unblocked
                                     (or viewing roost--current-task))
                                   others))
-                    (car others) (car keys)))))
-    (unless key (user-error "No tasks are waiting for you"))
-    (cond ((member key others) (setq roost--next-unblocked key))
-          ((member viewing others) (setq roost--next-unblocked viewing)))
-    (roost-open-task (gethash key roost--tasks) t)))
+                    (car others) (car keys))))
+         ;; Pressed in a task it opened, a run goes on.
+         (run (when-let* ((here (roost--task-here)))
+                (and (member (roost--key here) (plist-get roost--next-run :opened))
+                     roost--next-run))))
+    (cond
+     (key
+      (cond ((member key others) (setq roost--next-unblocked key))
+            ((member viewing others) (setq roost--next-unblocked viewing)))
+      (setq roost--next-run (plist-put (plist-put (copy-sequence (or run (roost--place-here))) :offered nil)
+                                       :opened (cons key (plist-get run :opened))))
+      (roost-open-task (gethash key roost--tasks) t #'roost--next-message))
+     ((not run)
+      (setq roost--next-run nil)
+      (user-error "No tasks are waiting for you"))
+     ((plist-get run :offered)
+      (setq roost--next-run nil)
+      ;; Quitting a question left open gives back the windows it found,
+      ;; which would undo the way back: so first.
+      (roost--quit-questions-left-open (lambda () (roost--go-back run)))
+      (roost--go-back run))
+     (t
+      (setq roost--next-run (plist-put run :offered t))
+      (message "No tasks are waiting for you; %s again goes back to %s"
+               (propertize "n" 'face 'roost-key) (roost--place-name run))))))
+
+(defun roost--task-here ()
+  "The task where you are, for `roost-next-waiting', or nil.
+From the sidebar or a docked panel, that of the main window you were in
+last; from the dashboard, the frame's, as `roost--frame-task' has it."
+  (with-current-buffer (if (window-parameter nil 'window-side)
+                           (window-buffer (roost--selected-main-window))
+                         (current-buffer))
+    (if (derived-mode-p 'roost-dashboard-mode)
+        (roost--frame-task)
+      (ignore-errors (roost--task-at-point)))))
+
+(defun roost--place-here ()
+  "Where you are, for `roost-next-waiting' to go back to: see `roost--next-run'."
+  (list :frame (selected-frame)
+        :workspace (roost--current-workspace)
+        :owner (when-let* (((roost--workspace-backend))
+                           (task (roost--frame-task))
+                           ((equal (roost--workspace-name task) (roost--current-workspace))))
+                 (roost--key task))
+        :windows (current-window-configuration)
+        :task (frame-parameter nil 'roost-task)
+        :current roost--current-task
+        :buffer (window-buffer (roost--selected-main-window))))
+
+(defun roost--place-name (run)
+  "What to call where RUN of `roost-next-waiting' began, from its buffer."
+  (let ((buffer (plist-get run :buffer)))
+    (cond ((not (buffer-live-p buffer)) "where you were")
+          ((with-current-buffer buffer (derived-mode-p 'roost-dashboard-mode)) "the dashboard")
+          ((when-let* ((task (roost--terminal-task buffer)))
+             (roost--field task 'name)))
+          (t (buffer-name buffer)))))
+
+(defun roost--go-back (run)
+  "Go back to where you were when RUN of `roost-next-waiting' began.
+With workspaces, to the workspace you were in, as you left it; without,
+or in that workspace still, to the frame's windows as they were then."
+  (let ((frame (plist-get run :frame))
+        (name (roost--place-name run))
+        workspace)
+    (unless (frame-live-p frame)
+      (user-error "The frame you were in is gone"))
+    ;; A task still opening, on a host slow to reply, stays where it is.
+    (cl-incf roost--open-generation)
+    (unless (eq frame (selected-frame))
+      (select-frame-set-input-focus frame))
+    ;; A task's, by the name it has now: it may have been renamed since.
+    (setq workspace (if-let* ((owner (gethash (plist-get run :owner) roost--tasks)))
+                        (roost--workspace-name owner)
+                      (plist-get run :workspace)))
+    (pcase (and workspace (not (equal workspace (roost--current-workspace))) (roost--workspace-backend))
+      ('perspective
+       (unless (member workspace (persp-names))
+         (user-error "The workspace you were in, %s, is gone" workspace))
+       (persp-switch workspace))
+      ('tab-bar
+       (unless (member workspace (roost--tabs))
+         (user-error "The tab you were in, %s, is gone" workspace))
+       (tab-bar-select-tab-by-name workspace))
+      (_
+       (set-window-configuration (plist-get run :windows))
+       ;; The panel and the sidebar's mark follow the frame's task.
+       (set-frame-parameter nil 'roost-task (plist-get run :task))
+       (setq roost--current-task (plist-get run :current))))
+    (roost--mark-in-sidebar)
+    (message "Back to %s" name)))
+
+(defun roost--waiting-reason (task)
+  "Why TASK waits for you, on one line, or nil.
+As its notification says: what its agent asks, the first line of its
+latest reply, why its pull request waits on you, or how it failed; or
+what it conflicts with."
+  (let* ((status (roost--attention-status task))
+         (conflicts (and (equal status "conflicts") (roost--conflicts task)))
+         (why (cond ((equal status "permission") (roost--permission-request task))
+                    ((equal status "prompt") "It may be waiting at a startup prompt, such as folder trust")
+                    ((member status roost--pr-turns) (roost--pr-reason task status))
+                    ((consp conflicts)
+                     (format "Conflicts with %s in %s" (or (roost--field task 'integrationBranch) "its branch")
+                             (roost--file-list conflicts)))
+                    (conflicts
+                     (format "#%s conflicts with the branch it merges into"
+                             (alist-get 'number (roost--field task 'pr))))
+                    ((member status '("error" "failed" "crashed" "exited"))
+                     (roost--field task 'error))
+                    (t (roost--last-message-summary task)))))
+    (when (stringp why)
+      (let ((line (roost--one-line why)))
+        (unless (string-empty-p line) line)))))
+
+(defun roost--next-message (task)
+  "What `roost-next-waiting' says once it opens TASK, as it was before.
+Its status and name, why it waits, and how many other tasks wait, on
+one line of the echo area.  Why it waits is cut short to fit, then the
+rest from its end: its status and name come first, and are read first."
+  (let* ((key (roost--key task))
+         (more (seq-count (lambda (other) (and (not (equal (roost--key other) key)) (roost--waiting-p other)))
+                          (roost-tasks)))
+         (head (concat (propertize (roost--display-status task)
+                                   'face (roost--status-face (roost--attention-status task)))
+                       " · " (roost--field task 'name)))
+         (why (roost--waiting-reason task))
+         (tail (concat (when (roost--action-applies-p task #'roost-resume)
+                         (concat "; " (propertize "s" 'face 'roost-key) " resumes it"))
+                       (if (> more 0) (format "; %d more waiting" more) "; no more waiting")))
+         (width (window-max-chars-per-line (minibuffer-window))))
+    ;; Measured as the echo area shows it, in no buffer's faces.
+    (with-temp-buffer
+      (let ((room (- width (roost--text-width head) (roost--text-width tail) 2)))
+        (roost--truncate-width
+         (concat head
+                 (when (and why (>= room 8))
+                   (concat ": " (roost--truncate-width why room)))
+                 tail)
+         width)))))
 
 (defun roost--project-name (task)
   "Short primary repository name for TASK."
