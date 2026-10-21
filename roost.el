@@ -1594,6 +1594,9 @@ started or gone since."
        (tab-bar-rename-tab (roost--tab-name task)))))
   (setq roost--current-task (roost--key task))
   ;; Without workspaces, the frame's task panel follows the last task used.
+  (unless (or (roost--workspace-backend)
+              (equal (frame-parameter nil 'roost-task) (roost--key task)))
+    (roost--set-aside-drafts task))
   (set-frame-parameter nil 'roost-task (roost--key task))
   (roost--leave-side-window))
 
@@ -1761,6 +1764,8 @@ not another task's: they keep their grid."
       (tmux-control-send-command (format "select-window -t %s" window))
       (tmux-control-select-pane pane)))
   (roost--mark-seen (or (gethash (roost--key task) roost--tasks) task))
+  (unless (roost--workspace-backend)
+    (roost--bring-back-drafts task))
   (roost--watch-layout)
   (roost--sync-side-windows)
   (roost--mark-in-sidebar)
@@ -1809,9 +1814,10 @@ frame without one: see `roost--take-frame'."
 (defun roost--put-away-other-terminals (task)
   "Put away the terminals of tasks other than TASK in the selected frame.
 Each window goes back to what it showed before, never to another task's
-terminal."
+terminal or a draft."
   (let ((switch-to-prev-buffer-skip
-         (lambda (_window buffer _bury-or-kill) (roost--terminal-task buffer))))
+         (lambda (_window buffer _bury-or-kill)
+           (or (roost--terminal-task buffer) (roost--draft-task buffer)))))
     (dolist (window (roost--main-windows))
       (when-let* ((shown (roost--terminal-task (window-buffer window))))
         (unless (or (equal (roost--key shown) (roost--key task))
@@ -1821,10 +1827,57 @@ terminal."
 (defun roost--take-frame (task)
   "Make the selected frame TASK's, as for a view of it, without its terminal.
 Another task's terminal there goes back to what its window showed
-before, but not to another task's terminal."
+before, but not to another task's terminal.  TASK's drafts another task
+took off the frame come back, as when TASK is opened."
   (roost--put-away-other-terminals task)
   (roost--activate-workspace task)
+  (unless (roost--workspace-backend)
+    (roost--bring-back-drafts task))
   (roost--mark-in-sidebar))
+
+(defvar-local roost--set-aside nil
+  "The frames this draft was taken off when other tasks took them.
+A draft can show in more than one frame, and comes back in each.")
+
+(defun roost--draft-task (buffer)
+  "The task BUFFER is a prompt or pull request draft for, or nil."
+  (or (buffer-local-value 'roost--send-task buffer)
+      (buffer-local-value 'roost--pr-task buffer)))
+
+(defun roost--set-aside-drafts (task)
+  "Take the drafts for tasks other than TASK off the selected frame.
+For when TASK takes the frame: without workspaces a frame shows one
+task.  A prompt or pull request draft for another task stays as it is,
+unseen, until that task is opened in the frame again: see
+`roost--bring-back-drafts'.  Its window closes, or, as the frame's last,
+shows what it did before, though not another task's terminal or draft."
+  (let ((switch-to-prev-buffer-skip
+         (lambda (_window buffer _bury-or-kill)
+           (or (roost--terminal-task buffer) (roost--draft-task buffer)))))
+    (dolist (window (roost--main-windows))
+      (let* ((buffer (window-buffer window))
+             (other (roost--draft-task buffer)))
+        (when (and other (not (equal (roost--key other) (roost--key task))))
+          (with-current-buffer buffer
+            (setq roost--set-aside (cons (selected-frame)
+                                         (seq-filter #'frame-live-p
+                                                     (remq (selected-frame) roost--set-aside)))))
+          (if (eq (window-deletable-p window) t)
+              (delete-window window)
+            (switch-to-prev-buffer window)))))))
+
+(defun roost--bring-back-drafts (task)
+  "Show TASK's drafts again that another task took off the selected frame.
+Beside its terminal, which stays selected."
+  (dolist (buffer (buffer-list))
+    (when (memq (selected-frame) (buffer-local-value 'roost--set-aside buffer))
+      (when-let* ((own (roost--draft-task buffer))
+                  ((equal (roost--key own) (roost--key task))))
+        ;; Only this frame's: another may wait for it too.
+        (with-current-buffer buffer
+          (setq roost--set-aside (remq (selected-frame) roost--set-aside)))
+        (unless (get-buffer-window buffer)
+          (display-buffer buffer '(nil (inhibit-same-window . t))))))))
 
 (defvar roost--held-for-minibuffer 0
   "How many things Roost holds back until the minibuffer is done.

@@ -14,6 +14,10 @@ Since 0.9.0:
   you pressed the first `n`; pressed again, it goes there: with
   workspaces, the perspective or tab you were in, and without, the
   frame's windows as they were. Nothing to do when upgrading.
+- Without workspaces, a prompt or pull request draft for one task no longer
+  stays on screen when you open another. It waits, as you left it, and
+  comes back beside its task's terminal when you open that task again, as
+  it would in the task's perspective or tab. Nothing to do when upgrading.
 - A task says what changed since you last looked at it. Opening it in
   Magit with `r`, or sending its agent your notes with `@`, records where
   its work stands, uncommitted work too. Once you've seen its agent's

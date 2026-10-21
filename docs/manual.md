@@ -404,6 +404,10 @@ capture (`M-n` at the prompt gives the newest), Roost copies all of it but its
 video and audio, and adds its summary. `M-x roost-attach` drafts a
 prompt with a file attached, or with the files marked in Dired.
 
+Without workspaces, a prompt or pull request draft you leave for another
+task's terminal waits off screen, as you left it, and comes back beside its
+task's terminal when you open that task again.
+
 In the new task draft: `C-c C-c` creates, `C-c C-k` cancels, and `C-c C-p`,
 `C-c C-a`, `C-c C-b` and `C-c C-n` change the project, agent, starting ref and
 name. `C-c C-t` starts from a GitHub issue (with `gh` on the project's host). An
