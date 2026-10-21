@@ -5026,7 +5026,7 @@ says changed since: see `roost--since-looked'."
                       ;; Emacs, its workspace has the new name.
                       (let ((task (gethash (roost--key task) roost--tasks task)))
                         (if (not (and (eq (selected-window) window) (eq (window-buffer window) shown)))
-                            (message "Roost: didn't open %s of %s, as you went to another window or buffer while its host replied"
+                            (message "Roost: didn't open %s for %s, as you went to another window or buffer while its host replied"
                                      what (roost--field task 'name))
                           (funcall show task)))))))))
     (if (gethash (roost--field task 'host) roost--errors)
