@@ -416,8 +416,11 @@ OCCURRENCE counts the buttons before it with the same label."
 
 (defun roost-sweep--keys ()
   "The keys the current buffer's mode binds, each (KEY . COMMAND).
-Those of the modes Roost's derive from, such as `special-mode', are left
-out, and so are mouse events and keys whose commands switch global
+Those of Roost's modes: its own, then those it derives from while they
+are Roost's.  The keys of the others, such as `special-mode' or
+`text-mode', are left out: what they do depends on Emacs and its
+setup, such as the word list `text-mode''s C-M-i completes from.
+Mouse events are left out too, and keys whose commands switch global
 modes, which roost-test.el covers.  A prefix key, such as the draft's
 C-c, counts for the keys after it."
   (let (found)
@@ -434,12 +437,11 @@ C-c, counts for the keys after it."
                                      (not (memq binding '(roost-task-panel-mode roost-sidebar-mode)))
                                      (not (assoc key found)))
                                 (push (cons key binding) found))))))
-                   map)
-                  (when-let* (((not prefix))
-                              (parent (keymap-parent map))
-                              ((not (eq parent special-mode-map))))
-                    (walk parent nil))))
-      (walk (current-local-map) nil))
+                   map)))
+      (let ((mode major-mode))
+        (while (and mode (string-prefix-p "roost-" (symbol-name mode)))
+          (walk (symbol-value (derived-mode-map-name mode)) nil)
+          (setq mode (get mode 'derived-mode-parent)))))
     (nreverse found)))
 
 (defun roost-sweep--do (action)
