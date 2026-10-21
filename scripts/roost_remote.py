@@ -3636,10 +3636,12 @@ def remove_worktrees(store, task, worktree, agents, force=False, teardown=None):
                 elif worktree:
                     try:
                         require_clean(str(worktree))
-                    except RoostError as exc:
+                    except RoostError:
+                        # Said apart from your own files, which x offers to discard.
                         if teardown:
-                            raise RoostError(str(exc) + ". The teardown command, which ran just now, "
-                                             "may have left them")
+                            raise RoostError("After the teardown command ran, the worktree has uncommitted "
+                                             "or untracked files, which it may have left; look at them in "
+                                             "Magit, then retire or discard the task")
                         raise
                     git(task["repo"], "worktree", "remove", str(worktree))
         finally:

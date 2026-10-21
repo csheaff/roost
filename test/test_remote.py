@@ -2342,8 +2342,7 @@ class Lifecycle(unittest.TestCase):
         (wt / "scratch").unlink()
         # One that leaves a file there keeps the task, and says it may have.
         error = self.request("retire", id=task["id"], teardown="touch made")["error"]
-        self.assertIn("Uncommitted or untracked files remain", error)
-        self.assertIn("teardown command", error)
+        self.assertTrue(error.startswith("After the teardown command ran"), error)
         (wt / "made").unlink()
         reply = self.request("retire", id=task["id"], teardown=teardown)
         self.assertTrue(reply["ok"], reply)
