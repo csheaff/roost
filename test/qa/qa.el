@@ -445,14 +445,16 @@ strings that overlays add put in, and the text properties kept."
 (defun qa--visible-text (window)
   "WINDOW's text from its start to its end, as shown, line prefixes included."
   (with-current-buffer (window-buffer window)
-    (let* ((start (window-start window))
-           (end (min (point-max) (or (window-end window t) (point-max))))
-           (lines nil))
-      ;; Prefixes are display properties; show them as text.
-      (dolist (line (split-string (qa--shown start end) "\n"))
-        (let ((prefix (and (> (length line) 0) (get-text-property 0 'line-prefix line))))
-          (push (concat (if (stringp prefix) prefix "") (substring-no-properties line)) lines)))
-      (string-join (nreverse lines) "\n"))))
+    (qa--lines-shown (window-start window) (min (point-max) (or (window-end window t) (point-max))))))
+
+(defun qa--lines-shown (start end)
+  "The current buffer's text from START to END, as shown, line prefixes included."
+  (let (lines)
+    ;; Prefixes are display properties; show them as text.
+    (dolist (line (split-string (qa--shown start end) "\n"))
+      (let ((prefix (and (> (length line) 0) (get-text-property 0 'line-prefix line))))
+        (push (concat (if (stringp prefix) prefix "") (substring-no-properties line)) lines)))
+    (string-join (nreverse lines) "\n")))
 
 (defun qa--roost-buffer-p (buffer)
   "Whether BUFFER is one of Roost's views."
@@ -643,6 +645,11 @@ question from another of the same prompt asked after it."
                     (qa--windows))))
        ;; The main frame's, though a child frame such as a note box is selected.
        (sidebar-width . ,roost-sidebar-width)
+       ;; Every row of the sidebar, as drawn, those scrolled out of sight
+       ;; too: a whole run starts more tasks than its window has lines for.
+       (sidebar-rows . ,(when-let* ((sidebar (get-buffer roost--sidebar-buffer)))
+                          (with-current-buffer sidebar
+                            (qa--lines-shown (point-min) (point-max)))))
        ;; The task the sidebar marks as yours, as drawn.
        (marked . ,(when-let* ((sidebar (get-buffer roost--sidebar-buffer)))
                     (with-current-buffer sidebar
