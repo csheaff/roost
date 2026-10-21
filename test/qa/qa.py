@@ -681,7 +681,11 @@ def journey(title):
 @journey("The sweep, in a GUI frame")
 def sweep(qa, repo):
     """test/roost-sweep.el's rules where text is measured in pixels."""
-    result = qa.emacs.json("(qa-sweep)", timeout=600)
+    started = time.monotonic()
+    # About ten minutes in a whole run with other runs beside it, as the
+    # sweep has grown: a hang still ends it.
+    result = qa.emacs.json("(qa-sweep)", timeout=1200)
+    qa.notes.add("The sweep took %ds in the GUI frame" % (time.monotonic() - started))
     qa.step("Every view, state, button and key", expect=[
         ("all of the sweep's tests ran, not %d" % result["ran"], lambda _: result["ran"] >= 4)] + [
         ("%s passes: %s" % (p["test"], p["condition"][:300]), lambda _: False) for p in result["problems"]])
@@ -1521,7 +1525,7 @@ def restart(qa, repo):
     qa.restart()
     qa.wait("the task, after the restart", lambda s: qa.task(s, name))
     qa.step("After a restart", expect=[
-        ("the sidebar lists it", lambda s: name in (qa.window(s, "roost-sidebar-list-mode") or {}).get("text", ""))])
+        ("the sidebar lists it", lambda s: name in sidebar_rows(s))])
     open_task(qa, name)
     # Painted from the host, a round trip away.
     qa.wait("its screen", lambda s: any("PROMPT Remember me" in w["text"] for w in terminals(s)))
@@ -2167,7 +2171,7 @@ def rename(qa, repo):
         qa.step("Renamed", expect=[
             ("the echo area says so", lambda s: "Renamed %s to Parser fix" % name in (s["echo"] or "")),
             ("its panel has the name", lambda s: panel_text(qa, s).startswith("Parser fix")),
-            ("so has the sidebar", lambda s: "Parser fix" in qa.window(s, "roost-sidebar-list-mode")["text"]),
+            ("so has the sidebar", lambda s: "Parser fix" in sidebar_rows(s)),
             ("and its tab", lambda s: s["workspace"] == qa.host_label + "/Parser fix"
              and qa.host_label + "/" + name not in s["workspaces"]),
             ("and its agent's tmux window", lambda s: "Parser fix" in qa.tmux("list-windows", "-a", "-F", "#W")),
@@ -2255,8 +2259,7 @@ def merged(qa, repo):
     qa.status(name, "merged")
     qa.step("Merged", expect=[
         ("its row in the sidebar says so",
-         lambda s: [line for line in (qa.window(s, "roost-sidebar-list-mode") or {}).get("text", "").splitlines()
-                    if line.rstrip().endswith(" merged")]),
+         lambda s: [line for line in sidebar_rows(s).splitlines() if line.rstrip().endswith(" merged")]),
         ("the panel says x retires it", lambda s: "Its work is merged; x retires it" in panel_text(qa, s)),
         ("and not to bring it up to date with main, which merged it",
          lambda s: "has moved on" not in panel_text(qa, s))])
@@ -2304,11 +2307,17 @@ def github(qa, **canned):
         (qa.github / (name + ".json")).write_text(json.dumps(value))
 
 
+def sidebar_rows(screen):
+    """The sidebar's rows as drawn, those scrolled out of sight too: a
+    whole run starts more tasks than its window has lines for."""
+    return screen.get("sidebar-rows") or ""
+
+
 def sidebar_row(qa, screen, name):
-    """NAME's row in the sidebar, as shown, or "". The name may be cut
+    """NAME's row in the sidebar, as drawn, or "". The name may be cut
     short there, to leave room for its status."""
-    return next((line.strip() for line in (qa.window(screen, "roost-sidebar-list-mode") or {}).get("text", "")
-                 .splitlines() if line.strip().startswith(name[:12])), "")
+    return next((line.strip() for line in sidebar_rows(screen).splitlines()
+                 if line.strip().startswith(name[:12])), "")
 
 
 @journey("A pull request that waits on you")
@@ -2446,12 +2455,8 @@ def exits(qa, repo):
 def unreachable(qa, repo):
     """A host that doesn't answer is named, in the sidebar and the dashboard, within their windows."""
     qa.emacs.eval("(progn (setq roost-hosts '(%s \"qa-unreachable.invalid\")) (roost-refresh) t)" % qa.hosts)
-    # To its top, where hosts are named, past the other journeys' tasks,
-    # as for the dashboard below: the sidebar shows the task you are on.
-    qa.emacs.eval("(qa-sidebar-to-top)")
     try:
-        qa.wait("the host to be named", lambda s: "unreachab" in
-                (qa.window(s, "roost-sidebar-list-mode") or {}).get("text", ""), timeout=30)
+        qa.wait("the host to be named", lambda s: "unreachab" in sidebar_rows(s), timeout=30)
         qa.step("The sidebar names it")
         qa.keys("C-c r S")
         qa.wait("the dashboard", lambda s: (qa.window(s, "roost-dashboard-mode") or {}).get("selected"))
