@@ -2233,6 +2233,29 @@
          (roost--compose-default-directory nil nil)
          (should looked))))))
 
+(ert-deftest roost-a-draft-about-a-remote-file-asks-its-host-nothing ()
+  ;; Even with TRAMP connected, looking for a remote file's checkout took a
+  ;; round trip for each directory, while Emacs waited: seconds over SSH.
+  (roost-test--isolated
+   (let ((roost--remembered-projects '("/ssh:dev:/srv/ledger/"))
+         (roost--projects-loaded t)
+         looked drafts)
+     (roost--cache-task "dev" (append '((repo . "/srv/ledger")) (roost-test--task)))
+     (cl-letf (((symbol-function 'roost--may-look-in-p) #'always)
+               ((symbol-function 'locate-dominating-file) (lambda (&rest _) (setq looked t) nil))
+               ((symbol-function 'vc-root-dir) (lambda (&rest _) (setq looked t) nil))
+               ((symbol-function 'roost--compose)
+                (lambda (_task prompt directory) (push (list (car prompt) directory) drafts))))
+       (roost-new-task-from-file "/ssh:dev:/srv/ledger/src/report.py")
+       (should (equal (car drafts) '("\n\nsrc/report.py" "/ssh:dev:/srv/ledger/")))
+       ;; In a task's worktree, from the top of that.
+       (roost-new-task-from-file "/ssh:dev:/home/user/work/fix auth/lib/a.py")
+       (should (equal (caar drafts) "\n\nlib/a.py"))
+       (should-not looked)
+       ;; A local file is looked for, which costs nothing.
+       (roost-new-task-from-file (expand-file-name "x.py" temporary-file-directory))
+       (should looked)))))
+
 (ert-deftest roost-sidebar-mode-pins-a-left-window ()
   (roost-test--isolated
    (save-window-excursion

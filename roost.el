@@ -2248,12 +2248,26 @@ actions."
 The draft names FILE from the top of its checkout."
   (interactive (list (read-file-name "New task about: ")))
   (setq file (expand-file-name file))
-  (let ((root (locate-dominating-file file ".git")))
+  (let ((root (roost--checkout-of file)))
     (roost--compose nil (cons (concat "\n\n" (if root
-                                                 (roost--quoting (file-relative-name file root))
+                                                 (roost--quoting (file-relative-name (file-local-name file)
+                                                                                     (file-local-name root)))
                                                (abbreviate-file-name file)))
                               t)
                     (roost--draft-directory (file-name-directory file)))))
+
+(defun roost--checkout-of (file)
+  "The top of FILE's checkout, as a directory, or nil.
+A task's worktree, found by path; or Git's checkout of it.  On another
+host, looking for that takes a round trip for each directory, while you
+wait, so first a project Roost knows, by path, and nothing that would
+connect to a host TRAMP isn't connected to."
+  (let ((directory (file-name-directory file)))
+    (or (when-let* ((task (roost--task-in-directory directory)))
+          (file-name-as-directory (roost--remote-directory task)))
+        (and (file-remote-p directory) (roost--known-project-of directory))
+        (and (roost--may-look-in-p directory)
+             (ignore-errors (locate-dominating-file file ".git"))))))
 
 ;;;###autoload
 (defun roost-new-task-from-url (url)
@@ -2334,9 +2348,14 @@ DIRECTORY's checkout, or a project Roost knows it is in."
 On a project's heading in the dashboard or sidebar, that project."
   (cond (task (if fork (roost--remote-directory task) (roost--project-directory task)))
         ((get-text-property (point) 'roost-directory))
-        ;; On a host TRAMP has not connected to yet, looking there would
-        ;; connect, while you wait: then a project Roost knows the directory
-        ;; is in, by name.
+        ;; On another host, looking there takes a round trip for each
+        ;; directory VC tries, and connects first if TRAMP hasn't, while you
+        ;; wait: so first a project Roost knows the directory is in, by name.
+        ((and (file-remote-p default-directory)
+              ;; A task's worktree, whose project the host resolves anyway.
+              (or (when-let* ((task (roost--task-in-directory default-directory)))
+                    (roost--project-directory task))
+                  (roost--known-project-of default-directory))))
         ((and (roost--may-look-in-p default-directory) (ignore-errors (vc-root-dir))))
         ((roost--known-project-of default-directory))
         ;; Buffers VC does not track, such as Dired or a shell, in a checkout.
