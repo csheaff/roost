@@ -4496,7 +4496,7 @@ the stubbed requests, `roost--display-task' and `dired' were asked."
   ;; With the menu open, a click on a task in the sidebar only said
   ;; "Unbound suffix": the menu goes, and the click does what it does.
   (roost-test--isolated
-   (dolist (command '(roost-dashboard-mouse-open roost-dashboard-mouse-menu))
+   (dolist (command '(roost-dashboard-mouse-open roost-dashboard-mouse-menu roost-compose-open-task))
      (should (eq (lookup-key transient-predicate-map (vector command)) #'transient--do-exit)))))
 
 (ert-deftest roost-task-panel-shows-prompt-changes-and-details ()
@@ -5883,7 +5883,7 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
                         (setq opened (list (roost--field task 'name) quit-questions))))
                      ((symbol-function 'roost--create-task)
                       (lambda (directory name &rest _) (setq created (list directory name)))))
-             (should (string-match-p "^Name .*\nledger totals already changes report\\.py\n─"
+             (should (string-match-p "^Name .*\n\nledger totals already changes report\\.py\n─"
                                      (funcall draft "/ssh:dev:/home/user/ledger/"
                                               "\n\n" (roost--quoting "report.py") ":3-4\n\ntotal = 0")))
              (with-current-buffer roost--compose-buffer
@@ -5891,7 +5891,9 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
                ;; The name opens the task, as a click on its row does.
                (goto-char (point-min))
                (search-forward "ledger totals already")
-               (push-button (match-beginning 0))
+               (goto-char (match-beginning 0))
+               (should (eq (key-binding (kbd "RET")) #'roost-compose-open-task))
+               (call-interactively #'roost-compose-open-task)
                (should (equal opened '("ledger totals" t)))
                ;; A task that changes it since shows once Roost measures it.
                (funcall other "4444444444444444" "report chart" "/home/user/ledger"

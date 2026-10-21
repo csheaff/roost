@@ -2597,30 +2597,43 @@ Each (KEY NAME . FILES), so that a refresh redraws it only when that changes.")
             (cons (roost--key (car entry)) (cons (roost--field (car entry) 'name) (cdr entry))))
           changing))
 
+(defun roost-compose-open-task (&optional event)
+  "Open the task whose name is at point in the draft, or clicked in EVENT.
+The draft names the tasks that change files it quotes.  Roost's menu,
+left open, closes rather than refusing the click."
+  (interactive (list last-nonmenu-event))
+  (when (mouse-event-p event)
+    (mouse-set-point event))
+  (or (push-button) (user-error "No task's name here")))
+
+(defvar-keymap roost--compose-task-map
+  :doc "Keys on a task's name in the draft: a click or RET opens it."
+  :parent button-map
+  "RET" #'roost-compose-open-task
+  "<mouse-2>" #'roost-compose-open-task)
+
 (defun roost--compose-insert-changing (changing)
   "Name the tasks in CHANGING, each opening on a click.
 CHANGING is what `roost--compose-changing' gives: the tasks that change
 files the draft quotes.  Whether to start the task anyway, wait, or
 give the work to one of them is yours: this only says so."
   (setq roost--compose-changing-shown (roost--compose-changing-summary changing))
+  (when changing (insert "\n"))
   (pcase-dolist (`(,task . ,files) (seq-take changing 3))
     (let ((key (roost--key task))
           (name (roost--field task 'name)))
-      (insert-text-button name 'follow-link t 'font-lock-face 'roost-status-permission
+      (insert-text-button name 'follow-link t 'font-lock-face 'roost-field
+                          'keymap roost--compose-task-map
                           'help-echo (format "mouse-1 or RET: open %s" name)
                           'action (lambda (_)
                                     (roost-open-task
                                      (or (gethash key roost--tasks)
                                          (user-error "%s is no longer listed" name))
                                      t)))
-      (insert (propertize (concat " already changes " (roost--file-list files))
-                          'font-lock-face 'roost-status-permission)
-              "\n")))
+      (insert " already changes " (roost--file-list files) "\n")))
   (when (length> changing 3)
-    (insert (propertize (format "%d more tasks change %s too" (- (length changing) 3)
-                                (if (cdr (seq-uniq (apply #'append (mapcar #'cdr changing)))) "them" "it"))
-                        'font-lock-face 'roost-status-permission)
-            "\n")))
+    (insert (format "%d more tasks change %s too\n" (- (length changing) 3)
+                    (if (cdr (seq-uniq (apply #'append (mapcar #'cdr changing)))) "them" "it")))))
 
 (defun roost--compose-changed (&rest _)
   "Refresh the fields soon after each edit to the prompt.
@@ -7583,7 +7596,7 @@ are told apart."
 ;; With a menu open, Roost's or another package's, a click on a task's
 ;; row closes the menu and does what it does, rather than being refused
 ;; as none of the menu's keys.
-(dolist (command '(roost-dashboard-mouse-open roost-dashboard-mouse-menu))
+(dolist (command '(roost-dashboard-mouse-open roost-dashboard-mouse-menu roost-compose-open-task))
   (define-key transient-predicate-map (vector command) #'transient--do-exit))
 
 (define-derived-mode roost-dashboard-mode special-mode "Roost"
@@ -8766,7 +8779,7 @@ Beside a terminal, that turns off `roost-task-panel-mode'."
   (when roost-watch-mode (roost-watch-mode -1))
   (when (timerp roost--lights-timer) (cancel-timer roost--lights-timer))
   (advice-remove 'persp-mode-line #'roost--compact-perspective-mode-line)
-  (dolist (command '(roost-dashboard-mouse-open roost-dashboard-mouse-menu))
+  (dolist (command '(roost-dashboard-mouse-open roost-dashboard-mouse-menu roost-compose-open-task))
     (define-key transient-predicate-map (vector command) nil t))
   ;; Continue with the standard unloading.
   nil)
