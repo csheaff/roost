@@ -75,9 +75,15 @@ they can do themselves.
 - A checkout runs uncompiled, so measure performance uncompiled too.
 - `make qa` does all this with a fake agent: a GUI Emacs of its own, journeys
   through the menu, terminal, panel and merge, each step checked and, on
-  macOS, captured (see the manual's Development section). Run it for changes
-  to what Roost shows, and look at every screenshot before asking for review:
-  the checks don't see what merely looks wrong. Give a new flow a journey in
+  macOS, captured (see the manual's Development section). Use it for changes
+  to what Roost shows. A whole run takes about 25 minutes, so while you work,
+  name the journeys your change touches, and run the whole of it once before
+  asking for review. After that, rerun the journeys that failed or that a fix
+  touches, and the whole run only for a fix to what every view uses. A
+  journey that stops can leave tasks that fail later journeys: fix the first
+  failure before reading into the rest. Look at the screenshots of the
+  journeys your change touches and of each step with a problem: the checks
+  don't see what merely looks wrong. Give a new flow a journey in
   `test/qa/qa.py`. A new way to open a task, or something new you can leave
   unfinished (a question, a menu, a buffer), goes in the `walk_away` grid,
   `WALK_INTERRUPTERS` or `WALK_STARTERS`, which tries it against all the
