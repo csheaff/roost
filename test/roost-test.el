@@ -6057,6 +6057,8 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
   (roost-test--isolated
    (let* ((files '((files ((path . "ledger.py") (added . 4) (deleted . 1)))))
           (panel (lambda (task &optional width)
+                   ;; On its own: the cache keeps what a later task leaves out, as its files.
+                   (clrhash roost--tasks)
                    (with-temp-buffer
                      (roost-task-info-mode)
                      (setq roost--buffer-task-key (roost--key (roost--cache-task "dev" task)))
@@ -6073,12 +6075,12 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
                                         (car threads) (cadr threads))))
      ;; Without a pull request, no CI results, which looks unlike any that passed.
      (let ((text (funcall panel (append files '((lastMessage . "All tests pass.")) (roost-test--task)))))
-       (should (string-match-p "^Checks\nNo CI results: no pull request\n\nAgent's latest reply  its own account\nAll tests pass\.$"
+       (should (string-match-p "^Checks\nNo CI results: no pull request\n\nAgent's latest reply  its own account\nAll tests pass\\.$"
                                text))
-       (should-not (string-match-p "✓\|passed" text)))
+       (should-not (string-match-p "✓\\|passed" text)))
      ;; Nor with nothing to merge.
      (let ((text (funcall panel (append '((lastMessage . "Which one?")) (roost-test--task)))))
-       (should-not (string-match-p "Checks\|own account" text)))
+       (should-not (string-match-p "Checks\\|own account" text)))
      ;; A pull request GitHub hasn't been asked about, or that has no checks.
      (should (string-match-p "^Checks\nNot heard from GitHub about #12 yet$"
                              (funcall panel (append files (roost-test--pr-task)))))
@@ -6100,6 +6102,9 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
      (let ((text (funcall panel named 40)))
        (should (string-match-p "^  …/long/path/report\\.py  octo · outdated$" text))
        (should (string-match-p "^The total skips the last row, which…$" text)))
+     ;; Nor on a branch that went apart from its head, as once amended.
+     (should (string-match-p "^Run on #12 as pushed, not on the branch as it is here$"
+                             (funcall panel (append files '((unpushed)) (roost-test--turn-task)))))
      ;; A closed one's checks say so; an open one's still show once its
      ;; work is merged here.
      (should (string-match-p "^✓ 3 passed\nRun on #12, which is closed$"
@@ -6107,7 +6112,7 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
      (should (string-match-p "^Checks\n✓ 3 passed$"
                              (funcall panel (append '((landed . t)) (roost-test--turn-task)))))
      ;; Merged, nothing waits on them.
-     (should-not (string-match-p "Checks\|Open review threads"
+     (should-not (string-match-p "Checks\\|Open review threads"
                                  (funcall panel (append files (roost-test--turn-task '(state . "MERGED") (car threads))))))
      ;; A thread on a line visits it in the worktree; another shows the
      ;; file's changes, as the file list does.

@@ -5456,8 +5456,12 @@ there are no CI results, which looks unlike checks that passed."
                    (failed (seq-take (alist-get 'failingChecks status) (min failing roost--failed-checks-shown)))
                    (waiting (seq-take (alist-get 'pendingChecks status) (min pending 3)))
                    (unpushed (roost--field task 'unpushed))
-                   (since (delq nil (list (when (and (numberp unpushed) (> unpushed 0))
-                                            (format "%d newer commit%s" unpushed (if (= unpushed 1) "" "s")))
+                   (since (delq nil (list (cond ((and (numberp unpushed) (> unpushed 0))
+                                                 (format "%d newer commit%s" unpushed (if (= unpushed 1) "" "s")))
+                                                ;; Its head and the branch went apart, as
+                                                ;; when a pushed commit was amended.
+                                                ((and (assq 'unpushed task) (null unpushed))
+                                                 "the branch as it is here"))
                                           (when (roost--field task 'dirty) "uncommitted changes")))))
         (dolist (name failed)
           (roost--insert-indented (funcall mark "✗" 'roost-status-failed (concat name " failed"))))

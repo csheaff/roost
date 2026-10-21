@@ -1599,7 +1599,9 @@ def task_worktree(qa, name):
 def shows_file(qa, name, path):
     """Whether the screen shows PATH of NAME's worktree, selected, in NAME's frame."""
     def check(screen):
-        visited = qa.emacs.eval("(with-current-buffer (window-buffer (selected-window)) buffer-file-name)")
+        # On a remote host, as a TRAMP name: the host's own path is the worktree's.
+        visited = qa.emacs.eval("(with-current-buffer (window-buffer (selected-window))"
+                                " (and buffer-file-name (file-local-name buffer-file-name)))")
         return bool((screen.get("task") or {}).get("name") == name and visited != "nil"
                      and Path(json.loads(visited)).resolve() == (Path(task_worktree(qa, name)) / path).resolve()
                      and qa.emacs.json("(json-encode (qa-selected-task))") == name)
@@ -2173,8 +2175,8 @@ def pull_request(qa, repo):
                                    or qa.window(s, "markdown-mode") or {}).get("selected"))
     in_file = "(with-current-buffer (window-buffer (selected-window)) %s)"
     qa.step("A click on a thread visits its line", expect=[
-        ("the task's own file", lambda s: Path(qa.emacs.eval(in_file % "buffer-file-name").strip('"')).resolve()
-         == (Path(worktree) / "DUE.md").resolve()),
+        ("the task's own file", lambda s: Path(json.loads(qa.emacs.eval(in_file % "(file-local-name buffer-file-name)")))
+         .resolve() == (Path(worktree) / "DUE.md").resolve()),
         ("at the line", lambda s: qa.emacs.eval(in_file % "(line-number-at-pos (window-point))") == "1"),
         ("in a window of its own, the terminal and panel still there",
          lambda s: terminals(s) and panel_text(qa, s))])
