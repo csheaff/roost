@@ -1536,6 +1536,7 @@ def to_sidebar(qa):
 
 
 def go_click(qa, target):
+    qa.emacs.eval("(qa-sidebar-show-row %s)" % lisp(target))
     qa.click_text(target, "roost-sidebar-list-mode")
 
 
@@ -2063,6 +2064,9 @@ def large(qa, repo):
          and row(s).endswith("± not looked at" if magit else "±"))])
     qa.keys("C-c r S")
     qa.wait("the dashboard", lambda s: (qa.window(s, "roost-dashboard-mode") or {}).get("selected"))
+    # Its row may be below the window's end, after the other journeys' tasks.
+    qa.emacs.eval("(qa-goto-row %s)" % lisp(name))
+    qa.settle()
     qa.step("The dashboard marks it too", expect=[
         ("its row has the mark", lambda s: any(name[:12] in line and "±" in line for line in
                                                qa.window(s, "roost-dashboard-mode")["text"].splitlines()))])
@@ -2192,6 +2196,8 @@ def unreachable(qa, repo):
         qa.step("The sidebar names it")
         qa.keys("C-c r S")
         qa.wait("the dashboard", lambda s: (qa.window(s, "roost-dashboard-mode") or {}).get("selected"))
+        # To its top, where hosts are named, past the other journeys' tasks.
+        qa.keys("M-<")
         qa.step("So does the dashboard", expect=[
             ("with why", lambda s: "is unreachable" in qa.window(s, "roost-dashboard-mode")["text"])])
     finally:
