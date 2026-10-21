@@ -5,7 +5,7 @@ package managers, fitting Roost to Evil and other setups, a walk through a
 day of work, every command and option, and how Roost works.
 
 - [Install](#install), and [fitting your setup](#fitting-your-setup)
-- [A day with Roost](#a-day-with-roost)
+- [A day with Roost](#a-day-with-roost), and [what a task says](#what-a-task-says)
 - [Commands](#commands)
 - [Configuration](#configuration)
 - [How it works](#how-it-works)
@@ -231,58 +231,12 @@ moves between them (so does `C-c C-o`),
 which starts in the worktree; it closes when its program exits, and every
 pane closes when the task stops.
 
-**See how much there is to read.** The task panel says how large a task's
-changes are, counted from where its work leaves the branch it merges into,
-with uncommitted work and new files included: `14 files +540 −88`, then the
-top-level directories they are in, `In docs/, src/, test/ and the top
-level`. A task whose changes reach 400 lines (added and removed together),
-10 files or 3 top-level directories gets a dim `±` after its name in the
-sidebar and dashboard, so you can tell an hour of reading from ten minutes
-before you open Magit; hover over the row for its numbers. The mark only
-gives the size: the task doesn't count as waiting for it. Studies of code
-review find that reviewers catch less, and take longer, as changes grow and
-spread; they support marking large changes more than these exact numbers,
-which you can change with `roost-large-change`.
-
-**See what a merge would rest on.** Under the files, the task panel lists
-what you can judge a change by, the easiest to check first. `Checks` names
-each check of the task's pull request that failed or is still pending, as
-GitHub last said, and counts those that passed. Without a pull request, or
-for one with no checks, it says `No CI results`, which looks unlike checks
-that passed; for a pull request without the task's newest commits, a commit
-amended since, or its uncommitted changes, it says the checks didn't run on
-them. `Open review threads` lists the pull request's unresolved threads,
-Copilot's too, each with its file and line, who started it and how. `RET` on
-one visits that line in the task's worktree, in another window, as the pull
-request has it; for a thread on a deleted line, one the agent has changed
-since, or one on the whole file, it shows the file's changes. The agent's
-latest reply comes last, marked as its own account: `No CI results` beside a
-reply that says the tests pass means only the agent says so, perhaps from a
-run in its terminal. Beside the terminal, where the reply is the terminal's,
-a task without a pull request leaves `Checks` out. Roost judges neither, and
-gives no score or verdict on whether to merge.
-
 **Review in Magit.** `r` opens Magit on the task's worktree, through TRAMP for
 remote tasks. Stage, edit and commit as usual. The status names the task,
 keeps the agent's latest reply folded at the top, and lists the commits not
 yet in the branch the task merges into (`Unmerged into main`); `RET` on that
 heading shows all their changes together, as on Magit's own sections of
 unmerged commits.
-
-**Since you last looked.** Opening a task with `r`, or its whole diff with
-`D` when no new file is left out of it, or sending its agent your notes with
-`@`, records where its work stands as where you last looked at it,
-uncommitted work too. Once you've seen its agent's reply, the
-sidebar and dashboard say, dim, what changed since (`3 files changed since
-you looked`), and its panel says when you looked: `r` shows the changes. It
-doesn't count as waiting. Roost compares content, so commits the agent
-makes of what you saw, amends or rebases don't count, nor do files only an
-update from the integration branch brought in; anything else changed does,
-whatever prompted it. With Magit, a task you never looked at says `not
-looked at`. In Magit, a section beside `Unmerged into main` lists the files
-that changed between your last two looks; `RET` on its heading shows their
-changes together, and on a file, its own, where `;` writes notes as in any
-diff. `m` and `P` say so too before you merge or push.
 
 Staging doubles as approval: stage what you have checked, and whatever the
 agent changes after that shows up as unstaged, on its own. To ask for changes,
@@ -318,7 +272,95 @@ to the agent with `e`; when it has committed, `P` pushes the new commits and
 opens the pull request. Once it is merged, `x` retires the task and deletes the
 branch. Needs `gh` on the task's host, and Git credentials there that can push.
 
-**When a pull request waits on you.** Roost notifies you when a task's pull
+What each task's row, panel and notification say is in
+[What a task says](#what-a-task-says).
+
+## What a task says
+
+The sidebar and the dashboard give each task one word, or none, after its
+name. A word in its colour waits for you: `n` goes there, the mode line
+counts it, and a notification says so. A dim one is only for knowing.
+
+| Word | Waits for you | What it means |
+| --- | --- | --- |
+| `permission` | Yes, before the rest | The agent asks something, or a dialog of its waits; answer it in its terminal |
+| `starting` | Once it seems held at a startup prompt, such as folder trust | The agent is starting. Without `roost-program-status`, Codex reports its status only from its first turn |
+| `ready` | Until you've seen its reply | Its turn is over and it waits for your next prompt. Not "reviewed" or "done" |
+| `interrupted` | Until you've seen it | You stopped its turn, with Esc or by declining a request |
+| `error` | Until you've seen it | A turn ended on an API error, such as a usage limit; `RET` opens it to try again |
+| `failed`, `exited`, `crashed` | Until you've seen it | The agent's CLI failed, it exited, or its tmux pane went; `RET` shows its last output |
+| `conflicts` | Once you've seen its reply | Merging its commits into the branch it merges into would conflict; `u` brings that branch in |
+| `to merge` | Once you've seen its reply | Its pull request passed its checks and review, and GitHub finds no conflicts; `P` opens it |
+| `ci failed` | Once you've seen its reply | A check of its pull request failed |
+| `comments` | Once you've seen its reply | A review thread on its pull request is unresolved, Copilot's too |
+| `running` | No | The agent works on a prompt |
+| `background` | No | Claude's background work, or Pi's queued messages, remain |
+| `stopped` | No | Stopped with `K`; `s` resumes its conversation |
+| `merged` | No | Its work is merged, on GitHub or into its branch; `x` retires it |
+| `offline` | No | Its host doesn't answer; the row is as it was last known |
+| none | No | You've seen an agent that waits for nothing |
+
+A task that waits for nothing may say, dim, what changed since you last
+looked at it, `3 files changed since you looked`, or with Magit,
+`not looked at`, where its whole name leaves room. A dim `±` after a name
+marks a large change. The sections below say more of each, and of what
+the task panel shows.
+
+### How large a change is
+
+The task panel says how large a task's
+changes are, counted from where its work leaves the branch it merges into,
+with uncommitted work and new files included: `14 files +540 −88`, then the
+top-level directories they are in, `In docs/, src/, test/ and the top
+level`. A task whose changes reach 400 lines (added and removed together),
+10 files or 3 top-level directories gets a dim `±` after its name in the
+sidebar and dashboard, so you can tell an hour of reading from ten minutes
+before you open Magit; hover over the row for its numbers. The mark only
+gives the size: the task doesn't count as waiting for it. Studies of code
+review find that reviewers catch less, and take longer, as changes grow and
+spread; they support marking large changes more than these exact numbers,
+which you can change with `roost-large-change`.
+
+### What a merge rests on
+
+Under the files, the task panel lists
+what you can judge a change by, the easiest to check first. `Checks` names
+each check of the task's pull request that failed or is still pending, as
+GitHub last said, and counts those that passed. Without a pull request, or
+for one with no checks, it says `No CI results`, which looks unlike checks
+that passed; for a pull request without the task's newest commits, a commit
+amended since, or its uncommitted changes, it says the checks didn't run on
+them. `Open review threads` lists the pull request's unresolved threads,
+Copilot's too, each with its file and line, who started it and how. `RET` on
+one visits that line in the task's worktree, in another window, as the pull
+request has it; for a thread on a deleted line, one the agent has changed
+since, or one on the whole file, it shows the file's changes. The agent's
+latest reply comes last, marked as its own account: `No CI results` beside a
+reply that says the tests pass means only the agent says so, perhaps from a
+run in its terminal. Beside the terminal, where the reply is the terminal's,
+a task without a pull request leaves `Checks` out. Roost judges neither, and
+gives no score or verdict on whether to merge.
+
+### Since you last looked
+
+Opening a task with `r`, or its whole diff with
+`D` when no new file is left out of it, or sending its agent your notes with
+`@`, records where its work stands as where you last looked at it,
+uncommitted work too. Once you've seen its agent's reply, the
+sidebar and dashboard say, dim, what changed since (`3 files changed since
+you looked`), and its panel says when you looked: `r` shows the changes. It
+doesn't count as waiting. Roost compares content, so commits the agent
+makes of what you saw, amends or rebases don't count, nor do files only an
+update from the integration branch brought in; anything else changed does,
+whatever prompted it. With Magit, a task you never looked at says `not
+looked at`. In Magit, a section beside `Unmerged into main` lists the files
+that changed between your last two looks; `RET` on its heading shows their
+changes together, and on a file, its own, where `;` writes notes as in any
+diff. `m` and `P` say so too before you merge or push.
+
+### A pull request that waits on you
+
+Roost notifies you when a task's pull
 request comes to wait on you, and once you've seen what its agent last said,
 the task counts as waiting: `n` visits it, the mode line counts it, and the
 sidebar and dashboard say why:
@@ -338,14 +380,18 @@ turn: `e` tells the agent what to fix. It goes by what GitHub said after the
 agent's last push, while the branch has no commits the pull request lacks and
 nothing is left uncommitted or in the agent's own worktrees.
 
-**See what's done.** A task whose work is merged, on GitHub or into the branch it
+### Work that is merged
+
+A task whose work is merged, on GitHub or into the branch it
 merges into, says `merged` in the dashboard and sidebar once you've seen its
 agent's last reply, so you can tell which tasks to retire without opening them.
 Nothing is lost by retiring it with `x`: nothing is left uncommitted, and its
 commits are all in what was merged. Commits made after its pull request merged
 keep it from saying so.
 
-**See how many agents you can keep up with.** `M-x roost-workload` shows, for
+### How many agents you keep up with
+
+`M-x roost-workload` shows, for
 today and each day of the past week, the most agents that worked at once, how
 long they worked, and how long they waited on you: asked you something, ended
 a turn or failed before you saw them, or had a pull request or conflict for you,
@@ -596,18 +642,7 @@ OpenCode plugin; with
 `roost-program-status` on, also from what the agent reports to its terminal.
 Roost never changes your global agent settings or answers prompts.
 
-| Status | Meaning |
-| --- | --- |
-| `running` | The agent is working on a prompt |
-| `permission` | The agent asked for permission, or a question or dialog waits on you; answer it in the terminal |
-| `interrupted` | You stopped its turn, with Esc or by declining a request; it waits for your next prompt |
-| `ready` | The agent is waiting for your next prompt. Not "reviewed" or "done" |
-| `background` | Claude background work or Pi queued messages remain |
-| `starting` | Startup prompts may be showing; without `roost-program-status`, Codex reports status only from its first turn |
-| `error` | A turn ended on an API error, such as a usage limit, and the agent waits; `RET` opens it to try again |
-| `exited`, `failed` | The agent exited normally, or the CLI failed; `RET` shows its last output |
-| `crashed` | The agent's tmux pane disappeared |
-| `stopped` | Stopped with `K`; `s` resumes the conversation |
+Each status, and what Roost makes of it, is in [What a task says](#what-a-task-says).
 
 The helper notes each change of a task's status, of whether you've seen its
 agent since its last event, and of what of its pull request or work waits on
