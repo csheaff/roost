@@ -1677,6 +1677,49 @@ def frames(qa, repo):
         ("its task as it was", lambda s: (s.get("task") or {}).get("name") == first)])
 
 
+def drafts_here(screen):
+    """The prompt drafts shown in the frame of the selected window."""
+    here = next((w.get("frame") for w in screen["windows"] if w["selected"]), None)
+    return [w for w in screen["windows"] if w["mode"] == "roost-send-mode" and w.get("frame") == here]
+
+
+@journey("A draft in two frames")
+def draft_frames(qa, repo):
+    """Without workspaces, a prompt draft another task took off two frames
+    comes back in each, once its task is opened there again."""
+    if qa.emacs.eval("(and (roost--workspace-backend) t)") == "t":
+        # Each frame has workspaces of its own, which keep their drafts.
+        qa.notes.add("No two-frame draft journey: with workspaces, drafts stay in each frame's own")
+        return
+    first = start_task(qa, "Write in two frames")
+    second = start_task(qa, "Step between frames")
+    open_task(qa, first)
+    qa.keys("M-x")
+    qa.wait("the question", lambda s: s["prompt"])
+    qa.type("roost-send\r")
+    qa.wait("the draft", lambda s: (qa.window(s, "roost-send-mode") or {}).get("selected"))
+    qa.type("Half a thought")
+    qa.keys("C-x 5 2")
+    qa.wait("the new frame", lambda s: len(s.get("frames") or {}) == 2)
+    qa.emacs.eval("(set-frame-size nil %d %d)" % FRAME)
+    qa.step("The draft in a second frame", expect=[("it shows there", drafts_here)])
+    open_task(qa, second)
+    qa.step("Another task in the second frame", expect=[("the draft waits", lambda s: not drafts_here(s))])
+    qa.keys("C-x 5 o")
+    qa.wait("the first frame", lambda s: (s.get("task") or {}).get("name") == first)
+    open_task(qa, second)
+    qa.step("Another task in the first frame", expect=[("the draft waits", lambda s: not drafts_here(s))])
+    back = ("the draft beside its terminal, which is selected", lambda s: shows(qa, first)(s) and drafts_here(s))
+    open_task(qa, first)
+    qa.step("Back in the first frame", expect=[back])
+    qa.keys("C-x 5 o")
+    qa.wait("the second frame", lambda s: (s.get("task") or {}).get("name") == second)
+    open_task(qa, first)
+    qa.step("Back in the second frame too", expect=[back])
+    qa.keys("C-x 5 0")
+    qa.wait("one frame", lambda s: len(s.get("frames") or {}) == 1)
+
+
 @journey("A draft from an Org heading")
 def org(qa, repo):
     plans = qa.work / "plans.org"
@@ -2177,7 +2220,7 @@ def dropped(qa, repo):
 JOURNEYS = [sweep, answer, fold, resize, merge, review, panes, shell,
             dashboard, stop_resume, retire, send, attach, update, conflicts, restart, search, workload, question_left,
             walk_away,
-            frames, org, drafts, tabs,
+            frames, draft_frames, org, drafts, tabs,
             forget, rename, fork, other_branch, merged, large, pull_request, exits, unreachable, scrollback, fleet, dropped]
 
 
