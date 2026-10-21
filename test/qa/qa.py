@@ -933,14 +933,24 @@ def since_looked(qa, repo):
         qa.notes.add("No since-you-looked journey: Magit over TRAMP's ssh method is too slow on a host "
                      "this far away")
         return
-    # A name of its own: a journey after looks for its task by name.
-    name = new_task(qa, "ask echo Milk > LIST.md")
-    # Its name gives way in the sidebar to what changed.
-    row = lambda s: sidebar_row(qa, s, name[:11])
+    # A name of its own, as a journey after looks for its task by name,
+    # short enough that what changed fits beside it in the sidebar.
+    name = "milk-list"
+    qa.keys("C-c r c")
+    qa.wait("the draft", lambda s: (qa.window(s, "roost-compose-mode") or {}).get("selected"))
+    qa.keys("C-c C-n")
+    qa.wait("the question", lambda s: s["prompt"])
+    qa.type(name + "\r")
+    qa.type("ask echo Milk > LIST.md")
+    qa.keys("C-c C-c")
+    qa.wait("the task", lambda s: qa.task(s, name))
+    row = lambda s: sidebar_row(qa, s, name)
     answer_yes(qa, name)
     qa.wait("the mark", lambda s: row(s).endswith("not looked at"))
     qa.step("Not looked at yet", expect=[
-        ("the panel says r opens it", lambda s: "Not looked at in Magit yet: r opens it" in panel_text(qa, s)),
+        ("the panel says so, and r once, in the next step",
+         lambda s: "Not looked at in Magit yet\n" in panel_text(qa, s)
+         and "in Magit: r" in panel_text(qa, s) and ": r opens it" not in panel_text(qa, s)),
         ("it doesn't wait on you", lambda s: qa.task(s, name)["status"] == "idle")])
     qa.keys("C-c r r")
     qa.wait("Magit", lambda s: (qa.window(s, "magit-status-mode") or {}).get("selected"))
@@ -1069,6 +1079,15 @@ def drafts(qa, repo):
         ("and not the URL", lambda s: "example.com" not in qa.window(s, "roost-compose-mode")["text"])])
 
 
+def names_changing(text, name, how, path):
+    """Whether TEXT has the line naming the tasks that change PATH, HOW
+    ("also" or "already"), and NAME among them: one line, whatever their
+    number, which for more than one says "change"."""
+    return any(re.search(r"\b%s\b" % re.escape(name), line)
+               and re.search(r" %s changes? .*\b%s\b" % (how, re.escape(path)), line)
+               for line in text.splitlines())
+
+
 @journey("A draft about a file another task changes")
 def overlap(qa, repo):
     """Code quoted in a new task's draft names the tasks that already
@@ -1086,7 +1105,7 @@ def overlap(qa, repo):
     qa.type("Say what these lines do")
     qa.step("The draft names the task that changes the file", expect=[
         ("the code, quoted with its file", lambda s: "Say what these lines do\n\nnotes.py:1-3" in draft(s)),
-        ("and the task", lambda s: "%s already changes notes.py" % name in draft(s))])
+        ("and the task", lambda s: names_changing(draft(s), name, "already", "notes.py"))])
     qa.click(name)
     qa.wait(name + "'s terminal", shows(qa, name))
     qa.step("A click on its name opens it")
@@ -1094,7 +1113,7 @@ def overlap(qa, repo):
     qa.wait("the draft", lambda s: (qa.window(s, "roost-compose-mode") or {}).get("selected"))
     qa.step("The draft is kept", expect=[
         ("what you wrote", lambda s: "Say what these lines do" in draft(s)),
-        ("and the task it names", lambda s: "%s already changes notes.py" % name in draft(s))])
+        ("and the task it names", lambda s: names_changing(draft(s), name, "already", "notes.py"))])
     before = {t["name"] for t in qa.screen()["tasks"]}
     qa.keys("C-c C-c")
     screen = qa.wait("the new task", lambda s: {t["name"] for t in s["tasks"]} - before)
@@ -1481,9 +1500,9 @@ def conflicts(qa, repo):
     second = new_task(qa, "ask printf 'two\\n' > SHARED.md && git add SHARED.md && git commit -qm 'Share two'")
     answer_yes(qa, second)
     qa.wait("its commit", lambda s: "Committed" in panel_text(qa, s))
-    qa.wait("the other task's files", lambda s: "also changes" in panel_text(qa, s))
+    qa.wait("the other task's files", lambda s: names_changing(panel_text(qa, s), first, "also", "SHARED.md"))
     qa.step("Two tasks change one file", expect=[
-        ("the panel names the other task", lambda s: "%s also changes SHARED.md" % first in panel_text(qa, s))])
+        ("the panel names the other task", lambda s: names_changing(panel_text(qa, s), first, "also", "SHARED.md"))])
     open_task(qa, first)
     qa.keys("C-c r m")
     qa.wait("the question", lambda s: s["prompt"])
@@ -2288,9 +2307,10 @@ def large(qa, repo):
     qa.step("Marked", expect=[
         ("the panel counts the lines of its new files", lambda s: "± 3 files +452 −0" in panel_text(qa, s)),
         ("its row in the sidebar has the mark", lambda s: "±" in row(s)),
-        ("and no status, once seen, but, with Magit, that you haven't looked at it",
+        ("and no status, once seen, but, with Magit, that you haven't looked at it where its whole name "
+         "leaves room",
          lambda s: (qa.task(s, name) or {}).get("status") == "idle"
-         and row(s).endswith("± not looked at" if magit else "±"))])
+         and row(s).endswith(("± not looked at", "±") if magit else "±"))])
     qa.keys("C-c r S")
     qa.wait("the dashboard", lambda s: (qa.window(s, "roost-dashboard-mode") or {}).get("selected"))
     # Its row may be below the window's end, after the other journeys' tasks.
@@ -2326,8 +2346,8 @@ def pull_request(qa, repo):
     done waits on you, and its status says why: to merge, ci failed or
     comments. While GitHub is still at work, the panel says on what. The
     panel names the checks and lists the open review threads, a click on
-    one visiting its line, and without a pull request, says there are no
-    CI results."""
+    one visiting its line; without a pull request, beside the terminal,
+    it leaves checks out."""
     origin = qa.work / "origin.git"
     if not origin.exists():
         qa.git(qa.work, "init", "-q", "--bare", "-b", "main", str(origin))
@@ -2339,8 +2359,8 @@ def pull_request(qa, repo):
     settled = time.monotonic() + 31
     qa.wait("its commit", lambda s: "Committed" in panel_text(qa, s))
     qa.step("No pull request yet", expect=[
-        ("the panel says there are no CI results",
-         lambda s: "Checks\n  No CI results: no pull request" in panel_text(qa, s))])
+        ("beside its terminal, the panel leaves checks out, for the reply the terminal shows",
+         lambda s: "Committed" in panel_text(qa, s) and "No CI results" not in panel_text(qa, s))])
     qa.keys("C-c r P")
     qa.wait("the pull request's draft", lambda s: (qa.window(s, "roost-pr-mode") or {}).get("selected"))
     qa.keys("C-c C-c")

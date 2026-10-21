@@ -6,6 +6,17 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.9.0:
 
+- The task panel says each thing once. Beside the agent's terminal, a task
+  without a pull request leaves out `No CI results`, which is there to
+  stand beside the agent's reply, as it does in `i`. A conflict the next
+  step names isn't said again under the changes, nor `r` after what
+  changed since you looked. In the sidebar, what changed since you looked
+  shows only beside the task's whole name, rather than cutting the name
+  to a few letters. The tasks that change the same files take one line
+  in the panel and in a new task's draft, however many there are: three
+  by name, then how many more. In a project where every change touches
+  a changelog, a line for each named every task. Nothing to do when
+  upgrading.
 - The sidebar shows the task you work on, however many it lists. With
   more tasks than it had lines, the one you opened could be below them,
   with its status. It goes to each task you open, and stays where you
