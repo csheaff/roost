@@ -45,7 +45,7 @@ ENDED = ("stopped", "exited", "failed", "crashed")
 # Computed per request and never persisted in a task record.
 TRANSIENT = ("live", "diff", "dirty", "files", "size", "ahead", "behind", "update", "worktreeMissing",
              "prStatus", "unpushed", "lastMessage", "gitStamp", "agentWork", "merging", "landed", "conflicts",
-             "sinceLooked")
+             "sinceLooked", "teardownFailure", "teardownOutput")
 LAST_MESSAGE_TAIL = 256 * 1024
 LAST_MESSAGE_LIMIT = 2000
 INTERRUPT_TAIL = 64 * 1024
@@ -2823,10 +2823,11 @@ def safe_to_delete(task, commit, merged_head=None):
     return merged_head is not None and merged_head == commit
 
 
-def retire(store, task, merge=False, merged_head=None, squash=False):
+def retire(store, task, merge=False, merged_head=None, squash=False, teardown=None):
     """Remove a finished task's worktree, branch, window and record.
     Never discards uncommitted files or unmerged commits. With MERGE, merge
-    the task first, as one commit with SQUASH."""
+    the task first, as one commit with SQUASH. TEARDOWN, the project's
+    teardown command, runs in the worktree before it is removed."""
     inventory = inventory_for(task)
     pane = owned_pane(task, inventory)
     require_finished(task, pane)
@@ -2883,7 +2884,8 @@ def retire(store, task, merge=False, merged_head=None, squash=False):
     stop(store, task, inventory)
     # With worktrees its agent made that hold nothing beyond the task's branch.
     remove_worktrees(store, task, worktree if worktree_exists else None,
-                     [entry for entry in agent_work(task) if entry["ahead"] == 0 and not entry["dirty"]])
+                     [entry for entry in agent_work(task) if entry["ahead"] == 0 and not entry["dirty"]],
+                     teardown=teardown)
     if branch_exists:
         delete_branch(repo, branch, commit)
     store.remove(task["id"])
@@ -2996,12 +2998,13 @@ def update(store, task):
     return task
 
 
-def discard(store, task, expect=None, dry_run=False):
+def discard(store, task, expect=None, dry_run=False, teardown=None):
     """Delete a task's worktree, branch, window and record, whatever they
     hold. With DRY_RUN, only say what would be lost: commits on no other
     branch, and uncommitted or untracked files. Otherwise EXPECT is the
     branch's commit when you were told, and a branch that has moved since
-    is not deleted."""
+    is not deleted. TEARDOWN, the project's teardown command, runs in the
+    worktree before it is removed."""
     repo = task["repo"]
     branch = task["branch"]
     # Whatever branch its agent left the worktree on: that goes too.
@@ -3030,7 +3033,7 @@ def discard(store, task, expect=None, dry_run=False):
     if commit != (expect or None):
         raise RoostError("The task's branch has moved since you were asked; look at it again before discarding")
     stop(store, task)
-    remove_worktrees(store, task, worktree if worktree_exists else None, work, force=True)
+    remove_worktrees(store, task, worktree if worktree_exists else None, work, force=True, teardown=teardown)
     if branch_exists:
         delete_branch(repo, branch, commit)
     store.remove(task["id"])
@@ -3568,13 +3571,52 @@ def worktree_holder(store, task):
     return None
 
 
-def remove_worktrees(store, task, worktree, agents, force=False):
+# Emacs waits this much longer for a request that runs a teardown command.
+TEARDOWN_SECONDS = 120
+TEARDOWN_OUTPUT = 2000
+
+
+def run_teardown(task, worktree, command):
+    """Run COMMAND, the project's teardown command, in TASK's WORKTREE before
+    it is removed, with the primary checkout in $ROOST_REPO. Return None, or
+    how it failed and the end of what it printed. Its output goes to a file:
+    what it leaves running in the background, holding a pipe, would hold up
+    the removal. After TEARDOWN_SECONDS it is killed, with what it started."""
+    env = dict(os.environ, ROOST_REPO=task["repo"], PATH=agent_path(os.environ.get("PATH", "")))
+    with tempfile.TemporaryFile() as output:
+        try:
+            process = subprocess.Popen(["/bin/sh", "-lc", command], cwd=str(worktree), env=env,
+                                       stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT,
+                                       start_new_session=True)
+        except OSError as exc:
+            return "could not start (%s)" % exc, ""
+        try:
+            code = process.wait(timeout=TEARDOWN_SECONDS)
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+            failure = "was stopped after %d seconds" % TEARDOWN_SECONDS
+        else:
+            if code == 0:
+                return None
+            failure = "exited with status %d" % code if code > 0 else "was killed by signal %d" % -code
+        # Read without moving the offset what it left running still writes at.
+        size = os.fstat(output.fileno()).st_size
+        start = max(0, size - 4 * TEARDOWN_OUTPUT)
+        printed = os.pread(output.fileno(), size - start, start).decode(errors="replace").strip()
+        return failure, printed[-TEARDOWN_OUTPUT:]
+
+
+def remove_worktrees(store, task, worktree, agents, force=False, teardown=None):
     """Remove TASK's WORKTREE, if any, and AGENTS, entries of `agent_work`.
     Without the registry lock: a worktree with dependencies installed can
     hold hundreds of thousands of files, and every agent's hooks wait on
     the lock. Meanwhile the record says the worktree is going, and a lock
     of its own, which Git inherits, says it is still going, so nothing else
-    acts on the task. Without FORCE, changes there are refused."""
+    acts on the task. Without FORCE, changes there are refused. TEARDOWN,
+    the project's teardown command, runs in WORKTREE first; if it fails,
+    the task says how, and the removal goes on."""
     if not worktree and not agents:
         return
     with holding_worktree(store, task, fcntl.LOCK_EX,
@@ -3584,6 +3626,9 @@ def remove_worktrees(store, task, worktree, agents, force=False):
         store.save(task)
         try:
             with store.released():
+                failure = run_teardown(task, worktree, teardown) if worktree and teardown else None
+                if failure:
+                    task["teardownFailure"], task["teardownOutput"] = failure
                 remove_agent_worktrees(task, agents)
                 if worktree and force:
                     # Twice: also a worktree its agent locked.
@@ -4192,12 +4237,15 @@ TASK_ACTIONS = {
     "seen": lambda store, task, request: seen(store, task, request.get("updatedAt")),
     "turn": lambda store, task, request: turn(store, task, text(request.get("turn"))),
     "rename": lambda store, task, request: rename(store, task, request.get("name")),
-    "retire": lambda store, task, request: retire(store, task, merged_head=request.get("mergedHead")),
+    "retire": lambda store, task, request: retire(store, task, merged_head=request.get("mergedHead"),
+                                                  teardown=text(request.get("teardown"))),
     "merge": lambda store, task, request: retire(store, task, merge=True, merged_head=request.get("mergedHead"),
-                                                 squash=request.get("style") == "squash"),
+                                                 squash=request.get("style") == "squash",
+                                                 teardown=text(request.get("teardown"))),
     "forget": lambda store, task, request: forget(store, task),
     "discard": lambda store, task, request: discard(store, task, request.get("expect"),
-                                                    request.get("dryRun") is True),
+                                                    request.get("dryRun") is True,
+                                                    text(request.get("teardown"))),
     "update": lambda store, task, request: update(store, task),
 }
 

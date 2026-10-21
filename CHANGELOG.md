@@ -6,6 +6,13 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.9.0:
 
+- `roost-teardown-command` runs a shell command in a task's worktree just
+  before Roost removes it, when you merge, retire or discard the task, as
+  for stopping a Bazel server and deleting its output base, which outlive
+  the worktree. Set it per project in `.dir-locals.el`, as
+  `roost-setup-command` is. It is stopped after two minutes, and if it
+  fails Roost warns and removes the worktree anyway. Nothing to do when
+  upgrading.
 - `n` says in the echo area which task it opened, why that one waits and
   how many more do: `permission · ledger: Asks to run make test; 2 more
   waiting`, with the first line of a reply, why a pull request waits on

@@ -2664,6 +2664,42 @@
        (roost-retire task))
      (should (equal discarded "0123456789abcdef")))))
 
+(ert-deftest roost-finishing-a-task-runs-its-projects-teardown-and-warns-if-it-fails ()
+  (roost-test--isolated
+   (let* ((project (make-temp-file "roost-project" t))
+          (task (roost--cache-task nil (append `((repo . ,project)) (roost-test--task nil "ready"))))
+          (enable-local-variables :all)
+          (roost-request-timeout 60)
+          sent warned)
+     (unwind-protect
+         (progn
+           (with-temp-file (expand-file-name ".dir-locals.el" project)
+             (prin1 '((nil . ((roost-teardown-command . "bazel shutdown")))) (current-buffer)))
+           (cl-letf (((symbol-function 'roost--request)
+                      (lambda (_host action parameters success &optional _failure timeout)
+                        (push (list action (alist-get 'teardown parameters) timeout) sent)
+                        (funcall success (append (when (equal action "discard")
+                                                   '((teardownFailure . "exited with status 3")
+                                                     (teardownOutput . "no output base")))
+                                                 '((status . "retired"))
+                                                 (roost-test--task nil "ready")))))
+                     ((symbol-function 'display-warning)
+                      (lambda (type text &rest _) (push (cons type text) warned))))
+             (dolist (action '("stop" "retire" "merge" "discard"))
+               (roost--act task action))
+             ;; Only what removes the worktree runs it, and waits for it.
+             (should (equal (reverse sent) '(("stop" nil nil)
+                                             ("retire" "bazel shutdown" 180)
+                                             ("merge" "bazel shutdown" 180)
+                                             ("discard" "bazel shutdown" 180))))
+             (should (equal warned '((roost . "fix auth's teardown command exited with status 3; Roost removed its worktree anyway:\n\nno output base"))))
+             ;; A project without one sends none.
+             (setq sent nil)
+             (delete-file (expand-file-name ".dir-locals.el" project))
+             (roost--act task "retire")
+             (should (equal sent '(("retire" nil nil))))))
+       (delete-directory project t)))))
+
 (ert-deftest roost-a-merge-under-way-in-a-task-says-so-until-it-is-done ()
   ;; Declining to have the agent resolve an update's conflicts left them,
   ;; while the panel still said the integration branch had moved on.
