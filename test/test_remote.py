@@ -2830,6 +2830,84 @@ elif args[:2] == ["auth", "status"]:
         self.assertEqual(len(self.gh_calls()), calls + 1)
         self.assertEqual(set(status), {"state", "draft", "review", "checks", "head", "base"})
 
+    def test_an_open_pull_request_names_its_checks_and_threads(self):
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        url = "https://github.com/octo/repo/pull/7"
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(
+            number=7, url=url, state="OPEN", headRefOid=tip,
+            statusCheckRollup=[
+                dict(__typename="CheckRun", name="lint", status="COMPLETED", conclusion="FAILURE"),
+                dict(__typename="CheckRun", name="test (29.1)", status="COMPLETED", conclusion="SUCCESS"),
+                dict(__typename="CheckRun", name="test (30.1)", status="IN_PROGRESS", conclusion=""),
+                dict(__typename="StatusContext", context="ci/docs", state="ERROR"),
+                # Unnamed, it is counted only.
+                dict(__typename="CheckRun", status="COMPLETED", conclusion="FAILURE"),
+                # A name two workflows share goes with its workflow's.
+                dict(__typename="CheckRun", name="build", workflowName="CI", status="COMPLETED",
+                     conclusion="FAILURE"),
+                dict(__typename="CheckRun", name="build", workflowName="Release", status="COMPLETED",
+                     conclusion="SUCCESS")])]))
+
+        def thread(resolved, path, **fields):
+            return dict(isResolved=resolved, path=path, comments=dict(nodes=[dict(createdAt="2026-10-16T21:41:00Z")]),
+                        **fields)
+
+        copilot = dict(nodes=[dict(author=dict(login="copilot-pull-request-reviewer"),
+                                   bodyText="\n  The total skips the last row.\nSuggested change: ...")])
+        (self.gh_dir / "reviews.json").write_text(json.dumps({"7": dict(
+            mergeable="MERGEABLE", reviewRequests=dict(nodes=[]),
+            reviewThreads=dict(totalCount=5, nodes=[
+                thread(False, "report.py", line=12, diffSide="RIGHT", opening=copilot),
+                thread(True, "ledger.py", line=3, diffSide="RIGHT", opening=copilot),
+                # On a deleted line, its line is the old file's.
+                thread(False, "ledger.py", line=40, diffSide="LEFT",
+                       opening=dict(nodes=[dict(author=dict(login="octo"), bodyText="Why remove this?")])),
+                # Its line changed since, or it is on the whole file.
+                thread(False, "ledger.py", line=None, isOutdated=True,
+                       opening=dict(nodes=[dict(author=None, bodyText="x" * 300)])),
+                thread(False, "README.md", diffSide="RIGHT", opening=dict(nodes=[])),
+                # Whatever else GitHub sends of how it starts.
+                thread(False, "TODO.md", opening=dict(nodes=["?"]))]))}))
+        status = self.request("list", full=True)["result"][0]["prStatus"]
+        self.assertEqual((status["failingChecks"], status["pendingChecks"]),
+                         (["lint", "ci/docs", "CI / build"], ["test (30.1)"]))
+        self.assertEqual(status["checks"], dict(passing=2, failing=4, pending=1))
+        self.assertEqual((status["threads"], status["mergeable"]), (5, "MERGEABLE"))
+        self.assertEqual(status["openThreads"], [
+            dict(path="README.md", author=None, text=""),
+            dict(path="TODO.md", author=None, text=""),
+            dict(path="ledger.py", author="octo", text="Why remove this?"),
+            dict(path="ledger.py", author=None, text="x" * 200, outdated=True),
+            dict(path="report.py", author="copilot-pull-request-reviewer", text="The total skips the last row.",
+                 line=12)])
+        query = self.gh_calls()[-1][5]
+        self.assertIn("path line diffSide", query)
+        self.assertIn("opening: comments(first: 1)", query)
+        # Checks that all pass, and threads all resolved, have nothing to name.
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(
+            number=7, url=url, state="OPEN", headRefOid=tip,
+            statusCheckRollup=[dict(__typename="CheckRun", name="lint", status="COMPLETED", conclusion="SUCCESS")])]))
+        (self.gh_dir / "reviews.json").write_text(json.dumps({"7": dict(
+            mergeable="MERGEABLE", reviewRequests=dict(nodes=[]),
+            reviewThreads=dict(totalCount=1, nodes=[thread(True, "report.py", line=12, diffSide="RIGHT")]))}))
+        status = self.request("list", full=True)["result"][0]["prStatus"]
+        for field in ("failingChecks", "pendingChecks", "openThreads"):
+            self.assertNotIn(field, status)
+        # Too many threads to tell which are open lists none.
+        (self.gh_dir / "reviews.json").write_text(json.dumps({"7": dict(
+            mergeable="MERGEABLE", reviewRequests=dict(nodes=[]),
+            reviewThreads=dict(totalCount=101, nodes=[thread(False, "report.py", line=12, diffSide="RIGHT")] * 100))}))
+        self.assertNotIn("openThreads", self.request("list", full=True)["result"][0]["prStatus"])
+        # Many are listed only as far as the panel could show them.
+        (self.gh_dir / "reviews.json").write_text(json.dumps({"7": dict(
+            mergeable="MERGEABLE", reviewRequests=dict(nodes=[]),
+            reviewThreads=dict(totalCount=30, nodes=[thread(False, "f%02d.py" % n) for n in range(30)]))}))
+        status = self.request("list", full=True)["result"][0]["prStatus"]
+        self.assertEqual((status["threads"], len(status["openThreads"])), (30, roost.THREADS_LISTED))
+
     def test_reviews_are_asked_once_for_each_repository(self):
         self.github()
         first, second = self.create(name="first"), self.create(name="second")

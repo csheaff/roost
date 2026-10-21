@@ -28,10 +28,36 @@ happened in a section below:
    worktree for its agent to resolve, and `m` merges it.
 7. `P` opens a pull request; while its checks run and Copilot reviews it, the
    panel says so, and once they pass, the sidebar says `to merge` and `n`
-   reaches it. Once it merges on GitHub, `x` retires the task. So does one
-   the agent opens itself, and the sidebar then says `merged`.
+   reaches it. The panel names a failing check, lists Copilot's open
+   threads with file and line, and `RET` on one visits it. Once it merges
+   on GitHub, `x` retires the task. So does one the agent opens itself, and
+   the sidebar then says `merged`.
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
+
+## Evidence beside the files — 2026-10-21
+
+- **The question.** Whether the panel can name a pull request's checks and
+  list its open review threads from the lookups Roost already makes, and
+  read as facts rather than a verdict.
+- **No new calls.** Check names come from the `statusCheckRollup` that
+  `gh pr list` already returns. The one GraphQL query per repository gains
+  each thread's path, line, side and whether it is outdated, and its first
+  comment's author and text. Run through the helper against GitHub for
+  three of Roost's pull requests, it answered in 0.9 s; on #86, with 10
+  threads, GitHub's answer was 7 KB. On Roost's #81 and tmux-control's #197
+  and #199, the threads Copilot left open came back with path, author
+  `copilot-pull-request-reviewer` (shown as Copilot) and the first line of
+  the finding; their lines had changed since, so they show as outdated and
+  `RET` shows the file's changes.
+- **`make qa`**: the pull request journey checks `No CI results: no pull
+  request` before `P`, `… 1 pending: test`, `✓ 1 passed`, `✗ lint failed`,
+  and two open threads, one on `DUE.md:1` from Copilot; a click on it opened
+  `DUE.md` at line 1 in the task's worktree, in a window below the
+  terminal, with the terminal and panel still on screen. The walk-away grid
+  gained a click on a review thread in another task's panel. Every panel
+  screenshot looked at: "No CI results" is dim and unmarked, passed checks
+  have a green ✓, and a merged pull request shows neither section.
 
 ## Size and spread — 2026-10-20
 

@@ -4,6 +4,7 @@
 """Roost's host-side task manager. Standard library only; JSON over stdin/stdout."""
 
 import base64
+import collections
 import concurrent.futures
 import contextlib
 import datetime
@@ -1614,6 +1615,23 @@ def summarize_checks(rollup):
     return counts
 
 
+def check_names(rollup, state):
+    """The names of a statusCheckRollup's checks that are STATE, as
+    check_state has it: the first CHECKS_NAMED of them, of those named. A
+    name that two checks share goes with its workflow's, when it has one."""
+    def name(check):
+        return check.get("name") or check.get("context")
+
+    shared = collections.Counter(name(check) for check in rollup or [])
+    names = []
+    for check in rollup or []:
+        if check_state(check) == state and isinstance(name(check), str) and name(check):
+            workflow = check.get("workflowName")
+            names.append("%s / %s" % (workflow, name(check)) if shared[name(check)] > 1 and workflow
+                         else name(check))
+    return names[:CHECKS_NAMED]
+
+
 def first_failure(rollup):
     """When the first of a statusCheckRollup's failing checks finished, as
     GitHub wrote it: a newer failure leaves an older one overdue. None when
@@ -1629,13 +1647,20 @@ PULL_REQUEST_FIELDS = "number,url,state,isDraft,reviewDecision,statusCheckRollup
 PULL_REQUEST_DEADLINE = 20
 # What `gh pr list` leaves out, for each of a repository's open pull
 # requests: whether it conflicts, who is yet to review it, Copilot among
-# them, and its review threads, the last 100 of them.
+# them, and its review threads, the last 100 of them, each with where it
+# is and how it starts.
 PULL_REQUEST_REVIEWS = """
   pr%d: pullRequest(number: %d) {
     mergeable
     reviewRequests(first: 20) { nodes { requestedReviewer { ... on Actor { login } ... on Team { slug } } } }
-    reviewThreads(last: 100) { totalCount nodes { isResolved comments(last: 1) { nodes { createdAt } } } }
+    reviewThreads(last: 100) { totalCount nodes { isResolved isOutdated path line diffSide
+      comments(last: 1) { nodes { createdAt } } opening: comments(first: 1) { nodes { author { login } bodyText } } } }
   }"""
+# How many failing or pending checks, and open review threads, the task
+# panel can name, and how much of each thread's first comment it shows.
+CHECKS_NAMED = 20
+THREADS_LISTED = 20
+THREAD_TEXT_LIMIT = 200
 
 
 def pull_request_reviews(prs, deadline):
@@ -1685,9 +1710,9 @@ def pull_request_reviews(prs, deadline):
 def review_state(pr):
     """The fields of prStatus that PR, one pull request of a
     PULL_REQUEST_REVIEWS answer, gives. Unresolved threads aren't counted
-    when there are more than were asked for. Of each one's last comment,
-    the first is when they came to wait: a comment in one leaves another
-    overdue. Without the time of one, there is none."""
+    or listed when there are more than were asked for. Of each one's last
+    comment, the first is when they came to wait: a comment in one leaves
+    another overdue. Without the time of one, there is none."""
     requested = [(request.get("requestedReviewer") or {}) for request in pr["reviewRequests"]["nodes"]]
     threads = pr["reviewThreads"]
     unresolved = [thread for thread in threads["nodes"] if not thread["isResolved"]]
@@ -1699,7 +1724,31 @@ def review_state(pr):
         state.update(threads=len(unresolved),
                      threadAt=(min(times, key=parse_time) if times and all(parse_time(t) for t in times)
                                else None))
+        listed = sorted((open_thread(thread) for thread in unresolved if isinstance(thread.get("path"), str)),
+                        key=lambda thread: (thread["path"], thread.get("line") or 0))
+        if listed:
+            state["openThreads"] = listed[:THREADS_LISTED]
     return state
+
+
+def open_thread(thread):
+    """What the task panel shows of THREAD, an unresolved review thread:
+    its file; its line in the pull request's version of the file, unless it
+    is on a deleted line, a line changed since or the whole file; and who
+    started it, with the first line of what they wrote."""
+    opening = thread.get("opening")
+    nodes = opening.get("nodes") if isinstance(opening, dict) else None
+    first = nodes[0] if isinstance(nodes, list) and nodes and isinstance(nodes[0], dict) else {}
+    author = first.get("author")
+    body = first.get("bodyText")
+    text = next((line.strip() for line in (body if isinstance(body, str) else "").splitlines() if line.strip()), "")
+    entry = dict(path=thread["path"], author=author.get("login") if isinstance(author, dict) else None,
+                 text=text[:THREAD_TEXT_LIMIT])
+    if thread.get("diffSide") == "RIGHT" and isinstance(thread.get("line"), int):
+        entry["line"] = thread["line"]
+    if thread.get("isOutdated"):
+        entry["outdated"] = True
+    return entry
 
 
 def unpushed(task, head, tip):
@@ -1838,11 +1887,16 @@ def check_pull_requests(store, tasks):
         try:
             checks = summarize_checks(pr.get("statusCheckRollup"))
             failed = first_failure(pr.get("statusCheckRollup"))
+            # By name, for the task panel, of those that don't pass.
+            names = dict(failingChecks=check_names(pr.get("statusCheckRollup"), "failing"),
+                         pendingChecks=check_names(pr.get("statusCheckRollup"), "pending"))
         except (AttributeError, TypeError):
             checks = failed = None
+            names = {}
         task["prStatus"] = dict(state=pr.get("state"), draft=bool(pr.get("isDraft")),
                                 review=pr.get("reviewDecision") or None, checks=checks, head=pr.get("headRefOid"),
                                 base=pr.get("baseRefName"))
+        task["prStatus"].update((key, value) for key, value in names.items() if value)
         if pr.get("state") == "OPEN":
             task["prStatus"].update(reviews.get(pr.get("url"), {}), failedAt=failed, checkedAt=checked)
             task["unpushed"] = unpushed(task, pr.get("headRefOid"), tip)
