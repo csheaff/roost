@@ -2197,7 +2197,7 @@ EXTRA is an alist of further request fields, such as the GitHub issue."
        (roost-watch-mode 1)
        (roost--redraw)
        (roost-open-task task)
-       (message "Roost created %s on %s from %s; integrates into %s"
+       (message "Roost created %s on %s from %s; it merges into %s"
                 name (roost--host-label host)
                 (roost--field task 'baseRef) (roost--field task 'integrationBranch)))
      (lambda (err)
@@ -2804,8 +2804,8 @@ The checkouts are those Roost has used, then those project.el knows."
     (roost--compose-render)))
 
 (defun roost--compose-integration (directory ref)
-  "The branch a task in DIRECTORY started at REF merges into, as the
-helper decides it, or nil for the primary checkout's."
+  "The branch a task in DIRECTORY started at REF merges into.
+As the helper decides it, or nil for the primary checkout's."
   (let ((full (string-trim (or (roost--git-in directory "rev-parse" "--symbolic-full-name" ref) ""))))
     (cond ((string-prefix-p "refs/heads/" full)
            (let* ((branch (substring full (length "refs/heads/")))
@@ -8860,6 +8860,9 @@ have seen that waits for nothing."
          (roost--marked-key (if (roost--workspace-backend)
                                 (when-let* ((task (roost--frame-task))) (roost--key task))
                               'unset))
+         ;; The line each window showing it starts at, which erasing loses.
+         (starts (mapcar (lambda (shown) (cons shown (line-number-at-pos (window-start shown))))
+                         (get-buffer-window-list (current-buffer) nil t)))
          (inhibit-read-only t))
     (erase-buffer)
     (insert (propertize "Roost" 'face 'roost-title)
@@ -8911,6 +8914,33 @@ have seen that waits for nothing."
                    (and heading (roost--heading-row heading))
                    (point-min)))
     (when window (set-window-point window (point)))
+    (pcase-dolist (`(,shown . ,line) starts)
+      (set-window-start shown (save-excursion (goto-char (point-min)) (forward-line (1- line)) (point)) t))
+    ;; Each sidebar you aren't in goes to the task you work on once it
+    ;; changes, so that its band shows however many tasks there are; one
+    ;; you scrolled since stays where you left it.
+    (dolist (shown (get-buffer-window-list (current-buffer) nil t))
+      ;; With workspaces, each frame's own task.
+      (let ((current (if (roost--workspace-backend)
+                         (with-selected-frame (window-frame shown)
+                           (when-let* ((task (roost--frame-task))) (roost--key task)))
+                       roost--current-task)))
+        (unless (or (eq shown (selected-window))
+                    (equal (window-parameter shown 'roost-followed) current))
+          ;; Followed once its row is there, as a new task's may not be yet.
+          (unless current (set-window-parameter shown 'roost-followed nil))
+          (when-let* ((row (and current (roost--task-row current))))
+            (set-window-parameter shown 'roost-followed current)
+            (set-window-point shown row)
+            ;; Scrolled no further than it shows the row, at the bottom:
+            ;; the top, with how many wait and the hosts it can't reach,
+            ;; stays as long as it can.
+            (let ((height (window-body-height shown))
+                  (top (line-number-at-pos (window-start shown)))
+                  (at (line-number-at-pos row)))
+              (unless (and (>= at top) (< at (+ top height)))
+                (set-window-start shown (save-excursion (goto-char row) (forward-line (- 1 height)) (point))
+                                  t)))))))
     ;; Redrawing removed the highlight with the text.
     (roost--sidebar-mark-selection)))
 
@@ -9417,7 +9447,7 @@ longest any waited on you at a time while you were here."
           (let ((start (point)) (fill-column 72))
             (insert (propertize
                      (concat "At once is the most agents working at the same time.  Waited on you adds up "
-                             "the time agents asked you something, ended a turn or failed before you looked, "
+                             "the time agents asked you something, ended a turn or failed before you saw them, "
                              "or had a pull request or conflict for you; "
                              (format "%d minutes with no change on any host count as time away, and are left out.  "
                                      (/ roost--away 60))

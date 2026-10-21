@@ -344,7 +344,7 @@ keep it from saying so.
 **See how many agents you can keep up with.** `M-x roost-workload` shows, for
 today and each day of the past week, the most agents that worked at once, how
 long they worked, and how long they waited on you: asked you something, ended
-a turn or failed before you looked, or had a pull request or conflict for you,
+a turn or failed before you saw them, or had a pull request or conflict for you,
 added up across agents, with the longest single wait. The last column is that
 waiting for each hour of work. A day with more agents at once should show more
 work; past what you can supervise, it shows more waiting for each hour of work
