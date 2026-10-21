@@ -1294,6 +1294,63 @@ def retire(qa, repo):
         ("its branch is gone", lambda s: not qa.git(repo, "branch", "--list", "roost/" + dirty + "*"))])
 
 
+@journey("Tear down a task's worktree")
+def teardown(qa, repo):
+    """A project's roost-teardown-command, from its .dir-locals.el, runs in a
+    task's worktree as it is retired; one that fails is shown, and the
+    worktree goes all the same."""
+    torn = qa.work / "torn-down"
+    settings = repo / ".dir-locals.el"
+    if qa.host:
+        qa.emacs.eval("(setq enable-remote-dir-locals t)")
+    asked = lambda s: "Please type" in (s["prompt"] or "")
+
+    def retire_with(command, prompt):
+        settings.write_text("((nil . ((roost-teardown-command . %s))))\n" % lisp(command))
+        # Creating a task reads the project's variables too, and Emacs asks
+        # about every one it doesn't trust.
+        before = {t["name"] for t in qa.screen()["tasks"]}
+        qa.keys("C-c r c")
+        qa.type(prompt)
+        qa.keys("C-c C-c")
+        qa.wait("whether to take the project's variables", asked)
+        qa.type("y")
+        screen = qa.wait("the task for %r" % prompt, lambda s: {t["name"] for t in s["tasks"]} - before)
+        name = next(t["name"] for t in screen["tasks"] if t["name"] not in before)
+        qa.status(name, "ready", "idle")
+        open_task(qa, name)
+        qa.keys("C-c r x")
+        qa.wait("the question", lambda s: s["prompt"])
+        qa.type("y")
+        # Emacs's own question, as for any command a project sets.
+        qa.wait("whether to take the command", asked)
+        return name
+
+    try:
+        name = retire_with("pwd -P > %s" % shlex.quote(str(torn)), "Build the index")
+        qa.step("Emacs asks before running what .dir-locals.el sets", expect=[
+            ("it shows the command", lambda s: any("pwd -P" in w["text"] for w in s["windows"]))])
+        qa.type("y")
+        qa.wait("the task to go", lambda s: qa.task(s, name) is None, timeout=60)
+        qa.step("Retired, after its teardown", expect=[
+            ("the command ran in its worktree", lambda s: torn.exists() and name in torn.read_text()),
+            ("which is gone", lambda s: not Path(torn.read_text().strip()).exists()),
+            ("no warning", lambda s: "*Warnings*" not in s["buffers"])])
+        failing = retire_with("echo no output base; exit 3", "Build it again")
+        qa.type("y")
+        warning = lambda s: next((w for w in s["windows"] if w["buffer"] == "*Warnings*"), None)
+        qa.wait("the warning", warning, timeout=60)
+        qa.step("A teardown that fails is shown", expect=[
+            ("the warning says how it failed", lambda s: "exited with status 3" in warning(s)["text"]),
+            ("and what it printed", lambda s: "no output base" in warning(s)["text"]),
+            ("the task went all the same", lambda s: qa.task(s, failing) is None),
+            ("its branch too", lambda s: not qa.git(repo, "branch", "--list", "roost/" + failing + "*"))])
+    finally:
+        settings.unlink(missing_ok=True)
+        if qa.host:
+            qa.emacs.eval("(setq enable-remote-dir-locals nil)")
+
+
 @journey("Send a prompt")
 def send(qa, repo):
     name = start_task(qa, "Say hi", "say-hi")
@@ -2489,7 +2546,7 @@ def dropped(qa, repo):
 
 
 JOURNEYS = [sweep, answer, next_waiting, fold, resize, merge, review, since_looked, panes, shell,
-            dashboard, stop_resume, retire, send, attach, update, conflicts, restart, search, workload, question_left,
+            dashboard, stop_resume, retire, teardown, send, attach, update, conflicts, restart, search, workload, question_left,
             walk_away,
             frames, draft_frames, org, drafts, overlap, tabs,
             forget, rename, fork, other_branch, merged, large, pull_request, exits, unreachable, scrollback, fleet, dropped]

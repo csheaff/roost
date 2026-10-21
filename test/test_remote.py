@@ -2329,6 +2329,69 @@ class Lifecycle(unittest.TestCase):
         task = self.wait(reply["result"], "ready")
         self.assertEqual((Path(task["worktree"]) / ".env").read_text(), "SECRET=1\n")
 
+    def test_teardown_runs_in_the_worktree_just_before_it_goes(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        marker = self.root / "torn down"
+        teardown = 'pwd -P > %s; echo "$ROOST_REPO" >> %s; test -f hello' % ((shlex.quote(str(marker)),) * 2)
+        # Not while retiring is refused.
+        (wt / "scratch").write_text("untracked\n")
+        self.request("stop", id=task["id"])
+        self.assertIn("Uncommitted", self.request("retire", id=task["id"], teardown=teardown)["error"])
+        self.assertFalse(marker.exists())
+        (wt / "scratch").unlink()
+        # One that leaves a file there keeps the task, and says it may have.
+        error = self.request("retire", id=task["id"], teardown="touch made")["error"]
+        self.assertTrue(error.startswith("After the teardown command ran"), error)
+        (wt / "made").unlink()
+        reply = self.request("retire", id=task["id"], teardown=teardown)
+        self.assertTrue(reply["ok"], reply)
+        self.assertNotIn("teardownFailure", reply["result"])
+        self.assertEqual(marker.read_text().splitlines(), [str(wt.resolve()), task["repo"]])
+        self.assertFalse(wt.exists())
+
+    def test_a_failing_teardown_says_so_and_the_worktree_goes_anyway(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+        reply = self.request("discard", id=task["id"], expect=told["commit"],
+                             teardown="echo cleaning; echo no output base >&2; exit 3")
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(reply["result"]["teardownFailure"], "exited with status 3")
+        self.assertEqual(reply["result"]["teardownOutput"], "cleaning\nno output base")
+        self.assertFalse(wt.exists())
+        self.assertFalse(roost.ref_exists(self.repo, task["branch"]))
+        self.assertEqual(self.request("list")["result"], [])
+        # One that can't run, as with no room for its output, doesn't keep it either.
+        other = self.create(name="other")
+        self.request("stop", id=other["id"])
+        with patch.object(roost.tempfile, "TemporaryFile", side_effect=OSError(28, "No space left on device")):
+            reply = self.request("retire", id=other["id"], teardown="true")
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(reply["result"]["teardownFailure"], "could not run ([Errno 28] No space left on device)")
+        self.assertFalse(Path(other["worktree"]).exists())
+
+    def test_a_teardown_that_hangs_is_stopped_and_one_left_running_holds_nothing_up(self):
+        first, second = self.create(name="first"), self.create(name="second")
+        for task in (first, second):
+            self.request("stop", id=task["id"])
+        survivor = self.root / "survivor"
+        with patch.object(roost, "TEARDOWN_SECONDS", 1):
+            reply = self.request("retire", id=first["id"],
+                                 teardown="echo waiting; (sleep 3; touch %s) & wait" % shlex.quote(str(survivor)))
+            self.assertTrue(reply["ok"], reply)
+            self.assertEqual(reply["result"]["teardownFailure"], "was stopped after 1 seconds")
+            self.assertEqual(reply["result"]["teardownOutput"], "waiting")
+            self.assertFalse(Path(first["worktree"]).exists())
+            # What it started was stopped with it; what it leaves to run on
+            # its own, with its output, finishes after the removal.
+            started = time.monotonic()
+            reply = self.request("retire", id=second["id"], teardown="sleep 20 &")
+            self.assertLess(time.monotonic() - started, 15)
+            self.assertNotIn("teardownFailure", reply["result"])
+        time.sleep(3)
+        self.assertFalse(survivor.exists())
+
     def test_agent_path_keeps_inherited_precedence(self):
         path = roost.agent_path("/project/bin" + os.pathsep + "/usr/local/bin").split(os.pathsep)
         self.assertEqual(path[:2], ["/project/bin", "/usr/local/bin"])

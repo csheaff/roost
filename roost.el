@@ -164,6 +164,19 @@ worktree, with the project's primary checkout in $ROOST_REPO, so it can
 copy files Git doesn't track, such as cp \"$ROOST_REPO/.env\" ."
   :type '(choice (const nil) string))
 
+(defcustom roost-teardown-command nil
+  "Optional shell command run in a task's worktree just before Roost removes it.
+Merging, retiring and discarding a task run it, as for cleaning up what
+a tool keeps for the worktree elsewhere.  May be set directory-locally;
+it runs on the task's host, with the primary checkout in $ROOST_REPO.
+After two minutes it is stopped.  If it fails, Roost warns, and removes
+the worktree anyway."
+  :type '(choice (const nil) string))
+
+(defconst roost--teardown-seconds 120
+  "Seconds a host lets a teardown command run, as TEARDOWN_SECONDS says.
+Emacs waits this much longer for a request that runs one.")
+
 (defcustom roost-branch-prefix "roost/"
   "Prefix for task topic branches, which are named PREFIX<task>-<id>.
 Existing tasks keep their branch."
@@ -2142,6 +2155,13 @@ a word, within 40 characters."
       (cdr (assoc agent roost-agent-commands))
       (list agent)))
 
+(defun roost--project-value (directory variable)
+  "VARIABLE's value for the project in DIRECTORY, which may set it locally."
+  (with-temp-buffer
+    (setq default-directory directory)
+    (hack-dir-local-variables-non-file-buffer)
+    (symbol-value variable)))
+
 (defun roost--create-task (directory name base prompt agent &optional on-success on-failure extra)
   "Create an AGENT task NAME in DIRECTORY from BASE with PROMPT.
 Call ON-SUCCESS with the task before it opens, or ON-FAILURE with an error.
@@ -2150,10 +2170,7 @@ EXTRA is an alist of further request fields, such as the GitHub issue."
   (unless (member agent roost--agents)
     (user-error "Unsupported Roost agent: %s" agent))
   (let ((host (roost--directory-host directory))
-        (setup (with-temp-buffer
-                 (setq default-directory directory)
-                 (hack-dir-local-variables-non-file-buffer)
-                 roost-setup-command)))
+        (setup (roost--project-value directory 'roost-setup-command)))
     (roost--request
      host "create"
      `(,(cons 'directory (file-local-name directory))
@@ -3008,30 +3025,44 @@ The other actions say more themselves when they finish.")
   "Run ACTION on TASK with PARAMETERS, then CALLBACK with the updated task.
 FAILURE, if given, receives the error message instead of Roost reporting it."
   (let* ((host (roost--field task 'host))
+         ;; What removes the worktree runs the project's teardown first.
+         (teardown (when (and (member action '("retire" "merge" "discard"))
+                              (roost--field task 'repo))
+                     (roost--project-value (roost--project-directory task) 'roost-teardown-command)))
          ;; The host refuses to resume an agent still running, whose
          ;; terminal stays.
          (terminals (when (or (member action '("stop" "retire" "merge" "forget" "discard"))
                               (and (equal action "resume") (not (roost--field task 'live))))
                       (roost--release-terminal task))))
-    (roost--request host action (cons (cons 'id (roost--field task 'id)) parameters)
-                    (lambda (updated)
-                      (roost--discard-terminal terminals)
-                      (cl-incf (gethash host roost--revisions 0))
-                      ;; `pushed' is transient: the callback sees it, the cache does not.
-                      (let ((pushed (assq 'pushed updated)))
-                        (setq updated (roost--cache-task host updated))
-                        (roost--redraw)
-                        (when-let* ((said (cdr (assoc action roost--action-messages))))
-                          (message said (roost--field task 'name)))
-                        (when callback
-                          (funcall callback (if pushed (cons pushed updated) updated)))))
-                    (lambda (err)
-                      ;; Refused, as retiring unmerged work is: the agent runs on.
-                      (when (roost--field task 'live)
-                        (roost--restore-terminal task terminals))
-                      (if failure
-                          (funcall failure err)
-                        (message "Roost %s: %s" (roost--host-label host) err))))))
+    (apply #'roost--request host action (append (list (cons 'id (roost--field task 'id)))
+                                                (when teardown (list (cons 'teardown teardown)))
+                                                parameters)
+           (lambda (updated)
+             (roost--discard-terminal terminals)
+             (cl-incf (gethash host roost--revisions 0))
+             ;; `pushed' is transient: the callback sees it, the cache does not.
+             (let ((pushed (assq 'pushed updated))
+                   (torn (alist-get 'teardownFailure updated))
+                   (output (alist-get 'teardownOutput updated)))
+               (setq updated (roost--cache-task host updated))
+               (roost--redraw)
+               (when-let* ((said (cdr (assoc action roost--action-messages))))
+                 (message said (roost--field task 'name)))
+               (when callback
+                 (funcall callback (if pushed (cons pushed updated) updated)))
+               (when torn
+                 (display-warning
+                  'roost (format "%s's teardown command %s; Roost removed its worktree anyway%s"
+                                 (roost--field task 'name) torn
+                                 (if (member output '(nil "")) "." (concat ":\n\n" output)))))))
+           (lambda (err)
+             ;; Refused, as retiring unmerged work is: the agent runs on.
+             (when (roost--field task 'live)
+               (roost--restore-terminal task terminals))
+             (if failure
+                 (funcall failure err)
+               (message "Roost %s: %s" (roost--host-label host) err)))
+           (when teardown (list (+ roost-request-timeout roost--teardown-seconds))))))
 
 ;;;###autoload
 (defun roost-resume (&optional task)
