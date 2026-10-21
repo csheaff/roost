@@ -162,10 +162,10 @@ account, with no badge or verdict.
 - **Since you last looked, in the fringe.** Point diff-hl at the commit
   Roost keeps of where you last looked, in a task's worktree, so a file
   shows only what changed since, in your own buffer.
-- **Looking without Magit.** Only `r` and the notes you send record a
+- **Looking without Magit.** Only `r`, `D` and the notes you send record a
   look, so someone who reads the diffs in the agent's terminal, or judges
   by evidence, sees `not looked at` until they open Magit. A key in the
-  task panel could record one, and `D` could count as one.
+  task panel could record one.
 - **Hunks changed since you staged.** Staging is the finest record of what
   you approved, and Magit shows what changed after it as unstaged. A count
   on the row, "3 hunks changed since you staged", would say at hunk level
