@@ -2362,6 +2362,14 @@ class Lifecycle(unittest.TestCase):
         self.assertFalse(wt.exists())
         self.assertFalse(roost.ref_exists(self.repo, task["branch"]))
         self.assertEqual(self.request("list")["result"], [])
+        # One that can't run, as with no room for its output, doesn't keep it either.
+        other = self.create(name="other")
+        self.request("stop", id=other["id"])
+        with patch.object(roost.tempfile, "TemporaryFile", side_effect=OSError(28, "No space left on device")):
+            reply = self.request("retire", id=other["id"], teardown="true")
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(reply["result"]["teardownFailure"], "could not run ([Errno 28] No space left on device)")
+        self.assertFalse(Path(other["worktree"]).exists())
 
     def test_a_teardown_that_hangs_is_stopped_and_one_left_running_holds_nothing_up(self):
         first, second = self.create(name="first"), self.create(name="second")

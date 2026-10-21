@@ -3637,29 +3637,31 @@ def run_teardown(task, worktree, command):
     what it leaves running in the background, holding a pipe, would hold up
     the removal. After TEARDOWN_SECONDS it is killed, with what it started."""
     env = dict(os.environ, ROOST_REPO=task["repo"], PATH=agent_path(os.environ.get("PATH", "")))
-    with tempfile.TemporaryFile() as output:
-        try:
+    # Nothing here keeps the worktree: what can't run, as with no room for
+    # its output, fails as the command would.
+    try:
+        with tempfile.TemporaryFile() as output:
             process = subprocess.Popen(["/bin/sh", "-lc", command], cwd=str(worktree), env=env,
                                        stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT,
                                        start_new_session=True)
-        except OSError as exc:
-            return "could not start (%s)" % exc, ""
-        try:
-            code = process.wait(timeout=TEARDOWN_SECONDS)
-        except subprocess.TimeoutExpired:
-            with contextlib.suppress(ProcessLookupError, PermissionError):
-                os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
-            failure = "was stopped after %d seconds" % TEARDOWN_SECONDS
-        else:
-            if code == 0:
-                return None
-            failure = "exited with status %d" % code if code > 0 else "was killed by signal %d" % -code
-        # Read without moving the offset what it left running still writes at.
-        size = os.fstat(output.fileno()).st_size
-        start = max(0, size - 4 * TEARDOWN_OUTPUT)
-        printed = os.pread(output.fileno(), size - start, start).decode(errors="replace").strip()
-        return failure, printed[-TEARDOWN_OUTPUT:]
+            try:
+                code = process.wait(timeout=TEARDOWN_SECONDS)
+            except subprocess.TimeoutExpired:
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
+                failure = "was stopped after %d seconds" % TEARDOWN_SECONDS
+            else:
+                if code == 0:
+                    return None
+                failure = "exited with status %d" % code if code > 0 else "was killed by signal %d" % -code
+            # Read without moving the offset what it left running still writes at.
+            size = os.fstat(output.fileno()).st_size
+            start = max(0, size - 4 * TEARDOWN_OUTPUT)
+            printed = os.pread(output.fileno(), size - start, start).decode(errors="replace").strip()
+            return failure, printed[-TEARDOWN_OUTPUT:]
+    except OSError as exc:
+        return "could not run (%s)" % exc, ""
 
 
 def remove_worktrees(store, task, worktree, agents, force=False, teardown=None):
