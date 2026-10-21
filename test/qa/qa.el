@@ -401,6 +401,12 @@ open is dismissed first, with keys."
     (select-window main)
     (delete-other-windows main)
     (switch-to-buffer "*scratch*"))
+  ;; Files the last journey visited go too, unless changed: one of another
+  ;; task's worktree, say, would name the checkout's own notes.py
+  ;; notes.py<notes> in the next.
+  (dolist (buffer (buffer-list))
+    (when (and (buffer-file-name buffer) (not (buffer-modified-p buffer)))
+      (kill-buffer buffer)))
   (roost--redraw)
   t)
 
