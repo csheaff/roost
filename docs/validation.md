@@ -61,10 +61,12 @@ happened in a section below:
   waited for a buffer that was now `notes.py<notes>`; each journey now
   starts without files earlier ones left open. The GUI sweep ran past its
   600 s while another QA run's sweep ran at the same time, and passed in
-  3½ minutes alone. The remote run also had a panel that didn't come back
-  after a split closed, a terminal that showed a line of history, and an
-  opened task whose host never replied, after which every journey waited
-  for it; see below.
+  3½ minutes alone. With the fixes, a full run on Emacs 32 had 241 steps
+  and none with problems. The remote run, made while two other QA runs
+  ran, also had a panel that didn't come back after a split closed, a
+  terminal that showed a line of history, and an opened task whose host
+  never replied, after which every journey waited for it: each to be run
+  again alone.
 
 ## Evidence beside the files — 2026-10-21
 
