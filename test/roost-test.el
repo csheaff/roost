@@ -8063,11 +8063,12 @@ host, or run."
 (defmacro roost-test--resuming (fail &rest body)
   "Run BODY with requests to hosts recorded in `requests', as (ACTION NAME).
 Resume and open succeed, unless FAIL names the task, whose resume fails;
-`opened' has the tasks opened, `asked' the questions, `messages' what
-was said.  Questions are answered with `answer'."
+`opened' has the tasks opened, `described' what opening the last one
+says, `asked' the questions, `messages' what was said.  Questions are
+answered with `answer'."
   (declare (indent 1))
-  `(let (requests opened asked messages answer)
-     (ignore answer)
+  `(let (requests opened described asked messages answer)
+     (ignore answer described)
      (cl-letf (((symbol-function 'roost--request)
                 (lambda (host action params success &optional failure _timeout)
                   (let ((task (gethash (list host (alist-get 'id params)) roost--tasks)))
@@ -8075,7 +8076,10 @@ was said.  Questions are answered with `answer'."
                     (if (member (roost--field task 'name) ,fail)
                         (funcall failure "Task worktree is gone; forget the task to remove it from Roost")
                       (funcall success (append '((status . "starting") (live . t)) task))))))
-               ((symbol-function 'roost-open-task) (lambda (task &rest _) (push (roost--field task 'name) opened)))
+               ((symbol-function 'roost-open-task)
+                (lambda (task &optional _quit describe)
+                  (push (roost--field task 'name) opened)
+                  (setq described describe)))
                ((symbol-function 'y-or-n-p) (lambda (question) (push question asked) answer))
                ((symbol-function 'message)
                 (lambda (format &rest args) (when format (push (apply #'format format args) messages)))))
@@ -8109,7 +8113,9 @@ was said.  Questions are answered with `answer'."
        (should (equal asked '("Resume the 2 other agents that crashed on dev too? ")))
        (should (equal (reverse requests) '(("resume" "sum check") ("resume" "lint") ("resume" "tidy"))))
        (should (equal opened '("sum check")))
-       (should (equal (car messages) "Resumed 3 agents on dev"))))
+       (should (equal (car messages) "Resumed 3 agents on dev"))
+       ;; Said again once its terminal shows, as opening clears it.
+       (should (equal (funcall described nil) "Resumed 3 agents on dev"))))
    (let ((task (roost-test--crashed-host)))
      (roost-test--resuming nil
        ;; n: this one only.
@@ -8207,14 +8213,14 @@ was said.  Questions are answered with `answer'."
        (roost--resume-together task (roost--crashed-with task))
        (should-not (roost--crashed-with (gethash '("dev" "3333333333333333") roost--tasks)))
        (should-not (string-match-p "offers" (roost--next-step (gethash '("dev" "3333333333333333") roost--tasks))))
-       ;; You resume tidy meanwhile: its turn passes.
+       ;; You resume tidy meanwhile, and forget lint: their turns pass.
        (roost--cache-task "dev" (append '((status . "starting") (live . t))
                                         (gethash '("dev" "2222222222222222") roost--tasks)))
-       (funcall (pop replies))
+       (remhash '("dev" "3333333333333333") roost--tasks)
        (funcall (pop replies))
        (should-not replies)
-       (should (equal (reverse requests) '(("resume" "sum check") ("resume" "lint"))))
-       (should (equal (car messages) "Resumed 3 agents on dev"))
+       (should (equal requests '(("resume" "sum check"))))
+       (should (equal (car messages) "Resumed 1 agent on dev"))
        (should-not roost--resuming)))))
 
 (ert-deftest roost-task-sessions-stay-out-of-tmux-controls-activity-corner ()

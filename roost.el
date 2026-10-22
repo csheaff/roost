@@ -3273,13 +3273,12 @@ host crashed with TASK's, as when the host restarted, ask whether to
 resume those too."
   (interactive (list nil t))
   (setq task (roost--choose task))
-  (let ((others (and offer (roost--crashed-with task))))
+  (let ((others (and offer (roost--crashed-with task)))
+        (host (roost--host-label (roost--field task 'host))))
     (if (and others
              (y-or-n-p (if (cdr others)
-                           (format "Resume the %d other agents that crashed on %s too? "
-                                   (length others) (roost--host-label (roost--field task 'host)))
-                         (format "Resume the other agent that crashed on %s too? "
-                                 (roost--host-label (roost--field task 'host))))))
+                           (format "Resume the %d other agents that crashed on %s too? " (length others) host)
+                         (format "Resume the other agent that crashed on %s too? " host))))
         (roost--resume-together task others)
       (roost--act task "resume" (roost--resume-parameters task) #'roost-open-task))))
 
@@ -3312,21 +3311,23 @@ several will resume, which you were asked about already."
   "Resume TASK, then open it, and resume OTHERS, one after another.
 OTHERS' terminals stay closed.  Once all have replied, say how many
 resumed, naming each that didn't and why: one that fails doesn't stop
-the rest."
+the rest.  One gone since, or running again, as when you resumed it
+meanwhile, is passed over."
   (let ((host (roost--field task 'host))
-        (total (1+ (length others)))
-        failures)
+        (tried 1)
+        failures said)
     ;; Until each replies, opening one of them offers the rest no more.
     (setq roost--resuming (append (mapcar #'roost--key (cons task others)) roost--resuming))
     (cl-labels ((replied (task)
                   (setq roost--resuming (delete (roost--key task) roost--resuming)))
                 (next (rest)
                   (if (null rest)
-                      (message "%s" (roost--resumed-message host total (nreverse failures)))
-                    ;; As cached now: you may have resumed it meanwhile.
-                    (let ((other (or (gethash (roost--key (car rest)) roost--tasks) (car rest))))
-                      (if (roost--agent-running-p other)
-                          (progn (replied other) (next (cdr rest)))
+                      (message "%s" (setq said (roost--resumed-message host tried (reverse failures))))
+                    (let* ((key (roost--key (car rest)))
+                           (other (gethash key roost--tasks)))
+                      (if (or (not other) (roost--agent-running-p other))
+                          (progn (replied (car rest)) (next (cdr rest)))
+                        (cl-incf tried)
                         (roost--act other "resume" (roost--resume-parameters other)
                                     (lambda (_)
                                       (replied other)
@@ -3341,7 +3342,9 @@ the rest."
                     ;; The others first: an error opening this one mustn't
                     ;; stop them.
                     (next others)
-                    (roost-open-task updated))
+                    ;; Said again once its terminal shows, if done by then:
+                    ;; opening clears the echo area.
+                    (roost-open-task updated nil (lambda (_) said)))
                   (lambda (err)
                     (replied task)
                     (push (cons task err) failures)
@@ -3351,8 +3354,12 @@ the rest."
   "What resuming TOTAL agents on HOST did, with FAILURES, each (TASK . ERROR)."
   (let ((label (roost--host-label host))
         (resumed (- total (length failures))))
-    (concat (cond ((null failures) (format "Resumed %d agents on %s" total label))
-                  ((zerop resumed) (format "Resumed none of the %d agents on %s" total label))
+    (concat (cond ((null failures)
+                   (format "Resumed %d agent%s on %s" total (if (= total 1) "" "s") label))
+                  ((zerop resumed)
+                   (if (= total 1)
+                       (format "Resumed no agent on %s" label)
+                     (format "Resumed none of the %d agents on %s" total label)))
                   (t (format "Resumed %d of %d agents on %s" resumed total label)))
             (mapconcat (lambda (failure)
                          (format "; %s didn't resume: %s" (roost--field (car failure) 'name) (cdr failure)))

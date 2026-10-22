@@ -588,15 +588,16 @@ class Run:
         """How WINDOW's terminal differs from what tmux has in its pane, or None.
         Output on its way may take a moment to show.  A dead pane is left out:
         tmux writes its "Pane is dead" line there without telling its control
-        clients, and the view keeps the agent's last output whole.  So is one
-        tmux no longer has, as once its server ends, where the view keeps it
-        too."""
+        clients, and the view keeps the agent's last output whole.  So is a
+        pane whose tmux server ended, as when its host restarts: the view
+        keeps it too."""
         deadline = time.monotonic() + timeout
         while True:
             ours = self.emacs.json("(json-encode (qa-terminal-screen %s))" % lisp(window["buffer"])) or []
             theirs = [line.rstrip() for line in self.tmux("capture-pane", "-p", "-t", window["pane"])]
             # Asked after each capture: the pane can die while it is compared.
-            if self.tmux("display-message", "-p", "-t", window["pane"], "#{pane_dead}") != ["0"]:
+            dead = self.tmux("display-message", "-p", "-t", window["pane"], "#{pane_dead}")
+            if dead == ["1"] or not (dead or self.tmux("list-sessions", "-F", "#{session_id}")):
                 return None
             while theirs and not theirs[-1]:
                 theirs.pop()
