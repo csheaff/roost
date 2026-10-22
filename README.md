@@ -11,7 +11,7 @@ worktree, a branch and a terminal, here or on any SSH host. It tells you which
 agents need you, and you review and merge their work with Magit. If you've
 used Orca or Conductor, it's that idea, inside the Emacs you already use.
 
-![Emacs with three columns: Roost's sidebar listing six agents on two machines, the one you are on marked with a band and asking permission, four ready and one working; that agent's Claude Code terminal on the SSH host claylien, asking to run python3 -m unittest; and the task's panel, which says to answer it in its terminal and shows the prompt it was given and the files it has changed](docs/images/roost-hero.png)
+![Emacs with three columns: Roost's sidebar listing six agents on two machines, the one you are on marked with a band and asking permission, two ready, two you have seen and one working; that agent's Claude Code terminal on the SSH host claylien, asking to run python3 -m unittest; and the task's panel, which says to answer it in its terminal and shows the prompt it was given, your latest prompt and the files it has changed](docs/images/roost-hero.png)
 
 *Six Claude Code agents on two machines. The one on `claylien` wants to run
 its tests: its own terminal in the middle, every task at the left, and at the
@@ -19,24 +19,28 @@ right what to do next, what you asked it and what it changed.*
 
 ## A task, start to finish
 
-https://github.com/user-attachments/assets/674d01cc-2a8d-491a-ba9f-6605e48f997e
-
-*One task, from a heading in an Org file to `main`, in about a minute. The
-agent's work plays four times faster, and the title bar shows the keys
-pressed. `C-c r` opens Roost's menu, as in the setup [below](#get-started);
-in the dashboard, the sidebar and a task's panel its keys work alone.*
+One task, from a heading in an Org file to `main`. `C-c r` opens Roost's
+menu, as in the setup [below](#get-started); in the dashboard, the sidebar
+and a task's panel its keys work alone.
 
 1. **Start where the work is.** `C-c r c` on an Org heading drafts a task,
    with the heading and its notes as the prompt; a selected region or a
    GitHub issue works the same way. `C-c C-c` makes the worktree and branch
    and starts the agent.
+
+   ![An Org file of plans beside the draft that C-c r c made from its heading, Export the notes as a Markdown checklist: the project notes on this machine, the agent claude, starting from main and merging into main, the task named export, and the heading and its notes as the prompt](docs/images/roost-new-task.png)
+
 2. **Go where you're needed.** While it works, an agent on `claylien` asks to
    run its tests. `C-c r n` takes you to the next agent waiting for you, and
    you answer it in its own terminal.
 3. **Review, and reply in place.** The panel beside the terminal lists the
-   files the agent changed. A click opens one's diff in Magit, `;` writes a
-   note on a line, and `@` sends your notes to the agent. `C-c r r` opens
-   Magit on the whole worktree, over TRAMP for a remote task.
+   files the agent changed, and the other tasks that change them too. A
+   click opens one's diff in Magit, `;` writes a note on a line, and `@` in
+   Magit, or `e`, sends your notes to the agent. `C-c r r` opens Magit on
+   the whole worktree, over TRAMP for a remote task.
+
+   ![A task's terminal above the Magit diff of notes.py, with a review note under a changed line: list shows tags as #shop, so people will type --tag '#shop'; strip a leading # from TAG. Beside them, the task's panel lists the two files it changed, one review note for the agent, and the three other tasks that change the same files](docs/images/roost-review.png)
+
 4. **Finish.** The agent revises and commits. `C-c r m` squashes the task
    into the branch it started from and removes its worktree, branch and
    terminal. On the same menu, `u` brings a task up to date first, and `P`
@@ -46,7 +50,7 @@ in the dashboard, the sidebar and a task's panel its keys work alone.*
 it's doing, what it changed, and its latest reply or what it asks. A
 notification says the same when one finishes or asks for something.
 
-![The dashboard: two tasks on claylien, one asking to run python3 -m unittest, and four local ones, three finished and one working, each with its changes and latest reply](docs/images/roost-dashboard.png)
+![The dashboard, counting 1 permission, 2 ready, 2 seen and 1 running: two tasks on claylien, one ready and one asking to run python3 -m unittest, and four local ones, one ready, two you have seen and one working, each with its changes and latest reply](docs/images/roost-dashboard.png)
 
 ## How it differs
 
@@ -133,8 +137,8 @@ These work in the dashboard, the sidebar and a task's panel, and on the menu.
 - [A possible roadmap](docs/roadmap.md): ideas being considered, and the
   tools and [research](docs/research.md) they come from.
 - [Validation](docs/validation.md): live runs with Claude Code and Codex, on
-  local and remote hosts. [How the screenshots and the clip were
-  made](docs/demo.md), and [the MELPA recipes](docs/melpa.md).
+  local and remote hosts. [How the screenshots were made](docs/demo.md),
+  and [the MELPA recipes](docs/melpa.md).
 
 [Orca](https://www.onorca.dev/) shaped the workflow: a worktree per task, a
 terminal nearby, review before finishing. See the

@@ -1,57 +1,48 @@
-# The README's screenshots and clip
+# The README's screenshots
 
-The images and the clip are native captures of GUI Emacs, taken while Claude
-Code worked on two small disposable projects: `notes`, a notes CLI on the Mac,
-and `ledger`, an expense-ledger CLI on the SSH host `claylien`. Every agent was
-a real Claude Code session (`--model haiku`), in its own terminal with its
+The images are native captures of GUI Emacs, taken while Claude Code worked
+on two small disposable projects: `notes`, a notes CLI on the Mac, and
+`ledger`, an expense-ledger CLI on the SSH host `claylien`. Every agent was a
+real Claude Code session (`--model haiku`), in its own terminal with its
 normal permission prompts. They ran with `--permission-mode acceptEdits`, so
 they asked before commands but not before edits.
 
 The capture Emacs was a plain Emacs 32 configuration, so that nothing personal
 distracts: the stock `modus-vivendi` theme and mode line, Menlo at 15 points,
-the fringe and margin given the theme's background, and Roost, tmux-control and
-Magit and nothing else. It had `roost-sidebar-mode`, `roost-task-panel-mode`
-and `roost-animations` on, and `roost-workspace` set to `nil`. It used a
-separate state directory and tmux socket named `roost-demo`; a normal setup
-shows `~/.local/share/roost` and your tmux-control socket.
+and Roost, tmux-control and Magit and nothing else. It had
+`roost-sidebar-mode`, `roost-task-panel-mode` and `roost-animations` on, and
+`roost-workspace` set to `nil`. It used a separate state directory and tmux
+socket named `roost-demo`; a normal setup shows `~/.local/share/roost` and
+your tmux-control socket.
 
 | File | What it shows |
 | --- | --- |
 | `roost-hero.png` | Six agents on two machines: the sidebar, the terminal of `budget-alerts` on `claylien` asking to run `python3 -m unittest`, and that task's panel |
-| `roost-dashboard.png` | The dashboard of the same six tasks, with `export` at work |
-| The clip | One task from an Org heading in `plans.org` to `main`: the draft, `n` to `budget-alerts` and its answer, a review note in Magit, the agent's revision and commit, and the merge |
-| `roost-new-task.png` | Not in the README since the clip: a draft opened on an Org heading, the heading and its notes the prompt |
-| `roost-review.png` | Not in the README since the clip: Magit on a task with a review note under the agent's change, and the box for another |
+| `roost-new-task.png` | `plans.org` beside the draft that `C-c r c` made from its heading, which started `export` |
+| `roost-review.png` | `tag-filter`'s terminal above the diff of `notes.py`, opened from its panel, with a review note under a line |
+| `roost-dashboard.png` | The dashboard of the same six tasks, with `budget-alerts` asking and `export` at work |
 
 ## How they were made
 
-`roost-hero.png`, `roost-dashboard.png` and the clip were taken on
-2026-10-16, for the sidebar that marks the task you are on with a band and
-names each task's status in a word. Six tasks were started with the prompts
-of the previous captures. To have one agent asking and one working at the
-moment of each capture, `budget-alerts`, `due-dates` and `export` were given
-follow-up prompts in their terminals, such as asking `budget-alerts` to show
-amounts with a thousands separator and then run its tests.
+All four were taken on 2026-10-21, with Roost as of 0.10.0 and the changes
+after it from its UX review, replacing a clip that played a task through and
+the stills from before it. Five tasks were started with prompts that ask the
+agent to run the tests with `python3 -m unittest`, and their prompts
+answered in their terminals until each finished. `export` was then drafted
+from the heading in `plans.org`. To have one agent asking and one working at
+the moment of the hero and the dashboard, `budget-alerts` was asked to show
+amounts with a thousands separator and run its tests, and `export` was given
+a further prompt just before each capture. The review note was written in
+the note box and saved; the box itself floats over the diff in a frame of
+its own, which a capture of the Emacs window leaves out.
 
-The clip was recorded as a movie of the Emacs window alone, with keys
-pressed through Emacs's input queue, and edited with ffmpeg:
-
-- The waits are cut, and the agent's two stretches of work play four times
-  faster, marked in the title bar.
-- The title bar names each key as it is pressed. These captions were added
-  in editing, as were the title bar's window buttons, which macOS replaces
-  with a recording indicator while a window is recorded.
-- The agent's last reply quoted the git author's email address; its three
-  lines are blacked out while they are on screen.
-- The new task's agent ran with `--permission-mode auto`, so its commands
-  were not asked about; `budget-alerts` kept `acceptEdits`, which is why it
-  asks.
-- Two tries at a note on a line wider than the diff's window, where the note
-  box did not open, were cut, and the note was written on a shorter line.
-
-`roost-new-task.png` dates from 2026-10-10 and `roost-review.png` from
-2026-10-11, in the same configuration. The disposable projects, tasks and
-capture state were removed afterwards each time.
+Each was taken at its own frame size, so that the text reads at the width
+GitHub shows the README: 172 columns by 36 lines for the hero, 132 by 19 for
+the draft, with the sidebar and panel off, 156 by 34 for the review, with the
+sidebar off, and 132 by 15 for the dashboard, with both off. The capture
+Emacs was given focus for a moment before each capture, so that its window
+looks active. The disposable projects, tasks and capture state were removed
+afterwards.
 
 ## Try the same workflow
 
