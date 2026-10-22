@@ -3288,11 +3288,15 @@ resume those too."
   `((programStatus . ,(if roost-program-status t :false))
     (size . ,(roost--terminal-size task))))
 
+(defvar roost--resuming nil
+  "Keys of the tasks that resuming several at once has yet to resume.")
+
 (defun roost--crashed-with (task)
   "The other tasks on TASK's host whose agents crashed, if TASK's did.
 Each crashed, as every agent there does when the host restarts or its
 tmux server ends, and can resume.  Those stopped, exited or failed are
-left out: you or the agent ended them."
+left out: you or the agent ended them.  So are those that resuming
+several will resume, which you were asked about already."
   (when (equal (roost--field task 'status) "crashed")
     (let ((host (roost--field task 'host))
           (key (roost--key task)))
@@ -3300,6 +3304,7 @@ left out: you or the agent ended them."
                     (and (equal (roost--field other 'host) host)
                          (not (equal (roost--key other) key))
                          (equal (roost--field other 'status) "crashed")
+                         (not (member (roost--key other) roost--resuming))
                          (roost--action-applies-p other #'roost-resume)))
                   (roost-tasks)))))
 
@@ -3311,23 +3316,34 @@ the rest."
   (let ((host (roost--field task 'host))
         (total (1+ (length others)))
         failures)
-    (cl-labels ((finish ()
-                  (message "%s" (roost--resumed-message host total (nreverse failures))))
+    ;; Until each replies, opening one of them offers the rest no more.
+    (setq roost--resuming (append (mapcar #'roost--key (cons task others)) roost--resuming))
+    (cl-labels ((replied (task)
+                  (setq roost--resuming (delete (roost--key task) roost--resuming)))
                 (next (rest)
                   (if (null rest)
-                      (finish)
-                    ;; As cached now, as a poll may have changed it since.
+                      (message "%s" (roost--resumed-message host total (nreverse failures)))
+                    ;; As cached now: you may have resumed it meanwhile.
                     (let ((other (or (gethash (roost--key (car rest)) roost--tasks) (car rest))))
-                      (roost--act other "resume" (roost--resume-parameters other)
-                                  (lambda (_) (next (cdr rest)))
-                                  (lambda (err)
-                                    (push (cons other err) failures)
-                                    (next (cdr rest))))))))
+                      (if (roost--agent-running-p other)
+                          (progn (replied other) (next (cdr rest)))
+                        (roost--act other "resume" (roost--resume-parameters other)
+                                    (lambda (_)
+                                      (replied other)
+                                      (next (cdr rest)))
+                                    (lambda (err)
+                                      (replied other)
+                                      (push (cons other err) failures)
+                                      (next (cdr rest)))))))))
       (roost--act task "resume" (roost--resume-parameters task)
                   (lambda (updated)
-                    (roost-open-task updated)
-                    (next others))
+                    (replied task)
+                    ;; The others first: an error opening this one mustn't
+                    ;; stop them.
+                    (next others)
+                    (roost-open-task updated))
                   (lambda (err)
+                    (replied task)
                     (push (cons task err) failures)
                     (next others))))))
 

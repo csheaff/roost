@@ -45,7 +45,7 @@
          (roost--notes nil) (roost--notes-loaded t)
          (roost--requests nil) (roost-notify nil) (roost--current-task nil) (roost--next-unblocked nil)
          (roost--next-run nil)
-         (roost--held-notices nil) (roost--notice-timer nil)
+         (roost--held-notices nil) (roost--notice-timer nil) (roost--resuming nil)
          (roost--perspectives (make-hash-table :test 'equal)))
      (set-frame-parameter nil 'roost-task nil)
      ;; Seeing an agent is recorded on its host too, and so is what of its
@@ -8187,6 +8187,35 @@ was said.  Questions are answered with `answer'."
        (should-not opened)
        (should (string-prefix-p "Resumed 1 of 3 agents on dev; sum check didn't resume: " (car messages)))
        (should (string-match-p "; tidy didn't resume: " (car messages)))))))
+
+(ert-deftest roost-resuming-together-offers-none-of-them-again-meanwhile ()
+  ;; Those waiting their turn still show crashed: opening one offered
+  ;; to resume them all again.
+  (roost-test--isolated
+   (let ((task (roost-test--crashed-host)) replies requests messages)
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (host action params success &rest _)
+                  (let ((task (gethash (list host (alist-get 'id params)) roost--tasks)))
+                    (push (list action (roost--field task 'name)) requests)
+                    (setq replies (append replies
+                                          (list (lambda ()
+                                                  (funcall success (append '((status . "starting") (live . t))
+                                                                           task)))))))))
+               ((symbol-function 'roost-open-task) #'ignore)
+               ((symbol-function 'message)
+                (lambda (format &rest args) (when format (push (apply #'format format args) messages)))))
+       (roost--resume-together task (roost--crashed-with task))
+       (should-not (roost--crashed-with (gethash '("dev" "3333333333333333") roost--tasks)))
+       (should-not (string-match-p "offers" (roost--next-step (gethash '("dev" "3333333333333333") roost--tasks))))
+       ;; You resume tidy meanwhile: its turn passes.
+       (roost--cache-task "dev" (append '((status . "starting") (live . t))
+                                        (gethash '("dev" "2222222222222222") roost--tasks)))
+       (funcall (pop replies))
+       (funcall (pop replies))
+       (should-not replies)
+       (should (equal (reverse requests) '(("resume" "sum check") ("resume" "lint"))))
+       (should (equal (car messages) "Resumed 3 agents on dev"))
+       (should-not roost--resuming)))))
 
 (ert-deftest roost-task-sessions-stay-out-of-tmux-controls-activity-corner ()
   ;; The corner named every other task whose agent printed anything, and
