@@ -7327,7 +7327,7 @@ there are no tasks at all."
     "---"
     ["Review in Magit" roost-review :active (roost--menu-applies-p 'roost-review)]
     ["Diff the task's changes" roost-diff :active (roost--menu-applies-p 'roost-diff)]
-    ["Update from integration branch" roost-update :active (roost--menu-applies-p 'roost-update)]
+    ["Bring up to date" roost-update :active (roost--menu-applies-p 'roost-update)]
     "---"
     ["Pull request…" roost-pr :active (roost--menu-applies-p 'roost-pr)]
     ["Merge and retire…" roost-merge-retire :active (roost--menu-applies-p 'roost-merge-retire)]
@@ -7475,7 +7475,7 @@ Task commands act on the task at point, in the dashboard, a task panel,
 terminal or worktree, or ask which task."
   [:description roost--dispatch-task-description
    ["Work"
-    ("RET" "Agent" roost-open-task :inapt-if roost--open-task-inapt-p)
+    ("RET" "Agent's terminal" roost-open-task :inapt-if roost--open-task-inapt-p)
     ("t" "Shell" roost-shell :inapt-if roost--shell-inapt-p)
     ("f" "Files" roost-files :inapt-if roost--files-inapt-p)
     ("e" "Send prompt" roost-send :inapt-if roost--send-inapt-p)
@@ -7484,21 +7484,21 @@ terminal or worktree, or ask which task."
    ["Review"
     ("r" "Magit" roost-review :inapt-if roost--review-inapt-p)
     ("D" "Diff" roost-diff :inapt-if roost--diff-inapt-p)
-    ("u" "Update from integration" roost-update :inapt-if roost--update-inapt-p)
+    ("u" "Bring up to date" roost-update :inapt-if roost--update-inapt-p)
     ("'" "Go to note" roost-goto-note :inapt-if roost--goto-note-inapt-p)]
    ["Finish"
     ("P" "Pull request" roost-pr :inapt-if roost--pr-inapt-p)
     ("m" "Merge and retire" roost-merge-retire :inapt-if roost--merge-retire-inapt-p)
     ("x" "Retire or discard" roost-retire :inapt-if roost--retire-inapt-p)
     ("X" "Forget" roost-forget :inapt-if roost--forget-inapt-p)]
-   ["Session"
+   ["Agent"
     ("K" "Stop" roost-stop :inapt-if roost--stop-inapt-p)
     ("s" "Resume" roost-resume :inapt-if roost--resume-inapt-p)]]
   ["Roost"
    [("c" "New task" roost-new-task)
     ("n" "Next waiting" roost-next-waiting)
     ("l" "Switch task" roost-switch-task)
-    ("/" "Search sessions" roost-search)]
+    ("/" "Search conversations" roost-search)]
    [("S" "Dashboard" roost-status)
     ("g" "Refresh" roost-refresh)]
    [("b" "Sidebar" roost-sidebar-mode)
@@ -8118,33 +8118,37 @@ Refreshes are asynchronous; rendering uses only cached state.
             (string< (format "%s %s" (roost--host-label (caar a)) (cadar a))
                      (format "%s %s" (roost--host-label (caar b)) (cadar b)))))))
 
+(defconst roost--row-words
+  '("permission" "starting" "ready" "interrupted" "ci failed" "comments" "conflicts"
+    "to merge" "seen" "merged" "error" "failed" "crashed" "exited" "running"
+    "background" "stopped" "offline")
+  "Each word a dashboard row can say, in the order its summary counts them.")
+
+(defun roost--row-word (task)
+  "TASK's word on its dashboard row.
+As `roost--display-status' has it, but \"seen\" for an agent you have
+seen that waits for nothing, which the sidebar leaves without a word."
+  (if (equal (roost--attention-status task) "idle") "seen" (roost--display-status task)))
+
 (defun roost--summary (tasks)
-  "One-line count of TASKS by status class."
-  (let ((counts (make-hash-table :test 'equal)))
+  "One-line count of TASKS by the word on their rows.
+A count is in the colour of the most pressing of its tasks, as for
+\"starting\" when one of them seems held at a startup prompt."
+  (let ((counts (make-hash-table :test 'equal))
+        (attention (make-hash-table :test 'equal)))
     (dolist (task tasks)
-      (cl-incf (gethash (roost--attention-status task) counts 0)))
+      (let ((word (roost--row-word task))
+            (status (roost--attention-status task)))
+        (cl-incf (gethash word counts 0))
+        (unless (equal (gethash word attention) "prompt")
+          (puthash word status attention))))
     (string-join
-     (delq nil
-           (mapcar (lambda (class)
-                     (let ((count (apply #'+ (mapcar (lambda (status) (gethash status counts 0))
-                                                     (cddr class)))))
-                       (when (> count 0)
-                         (propertize (format "%d %s" count (car class))
-                                     'face (roost--status-word-face (nth 2 class))))))
-                   '(("awaiting permission" nil "permission")
-                     ("at a startup prompt" nil "prompt")
-                     ("ready" nil "ready")
-                     ("interrupted" nil "interrupted")
-                     ("with failed checks" nil "ci failed")
-                     ("with review comments" nil "comments")
-                     ("with conflicts" nil "conflicts")
-                     ("to merge" nil "to merge")
-                     ("seen" nil "idle")
-                     ("merged" nil "merged")
-                     ("failed" nil "error" "failed" "crashed")
-                     ("running" nil "running" "background" "starting")
-                     ("stopped" nil "stopped" "exited")
-                     ("offline" nil "offline"))))
+     (mapcar (lambda (word)
+               (propertize (format "%d %s" (gethash word counts) word)
+                           'face (roost--status-word-face (gethash word attention))))
+             (seq-filter (lambda (word) (gethash word counts))
+                         ;; Words of statuses Roost doesn't know yet come last.
+                         (seq-uniq (append roost--row-words (hash-table-keys counts)))))
      (propertize " · " 'face 'roost-dim))))
 
 (defun roost--row-name (task &optional width face)
@@ -8198,7 +8202,7 @@ The changes column shrinks first, then the agent column is dropped."
 
 (defun roost--dashboard-row (task layout width)
   "Dashboard line for TASK using column LAYOUT, fitting WIDTH columns."
-  (let* ((status (roost--display-status task))
+  (let* ((status (roost--row-word task))
          (face (roost--status-word-face (roost--attention-status task)))
          (cell (lambda (text size &optional cell-face)
                  (propertize (truncate-string-to-width text size nil ?\s "…") 'face cell-face)))
@@ -8488,7 +8492,7 @@ conversations of its tasks, including tasks since retired, whose
 conversations Claude keeps, newest first and for at most 20 seconds.
 RET on a live task's message opens it; TAB shows more of a message,
 up to its first 1,500 characters."
-  (interactive (list (read-string "Search sessions: " nil 'roost-search-history)))
+  (interactive (list (read-string "Search conversations: " nil 'roost-search-history)))
   (when (string-blank-p query)
     (user-error "Search for at least one word"))
   (let ((buffer (get-buffer-create roost--search-buffer)))

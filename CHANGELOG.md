@@ -11,6 +11,13 @@ What each release changes, and what to do when upgrading. Newest first.
   unreachable from the start. `M-x roost-doctor` says how to stop
   watching a host it can't reach: take it out of `roost-hosts`, and `M-x
   roost-forget-host` once Roost remembers it from a task there.
+- The dashboard counts tasks by the words on their rows: `1 permission`,
+  `2 starting`, `1 comments`, rather than `1 awaiting permission`. A task
+  you've seen that waits for nothing says `seen` on its row, as the count
+  had it, rather than `ready`.
+- The menu says what the README does: `u` is "Bring up to date", `/`
+  "Search conversations", `RET` "Agent's terminal", and `K` and `s` are
+  under "Agent".
 
 ## 0.10.0
 
