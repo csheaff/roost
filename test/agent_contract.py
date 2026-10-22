@@ -314,10 +314,12 @@ def send_while_it_works(session):
     session.until(lambda: session.record()["status"] == "running", 60, "the counting turn")
     time.sleep(2)
     more = "Then reply with the single word DONE."
+    working = session.record()["status"] == "running"
     session.send(more)
     record = session.when(lambda task: task.get("lastPrompt") == more, 120, "the message to show as your latest prompt")
-    if record["status"] == "running":
-        session.check(True, "a message sent while it works shows as your latest prompt")
+    if working and record.get("lastEvent") != "Stop":
+        session.check(record["status"] == "running", "a message sent while it works shows as your latest prompt",
+                      record["status"])
     else:
         print("  --    the turn ended before the message came; not checked")
     record = session.when(lambda task: task["status"] == "ready" and task.get("lastEvent") == "Stop", 180,
