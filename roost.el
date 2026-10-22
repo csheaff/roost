@@ -6247,8 +6247,9 @@ running agent is stopped first."
 ;;;###autoload
 (defun roost-discard (&optional task)
   "Delete TASK's worktree, branch and window, and drop it from Roost.
-First says what would be lost, commits no other branch holds and files
-not committed, here and in worktrees its agent made, which go too; to
+First says what would be lost, commits no other branch holds, commits in
+submodules no remote has and files not committed, here and in worktrees
+its agent made, which go too; to
 lose any, you type the task's name.  For an experiment you don't want;
 finished work is merged or retired instead."
   (interactive)
@@ -6259,11 +6260,19 @@ finished work is merged or retired instead."
                                                (list (cons 'id (roost--field task 'id))
                                                      (cons 'dryRun t)))))
          (commits (or (alist-get 'commits told) 0))
+         (submodule-commits (or (alist-get 'submoduleCommits told) 0))
+         (unread (or (alist-get 'unreadSubmodules told) 0))
          (changes (or (alist-get 'changes told) 0))
          (worktrees (or (alist-get 'agentWorktrees told) 0))
          (losses (delq nil (list (when (> commits 0)
                                    (format "%d commit%s no other branch has"
                                            commits (if (= commits 1) "" "s")))
+                                 (when (> submodule-commits 0)
+                                   (format "%d commit%s in its submodules that no remote has"
+                                           submodule-commits (if (= submodule-commits 1) "" "s")))
+                                 (when (> unread 0)
+                                   (format "whatever is in %d submodule repositor%s Git can't read"
+                                           unread (if (= unread 1) "y" "ies")))
                                  (when (> changes 0)
                                    (format "%d uncommitted file%s"
                                            changes (if (= changes 1) "" "s"))))))
@@ -6274,7 +6283,10 @@ finished work is merged or retired instead."
     (if (not (if losses
                  (equal (string-trim
                          (read-string (format "Discarding %s loses %s%s.  Type its name to discard it: "
-                                              label (string-join losses " and ")
+                                              label (if (cdr losses)
+                                                        (concat (string-join (butlast losses) ", ")
+                                                                " and " (car (last losses)))
+                                                      (car losses))
                                               (if (roost--agent-running-p task) ", and stops its agent" ""))))
                         name)
                (y-or-n-p (format "Discard %s, %sdeleting its worktree and branch (nothing in them would be lost)? "

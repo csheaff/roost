@@ -688,10 +688,11 @@ happens there and needs nothing uncommitted (untracked files stay); with it on
 another branch, Git merges into the integration branch without touching your
 checkout (Git 2.38 or newer). A conflicting merge leaves nothing changed.
 Branches are deleted only if they still point at the commit Roost verified.
-Git will not remove a worktree with submodules checked out, since they may
-hold the only copy of commits made in them, so Roost refuses to retire one;
-once those commits are safe, remove it with `git worktree remove --force` and
-retire again.
+Removing a worktree deletes the repositories of its submodules, which may
+hold the only copy of commits made in them. Retiring removes one only when
+they hold nothing their remotes lack, as when an agent checked them out to
+build; otherwise it says which submodule holds what, for you to push.
+Discarding counts those commits among what it would lose.
 
 Things to know:
 
