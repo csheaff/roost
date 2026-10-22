@@ -433,8 +433,12 @@ can tell that a list asked for after some moment has arrived.")
 (defvar roost--statuses (make-hash-table :test 'equal)
   "Last observed status for each task key, for notifications.")
 (defvar roost--pr-verdicts (make-hash-table :test 'equal)
-  "For each task key, what its pull request last waited on you for.
-As `roost--pr-verdict' has it, or nil, for notifications.")
+  "For each task key, what its pull request or work last waited on you for.
+As `roost--news-turn' has it, or nil, for notifications.")
+(defvar roost--held-notices nil
+  "Notifications held to go together, oldest first; see `roost--hold-notice'.")
+(defvar roost--notice-timer nil
+  "The timer that sends `roost--held-notices'.")
 (defvar roost--seen (make-hash-table :test 'equal)
   "For each task key, its `updatedAt' when you last saw its agent.
 A ready agent you have seen since its last event is no longer waiting.")
@@ -846,28 +850,29 @@ task you open before then is the one shown."
                                    (when (= generation roost--open-generation)
                                      (roost-open-task task t)))))))
 
-(defun roost--terminal-notifier-arguments (title body task)
+(defun roost--terminal-notifier-arguments (title body task &optional group)
   "Arguments for terminal-notifier to show TITLE and BODY about TASK.
-A click opens TASK, given an Emacs server, and a newer notification about
-TASK replaces this one."
+A click opens TASK, given an Emacs server, and a newer notification in
+GROUP replaces this one: by default, one about TASK."
   (append (list "-title" title "-message" body)
           (when task
-            (append (list "-group" (concat "roost-" (or (roost--field task 'host) "local")
-                                           "-" (roost--field task 'id)))
+            (append (list "-group" (or group (concat "roost-" (or (roost--field task 'host) "local")
+                                                     "-" (roost--field task 'id))))
                     (when-let* ((command (roost--emacsclient-command
                                           `(roost--open-from-notification
                                             ,(roost--field task 'host) ,(roost--field task 'id)))))
                       (list "-execute" command))))))
 
-(defun roost--notify (title body &optional task)
+(defun roost--notify (title body &optional task group)
   "Display notification TITLE with BODY, about TASK if given.
 With terminal-notifier and an Emacs server, a click on it opens TASK,
-and a newer notification about TASK replaces it."
+and a newer notification in GROUP replaces it: by default, one about
+TASK."
   (cond ((functionp roost-notify-function)
          (funcall roost-notify-function title body))
         ((executable-find "terminal-notifier")
          (apply #'call-process "terminal-notifier" nil 0 nil
-                (roost--terminal-notifier-arguments title body task)))
+                (roost--terminal-notifier-arguments title body task group)))
         ((eq system-type 'darwin)
          (call-process "osascript" nil 0 nil "-e"
                        (format "display notification %S with title %S" body title)))
@@ -965,7 +970,7 @@ must a reply with a newer look lose it for an older agent event."
       (roost--name-panels))
     ;; Record the status before notifying, which may cache this task again.
     (puthash key status roost--statuses)
-    (let ((turn (roost--pr-verdict task t))
+    (let ((turn (roost--news-turn task))
           (had (gethash key roost--pr-verdicts 'unknown))
           ;; Not when you are looking at it already.
           (unwatched (lambda ()
@@ -974,6 +979,12 @@ must a reply with a newer look lose it for an older agent event."
       (if (gethash key roost--tasks)
           (puthash key turn roost--pr-verdicts)
         (remhash key roost--pr-verdicts))
+      ;; A pull request or work that comes to wait on you is news, whatever
+      ;; its agent last said; one there when Roost first saw the task is
+      ;; not.  Before the agent's news, which replaces it when both come.
+      (when (and roost-notify turn (not (eq had 'unknown)) (not (equal had turn))
+                 (funcall unwatched))
+        (roost--hold-notice task turn (concat (roost--host-label host) " · " (roost--turn-reason task turn))))
       (when (and roost-notify previous
                  (or (not (equal previous status)) new-stop)
                  ;; An agent that has just started waits for a prompt, which
@@ -982,14 +993,7 @@ must a reply with a newer look lose it for an older agent event."
                  (or (not (equal previous "starting")) (not (equal status "ready")) new-stop)
                  (member status '("ready" "permission" "failed" "crashed" "exited"))
                  (funcall unwatched))
-        (roost--notify-attention host task status))
-      ;; A pull request that comes to wait on you is news, whatever its
-      ;; agent last said; one there when Roost first saw the task is not.
-      (when (and roost-notify turn (not (eq had 'unknown)) (not (equal had turn))
-                 (funcall unwatched))
-        (roost--notify (format "Roost: %s — %s" (roost--field task 'name) turn)
-                       (concat (roost--host-label host) " · " (roost--pr-reason task turn))
-                       task)))
+        (roost--notify-attention host task status)))
     (when (and previous (not (equal previous status)))
       (roost--run-task-hook 'roost-task-status-functions task previous status))
     (when (gethash key roost--tasks)
@@ -1051,28 +1055,111 @@ a host said, nor the other functions from running."
 
 (defun roost--notify-attention (host task status)
   "Notify that TASK on HOST became STATUS.
+A permission request goes at once, since its agent can do nothing until
+you answer; the rest are held to go together, by `roost--hold-notice'.
 A ready agent or one asking permission is inspected first, since quiet
 polls leave out its latest reply, so the notification can say what it
 finished or wants."
-  (let ((title (format "Roost: %s — %s" (roost--field task 'name) (roost--status-name task)))
-        (label (roost--host-label host)))
+  (let* ((name (roost--status-name task))
+         (label (roost--host-label host))
+         (send (lambda (task body)
+                 (if (not (equal status "permission"))
+                     (roost--hold-notice task name body)
+                   ;; It replaces one held about the task, which is older.
+                   (roost--drop-notices (roost--key task))
+                   (roost--notify (roost--notice-title task name) body task)))))
     (if (not (member status '("ready" "permission")))
-        (roost--notify title (if-let* ((error (roost--field task 'error)))
-                                 (concat label " · " (truncate-string-to-width error 160 nil nil "…"))
-                               label)
-                       task)
+        (funcall send task (if-let* ((error (roost--field task 'error)))
+                               (concat label " · " (truncate-string-to-width error 160 nil nil "…"))
+                             label))
       (roost--request
        host "inspect" (list (cons 'id (roost--field task 'id)))
        (lambda (current)
          (setq current (roost--cache-task host current))
          (roost--redraw)
-         (roost--notify title
-                        (if-let* ((reply (or (roost--permission-request current)
-                                             (roost--last-message-summary current))))
-                            (concat label " · " (truncate-string-to-width reply 160 nil nil "…"))
-                          label)
-                        current))
-       (lambda (_error) (roost--notify title label task))))))
+         (funcall send current
+                  (if-let* ((reply (or (roost--permission-request current)
+                                       (roost--last-message-summary current))))
+                      (concat label " · " (truncate-string-to-width reply 160 nil nil "…"))
+                    label)))
+       (lambda (_error) (funcall send task label))))))
+
+;;;; Notifications held to go together
+
+;; A permission request notifies at once: its agent can do nothing until
+;; you answer.  The rest, finished turns, failures and pull requests or
+;; work that wait on you, gather across tasks into one notification that
+;; names the most urgent and counts the others.  Five agents that each
+;; finish a turn every ten minutes would otherwise send more than anyone
+;; heeds, and bury the requests among them.
+
+(defconst roost--notice-gather 60
+  "Seconds notifications that block no agent gather before they go, as one.
+From the first one held: those that come meanwhile go with it.")
+
+(defconst roost--notice-group "roost-held"
+  "The terminal-notifier group of held notifications: a newer one replaces it.")
+
+;; Defined with choosing a task, below.
+(defvar roost--pr-turns)
+
+(defun roost--notice-title (task status)
+  "A notification's title, that TASK is STATUS."
+  (format "%s — %s" (roost--field task 'name) status))
+
+(defun roost--hold-notice (task status body)
+  "Hold a notification that TASK became STATUS, saying BODY, to go with others.
+It replaces one held about TASK, as newer, and goes once
+`roost--notice-gather' seconds have passed since the first one held,
+unless you have seen TASK by then, or it is STATUS no longer."
+  (let ((key (roost--key task)))
+    (roost--drop-notices key)
+    (setq roost--held-notices
+          (append roost--held-notices
+                  (list (list :key key :status status :body body :seen (roost--seen-p task)))))
+    (unless (timerp roost--notice-timer)
+      (setq roost--notice-timer (run-at-time roost--notice-gather nil #'roost--send-notices)))))
+
+(defun roost--drop-notices (key)
+  "Drop the notification held about the task with KEY, if any."
+  (setq roost--held-notices
+        (seq-remove (lambda (notice) (equal (plist-get notice :key) key)) roost--held-notices)))
+
+(defun roost--notice-holds-p (notice)
+  "Whether held NOTICE is news still: its task is as it says, and unseen.
+Its task may have gone meanwhile, retired or no longer listed by its
+host, or moved on, or you may have seen it, here or in another Emacs."
+  (when-let* ((task (gethash (plist-get notice :key) roost--tasks)))
+    (let ((status (plist-get notice :status)))
+      (and (equal status (if (member status (cons "conflicts" roost--pr-turns))
+                             (roost--news-turn task)
+                           (roost--status-name task)))
+           (not (and (roost--seen-p task) (not (plist-get notice :seen))))
+           (not (when-let* ((watched (roost--watched-task)))
+                  (equal (roost--key watched) (plist-get notice :key))))))))
+
+(defun roost--send-notices ()
+  "Send the notifications held as one, about the most urgent of their tasks.
+It counts the others by status, and a click on it opens that task."
+  (setq roost--notice-timer nil)
+  (let ((notices (and roost-notify (seq-filter #'roost--notice-holds-p roost--held-notices))))
+    (setq roost--held-notices nil)
+    (when notices
+      ;; As `roost-next-waiting' goes, the first held first among equals.
+      (let* ((sorted (seq-sort-by (lambda (notice) (roost--status-rank (plist-get notice :status)))
+                                  #'< notices))
+             (top (car sorted))
+             (task (gethash (plist-get top :key) roost--tasks))
+             (counts nil))
+        (dolist (notice (cdr sorted))
+          (cl-incf (alist-get (plist-get notice :status) counts 0 nil #'equal)))
+        (roost--notify (roost--notice-title task (plist-get top :status))
+                       (concat (plist-get top :body)
+                               (when counts
+                                 (format "\n+%d more: %s" (length (cdr sorted))
+                                         (mapconcat (lambda (count) (format "%d %s" (cdr count) (car count)))
+                                                    (nreverse counts) ", "))))
+                       task roost--notice-group)))))
 
 (defun roost--apply-snapshot (host tasks &optional request)
   "Replace only HOST's cached tasks with a successful snapshot TASKS.
@@ -1289,9 +1376,11 @@ with the branch it merges into."
 
 (defun roost--mark-seen (task)
   "Record that you have seen TASK's agent as it is now.
-Its host records it too, for your other Emacs and the next session."
+Its host records it too, for your other Emacs and the next session.
+A notification held about it goes no more: you have seen it."
   (let ((key (roost--key task))
         (updated (roost--field task 'updatedAt)))
+    (roost--drop-notices key)
     (unless (or (null updated) (roost--seen-p task))
       (puthash key updated roost--seen)
       ;; Only where seeing it stops it waiting: a working agent's every
@@ -1334,9 +1423,13 @@ nobody is looking."
   (when-let* ((task (roost--watched-task)))
     (roost--mark-seen task)))
 
+(defun roost--status-rank (status)
+  "Sort rank of STATUS, an attention status, by how much it needs attention."
+  (or (seq-position roost--status-order status) 99))
+
 (defun roost--attention-rank (task)
   "Sort rank of TASK by how much it needs attention."
-  (or (seq-position roost--status-order (roost--attention-status task)) 99))
+  (roost--status-rank (roost--attention-status task)))
 
 (defun roost--read-task (prompt)
   "Choose a cached task with PROMPT, those needing attention first."
@@ -5645,19 +5738,46 @@ as its host last measured them, unless that work is merged."
     (unless (roost--landed task)
       (roost--field task 'conflicts))))
 
-(defun roost--conflict-turn (task)
-  "Whether TASK's work conflicts with the branch it merges into, for you.
-That is once you have seen what its agent last did, and it neither works,
-asks nor failed, with nothing left uncommitted or in its agent's own
-worktrees, nor a merge under way: until then those come first."
-  (and (roost--seen-p task)
-       (not (member (roost--status-name task)
+(defun roost--conflicting-p (task)
+  "Whether TASK's work conflicts with the branch it merges into, as it stands.
+That is while its agent neither works, asks nor failed, with nothing
+left uncommitted or in its agent's own worktrees, nor a merge under
+way: until then those come first."
+  (and (not (member (roost--status-name task)
                     '("starting" "running" "background" "permission" "error" "failed" "crashed")))
        (not (roost--field task 'dirty))
        (not (roost--field task 'merging))
        (not (roost--agent-work-left task))
        (roost--conflicts task)
        t))
+
+(defun roost--conflict-turn (task)
+  "Whether TASK's work conflicts with the branch it merges into, for you.
+That is as `roost--conflicting-p' has it, once you have seen what its
+agent last did."
+  (and (roost--seen-p task) (roost--conflicting-p task)))
+
+(defun roost--news-turn (task)
+  "What of TASK's pull request or work waits on you, for a notification, or nil.
+As `roost--turn' has it, but whether or not you have seen what its agent
+last did: a notification about it is news."
+  (or (roost--pr-verdict task t) (and (roost--conflicting-p task) "conflicts")))
+
+(defun roost--conflict-reason (task)
+  "What TASK's work conflicts with, on one line, or nil."
+  (let ((conflicts (roost--conflicts task)))
+    (cond ((consp conflicts)
+           (format "Conflicts with %s in %s" (or (roost--field task 'integrationBranch) "its branch")
+                   (roost--file-list conflicts)))
+          (conflicts
+           (format "#%s conflicts with the branch it merges into"
+                   (alist-get 'number (roost--field task 'pr)))))))
+
+(defun roost--turn-reason (task turn)
+  "Why TASK's pull request or work waits on you for TURN, as `roost--turn' has it."
+  (if (equal turn "conflicts")
+      (roost--conflict-reason task)
+    (roost--pr-reason task turn)))
 
 (defun roost--file-list (files &optional most)
   "FILES joined for a sentence: the first MOST, 3 by default, and how many more."
@@ -6312,16 +6432,9 @@ As its notification says: what its agent asks, the first line of its
 latest reply, why its pull request waits on you, or how it failed; or
 what it conflicts with."
   (let* ((status (roost--attention-status task))
-         (conflicts (and (equal status "conflicts") (roost--conflicts task)))
          (why (cond ((equal status "permission") (roost--permission-request task))
                     ((equal status "prompt") "It may be waiting at a startup prompt, such as folder trust")
-                    ((member status roost--pr-turns) (roost--pr-reason task status))
-                    ((consp conflicts)
-                     (format "Conflicts with %s in %s" (or (roost--field task 'integrationBranch) "its branch")
-                             (roost--file-list conflicts)))
-                    (conflicts
-                     (format "#%s conflicts with the branch it merges into"
-                             (alist-get 'number (roost--field task 'pr))))
+                    ((member status (cons "conflicts" roost--pr-turns)) (roost--turn-reason task status))
                     ((member status '("error" "failed" "crashed" "exited"))
                      (roost--field task 'error))
                     (t (roost--last-message-summary task)))))
@@ -9373,6 +9486,7 @@ Beside a terminal, that turns off `roost-task-panel-mode'."
   (roost--magit-teardown)
   (when roost-watch-mode (roost-watch-mode -1))
   (when (timerp roost--lights-timer) (cancel-timer roost--lights-timer))
+  (when (timerp roost--notice-timer) (cancel-timer roost--notice-timer))
   (advice-remove 'persp-mode-line #'roost--compact-perspective-mode-line)
   (dolist (command '(roost-dashboard-mouse-open roost-dashboard-mouse-menu roost-compose-open-task))
     (define-key transient-predicate-map (vector command) nil t))
