@@ -1347,10 +1347,19 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
                                                            '(lastMessage . "Merged main in.")))
             (roost-test--a-minute-on)
             (should (equal (car notices) '("fix auth — ready" "dev · Merged main in.")))))
-        ;; Nor as you stop its agent, though they are yours then.
-        (roost--cache-task "dev" (roost-test--conflicted '(status . "running") '(updatedAt . "2026-10-03T20:06:00+00:00")))
+        ;; Nor one held, once its agent started again, as you then stop it.
+        (roost--cache-task "dev" (roost-test--conflicted '(conflicts) '(updatedAt . "2026-10-03T20:08:00+00:00")))
+        (roost--cache-task "dev" (roost-test--conflicted '(updatedAt . "2026-10-03T20:09:00+00:00")))
+        (should roost--held-notices)
+        (roost--cache-task "dev" (roost-test--conflicted '(status . "running") '(updatedAt . "2026-10-03T20:10:00+00:00")))
         (roost--cache-task "dev" (roost-test--conflicted '(status . "stopped") '(live)
-                                                         '(updatedAt . "2026-10-03T20:07:00+00:00")))
+                                                         '(updatedAt . "2026-10-03T20:11:00+00:00")))
+        (roost-test--a-minute-on)
+        (should (= (length notices) 3))
+        ;; Nor as you stop its agent, though they are yours then.
+        (roost--cache-task "dev" (roost-test--conflicted '(status . "running") '(updatedAt . "2026-10-03T20:12:00+00:00")))
+        (roost--cache-task "dev" (roost-test--conflicted '(status . "stopped") '(live)
+                                                         '(updatedAt . "2026-10-03T20:13:00+00:00")))
         (should (equal (roost--news-turn (car (roost-tasks))) "conflicts"))
         (roost-test--a-minute-on)
         (should (= (length notices) 3)))))))

@@ -983,6 +983,11 @@ must a reply with a newer look lose it for an older agent event."
           (puthash key turn roost--pr-verdicts)
         (remhash key roost--pr-verdicts)
         (remhash key roost--agent-news))
+      ;; One held about it that is so no longer goes no more, though the
+      ;; task may come to be so again before it would go.
+      (when-let* ((held (seq-find (lambda (notice) (equal (plist-get notice :key) key)) roost--held-notices)))
+        (unless (roost--notice-still-p held (gethash key roost--tasks))
+          (roost--drop-notices key)))
       ;; A pull request or work that comes to wait on you is news, whatever
       ;; its agent last said; one there when Roost first saw the task is
       ;; not, nor one that comes as you stop its agent.  Before the
@@ -1139,18 +1144,24 @@ unless you have seen TASK by then, or it is STATUS no longer."
   (setq roost--held-notices
         (seq-remove (lambda (notice) (equal (plist-get notice :key) key)) roost--held-notices)))
 
+(defun roost--notice-still-p (notice task)
+  "Whether TASK, as cached, is still as held NOTICE about it says.
+Nil when TASK is: it went, retired or no longer listed by its host."
+  (when task
+    (let ((status (plist-get notice :status)))
+      (equal status (if (member status (cons "conflicts" roost--pr-turns))
+                        (roost--news-turn task)
+                      (roost--status-name task))))))
+
 (defun roost--notice-holds-p (notice watched)
   "Whether held NOTICE is news still: its task is as it says, and unseen.
-Its task may have gone meanwhile, retired or no longer listed by its
-host, or moved on, or you may have seen it, here or in another Emacs,
-or be looking at it now: WATCHED is the key of the task you look at."
-  (when-let* ((task (gethash (plist-get notice :key) roost--tasks)))
-    (let ((status (plist-get notice :status)))
-      (and (equal status (if (member status (cons "conflicts" roost--pr-turns))
-                             (roost--news-turn task)
-                           (roost--status-name task)))
-           (not (and (roost--seen-p task) (not (plist-get notice :seen))))
-           (not (equal watched (plist-get notice :key)))))))
+Its task may have gone meanwhile, or moved on, or you may have seen it,
+here or in another Emacs, or be looking at it now: WATCHED is the key
+of the task you look at."
+  (let ((task (gethash (plist-get notice :key) roost--tasks)))
+    (and (roost--notice-still-p notice task)
+         (not (and (roost--seen-p task) (not (plist-get notice :seen))))
+         (not (equal watched (plist-get notice :key))))))
 
 (defun roost--send-notices ()
   "Send the notifications held as one, about the most urgent of their tasks.
