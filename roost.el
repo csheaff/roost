@@ -39,6 +39,7 @@
 (require 'lisp-mnt)
 (require 'tramp)
 (require 'parse-time)
+(require 'iso8601)
 (require 'button)
 (require 'transient)
 (require 'hl-line)
@@ -2323,6 +2324,27 @@ DIRECTORY's checkout, or a project Roost knows it is in."
 (defvar-local roost--compose-body nil
   "Marker at the start of the prompt text.")
 (defvar-local roost--compose-timer nil)
+
+(defvar-local roost--compose-checkout-branch nil
+  "The draft's project directory and its primary checkout's branch, as a cons.
+Read once for each project: the fields are redrawn as you write.")
+
+(defun roost--checkout-branch (directory)
+  "The branch checked out in the primary checkout of DIRECTORY's project, or nil.
+Nil too on another host, where reading it would hold up the draft."
+  (unless (file-remote-p directory)
+    (when-let* ((list (roost--git-in directory "worktree" "list" "--porcelain"))
+                ;; The primary checkout comes first.
+                (first (car (split-string list "\n\n")))
+                ((string-match "^branch refs/heads/\\(.+\\)$" first)))
+      (match-string 1 first))))
+
+(defun roost--compose-branch (directory)
+  "The branch a draft in DIRECTORY starts from by default, or nil if unknown."
+  (unless (equal (car roost--compose-checkout-branch) directory)
+    (setq roost--compose-checkout-branch
+          (cons directory (and directory (roost--checkout-branch directory)))))
+  (cdr roost--compose-checkout-branch))
 (defvar-local roost--compose-submitting nil
   "Non-nil while the drafted task is being created.")
 
@@ -2527,6 +2549,9 @@ what is at point, and DIRECTORY is its project in place of where you are."
       (when fresh
         (roost-compose-mode)
         (setq roost--compose-body (copy-marker (point-min))))
+      ;; Its branch is read again, written or not, in case you have
+      ;; switched it since.
+      (setq roost--compose-checkout-branch nil)
       ;; An untouched draft follows the current context; a written one is kept.
       (when (or fresh fork (string-empty-p (roost--compose-prompt)))
         (setq roost--compose-fields
@@ -2625,23 +2650,26 @@ A task started from a GitHub issue leads with the issue's number."
       (delete-region (point-min) roost--compose-body)
       (goto-char (point-min))
       (insert (propertize "New task" 'font-lock-face 'roost-title) "\n\n")
-      (let ((directory (plist-get fields :directory))
-            (base (plist-get fields :base))
-            (name (plist-get fields :name)))
+      (let* ((directory (plist-get fields :directory))
+             (base (plist-get fields :base))
+             (name (plist-get fields :name))
+             (branch (roost--compose-branch directory))
+             (current (or branch "the project's current branch")))
         (roost--compose-field "Project" (if directory (roost--project-label directory) "Choose a project…")
                               #'roost-compose-set-project)
         (roost--compose-field "Agent" (plist-get fields :agent) #'roost-compose-set-agent)
         (roost--compose-field "Start" (cond ((plist-get fields :source)
                                             (format "%s of %s" base (plist-get fields :source)))
                                            (base)
-                                           (t "primary checkout's current branch"))
+                                           (t current))
                               #'roost-compose-set-base
-                              (when base
+                              ;; Not "the project's current branch" twice over.
+                              (when (or base branch)
                                 (concat (when (plist-get fields :source) "fork: includes its commits; ")
-                                        (pcase (plist-get fields :integration)
-                                          ('nil "merges into the primary checkout's branch")
+                                        (pcase (and base (plist-get fields :integration))
+                                          ('nil (concat "merges into " current))
                                           ("" "no branch to merge into")
-                                          (branch (concat "merges into " branch))))))
+                                          (into (concat "merges into " into))))))
         (roost--compose-field "Issue" (if-let* ((issue (plist-get fields :issue)))
                                           (format "#%s %s" (alist-get 'number issue)
                                                   (or (alist-get 'title issue) ""))
@@ -5454,9 +5482,12 @@ end of its turn, nor of the checks that push starts.")
 An agent that watches its own pull request starts a turn by then.")
 
 (defun roost--time (timestamp)
-  "TIMESTAMP, in ISO 8601, as a Lisp time; nil if missing or unreadable."
+  "TIMESTAMP, in ISO 8601, as a Lisp time; nil if missing or unreadable.
+To the fraction of a second hosts record, which `date-to-time' drops:
+an agent's event can follow a look in the same second."
   (when (stringp timestamp)
-    (ignore-errors (date-to-time timestamp))))
+    (or (ignore-errors (encode-time (iso8601-parse timestamp t)))
+        (ignore-errors (date-to-time timestamp)))))
 
 (defun roost--pr-status (task)
   "What GitHub last said of TASK's open pull request, if it covers its work.
@@ -6014,6 +6045,7 @@ comes in as one squashed commit, or a merge commit; see `roost-merge-style'."
                 (lambda (merged)
                   (roost--retired-workspace merged)
                   (roost--kill-worktree-buffers merged)
+                  (roost--revert-merged-files merged)
                   (roost--report-merge merged (roost--field merged 'retiringCommit)
                                        (or (roost--field merged 'integrationBranch)
                                            (roost--field task 'integrationBranch)))
@@ -6095,12 +6127,36 @@ finished work is merged or retired instead."
 
 (defun roost--kill-worktree-buffers (task)
   "Kill the Magit and Dired buffers left in TASK's removed worktree.
-File buffers stay, since they may hold unsaved edits."
+A window made to show one goes away, as the panel's does, rather than
+show some other buffer beside the one the terminal's window went back
+to.  File buffers stay, since they may hold unsaved edits."
   (dolist (buffer (buffer-list))
-    (with-current-buffer buffer
-      (when (and (derived-mode-p 'magit-mode 'dired-mode)
-                 (roost--task-in-directory default-directory (list task)))
-        (kill-buffer buffer)))))
+    (when (and (buffer-live-p buffer)
+               (with-current-buffer buffer
+                 (and (derived-mode-p 'magit-mode 'dired-mode)
+                      (roost--task-in-directory default-directory (list task)))))
+      ;; Before Emacs 31 this kills only a buffer that shows.
+      (quit-windows-on buffer t)
+      (when (buffer-live-p buffer) (kill-buffer buffer)))))
+
+(defun roost--revert-merged-files (task)
+  "Revert the buffers of files a merge of TASK changed in its primary checkout.
+Only those with no unsaved edits, and only here: on another host it
+would cost a round trip for each.  Revert mode would do it a moment
+later, saying so over what the merge said."
+  (when-let* (((null (roost--field task 'host)))
+              (repo (roost--field task 'repo))
+              ;; By true names: one of you may reach it through a link.
+              (directory (file-name-as-directory (file-truename repo))))
+    (dolist (buffer (buffer-list))
+      (when-let* ((file (buffer-file-name buffer))
+                  (true (buffer-local-value 'buffer-file-truename buffer)))
+        (when (and (string-prefix-p directory (expand-file-name true))
+                   (not (buffer-modified-p buffer))
+                   (file-exists-p file)
+                   (not (verify-visited-file-modtime buffer)))
+          (with-current-buffer buffer
+            (ignore-errors (revert-buffer t t t))))))))
 
 (defun roost--retired-workspace (task)
   "Remove TASK's workspace and panel, retaining other buffers.
@@ -6383,8 +6439,13 @@ doesn't again."
                  (concat "Not looked at in Magit yet" (when key (format ": %s opens it" key)))
                  'roost-dim)))
              ((= count 0)
-              (roost--insert-indented (format "Nothing changed since you looked, %s ago" (roost--elapsed at))
-                                      'roost-dim))
+              ;; Only once its agent has done something since: right after
+              ;; a look, it would say nothing you don't know.
+              (when-let* ((moved (roost--time (roost--field task 'updatedAt)))
+                          (looked (roost--time at))
+                          ((time-less-p looked moved)))
+                (roost--insert-indented (format "Nothing changed since you looked, %s ago" (roost--elapsed at))
+                                        'roost-dim)))
              (t
               (roost--insert-indented
                (concat (format "%d file%s changed since you looked, %s ago"
@@ -7500,6 +7561,7 @@ terminal or worktree, or ask which task."
     ("l" "Switch task" roost-switch-task)
     ("/" "Search conversations" roost-search)]
    [("S" "Dashboard" roost-status)
+    ("w" "Workload" roost-workload)
     ("g" "Refresh" roost-refresh)]
    [("b" "Sidebar" roost-sidebar-mode)
     ("I" "Task panel" roost-task-panel-mode)
@@ -7531,6 +7593,7 @@ terminal or worktree, or ask which task."
   "c" #'roost-new-task
   "b" #'roost-sidebar-mode
   "S" #'roost-status
+  "w" #'roost-workload
   "q" #'roost-task-info-quit
   "g" #'roost-task-info-refresh)
 
@@ -8053,6 +8116,7 @@ are told apart."
   "R" #'roost-rename
   "n" #'roost-next-waiting
   "/" #'roost-search
+  "w" #'roost-workload
   ;; As in Magit, `h' and `?' show every command.
   "h" #'roost-dispatch
   "?" #'roost-dispatch
@@ -8775,6 +8839,12 @@ Task commands act on the task at point, as in the dashboard.
               ;; The cursor shows only while you are in the sidebar, as
               ;; does the highlight; modal editing shows its state with it.
               cursor-in-non-selected-windows nil)
+  ;; Its title, in the header line so that a long list doesn't scroll it
+  ;; away, looks as it would in the buffer, in a window you are in or not
+  ;; (`header-line-active' and `-inactive' are Emacs 31's).
+  (dolist (face '(header-line header-line-active header-line-inactive))
+    (when (facep face)
+      (face-remap-add-relative face 'default)))
   (remove-hook 'window-size-change-functions #'roost--dashboard-resized t)
   (add-hook 'window-size-change-functions #'roost--sidebar-resized nil t)
   (add-hook 'post-command-hook #'roost--mark-selection nil t)
@@ -8951,11 +9021,15 @@ have seen that waits for nothing."
                          (get-buffer-window-list (current-buffer) nil t)))
          (inhibit-read-only t))
     (erase-buffer)
-    (insert (propertize "Roost" 'face 'roost-title)
-            (if-let* ((summary (roost--sidebar-summary tasks))) (concat "  " summary) "")
-            ;; Nothing here changes until it watches again.
-            (if roost-watch-mode "" (propertize "  paused" 'face 'roost-dim))
-            "\n")
+    (setq header-line-format
+          (list (string-replace
+                 "%" "%%"
+                 ;; From where the text starts, past a margin for lights.
+                 (concat (propertize " " 'display '(space :align-to 0))
+                         (propertize "Roost" 'face 'roost-title)
+                         (if-let* ((summary (roost--sidebar-summary tasks))) (concat "  " summary) "")
+                         ;; Nothing here changes until it watches again.
+                         (if roost-watch-mode "" (propertize "  paused" 'face 'roost-dim))))))
     (roost--insert-unreachable-hosts tasks width t)
     (if (null tasks)
         (insert "\n" (propertize (substitute-command-keys
@@ -9019,8 +9093,8 @@ have seen that waits for nothing."
             (set-window-parameter shown 'roost-followed current)
             (set-window-point shown row)
             ;; Scrolled no further than it shows the row, at the bottom:
-            ;; the top, with how many wait and the hosts it can't reach,
-            ;; stays as long as it can.
+            ;; the top, with the hosts it can't reach, stays as long as
+            ;; it can.
             (let ((height (window-body-height shown))
                   (top (line-number-at-pos (window-start shown)))
                   (at (line-number-at-pos row)))
@@ -9592,7 +9666,9 @@ RESULT is `pending', a list of checks, or (error . MESSAGE).")
 (define-derived-mode roost-doctor-mode special-mode "Roost Doctor"
   "What Roost needs locally and on each host, with fixes for problems.
 \\{roost-doctor-mode-map}"
-  (setq-local truncate-lines nil word-wrap t)
+  (setq-local truncate-lines nil word-wrap t
+              ;; Lines go on under their own start, which says enough.
+              fringe-indicator-alist (cons '(continuation nil nil) fringe-indicator-alist))
   (add-hook 'after-change-major-mode-hook #'roost--quiet-display 90 t)
   (roost--evil-state 'roost-doctor-mode roost-evil-state)
   (roost--quiet-display))
@@ -9680,21 +9756,24 @@ refresh of Magit's status does a dozen times or more."
           "tramp-rpc makes Magit several times faster: see \"Remote review\" in Roost's manual")))
 
 (defun roost--doctor-line (name ok detail hint &optional path)
-  "Insert one check NAME with status OK, DETAIL and HINT; PATH is a tooltip."
-  (insert "  "
-          (pcase ok
-            ('info (propertize "·" 'face 'roost-dim))
-            ('optional (propertize "–" 'face 'roost-dim))
-            ('nil (propertize "✗" 'face 'roost-status-failed))
-            (_ (propertize "✓" 'face 'roost-status-ready)))
-          ;; A long name, such as a project's push check, keeps a space.
-          " " (string-pad name 15) " "
-          (propertize (or (if (stringp detail) detail "") "") 'face 'roost-dim
-                      'help-echo path)
-          "\n")
+  "Insert one check NAME with status OK, DETAIL and HINT; PATH is a tooltip.
+In a narrow window, a long detail or hint goes on below its own start."
+  (let ((start (point)))
+    (insert "  "
+            (pcase ok
+              ('info (propertize "·" 'face 'roost-dim))
+              ('optional (propertize "–" 'face 'roost-dim))
+              ('nil (propertize "✗" 'face 'roost-status-failed))
+              (_ (propertize "✓" 'face 'roost-status-ready)))
+            ;; A long name, such as a project's push check, keeps a space.
+            " " (string-pad name 15) " ")
+    (insert (propertize (or (if (stringp detail) detail "") "") 'face 'roost-dim
+                        'help-echo path 'wrap-prefix (make-string (min 20 (- (point) start)) ?\s))
+            "\n"))
   (when (and hint (memq ok '(nil optional)))
     (insert (propertize (concat "      " hint "\n")
-                        'face (if ok 'roost-dim 'roost-status-permission)))))
+                        'face (if ok 'roost-dim 'roost-status-permission)
+                        'wrap-prefix "      "))))
 
 (defun roost--render-doctor ()
   "Redraw the setup check from `roost--doctor-results'."

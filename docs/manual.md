@@ -395,7 +395,7 @@ keep it from saying so.
 
 ### How many agents you keep up with
 
-`M-x roost-workload` shows, for
+`w`, or `M-x roost-workload`, shows, for
 today and each day of the past week, the most agents that worked at once, how
 long they worked, and how long they waited on you: asked you something, ended
 a turn or failed before you saw them, or had a pull request or conflict for you,
@@ -436,6 +436,7 @@ counted once you stop and resume it (`K`, then `s`).
 | `X` | `roost-forget` | Drop the task from Roost, leaving its worktree and branch as they are |
 | `K` | `roost-stop` | Stop the agent's window; keep all work |
 | `s` | `roost-resume` | Restart a stopped task in its recorded conversation |
+| `w` | `roost-workload` | How long agents worked and waited on you, each day of the past week ([below](#how-many-agents-you-keep-up-with)) |
 | `g` | `roost-refresh` | Refresh status and Git statistics |
 
 `j`/`k` or `TAB` move between tasks; `mouse-1` opens one and `mouse-3` shows its actions.

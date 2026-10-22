@@ -33,7 +33,7 @@
   (mapconcat (lambda (state)
                (concat "\n================ " state " ================\n"
                        (cl-letf (((symbol-function 'roost--panel-beside-terminal-p)
-                                  (lambda (_) beside)))
+                                  (lambda (_ &optional _any) beside)))
                          (gallery--draw 'panel state width 'selected))))
              (mapcar #'car roost-sweep--gallery) ""))
 
@@ -52,7 +52,9 @@
                        (roost-sidebar-list-mode)
                        (set-window-buffer (selected-window) (current-buffer))
                        (roost--render-sidebar)
-                       (buffer-substring-no-properties (point-min) (point-max)))))
+                       ;; Its title is in the header line.
+                       (concat (string-trim (substring-no-properties (car header-line-format))) "\n"
+                               (buffer-substring-no-properties (point-min) (point-max))))))
    (gallery--write "dashboard.txt" (gallery--draw 'dashboard (caar roost-sweep--gallery) nil 'selected))
    (gallery--write "draft.txt" (gallery--draw 'draft "ready, reviewing" nil 'selected))
    (gallery--write

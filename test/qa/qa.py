@@ -865,13 +865,24 @@ def merge(qa, repo):
     qa.step("Committed", expect=[
         ("the panel lists the commit's file", lambda s: "Committed" in qa.window(s, "roost-task-info-mode")["text"]),
         ("and says m merges it", lambda s: "m merges it" in qa.window(s, "roost-task-info-mode")["text"])])
+    # With Magit open beside its terminal, as after a review.
+    magit = qa.emacs.eval("(and (require 'magit nil t) t)") == "t" and not qa.host
+    if magit:
+        qa.keys("C-c r r")
+        qa.wait("Magit", lambda s: qa.window(s, "magit-status-mode"))
     qa.keys("C-c r m")
     qa.wait("the question", lambda s: s["prompt"])
     qa.step("Merging asks first", expect=[("it names the task", lambda s: name in (s["prompt"] or ""))])
     qa.type("y")
     qa.wait("the task to go", lambda s: qa.task(s, name) is None)
+    side = ("roost-sidebar-list-mode", "roost-task-info-mode")
+    main = lambda s: [w["buffer"] for w in s["windows"] if w["mode"] not in side]
     qa.step("Merged", expect=[
-        ("main has the commit", lambda s: "Add a to-do list" in qa.git(repo, "log", "--format=%s", "-3"))])
+        ("main has the commit", lambda s: "Add a to-do list" in qa.git(repo, "log", "--format=%s", "-3")),
+        ("no window is left on its Magit", lambda s: not qa.window(s, "magit-status-mode")),
+        # Not the same buffer in the windows its terminal and Magit had.
+        ("nor two on one buffer", lambda s: len(main(s)) == len(set(main(s)))),
+        ("the echo area says what it did", lambda s: (s["echo"] or "").startswith("Squashed " + name))])
 
 
 @journey("Review in Magit and send a note")
@@ -959,8 +970,11 @@ def since_looked(qa, repo):
         ("with nothing changed since a look before", lambda s: "Changed since you last looked"
          not in qa.window(s, "magit-status-mode")["text"])])
     open_task(qa, name)
-    qa.wait("the panel to say so", lambda s: "Nothing changed since you looked" in panel_text(qa, s))
-    qa.step("Nothing changed since", expect=[("the sidebar has no mark", lambda s: row(s) == name)])
+    qa.wait("the panel to take in the look", lambda s: "Not looked at" not in panel_text(qa, s))
+    qa.step("Nothing changed since", expect=[
+        ("the sidebar has no mark", lambda s: row(s) == name),
+        # Right after the look, with nothing from its agent since.
+        ("nor does the panel say so", lambda s: "since you looked" not in panel_text(qa, s))])
     # More from its agent, committed: what you saw and what's new.
     qa.keys("C-c r e")
     qa.wait("the prompt", lambda s: s["prompt"])
@@ -1007,7 +1021,7 @@ def since_looked(qa, repo):
     qa.step("D is a look too", expect=[
         ("it shows the task's changes", lambda s: "+Bread" in qa.window(s, "magit-diff-mode")["text"]),
         ("and the sidebar has no mark", lambda s: row(s) == name),
-        ("nor the panel a count", lambda s: "Nothing changed since you looked" in panel_text(qa, s))])
+        ("nor the panel a count", lambda s: "since you looked" not in panel_text(qa, s))])
 
 
 def panel_text(qa, screen):

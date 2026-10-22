@@ -69,8 +69,10 @@ happened in a section below:
   latest reply in Magit.
 - **Chosen.** Clay took 1 and 2 first (#106), then 4 and 5 (#107). Copilot
   found on #106 that `roost--hosts` dropped a host in both `roost-hosts`
-  and the remembered list from the remembered one, in memory. The rest
-  are in the [roadmap](roadmap.md#worth-trying).
+  and the remembered list from the remembered one, in memory. Then he
+  asked for the rest (#109). The sidebar's title went to its header line;
+  a host you can't reach stays at the top of the list, as it is red in its
+  group's heading too.
 
 ## Before 0.10.0 — 2026-10-21
 

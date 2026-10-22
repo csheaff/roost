@@ -18,6 +18,22 @@ What each release changes, and what to do when upgrading. Newest first.
 - The menu says what the README does: `u` is "Bring up to date", `/`
   "Search conversations", `RET` "Agent's terminal", and `K` and `s` are
   under "Agent".
+- After `m`, the window Magit or Dired opened in for the task closes, as
+  its panel's does, rather than show the same file as the terminal's
+  window beside it. Files the merge changed in the project, that you
+  have open with no unsaved edits, are reverted at once, so revert mode's
+  "Reverting buffer" no longer replaces what the merge said.
+- A new task's draft names the branch it starts from (`Start main ·
+  merges into main`) rather than "primary checkout's current branch",
+  for a project on this machine.
+- The task panel says "Nothing changed since you looked" only once its
+  agent has done something since you looked, not right after you look.
+- The sidebar's title, with how many tasks wait, stays at its top in the
+  header line however far its list scrolls.
+- `w` in the dashboard, sidebar and task panel, and on the menu, shows
+  `roost-workload`.
+- `M-x roost-doctor` wraps a long line under where it starts, in a
+  narrow window, rather than under the names of the checks.
 
 ## 0.10.0
 
