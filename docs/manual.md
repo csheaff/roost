@@ -178,10 +178,16 @@ while it watches, and the line keeps up with them. A file you mention
 yourself doesn't count, nor does a quote you delete.
 
 **Let them work.** Start more tasks; each is independent. Roost watches the
-agents' own lifecycle hooks and notifies you when one finishes or asks for
-permission, with the first line of its reply or what it asks (`Asks to run
-make test`), so you can tell from the notification whether it needs you now.
-The agent whose terminal you are looking at doesn't notify. The dashboard
+agents' own lifecycle hooks and notifies you when one needs you, titled with
+the task and its status. A permission request notifies at once and alone,
+with what it asks (`ledger — permission`, `Asks to run make test`), since its
+agent can do nothing until you answer. The rest, a finished turn, a failure,
+or a pull request or conflicts that wait on you, gather across tasks for up
+to a minute into one notification: it names the most urgent, as `n` orders
+them, with the first line of its reply or why it waits, and counts the
+others (`+2 more: 1 ready, 1 failed`). One you see in that minute, or whose
+task moves on, drops out. The agent whose terminal you are looking at
+doesn't notify. The dashboard
 shows the same for every agent, and the mode line counts the agents waiting
 (`Roost:2`; click it for the next one). `n` jumps to the next agent waiting
 for you, permission requests first, and the echo area says which task it
@@ -248,7 +254,8 @@ stage there.
 
 **Catch up and finish.** When other tasks land first, the dashboard shows the
 task falling behind (`↓2`). If merging the task's commits would then
-conflict, the task panel and menu say so before you press `m`, as in
+conflict, a notification says so, and the task panel and menu say so before
+you press `m`, as in
 "Conflicts with main in ledger.py: `u` merges main into it", and once
 you've seen what its agent last said, the task says `conflicts` and counts
 as waiting: `n` visits it. Roost checks whenever the task's branch or the
@@ -610,9 +617,12 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
   [terminal-notifier](https://github.com/julienXX/terminal-notifier) when it is
   installed (`brew install terminal-notifier`), otherwise macOS's own or Emacs's
   `notifications-notify`. With terminal-notifier and an Emacs server
-  (`server-start`), clicking one opens its task, quitting a question you left
-  open in the minibuffer as a click in the sidebar does, and a newer one about
-  the same task replaces it.
+  (`server-start`), clicking one opens its task, the most urgent of those it
+  counts, quitting a question you left open in the minibuffer as a click in
+  the sidebar does. A newer permission request from the same task replaces
+  one, and a newer gathered notification the one before. A
+  `roost-notify-function` of yours is called with each one's title and body;
+  a gathered one's body counts the others on a second line.
 - `roost-task-status-functions`, `roost-task-merged-functions`: your own
   functions to run when a task's status changes, or once its work is merged.
   Each status function is called with the task, its status before and its

@@ -11,6 +11,18 @@ What each release changes, and what to do when upgrading. Newest first.
   tasks too; a setup command that copies them, as `cp "$ROOST_REPO/.env" .`,
   can stop. If a file can't be copied, the task stops before its agent
   starts and says which, and `s` tries again.
+- Notifications go by urgency. A permission request still notifies at
+  once and alone. Finished turns, failures, and pull requests or conflicts
+  that wait on you gather across tasks for up to a minute into one
+  notification, which names the most urgent, as `n` orders them, and
+  counts the others (`+2 more: 1 ready, 1 failed`). One you see in that
+  minute, or whose task moves on, drops out. A task whose work comes to
+  conflict with the branch it merges into notifies too. Titles start with
+  the task and its status (`ledger — permission`) rather than `Roost:`.
+  With terminal-notifier, a newer gathered notification replaces the one
+  before. Upgrading: a `roost-notify-function` of yours still gets a title
+  and a body; a gathered one's body counts the others on a second line,
+  and a function that looked for `Roost:` in titles needs changing.
 - While an agent asks you something in its terminal on screen, its panel
   says to answer it there without naming `RET`, which in the terminal
   picks the agent's default answer, such as "No, exit" at folder trust.

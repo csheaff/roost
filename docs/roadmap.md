@@ -38,23 +38,6 @@ Small, and probably worth the most.
   with [the recipes and their status](melpa.md) current, and send them,
   tmux-control first, once people ask for them there. Features don't wait
   for it.
-- **Notifications by urgency.** Each change to ready, permission, failed,
-  crashed or exited sends a notification of its own, all alike, and only a
-  newer one about the same task replaces it. A permission request would
-  still go alone and at once, since its agent can do nothing until you
-  answer. The rest, finished turns, failures and pull requests or conflicts
-  that wait on you, would gather across tasks for up to a minute into one
-  notification that names the most urgent and counts the others. Titles
-  would start with the task and its status rather than "Roost:", and the
-  mode line's count stays. At two agents this changes little. Five that
-  each end a turn every ten minutes already send more than the one or two
-  per ten minutes that process-control guidance calls manageable
-  ([ISA-18.2](https://www.yokogawa.com/ro/library/resources/media-publications/implementing-alarm-management-per-the-ansi-isa-182-standard-control-engineering/)),
-  and people come to answer an alarm about as often as it has turned out
-  to matter ([Bliss et al. 1995](https://stars.library.ucf.edu/scopus1990/1980)),
-  so finished turns mixed in slow the answer to a permission request.
-  From the cockpit, where one alert sounds at a time and a message counts
-  the rest ([FAA](https://hfcc.dot.gov/publications/docs/GeneralGuidance/zz_FAA_GeneralGuidanceDoc_Chapter_04_Section_01.html)).
 - **Your phone, through Claude Code's Remote Control.** An option to start
   each Claude task with `--remote-control`, named after the task, so it
   shows in the Claude app and at claude.ai/code. Both send a push
@@ -128,20 +111,20 @@ account, with no badge or verdict.
   Conductor (setup, run and archive scripts, ten ports per workspace),
   workmux (`pre_merge` and `pre_remove` hooks that can stop the operation),
   Superset and agent-deck.
-- **Notifications held while you review.** While you review or merge one
-  task, in its Magit status or notes, or write it a prompt, notifications
-  from other tasks that don't block an agent could wait, a few minutes at
-  most, and come grouped when you leave; permission requests still go at
-  once, and the mode line's count still moves. Interruptions of a few
-  seconds doubled to tripled the mistakes people made in keeping their
-  place in a sequence of steps
+- **Notifications held while you review.** Notifications that don't block
+  an agent already gather for a minute into one, and permission requests go
+  at once. This builds on that: while you review or merge one task, in its
+  Magit status or notes, or write it a prompt, those from other tasks could
+  go on gathering, a few minutes at most, and come when you leave; the mode
+  line's count still moves. Interruptions of a few seconds doubled to
+  tripled the mistakes people made in keeping their place in a sequence of
+  steps
   ([Altmann et al. 2014](https://www.interruptions.net/literature/Altmann-JExpPsycholGen14.pdf)),
   and holding notifications until the next break cut frustration by a fifth
   ([Iqbal and Bailey 2010](https://www.interruptions.net/literature/Iqbal-TOCHI10.pdf)).
   That system had to guess when a break came, and was right about 40% of
   the time; Roost knows when you're in Magit or a merge, but nobody has
-  tried this with Roost's events. After
-  [notifications by urgency](#most-likely-first).
+  tried this with Roost's events.
 - **An Org entry's TODO state follows its task.** A linked entry
   (`ROOST_TASK`) moves through its keywords as the task starts, waits for
   review and merges, so the agenda becomes the board; off by default.

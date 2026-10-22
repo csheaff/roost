@@ -26,6 +26,7 @@
          (user-login-name "user")
          (roost--statuses (make-hash-table :test 'equal))
          (roost--pr-verdicts (make-hash-table :test 'equal))
+         (roost--agent-news (make-hash-table :test 'equal))
          (roost--merges-reported (make-hash-table :test 'equal))
          (roost--seen (make-hash-table :test 'equal))
          (roost--turns-sent (make-hash-table :test 'equal))
@@ -44,6 +45,7 @@
          (roost--notes nil) (roost--notes-loaded t)
          (roost--requests nil) (roost-notify nil) (roost--current-task nil) (roost--next-unblocked nil)
          (roost--next-run nil)
+         (roost--held-notices nil) (roost--notice-timer nil)
          (roost--perspectives (make-hash-table :test 'equal)))
      (set-frame-parameter nil 'roost-task nil)
      ;; Seeing an agent is recorded on its host too, and so is what of its
@@ -54,7 +56,28 @@
                ((symbol-function 'y-or-n-p) (lambda (prompt &rest _) (error "Unexpected question: %s" prompt)))
                ((symbol-function 'yes-or-no-p) (lambda (prompt) (error "Unexpected question: %s" prompt))))
        (unwind-protect (progn ,@body)
+         ;; Held notifications would go a minute later, in another test.
+         (when (timerp roost--notice-timer) (cancel-timer roost--notice-timer))
          (set-frame-parameter nil 'roost-task nil)))))
+
+(defmacro roost-test--held-notices (&rest body)
+  "Run BODY with held notifications sent by calling `roost-test--a-minute-on'.
+Their timer is stubbed: it checks that it waits `roost--notice-gather'
+seconds, and goes when BODY calls `roost-test--a-minute-on'."
+  (let ((timers (make-symbol "timers")))
+    `(let ((,timers nil))
+       (cl-letf (((symbol-function 'run-at-time)
+                  (lambda (secs repeat function &rest args)
+                    (should (equal (list secs repeat function)
+                                   (list roost--notice-gather nil #'roost--send-notices)))
+                    (push (cons function args) ,timers)
+                    (timer-create))))
+         (cl-flet ((roost-test--a-minute-on ()
+                     ;; One timer, from the first one held.
+                     (should (<= (length ,timers) 1))
+                     (pcase-dolist (`(,function . ,args) (prog1 ,timers (setq ,timers nil)))
+                       (apply function args))))
+           ,@body)))))
 
 (defvar-local roost-test--tmux nil
   "Plist of the stubbed tmux-control identity of the current buffer.")
@@ -1008,6 +1031,7 @@
 
 (ert-deftest roost-notifications-say-what-the-agent-finished ()
   (roost-test--isolated
+   (roost-test--held-notices
    (let* ((roost-notify t) notices
           (roost-notify-function (lambda (title body) (push (list title body) notices))))
      (cl-letf (((symbol-function 'roost--redraw) #'ignore)
@@ -1018,9 +1042,10 @@
                                            (roost-test--task nil "ready"))))))
        (roost--cache-task "dev" (roost-test--task nil "running"))
        (roost--cache-task "dev" (roost-test--task nil "ready"))
-       (should (equal notices '(("Roost: fix auth — ready" "dev · Fixed the login bug."))))
+       (roost-test--a-minute-on)
+       (should (equal notices '(("fix auth — ready" "dev · Fixed the login bug."))))
        (should (equal (roost--field (car (roost-tasks)) 'lastMessage)
-                      "## Done\n\nFixed the **login** bug."))))))
+                      "## Done\n\nFixed the **login** bug.")))))))
 
 (ert-deftest roost-a-turn-that-failed-says-why-and-that-the-agent-waits ()
   ;; At a usage limit every agent's turn fails while the agents run on,
@@ -1048,8 +1073,11 @@
      ;; Its status says the agent waits: an error, not a failure to resume.
      (should (equal (roost--display-status failed) "error"))
      (should (roost--waiting-p failed))
-     (roost--notify-attention "dev" failed "failed")
-     (should (equal notices `(("Roost: fix auth — error" ,(concat "dev · " error))))))))
+     (roost-test--held-notices
+      ;; As it is when the notification goes.
+      (roost--notify-attention "dev" (roost--cache-task "dev" failed) "failed")
+      (roost-test--a-minute-on))
+     (should (equal notices `(("fix auth — error" ,(concat "dev · " error))))))))
 
 (ert-deftest roost-notifies-once-and-not-on-initial-attachment ()
   (roost-test--isolated
@@ -1068,16 +1096,19 @@
   ;; agent go from starting to asking without the turn in between.
   (roost-test--isolated
    (roost-test--without-inspect
+    (roost-test--held-notices
     (let* ((roost-notify t) notices
            (roost-notify-function (lambda (title _body) (push title notices))))
       (roost--cache-task "dev" (roost-test--task nil "starting"))
       (roost--cache-task "dev" (roost-test--task nil "ready"))
+      (roost-test--a-minute-on)
       (should-not notices)
       (roost--cache-task "dev" (roost-test--task "1123456789abcdef" "starting"))
       (roost--cache-task "dev" (roost-test--task "1123456789abcdef" "permission"))
       (roost--cache-task "dev" (roost-test--task "2123456789abcdef" "starting"))
       (roost--cache-task "dev" (roost-test--task "2123456789abcdef" "failed"))
-      (should (equal notices '("Roost: fix auth — failed" "Roost: fix auth — permission")))))))
+      (roost-test--a-minute-on)
+      (should (equal notices '("fix auth — failed" "fix auth — permission"))))))))
 
 (ert-deftest roost-does-not-notify-about-the-agent-you-are-watching ()
   (roost-test--isolated
@@ -1104,6 +1135,7 @@
 (ert-deftest roost-notifies-on-fast-turns-that-finish-between-polls ()
   (roost-test--isolated
    (roost-test--without-inspect
+   (roost-test--held-notices
    (let* ((roost-notify t) notices
           (roost-notify-function (lambda (title _body) (push title notices)))
           (finished (append '((lastEvent . "Stop")) (roost-test--task))))
@@ -1111,7 +1143,270 @@
      (setf (alist-get 'updatedAt finished) "2026-10-03T20:00:01+00:00")
      (roost--cache-task "dev" finished)
      (roost--cache-task "dev" (copy-tree finished))
-     (should (= (length notices) 1))))))
+     (roost-test--a-minute-on)
+     (should (= (length notices) 1)))))))
+
+(defun roost-test--named (name id status &rest fields)
+  "A task called NAME, with ID and STATUS, and FIELDS over its own."
+  (let ((task (append fields (roost-test--task id status))))
+    (setf (alist-get 'name task) name)
+    task))
+
+(defmacro roost-test--inspecting (&rest body)
+  "Run BODY with each task inspected answering \"Finished NAME.\" as its reply."
+  `(cl-letf (((symbol-function 'roost--redraw) #'ignore)
+             ((symbol-function 'roost--request)
+              (lambda (host action params success _failure)
+                (should (equal action "inspect"))
+                (let ((task (gethash (list host (alist-get 'id params)) roost--tasks)))
+                  (funcall success (cons (cons 'lastMessage (format "Finished %s." (roost--field task 'name)))
+                                         (assq-delete-all 'lastMessage (copy-sequence task))))))))
+     ,@body))
+
+(ert-deftest roost-a-permission-request-notifies-alone-and-at-once ()
+  ;; Its agent can do nothing until you answer.
+  (roost-test--isolated
+   (roost-test--inspecting
+    (roost-test--held-notices
+     (let* ((roost-notify t) notices
+            (roost-notify-function (lambda (title body) (push (list title body) notices))))
+       (roost--cache-task "dev" (roost-test--named "docs" "1" "running"))
+       (roost--cache-task "dev" (roost-test--named "ledger" "2" "running"))
+       (roost--cache-task "dev" (roost-test--named "docs" "1" "ready"))
+       (should-not notices)
+       (roost--cache-task "dev" (roost-test--named "ledger" "2" "permission" '(request . "Asks to run make test")))
+       (should (equal notices '(("ledger — permission" "dev · Asks to run make test"))))
+       ;; The finished turn goes on its own, a minute after it came.
+       (roost-test--a-minute-on)
+       (should (equal notices '(("docs — ready" "dev · Finished docs.")
+                                ("ledger — permission" "dev · Asks to run make test"))))
+       ;; A request replaces what was held about its task, which is older.
+       (roost--cache-task "dev" (roost-test--named "docs" "1" "failed"))
+       (roost--cache-task "dev" (roost-test--named "docs" "1" "permission" '(request . "Asks to edit")))
+       (roost-test--a-minute-on)
+       (should (equal (car notices) '("docs — permission" "dev · Asks to edit")))
+       (should (= (length notices) 3)))))))
+
+(ert-deftest roost-notifications-gather-for-a-minute-into-one ()
+  ;; Most urgent first, as `n' goes, and the others counted.
+  (roost-test--isolated
+   (roost-test--inspecting
+    (roost-test--held-notices
+     (let* ((roost-notify t) sent)
+       (cl-letf (((symbol-function 'roost--notify)
+                  (lambda (title body &optional task group) (push (list title body task group) sent))))
+         (dolist (name '("api" "docs" "ledger" "ui"))
+           (roost--cache-task "dev" (roost-test--named name name "running")))
+         (roost--cache-task "dev" (roost-test--named "api" "api" "failed" '(error . "Exited with status 1")))
+         (roost--cache-task "dev" (roost-test--named "docs" "docs" "ready"))
+         (roost--cache-task "dev" (roost-test--named "ledger" "ledger" "ready"))
+         (roost--cache-task "dev" (roost-test--named "ui" "ui" "crashed"))
+         (should-not sent)
+         (roost-test--a-minute-on)
+         (pcase-let ((`((,title ,body ,task ,group)) sent))
+           (should (equal title "docs — ready"))
+           (should (equal body "dev · Finished docs.\n+3 more: 1 ready, 1 failed, 1 crashed"))
+           ;; A click opens that task, and a newer one replaces it.
+           (should (equal (roost--key task) '("dev" "docs")))
+           (should (equal group roost--notice-group))
+           (should (equal (cadr (member "-group" (roost--terminal-notifier-arguments title body task group)))
+                          group)))
+         ;; The next starts a minute from the first held after it.
+         (roost--cache-task "dev" (roost-test--named "api" "api" "running"))
+         (roost--cache-task "dev" (roost-test--named "api" "api" "exited" '(error . "Exited")))
+         (roost-test--a-minute-on)
+         (should (equal (seq-take (car sent) 2) '("api — exited" "dev · Exited")))
+         (should (= (length sent) 2))))))))
+
+(ert-deftest roost-a-newer-change-replaces-its-held-notification ()
+  (roost-test--isolated
+   (roost-test--inspecting
+    (roost-test--held-notices
+     (let* ((roost-notify t) notices
+            (roost-notify-function (lambda (title body) (push (list title body) notices))))
+       (roost--cache-task "dev" (roost-test--named "docs" "1" "running"))
+       (roost--cache-task "dev" (roost-test--named "docs" "1" "failed"))
+       ;; Resumed, it finished a turn: that alone goes.
+       (roost--cache-task "dev" (roost-test--named "docs" "1" "running"))
+       (roost--cache-task "dev" (roost-test--named "docs" "1" "ready"))
+       (roost-test--a-minute-on)
+       (should (equal notices '(("docs — ready" "dev · Finished docs."))))
+       ;; One that is no longer so by then goes not at all.
+       (roost--cache-task "dev" (roost-test--named "docs" "1" "running"))
+       (roost--cache-task "dev" (roost-test--named "docs" "1" "ready"))
+       (roost--cache-task "dev" (roost-test--named "docs" "1" "running"))
+       (roost-test--a-minute-on)
+       (should (= (length notices) 1)))))))
+
+(ert-deftest roost-an-inspection-that-returns-late-notifies-of-nothing ()
+  ;; Its agent changed meanwhile, which notifies of itself.
+  (roost-test--isolated
+   (roost-test--held-notices
+    (let* ((roost-notify t) notices replies
+           (roost-notify-function (lambda (title body) (push (list title body) notices)))
+           (reply (lambda (said at)
+                    (funcall (pop replies)
+                             (roost-test--named "docs" "1" "ready" `(lastMessage . ,said) `(updatedAt . ,at))))))
+      (cl-letf (((symbol-function 'roost--redraw) #'ignore)
+                ((symbol-function 'roost--request)
+                 (lambda (_host _action _params success _failure) (setq replies (append replies (list success))))))
+        (roost--cache-task "dev" (roost-test--named "docs" "1" "running"))
+        (roost--cache-task "dev" (roost-test--named "docs" "1" "ready"))
+        ;; Resumed, it failed before its reply came back.
+        (roost--cache-task "dev" (roost-test--named "docs" "1" "running" '(updatedAt . "2026-10-03T20:01:00+00:00")))
+        (roost--cache-task "dev" (roost-test--named "docs" "1" "failed" '(updatedAt . "2026-10-03T20:02:00+00:00")
+                                                    '(error . "Exited with status 1")))
+        (funcall reply "First." "2026-10-03T20:00:00+00:00")
+        (roost-test--a-minute-on)
+        (should (equal notices '(("docs — failed" "dev · Exited with status 1"))))
+        ;; Two turns' replies, the first one last.
+        (roost--cache-task "dev" (roost-test--named "docs" "1" "running" '(updatedAt . "2026-10-03T20:03:00+00:00")))
+        (roost--cache-task "dev" (roost-test--named "docs" "1" "ready" '(updatedAt . "2026-10-03T20:04:00+00:00")))
+        (roost--cache-task "dev" (roost-test--named "docs" "1" "running" '(updatedAt . "2026-10-03T20:05:00+00:00")))
+        (roost--cache-task "dev" (roost-test--named "docs" "1" "ready" '(updatedAt . "2026-10-03T20:06:00+00:00")))
+        (setq replies (reverse replies))
+        (funcall reply "Second." "2026-10-03T20:06:00+00:00")
+        (funcall reply "First." "2026-10-03T20:04:00+00:00")
+        (roost-test--a-minute-on)
+        (should (equal (car notices) '("docs — ready" "dev · Second.")))
+        (should (= (length notices) 2)))))))
+
+(ert-deftest roost-a-held-failure-goes-though-its-agent-went-meanwhile ()
+  ;; An error, whose agent waits, is a failure once its pane goes, as when
+  ;; its host can't read tmux for a while: news all the same.
+  (roost-test--isolated
+   (roost-test--held-notices
+    (let* ((roost-notify t) notices
+           (roost-notify-function (lambda (title body) (push (list title body) notices)))
+           (failed (lambda (live) (roost-test--named "docs" "1" "failed" `(live . ,live) '(error . "Usage limit")))))
+      (roost--cache-task "dev" (roost-test--named "docs" "1" "running" '(live . t)))
+      (roost--cache-task "dev" (funcall failed t))
+      (roost--cache-task "dev" (funcall failed nil))
+      (roost-test--a-minute-on)
+      (should (equal notices '(("docs — failed" "dev · Usage limit"))))
+      (roost--cache-task "dev" (roost-test--named "docs" "1" "running" '(live . t)))
+      (roost--cache-task "dev" (funcall failed t))
+      (roost--cache-task "dev" (funcall failed nil))
+      (roost--cache-task "dev" (funcall failed t))
+      (roost-test--a-minute-on)
+      (should (equal (car notices) '("docs — error" "dev · Usage limit")))))))
+
+(ert-deftest roost-a-held-notification-drops-once-you-see-its-task ()
+  (roost-test--isolated
+   (roost-test--inspecting
+    (roost-test--held-notices
+     (let* ((roost-notify t) notices
+            (roost-notify-function (lambda (title body) (push (list title body) notices)))
+            (hold (lambda (name status)
+                    (roost--cache-task "dev" (roost-test--named name name "running"))
+                    (roost--cache-task "dev" (roost-test--named name name status)))))
+       (dolist (name '("api" "docs" "ledger" "ui" "web"))
+         (funcall hold name "ready"))
+       ;; You open one; you see another in another Emacs.
+       (roost--mark-seen (gethash '("dev" "api") roost--tasks))
+       (roost--cache-task "dev" (roost-test--named "docs" "docs" "ready" '(seen . "2026-10-03T20:00:00+00:00")))
+       ;; One retires, and its host lists another no more.
+       (roost--cache-task "dev" (roost-test--named "ledger" "ledger" "retired"))
+       (roost--apply-snapshot "dev" (list (gethash '("dev" "api") roost--tasks)
+                                          (gethash '("dev" "docs") roost--tasks)
+                                          (gethash '("dev" "web") roost--tasks)))
+       (roost-test--a-minute-on)
+       (should (equal notices '(("web — ready" "dev · Finished web."))))
+       ;; Nor one you open while it is inspected, as with `n'.
+       (cl-letf* ((inspect (symbol-function 'roost--request))
+                  ((symbol-function 'roost--request)
+                   (lambda (host action params success failure)
+                     (roost--mark-seen (gethash (list host (alist-get 'id params)) roost--tasks))
+                     (funcall inspect host action params success failure))))
+         (funcall hold "web" "ready"))
+       (roost-test--a-minute-on)
+       (should (= (length notices) 1))
+       ;; With none left, none goes.
+       (funcall hold "web" "failed")
+       (roost--mark-seen (gethash '("dev" "web") roost--tasks))
+       (roost-test--a-minute-on)
+       (should (= (length notices) 1)))))))
+
+(ert-deftest roost-work-that-comes-to-conflict-notifies ()
+  (roost-test--isolated
+   (roost-test--held-notices
+    (let* ((roost-notify t) notices
+           (roost-notify-function (lambda (title body) (push (list title body) notices))))
+      (cl-letf (((symbol-function 'roost--watched-task) #'ignore))
+        ;; One that conflicted when Roost first saw it is no news.
+        (roost--cache-task "dev" (roost-test--conflicted))
+        (roost--cache-task "dev" (roost-test--conflicted '(conflicts)))
+        (roost-test--a-minute-on)
+        (should-not notices)
+        ;; Another task merged into main, say.
+        (roost--cache-task "dev" (roost-test--conflicted))
+        (roost-test--a-minute-on)
+        (should (equal notices '(("fix auth — conflicts" "dev · Conflicts with main in ledger.py, report.py"))))
+        ;; Not once you open it, though you had seen its agent already.
+        (roost--cache-task "dev" (roost-test--conflicted '(conflicts)))
+        (roost--cache-task "dev" (roost-test--conflicted))
+        (roost--mark-seen (car (roost-tasks)))
+        (roost-test--a-minute-on)
+        (should (= (length notices) 1))
+        ;; A finished turn that comes with it says what its agent said.
+        (roost-test--without-inspect
+         (roost--cache-task "dev" (roost-test--conflicted '(status . "running")))
+         (roost--cache-task "dev" (roost-test--conflicted '(updatedAt . "2026-10-03T20:05:00+00:00"))))
+        (roost-test--a-minute-on)
+        (should (equal (car notices) '("fix auth — ready" "dev")))
+        ;; Nor while that turn's reply is still on its way.
+        (let (replies)
+          (cl-letf (((symbol-function 'roost--redraw) #'ignore)
+                    ((symbol-function 'roost--request)
+                     (lambda (_host _action _params success _failure) (push success replies))))
+            (roost--cache-task "dev" (roost-test--conflicted '(status . "running") '(updatedAt . "2026-10-03T20:06:00+00:00")))
+            (roost--cache-task "dev" (roost-test--conflicted '(updatedAt . "2026-10-03T20:07:00+00:00")))
+            (roost-test--a-minute-on)
+            (should (= (length notices) 2))
+            (funcall (pop replies) (roost-test--conflicted '(updatedAt . "2026-10-03T20:07:00+00:00")
+                                                           '(lastMessage . "Merged main in.")))
+            (roost-test--a-minute-on)
+            (should (equal (car notices) '("fix auth — ready" "dev · Merged main in.")))))
+        ;; Nor one held, once its agent started again, as you then stop it.
+        (roost--cache-task "dev" (roost-test--conflicted '(conflicts) '(updatedAt . "2026-10-03T20:08:00+00:00")))
+        (roost--cache-task "dev" (roost-test--conflicted '(updatedAt . "2026-10-03T20:09:00+00:00")))
+        (should roost--held-notices)
+        (roost--cache-task "dev" (roost-test--conflicted '(status . "running") '(updatedAt . "2026-10-03T20:10:00+00:00")))
+        (roost--cache-task "dev" (roost-test--conflicted '(status . "stopped") '(live)
+                                                         '(updatedAt . "2026-10-03T20:11:00+00:00")))
+        (roost-test--a-minute-on)
+        (should (= (length notices) 3))
+        ;; Nor as you stop its agent, though they are yours then.
+        (roost--cache-task "dev" (roost-test--conflicted '(status . "running") '(updatedAt . "2026-10-03T20:12:00+00:00")))
+        (roost--cache-task "dev" (roost-test--conflicted '(status . "stopped") '(live)
+                                                         '(updatedAt . "2026-10-03T20:13:00+00:00")))
+        (should (equal (roost--news-turn (car (roost-tasks))) "conflicts"))
+        (roost-test--a-minute-on)
+        (should (= (length notices) 3)))))))
+
+(ert-deftest roost-held-notifications-cope-with-what-went-meanwhile ()
+  ;; Its timer is a real one in batch Emacs too, and goes without a task.
+  (roost-test--isolated
+   (roost-test--without-inspect
+    (let* ((roost-notify t) notices
+           (roost-notify-function (lambda (title body) (push (list title body) notices))))
+      (roost--cache-task "dev" (roost-test--task nil "running"))
+      (roost--cache-task "dev" (roost-test--task nil "failed"))
+      (should (timerp roost--notice-timer))
+      (should (memq roost--notice-timer timer-list))
+      (roost--apply-snapshot "dev" nil)
+      (let ((timer roost--notice-timer))
+        (roost--send-notices)
+        ;; Sent before its time, it goes no more.
+        (should-not (memq timer timer-list)))
+      (should-not notices)
+      (should-not roost--notice-timer)
+      (should-not roost--held-notices)
+      ;; Turned off meanwhile, nothing goes.
+      (roost--cache-task "dev" (roost-test--task nil "running"))
+      (roost--cache-task "dev" (roost-test--task nil "failed"))
+      (let ((roost-notify nil)) (roost--send-notices))
+      (should-not notices)))))
 
 (ert-deftest roost-refresh-captures-each-host-and-rejects-stale-replies ()
   (roost-test--isolated
@@ -2690,8 +2985,8 @@
            (make-directory (file-name-directory client))
            (write-region "" nil client nil 'silent)
            (set-file-modes client #o755)
-           (let ((arguments (roost--terminal-notifier-arguments "Roost: fix auth — ready" "dev · done" task)))
-             (should (equal (seq-take arguments 4) '("-title" "Roost: fix auth — ready" "-message" "dev · done")))
+           (let ((arguments (roost--terminal-notifier-arguments "fix auth — ready" "dev · done" task)))
+             (should (equal (seq-take arguments 4) '("-title" "fix auth — ready" "-message" "dev · done")))
              (should (equal (cadr (member "-group" arguments)) "roost-dev-0123456789abcdef"))
              (let ((command (split-string-shell-command (cadr (member "-execute" arguments)))))
                (should (equal (seq-take command 4)
@@ -6812,28 +7107,35 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
 
 (ert-deftest roost-a-pull-request-that-comes-to-wait-on-you-notifies ()
   (roost-test--isolated
+   (roost-test--held-notices
    (let ((roost-notify t) notices)
      (cl-letf (((symbol-function 'roost--notify) (lambda (title body &rest _) (push (list title body) notices)))
                ((symbol-function 'roost--watched-task) #'ignore))
        ;; One that waited when Roost first saw it is no news.
        (roost--cache-task "dev" (roost-test--turn-task))
+       (roost-test--a-minute-on)
        (should-not notices)
        (roost--cache-task "dev" (roost-test--turn-task '(checks . ((passing . 2) (failing . 0) (pending . 1)))))
+       (roost-test--a-minute-on)
        (should-not notices)
        (roost--cache-task "dev" (roost-test--turn-task))
-       (should (equal notices '(("Roost: fix auth — to merge" "dev · #12 passed its checks and review"))))
+       (roost-test--a-minute-on)
+       (should (equal notices '(("fix auth — to merge" "dev · #12 passed its checks and review"))))
        ;; Nor again while it waits, nor once you look at it.
        (roost--cache-task "dev" (roost-test--turn-task))
+       (roost-test--a-minute-on)
        (should (= (length notices) 1))
        (roost--cache-task "dev" (roost-test--turn-task '(threads . 1) `(threadAt . ,(roost-test--ago 300))))
-       (should (equal (car notices) '("Roost: fix auth — comments" "dev · #12 has 1 unresolved review thread")))
+       (roost-test--a-minute-on)
+       (should (equal (car notices) '("fix auth — comments" "dev · #12 has 1 unresolved review thread")))
        (cl-letf (((symbol-function 'roost--watched-task)
                   (lambda () (gethash '("dev" "0123456789abcdef") roost--tasks))))
          (roost--cache-task "dev" (roost-test--turn-task))
+         (roost-test--a-minute-on)
          (should (= (length notices) 2)))
        ;; Forgotten with the task.
        (roost--apply-snapshot "dev" nil)
-       (should (eq (gethash '("dev" "0123456789abcdef") roost--pr-verdicts 'gone) 'gone))))))
+       (should (eq (gethash '("dev" "0123456789abcdef") roost--pr-verdicts 'gone) 'gone)))))))
 
 (ert-deftest roost-the-panel-says-what-a-pull-request-waits-for ()
   (roost-test--isolated
