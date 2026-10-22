@@ -1080,6 +1080,8 @@ notifies of itself."
                        ;; Seen while it was inspected, as when `n' opened it.
                        ((not (roost--seen-p task))
                         (roost--hold-notice task name body))))))
+    ;; What was held about the task is older, even while it is inspected.
+    (roost--drop-notices key)
     (if (not (member status '("ready" "permission")))
         (funcall send task (if-let* ((error (roost--field task 'error)))
                                (concat label " · " (truncate-string-to-width error 160 nil nil "…"))

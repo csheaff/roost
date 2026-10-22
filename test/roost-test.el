@@ -1334,13 +1334,26 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
          (roost--cache-task "dev" (roost-test--conflicted '(updatedAt . "2026-10-03T20:05:00+00:00"))))
         (roost-test--a-minute-on)
         (should (equal (car notices) '("fix auth — ready" "dev")))
+        ;; Nor while that turn's reply is still on its way.
+        (let (replies)
+          (cl-letf (((symbol-function 'roost--redraw) #'ignore)
+                    ((symbol-function 'roost--request)
+                     (lambda (_host _action _params success _failure) (push success replies))))
+            (roost--cache-task "dev" (roost-test--conflicted '(status . "running") '(updatedAt . "2026-10-03T20:06:00+00:00")))
+            (roost--cache-task "dev" (roost-test--conflicted '(updatedAt . "2026-10-03T20:07:00+00:00")))
+            (roost-test--a-minute-on)
+            (should (= (length notices) 2))
+            (funcall (pop replies) (roost-test--conflicted '(updatedAt . "2026-10-03T20:07:00+00:00")
+                                                           '(lastMessage . "Merged main in.")))
+            (roost-test--a-minute-on)
+            (should (equal (car notices) '("fix auth — ready" "dev · Merged main in.")))))
         ;; Nor as you stop its agent, though they are yours then.
         (roost--cache-task "dev" (roost-test--conflicted '(status . "running") '(updatedAt . "2026-10-03T20:06:00+00:00")))
         (roost--cache-task "dev" (roost-test--conflicted '(status . "stopped") '(live)
                                                          '(updatedAt . "2026-10-03T20:07:00+00:00")))
         (should (equal (roost--news-turn (car (roost-tasks))) "conflicts"))
         (roost-test--a-minute-on)
-        (should (= (length notices) 2)))))))
+        (should (= (length notices) 3)))))))
 
 (ert-deftest roost-held-notifications-cope-with-what-went-meanwhile ()
   ;; Its timer is a real one in batch Emacs too, and goes without a task.
