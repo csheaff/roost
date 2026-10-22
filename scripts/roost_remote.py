@@ -4400,17 +4400,14 @@ def copy_staging(worktree):
     return worktree.with_name("." + worktree.name + ".copying")
 
 
-def leaves(link, depth):
-    """Whether LINK, a relative link DEPTH directories into a repository,
-    goes above its top on the way, as ../primary/x from the top does."""
-    for name in link.split("/"):
-        if name == "..":
-            depth -= 1
-            if depth < 0:
-                return True
-        elif name not in ("", "."):
-            depth += 1
-    return False
+def within(path, top):
+    """PATH relative to TOP, both resolved, or None when it is outside."""
+    return os.path.relpath(path, top) if path == top or path.startswith(top + os.sep) else None
+
+
+def shown(path):
+    """PATH as a message shows it, with bytes not in UTF-8 as \\xe9."""
+    return os.fsencode(path).decode("utf-8", "backslashreplace")
 
 
 def copy_included_file(repo, worktree, path, made, staging):
@@ -4435,12 +4432,12 @@ def copy_included_file(repo, worktree, path, made, staging):
     mode = os.lstat(source).st_mode
     if stat.S_ISLNK(mode):
         link = os.readlink(source)
-        # One that leaves the repository on its way, by name or after every
-        # link on the way, as `..` after one leads on from where that one
-        # led, leads where it did from the primary checkout.
-        resolved, root = os.path.realpath(source), os.path.realpath(repo)
-        if not os.path.isabs(link) and (leaves(link, len(PurePosixPath(path).parts) - 1) or resolved != root
-                                        and not resolved.startswith(root + os.sep)):
+        # A relative one stays so only if it leads from the worktree where
+        # it led from the primary checkout, after every link on its way;
+        # else it leads there from the primary checkout.
+        here = within(os.path.realpath(source), os.path.realpath(repo))
+        there = within(os.path.realpath(os.path.join(os.path.dirname(target), link)), os.path.realpath(worktree))
+        if not os.path.isabs(link) and (here is None or here != there):
             link = os.path.join(os.path.dirname(source), link)
         try:
             os.symlink(link, target)
@@ -4491,7 +4488,7 @@ def copy_included(repo, worktree):
                 print("Roost: copying %d files that %s lists" % (len(paths), WORKTREE_INCLUDE), flush=True)
                 said = True
             if path not in ignored:
-                failed.append("%s (Git doesn't ignore it on the task's branch)" % path)
+                failed.append("%s (Git doesn't ignore it on the task's branch)" % shown(path))
                 continue
             try:
                 if copy_included_file(repo, worktree, path, made, staging):
@@ -4500,7 +4497,7 @@ def copy_included(repo, worktree):
                 # Gone since Git listed it, as a log rotated away.
                 if isinstance(exc, FileNotFoundError) and not os.path.lexists(repo / path):
                     continue
-                failed.append("%s (%s)" % (path, exc.strerror or exc))
+                failed.append("%s (%s)" % (shown(path), exc.strerror or exc))
         return copied
 
     try:
@@ -4516,9 +4513,16 @@ def copy_included(repo, worktree):
             if path not in ignored:
                 with contextlib.suppress(FileNotFoundError):
                     os.unlink(worktree / path)
-                failed.append("%s (Git doesn't ignore it on the task's branch)" % path)
+                failed.append("%s (Git doesn't ignore it on the task's branch)" % shown(path))
         if not failed:
-            copy_each([path for path in paths if path not in rules])
+            copied += copy_each([path for path in paths if path not in rules])
+        # A link that leads nowhere from the worktree, past a file it lacks,
+        # leads where it did from the primary checkout.
+        for path in copied:
+            target, source = worktree / path, repo / path
+            if target.is_symlink() and not target.exists() and source.exists():
+                os.unlink(target)
+                os.symlink(os.path.join(os.path.dirname(source), os.readlink(source)), target)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
     if failed:

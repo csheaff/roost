@@ -4008,6 +4008,54 @@ class WorktreeInclude(unittest.TestCase):
         roost.copy_included(self.repo, worktree)
         self.assertEqual((worktree / ".env").read_text(), "SETTING=1\n")
 
+    def test_a_link_that_goes_out_through_another_and_comes_back_leads_where_it_did(self):
+        elsewhere = self.elsewhere()
+        (self.repo / "settings.env").write_text("SETTING=1\n")
+        (self.repo / "bridge").symlink_to(elsewhere)
+        (elsewhere / "settings.env").symlink_to(self.repo / "settings.env")
+        back = os.path.relpath(self.repo, elsewhere.parent)
+        (self.repo / "a.env").symlink_to("bridge/../%s/settings.env" % back)
+        (self.repo / "b.env").symlink_to("bridge/settings.env")
+        self.listed("*.env\nbridge\n", "a.env\nb.env\n")
+        worktree = self.worktree()
+        roost.copy_included(self.repo, worktree)
+        self.assertEqual(((worktree / "a.env").read_text(), (worktree / "b.env").read_text()),
+                         ("SETTING=1\n", "SETTING=1\n"))
+
+    def test_a_link_that_would_lead_to_another_file_from_the_worktree_leads_to_the_primary_checkouts(self):
+        (self.repo / "bridge").mkdir()
+        (self.repo / "bridge/settings.env").write_text("TRACKED\n")
+        roost.git(self.repo, "add", "bridge")
+        self.listed("sub/\n.env\n", ".env\n")
+        worktree = self.worktree()
+        # The task's branch tracks bridge/settings.env; here bridge leads to sub/.
+        roost.git(self.repo, "rm", "-rq", "bridge")
+        (self.repo / "sub").mkdir()
+        (self.repo / "sub/settings.env").write_text("PRIMARY\n")
+        (self.repo / "bridge").symlink_to("sub")
+        (self.repo / ".gitignore").write_text("sub/\n.env\nbridge\n")
+        (self.repo / ".env").symlink_to("bridge/settings.env")
+        roost.copy_included(self.repo, worktree)
+        self.assertEqual((worktree / ".env").read_text(), "PRIMARY\n")
+
+    def test_a_link_to_a_file_the_worktree_lacks_leads_to_the_primary_checkouts(self):
+        (self.repo / "settings.env").write_text("SETTING=1\n")
+        (self.repo / ".env").symlink_to("settings.env")
+        self.listed("*.env\n.env\n", ".env\n")
+        worktree = self.worktree()
+        roost.copy_included(self.repo, worktree)
+        self.assertEqual((worktree / ".env").read_text(), "SETTING=1\n")
+
+    @unittest.skipIf(sys.platform == "darwin", "macOS names files in UTF-8 only")
+    @unittest.skipIf(os.geteuid() == 0, "root reads any file")
+    def test_a_name_not_in_utf_8_is_shown_in_the_error_as_its_bytes(self):
+        name = os.fsdecode(b"caf\xe9.env")
+        self.listed("*.env\n", "*.env\n", name)
+        (self.repo / name).chmod(0)
+        with self.assertRaises(roost.RoostError) as caught:
+            roost.copy_included(self.repo, self.worktree())
+        self.assertIn("caf\\xe9.env (Permission denied)", str(caught.exception).encode("utf-8").decode())
+
     def test_what_a_copy_cut_off_left_is_cleared_and_nothing_is_staged_in_the_worktree(self):
         self.listed(".env\n", ".env\n", ".env")
         worktree = self.worktree()
