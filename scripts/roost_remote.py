@@ -4339,12 +4339,13 @@ WORKTREE_INCLUDE = ".worktreeinclude"
 SKIPPED_WALK_LIMIT = 1000
 
 
-def git_fields(repo, *args):
-    """What `git ARGS` prints in REPO, split at its NULs, with paths as the
-    file system names them, even ones not in UTF-8."""
-    result = subprocess.run(["git", "-C", str(repo), *args], stdout=subprocess.PIPE,
+def git_fields(repo, *args, input=None, succeed=(0,)):
+    """What `git ARGS` prints in REPO, given INPUT, split at its NULs, with
+    paths as the file system names them, even ones not in UTF-8. An exit
+    status not in SUCCEED raises RoostError."""
+    result = subprocess.run(["git", "-C", str(repo), *args], input=input, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, pass_fds=tuple(INHERITED))
-    if result.returncode:
+    if result.returncode not in succeed:
         raise RoostError(os.fsdecode(result.stderr).strip() or "git %s failed in %s" % (args[0], repo))
     return [os.fsdecode(field) for field in result.stdout.split(b"\0") if field]
 
@@ -4428,29 +4429,39 @@ def included_files(repo):
             if path in files or not path.endswith("/") and path.startswith(kept)]
 
 
-def copy_included_file(repo, worktree, path, made):
-    """Copy PATH from REPO into WORKTREE, and its mode, unless the worktree
-    has it already, or a file or link on its way, as checked out. A link
-    is copied as a link, never followed; a relative one that leads out of
-    the repository then leads to the same place. Add each directory made,
-    with the mode it copies, to MADE."""
+def checked_out(worktree, path):
+    """Whether WORKTREE has PATH already, or a file or link on its way, as
+    checked out, so that nothing is copied there: a link could lead out."""
+    parent = worktree
+    for name in PurePosixPath(path).parts[:-1]:
+        parent = parent / name
+        try:
+            if not stat.S_ISDIR(os.lstat(parent).st_mode):
+                return True
+        except FileNotFoundError:
+            return False
+    return os.path.lexists(worktree / path)
+
+
+def copy_included_file(repo, worktree, path, made, staging):
+    """Copy PATH from REPO into WORKTREE, and its mode, through STAGING, a
+    directory outside it, so that it comes whole or not at all, and never
+    over one made there meanwhile. A link is copied as a link, never
+    followed; a relative one that leads out of the repository then leads
+    to the same place. Add each directory made, with the mode it copies,
+    to MADE."""
     source, target = repo / path, worktree / path
     parent = worktree
     for name in PurePosixPath(path).parts[:-1]:
         parent = parent / name
         try:
-            mode = os.lstat(parent).st_mode
+            if not stat.S_ISDIR(os.lstat(parent).st_mode):
+                return
         except FileNotFoundError:
             mode = stat.S_IMODE(os.stat(repo / parent.relative_to(worktree)).st_mode)
             # Open to its owner until its files are in, as for a try after one failed.
             os.mkdir(parent, mode | 0o700)
             made.append((parent, mode))
-            continue
-        # A link could lead out of the worktree.
-        if not stat.S_ISDIR(mode):
-            return
-    if os.path.lexists(target):
-        return
     mode = os.lstat(source).st_mode
     if stat.S_ISLNK(mode):
         link = os.readlink(source)
@@ -4459,39 +4470,52 @@ def copy_included_file(repo, worktree, path, made):
         resolved, root = os.path.realpath(source), os.path.realpath(repo)
         if not os.path.isabs(link) and resolved != root and not resolved.startswith(root + os.sep):
             link = os.path.join(os.path.dirname(source), link)
-        os.symlink(link, target)
+        with contextlib.suppress(FileExistsError):
+            os.symlink(link, target)
     elif stat.S_ISREG(mode):
-        # Whole or not at all, so that trying again skips only what is done.
-        descriptor, partial = tempfile.mkstemp(prefix=".roost-copy-", dir=target.parent)
-        os.close(descriptor)
+        staged = staging / "file"
+        shutil.copy(source, staged)
         try:
-            shutil.copy(source, partial)
-            os.replace(partial, target)
-        except BaseException:
-            with contextlib.suppress(OSError):
-                os.unlink(partial)
-            raise
+            os.link(staged, target)
+        except FileExistsError:
+            pass
+        finally:
+            os.unlink(staged)
 
 
 def copy_included(repo, worktree):
     """Copy into WORKTREE the files of REPO, its primary checkout, that
-    `included_files` gives. It says so in the terminal when that takes a
-    while. Copy what can be, then raise RoostError naming what could not."""
+    `included_files` gives and that Git ignores in WORKTREE too. It says
+    so in the terminal when that takes a while. Copy what can be, then
+    raise RoostError naming what could not."""
     repo, worktree = Path(repo), Path(worktree)
-    paths = included_files(repo)
+    paths = [path for path in included_files(repo) if not checked_out(worktree, path)]
+    # A branch whose .gitignore leaves one out would offer it to be committed.
+    ignored = set(git_fields(worktree, "check-ignore", "-z", "--stdin", input=b"\0".join(map(os.fsencode, paths)),
+                             succeed=(0, 1))) if paths else set()
+    staging = worktree.with_name("." + worktree.name + ".copying")
+    # What a copy cut off left, for a secret's sake.
+    shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(mode=0o700)
     started, said = time.monotonic(), False
     made, failed = [], []
-    for path in paths:
-        if not said and time.monotonic() - started > 1:
-            print("Roost: copying %d files that %s lists" % (len(paths), WORKTREE_INCLUDE), flush=True)
-            said = True
-        try:
-            copy_included_file(repo, worktree, path, made)
-        except OSError as exc:
-            # Gone since Git listed it, as a log rotated away.
-            if isinstance(exc, FileNotFoundError) and not os.path.lexists(repo / path):
+    try:
+        for path in paths:
+            if not said and time.monotonic() - started > 1:
+                print("Roost: copying %d files that %s lists" % (len(paths), WORKTREE_INCLUDE), flush=True)
+                said = True
+            if path not in ignored:
+                failed.append("%s (Git doesn't ignore it on the task's branch)" % path)
                 continue
-            failed.append("%s (%s)" % (path, exc.strerror or exc))
+            try:
+                copy_included_file(repo, worktree, path, made, staging)
+            except OSError as exc:
+                # Gone since Git listed it, as a log rotated away.
+                if isinstance(exc, FileNotFoundError) and not os.path.lexists(repo / path):
+                    continue
+                failed.append("%s (%s)" % (path, exc.strerror or exc))
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
     if failed:
         raise RoostError("Could not copy %d of the files %s lists: %s%s; resuming the task tries again"
                          % (len(failed), WORKTREE_INCLUDE, ", ".join(failed[:3]),

@@ -530,13 +530,17 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
   files that match one and that Git ignores, from the primary checkout into
   each new task's worktree, as Claude Code and Conductor do, so one file
   serves all three. A file Git tracks, or one it shows as untracked, isn't
-  copied. In a directory Git ignores as a whole, Roost looks only where a
-  pattern leads: `.env` doesn't look through `node_modules/`, while
-  `vendor/**/config.json` looks in an ignored `vendor/`. Links are copied as
-  links, and files the worktree has already are left as checked out. The
-  copy runs in the task's terminal, before the setup command. If a file
-  can't be copied, the task stops before its agent starts and says which;
-  `s` copies what's still missing and starts it. A directory you list is
+  copied. Git must ignore it on the task's branch too, or an agent's `git
+  add .` could commit it: when a task starts from a branch whose
+  `.gitignore` doesn't have `.env`, or before you commit the line that adds
+  it, the task stops and says so. In a directory Git ignores as a whole,
+  Roost looks only where a pattern leads: `.env` doesn't look through
+  `node_modules/`, while `vendor/**/config.json` looks in an ignored
+  `vendor/`. Links are copied as links, and files the worktree has already
+  are left as checked out. The copy runs in the task's terminal, before
+  the setup command. If a file can't be copied, the task stops before its
+  agent starts and says which; `s` copies what's still missing and starts
+  it. A directory you list is
   copied file by file for each task: `node_modules` takes that time and
   space every time, where `npm ci` as the setup command may take less.
 - `roost-setup-command`: a shell command run once in a new worktree before the

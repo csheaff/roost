@@ -3872,8 +3872,9 @@ class WorktreeInclude(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.repo = Path(self.temp.name)
         roost.git(self.repo, "init", "-q")
+        # Not the user's global excludes, which may ignore .env everywhere.
         for name, value in (("user.name", "Roost Test"), ("user.email", "roost@example.invalid"),
-                            ("commit.gpgsign", "false")):
+                            ("commit.gpgsign", "false"), ("core.excludesFile", os.devnull)):
             roost.git(self.repo, "config", name, value)
         self.addCleanup(self.temp.cleanup)
 
@@ -3923,12 +3924,58 @@ class WorktreeInclude(unittest.TestCase):
                                      "secret keys/a.pem", "vendor1/b.json"),
                          ["secret keys/a.pem", "vendor1/b.json"])
 
+    def elsewhere(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        return Path(directory.name)
+
     def worktree(self):
-        elsewhere = tempfile.TemporaryDirectory()
-        self.addCleanup(elsewhere.cleanup)
-        worktree = Path(elsewhere.name) / "worktree"
-        worktree.mkdir()
+        """A worktree of the repository, with its .gitignore committed."""
+        roost.git(self.repo, "add", ".gitignore")
+        roost.git(self.repo, "commit", "-q", "--allow-empty", "-m", "ignore")
+        worktree = self.elsewhere() / "worktree"
+        roost.git(self.repo, "worktree", "add", "-q", "--detach", str(worktree))
         return worktree
+
+    def test_a_file_git_doesnt_ignore_on_the_tasks_branch_is_not_copied(self):
+        self.listed("", ".env\n")
+        worktree = self.worktree()
+        # Ignored only as the primary checkout's .gitignore stands, uncommitted.
+        (self.repo / ".gitignore").write_text(".env\n")
+        (self.repo / ".env").write_text("SECRET=1\n")
+        with self.assertRaisesRegex(roost.RoostError, r"\.env \(Git doesn't ignore it on the task's branch\)"):
+            roost.copy_included(self.repo, worktree)
+        self.assertFalse((worktree / ".env").exists())
+
+    def test_what_a_copy_cut_off_left_is_cleared_and_nothing_is_staged_in_the_worktree(self):
+        self.listed(".env\n", ".env\n", ".env")
+        worktree = self.worktree()
+        staging = worktree.with_name(".worktree.copying")
+        staging.mkdir()
+        (staging / "file").write_text("SECRET\n")
+        copy = shutil.copy
+        seen = []
+
+        def look(source, target):
+            copied = copy(source, target)
+            seen.append(roost.git(worktree, "status", "--porcelain", "--ignored=no").stdout)
+            return copied
+        with patch.object(roost.shutil, "copy", look):
+            roost.copy_included(self.repo, worktree)
+        self.assertEqual((seen, staging.exists()), ([""], False))
+        self.assertTrue((worktree / ".env").is_file())
+
+    def test_a_file_made_while_its_copy_runs_is_kept(self):
+        self.listed(".env\n", ".env\n", ".env")
+        worktree = self.worktree()
+        copy = shutil.copy
+
+        def meanwhile(source, target):
+            (worktree / ".env").write_text("MINE\n")
+            return copy(source, target)
+        with patch.object(roost.shutil, "copy", meanwhile):
+            roost.copy_included(self.repo, worktree)
+        self.assertEqual((worktree / ".env").read_text(), "MINE\n")
 
     def test_a_file_named_like_a_partial_copy_is_copied_too(self):
         self.listed("a/\n", "a/\n", "a/.roost-copy", "a/b.env")
@@ -3962,7 +4009,7 @@ class WorktreeInclude(unittest.TestCase):
         worktree = self.worktree()
         with patch.object(roost.shutil, "copy", rotate):
             roost.copy_included(self.repo, worktree)
-        self.assertEqual(sorted(p.name for p in worktree.iterdir()), ["b.log"])
+        self.assertEqual(((worktree / "a.log").exists(), (worktree / "b.log").exists()), (False, True))
 
     @unittest.skipIf(sys.platform == "darwin", "macOS names files in UTF-8 only")
     def test_a_name_not_in_utf_8_matches_its_own_pattern(self):
@@ -3974,7 +4021,7 @@ class WorktreeInclude(unittest.TestCase):
         self.assertEqual(roost.included_files(self.repo), [name + "/x/a.pem"])
 
     def test_a_link_out_of_the_repository_leads_where_it_did(self):
-        elsewhere = Path(self.worktree().parent)
+        elsewhere = self.elsewhere()
         (elsewhere / "outside.env").write_text("chained\n")
         (elsewhere / "shared.env").write_text("bridged\n")
         (elsewhere / "a/b").mkdir(parents=True)
@@ -3991,15 +4038,12 @@ class WorktreeInclude(unittest.TestCase):
 
     def test_a_link_or_file_the_worktree_has_on_the_way_is_left_as_it_is(self):
         self.listed("config/\nlinked/\n", "config/\nlinked/\n", "config/local.json", "linked/x.env")
-        elsewhere = tempfile.TemporaryDirectory()
-        self.addCleanup(elsewhere.cleanup)
-        worktree = Path(elsewhere.name) / "worktree"
-        worktree.mkdir()
+        worktree, elsewhere = self.worktree(), self.elsewhere()
         (worktree / "config").write_text("tracked\n")
-        (worktree / "linked").symlink_to(elsewhere.name)
+        (worktree / "linked").symlink_to(elsewhere)
         roost.copy_included(self.repo, worktree)
         self.assertEqual((worktree / "config").read_text(), "tracked\n")
-        self.assertFalse((Path(elsewhere.name) / "x.env").exists())
+        self.assertFalse((elsewhere / "x.env").exists())
 
     def test_no_worktreeinclude_lists_nothing(self):
         (self.repo / ".gitignore").write_text(".env\n")
