@@ -1258,6 +1258,15 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
                                           (gethash '("dev" "web") roost--tasks)))
        (roost-test--a-minute-on)
        (should (equal notices '(("web — ready" "dev · Finished web."))))
+       ;; Nor one you open while it is inspected, as with `n'.
+       (cl-letf* ((inspect (symbol-function 'roost--request))
+                  ((symbol-function 'roost--request)
+                   (lambda (host action params success failure)
+                     (roost--mark-seen (gethash (list host (alist-get 'id params)) roost--tasks))
+                     (funcall inspect host action params success failure))))
+         (funcall hold "web" "ready"))
+       (roost-test--a-minute-on)
+       (should (= (length notices) 1))
        ;; With none left, none goes.
        (funcall hold "web" "failed")
        (roost--mark-seen (gethash '("dev" "web") roost--tasks))
@@ -1291,6 +1300,12 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
          (roost--cache-task "dev" (roost-test--conflicted '(updatedAt . "2026-10-03T20:05:00+00:00"))))
         (roost-test--a-minute-on)
         (should (equal (car notices) '("fix auth — ready" "dev")))
+        ;; Nor as you stop its agent, though they are yours then.
+        (roost--cache-task "dev" (roost-test--conflicted '(status . "running") '(updatedAt . "2026-10-03T20:06:00+00:00")))
+        (roost--cache-task "dev" (roost-test--conflicted '(status . "stopped") '(live)
+                                                         '(updatedAt . "2026-10-03T20:07:00+00:00")))
+        (should (equal (roost--news-turn (car (roost-tasks))) "conflicts"))
+        (roost-test--a-minute-on)
         (should (= (length notices) 2)))))))
 
 (ert-deftest roost-held-notifications-cope-with-what-went-meanwhile ()

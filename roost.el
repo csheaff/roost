@@ -981,8 +981,10 @@ must a reply with a newer look lose it for an older agent event."
         (remhash key roost--pr-verdicts))
       ;; A pull request or work that comes to wait on you is news, whatever
       ;; its agent last said; one there when Roost first saw the task is
-      ;; not.  Before the agent's news, which replaces it when both come.
+      ;; not, nor one that comes as you stop its agent.  Before the
+      ;; agent's news, which replaces it when both come.
       (when (and roost-notify turn (not (eq had 'unknown)) (not (equal had turn))
+                 (not (and (equal status "stopped") (not (equal previous "stopped"))))
                  (funcall unwatched))
         (roost--hold-notice task turn (concat (roost--host-label host) " · " (roost--turn-reason task turn))))
       (when (and roost-notify previous
@@ -1063,11 +1065,13 @@ finished or wants."
   (let* ((name (roost--status-name task))
          (label (roost--host-label host))
          (send (lambda (task body)
-                 (if (not (equal status "permission"))
-                     (roost--hold-notice task name body)
-                   ;; It replaces one held about the task, which is older.
-                   (roost--drop-notices (roost--key task))
-                   (roost--notify (roost--notice-title task name) body task)))))
+                 (cond ((equal status "permission")
+                        ;; It replaces one held about the task, which is older.
+                        (roost--drop-notices (roost--key task))
+                        (roost--notify (roost--notice-title task name) body task))
+                       ;; Seen while it was inspected, as when `n' opened it.
+                       ((not (roost--seen-p task))
+                        (roost--hold-notice task name body))))))
     (if (not (member status '("ready" "permission")))
         (funcall send task (if-let* ((error (roost--field task 'error)))
                                (concat label " · " (truncate-string-to-width error 160 nil nil "…"))
@@ -1125,24 +1129,27 @@ unless you have seen TASK by then, or it is STATUS no longer."
   (setq roost--held-notices
         (seq-remove (lambda (notice) (equal (plist-get notice :key) key)) roost--held-notices)))
 
-(defun roost--notice-holds-p (notice)
+(defun roost--notice-holds-p (notice watched)
   "Whether held NOTICE is news still: its task is as it says, and unseen.
 Its task may have gone meanwhile, retired or no longer listed by its
-host, or moved on, or you may have seen it, here or in another Emacs."
+host, or moved on, or you may have seen it, here or in another Emacs,
+or be looking at it now: WATCHED is the key of the task you look at."
   (when-let* ((task (gethash (plist-get notice :key) roost--tasks)))
     (let ((status (plist-get notice :status)))
       (and (equal status (if (member status (cons "conflicts" roost--pr-turns))
                              (roost--news-turn task)
                            (roost--status-name task)))
            (not (and (roost--seen-p task) (not (plist-get notice :seen))))
-           (not (when-let* ((watched (roost--watched-task)))
-                  (equal (roost--key watched) (plist-get notice :key))))))))
+           (not (equal watched (plist-get notice :key)))))))
 
 (defun roost--send-notices ()
   "Send the notifications held as one, about the most urgent of their tasks.
 It counts the others by status, and a click on it opens that task."
   (setq roost--notice-timer nil)
-  (let ((notices (and roost-notify (seq-filter #'roost--notice-holds-p roost--held-notices))))
+  (let* ((watched (when-let* ((task (roost--watched-task))) (roost--key task)))
+         (notices (and roost-notify
+                       (seq-filter (lambda (notice) (roost--notice-holds-p notice watched))
+                                   roost--held-notices))))
     (setq roost--held-notices nil)
     (when notices
       ;; As `roost-next-waiting' goes, the first held first among equals.
