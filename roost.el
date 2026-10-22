@@ -2169,11 +2169,26 @@ says once the terminal shows."
                                 0 nil #'roost--when-out-of-minibuffer
                                 (lambda ()
                                   (when (= generation roost--open-generation)
-                                    ;; You know now; `n' moves on to the next.
-                                    (roost--mark-seen (or (gethash (roost--key task) roost--tasks) task))
-                                    (when (y-or-n-p (format "%s's agent isn't running.  Resume its conversation? "
-                                                            (roost--field task 'name)))
-                                      (roost-resume task)))))
+                                    (let* ((current (or (gethash (roost--key task) roost--tasks) task))
+                                           ;; As after its host restarted: one
+                                           ;; question for all of them.
+                                           (others (roost--crashed-with current))
+                                           (name (roost--field task 'name))
+                                           (host (roost--host-label (roost--field task 'host))))
+                                      ;; You know now; `n' moves on to the next.
+                                      (roost--mark-seen current)
+                                      (when (y-or-n-p
+                                             (cond ((null others)
+                                                    (format "%s's agent isn't running.  Resume its conversation? "
+                                                            name))
+                                                   ((cdr others)
+                                                    (format "%s's agent isn't running, nor %d others' on %s.  Resume all %d? "
+                                                            name (length others) host (1+ (length others))))
+                                                   (t (format "%s's agent isn't running, nor one other's on %s.  Resume both? "
+                                                              name host))))
+                                        (if others
+                                            (roost--resume-together current others)
+                                          (roost-resume task)))))))
                              (message "Roost %s: %s" (roost--host-label (roost--field task 'host)) err)))
                           ;; A view of the task shows without its terminal.
                           ((funcall still-wanted)
@@ -3250,14 +3265,113 @@ FAILURE, if given, receives the error message instead of Roost reporting it."
                (message "Roost %s: %s" (roost--host-label host) err)))
            (when teardown (list (+ roost-request-timeout roost--teardown-seconds))))))
 
+(defvar roost--resuming nil
+  "Keys of the tasks that resuming several at once has yet to resume.")
+
 ;;;###autoload
-(defun roost-resume (&optional task)
-  "Restart TASK, resuming its recorded agent conversation."
-  (interactive)
-  (roost--act (roost--choose task) "resume"
-              `((programStatus . ,(if roost-program-status t :false))
-                (size . ,(roost--terminal-size task)))
-              #'roost-open-task))
+(defun roost-resume (&optional task offer)
+  "Restart TASK, resuming its recorded agent conversation.
+With OFFER, as when you give the command, and other agents on TASK's
+host crashed with TASK's, as when the host restarted, ask whether to
+resume those too."
+  (interactive (list nil t))
+  (setq task (roost--choose task))
+  (let ((others (and offer (roost--crashed-with task)))
+        (host (roost--host-label (roost--field task 'host))))
+    (if (and others
+             (y-or-n-p (if (cdr others)
+                           (format "Resume the %d other agents that crashed on %s too? " (length others) host)
+                         (format "Resume the other agent that crashed on %s too? " host))))
+        (roost--resume-together task others)
+      ;; Now, rather than in its turn among several resuming.
+      (setq roost--resuming (delete (roost--key task) roost--resuming))
+      (roost--act task "resume" (roost--resume-parameters task) #'roost-open-task))))
+
+(defun roost--resume-parameters (task)
+  "What a request to resume TASK says besides which task."
+  `((programStatus . ,(if roost-program-status t :false))
+    (size . ,(roost--terminal-size task))))
+
+(defun roost--crashed-with (task)
+  "The other tasks on TASK's host whose agents crashed, if TASK's did.
+Each crashed, as every agent there does when the host restarts or its
+tmux server ends, and can resume.  Those stopped, exited or failed are
+left out: you or the agent ended them.  So are those that resuming
+several will resume, which you were asked about already, and all of
+them while TASK is one of those."
+  (when (and (equal (roost--field task 'status) "crashed")
+             (not (member (roost--key task) roost--resuming)))
+    (let ((host (roost--field task 'host))
+          (key (roost--key task)))
+      (seq-filter (lambda (other)
+                    (and (equal (roost--field other 'host) host)
+                         (not (equal (roost--key other) key))
+                         (equal (roost--field other 'status) "crashed")
+                         (not (member (roost--key other) roost--resuming))
+                         (roost--action-applies-p other #'roost-resume)))
+                  (roost-tasks)))))
+
+(defun roost--resume-together (task others)
+  "Resume TASK, then open it, and resume OTHERS, one after another.
+OTHERS' terminals stay closed.  Once all have replied, say how many
+resumed, naming each that didn't and why: one that fails doesn't stop
+the rest.  One you resumed, stopped or forgot meanwhile, or that no
+longer shows as crashed, is passed over."
+  (let ((host (roost--field task 'host))
+        (tried 1)
+        failures said)
+    ;; Until each replies, opening one of them offers the rest no more.
+    (setq roost--resuming (append (mapcar #'roost--key (cons task others)) roost--resuming))
+    (cl-labels ((replied (task)
+                  (setq roost--resuming (delete (roost--key task) roost--resuming)))
+                (next (rest)
+                  (if (null rest)
+                      (message "%s" (setq said (roost--resumed-message host tried (reverse failures))))
+                    (let* ((key (roost--key (car rest)))
+                           (other (gethash key roost--tasks)))
+                      ;; Unless, since you were asked, you resumed it,
+                      ;; stopped or forgot it, or it ended another way.
+                      (if (not (and other (member key roost--resuming)
+                                    (equal (roost--field other 'status) "crashed")
+                                    (roost--action-applies-p other #'roost-resume)))
+                          (progn (replied (car rest)) (next (cdr rest)))
+                        (cl-incf tried)
+                        (roost--act other "resume" (roost--resume-parameters other)
+                                    (lambda (_)
+                                      (replied other)
+                                      (next (cdr rest)))
+                                    (lambda (err)
+                                      (replied other)
+                                      (push (cons other err) failures)
+                                      (next (cdr rest)))))))))
+      (roost--act task "resume" (roost--resume-parameters task)
+                  (lambda (updated)
+                    (replied task)
+                    ;; The others first: an error opening this one mustn't
+                    ;; stop them.
+                    (next others)
+                    ;; Said again once its terminal shows, if done by then:
+                    ;; opening clears the echo area.
+                    (roost-open-task updated nil (lambda (_) said)))
+                  (lambda (err)
+                    (replied task)
+                    (push (cons task err) failures)
+                    (next others))))))
+
+(defun roost--resumed-message (host total failures)
+  "What resuming TOTAL agents on HOST did, with FAILURES, each (TASK . ERROR)."
+  (let ((label (roost--host-label host))
+        (resumed (- total (length failures))))
+    (concat (cond ((null failures)
+                   (format "Resumed %d agent%s on %s" total (if (= total 1) "" "s") label))
+                  ((zerop resumed)
+                   (if (= total 1)
+                       (format "Resumed no agent on %s" label)
+                     (format "Resumed none of the %d agents on %s" total label)))
+                  (t (format "Resumed %d of %d agents on %s" resumed total label)))
+            (mapconcat (lambda (failure)
+                         (format "; %s didn't resume: %s" (roost--field (car failure) 'name) (cdr failure)))
+                       failures ""))))
 
 ;;;###autoload
 (defun roost-send (&optional task text)
@@ -7672,7 +7786,11 @@ where RET would pick the agent's default answer, so no key is named."
      ((member status roost--pr-turns) (roost--pr-next-step task key))
      ((equal status "conflicts") (roost--conflict-next-step task key))
      ((member status '("stopped" "crashed"))
-      (concat (funcall key "RET") " or " (funcall key "s") " resumes its conversation"))
+      (concat (funcall key "RET") " or " (funcall key "s") " resumes its conversation"
+              (when-let* ((others (roost--crashed-with task)))
+                (format ", and offers the %s that crashed on %s"
+                        (if (cdr others) (format "%d others" (length others)) "other one")
+                        (roost--host-label (roost--field task 'host))))))
      ((not (roost--agent-running-p task))
       (concat (funcall key "RET") " shows its last output; " (funcall key "s") " resumes its conversation"))
      ((member status '("running" "background" "starting")) nil)

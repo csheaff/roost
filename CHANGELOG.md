@@ -4,6 +4,13 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- When every agent on a host crashed, as after the host restarted or its
+  tmux server ended, `s` on one of them asks once whether to resume the
+  others that crashed there too, and `RET` asks in a single question
+  whether to resume them all. The others resume one after another,
+  without opening their terminals, and one message says how many did,
+  naming any that didn't. Agents you stopped, or that exited or failed,
+  aren't included, nor are those on other hosts.
 - A new task's worktree gets the files Git ignores that the project's
   `.worktreeinclude` lists, such as `.env`, copied from the primary
   checkout before `roost-setup-command` runs, as Claude Code and Conductor
