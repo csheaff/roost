@@ -4038,6 +4038,17 @@ class WorktreeInclude(unittest.TestCase):
         roost.copy_included(self.repo, worktree)
         self.assertEqual((worktree / ".env").read_text(), "PRIMARY\n")
 
+    def test_a_chain_of_links_it_copies_whole_stays_the_worktrees_own(self):
+        (self.repo / "values.env").write_text("PRIMARY\n")
+        (self.repo / ".env.local").symlink_to("values.env")
+        (self.repo / ".env").symlink_to(".env.local")
+        self.listed(".env*\nvalues.env\n", ".env*\nvalues.env\n")
+        worktree = self.worktree()
+        roost.copy_included(self.repo, worktree)
+        (worktree / ".env").write_text("TASK\n")
+        self.assertEqual(((self.repo / "values.env").read_text(), (worktree / "values.env").read_text()),
+                         ("PRIMARY\n", "TASK\n"))
+
     def test_a_link_to_a_file_the_worktree_lacks_leads_to_the_primary_checkouts(self):
         (self.repo / "settings.env").write_text("SETTING=1\n")
         (self.repo / ".env").symlink_to("settings.env")

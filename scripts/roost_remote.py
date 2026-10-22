@@ -4432,12 +4432,10 @@ def copy_included_file(repo, worktree, path, made, staging):
     mode = os.lstat(source).st_mode
     if stat.S_ISLNK(mode):
         link = os.readlink(source)
-        # A relative one stays so only if it leads from the worktree where
-        # it led from the primary checkout, after every link on its way;
-        # else it leads there from the primary checkout.
-        here = within(os.path.realpath(source), os.path.realpath(repo))
-        there = within(os.path.realpath(os.path.join(os.path.dirname(target), link)), os.path.realpath(worktree))
-        if not os.path.isabs(link) and (here is None or here != there):
+        # One that leads out of the repository, after every link on its
+        # way, leads there from the primary checkout; `copy_included` sees
+        # to the rest once every file is in.
+        if not os.path.isabs(link) and within(os.path.realpath(source), os.path.realpath(repo)) is None:
             link = os.path.join(os.path.dirname(source), link)
         try:
             os.symlink(link, target)
@@ -4516,11 +4514,18 @@ def copy_included(repo, worktree):
                 failed.append("%s (Git doesn't ignore it on the task's branch)" % shown(path))
         if not failed:
             copied += copy_each([path for path in paths if path not in rules])
-        # A link that leads nowhere from the worktree, past a file it lacks,
-        # leads where it did from the primary checkout.
+        # Now every file is in, a relative link stays so only if it leads
+        # from the worktree where it led from the primary checkout, after
+        # every link on its way, and somewhere if it did; else, as through a
+        # link or past a file the worktree lacks, it leads there from the
+        # primary checkout.
+        root, top = os.path.realpath(repo), os.path.realpath(worktree)
         for path in copied:
             target, source = worktree / path, repo / path
-            if target.is_symlink() and not target.exists() and source.exists():
+            if not target.is_symlink() or os.path.isabs(os.readlink(target)):
+                continue
+            if (within(os.path.realpath(source), root) != within(os.path.realpath(target), top)
+                    or source.exists() and not target.exists()):
                 os.unlink(target)
                 os.symlink(os.path.join(os.path.dirname(source), os.readlink(source)), target)
     finally:
