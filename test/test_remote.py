@@ -3740,6 +3740,28 @@ class WorktreeInclude(unittest.TestCase):
         roost.copy_included(self.repo, worktree)
         self.assertTrue((worktree / "secrets/b.pem").is_file())
 
+    def test_a_file_gone_while_copying_is_left_out(self):
+        self.listed("*.log\n", "*.log\n", "a.log", "b.log")
+        copy = shutil.copy
+
+        def rotate(source, target):
+            if Path(source).name == "a.log":
+                Path(source).unlink()
+            return copy(source, target)
+        worktree = self.worktree()
+        with patch.object(roost.shutil, "copy", rotate):
+            roost.copy_included(self.repo, worktree)
+        self.assertEqual(sorted(p.name for p in worktree.iterdir()), ["b.log"])
+
+    @unittest.skipIf(sys.platform == "darwin", "macOS names files in UTF-8 only")
+    def test_a_name_not_in_utf_8_matches_its_own_pattern(self):
+        name = os.fsdecode(b"caf\xe9")
+        (self.repo / ".gitignore").write_bytes(b"caf\xe9/\n")
+        (self.repo / ".worktreeinclude").write_bytes(b"caf\xe9/x/*.pem\n")
+        (self.repo / name / "x").mkdir(parents=True)
+        (self.repo / name / "x" / "a.pem").write_text("x\n")
+        self.assertEqual(roost.included_files(self.repo), [name + "/x/a.pem"])
+
     def test_a_link_out_of_the_repository_leads_where_it_did(self):
         elsewhere = Path(self.worktree().parent)
         (elsewhere / "outside.env").write_text("chained\n")

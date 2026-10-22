@@ -4292,7 +4292,8 @@ def included_files(repo):
     as `reaches` says."""
     include = Path(repo) / WORKTREE_INCLUDE
     try:
-        lines = include.read_text(errors="replace").splitlines()
+        # As Git's paths are, so a name that isn't UTF-8 matches its own.
+        lines = os.fsdecode(include.read_bytes()).splitlines()
     except FileNotFoundError:
         return []
     patterns = [names for names in map(include_names, lines) if names]
@@ -4323,10 +4324,7 @@ def copy_included_file(repo, worktree, path, made):
         try:
             mode = os.lstat(parent).st_mode
         except FileNotFoundError:
-            try:
-                mode = stat.S_IMODE(os.stat(repo / parent.relative_to(worktree)).st_mode)
-            except FileNotFoundError:
-                return
+            mode = stat.S_IMODE(os.stat(repo / parent.relative_to(worktree)).st_mode)
             # Open to its owner until its files are in, as for a try after one failed.
             os.mkdir(parent, mode | 0o700)
             made.append((parent, mode))
@@ -4336,10 +4334,7 @@ def copy_included_file(repo, worktree, path, made):
             return
     if os.path.lexists(target):
         return
-    try:
-        mode = os.lstat(source).st_mode
-    except FileNotFoundError:
-        return  # Gone since Git listed it, as a log rotated away.
+    mode = os.lstat(source).st_mode
     if stat.S_ISLNK(mode):
         link = os.readlink(source)
         # Where it leads after every link on the way, as `..` after one
@@ -4376,6 +4371,9 @@ def copy_included(repo, worktree):
         try:
             copy_included_file(repo, worktree, path, made)
         except OSError as exc:
+            # Gone since Git listed it, as a log rotated away.
+            if isinstance(exc, FileNotFoundError) and not os.path.lexists(repo / path):
+                continue
             failed.append("%s (%s)" % (path, exc.strerror or exc))
     if failed:
         raise RoostError("Could not copy %d of the files %s lists: %s%s; resuming the task tries again"
