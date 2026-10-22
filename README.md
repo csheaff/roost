@@ -74,7 +74,7 @@ outside the agent.
 ## Get started
 
 Roost needs Emacs 29.1 or newer and
-[tmux-control](https://github.com/csheaff/tmux-control) 0.8.1 or newer. Each
+[tmux-control](https://github.com/csheaff/tmux-control) 0.8.2 or newer. Each
 host needs Python 3.9+, Git, tmux 3.1+ and a signed-in agent CLI; remote hosts
 need SSH with keys or an agent. With Emacs 30:
 

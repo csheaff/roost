@@ -7230,9 +7230,9 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
 
 (ert-deftest roost-doctor-requires-tmux-control-public-api ()
   (roost-test--isolated
-   (dolist (case '((nil nil "Install tmux-control") ("0.6.0" nil "0.8.1 or newer")
-                   ("installed" nil "0.8.1 or newer") ("0.8.0" nil "0.8.1 or newer")
-                   ("0.8.1" t nil) ("0.10.1" t nil)))
+   (dolist (case '((nil nil "Install tmux-control") ("0.6.0" nil "0.8.2 or newer")
+                   ("installed" nil "0.8.2 or newer") ("0.8.1" nil "0.8.2 or newer")
+                   ("0.8.2" t nil) ("0.10.1" t nil)))
      (cl-letf (((symbol-function 'roost--library-version)
                 (lambda (library) (and (equal library "tmux-control") (car case)))))
        (let ((check (assoc "tmux-control" (roost--doctor-local-checks))))

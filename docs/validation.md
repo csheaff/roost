@@ -35,6 +35,34 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## Before 0.10.0 — 2026-10-21
+
+- **`make contract` and `make contract-live`** with Claude Code 2.1.303:
+  every check as expected; the capture it wrote differed from the one kept
+  only in the model's wording, so the kept one stands. Codex 0.163.0 and
+  Pi 1.3.0 are the versions captured, so not run live again. Claude Code
+  2.1.304, on claylien, passes the scan.
+- **By hand, in a scratch Emacs** (Emacs 32, its own server, state
+  directory and tmux socket), with Claude Code on Haiku in manual
+  permission mode. Here: a task in a new repository showed `starting`,
+  then counted as waiting with "It may be waiting at a startup prompt,
+  such as folder trust"; trusted in its terminal, it asked to run a
+  command, shown as `permission` with what it asked, and `n` said
+  "permission · sum-check: Asks to run python3 -c 'print(sum([2, 3]))'; no
+  more waiting". Approved in the terminal, it was `ready` with its reply.
+  A prompt sent with `roost--send-text`, stopped with Esc, showed
+  `interrupted`, with the panel's latest prompt. On claylien: the same
+  trust prompt, then an edit and a commit approved; `r` opened Magit over
+  TRAMP's default method in 6 s, with the task line and the agent's reply,
+  and recorded a look. After a restart of that Emacs, both tasks and the
+  note written on `ledger.py` were back. The note, sent as `@` sends it,
+  was cleared; the agent edited and committed, and the task said 1 file
+  changed since that look.
+- **Not by hand this time:** Codex and Pi tasks, conflicts and a pull
+  request through GitHub with real agents, and a second frame. `make qa`
+  covers each with its fake agent and fake `gh`, on Emacs 32 and 30.2 and
+  with `--remote --tuned --popular`; see the test pass below.
+
 ## A test pass after 0.9.0 — 2026-10-21
 
 - **The question.** Whether the 30 pull requests since 0.9.0, many made
