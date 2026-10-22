@@ -4251,7 +4251,7 @@ def include_names(line):
     that selects files, or None for a blank line, a comment or a negation.
     One without a slash, but at its end, matches at any depth, so its names
     start with "**"."""
-    line = line.strip()
+    line = line.rstrip()
     if not line or line.startswith(("#", "!")):
         return None
     pattern = line[line.startswith("\\"):].rstrip("/")
@@ -4299,8 +4299,9 @@ def included_files(repo):
             if len(skipped) <= SKIPPED_WALK_LIMIT else [])
     # Untracked files the patterns match, and nested repositories, ending in "/".
     matched = git_fields(repo, "ls-files", "-z", "--others", "--ignored", "--exclude-from=" + str(include), *walk)
+    kept = tuple(kept)
     return [path for path in matched
-            if path in files or not path.endswith("/") and path.startswith(tuple(kept))]
+            if path in files or not path.endswith("/") and path.startswith(kept)]
 
 
 def copy_included_file(repo, worktree, path, made):
@@ -4332,7 +4333,7 @@ def copy_included_file(repo, worktree, path, made):
         link = os.readlink(source)
         if not os.path.isabs(link):
             resolved = os.path.normpath(os.path.join(os.path.dirname(source), link))
-            if not resolved.startswith(str(repo) + os.sep):
+            if resolved != str(repo) and not resolved.startswith(str(repo) + os.sep):
                 link = resolved
         os.symlink(link, target)
     elif stat.S_ISREG(mode):
