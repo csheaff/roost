@@ -642,6 +642,16 @@ class Lifecycle(unittest.TestCase):
         # A detached HEAD naming no commit, with its branches fine.
         (old / "HEAD").write_text("1" * 40 + "\n")
         self.assertIn("old, whose repository Git can't read", self.request("retire", id=task["id"])["error"])
+        # A stash naming no commit.
+        shutil.rmtree(old)
+        (old.parent / "lib" / "refs" / "stash").write_text("1" * 40 + "\n")
+        self.assertIn("lib, whose repository Git can't read", self.request("retire", id=task["id"])["error"])
+        (old.parent / "lib" / "refs" / "stash").unlink()
+        # A checkout whose repository Git can't find, for a config it can't read.
+        with (old.parent / "lib" / "config").open("a") as config:
+            config.write("[broken\n")
+        self.assertEqual(self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]["unreadSubmodules"],
+                         2)
         self.assertTrue(wt.exists())
 
     def test_retire_sees_untracked_files_status_is_set_not_to_show(self):

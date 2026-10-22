@@ -2739,9 +2739,13 @@ def submodule_work(worktree):
         # at; what is in those is counted there.
         status = (read_git(checkout, "status", "--porcelain", "--untracked-files=normal",
                            "--ignore-submodules=dirty") if checkout else None)
-        unread = (not head and not unborn) or commits.returncode or (status is not None and status.returncode)
+        # A stash ref, whether or not Git can read what it names.
+        stashed = run("rev-parse", "-q", "--verify", "refs/stash").returncode == 0
+        stashes = run("log", "-g", "--format=%H", "refs/stash", "--") if stashed else None
+        unread = ((not head and not unborn) or commits.returncode or (status is not None and status.returncode)
+                  or (stashes is not None and stashes.returncode))
         found[gitdir] = dict(name=name, commits=None if unread else int(commits.stdout),
-                             stashes=len(run("log", "-g", "--format=%H", "refs/stash", "--").stdout.split()),
+                             stashes=len(stashes.stdout.split()) if stashes else 0,
                              changes=len(status.stdout.splitlines()) if status else 0)
         return True
 
@@ -2753,6 +2757,9 @@ def submodule_work(worktree):
                 if gitdir:
                     add(Path(gitdir), prefix + path, top / path)
                     checkouts(top / path, prefix + path + "/")
+                else:
+                    # Its repository is somewhere Git can't say.
+                    found[top / path] = dict(name=prefix + path, commits=None, stashes=0, changes=0)
 
     worktree = Path(worktree)
     # Those checked out first, which have changes to read; then the rest
