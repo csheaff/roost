@@ -3704,6 +3704,39 @@ class WorktreeInclude(unittest.TestCase):
         roost.git(self.repo, "mv", "!! old.env", "new.txt")
         self.assertEqual(roost.ignored_paths(self.repo), [])
 
+    def test_escapes_and_character_classes_are_left_to_git(self):
+        self.assertEqual(self.listed("secret keys/\nvendor1/\n", "secret\\ keys/*.pem\nvendor[[:digit:]]/*.json\n",
+                                     "secret keys/a.pem", "vendor1/b.json"),
+                         ["secret keys/a.pem", "vendor1/b.json"])
+
+    def worktree(self):
+        elsewhere = tempfile.TemporaryDirectory()
+        self.addCleanup(elsewhere.cleanup)
+        worktree = Path(elsewhere.name) / "worktree"
+        worktree.mkdir()
+        return worktree
+
+    def test_a_file_named_like_a_partial_copy_is_copied_too(self):
+        self.listed("a/\n", "a/\n", "a/.roost-copy", "a/b.env")
+        worktree = self.worktree()
+        roost.copy_included(self.repo, worktree)
+        self.assertEqual(sorted(p.name for p in (worktree / "a").iterdir()), [".roost-copy", "b.env"])
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads any file")
+    def test_a_directory_without_write_takes_its_files_on_a_try_after_one_failed(self):
+        self.listed("secrets/\n", "secrets/\n", "secrets/a.pem", "secrets/b.pem")
+        (self.repo / "secrets/b.pem").chmod(0)
+        (self.repo / "secrets").chmod(0o500)
+        self.addCleanup((self.repo / "secrets").chmod, 0o700)
+        worktree = self.worktree()
+        with self.assertRaisesRegex(roost.RoostError, r"secrets/b\.pem \(Permission denied\)"):
+            roost.copy_included(self.repo, worktree)
+        (self.repo / "secrets").chmod(0o700)
+        (self.repo / "secrets/b.pem").chmod(0o600)
+        (self.repo / "secrets").chmod(0o500)
+        roost.copy_included(self.repo, worktree)
+        self.assertTrue((worktree / "secrets/b.pem").is_file())
+
     def test_a_link_or_file_the_worktree_has_on_the_way_is_left_as_it_is(self):
         self.listed("config/\nlinked/\n", "config/\nlinked/\n", "config/local.json", "linked/x.env")
         elsewhere = tempfile.TemporaryDirectory()

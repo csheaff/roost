@@ -4260,6 +4260,12 @@ def include_names(line):
     return pattern.lstrip("/").split("/") if "/" in pattern else ["**", pattern]
 
 
+def may_match(name, pattern):
+    """Whether NAME may match PATTERN, one name of a Git pattern. One with
+    an escape or a bracket, which Git reads otherwise than fnmatch, may."""
+    return "\\" in pattern or "[" in pattern or fnmatch.fnmatchcase(name, pattern)
+
+
 def reaches(names, directory):
     """Whether the pattern of NAMES may match DIRECTORY, one Git ignores as
     a whole, or a file in it. As Claude Code has it, one starting with
@@ -4268,12 +4274,12 @@ def reaches(names, directory):
     names = [name.lower() for name in names]
     path = directory.lower().split("/")
     if names[0] == "**":
-        return len(names) == 1 or any(fnmatch.fnmatchcase(name, names[1]) for name in path)
+        return len(names) == 1 or any(may_match(name, names[1]) for name in path)
     # Through a "**", or past the directory or the pattern's end, it may.
     for name, pattern in zip(path, names):
         if pattern == "**":
             return True
-        if not fnmatch.fnmatchcase(name, pattern):
+        if not may_match(name, pattern):
             return False
     return True
 
@@ -4309,7 +4315,7 @@ def copy_included_file(repo, worktree, path, made):
     has it already, or a file or link on its way, as checked out. A link
     is copied as a link, never followed; a relative one that leads out of
     the repository then leads to the same place. Add each directory made,
-    with the one it copies, to MADE."""
+    with the mode it copies, to MADE."""
     source, target = repo / path, worktree / path
     parent = worktree
     for name in PurePosixPath(path).parts[:-1]:
@@ -4317,8 +4323,13 @@ def copy_included_file(repo, worktree, path, made):
         try:
             mode = os.lstat(parent).st_mode
         except FileNotFoundError:
-            os.mkdir(parent)
-            made.append((parent, repo / parent.relative_to(worktree)))
+            try:
+                mode = stat.S_IMODE(os.stat(repo / parent.relative_to(worktree)).st_mode)
+            except FileNotFoundError:
+                return
+            # Open to its owner until its files are in, as for a try after one failed.
+            os.mkdir(parent, mode | 0o700)
+            made.append((parent, mode))
             continue
         # A link could lead out of the worktree.
         if not stat.S_ISDIR(mode):
@@ -4338,11 +4349,15 @@ def copy_included_file(repo, worktree, path, made):
         os.symlink(link, target)
     elif stat.S_ISREG(mode):
         # Whole or not at all, so that trying again skips only what is done.
-        partial = target.with_name(".roost-copy")
-        with contextlib.suppress(FileNotFoundError):
-            os.unlink(partial)
-        shutil.copy(source, partial)
-        os.replace(partial, target)
+        descriptor, partial = tempfile.mkstemp(prefix=".roost-copy-", dir=target.parent)
+        os.close(descriptor)
+        try:
+            shutil.copy(source, partial)
+            os.replace(partial, target)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(partial)
+            raise
 
 
 def copy_included(repo, worktree):
@@ -4361,14 +4376,14 @@ def copy_included(repo, worktree):
             copy_included_file(repo, worktree, path, made)
         except OSError as exc:
             failed.append("%s (%s)" % (path, exc.strerror or exc))
-    # Once their files are in, as one may not be writable.
-    for directory, source in reversed(made):
-        with contextlib.suppress(OSError):
-            os.chmod(directory, stat.S_IMODE(os.stat(source).st_mode))
     if failed:
         raise RoostError("Could not copy %d of the files %s lists: %s%s; resuming the task tries again"
                          % (len(failed), WORKTREE_INCLUDE, ", ".join(failed[:3]),
                             " and %d more" % (len(failed) - 3) if len(failed) > 3 else ""))
+    # Once their files are in, as one may not be writable.
+    for directory, mode in reversed(made):
+        with contextlib.suppress(OSError):
+            os.chmod(directory, mode)
 
 
 def runner(root, task_id, run_id, resume_conversation=False):
