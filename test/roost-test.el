@@ -1484,7 +1484,7 @@
              (with-current-buffer roost--compose-buffer
                (should (string-suffix-p ":/home/user/repo/" (plist-get roost--compose-fields :directory)))
                (should-not (plist-get roost--compose-fields :base))
-               (should (string-match-p "Start    primary checkout's current branch  C-c C-b" (buffer-string))))
+               (should (string-match-p "Start    the project's current branch  C-c C-b$" (buffer-string))))
              (roost--compose t)
              (with-current-buffer roost--compose-buffer
                (should (string-suffix-p ":/home/user/work/fix auth/" (plist-get roost--compose-fields :directory)))
@@ -1531,9 +1531,11 @@
                                ;; A task's branch merges where that task does.
                                ("codex/roost/fix-auth-123456" . "release")
                                ("HEAD" . "release")
-                               ("release" . "the primary checkout's branch")
-                               ("v1.0" . "the primary checkout's branch")
-                               ("origin/HEAD" . "the primary checkout's branch")))
+                               ;; Its primary checkout's branch, which on
+                               ;; another host it doesn't read for a draft.
+                               ("release" . "the project's current branch")
+                               ("v1.0" . "the project's current branch")
+                               ("origin/HEAD" . "the project's current branch")))
                  (setq answer (car case))
                  (roost-compose-set-base)
                  (should (string-match-p (concat "Start    " (regexp-quote (car case))
@@ -1554,8 +1556,16 @@
                (should (string-match-p "Start    HEAD  C-c C-b · merges into trunk$" (buffer-string)))
                (setq answer "")
                (roost-compose-set-base)
-               (should (string-match-p "Start    primary checkout's current branch  C-c C-b$"
-                                       (buffer-string)))))
+               (should (string-match-p "Start    the project's current branch  C-c C-b$"
+                                       (buffer-string)))
+               ;; Here, it names the branch, read once for the project.
+               (setq primary "/repo")
+               (setq roost--compose-fields (plist-put roost--compose-fields :directory "/repo/"))
+               (roost--compose-render)
+               (should (string-match-p "Start    main  C-c C-b · merges into main$" (buffer-string)))
+               (setq answer "v1.0")
+               (roost-compose-set-base)
+               (should (string-match-p "Start    v1.0  C-c C-b · merges into main$" (buffer-string)))))
          (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
 
 (ert-deftest roost-compose-derives-a-name-and-submits-the-draft ()
@@ -2118,11 +2128,14 @@
      (with-temp-buffer
        (roost-sidebar-list-mode)
        (roost--render-sidebar)
-       (let ((lines (split-string (buffer-string) "\n")))
-         (should (equal (substring-no-properties (car lines)) "Roost  1 waiting"))
+       (let ((lines (split-string (buffer-string) "\n"))
+             (title (lambda () (string-trim (substring-no-properties (car header-line-format))))))
+         ;; In the header line, which a long list doesn't scroll away.
+         (should (equal (funcall title) "Roost  1 waiting"))
+         (should-not (string-match-p "waiting" (buffer-string)))
          (let ((roost-watch-mode nil))
            (roost--render-sidebar)
-           (should (string-prefix-p "Roost  1 waiting  paused\n" (buffer-string))))
+           (should (equal (funcall title) "Roost  1 waiting  paused")))
          (roost--render-sidebar)
          ;; Each project's heading ends with a + that starts a task in it.
          (should (member (concat "dev · ledger" (make-string 17 ?\s) "+") lines))
@@ -4860,7 +4873,8 @@ of its own, which shows in the selected window of its workspace."
        (with-temp-buffer
          (roost-sidebar-list-mode)
          (roost--render-sidebar)
-         (should (equal (substring-no-properties (buffer-string) 0 6) "Roost\n"))
+         ;; Nothing waits.
+         (should (equal (string-trim (substring-no-properties (car header-line-format))) "Roost"))
          (goto-char (roost--task-row (roost--key task)))
          (should (looking-at " fix auth ±\n"))
          (search-forward "±")
@@ -6220,6 +6234,14 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
          (setq roost--buffer-task-key (roost--key task))
          (roost--render-task-info)
          (should (string-match-p (cadr case) (buffer-string))))))
+   ;; Right after a look, with nothing from its agent since, it says nothing.
+   (let ((task (roost--cache-task "dev" (roost-test--looked
+                                         '(sinceLooked (count . 0) (at . "2026-10-03T21:00:00+00:00"))))))
+     (with-temp-buffer
+       (roost-task-info-mode)
+       (setq roost--buffer-task-key (roost--key task))
+       (roost--render-task-info)
+       (should-not (string-match-p "since you looked\\|Not looked at" (buffer-string)))))
    ;; With uncommitted changes the next step names r, and it isn't said twice.
    (let ((task (roost--cache-task "dev" (roost-test--looked '(dirty . t)))))
      (with-temp-buffer
@@ -7263,7 +7285,13 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
                  (should (equal roost--remembered-hosts '("old" "both")))
                  (should (string-match-p "^both\n.*\n +To stop watching it, take it out of `roost-hosts', then M-x roost-forget-host$" text))
                  (should (string-match-p "^old\n.*closed by remote host\\.\n +To stop watching it, M-x roost-forget-host$" text))
-                 (should (string-match-p "· Workspaces" text)))))
+                 (should (string-match-p "· Workspaces" text))
+                 ;; Wrapped in a narrow window, a detail or hint goes on
+                 ;; below its own start, not under the names.
+                 (should (equal (get-text-property (string-search "far: Permission" text) 'wrap-prefix text)
+                                (make-string 20 ?\s)))
+                 (should (equal (get-text-property (string-search "Set up key-based" text) 'wrap-prefix text)
+                                "      ")))))
          (kill-buffer "*roost doctor*"))))))
 
 (ert-deftest roost-doctor-requires-tmux-control-public-api ()
@@ -7382,6 +7410,60 @@ ssh: connect to host dev port 22: Operation timed out"
        ;; Committed and clean: merge as before.
        (roost-merge-retire (roost--cache-task "dev" (roost-test--task "fedcba9876543210")))
        (should (equal actions '("merge")))))))
+
+(ert-deftest roost-a-merge-leaves-one-window-and-fresh-files ()
+  ;; After `m', the task's terminal window went back to a file of the
+  ;; project, and its Magit window to the same file beside it; then
+  ;; revert mode, reverting that file, said so over what the merge said.
+  (roost-test--isolated
+   (let* ((root (make-temp-file "roost-merge" t))
+          (worktree (expand-file-name "worktree/" root))
+          (repo (expand-file-name "repo/" root))
+          (file (expand-file-name "ledger.py" repo))
+          (edited (expand-file-name "notes.py" repo))
+          task)
+     (make-directory worktree t)
+     (make-directory repo t)
+     ;; Recorded by its true name, as Git gives it, and visited through
+     ;; a link to it: macOS's temporary directory is one.
+     (let ((link (expand-file-name "link" root)))
+       (make-symbolic-link repo link)
+       (setq task (roost--cache-task nil (append `((worktree . ,(directory-file-name worktree))
+                                                   (repo . ,(directory-file-name (file-truename repo))))
+                                                 (roost-test--task)))
+             file (expand-file-name "ledger.py" link)))
+     (with-temp-file file (insert "def total(xs):\n"))
+     (with-temp-file edited (insert "NOTES = []\n"))
+     (unwind-protect
+         (save-window-excursion
+           (delete-other-windows)
+           (let* ((main (selected-window))
+                  (dired (save-selected-window
+                           (pop-to-buffer (dired-noselect worktree) '(display-buffer-pop-up-window))
+                           (selected-window)))
+                  (visited (find-file-noselect file))
+                  (yours (find-file-noselect edited)))
+             (should (window-live-p dired))
+             (roost--kill-worktree-buffers task)
+             ;; The window made for it goes, as the panel's does.
+             (should-not (window-live-p dired))
+             (should (window-live-p main))
+             (should-not (seq-some (lambda (buffer) (with-current-buffer buffer (derived-mode-p 'dired-mode)))
+                                   (mapcar #'window-buffer (window-list))))
+             ;; The merge changes both files; yours has unsaved edits.
+             (with-current-buffer yours (insert "# mine\n"))
+             (sleep-for 0.01)
+             (with-temp-file file (insert "def total(xs):\n\ndef mean(xs):\n"))
+             (with-temp-file edited (insert "NOTES = [1]\n"))
+             (set-file-times file (time-add nil 2))
+             (set-file-times edited (time-add nil 2))
+             (roost--revert-merged-files task)
+             (should (string-match-p "def mean" (with-current-buffer visited (buffer-string))))
+             (should (string-match-p "# mine" (with-current-buffer yours (buffer-string))))
+             (kill-buffer visited)
+             (with-current-buffer yours (set-buffer-modified-p nil))
+             (kill-buffer yours)))
+       (delete-directory root t)))))
 
 (ert-deftest roost-rows-light-up-alone-and-keep-their-task-at-the-line-end ()
   ;; With the newline in the highlighted text, hovering a row lit up the
