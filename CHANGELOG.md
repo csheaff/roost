@@ -16,6 +16,10 @@ What each release changes, and what to do when upgrading. Newest first.
   before. Upgrading: a `roost-notify-function` of yours still gets a title
   and a body; a gathered one's body counts the others on a second line,
   and a function that looked for `Roost:` in titles needs changing.
+- When a background command of Claude's finishes, the task panel's "Your
+  latest prompt" keeps the prompt you sent, rather than showing Claude's
+  `<task-notification>` notice. Upgrading: a task that shows a notice there
+  shows your prompt again once you send the next one.
 - While an agent asks you something in its terminal on screen, its panel
   says to answer it there without naming `RET`, which in the terminal
   picks the agent's default answer, such as "No, exit" at folder trust.
