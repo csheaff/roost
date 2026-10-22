@@ -677,8 +677,11 @@ class ClaudeAgent:
             updates["lastReply"] = reply.strip()[:LAST_MESSAGE_LIMIT + 1]
         elif event == "UserPromptSubmit" or (event == "SessionStart" and payload.get("source") == "clear"):
             updates["lastReply"] = None
-        if event == "UserPromptSubmit":
-            updates["lastPrompt"] = payload.get("prompt")
+        # Claude also hands itself a background task's notice as your prompt,
+        # which leaves the one you last sent where it was.
+        prompt = payload.get("prompt")
+        if event == "UserPromptSubmit" and not (isinstance(prompt, str) and CLAUDE_NOTE.match(prompt.strip())):
+            updates["lastPrompt"] = prompt
         # The old claudeSession field serves tasks whose original helper still runs.
         updates.update(reported)
         return updates

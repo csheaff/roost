@@ -3714,6 +3714,9 @@ elif args[:2] == ["auth", "status"]:
         # Emacs shows it as is.
         self.assertEqual(self.request("list")["result"][0]["lastPrompt"], "Now add a test")
         self.assertEqual(self.request("inspect", id=task["id"])["result"]["lastPrompt"], "Now add a test")
+        # A background task's notice isn't yours, so yours stays.
+        hook(prompt="<task-notification>\n<status>completed</status>\n</task-notification>")
+        self.assertEqual(store.read(task["id"])["lastPrompt"], "Now add a test")
         hook(prompt="y" * 3000)
         said = store.read(task["id"])["lastPrompt"]
         self.assertEqual((said[:2000], said[2000:]), ("y" * 2000, "…"))
@@ -4396,6 +4399,15 @@ class LastMessage(unittest.TestCase):
         self.assertEqual(roost.CodexAgent().observe(
             dict(hook_event_name="UserPromptSubmit", prompt="Next"))["lastPrompt"], "Next")
         self.assertNotIn("lastPrompt", roost.ClaudeAgent().observe(dict(hook_event_name="Stop")))
+        # Claude hands itself a background task's notice as a prompt; it starts
+        # a turn, but you didn't send it.
+        notice = roost.ClaudeAgent().observe(dict(
+            hook_event_name="UserPromptSubmit",
+            prompt="<task-notification>\n<task-id>b18frnbxh</task-id>\n<status>completed</status>\n"
+                   "<summary>Background command \"Wait\" completed (exit code 0)</summary>\n"
+                   "</task-notification>"))
+        self.assertEqual(notice["status"], "running")
+        self.assertNotIn("lastPrompt", notice)
         self.assertNotIn("lastPrompt", roost.PiAgent().observe(dict(event="agent_start")))
         self.assertNotIn("lastPrompt", roost.OpenCodeAgent().observe(dict(event="status", status="busy"), "ready"))
         # A task recorded before the field, as by an older helper, has none.
