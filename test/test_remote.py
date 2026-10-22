@@ -1439,6 +1439,7 @@ class Lifecycle(unittest.TestCase):
                 self.assertTrue(self.request("send", id=task["id"], text="literal $() `ticks` prompt")["ok"])
                 finished = self.wait(task, "ready", event="Stop")
                 self.assertEqual(finished["lastEvent"], "Stop")
+                self.assertEqual(finished["lastPrompt"], "literal $() `ticks` prompt")
                 # OpenCode starts its session with the first prompt.
                 session = record.get("agentSession") or finished["agentSession"]
                 self.assertTrue(session)
@@ -1551,6 +1552,8 @@ class Lifecycle(unittest.TestCase):
         record = self.wait(task, "ready", "Stop")
         session = record["agentSession"]
         self.assertEqual(roost.last_message(record), "opencode says -first")
+        # Its first turn's prompt is the task's own, which the panel shows already.
+        self.assertIsNone(record.get("lastPrompt"))
         self.assertTrue(self.request("send", id=task["id"], text="permission")["ok"])
         self.assertEqual(self.wait(task, "permission")["request"], "Asks to run make deploy")
         roost.tmux(self.socket, "send-keys", "-t", task["paneId"], "yes", "Enter")
@@ -4915,11 +4918,15 @@ class LastMessage(unittest.TestCase):
             {"type": "message", "message": {"role": "user", "content": "ok"}}])
         self.assertEqual(roost.last_message(dict(agent="pi", worktree="/w", agentSession=str(path))), "pi says")
 
-    def test_only_agents_whose_hooks_say_what_you_sent_report_it(self):
+    def test_each_agent_says_what_you_sent(self):
         self.assertEqual(roost.ClaudeAgent().observe(
             dict(hook_event_name="UserPromptSubmit", prompt="Next"))["lastPrompt"], "Next")
         self.assertEqual(roost.CodexAgent().observe(
             dict(hook_event_name="UserPromptSubmit", prompt="Next"))["lastPrompt"], "Next")
+        self.assertEqual(roost.PiAgent().observe(dict(event="prompt", prompt="Next", source="interactive")),
+                         dict(lastPrompt="Next", lastReply=None))
+        self.assertEqual(roost.OpenCodeAgent().observe(
+            dict(event="status", status="busy", prompt="Next"), "ready")["lastPrompt"], "Next")
         self.assertNotIn("lastPrompt", roost.ClaudeAgent().observe(dict(hook_event_name="Stop")))
         # Claude hands itself a background task's notice as a prompt; it starts
         # a turn, but you didn't send it.
@@ -4939,6 +4946,54 @@ class LastMessage(unittest.TestCase):
         # One that starts as the first did, beyond what the panel shows, is another.
         said = roost.later_prompt(dict(prompt="x" * 2500 + " and then a"), "x" * 2500 + " and then b")
         self.assertEqual(said, "x" * 2000 + "…")
+
+    def test_pi_and_opencode_say_what_you_sent_and_when(self):
+        store = roost.Store(str(self.home / "state"))
+        for agent in ("pi", "opencode"):
+            for relayed in (False, True):
+                with self.subTest(agent=agent, relayed=relayed):
+                    store.save(dict(id="0" * 16, agent=agent, worktree="/w", status="ready", runId="run",
+                                    prompt="Fix the parser", lastEvent="Stop", updatedAt="then",
+                                    programStatusRun="run" if relayed else None))
+                    hook = lambda **fields: roost.update_hook(store, "0" * 16, dict(fields, session="s"), "run")
+                    task = lambda: store.read("0" * 16)
+                    # The task's own prompt starts it, and the panel shows it already.
+                    if agent == "pi":
+                        hook(event="prompt", prompt="\nFix the parser", source="interactive")
+                        hook(event="agent_start")
+                    else:
+                        hook(event="status", status="busy", prompt="Fix the parser")
+                    self.assertIsNone(task().get("lastPrompt"))
+                    if not relayed:
+                        self.assertEqual(task()["status"], "running")
+                    # Sent while it works, as Pi's steering or a message OpenCode
+                    # takes up at the next step, it changes nothing else.
+                    before = task()
+                    hook(event="prompt", prompt="  Now add a test\n", source="interactive")
+                    self.assertEqual(task(), dict(before, lastPrompt="Now add a test", lastReply=None)
+                                     if agent == "pi" else dict(before, lastPrompt="Now add a test"))
+                    # A message a Pi extension sent isn't yours.
+                    if agent == "pi":
+                        hook(event="prompt", prompt="Context from my extension", source="extension")
+                        self.assertEqual(task()["lastPrompt"], "Now add a test")
+                    # A long one is shortened as the others' are.
+                    hook(event="prompt", prompt="y" * 3000)
+                    said = task()["lastPrompt"]
+                    self.assertEqual((said[:2000], said[2000:]), ("y" * 2000, "…"))
+                    # What waits on you is not undone by what you send.
+                    if agent == "pi":
+                        hook(event="ui_prompt_start", title="Allow bash?")
+                    else:
+                        hook(event="asked", permission="bash", patterns=["make"], metadata=dict(command="make"))
+                    asked = task()
+                    hook(event="prompt", prompt="Also the docs")
+                    self.assertEqual(task(), dict(asked, lastPrompt="Also the docs")
+                                     if agent == "opencode" else dict(asked, lastPrompt="Also the docs", lastReply=None))
+                    # OpenCode's next turn, with no new message, as when it goes on after compacting.
+                    if agent == "opencode":
+                        hook(event="status", status="idle", reply="Done")
+                        hook(event="status", status="busy")
+                        self.assertEqual(task()["lastPrompt"], "Also the docs")
 
     def test_missing_or_malformed_transcripts_give_none(self):
         for agent in ("claude", "codex", "pi", "opencode"):
@@ -5399,6 +5454,120 @@ class ProgramStatus(unittest.TestCase):
                              [("ui_prompt_start", "First"), ("ui_prompt_end", None), ("ui_prompt_start", "Second")])
             self.assertEqual(events[1]["idle"], False)
 
+    @unittest.skipUnless(shutil.which("node"), "needs Node")
+    def test_pi_reports_what_you_send_without_holding_it_up(self):
+        # Pi waits for an input handler before it goes on with your message.
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            store = roost.Store(str(root / "state"))
+            roost.PiAgent().launch(store, dict(id="0" * 16, command=["pi"], prompt=None), False)
+            extension = next(store.root.glob("pi-observer-*.mjs"))
+            log = root / "log"
+            helper = root / "helper.py"
+            helper.write_text("import json, sys, time\n"
+                              "event = json.load(sys.stdin)\n"
+                              "time.sleep(0.3 if event['event'] == 'prompt' else 0)\n"
+                              "open(%r, 'a').write(json.dumps(event) + '\\n')\n" % str(log))
+            driver = root / "driver.mjs"
+            driver.write_text(
+                "const { default: observe } = await import(%s);\n"
+                "const handlers = {};\n"
+                "observe({ on: (name, handler) => { handlers[name] = handler; } });\n"
+                "const ctx = { sessionManager: { getSessionFile: () => 's' } };\n"
+                "const held = handlers.input({ text: 'Now add a test', source: 'interactive' }, ctx);\n"
+                "if (held !== undefined) throw new Error('input handler returned ' + held);\n"
+                "handlers.input({ text: 'From an extension', source: 'extension' }, ctx);\n"
+                "await handlers.agent_start({}, ctx);\n" % json.dumps(extension.as_uri()))
+            env = dict(os.environ, ROOST_PYTHON=sys.executable, ROOST_HELPER=str(helper))
+            subprocess.run(["node", str(driver)], env=env, check=True, timeout=30)
+            events = [json.loads(line) for line in log.read_text().splitlines()]
+            self.assertEqual(events, [dict(event="prompt", session="s", prompt="Now add a test", source="interactive"),
+                                      dict(event="prompt", session="s", prompt="From an extension",
+                                           source="extension"),
+                                      dict(event="agent_start", session="s")])
+            self.assertIsNone(roost.PiAgent().observe(events[1]))
+
+    @unittest.skipUnless(shutil.which("node"), "needs Node")
+    def test_opencode_plugin_reports_what_you_sent_as_a_turn_takes_it_up(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            plugin = roost.OpenCodeAgent().plugin(roost.Store(str(root / "state")))
+            log = root / "log"
+            helper = root / "helper.py"
+            helper.write_text("import sys\n"
+                              "open(%r, 'a').write(sys.stdin.read() + '\\n')\n" % str(log))
+            status = lambda session, kind: ("session.status", dict(sessionID=session, status=dict(type=kind)))
+            message = lambda message, role, session="ses_a": (
+                "message.updated", dict(info=dict(id=message, role=role, sessionID=session)))
+            part = lambda part, message, words, session="ses_a", **flags: (
+                "message.part.updated", dict(part=dict(id=part, type="text", text=words, messageID=message,
+                                                       sessionID=session, **flags)))
+            events = [
+                ("session.created", dict(info=dict(id="ses_a"))),
+                # OpenCode saves your message, and its parts, before it works on it.
+                message("msg_1", "user"),
+                part("prt_1", "msg_1", "Fix the parser"),
+                part("prt_2", "msg_1", "Read from parser.py", synthetic=True),
+                ("message.part.updated", dict(part=dict(id="prt_3", type="file", messageID="msg_1",
+                                                        sessionID="ses_a"))),
+                part("prt_4", "msg_1", "and test it"),
+                part("prt_5", "msg_1", "left out", ignored=True),
+                message("msg_1", "user"),
+                status("ses_a", "busy"),
+                message("msg_2", "assistant"),
+                part("prt_6", "msg_2", "Fixing."),
+                # Its next step says nothing new.
+                status("ses_a", "busy"),
+                # Sent while it works, it is taken up at a step.
+                message("msg_3", "user"),
+                part("prt_7", "msg_3", "Also the docs"),
+                status("ses_a", "busy"),
+                # A subagent's session has messages of its own, not yours.
+                ("session.created", dict(info=dict(id="ses_c", parentID="ses_a"))),
+                message("msg_4", "user", "ses_c"),
+                part("prt_8", "msg_4", "Explore the tests", "ses_c"),
+                status("ses_c", "busy"),
+                status("ses_c", "idle"),
+                status("ses_a", "idle"),
+                # Compacting saves a message of its own, all synthetic, and goes on.
+                message("msg_5", "user"),
+                part("prt_9", "msg_5", "Continue from the summary", synthetic=True),
+                status("ses_a", "busy"),
+                status("ses_a", "idle"),
+                # Words that come only once it works are taken up at its next step.
+                message("msg_7", "user"),
+                part("prt_11", "msg_7", " "),
+                status("ses_a", "busy"),
+                part("prt_11", "msg_7", "Now the tests"),
+                status("ses_a", "busy"),
+                status("ses_a", "idle"),
+                # Another session starts while a question waits on you.
+                status("ses_a", "busy"),
+                ("question.asked", dict(id="que_1", sessionID="ses_a", questions=[dict(question="Which?")])),
+                message("msg_6", "user", "ses_b"),
+                part("prt_10", "msg_6", "Meanwhile, the README", "ses_b"),
+                status("ses_b", "busy")]
+            driver = root / "driver.mjs"
+            driver.write_text(
+                "const { RoostObserver } = await import(%s);\n"
+                "const hooks = await RoostObserver({});\n"
+                "for (const [type, properties] of %s) await hooks.event({ event: { type, properties } });\n"
+                % (json.dumps(plugin.as_uri()), json.dumps(events)))
+            env = dict(os.environ, ROOST_PYTHON=sys.executable, ROOST_HELPER=str(helper))
+            env.pop("ROOST_OPENCODE_OBSERVER", None)
+            subprocess.run(["node", str(driver)], env=env, check=True, timeout=30)
+            reports = [json.loads(line) for line in log.read_text().splitlines()]
+            self.assertEqual([(r["event"], r.get("session"), r.get("status"), r.get("prompt")) for r in reports],
+                             [("start", None, None, None),
+                              ("status", "ses_a", "busy", "Fix the parser\n\nand test it"),
+                              ("prompt", "ses_a", None, "Also the docs"),
+                              ("status", "ses_a", "idle", None),
+                              ("status", "ses_a", "busy", None), ("status", "ses_a", "idle", None),
+                              ("status", "ses_a", "busy", None), ("prompt", "ses_a", None, "Now the tests"),
+                              ("status", "ses_a", "idle", None),
+                              ("status", "ses_a", "busy", None), ("asked", "ses_a", None, None),
+                              ("prompt", "ses_b", None, "Meanwhile, the README")])
+
 
     @unittest.skipUnless(shutil.which("node"), "needs Node")
     def test_opencode_plugin_reports_the_task_session(self):
@@ -5416,9 +5585,9 @@ class ProgramStatus(unittest.TestCase):
             status = lambda session, kind: ("session.status", dict(sessionID=session, status=dict(type=kind)))
             events = [
                 ("session.created", dict(info=dict(id="ses_a"))),
-                status("ses_a", "busy"),
-                ("message.updated", dict(info=dict(id="msg_u", role="user"))),
+                ("message.updated", dict(info=dict(id="msg_u", role="user", sessionID="ses_a"))),
                 text("p0", "msg_u", "hi"),
+                status("ses_a", "busy"),
                 ("message.updated", dict(info=dict(id="msg_a", role="assistant"))),
                 text("p1", "msg_a", "Done."),
                 ("session.created", dict(info=dict(id="ses_c", parentID="ses_a"))),

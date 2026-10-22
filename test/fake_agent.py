@@ -31,7 +31,8 @@ if agent == "opencode":
     report("start", None)
     print("FAKE_AGENT_READY " + session, flush=True)
     for line in itertools.chain(prompts, (line.strip() for line in sys.stdin)):
-        report("status", status="busy")
+        # A turn's start carries what you sent, the first prompt too.
+        report("status", status="busy", prompt=line)
         if line == "exit":
             break
         if line == "permission":
@@ -73,7 +74,7 @@ else:
     assert "--extension" in args and "--session-dir" in args
     extension = Path(args[args.index("--extension") + 1]).read_text()
     assert all('pi.on("%s"' % event in extension
-               for event in ("agent_start", "agent_end", "agent_settled", "ui_prompt_start", "ui_prompt_end"))
+               for event in ("input", "agent_start", "agent_end", "agent_settled", "ui_prompt_start", "ui_prompt_end"))
     newer = ("agent_settled", "ui_prompt_start", "ui_prompt_end")
     session_dir = Path(args[args.index("--session-dir") + 1])
     session = args[args.index("--session") + 1] if "--session" in args else str(session_dir / (str(uuid.uuid4()) + ".jsonl"))
@@ -146,6 +147,7 @@ for line in sys.stdin:
     if codex:
         report("UserPromptSubmit", prompt=line)
     else:
+        report("prompt", prompt=line, source="interactive")
         report("agent_start")
     if line == "permission" and codex:
         report("PermissionRequest")

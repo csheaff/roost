@@ -4,6 +4,13 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- The task panel shows your latest prompt for Pi and OpenCode tasks too,
+  as it does for Claude Code and Codex. A message you send while Pi works
+  shows at once, and one OpenCode queues shows once it takes it up. One a
+  Pi extension sends by itself isn't yours, so it doesn't show.
+  Upgrading: stop and resume running Pi and OpenCode tasks (`K`, then `s`)
+  for them to load the new extension or plugin; until then their panels
+  show no latest prompt.
 - When every agent on a host crashed, as after the host restarted or its
   tmux server ended, `s` on one of them asks once whether to resume the
   others that crashed there too, and `RET` asks in a single question

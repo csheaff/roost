@@ -218,9 +218,9 @@ quitting any question you left open in the minibuffer, which would hold it back,
 and closing a menu left open. `I` docks a panel at the right of an open task's terminal,
 kept current as the agent works: what to do next, the task's prompt, the
 files it changed, those not yet committed first, and what a merge would rest
-on (below). Once you have sent a Claude or
-Codex agent more, your latest prompt shows under the task's, a reminder of
-where you left off that the terminal may have scrolled away. A click or `RET` on a file
+on (below). Once you have sent the agent more, your latest prompt shows
+under the task's, a reminder of where you left off that the terminal may
+have scrolled away. A click or `RET` on a file
 opens its diff in Magit, where `;` writes a note for the agent (more under
 Review in Magit, below). The terminal shows the agent's replies, so the panel leaves them out
 while the terminal is on screen; `i` shows the same panel in the main area,
@@ -877,9 +877,10 @@ defines. An agent that isn't installed is skipped. `make contract-live`
 also takes Claude Code through a real session (a few short Haiku turns,
 about three minutes) and checks each status Roost derives: a reply, a
 permission request approved and declined, Esc, a minute idle and `/clear`.
-`make contract-live CONTRACT_AGENTS="codex pi"` does the same with Codex
-(its default model; trusting the scratch repository and Roost's hooks is
-undone afterwards) and Pi (the model it is set to use). Add
+`make contract-live CONTRACT_AGENTS="codex pi opencode"` does the same
+with Codex (its default model; trusting the scratch repository and Roost's
+hooks is undone afterwards), and with Pi and OpenCode (the model each is
+set to use), which also get a message while they work. Add
 `CONTRACT_FLAGS=--program-status` to relay their OSC 7501 reports too, as
 `roost-program-status` does. Run them after an agent updates. A Claude
 Code older than an event Roost listens to runs none of Roost's hooks, so a

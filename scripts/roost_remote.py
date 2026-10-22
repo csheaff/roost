@@ -907,6 +907,10 @@ export default function (pi) {
     return reported = reported.then(() => send(payload));
   };
   pi.on("session_start", (_event, ctx) => report("session_start", ctx));
+  // What you send, idle or while it works, as you wrote it, before Pi
+  // expands a template in it; an extension's own says so by its source.
+  // Pi waits for an input handler, so this one returns before the report.
+  pi.on("input", (event, ctx) => { report("prompt", ctx, { prompt: event.text, source: event.source }); });
   pi.on("agent_start", (_event, ctx) => report("agent_start", ctx));
   pi.on("agent_end", (_event, ctx) => report("agent_end", ctx, { pending: ctx.hasPendingMessages() }));
   // Pi 1.1.0 and later say whether you stopped the run.
@@ -950,6 +954,12 @@ class PiAgent:
 
     def observe(self, payload, current=None):
         event = payload.get("event")
+        if event == "prompt":
+            # Yours, as Claude's UserPromptSubmit has it; one an extension
+            # sent is not. The run it starts, if any, says so itself.
+            if payload.get("source") == "extension":
+                return None
+            return dict(lastPrompt=payload.get("prompt"), lastReply=None)
         status = {"session_start": "ready", "agent_start": "running", "agent_end": "ready"}.get(event)
         last = "Stop" if event == "agent_end" else event
         request = None
@@ -1038,6 +1048,18 @@ export const RoostObserver = async () => {
   const parents = new Map();
   const rootOf = session => parents.has(session) ? rootOf(parents.get(session)) : session;
   const assistant = new Set();
+  // Your latest message in each session, by id, with its words by part,
+  // and the last one reported: OpenCode saves it before working on it.
+  // One of its own, as after compacting, has no words of yours.
+  const yours = new Map();
+  const said = new Map();
+  const words = session => {
+    const message = yours.get(session);
+    const text = message && said.get(session) !== message.id ? [...message.parts.values()].join("\n\n") : "";
+    if (!text.trim()) return undefined;
+    said.set(session, message.id);
+    return text;
+  };
   // What waits on you, by request, in the order it asked.
   const waiting = new Map();
   const newest = () => [...waiting.values()].pop();
@@ -1094,11 +1116,19 @@ export const RoostObserver = async () => {
           return;
         case "message.updated":
           if (p.info && p.info.role === "assistant") assistant.add(p.info.id);
+          if (p.info && p.info.role === "user" && (yours.get(p.info.sessionID) || {}).id !== p.info.id)
+            yours.set(p.info.sessionID, { id: p.info.id, parts: new Map() });
           return;
         case "message.part.updated": {
           const part = p.part || {};
           const turn = turns.get(part.sessionID);
-          if (part.type !== "text" || part.synthetic || part.ignored || !turn || !assistant.has(part.messageID)) return;
+          if (part.type !== "text" || part.synthetic || part.ignored) return;
+          const mine = yours.get(part.sessionID);
+          if (mine && mine.id === part.messageID) {
+            mine.parts.set(part.id, part.text);
+            return;
+          }
+          if (!turn || !assistant.has(part.messageID)) return;
           if (turn.message !== part.messageID) Object.assign(turn, { message: part.messageID, parts: new Map() });
           turn.parts.set(part.id, part.text);
           // It replied after all, as OpenCode can be set to when you decline.
@@ -1113,10 +1143,15 @@ export const RoostObserver = async () => {
           if (parents.has(session) || !p.status) return;
           const turn = turns.get(session);
           if (p.status.type !== "idle") {
-            if (turn) return;
-            turns.set(session, { parts: new Map() });
-            // A question another turn asked still waits on you.
-            return waiting.size ? undefined : report("status", session, { status: p.status.type });
+            // What you sent that it takes up: at a turn's start, or at a
+            // step of one, if you sent it while the turn went on.
+            const prompt = words(session);
+            if (!turn) {
+              turns.set(session, { parts: new Map() });
+              // A question another turn asked still waits on you.
+              if (!waiting.size) return report("status", session, { status: p.status.type, prompt });
+            }
+            return prompt === undefined ? undefined : report("prompt", session, { prompt });
           }
           return end(session);
         }
@@ -1276,8 +1311,14 @@ class OpenCodeAgent:
         elif event == "replied" and current == "permission":
             # The turn goes on; if you declined, its end says so.
             updates.update(status="running", lastEvent="Answered")
+        elif event == "prompt":
+            # Sent while a turn went on, which goes on with it.
+            updates = {}
         else:
             return None
+        # What you sent, as a turn takes it up; subagents' sessions send none.
+        if isinstance(payload.get("prompt"), str):
+            updates["lastPrompt"] = payload["prompt"]
         if isinstance(payload.get("session"), str) and payload["session"] and not payload.get("child"):
             updates["agentSession"] = payload["session"]
         return updates
