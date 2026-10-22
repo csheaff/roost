@@ -544,7 +544,7 @@ class Lifecycle(unittest.TestCase):
         # Before merging, which would leave main naming a commit only
         # this worktree has, and before stopping the agent.
         error = self.request("merge", id=task["id"])["error"]
-        self.assertIn("1 commit in lib not on its remote", error)
+        self.assertIn("lib holds 1 commit not on its remote", error)
         self.assertNotIn("git worktree remove", error)
         self.assertEqual(self.git("rev-parse", "main"), main)
         self.assertTrue(wt.exists())
@@ -570,7 +570,7 @@ class Lifecycle(unittest.TestCase):
         self.commit_in_submodule(wt)
         self.git("submodule", "--quiet", "deinit", "--force", "lib", cwd=wt)
         self.assertEqual(self.git("status", "--porcelain", cwd=wt), "")
-        self.assertIn("1 commit in lib not on its remote", self.request("retire", id=task["id"])["error"])
+        self.assertIn("lib holds 1 commit not on its remote", self.request("retire", id=task["id"])["error"])
         told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
         self.assertEqual(told["submoduleCommits"], 1)
         self.assertTrue(self.request("discard", id=task["id"], expect=told["commit"])["ok"])
@@ -585,11 +585,32 @@ class Lifecycle(unittest.TestCase):
         self.check_out_submodules(wt)
         (wt / "lib" / "notes").write_text("only here\n")
         self.assertEqual(self.git("status", "--porcelain", cwd=wt), "")
-        error = self.request("retire", id=task["id"])["error"]
-        self.assertIn("changes in lib that .gitmodules hides", error)
-        self.assertIn("Commit and push it there", error)
+        self.assertIn("lib holds 1 uncommitted file", self.request("retire", id=task["id"])["error"])
         self.assertTrue((wt / "lib" / "notes").exists())
         self.assertEqual(self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]["changes"], 1)
+
+    def test_retire_counts_a_stash_in_a_submodule_and_names_one_git_cannot_read(self):
+        self.add_submodule()
+        task = self.create()
+        wt = Path(task["worktree"])
+        self.check_out_submodules(wt)
+        (wt / "lib" / "notes").write_text("put aside\n")
+        self.git("-c", "user.name=T", "-c", "user.email=t@example.invalid",
+                 "stash", "push", "-q", "--include-untracked", cwd=wt / "lib")
+        self.assertEqual(self.git("status", "--porcelain", cwd=wt), "")
+        self.assertIn("lib holds 1 stash", self.request("retire", id=task["id"])["error"])
+        self.assertEqual(self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]["submoduleCommits"],
+                         1)
+        # A branch there naming no commit: Git can't count, so nothing is
+        # taken to be safe, and discarding still says so.
+        gitdir = Path(self.git("rev-parse", "--absolute-git-dir", cwd=wt / "lib"))
+        (gitdir / "refs" / "heads" / "broken").write_text("1" * 40 + "\n")
+        self.assertIn("lib, whose repository Git can't read", self.request("retire", id=task["id"])["error"])
+        reply = self.request("discard", id=task["id"], dryRun=True)
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(reply["result"]["discard"]["unreadSubmodules"], 1)
+        self.assertTrue(self.request("discard", id=task["id"], expect=reply["result"]["discard"]["commit"])["ok"])
+        self.assertFalse(wt.exists())
 
     def test_retire_counts_commits_in_submodules_of_its_agents_own_worktree(self):
         self.add_submodule()
@@ -606,7 +627,7 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(self.git("status", "--porcelain", cwd=own), "")
         error = self.request("retire", id=task["id"])["error"]
         self.assertIn("its agent's worktree", error)
-        self.assertIn("1 commit in lib not on its remote", error)
+        self.assertIn("lib holds 1 commit not on its remote", error)
         self.assertTrue(own.exists())
         told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
         self.assertEqual(told["submoduleCommits"], 1)
