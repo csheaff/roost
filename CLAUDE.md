@@ -88,6 +88,8 @@ they can do themselves.
   unfinished (a question, a menu, a buffer), goes in the `walk_away` grid,
   `WALK_INTERRUPTERS` or `WALK_STARTERS`, which tries it against all the
   others. `--popular` and `--remote` find what a plain local run doesn't.
+- A UX design review, of how Roost reads and feels on real journeys rather
+  than its code, follows `.claude/skills/ux-review` (`/ux-review`).
 
 ## Docs and changes
 
