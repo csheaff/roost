@@ -3911,6 +3911,9 @@ class WorktreeInclude(unittest.TestCase):
     def test_a_question_mark_matches_a_byte_as_in_git(self):
         self.assertEqual(self.listed("café/\n", "caf??/config.json\n", "café/config.json"), ["café/config.json"])
 
+    def test_letters_fold_as_ascii_bytes_as_in_git(self):
+        self.assertEqual(self.listed("İ/\n", "??/config.json\n", "İ/config.json"), ["İ/config.json"])
+
     def test_a_directory_with_only_ignored_files_is_looked_through(self):
         self.assertEqual(self.listed("*.log\n", "*.log\n", "logs/a.log", "logs/deep/b.log"),
                          ["logs/a.log", "logs/deep/b.log"])
@@ -3961,6 +3964,19 @@ class WorktreeInclude(unittest.TestCase):
         with self.assertRaisesRegex(roost.RoostError, r"\.env \(Git doesn't ignore it on the task's branch\)"):
             roost.copy_included(self.repo, worktree)
         self.assertFalse((worktree / ".env").exists())
+
+    def test_a_gitignore_it_copies_that_stops_git_ignoring_another_is_caught(self):
+        self.listed("config/*\n", "config/\n")
+        worktree = self.worktree()
+        # The primary checkout ignores config/ whole, and so the !.env in it.
+        (self.repo / ".gitignore").write_text("config/\n")
+        (self.repo / "config").mkdir()
+        (self.repo / "config/.gitignore").write_text("!.env\n")
+        (self.repo / "config/.env").write_text("SECRET=1\n")
+        with self.assertRaisesRegex(roost.RoostError, r"config/\.env \(Git doesn't ignore it on the task's branch\)"):
+            roost.copy_included(self.repo, worktree)
+        self.assertFalse((worktree / "config/.env").exists())
+        self.assertEqual(roost.git(worktree, "status", "--porcelain").stdout, "")
 
     def test_what_a_copy_cut_off_left_is_cleared_and_nothing_is_staged_in_the_worktree(self):
         self.listed(".env\n", ".env\n", ".env")

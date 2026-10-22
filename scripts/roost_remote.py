@@ -4383,10 +4383,11 @@ def include_names(line):
 
 def may_match(name, pattern):
     """Whether NAME may match PATTERN, one name of a Git pattern, byte by
-    byte as Git matches, so that `?` is one byte of é. One with an escape
-    or a bracket, which Git reads otherwise than fnmatch, may."""
+    byte as Git matches, so that `?` is one byte of é, and in either case
+    for ASCII letters, as Git may. One with an escape or a bracket, which
+    Git reads otherwise than fnmatch, may."""
     return ("\\" in pattern or "[" in pattern
-            or fnmatch.fnmatchcase(os.fsencode(name), os.fsencode(pattern)))
+            or fnmatch.fnmatchcase(os.fsencode(name).lower(), os.fsencode(pattern).lower()))
 
 
 def reaches(names, directory):
@@ -4394,8 +4395,7 @@ def reaches(names, directory):
     a whole, or a file in it. As Claude Code has it, one starting with
     "**/" does only when the name after that is one of the directory's,
     so `.env` doesn't look through node_modules."""
-    names = [name.lower() for name in names]
-    path = directory.lower().split("/")
+    path = directory.split("/")
     if names[0] == "**":
         return len(names) == 1 or any(may_match(name, names[1]) for name in path)
     # Through a "**", or past the directory or the pattern's end, it may.
@@ -4460,7 +4460,7 @@ def copy_included_file(repo, worktree, path, made, staging):
     over one made there meanwhile. A link is copied as a link, never
     followed; a relative one that leads out of the repository then leads
     to the same place. Add each directory made, with the mode it copies,
-    to MADE."""
+    to MADE. Return whether it made the file."""
     source, target = repo / path, worktree / path
     parent = worktree
     for name in PurePosixPath(path).parts[:-1]:
@@ -4481,17 +4481,28 @@ def copy_included_file(repo, worktree, path, made, staging):
         resolved, root = os.path.realpath(source), os.path.realpath(repo)
         if not os.path.isabs(link) and resolved != root and not resolved.startswith(root + os.sep):
             link = os.path.join(os.path.dirname(source), link)
-        with contextlib.suppress(FileExistsError):
+        try:
             os.symlink(link, target)
-    elif stat.S_ISREG(mode):
+        except FileExistsError:
+            return False
+        return True
+    if stat.S_ISREG(mode):
         staged = staging / "file"
         shutil.copy(source, staged)
         try:
             os.link(staged, target)
         except FileExistsError:
-            pass
+            return False
         finally:
             os.unlink(staged)
+        return True
+    return False
+
+
+def ignored_in(worktree, paths):
+    """Those of PATHS that Git ignores in WORKTREE."""
+    return set(git_fields(worktree, "check-ignore", "-z", "--stdin", input=b"\0".join(map(os.fsencode, paths)),
+                          succeed=(0, 1))) if paths else set()
 
 
 def copy_included(repo, worktree):
@@ -4502,14 +4513,13 @@ def copy_included(repo, worktree):
     repo, worktree = Path(repo), Path(worktree)
     paths = [path for path in included_files(repo) if not checked_out(worktree, path)]
     # A branch whose .gitignore leaves one out would offer it to be committed.
-    ignored = set(git_fields(worktree, "check-ignore", "-z", "--stdin", input=b"\0".join(map(os.fsencode, paths)),
-                             succeed=(0, 1))) if paths else set()
+    ignored = ignored_in(worktree, paths)
     staging = copy_staging(worktree)
     # What a copy cut off left, for a secret's sake.
     shutil.rmtree(staging, ignore_errors=True)
     staging.mkdir(mode=0o700)
     started, said = time.monotonic(), False
-    made, failed = [], []
+    made, failed, copied = [], [], []
     try:
         for path in paths:
             if not said and time.monotonic() - started > 1:
@@ -4519,12 +4529,22 @@ def copy_included(repo, worktree):
                 failed.append("%s (Git doesn't ignore it on the task's branch)" % path)
                 continue
             try:
-                copy_included_file(repo, worktree, path, made, staging)
+                if copy_included_file(repo, worktree, path, made, staging):
+                    copied.append(path)
             except OSError as exc:
                 # Gone since Git listed it, as a log rotated away.
                 if isinstance(exc, FileNotFoundError) and not os.path.lexists(repo / path):
                     continue
                 failed.append("%s (%s)" % (path, exc.strerror or exc))
+        # A .gitignore among them may stop Git ignoring another, as with
+        # !.env: what it no longer ignores goes again.
+        if any(PurePosixPath(path).name == ".gitignore" for path in copied):
+            ignored = ignored_in(worktree, copied)
+            for path in copied:
+                if path not in ignored:
+                    with contextlib.suppress(FileNotFoundError):
+                        os.unlink(worktree / path)
+                    failed.append("%s (Git doesn't ignore it on the task's branch)" % path)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
     if failed:
