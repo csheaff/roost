@@ -4400,6 +4400,19 @@ def copy_staging(worktree):
     return worktree.with_name("." + worktree.name + ".copying")
 
 
+def leaves(link, depth):
+    """Whether LINK, a relative link DEPTH directories into a repository,
+    goes above its top on the way, as ../primary/x from the top does."""
+    for name in link.split("/"):
+        if name == "..":
+            depth -= 1
+            if depth < 0:
+                return True
+        elif name not in ("", "."):
+            depth += 1
+    return False
+
+
 def copy_included_file(repo, worktree, path, made, staging):
     """Copy PATH from REPO into WORKTREE, and its mode, through STAGING, a
     directory outside it, so that it comes whole or not at all, and never
@@ -4422,10 +4435,12 @@ def copy_included_file(repo, worktree, path, made, staging):
     mode = os.lstat(source).st_mode
     if stat.S_ISLNK(mode):
         link = os.readlink(source)
-        # Where it leads after every link on the way, as `..` after one
-        # leads on from where that one led.
+        # One that leaves the repository on its way, by name or after every
+        # link on the way, as `..` after one leads on from where that one
+        # led, leads where it did from the primary checkout.
         resolved, root = os.path.realpath(source), os.path.realpath(repo)
-        if not os.path.isabs(link) and resolved != root and not resolved.startswith(root + os.sep):
+        if not os.path.isabs(link) and (leaves(link, len(PurePosixPath(path).parts) - 1) or resolved != root
+                                        and not resolved.startswith(root + os.sep)):
             link = os.path.join(os.path.dirname(source), link)
         try:
             os.symlink(link, target)
@@ -4492,7 +4507,9 @@ def copy_included(repo, worktree):
         # Each .gitignore first, as one changes what Git ignores, as with
         # !.env, even itself; the rest only once all are in, on this try
         # or one before, so none is ever checked against rules that change.
-        rules = [path for path in paths if PurePosixPath(path).name == ".gitignore"]
+        # In any letters' case, as Git opens .gitignore by name, and a file
+        # system may not tell them apart.
+        rules = [path for path in paths if PurePosixPath(path).name.lower() == ".gitignore"]
         copied = copy_each(rules)
         ignored = ignored_in(worktree, copied)
         for path in copied:
@@ -4501,7 +4518,7 @@ def copy_included(repo, worktree):
                     os.unlink(worktree / path)
                 failed.append("%s (Git doesn't ignore it on the task's branch)" % path)
         if not failed:
-            copy_each([path for path in paths if PurePosixPath(path).name != ".gitignore"])
+            copy_each([path for path in paths if path not in rules])
     finally:
         shutil.rmtree(staging, ignore_errors=True)
     if failed:

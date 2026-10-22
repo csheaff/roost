@@ -3985,6 +3985,29 @@ class WorktreeInclude(unittest.TestCase):
         self.assertFalse((worktree / "config/.env").exists())
         self.assertEqual(roost.git(worktree, "status", "--porcelain").stdout, "")
 
+    def test_a_gitignore_named_in_other_letters_goes_first_where_case_does_not_count(self):
+        (self.repo / "Probe").write_text("")
+        if not (self.repo / "probe").exists():
+            self.skipTest("this file system tells letters' case apart")
+        (self.repo / "Probe").unlink()
+        self.listed("config/*\n", "config/\n")
+        worktree = self.worktree()
+        (self.repo / ".gitignore").write_text("config/\n")
+        (self.repo / "config").mkdir()
+        (self.repo / "config/.GITIGNORE").write_text("!.env\n")
+        (self.repo / "config/.env").write_text("SECRET=1\n")
+        with self.assertRaisesRegex(roost.RoostError, r"config/\.env \(Git doesn't ignore it on the task's branch\)"):
+            roost.copy_included(self.repo, worktree)
+        self.assertFalse((worktree / "config/.env").exists())
+
+    def test_a_link_that_leaves_the_repository_and_comes_back_leads_where_it_did(self):
+        (self.repo / "settings.env").write_text("SETTING=1\n")
+        (self.repo / ".env").symlink_to("../%s/settings.env" % self.repo.name)
+        self.listed("*.env\n.env\n", ".env\n")
+        worktree = self.worktree()
+        roost.copy_included(self.repo, worktree)
+        self.assertEqual((worktree / ".env").read_text(), "SETTING=1\n")
+
     def test_what_a_copy_cut_off_left_is_cleared_and_nothing_is_staged_in_the_worktree(self):
         self.listed(".env\n", ".env\n", ".env")
         worktree = self.worktree()
