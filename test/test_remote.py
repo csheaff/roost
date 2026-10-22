@@ -3908,6 +3908,9 @@ class WorktreeInclude(unittest.TestCase):
         self.assertEqual(self.listed(".claude/\nvendor/\n", "/vendor/\n", *files),
                          ["vendor/x/.env", "vendor/x/config.json"])
 
+    def test_a_question_mark_matches_a_byte_as_in_git(self):
+        self.assertEqual(self.listed("café/\n", "caf??/config.json\n", "café/config.json"), ["café/config.json"])
+
     def test_a_directory_with_only_ignored_files_is_looked_through(self):
         self.assertEqual(self.listed("*.log\n", "*.log\n", "logs/a.log", "logs/deep/b.log"),
                          ["logs/a.log", "logs/deep/b.log"])

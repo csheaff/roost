@@ -4382,9 +4382,11 @@ def include_names(line):
 
 
 def may_match(name, pattern):
-    """Whether NAME may match PATTERN, one name of a Git pattern. One with
-    an escape or a bracket, which Git reads otherwise than fnmatch, may."""
-    return "\\" in pattern or "[" in pattern or fnmatch.fnmatchcase(name, pattern)
+    """Whether NAME may match PATTERN, one name of a Git pattern, byte by
+    byte as Git matches, so that `?` is one byte of é. One with an escape
+    or a bracket, which Git reads otherwise than fnmatch, may."""
+    return ("\\" in pattern or "[" in pattern
+            or fnmatch.fnmatchcase(os.fsencode(name), os.fsencode(pattern)))
 
 
 def reaches(names, directory):
