@@ -1445,7 +1445,7 @@ def send(qa, repo):
         ("beside its terminal, which is selected", lambda s: shows(qa, name)(s)
          and "Half a thought" in (qa.window(s, "roost-send-mode") or {}).get("text", ""))])
     # Pi and OpenCode say what you sent too, each through what Roost loads into it.
-    for agent, label in (("pi", "Pi"), ("opencode", "OpenCode")):
+    for agent, label, article in (("pi", "Pi", "A"), ("opencode", "OpenCode", "An")):
         qa.emacs.eval("(setq qa-agents (cons roost-default-agent roost-agent-commands)"
                       " roost-default-agent %s roost-agent-commands (cons (list %s %s %s %s) roost-agent-commands))"
                       % (lisp(agent), lisp(agent), lisp(sys.executable), lisp(str(FAKE_AGENT)), lisp(agent)))
@@ -1461,7 +1461,7 @@ def send(qa, repo):
                                                     for w in terminals(s)))
         latest = lambda s: re.search(r"Your latest prompt\n\s*And you, %s\?" % label, panel_text(qa, s))
         qa.wait("the panel to hear it", latest)
-        qa.step("A %s task's panel shows what you last said" % label, expect=[
+        qa.step("%s %s task's panel shows what you last said" % (article, label), expect=[
             ("under the task's prompt", lambda s: latest(s) and panel_text(qa, s).index("Greet " + label)
              < panel_text(qa, s).index("Your latest prompt"))])
 
