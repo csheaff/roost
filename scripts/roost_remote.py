@@ -10,6 +10,7 @@ import contextlib
 import datetime
 import errno
 import fcntl
+import fnmatch
 import functools
 import hashlib
 import heapq
@@ -24,6 +25,7 @@ import shlex
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -1449,6 +1451,9 @@ def create(store, request):
                              url=text(issue.get("url")))
     if setup:
         task["setupComplete"] = False
+    # Its runner copies them, in its terminal, as that may take a while.
+    if (Path(repo) / WORKTREE_INCLUDE).is_file():
+        task["copyComplete"] = False
     if request.get("programStatus") is True:
         task["programStatus"] = True
     git(repo, "-c", "branch.autoSetupMerge=false", "worktree", "add", "-b", branch,
@@ -4211,6 +4216,160 @@ def relay(argv, cwd, env, report):
     return process.wait()
 
 
+WORKTREE_INCLUDE = ".worktreeinclude"
+# Ignored directories that Git's walk for them skips, at most: an argument
+# list holds only so much. Past that it walks them too, which takes longer.
+SKIPPED_WALK_LIMIT = 1000
+
+
+def git_fields(repo, *args):
+    """What `git ARGS` prints in REPO, split at its NULs, with paths as the
+    file system names them, even ones not in UTF-8."""
+    result = subprocess.run(["git", "-C", str(repo), *args], stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, pass_fds=tuple(INHERITED))
+    if result.returncode:
+        raise RoostError(os.fsdecode(result.stderr).strip() or "git %s failed in %s" % (args[0], repo))
+    return [os.fsdecode(field) for field in result.stdout.split(b"\0") if field]
+
+
+def ignored_paths(repo):
+    """The files Git ignores in REPO, and each directory an ignore pattern
+    matches, ending in "/", rather than what is in it."""
+    fields = git_fields(repo, "--no-optional-locks", "status", "--porcelain", "-z", "--ignored=matching",
+                        "--untracked-files=normal", "--ignore-submodules=all")
+    paths, renamed = [], False
+    for field in fields:
+        if not renamed and field.startswith("!! "):
+            paths.append(field[3:])
+        # A renamed or copied file's old path comes next.
+        renamed = not renamed and bool(set(field[:2]) & set("RC"))
+    return paths
+
+
+def include_names(line):
+    """The names between the slashes of LINE, a .worktreeinclude pattern
+    that selects files, or None for a blank line, a comment or a negation.
+    One without a slash, but at its end, matches at any depth, so its names
+    start with "**"."""
+    line = line.strip()
+    if not line or line.startswith(("#", "!")):
+        return None
+    pattern = line[line.startswith("\\"):].rstrip("/")
+    if not pattern:
+        return None
+    return pattern.lstrip("/").split("/") if "/" in pattern else ["**", pattern]
+
+
+def reaches(names, directory):
+    """Whether the pattern of NAMES may match DIRECTORY, one Git ignores as
+    a whole, or a file in it. As Claude Code has it, one starting with
+    "**/" does only when the name after that is one of the directory's,
+    so `.env` doesn't look through node_modules."""
+    names = [name.lower() for name in names]
+    path = directory.lower().split("/")
+    if names[0] == "**":
+        return len(names) == 1 or any(fnmatch.fnmatchcase(name, names[1]) for name in path)
+    # Through a "**", or past the directory or the pattern's end, it may.
+    for name, pattern in zip(path, names):
+        if pattern == "**":
+            return True
+        if not fnmatch.fnmatchcase(name, pattern):
+            return False
+    return True
+
+
+def included_files(repo):
+    """The files in REPO, a primary checkout, that its .worktreeinclude
+    lists and Git ignores, as Claude Code and Conductor copy them into a
+    new worktree. Git reads the patterns, as it would a .gitignore. In a
+    directory Git ignores as a whole it looks only where a pattern leads,
+    as `reaches` says."""
+    include = Path(repo) / WORKTREE_INCLUDE
+    try:
+        lines = include.read_text(errors="replace").splitlines()
+    except FileNotFoundError:
+        return []
+    patterns = [names for names in map(include_names, lines) if names]
+    ignored = ignored_paths(repo)
+    files = {path for path in ignored if not path.endswith("/")}
+    kept, skipped = [], []
+    for path in (path for path in ignored if path.endswith("/")):
+        (kept if any(reaches(names, path[:-1]) for names in patterns) else skipped).append(path)
+    walk = (["--", "."] + [":(exclude,literal)" + path[:-1] for path in skipped]
+            if len(skipped) <= SKIPPED_WALK_LIMIT else [])
+    # Untracked files the patterns match, and nested repositories, ending in "/".
+    matched = git_fields(repo, "ls-files", "-z", "--others", "--ignored", "--exclude-from=" + str(include), *walk)
+    return [path for path in matched
+            if path in files or not path.endswith("/") and path.startswith(tuple(kept))]
+
+
+def copy_included_file(repo, worktree, path, made):
+    """Copy PATH from REPO into WORKTREE, and its mode, unless the worktree
+    has it already, or a file or link on its way, as checked out. A link
+    is copied as a link, never followed; a relative one that leads out of
+    the repository then leads to the same place. Add each directory made,
+    with the one it copies, to MADE."""
+    source, target = repo / path, worktree / path
+    parent = worktree
+    for name in PurePosixPath(path).parts[:-1]:
+        parent = parent / name
+        try:
+            mode = os.lstat(parent).st_mode
+        except FileNotFoundError:
+            os.mkdir(parent)
+            made.append((parent, repo / parent.relative_to(worktree)))
+            continue
+        # A link could lead out of the worktree.
+        if not stat.S_ISDIR(mode):
+            return
+    if os.path.lexists(target):
+        return
+    try:
+        mode = os.lstat(source).st_mode
+    except FileNotFoundError:
+        return  # Gone since Git listed it, as a log rotated away.
+    if stat.S_ISLNK(mode):
+        link = os.readlink(source)
+        if not os.path.isabs(link):
+            resolved = os.path.normpath(os.path.join(os.path.dirname(source), link))
+            if not resolved.startswith(str(repo) + os.sep):
+                link = resolved
+        os.symlink(link, target)
+    elif stat.S_ISREG(mode):
+        # Whole or not at all, so that trying again skips only what is done.
+        partial = target.with_name(".roost-copy")
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(partial)
+        shutil.copy(source, partial)
+        os.replace(partial, target)
+
+
+def copy_included(repo, worktree):
+    """Copy into WORKTREE the files of REPO, its primary checkout, that
+    `included_files` gives. It says so in the terminal when that takes a
+    while. Copy what can be, then raise RoostError naming what could not."""
+    repo, worktree = Path(repo), Path(worktree)
+    paths = included_files(repo)
+    started, said = time.monotonic(), False
+    made, failed = [], []
+    for path in paths:
+        if not said and time.monotonic() - started > 1:
+            print("Roost: copying %d files that %s lists" % (len(paths), WORKTREE_INCLUDE), flush=True)
+            said = True
+        try:
+            copy_included_file(repo, worktree, path, made)
+        except OSError as exc:
+            failed.append("%s (%s)" % (path, exc.strerror or exc))
+    # Once their files are in, as one may not be writable.
+    for directory, source in reversed(made):
+        with contextlib.suppress(OSError):
+            os.chmod(directory, stat.S_IMODE(os.stat(source).st_mode))
+    if failed:
+        raise RoostError("Could not copy %d of the files %s lists: %s%s; resuming the task tries again"
+                         % (len(failed), WORKTREE_INCLUDE, ", ".join(failed[:3]),
+                            " and %d more" % (len(failed) - 3) if len(failed) > 3 else ""))
+
+
 def runner(root, task_id, run_id, resume_conversation=False):
     store = Store(root)
     with store.locked():
@@ -4243,6 +4402,14 @@ def runner(root, task_id, run_id, resume_conversation=False):
             argv = agent.launch(store, task, resume_conversation)
             # What the agent alone needs in its environment, as to load an observer.
             agent_env = dict(env, **(agent.environment(store, task, env) if hasattr(agent, "environment") else {}))
+        # Before setup, which may use them, and until it has all of them.
+        if task.get("copyComplete") is False:
+            copy_included(task["repo"], task["worktree"])
+            with store.locked():
+                current = store.read(task_id)
+                if current.get("runId") == run_id:
+                    current["copyComplete"] = True
+                    store.save(current)
         setup = text(task.get("setup"))
         # Resume reruns setup only when the first run never finished it.
         if setup and (not resume_conversation or task.get("setupComplete") is False):

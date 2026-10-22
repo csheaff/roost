@@ -161,8 +161,8 @@ Roost owns worktree, resume and hook flags, and refuses ones that clash."
 (defcustom roost-setup-command nil
   "Optional project setup shell command, run before the agent in new worktrees.
 May be set directory-locally.  Not rerun on resume.  It runs in the
-worktree, with the project's primary checkout in $ROOST_REPO, so it can
-copy files Git doesn't track, such as cp \"$ROOST_REPO/.env\" ."
+worktree, once the ignored files the project's .worktreeinclude lists
+are copied there, with the project's primary checkout in $ROOST_REPO."
   :type '(choice (const nil) string))
 
 (defcustom roost-teardown-command nil

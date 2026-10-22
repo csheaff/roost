@@ -55,9 +55,6 @@ Small, and probably worth the most.
   so finished turns mixed in slow the answer to a permission request.
   From the cockpit, where one alert sounds at a time and a message counts
   the rest ([FAA](https://hfcc.dot.gov/publications/docs/GeneralGuidance/zz_FAA_GeneralGuidanceDoc_Chapter_04_Section_01.html)).
-- **`.worktreeinclude`.** Copy the ignored files it lists, such as `.env`,
-  into new worktrees, as Claude Code and Conductor do. Today that takes
-  `roost-setup-command`.
 - **Your phone, through Claude Code's Remote Control.** An option to start
   each Claude task with `--remote-control`, named after the task, so it
   shows in the Claude app and at claude.ai/code. Both send a push

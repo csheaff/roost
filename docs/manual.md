@@ -517,12 +517,27 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
 - `roost-default-agent`, `roost-agent-commands`: which agent new tasks use, and
   each CLI with extra arguments, such as `("claude" "claude" "--model" "sonnet")`.
   Roost owns worktree, resume and hook flags and rejects conflicting ones.
+- `.worktreeinclude`, a file in the project's primary checkout: the files Git
+  ignores that a new worktree should have, such as `.env`, which a worktree
+  otherwise lacks. It takes `.gitignore`'s patterns, and Roost copies the
+  files that match one and that Git ignores, from the primary checkout into
+  each new task's worktree, as Claude Code and Conductor do, so one file
+  serves all three. A file Git tracks, or one it shows as untracked, isn't
+  copied. In a directory Git ignores as a whole, Roost looks only where a
+  pattern leads: `.env` doesn't look through `node_modules/`, while
+  `vendor/**/config.json` looks in an ignored `vendor/`. Links are copied as
+  links, and files the worktree has already are left as checked out. The
+  copy runs in the task's terminal, before the setup command. If a file
+  can't be copied, the task stops before its agent starts and says which;
+  `s` copies what's still missing and starts it. A directory you list is
+  copied file by file for each task: `node_modules` takes that time and
+  space every time, where `npm ci` as the setup command may take less.
 - `roost-setup-command`: a shell command run once in a new worktree before the
   agent starts, such as `npm ci`. Set it in `.dir-locals.el` per project:
   `((nil . ((roost-setup-command . "npm ci"))))`. Emacs reads a remote
-  project's `.dir-locals.el` only with `enable-remote-dir-locals` on. A new
-  worktree lacks files Git doesn't track, such as `.env`; the command finds the
-  primary checkout in `$ROOST_REPO`: `cp "$ROOST_REPO/.env" . && npm ci`.
+  project's `.dir-locals.el` only with `enable-remote-dir-locals` on. It runs
+  once Roost has copied what `.worktreeinclude` lists, and finds the primary
+  checkout in `$ROOST_REPO`, for anything else it needs from there.
 - `roost-teardown-command`: a shell command run in a task's worktree just before
   Roost removes it, when you merge, retire or discard the task, set the same
   way. It cleans up what a tool keeps for the worktree elsewhere, such as

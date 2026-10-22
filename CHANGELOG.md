@@ -4,6 +4,13 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A new task's worktree gets the files Git ignores that the project's
+  `.worktreeinclude` lists, such as `.env`, copied from the primary
+  checkout before `roost-setup-command` runs, as Claude Code and Conductor
+  do. A project with a `.worktreeinclude` already gets them in Roost's
+  tasks too; a setup command that copies them, as `cp "$ROOST_REPO/.env" .`,
+  can stop. If a file can't be copied, the task stops before its agent
+  starts and says which, and `s` tries again.
 - While an agent asks you something in its terminal on screen, its panel
   says to answer it there without naming `RET`, which in the terminal
   picks the agent's default answer, such as "No, exit" at folder trust.
