@@ -8223,6 +8223,47 @@ answered with `answer'."
        (should (equal (car messages) "Resumed 1 agent on dev"))
        (should-not roost--resuming)))))
 
+(ert-deftest roost-resuming-together-leaves-what-you-do-meanwhile ()
+  ;; Each reply waits until the test gives it, as a host's does.
+  (roost-test--isolated
+   (let ((task (roost-test--crashed-host)) held requests messages opened asked)
+     (roost--cache-task "dev" (append '((name . "pile") (live)) (roost-test--task "aaaaaaaaaaaaaaaa" "crashed")))
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (host action params success &optional failure _timeout)
+                  (let ((task (gethash (list host (alist-get 'id params)) roost--tasks)))
+                    (push (list action (roost--field task 'name)) requests)
+                    (push (list (roost--field task 'name) task success failure) held))))
+               ((symbol-function 'roost-open-task) (lambda (task &rest _) (push (roost--field task 'name) opened)))
+               ((symbol-function 'y-or-n-p) (lambda (question) (push question asked) t))
+               ((symbol-function 'message)
+                (lambda (format &rest args) (when format (push (apply #'format format args) messages)))))
+       (cl-flet ((reply (name &optional err)
+                   (pcase-let ((`(,_ ,task ,success ,failure) (assoc name held)))
+                     (setq held (delq (assoc name held) held))
+                     (if err
+                         (funcall failure err)
+                       (funcall success (append '((status . "starting") (live . t)) task)))))
+                 (task (id) (gethash (list "dev" id) roost--tasks)))
+         (roost--resume-together task (roost--crashed-with task))
+         ;; Its own resume fails while the next waits for its reply:
+         ;; opening one still waiting offers it alone, not another round.
+         (reply "sum check" "boom")
+         (should (equal (caar held) "lint"))
+         (should-not (roost--crashed-with (task "2222222222222222")))
+         (should-not (roost--crashed-with (task "1111111111111111")))
+         ;; You stop pile, then resume tidy yourself, before their turns.
+         (roost--cache-task "dev" (append '((status . "stopped")) (task "aaaaaaaaaaaaaaaa")))
+         (roost-resume (task "2222222222222222") t)
+         (should-not asked)
+         (reply "lint")
+         ;; Neither resumes again, though tidy's own reply is yet to come.
+         (should (equal (reverse requests) '(("resume" "sum check") ("resume" "lint") ("resume" "tidy"))))
+         (should (equal (car messages) "Resumed 1 of 2 agents on dev; sum check didn't resume: boom"))
+         (reply "tidy")
+         (should (equal opened '("tidy")))
+         (should-not held)
+         (should-not roost--resuming))))))
+
 (ert-deftest roost-task-sessions-stay-out-of-tmux-controls-activity-corner ()
   ;; The corner named every other task whose agent printed anything, and
   ;; clicking it showed that terminal without switching task.

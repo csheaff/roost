@@ -3265,6 +3265,9 @@ FAILURE, if given, receives the error message instead of Roost reporting it."
                (message "Roost %s: %s" (roost--host-label host) err)))
            (when teardown (list (+ roost-request-timeout roost--teardown-seconds))))))
 
+(defvar roost--resuming nil
+  "Keys of the tasks that resuming several at once has yet to resume.")
+
 ;;;###autoload
 (defun roost-resume (&optional task offer)
   "Restart TASK, resuming its recorded agent conversation.
@@ -3280,6 +3283,8 @@ resume those too."
                            (format "Resume the %d other agents that crashed on %s too? " (length others) host)
                          (format "Resume the other agent that crashed on %s too? " host))))
         (roost--resume-together task others)
+      ;; Now, rather than in its turn among several resuming.
+      (setq roost--resuming (delete (roost--key task) roost--resuming))
       (roost--act task "resume" (roost--resume-parameters task) #'roost-open-task))))
 
 (defun roost--resume-parameters (task)
@@ -3287,16 +3292,15 @@ resume those too."
   `((programStatus . ,(if roost-program-status t :false))
     (size . ,(roost--terminal-size task))))
 
-(defvar roost--resuming nil
-  "Keys of the tasks that resuming several at once has yet to resume.")
-
 (defun roost--crashed-with (task)
   "The other tasks on TASK's host whose agents crashed, if TASK's did.
 Each crashed, as every agent there does when the host restarts or its
 tmux server ends, and can resume.  Those stopped, exited or failed are
 left out: you or the agent ended them.  So are those that resuming
-several will resume, which you were asked about already."
-  (when (equal (roost--field task 'status) "crashed")
+several will resume, which you were asked about already, and all of
+them while TASK is one of those."
+  (when (and (equal (roost--field task 'status) "crashed")
+             (not (member (roost--key task) roost--resuming)))
     (let ((host (roost--field task 'host))
           (key (roost--key task)))
       (seq-filter (lambda (other)
@@ -3311,8 +3315,8 @@ several will resume, which you were asked about already."
   "Resume TASK, then open it, and resume OTHERS, one after another.
 OTHERS' terminals stay closed.  Once all have replied, say how many
 resumed, naming each that didn't and why: one that fails doesn't stop
-the rest.  One gone since, or running again, as when you resumed it
-meanwhile, is passed over."
+the rest.  One you resumed, stopped or forgot meanwhile, or that no
+longer shows as crashed, is passed over."
   (let ((host (roost--field task 'host))
         (tried 1)
         failures said)
@@ -3325,7 +3329,11 @@ meanwhile, is passed over."
                       (message "%s" (setq said (roost--resumed-message host tried (reverse failures))))
                     (let* ((key (roost--key (car rest)))
                            (other (gethash key roost--tasks)))
-                      (if (or (not other) (roost--agent-running-p other))
+                      ;; Unless, since you were asked, you resumed it,
+                      ;; stopped or forgot it, or it ended another way.
+                      (if (not (and other (member key roost--resuming)
+                                    (equal (roost--field other 'status) "crashed")
+                                    (roost--action-applies-p other #'roost-resume)))
                           (progn (replied (car rest)) (next (cdr rest)))
                         (cl-incf tried)
                         (roost--act other "resume" (roost--resume-parameters other)
