@@ -9,8 +9,8 @@ What each release changes, and what to do when upgrading. Newest first.
   picks the agent's default answer, such as "No, exit" at folder trust.
 - The README's setup no longer lists an example SSH host, which showed as
   unreachable from the start. `M-x roost-doctor` says how to stop
-  watching a host it can't reach: take it out of `roost-hosts`, or `M-x
-  roost-forget-host` for one Roost remembered.
+  watching a host it can't reach: take it out of `roost-hosts`, and `M-x
+  roost-forget-host` once Roost remembers it from a task there.
 
 ## 0.10.0
 

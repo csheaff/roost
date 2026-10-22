@@ -233,7 +233,7 @@
             (draws 0))
        (unwind-protect
            (cl-letf (((symbol-function 'magit-status) #'ignore)
-                     ((symbol-function 'roost--panel-beside-terminal-p) (lambda (_) on-screen)))
+                     ((symbol-function 'roost--panel-beside-terminal-p) (lambda (_ &optional _any) on-screen)))
              (display-buffer-in-side-window buffer (roost--side-window-alist 'right 44))
              (with-current-buffer buffer
                (roost--render-task-info)
@@ -288,6 +288,22 @@
                (should-not (roost--panel-beside-terminal-p task))
                (set-window-buffer (split-window-right) terminal)
                (should (roost--panel-beside-terminal-p task))
+               ;; A copy in another frame without the terminal keeps the
+               ;; conversation, but the frame with it still has a terminal
+               ;; whose RET would answer the agent.
+               (let* ((copy (split-window-below))
+                      (frame-of (symbol-function 'window-frame))
+                      (windows-of (symbol-function 'window-list)))
+                 (set-window-buffer copy panel)
+                 (cl-letf (((symbol-function 'window-frame)
+                            (lambda (&optional window)
+                              (if (eq window copy) 'elsewhere (funcall frame-of window))))
+                           ((symbol-function 'window-list)
+                            (lambda (&optional frame &rest rest)
+                              (if (eq frame 'elsewhere) (list copy) (apply windows-of frame rest)))))
+                   (should-not (roost--panel-beside-terminal-p task))
+                   (should (roost--panel-beside-terminal-p task t)))
+                 (delete-window copy))
                ;; Hidden, it has no terminal beside it.
                (set-window-buffer main (get-buffer-create "*scratch*"))
                (should-not (roost--panel-beside-terminal-p task))))
@@ -7199,8 +7215,8 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
 
 (ert-deftest roost-doctor-reports-checks-and-connection-fixes ()
   (roost-test--isolated
-   (let ((roost-hosts '("dev" "far")) (roost-default-agent "claude")
-         (roost--hosts-loaded t) (roost--remembered-hosts '("old")))
+   (let ((roost-hosts '("dev" "far" "both")) (roost-default-agent "claude")
+         (roost--hosts-loaded t) (roost--remembered-hosts (list "old" "both")))
      (cl-letf (((symbol-function 'roost--request)
                 (lambda (host action _params success failure)
                   (should (equal action "doctor"))
@@ -7220,7 +7236,7 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
                                          ((name . "Push · qa-project") (ok) (optional . t)
                                           (detail . "no origin remote")))))
                    ("far" (funcall failure "far: Permission denied (publickey)."))
-                   (_ (funcall failure "Connection to old closed by remote host.")))))
+                   (_ (funcall failure (format "Connection to %s closed by remote host." host))))))
                ((symbol-function 'pop-to-buffer) #'ignore))
        (unwind-protect
            (progn
@@ -7238,7 +7254,10 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
                  (should (string-match-p "✗ SSH and Python +far: Permission denied" text))
                  ;; The way out for a host you don't use, as one copied
                  ;; from an example: where it was listed.
-                 (should (string-match-p "ssh-copy-id far.*\\. To stop watching it, take it out of `roost-hosts'" text))
+                 (should (string-match-p "ssh-copy-id far.*\\. To stop watching it, take it out of `roost-hosts'$" text))
+                 ;; One you made a task on is remembered too, until you forget it.
+                 (should (equal roost--remembered-hosts '("old" "both")))
+                 (should (string-match-p "^both\n.*\n +To stop watching it, take it out of `roost-hosts', then M-x roost-forget-host$" text))
                  (should (string-match-p "^old\n.*closed by remote host\\.\n +To stop watching it, M-x roost-forget-host$" text))
                  (should (string-match-p "· Workspaces" text)))))
          (kill-buffer "*roost doctor*"))))))

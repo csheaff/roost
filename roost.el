@@ -528,7 +528,9 @@ JSON null becomes nil."
     (setq roost--hosts-loaded t
           roost--remembered-hosts (seq-filter #'string-or-null-p
                                               (roost--read-json-list roost-hosts-file))))
-  (delete-dups (append roost-hosts roost--remembered-hosts)))
+  ;; A copy: `delete-dups' would otherwise drop a configured host from
+  ;; the remembered ones, which `append' shares as its tail.
+  (delete-dups (append roost-hosts roost--remembered-hosts nil)))
 
 (defun roost--remember-host (host)
   "Remember HOST across restarts."
@@ -7560,24 +7562,30 @@ Status is the last observation from the task's host.
 (defvar-local roost--beside-terminal nil
   "Non-nil if this task panel was last drawn with its agent's terminal on screen.")
 
-(defun roost--panel-beside-terminal-p (task)
+(defvar-local roost--near-terminal nil
+  "Non-nil if this task panel was last drawn in a frame with its terminal.")
+
+(defun roost--panel-beside-terminal-p (task &optional any)
   "Whether each window showing this task panel has TASK's terminal in its frame.
 Then the panel leaves the agent's conversation to the terminal; one
-window without it, such as in another frame, keeps the conversation."
+window without it, such as in another frame, keeps the conversation.
+With ANY, whether one window does: there, the panel names no key for
+answering the agent, which RET in the terminal would answer instead."
   (when-let* ((windows (get-buffer-window-list nil 'nomini 'visible)))
-    (seq-every-p (lambda (window)
-                   (seq-some (lambda (other)
-                               (with-current-buffer (window-buffer other)
-                                 (or (roost--terminal-shows-p task (list (roost--field task 'paneId)))
-                                     ;; Just connected, before tmux says which pane
-                                     ;; is active: the task's own session holds
-                                     ;; only its agent's window.
-                                     (and (fboundp 'tmux-control-active-pane)
-                                          (null (tmux-control-active-pane))
-                                          (when-let* ((shown (roost--terminal-task (current-buffer))))
-                                            (equal (roost--key shown) (roost--key task)))))))
-                             (window-list (window-frame window) 'nomini)))
-                 windows)))
+    (funcall (if any #'seq-some #'seq-every-p)
+             (lambda (window)
+               (seq-some (lambda (other)
+                           (with-current-buffer (window-buffer other)
+                             (or (roost--terminal-shows-p task (list (roost--field task 'paneId)))
+                                 ;; Just connected, before tmux says which pane
+                                 ;; is active: the task's own session holds
+                                 ;; only its agent's window.
+                                 (and (fboundp 'tmux-control-active-pane)
+                                      (null (tmux-control-active-pane))
+                                      (when-let* ((shown (roost--terminal-task (current-buffer))))
+                                        (equal (roost--key shown) (roost--key task)))))))
+                         (window-list (window-frame window) 'nomini)))
+             windows)))
 
 (defun roost--redraw-moved-panels ()
   "Redraw the task panels whose agent's terminal came on or off screen."
@@ -7585,8 +7593,10 @@ window without it, such as in another frame, keeps the conversation."
     (with-current-buffer (window-buffer window)
       (when-let* (((derived-mode-p 'roost-task-info-mode))
                   (task (gethash roost--buffer-task-key roost--tasks))
-                  ((not (eq (not roost--beside-terminal)
-                            (not (roost--panel-beside-terminal-p task))))))
+                  ((or (not (eq (not roost--beside-terminal)
+                                (not (roost--panel-beside-terminal-p task))))
+                       (not (eq (not roost--near-terminal)
+                                (not (roost--panel-beside-terminal-p task t)))))))
         (roost--render-task-info)))))
 
 (defun roost--narrowest-width (otherwise)
@@ -7781,7 +7791,9 @@ Windows showing the panel keep their scroll position, and the mark stays."
              (integration (roost--field task 'integrationBranch))
              ;; With the agent's terminal on screen, the conversation is its.
              (beside (setq roost--beside-terminal (roost--panel-beside-terminal-p task)))
-             (next (roost--next-step task nil beside)))
+             ;; Beside it in one frame, RET would answer the agent there.
+             (next (roost--next-step task nil (setq roost--near-terminal
+                                                    (roost--panel-beside-terminal-p task t)))))
         (let ((name (propertize (roost--field task 'name) 'face 'roost-title))
               (state (concat (roost--status-light task (cons 'panel (current-buffer)) t)
                              (propertize (concat " " status)
@@ -9702,6 +9714,10 @@ refresh of Magit's status does a dozen times or more."
                                           roost--ssh-hints)))
                      ;; A host you don't use, as one copied from an example.
                      (away (cond ((null host) nil)
+                                 ;; Creating a task there remembers it too.
+                                 ((and (member host roost-hosts) (member host roost--remembered-hosts))
+                                  (concat "To stop watching it, take it out of `roost-hosts', then "
+                                          (substitute-command-keys "\\[roost-forget-host]")))
                                  ((member host roost-hosts)
                                   "To stop watching it, take it out of `roost-hosts'")
                                  ((member host roost--remembered-hosts)
