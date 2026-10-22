@@ -98,6 +98,15 @@ account, with no badge or verdict.
 
 ## Worth trying
 
+- **From the UX review of 2026-10-21**, small and not yet taken
+  ([validation](validation.md#ux-review--2026-10-21)): after a merge,
+  close the windows that showed the task's buffers and say "Squashed …"
+  after Emacs reverts the files it changed; name the branch a draft starts
+  from rather than "primary checkout's current branch"; no "Nothing
+  changed since you looked" right after your first look; keep the
+  sidebar's "N waiting" and unreachable hosts in its header line, so a long
+  list doesn't scroll them away; a dashboard key for `roost-workload`; and
+  `roost-doctor` lines that fit a narrow window.
 - **A quiet word for a stalled task.** The task panel and dashboard say how
   long since an agent's last event ("for 14m"); the sidebar doesn't. A dim
   `quiet` there, for a working task far past its own usual gap between
