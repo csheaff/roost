@@ -3314,7 +3314,8 @@ Read from the layout transient keeps, whose form varies by version."
   ;; A stopped task's panel offered Stop, Shell and Send, which its host refuses.
   (roost-test--isolated
    (let* ((commands '(("RET" . roost-open-task) ("t" . roost-shell) ("f" . roost-files)
-                      ("e" . roost-send) ("r" . roost-review) ("D" . roost-diff) ("u" . roost-update)
+                      ("e" . roost-send) ("r" . roost-review) ("D" . roost-diff) ("v" . roost-mark-looked)
+                      ("u" . roost-update)
                       ("P" . roost-pr) ("m" . roost-merge-retire) ("x" . roost-retire)
                       ("X" . roost-forget) ("K" . roost-stop) ("s" . roost-resume)))
           (applies (lambda (task)
@@ -3328,10 +3329,10 @@ Read from the layout transient keeps, whose form varies by version."
           (merged (roost--cache-task "dev" (append '((live . t) (ahead . 2) (prStatus (state . "MERGED"))
                                                      (pr (number . 12) (url . "https://github.com/o/r/pull/12")))
                                                    (roost-test--task "3333333333333333" "ready")))))
-     (should (equal (funcall applies stopped) '("RET" "f" "r" "D" "u" "P" "m" "x" "X" "s")))
+     (should (equal (funcall applies stopped) '("RET" "f" "r" "D" "v" "u" "P" "m" "x" "X" "s")))
      (should (string-match-p "resumes its conversation" (roost--next-step stopped)))
      ;; At work: nothing to merge or retire, and no resuming it.
-     (should (equal (funcall applies working) '("RET" "t" "f" "e" "r" "D" "u" "X" "K")))
+     (should (equal (funcall applies working) '("RET" "t" "f" "e" "r" "D" "v" "u" "X" "K")))
      (should-not (roost--next-step working))
      ;; Finished with commits: merge it, or discard it with x.
      (should (member "m" (funcall applies finished)))
@@ -6539,20 +6540,24 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
          (roost-task-info-mode)
          (setq roost--buffer-task-key (roost--key task))
          (roost--render-task-info)
-         (should (string-match-p "^Not looked at in Magit yet: r opens it$" (buffer-string))))))))
+         (should (string-match-p "^Not looked at yet: r opens it in Magit, v marks it as looked at$"
+                                 (buffer-string))))))))
 
 (ert-deftest roost-the-task-panel-says-what-changed-since-you-looked ()
   (roost-test--isolated
-   (dolist (case '((3 "^3 files changed since you looked, [0-9]+d ago: r shows them$")
-                   (0 "^Nothing changed since you looked, [0-9]+d ago$")))
+   (dolist (case '((3 t "^3 files changed since you looked, [0-9]+d ago: r shows them, v marks it as looked at$")
+                   ;; Without Magit, r opens Dired.
+                   (3 nil "^3 files changed since you looked, [0-9]+d ago: v marks it as looked at$")
+                   (0 t "^Nothing changed since you looked, [0-9]+d ago$")))
      (let ((task (roost--cache-task "dev" (roost-test--looked
                                            `(sinceLooked (count . ,(car case))
                                                          (at . "2026-10-03T19:00:00+00:00"))))))
-       (with-temp-buffer
-         (roost-task-info-mode)
-         (setq roost--buffer-task-key (roost--key task))
-         (roost--render-task-info)
-         (should (string-match-p (cadr case) (buffer-string))))))
+       (cl-letf (((symbol-function 'magit-status) (and (cadr case) #'ignore)))
+         (with-temp-buffer
+           (roost-task-info-mode)
+           (setq roost--buffer-task-key (roost--key task))
+           (roost--render-task-info)
+           (should (string-match-p (caddr case) (buffer-string)))))))
    ;; Right after a look, with nothing from its agent since, it says nothing.
    (let ((task (roost--cache-task "dev" (roost-test--looked
                                          '(id . "2222222222222222")
@@ -6576,12 +6581,18 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
        (should (string-match-p "^Nothing changed since you looked" (buffer-string)))))
    ;; With uncommitted changes the next step names r, and it isn't said twice.
    (let ((task (roost--cache-task "dev" (roost-test--looked '(dirty . t)))))
-     (with-temp-buffer
-       (roost-task-info-mode)
-       (setq roost--buffer-task-key (roost--key task))
-       (roost--render-task-info)
-       (should (string-match-p "^Review and commit its changes in Magit: r$" (buffer-string)))
-       (should (string-match-p "^3 files changed since you looked, [0-9]+d ago$" (buffer-string)))))
+     (cl-letf (((symbol-function 'magit-status) #'ignore))
+       (with-temp-buffer
+         (roost-task-info-mode)
+         (setq roost--buffer-task-key (roost--key task))
+         (roost--render-task-info)
+         (should (string-match-p "^Review and commit its changes in Magit: r$" (buffer-string)))
+         (should (string-match-p "^3 files changed since you looked, [0-9]+d ago: v marks it as looked at$"
+                                 (buffer-string)))
+         ;; Keys, as the next step's are, for the sweep to check.
+         (goto-char (point-min))
+         (search-forward ": v marks")
+         (should (memq 'roost-key (ensure-list (get-text-property (- (point) 7) 'face)))))))
    ;; Not while its agent works on more.
    (let ((task (roost--cache-task "dev" (roost-test--looked '(status . "running")))))
      (with-temp-buffer
@@ -6707,6 +6718,60 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
              (set-window-buffer nil was)
              (kill-buffer " *roost elsewhere*")))
          (should (equal (length opened) 2)))))))
+
+(ert-deftest roost-v-records-a-look-and-opens-nothing ()
+  ;; For a task you judged by its panel, or read in its agent's terminal.
+  (roost-test--isolated
+   (let ((task (roost--cache-task nil (roost-test--task)))
+         requests reply messages)
+     (cl-letf (((symbol-function 'roost--redraw) #'ignore)
+               ((symbol-function 'roost--in-task-frame)
+                (lambda (&rest _) (error "Opened something")))
+               ((symbol-function 'message)
+                (lambda (format &rest args) (push (apply #'format-message format args) messages)))
+               ((symbol-function 'roost--request)
+                (lambda (host action params success failure)
+                  (push (list host action params) requests)
+                  (setq reply (cons success failure)))))
+       (should (eq (keymap-lookup roost-task-info-mode-map "v") #'roost-mark-looked))
+       (should (eq (keymap-lookup roost-dashboard-mode-map "v") #'roost-mark-looked))
+       (should (eq (keymap-lookup roost-sidebar-list-mode-map "v") #'roost-mark-looked))
+       (roost-mark-looked task)
+       ;; As r does: files Git doesn't track count as looked at too.
+       (should (equal requests '((nil "look" ((id . "0123456789abcdef"))))))
+       (should-not messages)
+       (funcall (car reply) (append '((looked (at . "2026-10-03T21:00:00+00:00")) (name . "sum check"))
+                                    (roost-test--task)))
+       (should (equal messages '("Marked sum check as looked at")))
+       (should (equal (alist-get 'at (roost--field (gethash (roost--key task) roost--tasks) 'looked))
+                      "2026-10-03T21:00:00+00:00"))
+       ;; A host that can't record it says so, and nothing is raised.
+       (setq messages nil task (gethash (roost--key task) roost--tasks))
+       (roost-mark-looked task)
+       (funcall (cdr reply) "No space left on device")
+       (should (equal messages '("Roost could not record that you looked at sum check: No space left on device")))
+       ;; One that doesn't answer isn't asked.
+       (setq messages nil requests nil)
+       (puthash nil "ssh: connect to host dev: Connection refused" roost--errors)
+       (roost-mark-looked task)
+       (should-not requests)
+       (should (equal messages '("Roost could not record that you looked at sum check: ssh: connect to host dev: Connection refused")))))))
+
+(ert-deftest roost-v-is-in-the-menu-where-r-is ()
+  (roost-test--isolated
+   (let ((here (roost--cache-task "dev" (roost-test--task)))
+         (gone (roost--cache-task "dev" (append '((worktreeMissing . t)) (roost-test--task "1111111111111111"))))
+         (transient--original-buffer (current-buffer)))
+     (should (eq (cdr (assq 'roost-mark-looked (roost-test--task-menu-suffixes))) 'roost--mark-looked-inapt-p))
+     (should (string-search ":command roost-mark-looked"
+                            (format "%S" (transient-get-suffix 'roost-dispatch "v"))))
+     (should (seq-find (lambda (item) (and (vectorp item) (eq (aref item 1) 'roost-mark-looked)))
+                       roost--task-menu-items))
+     (dolist (task (list here gone))
+       (cl-letf (((symbol-function 'roost--task-at-point) (lambda () task)))
+         (should (eq (roost--mark-looked-inapt-p) (roost--review-inapt-p)))))
+     (cl-letf (((symbol-function 'roost--task-at-point) (lambda () gone)))
+       (should (roost--mark-looked-inapt-p))))))
 
 (ert-deftest roost-a-look-from-another-emacs-is-measured-against ()
   ;; It moves neither the agent's last event nor the task's Git stamp.

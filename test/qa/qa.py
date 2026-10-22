@@ -938,8 +938,9 @@ def review(qa, repo):
 
 @journey("What changed since you looked")
 def since_looked(qa, repo):
-    """A task you never looked at says so; once you look in Magit and its
-    agent changes more, its row, panel, Magit and m say what changed since."""
+    """A task you never looked at says so, until v marks it as looked at,
+    opening nothing; once its agent changes more, its row, panel, Magit
+    and m say what changed since, as they do after a look in Magit."""
     if qa.emacs.eval("(and (require 'magit nil t) t)") != "t":
         qa.notes.add("No since-you-looked journey: Magit isn't loaded")
         return
@@ -962,18 +963,42 @@ def since_looked(qa, repo):
     answer_yes(qa, name)
     qa.wait("the mark", lambda s: row(s).endswith("not looked at"))
     qa.step("Not looked at yet", expect=[
-        ("the panel says so, and r once, in the next step",
-         lambda s: "Not looked at in Magit yet\n" in panel_text(qa, s)
+        ("the panel says so, naming v, and r once, in the next step",
+         lambda s: "Not looked at yet: v marks it as looked at\n" in panel_text(qa, s)
          and "in Magit: r" in panel_text(qa, s) and ": r opens it" not in panel_text(qa, s)),
         ("it doesn't wait on you", lambda s: qa.task(s, name)["status"] == "idle")])
+    # As for a task you judged by its panel, from its row.
+    to_sidebar(qa)
+    if qa.emacs.eval("(qa-goto-row %s)" % lisp(name)) != "t":
+        raise Stuck("No row for %s in the sidebar" % name)
+    qa.keys("v")
+    qa.wait("the mark to go", lambda s: row(s) == name)
+    qa.step("v marks it as looked at", expect=[
+        ("the echo area says so", lambda s: "Marked %s as looked at" % name in (s["echo"] or "")),
+        ("the panel no longer says it isn't", lambda s: "Not looked at" not in panel_text(qa, s)
+         and "since you looked" not in panel_text(qa, s)),
+        ("it opens nothing", lambda s: not qa.window(s, "magit-status-mode")
+         and (qa.window(s, "roost-sidebar-list-mode") or {}).get("selected"))])
+    # More from its agent, not committed: counted from v's look.
+    qa.keys("C-c r e")
+    qa.wait("the prompt", lambda s: s["prompt"])
+    qa.type("ask echo Butter >> LIST.md\r")
+    answer_yes(qa, name)
+    qa.wait("the count", lambda s: "since you looked" in panel_text(qa, s))
+    qa.step("Changed since v", expect=[
+        ("the panel counts from there, naming v, and r once, in the next step",
+         lambda s: re.search(r"1 file changed since you looked, \d+[smhd]\w* ago: v marks it as looked at\n",
+                             panel_text(qa, s))),
+        ("the sidebar says so", lambda s: row(s).endswith("1 file changed"))])
     qa.keys("C-c r r")
     qa.wait("Magit", lambda s: (qa.window(s, "magit-status-mode") or {}).get("selected"))
     qa.step("Looked at in Magit", expect=[
         ("it shows LIST.md", lambda s: "LIST.md" in qa.window(s, "magit-status-mode")["text"]),
-        ("with nothing changed since a look before", lambda s: "Changed since you last looked"
-         not in qa.window(s, "magit-status-mode")["text"])])
+        ("with what changed since v's look", lambda s: re.search(
+            r"Changed since you last looked, \d+[smhd]\w* ago \(1\)\nLIST\.md  \+1 −0",
+            qa.window(s, "magit-status-mode")["text"]))])
     open_task(qa, name)
-    qa.wait("the panel to take in the look", lambda s: "Not looked at" not in panel_text(qa, s))
+    qa.wait("the panel to take in the look", lambda s: "since you looked" not in panel_text(qa, s))
     qa.step("Nothing changed since", expect=[
         ("the sidebar has no mark", lambda s: row(s) == name),
         # Right after the look, with nothing from its agent since.
@@ -985,8 +1010,9 @@ def since_looked(qa, repo):
     answer_yes(qa, name)
     qa.wait("the count", lambda s: "since you looked" in panel_text(qa, s))
     qa.step("Changed since you looked", expect=[
-        ("the panel says how much, and that r shows it",
-         lambda s: re.search(r"1 file changed since you looked, \d+[smhd]\w* ago: r shows them", panel_text(qa, s))),
+        ("the panel says how much, that r shows it, and v",
+         lambda s: re.search(r"1 file changed since you looked, \d+[smhd]\w* ago: r shows them, v marks it as looked at",
+                             panel_text(qa, s))),
         ("the sidebar says so", lambda s: row(s).endswith("1 file changed")),
         ("it still doesn't wait on you", lambda s: qa.task(s, name)["status"] == "idle")])
     qa.keys("C-c r m")

@@ -4,6 +4,12 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- `v` records that you've looked at a task, as `r` does, without opening
+  Magit or a diff: for a task you judged by its panel, by its checks,
+  threads and its agent's reply, or whose diff you read in its agent's
+  terminal. What changed since you looked then starts from there. The
+  task panel names `v` where it says what you haven't looked at, and the
+  menu (`h`) has it beside `D`. Nothing to do when upgrading.
 - When every agent on a host crashed, as after the host restarted or its
   tmux server ended, `s` on one of them asks once whether to resume the
   others that crashed there too, and `RET` asks in a single question
