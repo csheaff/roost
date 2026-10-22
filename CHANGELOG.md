@@ -2,9 +2,29 @@
 
 What each release changes, and what to do when upgrading. Newest first.
 
-## Unreleased
+## 0.10.0
 
-Since 0.9.0:
+To upgrade from 0.9:
+
+- Update tmux-control to 0.8.2 first, which Roost now needs, so that clicks
+  work again after a mouse press a terminal never saw released: with
+  straight.el or a Git checkout, pull it before Roost; with `package-vc`,
+  run `package-vc-upgrade` on tmux-control, then on Roost. Then restart
+  Emacs. `M-x roost-doctor` flags an older tmux-control.
+- Run `M-x roost-doctor`. It asks for Claude Code 2.1.78 or newer on each
+  host, since an older one runs none of Roost's hooks; run `claude update`
+  where it says so.
+- Stop and resume each agent that was running when you upgraded (`K`,
+  then `s`) when convenient. Then its panel shows your latest prompt,
+  `roost-workload` counts it, Claude and OpenCode read the files you
+  attach without asking, and Pi reports its new events.
+- For Codex and Pi to report their status through the terminal too, with
+  `roost-program-status`, upgrade Codex to 0.163.0 and Pi to 1.1.0 or
+  later.
+- If you set `roost-agent-commands` yourself, add `("opencode" "opencode")`
+  to use OpenCode.
+
+Changes since 0.9.0:
 
 - A new task's draft about a file on another host, as `M-x
   roost-new-task-from-file` or Embark makes it, opens without waiting on
