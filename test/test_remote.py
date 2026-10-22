@@ -3776,10 +3776,11 @@ elif args[:2] == ["auth", "status"]:
     def test_lines_are_read_backwards_whole(self):
         path = self.root / "lines"
         read = lambda limit, chunk: [line for line in roost.lines_backwards(path, limit, chunk) if line]
-        for data in (b"", b"one", b"one\ntwo\n", b"one\ntwo\nthree"):
+        for data in (b"", b"one", b"one\ntwo\n", b"one\ntwo\nthree", b"one\n" + b"x" * 50 + b"\ntwo",
+                     b"y" * 50 + b"\n\n" + b"x" * 50 + b"\n"):
             path.write_bytes(data)
             for chunk in (1, 2, 4, 100):
-                self.assertEqual(read(100, chunk), [line for line in reversed(data.split(b"\n")) if line])
+                self.assertEqual(read(1000, chunk), [line for line in reversed(data.split(b"\n")) if line])
         # The last LIMIT bytes may start mid-line, so their first is left out.
         path.write_bytes(b"one\ntwo\nthree\n")
         self.assertEqual(read(8, 3), [b"three"])

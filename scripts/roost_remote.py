@@ -527,16 +527,22 @@ def lines_backwards(path, limit, chunk=LAST_MESSAGE_TAIL):
     with open(path, "rb") as handle:
         end = handle.seek(0, os.SEEK_END)
         stop = max(0, end - limit)
-        rest = b""
+        # The line read in part, newest piece first: joined once its start
+        # is read, so that a long line costs no more than short ones.
+        pieces = []
         while end > stop:
             start = max(stop, end - chunk)
             handle.seek(start)
-            lines = (handle.read(end - start) + rest).split(b"\n")
+            lines = handle.read(end - start).split(b"\n")
             end = start
-            rest = lines.pop(0)  # Starts mid-line, unless the file does.
-            yield from reversed(lines)
-        if stop == 0 and rest:
-            yield rest
+            if len(lines) == 1:
+                pieces.append(lines[0])
+                continue
+            yield lines[-1] + b"".join(reversed(pieces))
+            yield from reversed(lines[1:-1])
+            pieces = [lines[0]]  # Starts mid-line, unless the file does.
+        if stop == 0 and pieces:
+            yield b"".join(reversed(pieces))
 
 
 def message_text(content, kinds=("text",)):
