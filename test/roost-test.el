@@ -1271,6 +1271,26 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
         (should (equal (car notices) '("docs — ready" "dev · Second.")))
         (should (= (length notices) 2)))))))
 
+(ert-deftest roost-a-held-failure-goes-though-its-agent-went-meanwhile ()
+  ;; An error, whose agent waits, is a failure once its pane goes, as when
+  ;; its host can't read tmux for a while: news all the same.
+  (roost-test--isolated
+   (roost-test--held-notices
+    (let* ((roost-notify t) notices
+           (roost-notify-function (lambda (title body) (push (list title body) notices)))
+           (failed (lambda (live) (roost-test--named "docs" "1" "failed" `(live . ,live) '(error . "Usage limit")))))
+      (roost--cache-task "dev" (roost-test--named "docs" "1" "running" '(live . t)))
+      (roost--cache-task "dev" (funcall failed t))
+      (roost--cache-task "dev" (funcall failed nil))
+      (roost-test--a-minute-on)
+      (should (equal notices '(("docs — failed" "dev · Usage limit"))))
+      (roost--cache-task "dev" (roost-test--named "docs" "1" "running" '(live . t)))
+      (roost--cache-task "dev" (funcall failed t))
+      (roost--cache-task "dev" (funcall failed nil))
+      (roost--cache-task "dev" (funcall failed t))
+      (roost-test--a-minute-on)
+      (should (equal (car notices) '("docs — error" "dev · Usage limit")))))))
+
 (ert-deftest roost-a-held-notification-drops-once-you-see-its-task ()
   (roost-test--isolated
    (roost-test--inspecting

@@ -1084,7 +1084,7 @@ notifies of itself."
                         (roost--notify (roost--notice-title task name) body task))
                        ;; Seen while it was inspected, as when `n' opened it.
                        ((not (roost--seen-p task))
-                        (roost--hold-notice task name body))))))
+                        (roost--hold-notice task name body status))))))
     ;; What was held about the task is older, even while it is inspected.
     (roost--drop-notices key)
     (if (not (member status '("ready" "permission")))
@@ -1126,16 +1126,20 @@ From the first one held: those that come meanwhile go with it.")
   "A notification's title, that TASK is STATUS."
   (format "%s — %s" (roost--field task 'name) status))
 
-(defun roost--hold-notice (task status body)
+(defun roost--hold-notice (task status body &optional recorded)
   "Hold a notification that TASK became STATUS, saying BODY, to go with others.
 It replaces one held about TASK, as newer, and goes once
 `roost--notice-gather' seconds have passed since the first one held,
-unless you have seen TASK by then, or it is STATUS no longer."
+unless you have seen TASK by then, or it is STATUS no longer.  News of
+its agent's comes with RECORDED, the status its host recorded: while
+that lasts, so does the notification, named as the task is by then, as
+\"failed\" for an \"error\" whose agent has since gone."
   (let ((key (roost--key task)))
     (roost--drop-notices key)
     (setq roost--held-notices
           (append roost--held-notices
-                  (list (list :key key :status status :body body :seen (roost--seen-p task)))))
+                  (list (list :key key :status status :recorded recorded :body body
+                              :seen (roost--seen-p task)))))
     (unless (timerp roost--notice-timer)
       (setq roost--notice-timer (run-at-time roost--notice-gather nil #'roost--send-notices)))))
 
@@ -1148,10 +1152,9 @@ unless you have seen TASK by then, or it is STATUS no longer."
   "Whether TASK, as cached, is still as held NOTICE about it says.
 Nil when TASK is: it went, retired or no longer listed by its host."
   (when task
-    (let ((status (plist-get notice :status)))
-      (equal status (if (member status (cons "conflicts" roost--pr-turns))
-                        (roost--news-turn task)
-                      (roost--status-name task))))))
+    (if-let* ((recorded (plist-get notice :recorded)))
+        (equal recorded (roost--field task 'status))
+      (equal (plist-get notice :status) (roost--news-turn task)))))
 
 (defun roost--notice-holds-p (notice watched)
   "Whether held NOTICE is news still: its task is as it says, and unseen.
@@ -1171,8 +1174,14 @@ It counts the others by status, and a click on it opens that task."
   (setq roost--notice-timer nil)
   (let* ((watched (when-let* ((task (roost--watched-task))) (roost--key task)))
          (notices (and roost-notify
-                       (seq-filter (lambda (notice) (roost--notice-holds-p notice watched))
-                                   roost--held-notices))))
+                       (mapcar (lambda (notice)
+                                 ;; Named as its task is now.
+                                 (if (not (plist-get notice :recorded))
+                                     notice
+                                   (plist-put (copy-sequence notice) :status
+                                              (roost--status-name (gethash (plist-get notice :key) roost--tasks)))))
+                               (seq-filter (lambda (notice) (roost--notice-holds-p notice watched))
+                                           roost--held-notices)))))
     (setq roost--held-notices nil)
     (when notices
       ;; As `roost-next-waiting' goes, the first held first among equals.
