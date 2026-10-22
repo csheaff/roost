@@ -589,6 +589,44 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue((wt / "lib" / "notes").exists())
         self.assertEqual(self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]["changes"], 1)
 
+    def test_retire_sees_changes_in_a_nested_submodule_that_its_parent_hides(self):
+        inner = self.root / "inner"
+        roost.git(self.root, "init", "-q", "-b", "main", str(inner))
+        roost.git(inner, "-c", "user.name=T", "-c", "user.email=t@example.invalid",
+                  "commit", "-q", "--allow-empty", "-m", "inner")
+        library = self.root / "library"
+        roost.git(self.root, "init", "-q", "-b", "main", str(library))
+        roost.git(library, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(inner), "inner")
+        roost.git(library, "config", "-f", ".gitmodules", "submodule.inner.ignore", "dirty")
+        roost.git(library, "add", ".gitmodules")
+        roost.git(library, "-c", "user.name=T", "-c", "user.email=t@example.invalid", "commit", "-qm", "inner")
+        self.git("-c", "protocol.file.allow=always", "submodule", "add", "-q", str(library), "lib")
+        self.git("commit", "-qm", "library")
+        task = self.create()
+        wt = Path(task["worktree"])
+        self.git("-c", "protocol.file.allow=always", "submodule", "update", "-q", "--init", "--recursive", cwd=wt)
+        (wt / "lib" / "inner" / "notes").write_text("only here\n")
+        self.assertEqual(self.git("status", "--porcelain", cwd=wt), "")
+        self.assertIn("lib/inner holds 1 uncommitted file", self.request("retire", id=task["id"])["error"])
+        self.assertTrue((wt / "lib" / "inner" / "notes").exists())
+        self.assertEqual(self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]["changes"], 1)
+
+    def test_retire_sees_a_submodule_checked_out_at_a_commit_the_task_does_not_record(self):
+        # Pushed, so nothing in it is lost, but which commit it is would be.
+        self.add_submodule()
+        self.git("config", "-f", ".gitmodules", "submodule.lib.ignore", "all")
+        self.git("commit", "-qam", "Ignore lib")
+        task = self.create()
+        wt = Path(task["worktree"])
+        self.check_out_submodules(wt)
+        self.commit_in_submodule(wt)
+        self.git("push", "-q", "origin", "HEAD:refs/heads/fix", cwd=wt / "lib")
+        self.assertEqual(self.git("status", "--porcelain", cwd=wt), "")
+        self.assertIn("lib is checked out at a commit the task doesn't record",
+                      self.request("retire", id=task["id"])["error"])
+        told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+        self.assertEqual((told["changes"], told["submoduleCommits"]), (1, 0))
+
     def test_retire_counts_a_stash_in_a_submodule_and_names_one_git_cannot_read(self):
         self.add_submodule()
         task = self.create()
@@ -601,9 +639,17 @@ class Lifecycle(unittest.TestCase):
         self.assertIn("lib holds 1 stash", self.request("retire", id=task["id"])["error"])
         self.assertEqual(self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]["submoduleCommits"],
                          1)
+        gitdir = Path(self.git("rev-parse", "--absolute-git-dir", cwd=wt / "lib"))
+        # An index Git can't read hides what changed there. Retiring fails
+        # in `git status`; discarding must still say so.
+        index = (gitdir / "index").read_bytes()
+        (gitdir / "index").write_bytes(b"not an index")
+        self.assertFalse(self.request("retire", id=task["id"])["ok"])
+        self.assertEqual(self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]["unreadSubmodules"],
+                         1)
+        (gitdir / "index").write_bytes(index)
         # A branch there naming no commit: Git can't count, so nothing is
         # taken to be safe, and discarding still says so.
-        gitdir = Path(self.git("rev-parse", "--absolute-git-dir", cwd=wt / "lib"))
         (gitdir / "refs" / "heads" / "broken").write_text("1" * 40 + "\n")
         self.assertIn("lib, whose repository Git can't read", self.request("retire", id=task["id"])["error"])
         reply = self.request("discard", id=task["id"], dryRun=True)

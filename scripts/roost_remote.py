@@ -2711,7 +2711,7 @@ def submodule_work(worktree):
     submodule's commits sit, detached, as well as from its branches, its
     `stashes`, and, for one checked out, as an agent does to build, its
     uncommitted `changes`, whatever .gitmodules tells `git status` to
-    leave out. Commits are None when Git can't count them.
+    leave out. Commits are None when Git can't read them.
     Removing the worktree deletes these repositories: Git keeps them in
     its own Git directory, those of submodules since deinitialized too,
     which still keep it from removing the worktree without --force, or,
@@ -2721,28 +2721,23 @@ def submodule_work(worktree):
     found = {}
 
     def add(gitdir, name, checkout=None):
+        """Note the repository at GITDIR, and say whether it is new."""
         gitdir = gitdir.resolve()
         if gitdir in found or not gitdir.is_dir():
-            return
+            return False
 
         def run(*args):
             return execute(["git", "--git-dir=" + str(gitdir), "--no-optional-locks", *args], check=False)
         head = ["HEAD"] if run("rev-parse", "-q", "--verify", "HEAD^{commit}").returncode == 0 else []
         commits = run("rev-list", "--count", *head, "--branches", "--not", "--remotes", "--tags")
-        # Each level's own changes; those of a nested submodule are its own.
-        changes = (read_git(checkout, "status", "--porcelain", "--ignore-submodules=all").stdout.splitlines()
-                   if checkout else [])
-        found[gitdir] = dict(name=name, commits=None if commits.returncode else int(commits.stdout),
+        # Each level's own files, and which commits its submodules are
+        # at; what is in those is counted there.
+        status = read_git(checkout, "status", "--porcelain", "--ignore-submodules=dirty") if checkout else None
+        unread = commits.returncode or (status is not None and status.returncode)
+        found[gitdir] = dict(name=name, commits=None if unread else int(commits.stdout),
                              stashes=len(run("log", "-g", "--format=%H", "refs/stash", "--").stdout.split()),
-                             changes=len(changes))
-        walk(gitdir / "modules", name + "/")
-
-    def walk(modules, prefix):
-        # A submodule's name may hold slashes.
-        for directory, subdirectories, files in os.walk(modules):
-            if "HEAD" in files and "objects" in subdirectories:
-                subdirectories[:] = []
-                add(Path(directory), prefix + Path(directory).relative_to(modules).as_posix())
+                             changes=len(status.stdout.splitlines()) if status else 0)
+        return True
 
     def checkouts(top, prefix):
         for entry in read_git(top, "ls-files", "--stage", "-z").stdout.split("\0"):
@@ -2754,23 +2749,40 @@ def submodule_work(worktree):
                     checkouts(top / path, prefix + path + "/")
 
     worktree = Path(worktree)
+    # Those checked out first, which have changes to read; then the rest
+    # of the repositories Git keeps, nested in theirs too.
     checkouts(worktree, "")
     modules = read_git(worktree, "rev-parse", "--git-path", "modules").stdout.strip()
-    if modules:
-        walk(worktree / modules, "")
+    pending = ([(worktree / modules, "")] if modules else []) \
+        + [(gitdir / "modules", entry["name"] + "/") for gitdir, entry in found.items()]
+    while pending:
+        modules, prefix = pending.pop()
+        # A submodule's name may hold slashes.
+        for directory, subdirectories, files in os.walk(modules):
+            if "HEAD" in files and "objects" in subdirectories:
+                subdirectories[:] = []
+                name = prefix + Path(directory).relative_to(modules).as_posix()
+                if add(Path(directory), name):
+                    pending.append((Path(directory) / "modules", name + "/"))
     return list(found.values())
 
 
 def require_submodules_kept(worktree, where="its worktree"):
-    """Refuse to remove WORKTREE, which is WHERE, while its submodules hold
-    work their remotes lack (see `submodule_work`). Say whether it has any
-    submodule repositories, which only --force removes. With nothing in
-    them to lose, as when its agent checked them out to build, that is
-    safe."""
+    """Refuse to remove WORKTREE, which is WHERE and clean as `git status`
+    sees it, while its submodules hold work their remotes lack (see
+    `submodule_work`), or are checked out at commits it doesn't record,
+    which .gitmodules can tell `git status` to leave out. Say whether it
+    has any submodule repositories, which only --force removes. With
+    nothing in them to lose, as when its agent checked them out to build,
+    that is safe."""
     def counted(number, what):
         return "%d %s%s" % (number, what, "" if number == 1 else ("es" if what.endswith("sh") else "s"))
     work = submodule_work(worktree)
-    lost = []
+    if not work:
+        return False
+    lost = ["%s is checked out at a commit the task doesn't record" % entry[3:]
+            for entry in git(worktree, "status", "--porcelain", "-z", "--ignore-submodules=dirty")
+            .stdout.split("\0") if entry]
     for entry in work:
         held = ([counted(entry["commits"], "commit") + " not on its remote"] if entry["commits"] else []) \
             + ([counted(entry["stashes"], "stash")] if entry["stashes"] else []) \
@@ -2782,7 +2794,7 @@ def require_submodules_kept(worktree, where="its worktree"):
     if lost:
         raise RoostError("Removing %s would lose work in its submodules: %s. Push what you want to keep, "
                          "then retire again, or discard the task" % (where, "; ".join(lost)))
-    return bool(work)
+    return True
 
 
 MERGE_TREE_GIT = (2, 38)  # `git merge-tree --write-tree`
@@ -3167,9 +3179,9 @@ def discard(store, task, expect=None, dry_run=False, teardown=None):
                           *("--exclude=" + name for name in branches),
                           "--branches", "--remotes", "--tags").stdout) if tips else 0
         # Removing the worktrees deletes their submodules' repositories,
-        # whose changes are counted there.
+        # whose changes are counted there; here, which commits they're at.
         submodules = [entry for path in paths for entry in submodule_work(path)]
-        changes = sum(len(read_git(path, "status", "--porcelain", "--ignore-submodules=all").stdout.splitlines())
+        changes = sum(len(read_git(path, "status", "--porcelain", "--ignore-submodules=dirty").stdout.splitlines())
                       for path in paths) + sum(entry["changes"] for entry in submodules)
         return dict(task, discard=dict(
             commits=commits, changes=changes, commit=commit, agentWorktrees=len(work),
