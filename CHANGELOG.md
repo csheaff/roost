@@ -25,8 +25,9 @@ What each release changes, and what to do when upgrading. Newest first.
   and a function that looked for `Roost:` in titles needs changing.
 - When a background command of Claude's finishes, the task panel's "Your
   latest prompt" keeps the prompt you sent, rather than showing Claude's
-  `<task-notification>` notice. Upgrading: a task that shows a notice there
-  shows your prompt again once you send the next one.
+  `<task-notification>` notice. This holds for agents started before you
+  upgraded too: their hooks still record the notice, and Roost finds your
+  prompt in the conversation's transcript instead.
 - While an agent asks you something in its terminal on screen, its panel
   says to answer it there without naming `RET`, which in the terminal
   picks the agent's default answer, such as "No, exit" at folder trust.

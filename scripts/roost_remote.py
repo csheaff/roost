@@ -50,6 +50,8 @@ TRANSIENT = ("live", "diff", "dirty", "files", "size", "ahead", "behind", "updat
 LAST_MESSAGE_TAIL = 256 * 1024
 LAST_MESSAGE_LIMIT = 2000
 INTERRUPT_TAIL = 64 * 1024
+# How far back in a transcript to look for the prompt you last sent.
+PROMPT_SEARCH = 32 * 1024 * 1024
 DEFAULT_BRANCH_PREFIX = "roost/"
 
 
@@ -519,6 +521,24 @@ def transcript_tail(path, limit=LAST_MESSAGE_TAIL):
     return entries
 
 
+def lines_backwards(path, limit, chunk=LAST_MESSAGE_TAIL):
+    """The complete lines in the last LIMIT bytes of the file at PATH, newest
+    first, read a CHUNK at a time so that a search can stop early."""
+    with open(path, "rb") as handle:
+        end = handle.seek(0, os.SEEK_END)
+        stop = max(0, end - limit)
+        rest = b""
+        while end > stop:
+            start = max(stop, end - chunk)
+            handle.seek(start)
+            lines = (handle.read(end - start) + rest).split(b"\n")
+            end = start
+            rest = lines.pop(0)  # Starts mid-line, unless the file does.
+            yield from reversed(lines)
+        if stop == 0 and rest:
+            yield rest
+
+
 def message_text(content, kinds=("text",)):
     """The text parts of a message's content, joined; None if there are none."""
     if isinstance(content, str):
@@ -679,9 +699,8 @@ class ClaudeAgent:
             updates["lastReply"] = None
         # Claude also hands itself a background task's notice as your prompt,
         # which leaves the one you last sent where it was.
-        prompt = payload.get("prompt")
-        if event == "UserPromptSubmit" and not (isinstance(prompt, str) and CLAUDE_NOTE.match(prompt.strip())):
-            updates["lastPrompt"] = prompt
+        if event == "UserPromptSubmit" and not claude_note(payload.get("prompt")):
+            updates["lastPrompt"] = payload.get("prompt")
         # The old claudeSession field serves tasks whose original helper still runs.
         updates.update(reported)
         return updates
@@ -705,6 +724,26 @@ class ClaudeAgent:
         return last_assistant_text(
             transcript_tail(path),
             lambda entry: message_text((message(entry) or {}).get("content")))
+
+    def your_prompt(self, task, prompt):
+        """PROMPT, the latest TASK recorded as yours, unless it is one of
+        Claude's own notes, which the hooks of an older helper took for
+        yours: then the newest prompt of yours in the transcript, as
+        `later_prompt' keeps it, or None."""
+        if not claude_note(prompt):
+            return prompt
+        path = self.transcript(task)
+        if not path or not path.is_file():
+            return None
+        for line in lines_backwards(path, PROMPT_SEARCH):
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            found = None if isinstance(entry, dict) and entry.get("isSidechain") else conversation_text(entry)
+            if found and found[0] == "user" and not found[1].startswith("[Request interrupted by user"):
+                return later_prompt(task, found[1])
+        return None
 
     def interrupted(self, task):
         """Whether you stopped the agent's turn since its last hook event, with
@@ -1545,6 +1584,22 @@ def was_interrupted(task):
         return False
 
 
+def put_right_prompt(task):
+    """Whether TASK's latest prompt needed putting right: one its agent sent
+    itself, which the hooks of an older helper recorded as yours. The
+    agent's adapter says what you sent; an error reading it leaves the
+    prompt as it was."""
+    try:
+        check = getattr(agent_for(task), "your_prompt", None)
+        said = check(task, task.get("lastPrompt")) if check else task.get("lastPrompt")
+    except (RoostError, OSError, ValueError, TypeError, AttributeError, KeyError):
+        return False
+    if said == task.get("lastPrompt"):
+        return False
+    task["lastPrompt"] = said
+    return True
+
+
 def list_tasks(store, request):
     tasks = []
     for task in store.all():
@@ -1552,6 +1607,9 @@ def list_tasks(store, request):
             # Retirement now deletes records; clear out ones left by older helpers.
             store.remove(task["id"])
         else:
+            # Kept, so the transcript is read once for each such prompt.
+            if put_right_prompt(task):
+                store.save(task)
             tasks.append(task)
     inventories = {}
     table = None  # The process table, read only when a request may have been approved.
@@ -2551,6 +2609,7 @@ def inspect(store, task):
     if not pane:
         raise RoostError("The agent's tmux window is gone; resume the task")
     task.update(windowIndex=pane["index"], session=pane["session_name"])
+    put_right_prompt(task)
     store.save(task)
     task["live"] = not pane["dead"]
     reply = last_message(task)
@@ -3292,6 +3351,12 @@ def conversation_text(entry):
 
 CLAUDE_NOTE = re.compile(r"<(command-[a-z-]+|local-command-[a-z-]+|bash-[a-z]+|task-notification"
                          r"|system-reminder|user-prompt-submit-hook)>")
+
+
+def claude_note(prompt):
+    """Whether PROMPT is one Claude Code sent itself, such as a background
+    task's notice, rather than one you sent."""
+    return isinstance(prompt, str) and bool(CLAUDE_NOTE.match(prompt.strip()))
 
 
 def word_patterns(words):
