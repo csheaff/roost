@@ -39,6 +39,7 @@
 (require 'lisp-mnt)
 (require 'tramp)
 (require 'parse-time)
+(require 'iso8601)
 (require 'button)
 (require 'transient)
 (require 'hl-line)
@@ -2548,10 +2549,11 @@ what is at point, and DIRECTORY is its project in place of where you are."
       (when fresh
         (roost-compose-mode)
         (setq roost--compose-body (copy-marker (point-min))))
+      ;; Its branch is read again, written or not, in case you have
+      ;; switched it since.
+      (setq roost--compose-checkout-branch nil)
       ;; An untouched draft follows the current context; a written one is kept.
       (when (or fresh fork (string-empty-p (roost--compose-prompt)))
-        ;; Its branch is read again, in case you have switched it since.
-        (setq roost--compose-checkout-branch nil)
         (setq roost--compose-fields
               (list :directory directory
                     :agent roost-default-agent
@@ -5480,9 +5482,12 @@ end of its turn, nor of the checks that push starts.")
 An agent that watches its own pull request starts a turn by then.")
 
 (defun roost--time (timestamp)
-  "TIMESTAMP, in ISO 8601, as a Lisp time; nil if missing or unreadable."
+  "TIMESTAMP, in ISO 8601, as a Lisp time; nil if missing or unreadable.
+To the fraction of a second hosts record, which `date-to-time' drops:
+an agent's event can follow a look in the same second."
   (when (stringp timestamp)
-    (ignore-errors (date-to-time timestamp))))
+    (or (ignore-errors (encode-time (iso8601-parse timestamp t)))
+        (ignore-errors (date-to-time timestamp)))))
 
 (defun roost--pr-status (task)
   "What GitHub last said of TASK's open pull request, if it covers its work.
@@ -6436,9 +6441,9 @@ doesn't again."
              ((= count 0)
               ;; Only once its agent has done something since: right after
               ;; a look, it would say nothing you don't know.
-              (when-let* ((moved (roost--seconds-since (roost--field task 'updatedAt)))
-                          (looked (roost--seconds-since at))
-                          ((< moved looked)))
+              (when-let* ((moved (roost--time (roost--field task 'updatedAt)))
+                          (looked (roost--time at))
+                          ((time-less-p looked moved)))
                 (roost--insert-indented (format "Nothing changed since you looked, %s ago" (roost--elapsed at))
                                         'roost-dim)))
              (t

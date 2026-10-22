@@ -1496,7 +1496,7 @@
 (ert-deftest roost-compose-says-which-branch-a-start-merges-into ()
   (roost-test--isolated
    (roost--cache-task "dev" (append '((repo . "/repo") (integrationBranch . "release")) (roost-test--task)))
-   (let ((default-directory "/tmp/") answer (primary "/repo")
+   (let ((default-directory "/tmp/") answer (primary "/repo") (checked-out "main")
          ;; What Git resolves each ref to, as `rev-parse --symbolic-full-name' does.
          (refs '(("main" . "refs/heads/main")
                  ("origin/release/1.2" . "refs/remotes/origin/release/1.2")
@@ -1515,7 +1515,7 @@
                           (`("for-each-ref" . ,_) (insert "main\norigin/release/1.2\n") 0)
                           (`("remote") (insert "origin\nteam\nteam/origin\n") 0)
                           (`("worktree" "list" "--porcelain")
-                           (insert "worktree " primary "\nHEAD 0123\nbranch refs/heads/main\n\n") 0)
+                           (insert "worktree " primary "\nHEAD 0123\nbranch refs/heads/" checked-out "\n\n") 0)
                           (`("rev-parse" "--symbolic-full-name" ,ref)
                            (insert (or (cdr (assoc ref refs)) "")) 0)
                           (_ 1))))
@@ -1565,7 +1565,16 @@
                (should (string-match-p "Start    main  C-c C-b · merges into main$" (buffer-string)))
                (setq answer "v1.0")
                (roost-compose-set-base)
-               (should (string-match-p "Start    v1.0  C-c C-b · merges into main$" (buffer-string)))))
+               (should (string-match-p "Start    v1.0  C-c C-b · merges into main$" (buffer-string)))
+               ;; A draft you have written in, opened again after you
+               ;; switched the checkout's branch, names the new one.
+               (setq answer "")
+               (roost-compose-set-base)
+               (goto-char (point-max))
+               (insert "Add a mean")
+               (setq checked-out "release")
+               (roost--compose)
+               (should (string-match-p "Start    release  C-c C-b · merges into release$" (buffer-string)))))
          (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
 
 (ert-deftest roost-compose-derives-a-name-and-submits-the-draft ()
@@ -6236,12 +6245,25 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
          (should (string-match-p (cadr case) (buffer-string))))))
    ;; Right after a look, with nothing from its agent since, it says nothing.
    (let ((task (roost--cache-task "dev" (roost-test--looked
+                                         '(id . "2222222222222222")
+                                         '(looked (commit . "c2") (head . "c2") (at . "2026-10-03T21:00:00+00:00"))
                                          '(sinceLooked (count . 0) (at . "2026-10-03T21:00:00+00:00"))))))
      (with-temp-buffer
        (roost-task-info-mode)
        (setq roost--buffer-task-key (roost--key task))
        (roost--render-task-info)
        (should-not (string-match-p "since you looked\\|Not looked at" (buffer-string)))))
+   ;; An event in the same second as the look, as hosts record it, came after it.
+   (let ((task (roost--cache-task "dev" (append '((id . "3333333333333333")
+                                                  (updatedAt . "2026-10-03T21:00:00.400123+00:00"))
+                                                (roost-test--looked
+                                                 '(looked (commit . "c2") (head . "c2") (at . "2026-10-03T21:00:00.100+00:00"))
+                                                 '(sinceLooked (count . 0) (at . "2026-10-03T21:00:00.100+00:00")))))))
+     (with-temp-buffer
+       (roost-task-info-mode)
+       (setq roost--buffer-task-key (roost--key task))
+       (roost--render-task-info)
+       (should (string-match-p "^Nothing changed since you looked" (buffer-string)))))
    ;; With uncommitted changes the next step names r, and it isn't said twice.
    (let ((task (roost--cache-task "dev" (roost-test--looked '(dirty . t)))))
      (with-temp-buffer
