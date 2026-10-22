@@ -2,6 +2,16 @@
 
 What each release changes, and what to do when upgrading. Newest first.
 
+## Unreleased
+
+- While an agent asks you something in its terminal on screen, its panel
+  says to answer it there without naming `RET`, which in the terminal
+  picks the agent's default answer, such as "No, exit" at folder trust.
+- The README's setup no longer lists an example SSH host, which showed as
+  unreachable from the start. `M-x roost-doctor` says how to stop
+  watching a host it can't reach: take it out of `roost-hosts`, and `M-x
+  roost-forget-host` once Roost remembers it from a task there.
+
 ## 0.10.0
 
 To upgrade from 0.9:

@@ -86,7 +86,7 @@ need SSH with keys or an agent. With Emacs 30:
   :vc (:url "https://github.com/csheaff/roost" :rev :newest)
   :demand t
   :bind ("C-c r" . roost-dispatch)          ; the menu, from anywhere
-  :custom (roost-hosts '(nil "devbox"))     ; nil is this machine
+  ;; :custom (roost-hosts '(nil "devbox"))  ; SSH hosts too; nil is this one
   :config
   (roost-watch-mode 1)                      ; notice waiting agents from startup
   (roost-sidebar-mode 1)                    ; the task list at the left

@@ -29,7 +29,7 @@ Emacs 30 (built-in `use-package`):
   :vc (:url "https://github.com/csheaff/roost" :rev :newest)
   :demand t
   :bind ("C-c r" . roost-dispatch)          ; the menu, from anywhere
-  :custom (roost-hosts '(nil "devbox"))     ; nil is this machine
+  ;; :custom (roost-hosts '(nil "devbox"))  ; SSH hosts too; nil is this one
   :config
   (roost-watch-mode 1)                      ; notice waiting agents from startup
   (roost-sidebar-mode 1)                    ; the task list at the left
@@ -43,7 +43,7 @@ sidebar and the task's panel are optional ([below](#a-day-with-roost)):
 without those lines, `b` and `I` show them when you want them.
 
 Emacs 29: `M-x package-vc-install` tmux-control's URL, then Roost's, and
-`(setq roost-hosts '(nil "devbox"))` and `(roost-watch-mode 1)`.
+`(roost-watch-mode 1)`; for SSH hosts, `(setq roost-hosts '(nil "devbox"))`.
 
 straight.el:
 
@@ -54,7 +54,7 @@ straight.el:
   :straight (:host github :repo "csheaff/roost" :files ("roost.el" "scripts"))
   :demand t
   :bind ("C-c r" . roost-dispatch)
-  :custom (roost-hosts '(nil "devbox"))
+  ;; :custom (roost-hosts '(nil "devbox"))
   :config (roost-watch-mode 1))
 ```
 
@@ -65,8 +65,8 @@ Doom Emacs, in `packages.el`:
 (package! roost :recipe (:host github :repo "csheaff/roost" :files ("roost.el" "scripts")))
 ```
 
-and in `config.el`: `(setq roost-hosts '(nil "devbox"))` and
-`(roost-watch-mode 1)`.
+and in `config.el`: `(roost-watch-mode 1)`, and for SSH hosts
+`(setq roost-hosts '(nil "devbox"))`.
 
 Then run **`M-x roost-doctor`**. It checks Emacs's side and, on each host, SSH,
 Python, Git, tmux and each agent CLI's version and sign-in, with a fix for

@@ -528,7 +528,9 @@ JSON null becomes nil."
     (setq roost--hosts-loaded t
           roost--remembered-hosts (seq-filter #'string-or-null-p
                                               (roost--read-json-list roost-hosts-file))))
-  (delete-dups (append roost-hosts roost--remembered-hosts)))
+  ;; A copy: `delete-dups' would otherwise drop a configured host from
+  ;; the remembered ones, which `append' shares as its tail.
+  (delete-dups (append roost-hosts roost--remembered-hosts nil)))
 
 (defun roost--remember-host (host)
   "Remember HOST across restarts."
@@ -7412,10 +7414,12 @@ Unknown Git statistics count as making sense."
       ('roost-goto-note (and worktree (roost--task-notes task) t))
       (_ t))))
 
-(defun roost--next-step (task &optional menu)
+(defun roost--next-step (task &optional menu beside)
   "What to do next with TASK, as a line naming its key, or nil.
 MENU non-nil means the line is for `roost-dispatch', away from the
-task panel's list of the agent's own worktrees."
+task panel's list of the agent's own worktrees.  BESIDE non-nil means
+the agent's terminal is on screen: a question there is answered there,
+where RET would pick the agent's default answer, so no key is named."
   (let* ((key (lambda (key) (propertize key 'face 'roost-key)))
          (status (roost--attention-status task))
          ;; As GitHub said last, or as its host recorded.
@@ -7426,9 +7430,11 @@ task panel's list of the agent's own worktrees."
                            (funcall key "x") " retires it"))))
     (cond
      ((equal status "permission")
-      (concat "Answer it in its terminal: " (funcall key "RET")))
+      (if beside "Answer it in its terminal"
+        (concat "Answer it in its terminal: " (funcall key "RET"))))
      ((equal status "prompt")
-      (concat "It may be waiting at a startup prompt, such as folder trust: " (funcall key "RET")))
+      (if beside "It may be waiting at a startup prompt in its terminal, such as folder trust"
+        (concat "It may be waiting at a startup prompt, such as folder trust: " (funcall key "RET"))))
      ((roost--field task 'worktreeMissing)
       (concat "Its worktree is gone: " (funcall key "x") " retires it if its work is merged, "
               (funcall key "X") " forgets it"))
@@ -7556,24 +7562,30 @@ Status is the last observation from the task's host.
 (defvar-local roost--beside-terminal nil
   "Non-nil if this task panel was last drawn with its agent's terminal on screen.")
 
-(defun roost--panel-beside-terminal-p (task)
+(defvar-local roost--near-terminal nil
+  "Non-nil if this task panel was last drawn in a frame with its terminal.")
+
+(defun roost--panel-beside-terminal-p (task &optional any)
   "Whether each window showing this task panel has TASK's terminal in its frame.
 Then the panel leaves the agent's conversation to the terminal; one
-window without it, such as in another frame, keeps the conversation."
+window without it, such as in another frame, keeps the conversation.
+With ANY, whether one window does: there, the panel names no key for
+answering the agent, which RET in the terminal would answer instead."
   (when-let* ((windows (get-buffer-window-list nil 'nomini 'visible)))
-    (seq-every-p (lambda (window)
-                   (seq-some (lambda (other)
-                               (with-current-buffer (window-buffer other)
-                                 (or (roost--terminal-shows-p task (list (roost--field task 'paneId)))
-                                     ;; Just connected, before tmux says which pane
-                                     ;; is active: the task's own session holds
-                                     ;; only its agent's window.
-                                     (and (fboundp 'tmux-control-active-pane)
-                                          (null (tmux-control-active-pane))
-                                          (when-let* ((shown (roost--terminal-task (current-buffer))))
-                                            (equal (roost--key shown) (roost--key task)))))))
-                             (window-list (window-frame window) 'nomini)))
-                 windows)))
+    (funcall (if any #'seq-some #'seq-every-p)
+             (lambda (window)
+               (seq-some (lambda (other)
+                           (with-current-buffer (window-buffer other)
+                             (or (roost--terminal-shows-p task (list (roost--field task 'paneId)))
+                                 ;; Just connected, before tmux says which pane
+                                 ;; is active: the task's own session holds
+                                 ;; only its agent's window.
+                                 (and (fboundp 'tmux-control-active-pane)
+                                      (null (tmux-control-active-pane))
+                                      (when-let* ((shown (roost--terminal-task (current-buffer))))
+                                        (equal (roost--key shown) (roost--key task)))))))
+                         (window-list (window-frame window) 'nomini)))
+             windows)))
 
 (defun roost--redraw-moved-panels ()
   "Redraw the task panels whose agent's terminal came on or off screen."
@@ -7581,8 +7593,10 @@ window without it, such as in another frame, keeps the conversation."
     (with-current-buffer (window-buffer window)
       (when-let* (((derived-mode-p 'roost-task-info-mode))
                   (task (gethash roost--buffer-task-key roost--tasks))
-                  ((not (eq (not roost--beside-terminal)
-                            (not (roost--panel-beside-terminal-p task))))))
+                  ((or (not (eq (not roost--beside-terminal)
+                                (not (roost--panel-beside-terminal-p task))))
+                       (not (eq (not roost--near-terminal)
+                                (not (roost--panel-beside-terminal-p task t)))))))
         (roost--render-task-info)))))
 
 (defun roost--narrowest-width (otherwise)
@@ -7775,9 +7789,11 @@ Windows showing the panel keep their scroll position, and the mark stays."
              (width (roost--task-info-width))
              (base (roost--field task 'baseRef))
              (integration (roost--field task 'integrationBranch))
-             (next (roost--next-step task))
              ;; With the agent's terminal on screen, the conversation is its.
-             (beside (setq roost--beside-terminal (roost--panel-beside-terminal-p task))))
+             (beside (setq roost--beside-terminal (roost--panel-beside-terminal-p task)))
+             ;; Beside it in one frame, RET would answer the agent there.
+             (next (roost--next-step task nil (setq roost--near-terminal
+                                                    (roost--panel-beside-terminal-p task t)))))
         (let ((name (propertize (roost--field task 'name) 'face 'roost-title))
               (state (concat (roost--status-light task (cons 'panel (current-buffer)) t)
                              (propertize (concat " " status)
@@ -9693,10 +9709,25 @@ refresh of Magit's status does a dozen times or more."
             (cond
              ((eq result 'pending) (insert (propertize "  Checking…\n" 'face 'roost-dim)))
              ((eq (car-safe result) 'error)
-              (let ((hint (cdr (seq-find (lambda (hint) (string-match-p (regexp-quote (car hint)) (cdr result)))
-                                         roost--ssh-hints))))
-                (roost--doctor-line (if (car entry) "SSH and Python" "Python") nil (cdr result)
-                                    (and hint (string-replace "HOST" (or (car entry) "localhost") hint)))))
+              (let* ((host (car entry))
+                     (hint (cdr (seq-find (lambda (hint) (string-match-p (regexp-quote (car hint)) (cdr result)))
+                                          roost--ssh-hints)))
+                     ;; A host you don't use, as one copied from an example.
+                     (away (cond ((null host) nil)
+                                 ;; Creating a task there remembers it too.
+                                 ((and (member host roost-hosts) (member host roost--remembered-hosts))
+                                  (concat "To stop watching it, take it out of `roost-hosts', then "
+                                          (substitute-command-keys "\\[roost-forget-host]")))
+                                 ((member host roost-hosts)
+                                  "To stop watching it, take it out of `roost-hosts'")
+                                 ((member host roost--remembered-hosts)
+                                  (substitute-command-keys
+                                   "To stop watching it, \\[roost-forget-host]")))))
+                (roost--doctor-line (if host "SSH and Python" "Python") nil (cdr result)
+                                    (when (or hint away)
+                                      (string-join (delq nil (list (and hint (string-replace "HOST" (or host "localhost") hint))
+                                                                   away))
+                                                   ". ")))))
              (t
               (when (car entry)
                 (roost--doctor-line "SSH" t "connected" nil)
