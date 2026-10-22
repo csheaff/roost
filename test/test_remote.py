@@ -3727,6 +3727,66 @@ elif args[:2] == ["auth", "status"]:
         hook()
         self.assertIsNone(store.read(task["id"])["lastPrompt"])
 
+    def test_a_notice_older_hooks_took_for_your_prompt_is_put_right_from_the_transcript(self):
+        # A task's hooks call the helper that launched its agent, and older
+        # ones recorded a background task's notice as your prompt.
+        task = self.create(prompt="Fix the parser")
+        self.wait(task, "ready", "Stop")
+        store = roost.Store(str(self.state))
+        transcript = self.root / "conversation.jsonl"
+        notice = "<task-notification>\n<status>completed</status>\n</task-notification>"
+        said = lambda role, content, **fields: dict(type=role, message=dict(role=role, content=content), **fields)
+        reply = said("assistant", [dict(type="text", text="x" * 1000)])
+
+        def recorded(entries):
+            transcript.write_text("".join(json.dumps(entry) + "\n" for entry in entries))
+            record = store.read(task["id"])
+            record.update(transcript=str(transcript), lastPrompt=notice)
+            store.save(record)
+
+        recorded([said("user", "Fix the parser"), reply,
+                  said("user", [dict(type="text", text="Now add a test")]),
+                  said("assistant", [dict(type="tool_use", id="t1", name="Bash", input={})]),
+                  said("user", [dict(type="tool_result", tool_use_id="t1", content="ok")]),
+                  said("user", "Caveat: the messages below", isMeta=True),
+                  said("user", "Explore the tests", isSidechain=True),
+                  said("user", [dict(type="text", text="[Request interrupted by user]")]),
+                  said("user", notice), reply]
+                 # Further back than the reply is looked for.
+                 + [reply] * 300)
+        self.assertEqual(self.request("list")["result"][0]["lastPrompt"], "Now add a test")
+        # It is kept, so the transcript need not be read again.
+        transcript.unlink()
+        self.assertEqual(store.read(task["id"])["lastPrompt"], "Now add a test")
+        # Your first prompt is the task's own, which the panel shows already.
+        recorded([said("user", "Fix the parser"), said("user", notice)])
+        self.assertIsNone(self.request("inspect", id=task["id"])["result"]["lastPrompt"])
+        recorded([said("user", notice)])
+        self.assertIsNone(self.request("list")["result"][0]["lastPrompt"])
+        record = store.read(task["id"])
+        record.update(lastPrompt=notice, transcript=str(self.root / "missing.jsonl"))
+        store.save(record)
+        self.assertIsNone(self.request("list")["result"][0]["lastPrompt"])
+        # Prompts of yours stay as they are.
+        hook = lambda prompt: roost.update_hook(store, task["id"], dict(hook_event_name="UserPromptSubmit",
+                                                                        prompt=prompt), task["runId"])
+        hook("Now the docs")
+        self.assertEqual(self.request("list")["result"][0]["lastPrompt"], "Now the docs")
+
+    def test_lines_are_read_backwards_whole(self):
+        path = self.root / "lines"
+        read = lambda limit, chunk: [line for line in roost.lines_backwards(path, limit, chunk) if line]
+        for data in (b"", b"one", b"one\ntwo\n", b"one\ntwo\nthree", b"one\n" + b"x" * 50 + b"\ntwo",
+                     b"y" * 50 + b"\n\n" + b"x" * 50 + b"\n"):
+            path.write_bytes(data)
+            for chunk in (1, 2, 4, 100):
+                self.assertEqual(read(1000, chunk), [line for line in reversed(data.split(b"\n")) if line])
+        # The last LIMIT bytes may start mid-line, so their first is left out.
+        path.write_bytes(b"one\ntwo\nthree\n")
+        self.assertEqual(read(8, 3), [b"three"])
+        self.assertEqual(read(10, 3), [b"three"])
+        self.assertEqual(read(11, 3), [b"three", b"two"])
+
     def test_claudes_transcript_is_read_where_claude_says_it_is(self):
         task = self.create()
         store = roost.Store(str(self.state))
