@@ -4429,7 +4429,9 @@ def runner(root, task_id, run_id, resume_conversation=False):
             code = subprocess.call(argv, cwd=task["worktree"], env=agent_env)
     except (OSError, RoostError, subprocess.CalledProcessError) as exc:
         error = str(exc)
-        print("Roost: " + error, file=sys.stderr)
+        # tmux scrolls a dead pane's screen up a line to say it is dead,
+        # which would hide the first line of this when it is all there is.
+        print("\nRoost: " + error, file=sys.stderr)
     finally:
         with store.locked(), contextlib.suppress(RoostError):
             current = store.read(task_id)

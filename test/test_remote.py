@@ -2446,6 +2446,8 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue((wt / ".env").is_file())
         self.assertFalse((wt / "setup-ran").exists())
         self.wait_for_pane_exit(task)
+        # On its screen still, as tmux says the pane is dead.
+        self.assertIn("Roost: Could not copy", roost.tmux(self.socket, "capture-pane", "-p", "-t", task["paneId"]).stdout)
         (self.repo / "key.pem").chmod(0o600)
         self.assertTrue(self.request("resume", id=task["id"])["ok"])
         self.assertIs(self.wait(task, "ready")["copyComplete"], True)
