@@ -2258,14 +2258,16 @@ The draft names FILE from the top of its checkout."
 
 (defun roost--checkout-of (file)
   "The top of FILE's checkout, as a directory, or nil.
-A task's worktree, found by path; or Git's checkout of it.  On another
-host, looking for that takes a round trip for each directory, while you
-wait, so first a project Roost knows, by path, and nothing that would
-connect to a host TRAMP isn't connected to."
+Git's checkout of it.  On another host, looking for that takes a round
+trip for each directory, while you wait, so first a task's worktree or
+a project Roost knows, by path, and nothing that would connect to a host
+TRAMP isn't connected to."
   (let ((directory (file-name-directory file)))
-    (or (when-let* ((task (roost--task-in-directory directory)))
-          (file-name-as-directory (roost--remote-directory task)))
-        (and (file-remote-p directory) (roost--known-project-of directory))
+    (or (and (file-remote-p directory)
+             (or (when-let* ((task (roost--task-in-directory directory)))
+                   (file-name-as-directory (roost--remote-directory task)))
+                 (roost--known-project-of directory)))
+        ;; Here Git answers at once, nested repositories and all.
         (and (roost--may-look-in-p directory)
              (ignore-errors (locate-dominating-file file ".git"))))))
 
