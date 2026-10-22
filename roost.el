@@ -7412,10 +7412,12 @@ Unknown Git statistics count as making sense."
       ('roost-goto-note (and worktree (roost--task-notes task) t))
       (_ t))))
 
-(defun roost--next-step (task &optional menu)
+(defun roost--next-step (task &optional menu beside)
   "What to do next with TASK, as a line naming its key, or nil.
 MENU non-nil means the line is for `roost-dispatch', away from the
-task panel's list of the agent's own worktrees."
+task panel's list of the agent's own worktrees.  BESIDE non-nil means
+the agent's terminal is on screen: a question there is answered there,
+where RET would pick the agent's default answer, so no key is named."
   (let* ((key (lambda (key) (propertize key 'face 'roost-key)))
          (status (roost--attention-status task))
          ;; As GitHub said last, or as its host recorded.
@@ -7426,9 +7428,11 @@ task panel's list of the agent's own worktrees."
                            (funcall key "x") " retires it"))))
     (cond
      ((equal status "permission")
-      (concat "Answer it in its terminal: " (funcall key "RET")))
+      (if beside "Answer it in its terminal"
+        (concat "Answer it in its terminal: " (funcall key "RET"))))
      ((equal status "prompt")
-      (concat "It may be waiting at a startup prompt, such as folder trust: " (funcall key "RET")))
+      (if beside "It may be waiting at a startup prompt in its terminal, such as folder trust"
+        (concat "It may be waiting at a startup prompt, such as folder trust: " (funcall key "RET"))))
      ((roost--field task 'worktreeMissing)
       (concat "Its worktree is gone: " (funcall key "x") " retires it if its work is merged, "
               (funcall key "X") " forgets it"))
@@ -7775,9 +7779,9 @@ Windows showing the panel keep their scroll position, and the mark stays."
              (width (roost--task-info-width))
              (base (roost--field task 'baseRef))
              (integration (roost--field task 'integrationBranch))
-             (next (roost--next-step task))
              ;; With the agent's terminal on screen, the conversation is its.
-             (beside (setq roost--beside-terminal (roost--panel-beside-terminal-p task))))
+             (beside (setq roost--beside-terminal (roost--panel-beside-terminal-p task)))
+             (next (roost--next-step task nil beside)))
         (let ((name (propertize (roost--field task 'name) 'face 'roost-title))
               (state (concat (roost--status-light task (cons 'panel (current-buffer)) t)
                              (propertize (concat " " status)
@@ -9693,10 +9697,21 @@ refresh of Magit's status does a dozen times or more."
             (cond
              ((eq result 'pending) (insert (propertize "  Checking…\n" 'face 'roost-dim)))
              ((eq (car-safe result) 'error)
-              (let ((hint (cdr (seq-find (lambda (hint) (string-match-p (regexp-quote (car hint)) (cdr result)))
-                                         roost--ssh-hints))))
-                (roost--doctor-line (if (car entry) "SSH and Python" "Python") nil (cdr result)
-                                    (and hint (string-replace "HOST" (or (car entry) "localhost") hint)))))
+              (let* ((host (car entry))
+                     (hint (cdr (seq-find (lambda (hint) (string-match-p (regexp-quote (car hint)) (cdr result)))
+                                          roost--ssh-hints)))
+                     ;; A host you don't use, as one copied from an example.
+                     (away (cond ((null host) nil)
+                                 ((member host roost-hosts)
+                                  "To stop watching it, take it out of `roost-hosts'")
+                                 ((member host roost--remembered-hosts)
+                                  (substitute-command-keys
+                                   "To stop watching it, \\[roost-forget-host]")))))
+                (roost--doctor-line (if host "SSH and Python" "Python") nil (cdr result)
+                                    (when (or hint away)
+                                      (string-join (delq nil (list (and hint (string-replace "HOST" (or host "localhost") hint))
+                                                                   away))
+                                                   ". ")))))
              (t
               (when (car entry)
                 (roost--doctor-line "SSH" t "connected" nil)

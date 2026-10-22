@@ -238,8 +238,9 @@
              (with-current-buffer buffer
                (roost--render-task-info)
                (let ((text (buffer-string)))
-                 ;; What to do next, then what the task is for.
-                 (should (string-match-p "^Answer it in its terminal: RET\n\nPrompt\nfix authentication\n" text))
+                 ;; What to do next, then what the task is for.  No key:
+                 ;; RET in the terminal would pick the agent's default answer.
+                 (should (string-match-p "^Answer it in its terminal\n\nPrompt\nfix authentication\n" text))
                  (should-not (string-match-p "Waiting for your answer\\|Agent's latest reply\\|Fixed the" text))
                  ;; The labels say what is uncommitted, and where notes are written.
                  (should (string-match-p "^Changes\n1 file \\+1 −0\n" text))
@@ -262,6 +263,8 @@
                    (should (= draws 1)))
                (advice-remove 'roost--render-task-info 'qa-count))
              (with-current-buffer buffer
+               ;; Away from the terminal, RET in the panel opens it.
+               (should (string-match-p "^Answer it in its terminal: RET$" (buffer-string)))
                (should (string-match-p "^Waiting for your answer$" (buffer-string)))
                ;; After what can be checked, as its agent's own account.
                (should (string-match-p "^Checks\nNo CI results: no pull request\n\nAgent's latest reply  its own account$"
@@ -5131,6 +5134,12 @@ of its own, which shows in the selected window of its workspace."
      (roost--cache-task "dev" (append `((updatedAt . ,new) (name . "idle")) (roost-test--task "3333333333333333" "ready")))
      (should (equal (roost--attention-status (gethash '("dev" "1111111111111111") roost--tasks)) "prompt"))
      (should (equal (roost--attention-status (gethash '("dev" "2222222222222222") roost--tasks)) "starting"))
+     ;; Away from its terminal, RET opens it; beside it, RET would answer
+     ;; the agent's question with its default, such as "No, exit".
+     (let ((stuck (gethash '("dev" "1111111111111111") roost--tasks)))
+       (should (string-suffix-p "such as folder trust: RET" (roost--next-step stuck)))
+       (should (equal (roost--next-step stuck nil t)
+                      "It may be waiting at a startup prompt in its terminal, such as folder trust")))
      (should (string-prefix-p "1 at a startup prompt · 1 ready · 1 running" (roost--summary (roost-tasks))))
      (let (opened)
        (cl-letf (((symbol-function 'roost-open-task)
@@ -7190,11 +7199,13 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
 
 (ert-deftest roost-doctor-reports-checks-and-connection-fixes ()
   (roost-test--isolated
-   (let ((roost-hosts '("dev" "far")) (roost-default-agent "claude"))
+   (let ((roost-hosts '("dev" "far")) (roost-default-agent "claude")
+         (roost--hosts-loaded t) (roost--remembered-hosts '("old")))
      (cl-letf (((symbol-function 'roost--request)
                 (lambda (host action _params success failure)
                   (should (equal action "doctor"))
-                  (if (equal host "dev")
+                  (pcase host
+                   ("dev"
                       (funcall success '(((name . "tmux") (ok . t) (detail . "tmux 3.7c"))
                                          ((name . "Claude") (ok) (detail . "/bin/claude 2.1")
                                           (hint . "Run `claude` once on this host to sign in"))
@@ -7207,8 +7218,9 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
                                          ((name . "Mystery") (ok) (optional) (detail . "broken")
                                           (hint . "Fix it"))
                                          ((name . "Push · qa-project") (ok) (optional . t)
-                                          (detail . "no origin remote"))))
-                    (funcall failure "far: Permission denied (publickey)."))))
+                                          (detail . "no origin remote")))))
+                   ("far" (funcall failure "far: Permission denied (publickey)."))
+                   (_ (funcall failure "Connection to old closed by remote host.")))))
                ((symbol-function 'pop-to-buffer) #'ignore))
        (unwind-protect
            (progn
@@ -7224,7 +7236,10 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
                  ;; A name longer than the column keeps a space before its detail.
                  (should (string-match-p "– Push · qa-project no origin remote" text))
                  (should (string-match-p "✗ SSH and Python +far: Permission denied" text))
-                 (should (string-match-p "ssh-copy-id far" text))
+                 ;; The way out for a host you don't use, as one copied
+                 ;; from an example: where it was listed.
+                 (should (string-match-p "ssh-copy-id far.*\\. To stop watching it, take it out of `roost-hosts'" text))
+                 (should (string-match-p "^old\n.*closed by remote host\\.\n +To stop watching it, M-x roost-forget-host$" text))
                  (should (string-match-p "· Workspaces" text)))))
          (kill-buffer "*roost doctor*"))))))
 
