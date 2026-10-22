@@ -5352,7 +5352,7 @@ it, as when it doesn't answer, which Roost has said by then."
 (defun roost-mark-looked (&optional task)
   "Record that you have looked at TASK as it stands now, opening nothing.
 Its host records where its work stands, files Git doesn't track too, as
-\\[roost-review] does, and what changed since you last looked starts
+`roost-review' does, and what changed since you last looked starts
 from there: for a task you judged by its panel, or whose diff you read
 in its agent's terminal."
   (interactive)
