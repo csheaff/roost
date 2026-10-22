@@ -533,16 +533,17 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
   copied. Git must ignore it on the task's branch too, or an agent's `git
   add .` could commit it: when a task starts from a branch whose
   `.gitignore` doesn't have `.env`, or before you commit the line that adds
-  it, the task stops and says so. In a directory Git ignores as a whole,
-  Roost looks only where a pattern leads: `.env` doesn't look through
-  `node_modules/`, while `vendor/**/config.json` looks in an ignored
-  `vendor/`. Links are copied as links, and files the worktree has already
-  are left as checked out. The copy runs in the task's terminal, before
-  the setup command. If a file can't be copied, the task stops before its
-  agent starts and says which; `s` copies what's still missing and starts
-  it. A directory you list is
-  copied file by file for each task: `node_modules` takes that time and
-  space every time, where `npm ci` as the setup command may take less.
+  it, the task stops and says so. Git reads the patterns as it reads a
+  `.gitignore`, so one without a slash matches at any depth: `.env` also
+  copies a `.env` inside an ignored `node_modules/`, which Claude Code
+  skips. To copy only the top one, write `/.env`, or leave the directory
+  out with `!node_modules/**`. Links are copied as links, and files the
+  worktree has already are left as checked out. The copy runs in the
+  task's terminal, before the setup command. If a file can't be copied,
+  the task stops before its agent starts and says which; `s` copies what's
+  still missing and starts it. A directory you list is copied file by file
+  for each task: `node_modules` takes that time and space every time,
+  where `npm ci` as the setup command may take less.
 - `roost-setup-command`: a shell command run once in a new worktree before the
   agent starts, such as `npm ci`. Set it in `.dir-locals.el` per project:
   `((nil . ((roost-setup-command . "npm ci"))))`. Emacs reads a remote

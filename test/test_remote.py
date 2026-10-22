@@ -2616,11 +2616,11 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue((wt / "app.log").is_file())
         self.assertTrue((wt / "logs/deep/app.log").is_file())
         self.assertFalse((wt / "debug.log").exists())
-        # In a directory Git ignores as a whole, where a pattern leads, and
-        # its directory's mode; `.env` doesn't look through build/.
+        # In a directory Git ignores as a whole, and its directory's mode;
+        # `.env`, without a slash, at any depth, as in a .gitignore.
         self.assertEqual((mode("secrets/dev/key.pem"), mode("secrets/dev")), (0o600, 0o700))
         self.assertFalse((wt / "secrets/prod").exists())
-        self.assertFalse((wt / "build").exists())
+        self.assertTrue((wt / "build/.env").is_file())
         # Listed, but Git doesn't ignore it, or tracks it.
         self.assertFalse((wt / "notes.txt").exists())
         self.assertEqual((wt / "tracked.json").read_text(), "committed\n")
@@ -3898,21 +3898,14 @@ class WorktreeInclude(unittest.TestCase):
             (self.repo / name).write_text("x\n")
         return sorted(roost.included_files(self.repo))
 
-    def test_in_a_directory_git_ignores_whole_only_where_a_pattern_leads(self):
-        files = (".claude/skills/a.md", ".claude/b.md", "vendor/x/config.json", "vendor/x/.env")
-        # Claude Code's examples: `**/name` looks in a directory with that name.
-        self.assertEqual(self.listed(".claude/\nvendor/\n", "**/.claude/skills/*.md\n**/config.json\n.env\n", *files),
-                         [".claude/skills/a.md"])
-        self.assertEqual(self.listed(".claude/\nvendor/\n", "vendor/**/config.json\n", *files),
-                         ["vendor/x/config.json"])
-        self.assertEqual(self.listed(".claude/\nvendor/\n", "/vendor/\n", *files),
-                         ["vendor/x/.env", "vendor/x/config.json"])
-
-    def test_a_question_mark_matches_a_byte_as_in_git(self):
-        self.assertEqual(self.listed("café/\n", "caf??/config.json\n", "café/config.json"), ["café/config.json"])
-
-    def test_letters_fold_as_ascii_bytes_as_in_git(self):
-        self.assertEqual(self.listed("İ/\n", "??/config.json\n", "İ/config.json"), ["İ/config.json"])
+    def test_a_pattern_without_a_slash_matches_at_any_depth_as_in_a_gitignore(self):
+        ignore = ".env\nnode_modules/\nvendor/\n"
+        files = (".env", "node_modules/pkg/.env", "vendor/x/config.json")
+        self.assertEqual(self.listed(ignore, ".env\n", *files), [".env", "node_modules/pkg/.env"])
+        # Claude Code leaves that one out; anchored, or with the directory left out, so does Roost.
+        self.assertEqual(self.listed(ignore, "/.env\n", *files), [".env"])
+        self.assertEqual(self.listed(ignore, ".env\n!node_modules/**\n", *files), [".env"])
+        self.assertEqual(self.listed(ignore, "vendor/**/config.json\n", *files), ["vendor/x/config.json"])
 
     def test_a_directory_with_only_ignored_files_is_looked_through(self):
         self.assertEqual(self.listed("*.log\n", "*.log\n", "logs/a.log", "logs/deep/b.log"),
@@ -3936,11 +3929,6 @@ class WorktreeInclude(unittest.TestCase):
         roost.git(self.repo, "commit", "-q", "-m", "a")
         roost.git(self.repo, "mv", "!! old.env", "new.txt")
         self.assertEqual(roost.ignored_paths(self.repo), [])
-
-    def test_escapes_and_character_classes_are_left_to_git(self):
-        self.assertEqual(self.listed("secret keys/\nvendor1/\n", "secret\\ keys/*.pem\nvendor[[:digit:]]/*.json\n",
-                                     "secret keys/a.pem", "vendor1/b.json"),
-                         ["secret keys/a.pem", "vendor1/b.json"])
 
     def elsewhere(self):
         directory = tempfile.TemporaryDirectory()

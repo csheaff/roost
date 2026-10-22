@@ -10,7 +10,6 @@ import contextlib
 import datetime
 import errno
 import fcntl
-import fnmatch
 import functools
 import hashlib
 import heapq
@@ -4337,9 +4336,6 @@ def relay(argv, cwd, env, report):
 
 
 WORKTREE_INCLUDE = ".worktreeinclude"
-# Ignored directories that Git's walk for them skips, at most: an argument
-# list holds only so much. Past that it walks them too, which takes longer.
-SKIPPED_WALK_LIMIT = 1000
 
 
 def git_fields(repo, *args, input=None, succeed=(0,)):
@@ -4367,71 +4363,21 @@ def ignored_paths(repo):
     return paths
 
 
-def include_names(line):
-    """The names between the slashes of LINE, a .worktreeinclude pattern
-    that selects files, or None for a blank line, a comment or a negation.
-    One without a slash, but at its end, matches at any depth, so its names
-    start with "**"."""
-    line = line.rstrip()
-    if not line or line.startswith(("#", "!")):
-        return None
-    pattern = line[line.startswith("\\"):].rstrip("/")
-    if not pattern:
-        return None
-    return pattern.lstrip("/").split("/") if "/" in pattern else ["**", pattern]
-
-
-def may_match(name, pattern):
-    """Whether NAME may match PATTERN, one name of a Git pattern, byte by
-    byte as Git matches, so that `?` is one byte of é, and in either case
-    for ASCII letters, as Git may. One with an escape or a bracket, which
-    Git reads otherwise than fnmatch, may."""
-    return ("\\" in pattern or "[" in pattern
-            or fnmatch.fnmatchcase(os.fsencode(name).lower(), os.fsencode(pattern).lower()))
-
-
-def reaches(names, directory):
-    """Whether the pattern of NAMES may match DIRECTORY, one Git ignores as
-    a whole, or a file in it. As Claude Code has it, one starting with
-    "**/" does only when the name after that is one of the directory's,
-    so `.env` doesn't look through node_modules."""
-    path = directory.split("/")
-    if names[0] == "**":
-        return len(names) == 1 or any(may_match(name, names[1]) for name in path)
-    # Through a "**", or past the directory or the pattern's end, it may.
-    for name, pattern in zip(path, names):
-        if pattern == "**":
-            return True
-        if not may_match(name, pattern):
-            return False
-    return True
-
-
 def included_files(repo):
     """The files in REPO, a primary checkout, that its .worktreeinclude
     lists and Git ignores, as Claude Code and Conductor copy them into a
-    new worktree. Git reads the patterns, as it would a .gitignore. In a
-    directory Git ignores as a whole it looks only where a pattern leads,
-    as `reaches` says."""
+    new worktree. Git reads the patterns, as it would a .gitignore, so one
+    without a slash matches at any depth, in node_modules too."""
     include = Path(repo) / WORKTREE_INCLUDE
-    try:
-        # As Git's paths are, so a name that isn't UTF-8 matches its own.
-        lines = os.fsdecode(include.read_bytes()).splitlines()
-    except FileNotFoundError:
+    if not include.is_file():
         return []
-    patterns = [names for names in map(include_names, lines) if names]
     ignored = ignored_paths(repo)
     files = {path for path in ignored if not path.endswith("/")}
-    kept, skipped = [], []
-    for path in (path for path in ignored if path.endswith("/")):
-        (kept if any(reaches(names, path[:-1]) for names in patterns) else skipped).append(path)
-    walk = (["--", "."] + [":(exclude,literal)" + path[:-1] for path in skipped]
-            if len(skipped) <= SKIPPED_WALK_LIMIT else [])
+    directories = tuple(path for path in ignored if path.endswith("/"))
     # Untracked files the patterns match, and nested repositories, ending in "/".
-    matched = git_fields(repo, "ls-files", "-z", "--others", "--ignored", "--exclude-from=" + str(include), *walk)
-    kept = tuple(kept)
+    matched = git_fields(repo, "ls-files", "-z", "--others", "--ignored", "--exclude-from=" + str(include))
     return [path for path in matched
-            if path in files or not path.endswith("/") and path.startswith(kept)]
+            if path in files or not path.endswith("/") and path.startswith(directories)]
 
 
 def checked_out(worktree, path):
