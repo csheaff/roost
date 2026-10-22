@@ -3,8 +3,8 @@
 ;; Copyright (C) 2026  Clay Sheaff
 
 ;; Author: Clay Sheaff
-;; Version: 0.9.0
-;; Package-Requires: ((emacs "29.1") (tmux-control "0.8.1") (transient "0.4.1"))
+;; Version: 0.10.0
+;; Package-Requires: ((emacs "29.1") (tmux-control "0.8.2") (transient "0.4.1"))
 ;; Keywords: tools, processes
 ;; URL: https://github.com/csheaff/roost
 ;; SPDX-License-Identifier: GPL-3.0-or-later
@@ -9576,7 +9576,7 @@ RESULT is `pending', a list of checks, or (error . MESSAGE).")
             (lm-header "Version")))
         "installed")))
 
-(defconst roost--tmux-control-version "0.8.1"
+(defconst roost--tmux-control-version "0.8.2"
   "The oldest tmux-control Roost works with, as its Package-Requires says.")
 
 (defun roost--doctor-local-checks ()
