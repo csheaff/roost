@@ -4342,10 +4342,11 @@ def copy_included_file(repo, worktree, path, made):
         return  # Gone since Git listed it, as a log rotated away.
     if stat.S_ISLNK(mode):
         link = os.readlink(source)
-        if not os.path.isabs(link):
-            resolved = os.path.normpath(os.path.join(os.path.dirname(source), link))
-            if resolved != str(repo) and not resolved.startswith(str(repo) + os.sep):
-                link = resolved
+        # Where it leads after every link on the way, as `..` after one
+        # leads on from where that one led.
+        resolved, root = os.path.realpath(source), os.path.realpath(repo)
+        if not os.path.isabs(link) and resolved != root and not resolved.startswith(root + os.sep):
+            link = os.path.join(os.path.dirname(source), link)
         os.symlink(link, target)
     elif stat.S_ISREG(mode):
         # Whole or not at all, so that trying again skips only what is done.

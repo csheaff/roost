@@ -3661,6 +3661,9 @@ class WorktreeInclude(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.repo = Path(self.temp.name)
         roost.git(self.repo, "init", "-q")
+        for name, value in (("user.name", "Roost Test"), ("user.email", "roost@example.invalid"),
+                            ("commit.gpgsign", "false")):
+            roost.git(self.repo, "config", name, value)
         self.addCleanup(self.temp.cleanup)
 
     def listed(self, ignore, include, *files):
@@ -3700,7 +3703,7 @@ class WorktreeInclude(unittest.TestCase):
     def test_a_renamed_files_old_name_is_not_taken_for_an_ignored_one(self):
         (self.repo / "!! old.env").write_text("x\n")
         roost.git(self.repo, "add", ".")
-        roost.git(self.repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "a")
+        roost.git(self.repo, "commit", "-q", "-m", "a")
         roost.git(self.repo, "mv", "!! old.env", "new.txt")
         self.assertEqual(roost.ignored_paths(self.repo), [])
 
@@ -3736,6 +3739,22 @@ class WorktreeInclude(unittest.TestCase):
         (self.repo / "secrets").chmod(0o500)
         roost.copy_included(self.repo, worktree)
         self.assertTrue((worktree / "secrets/b.pem").is_file())
+
+    def test_a_link_out_of_the_repository_leads_where_it_did(self):
+        elsewhere = Path(self.worktree().parent)
+        (elsewhere / "outside.env").write_text("chained\n")
+        (elsewhere / "shared.env").write_text("bridged\n")
+        (elsewhere / "a/b").mkdir(parents=True)
+        # Out through another link in the repository, and back up from where one leads.
+        (self.repo / ".env.local").symlink_to(os.path.relpath(elsewhere / "outside.env", self.repo))
+        (self.repo / ".env").symlink_to(".env.local")
+        (self.repo / "bridge").symlink_to(elsewhere / "a/b")
+        (self.repo / "x.env").symlink_to("bridge/../../shared.env")
+        self.listed(".env*\nbridge\nx.env\n", ".env\nx.env\n")
+        worktree = self.worktree()
+        roost.copy_included(self.repo, worktree)
+        self.assertEqual(((worktree / ".env").read_text(), (worktree / "x.env").read_text()),
+                         ("chained\n", "bridged\n"))
 
     def test_a_link_or_file_the_worktree_has_on_the_way_is_left_as_it_is(self):
         self.listed("config/\nlinked/\n", "config/\nlinked/\n", "config/local.json", "linked/x.env")
