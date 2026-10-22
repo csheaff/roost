@@ -2700,7 +2700,9 @@ def require_finished(task, pane):
 
 
 def require_clean(repo):
-    if git(repo, "status", "--porcelain").stdout.strip():
+    # Untracked files too, which removing the worktree deletes, whatever
+    # status.showUntrackedFiles says.
+    if git(repo, "status", "--porcelain", "--untracked-files=normal").stdout.strip():
         raise RoostError("Uncommitted or untracked files remain; review and commit in Magit first")
 
 
@@ -2728,12 +2730,16 @@ def submodule_work(worktree):
 
         def run(*args):
             return execute(["git", "--git-dir=" + str(gitdir), "--no-optional-locks", *args], check=False)
-        head = ["HEAD"] if run("rev-parse", "-q", "--verify", "HEAD^{commit}").returncode == 0 else []
-        commits = run("rev-list", "--count", *head, "--branches", "--not", "--remotes", "--tags")
+        head = run("rev-parse", "-q", "--verify", "HEAD^{commit}").returncode == 0
+        # Only a branch not made yet leaves nothing at HEAD to count.
+        unborn = not head and run("symbolic-ref", "-q", "HEAD").returncode == 0
+        commits = run("rev-list", "--count", *(["HEAD"] if head else []), "--branches",
+                      "--not", "--remotes", "--tags")
         # Each level's own files, and which commits its submodules are
         # at; what is in those is counted there.
-        status = read_git(checkout, "status", "--porcelain", "--ignore-submodules=dirty") if checkout else None
-        unread = commits.returncode or (status is not None and status.returncode)
+        status = (read_git(checkout, "status", "--porcelain", "--untracked-files=normal",
+                           "--ignore-submodules=dirty") if checkout else None)
+        unread = (not head and not unborn) or commits.returncode or (status is not None and status.returncode)
         found[gitdir] = dict(name=name, commits=None if unread else int(commits.stdout),
                              stashes=len(run("log", "-g", "--format=%H", "refs/stash", "--").stdout.split()),
                              changes=len(status.stdout.splitlines()) if status else 0)
@@ -2759,7 +2765,8 @@ def submodule_work(worktree):
         modules, prefix = pending.pop()
         # A submodule's name may hold slashes.
         for directory, subdirectories, files in os.walk(modules):
-            if "HEAD" in files and "objects" in subdirectories:
+            # One that lost its HEAD too, which then reads as unreadable.
+            if "objects" in subdirectories and ("HEAD" in files or "refs" in subdirectories):
                 subdirectories[:] = []
                 name = prefix + Path(directory).relative_to(modules).as_posix()
                 if add(Path(directory), name):
@@ -2781,7 +2788,8 @@ def require_submodules_kept(worktree, where="its worktree"):
     if not work:
         return False
     lost = ["%s is checked out at a commit the task doesn't record" % entry[3:]
-            for entry in git(worktree, "status", "--porcelain", "-z", "--ignore-submodules=dirty")
+            for entry in git(worktree, "status", "--porcelain", "-z", "--untracked-files=no",
+                             "--ignore-submodules=dirty")
             .stdout.split("\0") if entry]
     for entry in work:
         held = ([counted(entry["commits"], "commit") + " not on its remote"] if entry["commits"] else []) \
@@ -3181,7 +3189,8 @@ def discard(store, task, expect=None, dry_run=False, teardown=None):
         # Removing the worktrees deletes their submodules' repositories,
         # whose changes are counted there; here, which commits they're at.
         submodules = [entry for path in paths for entry in submodule_work(path)]
-        changes = sum(len(read_git(path, "status", "--porcelain", "--ignore-submodules=dirty").stdout.splitlines())
+        changes = sum(len(read_git(path, "status", "--porcelain", "--untracked-files=normal",
+                                   "--ignore-submodules=dirty").stdout.splitlines())
                       for path in paths) + sum(entry["changes"] for entry in submodules)
         return dict(task, discard=dict(
             commits=commits, changes=changes, commit=commit, agentWorktrees=len(work),
@@ -3677,7 +3686,8 @@ def agent_work(task):
         ahead = read_git(path, "rev-list", "--count", "refs/heads/" + task["branch"] + "..HEAD", "--")
         work.append(dict(path=path, branch=branch or None,
                          ahead=int(ahead.stdout) if ahead.returncode == 0 else None,
-                         dirty=bool(read_git(path, "status", "--porcelain").stdout.strip())))
+                         dirty=bool(read_git(path, "status", "--porcelain",
+                                             "--untracked-files=normal").stdout.strip())))
     return work
 
 

@@ -627,6 +627,38 @@ class Lifecycle(unittest.TestCase):
         told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
         self.assertEqual((told["changes"], told["submoduleCommits"]), (1, 0))
 
+    def test_retire_names_a_kept_submodule_repository_that_lost_its_head(self):
+        # Beside a clean one, which would otherwise let --force remove both.
+        self.add_submodule()
+        task = self.create()
+        wt = Path(task["worktree"])
+        self.check_out_submodules(wt)
+        old = Path(self.git("rev-parse", "--absolute-git-dir", cwd=wt / "lib")).parent / "old"
+        shutil.copytree(old.parent / "lib", old)
+        (old / "HEAD").unlink()
+        self.assertIn("old, whose repository Git can't read", self.request("retire", id=task["id"])["error"])
+        self.assertEqual(self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]["unreadSubmodules"],
+                         1)
+        # A detached HEAD naming no commit, with its branches fine.
+        (old / "HEAD").write_text("1" * 40 + "\n")
+        self.assertIn("old, whose repository Git can't read", self.request("retire", id=task["id"])["error"])
+        self.assertTrue(wt.exists())
+
+    def test_retire_sees_untracked_files_status_is_set_not_to_show(self):
+        self.add_submodule()
+        self.git("config", "status.showUntrackedFiles", "no")
+        task = self.create()
+        wt = Path(task["worktree"])
+        self.check_out_submodules(wt)
+        self.git("config", "status.showUntrackedFiles", "no", cwd=wt / "lib")
+        (wt / "lib" / "notes").write_text("only here\n")
+        self.assertIn("lib holds 1 uncommitted file", self.request("retire", id=task["id"])["error"])
+        self.assertEqual(self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]["changes"], 1)
+        (wt / "lib" / "notes").unlink()
+        (wt / "notes").write_text("only here\n")
+        self.assertIn("Uncommitted or untracked", self.request("retire", id=task["id"])["error"])
+        self.assertTrue((wt / "notes").exists())
+
     def test_retire_counts_a_stash_in_a_submodule_and_names_one_git_cannot_read(self):
         self.add_submodule()
         task = self.create()
