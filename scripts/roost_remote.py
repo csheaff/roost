@@ -4538,10 +4538,14 @@ def copy_included(repo, worktree):
                 target, source = worktree / path, repo / path
                 if not target.is_symlink() or os.path.isabs(os.readlink(target)):
                     continue
+                try:
+                    link = os.readlink(source)
+                except OSError:
+                    continue  # Gone since, as a log rotated away: its copy stays as made.
                 if (within(os.path.realpath(source), root) != within(os.path.realpath(target), top)
                         or source.exists() and not target.exists()):
                     os.unlink(target)
-                    os.symlink(os.path.join(os.path.dirname(source), os.readlink(source)), target)
+                    os.symlink(os.path.join(os.path.dirname(source), link), target)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
     if failed:

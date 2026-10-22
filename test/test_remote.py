@@ -4065,6 +4065,21 @@ class WorktreeInclude(unittest.TestCase):
         (worktree / ".env").write_text("TASK\n")
         self.assertEqual((values.read_text(), (worktree / "values.env").read_text()), ("PRIMARY\n", "TASK\n"))
 
+    def test_a_link_gone_once_its_copy_is_made_is_left_as_made(self):
+        (self.repo / "current.log").write_text("x\n")
+        (self.repo / "latest.log").symlink_to("current.log")
+        self.listed("*.log\n", "*.log\n")
+        worktree = self.worktree()
+        make = os.symlink
+
+        def rotate(link, target, *args, **kwargs):
+            make(link, target, *args, **kwargs)
+            if Path(target).name == "latest.log":
+                (self.repo / "latest.log").unlink()
+        with patch.object(roost.os, "symlink", rotate):
+            roost.copy_included(self.repo, worktree)
+        self.assertEqual(os.readlink(worktree / "latest.log"), "current.log")
+
     def test_a_link_to_a_file_the_worktree_lacks_leads_to_the_primary_checkouts(self):
         (self.repo / "settings.env").write_text("SETTING=1\n")
         (self.repo / ".env").symlink_to("settings.env")
