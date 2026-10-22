@@ -9,7 +9,7 @@
 [OpenCode](https://opencode.ai)) a task of its own: a Git
 worktree, a branch and a terminal, here or on any SSH host. It tells you which
 agents need you, and you review and merge their work with Magit. If you've
-used Orca or Conductor, it's that idea, inside the Emacs you already use.
+used Orca, it's that idea, inside Emacs.
 
 ![Emacs with three columns: Roost's sidebar listing six agents on two machines, the one you are on marked with a band and asking permission, two ready, two you have seen and one working; that agent's Claude Code terminal on the SSH host claylien, asking to run python3 -m unittest; and the task's panel, which says to answer it in its terminal and shows the prompt it was given, your latest prompt and the files it has changed](docs/images/roost-hero.png)
 
