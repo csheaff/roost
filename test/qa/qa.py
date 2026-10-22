@@ -2649,8 +2649,9 @@ def crashed(qa, repo):
     """The host's tmux server ends, as when the host restarts, and every
     agent on it crashes: s on one asks once, and resumes them all.  Last
     in a run: the other journeys' agents crash too, and resume with these."""
-    first = start_task(qa, "Count the notes")
-    second = start_task(qa, "Sort the notes")
+    # Names no other journey's tasks have: new_task finds a task by its new name.
+    first = start_task(qa, "Weigh the notes")
+    second = start_task(qa, "Rank the notes")
     open_task(qa, first)
     qa.tmux("kill-server")
     qa.status(first, "crashed")
