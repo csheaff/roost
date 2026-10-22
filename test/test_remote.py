@@ -3966,6 +3966,25 @@ class WorktreeInclude(unittest.TestCase):
         self.assertFalse((worktree / "config/.env").exists())
         self.assertEqual(roost.git(worktree, "status", "--porcelain").stdout, "")
 
+    @unittest.skipIf(os.geteuid() == 0, "root reads any file")
+    def test_nothing_is_copied_before_every_gitignore_is_in_on_this_try_or_one_before(self):
+        self.listed("config/*\n", "config/\n")
+        worktree = self.worktree()
+        (self.repo / ".gitignore").write_text("config/\n")
+        (self.repo / "config").mkdir()
+        rules = self.repo / "config/.gitignore"
+        rules.write_text("!.env\n")
+        rules.chmod(0)
+        (self.repo / "config/.env").write_text("SECRET=1\n")
+        with self.assertRaisesRegex(roost.RoostError, r"config/\.gitignore \(Permission denied\)"):
+            roost.copy_included(self.repo, worktree)
+        self.assertFalse((worktree / "config/.env").exists())
+        rules.chmod(0o644)
+        with self.assertRaisesRegex(roost.RoostError, r"config/\.env \(Git doesn't ignore it on the task's branch\)"):
+            roost.copy_included(self.repo, worktree)
+        self.assertFalse((worktree / "config/.env").exists())
+        self.assertEqual(roost.git(worktree, "status", "--porcelain").stdout, "")
+
     def test_what_a_copy_cut_off_left_is_cleared_and_nothing_is_staged_in_the_worktree(self):
         self.listed(".env\n", ".env\n", ".env")
         worktree = self.worktree()

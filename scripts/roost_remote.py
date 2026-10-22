@@ -4458,16 +4458,20 @@ def copy_included(repo, worktree):
     raise RoostError naming what could not."""
     repo, worktree = Path(repo), Path(worktree)
     paths = [path for path in included_files(repo) if not checked_out(worktree, path)]
-    # A branch whose .gitignore leaves one out would offer it to be committed.
-    ignored = ignored_in(worktree, paths)
     staging = copy_staging(worktree)
     # What a copy cut off left, for a secret's sake.
     shutil.rmtree(staging, ignore_errors=True)
     staging.mkdir(mode=0o700)
     started, said = time.monotonic(), False
-    made, failed, copied = [], [], []
-    try:
-        for path in paths:
+    made, failed = [], []
+
+    def copy_each(batch):
+        """Copy those of BATCH that Git ignores in WORKTREE, as it stands;
+        return those copied. A branch whose .gitignore leaves one out would
+        offer it to be committed."""
+        nonlocal said
+        ignored, copied = ignored_in(worktree, batch), []
+        for path in batch:
             if not said and time.monotonic() - started > 1:
                 print("Roost: copying %d files that %s lists" % (len(paths), WORKTREE_INCLUDE), flush=True)
                 said = True
@@ -4482,15 +4486,22 @@ def copy_included(repo, worktree):
                 if isinstance(exc, FileNotFoundError) and not os.path.lexists(repo / path):
                     continue
                 failed.append("%s (%s)" % (path, exc.strerror or exc))
-        # A .gitignore among them may stop Git ignoring another, as with
-        # !.env: what it no longer ignores goes again.
-        if any(PurePosixPath(path).name == ".gitignore" for path in copied):
-            ignored = ignored_in(worktree, copied)
-            for path in copied:
-                if path not in ignored:
-                    with contextlib.suppress(FileNotFoundError):
-                        os.unlink(worktree / path)
-                    failed.append("%s (Git doesn't ignore it on the task's branch)" % path)
+        return copied
+
+    try:
+        # Each .gitignore first, as one changes what Git ignores, as with
+        # !.env, even itself; the rest only once all are in, on this try
+        # or one before, so none is ever checked against rules that change.
+        rules = [path for path in paths if PurePosixPath(path).name == ".gitignore"]
+        copied = copy_each(rules)
+        ignored = ignored_in(worktree, copied)
+        for path in copied:
+            if path not in ignored:
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(worktree / path)
+                failed.append("%s (Git doesn't ignore it on the task's branch)" % path)
+        if not failed:
+            copy_each([path for path in paths if PurePosixPath(path).name != ".gitignore"])
     finally:
         shutil.rmtree(staging, ignore_errors=True)
     if failed:
