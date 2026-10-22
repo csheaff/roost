@@ -35,6 +35,43 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## UX review — 2026-10-21
+
+- **Scope.** The first UX review with the `ux-review` skill, after 0.10.0:
+  someone new to Roost, from the README's setup to a merge, and someone
+  running many tasks. Evil and Doom weren't covered.
+- **Evidence.** `make qa` on Emacs 32 (242 steps, none with problems,
+  including the narrow frames and both themes); the text of every task
+  state in the sidebar, dashboard, panel and draft (the skill's
+  `gallery.el`); and a first hour in a fresh Emacs 30.2 set up from the
+  README, with Claude Code 2.1.303 on Haiku in manual permission mode, from
+  a draft through folder trust, a permission prompt, Magit and `m`. Claude
+  records folder trust once per repository, so its question meets each new
+  project's first task.
+- **Found, most important first.** (1) Beside an agent's question in its
+  terminal, the panel said "Answer it in its terminal: RET", where RET
+  picks the agent's default: "No, exit" at folder trust. (2) The README's
+  `roost-hosts` example, `"devbox"`, showed as unreachable in red from the
+  first second, and `roost-doctor` said nothing of taking it out. (3) After
+  a merge the frame kept a split with two windows on the same file, and
+  Emacs's "Reverting buffer" replaced "Squashed … into main" at once. (4)
+  The menu said "Update from integration", "Search sessions" and
+  "Agent" where the README said "Bring a task up to date", "Search agents'
+  conversations" and "The agent's terminal". (5) The dashboard counted
+  `1 awaiting permission · 6 seen` while its rows said `permission` and
+  `ready`. (6) A draft's start was "primary checkout's current branch"
+  rather than its name. (7) "Nothing changed since you looked, 0s ago"
+  right after the first `r`. (8) A long sidebar scrolls its "N waiting"
+  line out of view when it follows a task near the bottom. (9)
+  `roost-workload` only from `M-x`. (10) `roost-doctor` wraps long lines
+  mid-word in a narrow window. Good as they were: doctor's checklist, the
+  same keys in every view, `n` saying why, the panel's next step, the
+  latest reply in Magit.
+- **Chosen.** Clay took 1 and 2 first (#106), then 4 and 5 (#107). Copilot
+  found on #106 that `roost--hosts` dropped a host in both `roost-hosts`
+  and the remembered list from the remembered one, in memory. The rest
+  are in the [roadmap](roadmap.md#worth-trying).
+
 ## Before 0.10.0 — 2026-10-21
 
 - **`make contract` and `make contract-live`** with Claude Code 2.1.303:
