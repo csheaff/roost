@@ -105,9 +105,9 @@ For straight.el, Doom, Emacs 29, Evil and other modal setups, see the
 | --- | --- | --- | --- |
 | `c` | New task | `r` | Review in Magit |
 | `n` | Next agent waiting for you | `u` | Bring a task up to date |
-| `RET` | The agent's terminal | `m` | Merge it, and clean up |
+| `RET` | The agent's terminal | `m` | Merge it, and retire it |
 | `t` | A shell in its worktree | `P` | Open a pull request |
-| `e` | Send the agent a prompt | `x` | Finish: retire, or discard |
+| `e` | Send the agent a prompt | `x` | Retire it, or discard it |
 | `/` | Search agents' conversations | `?` | Every command |
 
 These work in the dashboard, the sidebar and a task's panel, and on the menu.

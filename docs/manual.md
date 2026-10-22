@@ -282,7 +282,7 @@ table's second column says when a task waits for you: those are the tasks
 `n` visits, the mode line counts and a notification announces. In the
 sidebar, their word is in its colour, and an agent you've seen that waits
 for nothing has none; the dashboard shows every task's word, and counts
-them at its top.
+them by those words at its top.
 
 | Word | Waits for you | What it means |
 | --- | --- | --- |
@@ -302,7 +302,7 @@ them at its top.
 | `stopped` | No | Stopped with `K`; `s` resumes its conversation |
 | `merged` | No | Its work is merged, on GitHub or into its branch; `x` retires it |
 | `offline` | No | Its host doesn't answer; the row is as it was last known |
-| none | No | You've seen an agent that waits for nothing |
+| `seen` | No | You've seen an agent that waits for nothing. The sidebar leaves it without a word |
 
 A task that waits for nothing may say, dim, what changed since you last
 looked at it, `3 files changed since you looked`, or with Magit,
@@ -429,7 +429,7 @@ counted once you stop and resume it (`K`, then `s`).
 | `/` | `roost-search` | Find messages in your tasks' conversations, retired tasks' too; `RET` opens a live task, `TAB` shows more of a message (its first 1,500 characters) |
 | `b` | `roost-sidebar-mode` | Keep the task list at the left of every frame |
 | `I` | `roost-task-panel-mode` | Dock the open task's panel beside its terminal |
-| `u` | `roost-update` | Merge the integration branch into the task; for uncommitted changes or conflicts, offers to have its agent do it |
+| `u` | `roost-update` | Bring the task up to date: merge the branch it merges into, such as `main`, into it; for uncommitted changes or conflicts, offers to have its agent do it |
 | `P` | `roost-pr` | Draft a pull request for the task; if it has one, push new commits and open it (`C-u`: open only) |
 | `m` | `roost-merge-retire` | Merge committed work as one commit, then retire the task (a merge commit with `roost-merge-style` set to `merge`) |
 | `x` | `roost-retire` | Finish with a task: retire it when its work is merged or it has none, otherwise offer to discard it (`roost-discard`), first saying what would be lost; to lose commits or files you type its name |

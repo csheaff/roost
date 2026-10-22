@@ -4764,7 +4764,7 @@ of its own, which shows in the selected window of its workspace."
      (roost-dashboard-mode)
      (roost--render-dashboard)
      (let ((text (buffer-string)))
-       (should (string-prefix-p "1 awaiting permission · 1 ready · 1 running\n" text))
+       (should (string-prefix-p "1 permission · 1 ready · 1 running\n" text))
        (should (string-match-p "^dev · ledger  ~/ledger$" text))
        (should (string-match-p "^local · site  ~/site$" text))
        (should (string-match-p "  ● fix auth  permission  [0-9a-z]+ +claude    2 files \\+10 −3 · uncommitted · ↑1 ↓4  Fix the parser\\. Then add tests\\." text))
@@ -5156,7 +5156,9 @@ of its own, which shows in the selected window of its workspace."
        (should (string-suffix-p "such as folder trust: RET" (roost--next-step stuck)))
        (should (equal (roost--next-step stuck nil t)
                       "It may be waiting at a startup prompt in its terminal, such as folder trust")))
-     (should (string-prefix-p "1 at a startup prompt · 1 ready · 1 running" (roost--summary (roost-tasks))))
+     (should (string-prefix-p "2 starting · 1 ready" (roost--summary (roost-tasks))))
+     ;; In the colour of the one held at a startup prompt, as its row.
+     (should (eq (get-text-property 0 'face (roost--summary (roost-tasks))) 'roost-status-permission))
      (let (opened)
        (cl-letf (((symbol-function 'roost-open-task)
                   (lambda (task &rest _) (setq opened (roost--field task 'name) roost--current-task (roost--key task)))))
@@ -6082,7 +6084,7 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
                    (roost--attention-status (roost--cache-task "dev" (apply #'roost-test--conflicted fields))))))
      (should (equal (roost--display-status task) "conflicts"))
      (should (roost--waiting-p task))
-     (should (equal (substring-no-properties (roost--summary (list task))) "1 with conflicts"))
+     (should (equal (substring-no-properties (roost--summary (list task))) "1 conflicts"))
      (should (string-suffix-p "conflicts" (roost--sidebar-row task 40)))
      (should (equal (funcall step)
                     "Conflicts with main in ledger.py, report.py: u merges main into it, to resolve them there"))
@@ -6156,6 +6158,8 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
      (should-not (roost--waiting-p task))
      (should (equal (roost--since-looked task) '(3 . "2026-10-03T19:00:00+00:00")))
      (should (equal (substring-no-properties (roost--summary (list task))) "1 seen"))
+     ;; Its dashboard row says the word its summary counts.
+     (should (string-match-p "fix auth +seen " (roost--dashboard-row task (funcall layout task) 140)))
      (let ((row (roost--sidebar-row task 50)))
        (should (string-suffix-p "3 files changed since you looked" row))
        (should (eq (get-text-property (1- (length row)) 'face row) 'roost-dim)))
@@ -6760,7 +6764,7 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
        (should (roost--waiting-p task))
        (should (equal (substring-no-properties (roost--next-step task))
                       "#12 has 2 unresolved review threads: e tells its agent to answer them, P opens it"))
-       (should (equal (substring-no-properties (roost--summary (list task))) "1 with review comments"))))))
+       (should (equal (substring-no-properties (roost--summary (list task))) "1 comments"))))))
 
 (ert-deftest roost-a-pull-request-that-comes-to-wait-on-you-notifies ()
   (roost-test--isolated
