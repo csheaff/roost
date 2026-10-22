@@ -4049,6 +4049,22 @@ class WorktreeInclude(unittest.TestCase):
         self.assertEqual(((self.repo / "values.env").read_text(), (worktree / "values.env").read_text()),
                          ("PRIMARY\n", "TASK\n"))
 
+    @unittest.skipIf(os.geteuid() == 0, "root reads any file")
+    def test_a_chain_of_links_stays_the_worktrees_own_after_a_try_that_failed(self):
+        values = self.repo / "values.env"
+        values.write_text("PRIMARY\n")
+        (self.repo / ".env.local").symlink_to("values.env")
+        (self.repo / ".env").symlink_to(".env.local")
+        self.listed(".env*\nvalues.env\n", ".env*\nvalues.env\n")
+        worktree = self.worktree()
+        values.chmod(0)
+        with self.assertRaisesRegex(roost.RoostError, r"values\.env \(Permission denied\)"):
+            roost.copy_included(self.repo, worktree)
+        values.chmod(0o644)
+        roost.copy_included(self.repo, worktree)
+        (worktree / ".env").write_text("TASK\n")
+        self.assertEqual((values.read_text(), (worktree / "values.env").read_text()), ("PRIMARY\n", "TASK\n"))
+
     def test_a_link_to_a_file_the_worktree_lacks_leads_to_the_primary_checkouts(self):
         (self.repo / "settings.env").write_text("SETTING=1\n")
         (self.repo / ".env").symlink_to("settings.env")

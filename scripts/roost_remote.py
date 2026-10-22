@@ -4410,13 +4410,14 @@ def shown(path):
     return os.fsencode(path).decode("utf-8", "backslashreplace")
 
 
-def copy_included_file(repo, worktree, path, made, staging):
+def copy_included_file(repo, worktree, path, made, staging, later=None):
     """Copy PATH from REPO into WORKTREE, and its mode, through STAGING, a
     directory outside it, so that it comes whole or not at all, and never
     over one made there meanwhile. A link is copied as a link, never
     followed; a relative one that leads out of the repository then leads
-    to the same place. Add each directory made, with the mode it copies,
-    to MADE. Return whether it made the file."""
+    to the same place, and with LATER, one that stays in it is added to
+    LATER, to be made once every file is in. Add each directory made, with
+    the mode it copies, to MADE. Return whether it made the file."""
     source, target = repo / path, worktree / path
     parent = worktree
     for name in PurePosixPath(path).parts[:-1]:
@@ -4433,10 +4434,13 @@ def copy_included_file(repo, worktree, path, made, staging):
     if stat.S_ISLNK(mode):
         link = os.readlink(source)
         # One that leads out of the repository, after every link on its
-        # way, leads there from the primary checkout; `copy_included` sees
-        # to the rest once every file is in.
-        if not os.path.isabs(link) and within(os.path.realpath(source), os.path.realpath(repo)) is None:
-            link = os.path.join(os.path.dirname(source), link)
+        # way, leads there from the primary checkout.
+        if not os.path.isabs(link):
+            if within(os.path.realpath(source), os.path.realpath(repo)) is None:
+                link = os.path.join(os.path.dirname(source), link)
+            elif later is not None:
+                later.append(path)
+                return False
         try:
             os.symlink(link, target)
         except FileExistsError:
@@ -4475,10 +4479,11 @@ def copy_included(repo, worktree):
     started, said = time.monotonic(), False
     made, failed = [], []
 
-    def copy_each(batch):
-        """Copy those of BATCH that Git ignores in WORKTREE, as it stands;
-        return those copied. A branch whose .gitignore leaves one out would
-        offer it to be committed."""
+    def copy_each(batch, later=None):
+        """Copy those of BATCH that Git ignores in WORKTREE, as it stands,
+        as `copy_included_file` does with LATER; return those copied. A
+        branch whose .gitignore leaves one out would offer it to be
+        committed."""
         nonlocal said
         ignored, copied = ignored_in(worktree, batch), []
         for path in batch:
@@ -4489,7 +4494,7 @@ def copy_included(repo, worktree):
                 failed.append("%s (Git doesn't ignore it on the task's branch)" % shown(path))
                 continue
             try:
-                if copy_included_file(repo, worktree, path, made, staging):
+                if copy_included_file(repo, worktree, path, made, staging, later):
                     copied.append(path)
             except OSError as exc:
                 # Gone since Git listed it, as a log rotated away.
@@ -4512,22 +4517,31 @@ def copy_included(repo, worktree):
                 with contextlib.suppress(FileNotFoundError):
                     os.unlink(worktree / path)
                 failed.append("%s (Git doesn't ignore it on the task's branch)" % shown(path))
+        later = []
         if not failed:
-            copied += copy_each([path for path in paths if path not in rules])
-        # Now every file is in, a relative link stays so only if it leads
-        # from the worktree where it led from the primary checkout, after
-        # every link on its way, and somewhere if it did; else, as through a
-        # link or past a file the worktree lacks, it leads there from the
-        # primary checkout.
-        root, top = os.path.realpath(repo), os.path.realpath(worktree)
-        for path in copied:
-            target, source = worktree / path, repo / path
-            if not target.is_symlink() or os.path.isabs(os.readlink(target)):
-                continue
-            if (within(os.path.realpath(source), root) != within(os.path.realpath(target), top)
-                    or source.exists() and not target.exists()):
-                os.unlink(target)
-                os.symlink(os.path.join(os.path.dirname(source), os.readlink(source)), target)
+            copied += copy_each([path for path in paths if path not in rules], later)
+        # A relative link that stays in the repository is made once every
+        # file is in, and not on a try where one failed, as it may lead to
+        # it. It stays relative only if it leads from the worktree where it
+        # led from the primary checkout, after every link on its way, and
+        # somewhere if it did; else, as through a link or past a file the
+        # worktree lacks, it leads there from the primary checkout.
+        if not failed:
+            for path in later:
+                try:
+                    os.symlink(os.readlink(repo / path), worktree / path)
+                except (FileExistsError, FileNotFoundError):
+                    continue
+                copied.append(path)
+            root, top = os.path.realpath(repo), os.path.realpath(worktree)
+            for path in copied:
+                target, source = worktree / path, repo / path
+                if not target.is_symlink() or os.path.isabs(os.readlink(target)):
+                    continue
+                if (within(os.path.realpath(source), root) != within(os.path.realpath(target), top)
+                        or source.exists() and not target.exists()):
+                    os.unlink(target)
+                    os.symlink(os.path.join(os.path.dirname(source), os.readlink(source)), target)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
     if failed:
