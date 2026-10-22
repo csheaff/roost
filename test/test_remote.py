@@ -654,6 +654,20 @@ class Lifecycle(unittest.TestCase):
                          2)
         self.assertTrue(wt.exists())
 
+    def test_retire_names_a_submodule_left_with_files_but_no_git_file(self):
+        # Git sees it as not checked out, so its status shows nothing.
+        self.add_submodule()
+        task = self.create()
+        wt = Path(task["worktree"])
+        self.check_out_submodules(wt)
+        (wt / "lib" / ".git").unlink()
+        (wt / "lib" / "notes").write_text("only here\n")
+        self.assertEqual(self.git("status", "--porcelain", cwd=wt), "")
+        self.assertIn("lib, whose repository Git can't read", self.request("retire", id=task["id"])["error"])
+        self.assertTrue((wt / "lib" / "notes").exists())
+        self.assertEqual(self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]["unreadSubmodules"],
+                         1)
+
     def test_retire_sees_untracked_files_status_is_set_not_to_show(self):
         self.add_submodule()
         self.git("config", "status.showUntrackedFiles", "no")

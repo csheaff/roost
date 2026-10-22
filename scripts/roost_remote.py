@@ -2752,14 +2752,19 @@ def submodule_work(worktree):
     def checkouts(top, prefix):
         for entry in read_git(top, "ls-files", "--stage", "-z").stdout.split("\0"):
             mode, _, path = entry.partition("\t")
-            if mode.startswith("160000 ") and (top / path / ".git").exists():
-                gitdir = read_git(top / path, "rev-parse", "--absolute-git-dir").stdout.strip()
-                if gitdir:
-                    add(Path(gitdir), prefix + path, top / path)
-                    checkouts(top / path, prefix + path + "/")
-                else:
-                    # Its repository is somewhere Git can't say.
-                    found[top / path] = dict(name=prefix + path, commits=None, stashes=0, changes=0)
+            if not mode.startswith("160000 "):
+                continue
+            checkout = top / path
+            gitdir = (read_git(checkout, "rev-parse", "--absolute-git-dir").stdout.strip()
+                      if (checkout / ".git").exists() else None)
+            if gitdir:
+                add(Path(gitdir), prefix + path, checkout)
+                checkouts(checkout, prefix + path + "/")
+            # Its repository is somewhere Git can't say, or files are left
+            # where it no longer sees a checkout; a deinitialized one's
+            # directory is empty.
+            elif gitdir == "" or (checkout.is_dir() and any(checkout.iterdir())):
+                found[checkout] = dict(name=prefix + path, commits=None, stashes=0, changes=0)
 
     worktree = Path(worktree)
     # Those checked out first, which have changes to read; then the rest
