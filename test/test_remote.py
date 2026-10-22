@@ -2630,6 +2630,18 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(self.git("status", "--porcelain", cwd=wt), "")
         self.assertIs(roost.Store(str(self.state)).read(task["id"])["copyComplete"], True)
 
+    def test_retiring_or_discarding_a_task_clears_what_a_cut_off_copy_left(self):
+        for action in ("retire", "discard"):
+            task = self.create(name=action)
+            staging = roost.copy_staging(task["worktree"])
+            staging.mkdir()
+            (staging / "file").write_text("SECRET=1\n")
+            self.request("stop", id=task["id"])
+            told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+            reply = self.request(action, id=task["id"], **(dict(expect=told["commit"]) if action == "discard" else {}))
+            self.assertTrue(reply["ok"], reply)
+            self.assertFalse(staging.exists(), action)
+
     def test_without_worktreeinclude_nothing_is_copied(self):
         (self.repo / ".gitignore").write_text(".env\n")
         self.git("add", ".")

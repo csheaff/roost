@@ -3062,6 +3062,8 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
     remove_worktrees(store, task, worktree if worktree_exists else None,
                      [entry for entry in agent_work(task) if entry["ahead"] == 0 and not entry["dirty"]],
                      teardown=teardown)
+    # What a copy stopped partway left, which may hold a secret.
+    shutil.rmtree(copy_staging(task["worktree"]), ignore_errors=True)
     if branch_exists:
         delete_branch(repo, branch, commit)
     store.remove(task["id"])
@@ -3218,6 +3220,7 @@ def discard(store, task, expect=None, dry_run=False, teardown=None):
         raise RoostError("The task's branch has moved since you were asked; look at it again before discarding")
     stop(store, task)
     remove_worktrees(store, task, worktree if worktree_exists else None, work, force=True, teardown=teardown)
+    shutil.rmtree(copy_staging(task["worktree"]), ignore_errors=True)
     if branch_exists:
         delete_branch(repo, branch, commit)
     store.remove(task["id"])
@@ -4443,6 +4446,12 @@ def checked_out(worktree, path):
     return os.path.lexists(worktree / path)
 
 
+def copy_staging(worktree):
+    """Where a copy into WORKTREE stages its files: beside it, out of Git's sight."""
+    worktree = Path(worktree)
+    return worktree.with_name("." + worktree.name + ".copying")
+
+
 def copy_included_file(repo, worktree, path, made, staging):
     """Copy PATH from REPO into WORKTREE, and its mode, through STAGING, a
     directory outside it, so that it comes whole or not at all, and never
@@ -4493,7 +4502,7 @@ def copy_included(repo, worktree):
     # A branch whose .gitignore leaves one out would offer it to be committed.
     ignored = set(git_fields(worktree, "check-ignore", "-z", "--stdin", input=b"\0".join(map(os.fsencode, paths)),
                              succeed=(0, 1))) if paths else set()
-    staging = worktree.with_name("." + worktree.name + ".copying")
+    staging = copy_staging(worktree)
     # What a copy cut off left, for a secret's sake.
     shutil.rmtree(staging, ignore_errors=True)
     staging.mkdir(mode=0o700)
