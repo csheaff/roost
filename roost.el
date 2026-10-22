@@ -9959,35 +9959,61 @@ RESULT is `pending', a list of checks, or (error . MESSAGE).")
 (defun roost--doctor-local-checks ()
   "List the local checks, each (NAME OK DETAIL HINT PATH)."
   (let ((helper (expand-file-name "scripts/roost_remote.py" roost--package-directory)))
-    (list (list "Emacs" (version<= "29.1" emacs-version) emacs-version
-                "Roost needs Emacs 29.1 or newer")
-          (let ((version (roost--library-version "tmux-control")))
-            (list "tmux-control"
-                  (and version (ignore-errors (version<= roost--tmux-control-version version)))
-                  version
-                  (if version
-                      (format "Roost needs tmux-control %s or newer: https://github.com/csheaff/tmux-control"
-                              roost--tmux-control-version)
-                    "Install tmux-control: https://github.com/csheaff/tmux-control")
-                  (locate-library "tmux-control")))
-          (list "Eat" (locate-library "eat") (roost--library-version "eat")
-                "Install eat from NonGNU ELPA (tmux-control renders through it)"
-                (locate-library "eat"))
-          (list "Magit" (or (locate-library "magit") 'optional) (roost--library-version "magit")
-                "Optional: review (r) falls back to Dired" (locate-library "magit"))
-          (list "Host helper" (file-readable-p helper) (if (file-readable-p helper) "found" "missing")
-                "Reinstall Roost with its scripts/ directory" helper)
-          (list "Workspaces" 'info
-                (pcase (roost--workspace-backend)
-                  ('perspective "a perspective per task (perspective.el)")
-                  ('tab-bar "a tab per task (tab-bar-mode)")
-                  (_ "none; tasks open in the selected window (see `roost-workspace')"))
-                nil)
-          (if (and roost-watch-mode (not roost--watching-on-demand))
-              (list "Watching" t "from the start of the session" nil)
-            (list "Watching" 'optional "once you open Roost"
-                  "Optional: (roost-watch-mode 1) in your configuration tells you from the start when an agent needs you"))
-          (roost--doctor-notifications))))
+    (delq nil
+          (list (list "Emacs" (version<= "29.1" emacs-version) emacs-version
+                      "Roost needs Emacs 29.1 or newer")
+                (let ((version (roost--library-version "tmux-control")))
+                  (list "tmux-control"
+                        (and version (ignore-errors (version<= roost--tmux-control-version version)))
+                        version
+                        (if version
+                            (format "Roost needs tmux-control %s or newer: https://github.com/csheaff/tmux-control"
+                                    roost--tmux-control-version)
+                          "Install tmux-control: https://github.com/csheaff/tmux-control")
+                        (locate-library "tmux-control")))
+                (list "Eat" (locate-library "eat") (roost--library-version "eat")
+                      "Install eat from NonGNU ELPA (tmux-control renders through it)"
+                      (locate-library "eat"))
+                (list "Magit" (or (locate-library "magit") 'optional) (roost--library-version "magit")
+                      "Optional: review (r) falls back to Dired" (locate-library "magit"))
+                (list "Host helper" (file-readable-p helper) (if (file-readable-p helper) "found" "missing")
+                      "Reinstall Roost with its scripts/ directory" helper)
+                (list "Workspaces" 'info
+                      (pcase (roost--workspace-backend)
+                        ('perspective "a perspective per task (perspective.el)")
+                        ('tab-bar "a tab per task (tab-bar-mode)")
+                        (_ "none; tasks open in the selected window (see `roost-workspace')"))
+                      nil)
+                (if (and roost-watch-mode (not roost--watching-on-demand))
+                    (list "Watching" t "from the start of the session" nil)
+                  (list "Watching" 'optional "once you open Roost"
+                        "Optional: (roost-watch-mode 1) in your configuration tells you from the start when an agent needs you"))
+                (roost--doctor-notifications)
+                (roost--doctor-old-settings)))))
+
+(defconst roost--old-settings
+  '((roost-claude-command . "the \"claude\" entry of `roost-agent-commands'")
+    (roost-use-perspectives . "`roost-workspace'")
+    (roost-session-name . "nothing: each task has a tmux session of its own"))
+  "Settings Roost read before 1.0, each with what replaces it.")
+
+(defconst roost--tuning-variables
+  '(roost-startup-grace roost-request-timeout roost-watch-unfocused-interval roost-note-box-lines)
+  "Options before 1.0, now variables that Customize no longer sets.")
+
+(defun roost--doctor-old-settings ()
+  "The setup check's line on settings Roost no longer reads, or nil."
+  (when-let* ((old (append
+                    (seq-keep (lambda (setting)
+                                (when (boundp (car setting))
+                                  (format "`%s' (use %s)" (car setting) (cdr setting))))
+                              roost--old-settings)
+                    (seq-keep (lambda (variable)
+                                (when (get variable 'saved-value)
+                                  (format "`%s' from Customize (set it with setq)" variable)))
+                              roost--tuning-variables))))
+    (list "Old settings" nil (format "%d Roost no longer reads" (length old))
+          (concat "Your configuration sets " (string-join old ", ")))))
 
 (defun roost--doctor-notifications ()
   "The setup check's line on how Roost notifies you."

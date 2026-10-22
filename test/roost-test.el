@@ -7572,6 +7572,21 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
          (should (eq (roost--workspace-backend) 'tab-bar))))
      (let ((roost-workspace nil)) (should-not (roost--workspace-backend))))))
 
+(ert-deftest roost-doctor-names-settings-roost-no-longer-reads ()
+  (roost-test--isolated
+   (should-not (roost--doctor-old-settings))
+   (let ((roost-request-timeout 60))
+     (put 'roost-request-timeout 'saved-value '(120))
+     (unwind-protect
+         (cl-progv '(roost-claude-command) '(("claude" "--model" "opus"))
+           (let ((check (roost--doctor-old-settings)))
+             (should (equal (car check) "Old settings"))
+             (should-not (nth 1 check))
+             (should (string-match-p "roost-claude-command' (use the \"claude\" entry" (nth 3 check)))
+             (should (string-match-p "roost-request-timeout' from Customize" (nth 3 check)))
+             (should (member check (roost--doctor-local-checks)))))
+       (put 'roost-request-timeout 'saved-value nil)))))
+
 (ert-deftest roost-doctor-reports-checks-and-connection-fixes ()
   (roost-test--isolated
    (let ((roost-hosts '("dev" "far" "both")) (roost-default-agent "claude")
