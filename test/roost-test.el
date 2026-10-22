@@ -2233,6 +2233,48 @@
          (roost--compose-default-directory nil nil)
          (should looked))))))
 
+(ert-deftest roost-a-draft-about-a-remote-file-asks-its-host-nothing ()
+  ;; Even with TRAMP connected, looking for a remote file's checkout took a
+  ;; round trip for each directory, while Emacs waited: seconds over SSH.
+  (roost-test--isolated
+   (let ((roost--remembered-projects '("/ssh:dev:/srv/ledger/"))
+         (roost--projects-loaded t)
+         looked drafts)
+     (roost--cache-task "dev" (append '((repo . "/srv/ledger")) (roost-test--task)))
+     (cl-letf (((symbol-function 'roost--may-look-in-p) #'always)
+               ((symbol-function 'locate-dominating-file) (lambda (&rest _) (setq looked t) nil))
+               ((symbol-function 'vc-root-dir) (lambda (&rest _) (setq looked t) nil))
+               ((symbol-function 'roost--compose)
+                (lambda (_task prompt directory) (push (list (car prompt) directory) drafts))))
+       (roost-new-task-from-file "/ssh:dev:/srv/ledger/src/report.py")
+       (should (equal (car drafts) '("\n\nsrc/report.py" "/ssh:dev:/srv/ledger/")))
+       ;; In a task's worktree, from the top of that.
+       (roost-new-task-from-file "/ssh:dev:/home/user/work/fix auth/lib/a.py")
+       (should (equal (caar drafts) "\n\nlib/a.py"))
+       (should-not looked)
+       ;; A local file is looked for, which costs nothing.
+       (roost-new-task-from-file (expand-file-name "x.py" temporary-file-directory))
+       (should looked)))
+    ;; Git finds a local file's checkout, a repository nested in a task's
+    ;; worktree too, rather than the worktree.
+    (let* ((worktree (file-name-as-directory (make-temp-file "roost-worktree" t)))
+           (nested (expand-file-name "vendor/lib/" worktree))
+           drafts)
+      (unwind-protect
+          (progn
+            (make-directory (expand-file-name "src" nested) t)
+            (make-directory (expand-file-name ".git" nested))
+            (with-temp-file (expand-file-name ".git" worktree) (insert "gitdir: /elsewhere\n"))
+            (roost--cache-task nil (append `((id . "2222222222222222") (repo . "/srv/ledger")
+                                             (worktree . ,(directory-file-name worktree)))
+                                           (roost-test--task "2222222222222222")))
+            (cl-letf (((symbol-function 'roost--compose)
+                       (lambda (_task prompt _directory) (push (car prompt) drafts))))
+              (roost-new-task-from-file (expand-file-name "src/a.py" nested))
+              (roost-new-task-from-file (expand-file-name "b.py" worktree)))
+            (should (equal drafts '("\n\nb.py" "\n\nsrc/a.py"))))
+        (delete-directory worktree t)))))
+
 (ert-deftest roost-sidebar-mode-pins-a-left-window ()
   (roost-test--isolated
    (save-window-excursion

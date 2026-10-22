@@ -6,6 +6,13 @@ What each release changes, and what to do when upgrading. Newest first.
 
 Since 0.9.0:
 
+- A new task's draft about a file on another host, as `M-x
+  roost-new-task-from-file` or Embark makes it, opens without waiting on
+  that host. Finding the file's checkout took a round trip for each
+  directory over TRAMP, seconds over SSH, in which nothing else in Emacs
+  ran; Roost now goes by the task worktrees and projects it knows, by
+  path, and asks the host only for a file outside them. Nothing to do when
+  upgrading.
 - `D`, a task's whole diff, counts as looking at it, as `r` does, when it
   leaves no new file out: what changed since you looked then starts from
   there. Git's diff of a worktree leaves out files not yet added, so with
