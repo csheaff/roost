@@ -9,7 +9,7 @@ it asks before commands, as a cautious user would have it.
 ## Set up
 
 Pick a scratch directory `L` and export a current tmux-control there:
-`git -C ~/code/tmux-control archive origin/main | tar -x -C $L/tmux-control`
+`mkdir -p "$L/tmux-control" && git -C ~/code/tmux-control archive origin/main | tar -x -C "$L/tmux-control"`
 (don't pull Clay's checkout). Make a scratch repository at `$L/ledger`, and
 for remote journeys one on claylien under `/tmp`. Then `$L/init.el`, with
 `L` and `ROOST` replaced by the scratch directory and the checkout:
@@ -50,7 +50,10 @@ your own.
   answering, and the only way out is to kill that Emacs. Use the pieces the
   commands use: `roost--create-task` for a task, `roost--send-draft` and
   then `roost-send-submit` in its buffer for `@`, `roost-review`,
-  `roost-diff`, `roost-task-info`.
+  `roost-diff`, `roost-task-info`. `roost-send-submit` still asks before
+  sending to a task that is `starting` or asking `permission`: send only
+  once the task is past those, or wrap the call in
+  `(cl-letf (((symbol-function 'yes-or-no-p) #'ignore)) …)` to see it refuse.
 - Answer the agent in its terminal as a person would, with tmux: here,
   `tmux -L roost-live send-keys -t PANE Enter`; on claylien, the same over
   `ssh` after `export TMUX_TMPDIR=$HOME/.tmux-sock`. A new folder asks to be
@@ -66,6 +69,8 @@ your own.
 ## Clean up
 
 Kill the scratch Emacs (`(kill-emacs)` through its server, else its PID),
-`tmux -L roost-live kill-server` here and on claylien, and remove
+`tmux -L roost-live kill-server` here and, on claylien, with the same
+socket directory (`ssh claylien 'export TMUX_TMPDIR=$HOME/.tmux-sock; tmux
+-L roost-live kill-server'`), before you remove
 `~/.local/share/roost-live` on both and the scratch repositories. Say in
 the review that the trust prompts added entries to `~/.claude.json`.
