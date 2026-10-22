@@ -4,6 +4,13 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Retiring a task whose worktree has submodules checked out, as an
+  agent does to build, removes it when nothing in them would be lost,
+  rather than ask you to run `git worktree remove --force`. When a
+  submodule holds commits its remote lacks, a stash, or uncommitted
+  changes, even ones `.gitmodules` hides, retiring names it and leaves
+  the task as it is. Discarding now counts those commits, and asks for
+  the task's name to lose them; it used to say nothing would be lost.
 - Notifications go by urgency. A permission request still notifies at
   once and alone. Finished turns, failures, and pull requests or conflicts
   that wait on you gather across tasks for up to a minute into one

@@ -503,25 +503,236 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual((self.repo / "hello").read_text(), "changed\n")
         self.assertFalse(wt.exists())
 
-    def test_retire_refuses_checked_out_submodules_before_stopping_the_agent(self):
-        # Git will not remove such a worktree; retiring used to stop the
-        # agent first and then fail.
+    def add_submodule(self):
+        """Commit a submodule lib to the primary checkout, cloned from a
+        library of its own, which is its remote."""
         library = self.root / "library"
         roost.git(self.root, "init", "-q", "-b", "main", str(library))
         roost.git(library, "-c", "user.name=T", "-c", "user.email=t@example.invalid",
                   "commit", "-q", "--allow-empty", "-m", "library")
         self.git("-c", "protocol.file.allow=always", "submodule", "add", "-q", str(library), "lib")
         self.git("commit", "-qm", "library")
+
+    def check_out_submodules(self, worktree):
+        self.git("-c", "protocol.file.allow=always", "submodule", "update", "-q", "--init", cwd=worktree)
+
+    def commit_in_submodule(self, worktree, message="in lib"):
+        self.git("-c", "user.name=T", "-c", "user.email=t@example.invalid",
+                 "commit", "-q", "--allow-empty", "-m", message, cwd=worktree / "lib")
+
+    def test_retire_removes_submodules_its_agent_checked_out_to_build(self):
+        # Git will not remove them without --force, which Roost used to
+        # leave to you.
+        self.add_submodule()
         task = self.create()
         wt = Path(task["worktree"])
-        self.git("-c", "protocol.file.allow=always", "submodule", "update", "-q", "--init", cwd=wt)
+        self.check_out_submodules(wt)
         reply = self.request("retire", id=task["id"])
-        self.assertIn("submodules checked out (lib)", reply["error"])
-        self.assertIn("git worktree remove --force", reply["error"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertFalse(wt.exists())
+        self.assertNotIn(task["paneId"], roost.pane_inventory(self.socket) or {})
+
+    def test_retire_refuses_while_a_submodule_holds_commits_no_remote_has(self):
+        self.add_submodule()
+        task = self.create()
+        wt = Path(task["worktree"])
+        self.check_out_submodules(wt)
+        # Its agent commits in lib, on a detached HEAD, and in the task.
+        self.commit_in_submodule(wt)
+        self.git("commit", "-qam", "Use the new lib", cwd=wt)
+        main = self.git("rev-parse", "main")
+        # Before merging, which would leave main naming a commit only
+        # this worktree has, and before stopping the agent.
+        error = self.request("merge", id=task["id"])["error"]
+        self.assertIn("lib holds 1 commit not on its remote", error)
+        self.assertNotIn("git worktree remove", error)
+        self.assertEqual(self.git("rev-parse", "main"), main)
+        self.assertTrue(wt.exists())
         self.assertIn(task["paneId"], roost.pane_inventory(self.socket))
-        self.request("stop", id=task["id"])
-        self.git("worktree", "remove", "--force", str(wt))
-        self.assertTrue(self.request("retire", id=task["id"])["ok"])
+        # With the task's own commit on another branch, as once pushed,
+        # discarding loses only the one in lib, and must say so.
+        self.git("branch", "pushed", task["branch"])
+        told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+        self.assertEqual((told["commits"], told["submoduleCommits"], told["changes"]), (0, 1, 0))
+        # Pushed from there, nothing would be lost.
+        self.git("push", "-q", "origin", "HEAD:refs/heads/fix", cwd=wt / "lib")
+        reply = self.request("merge", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertFalse(wt.exists())
+        self.assertEqual(self.git("rev-parse", "main:lib"), self.git("rev-parse", "fix", cwd=self.root / "library"))
+
+    def test_retire_counts_commits_in_a_submodule_since_deinitialized(self):
+        # Git keeps its repository, and still won't remove the worktree.
+        self.add_submodule()
+        task = self.create()
+        wt = Path(task["worktree"])
+        self.check_out_submodules(wt)
+        self.commit_in_submodule(wt)
+        self.git("submodule", "--quiet", "deinit", "--force", "lib", cwd=wt)
+        self.assertEqual(self.git("status", "--porcelain", cwd=wt), "")
+        self.assertIn("lib holds 1 commit not on its remote", self.request("retire", id=task["id"])["error"])
+        told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+        self.assertEqual(told["submoduleCommits"], 1)
+        self.assertTrue(self.request("discard", id=task["id"], expect=told["commit"])["ok"])
+        self.assertFalse(wt.exists())
+
+    def test_retire_sees_changes_in_a_submodule_that_gitmodules_hides(self):
+        self.add_submodule()
+        self.git("config", "-f", ".gitmodules", "submodule.lib.ignore", "dirty")
+        self.git("commit", "-qam", "Ignore what changes in lib")
+        task = self.create()
+        wt = Path(task["worktree"])
+        self.check_out_submodules(wt)
+        (wt / "lib" / "notes").write_text("only here\n")
+        self.assertEqual(self.git("status", "--porcelain", cwd=wt), "")
+        self.assertIn("lib holds 1 uncommitted file", self.request("retire", id=task["id"])["error"])
+        self.assertTrue((wt / "lib" / "notes").exists())
+        self.assertEqual(self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]["changes"], 1)
+
+    def test_retire_sees_changes_in_a_nested_submodule_that_its_parent_hides(self):
+        inner = self.root / "inner"
+        roost.git(self.root, "init", "-q", "-b", "main", str(inner))
+        roost.git(inner, "-c", "user.name=T", "-c", "user.email=t@example.invalid",
+                  "commit", "-q", "--allow-empty", "-m", "inner")
+        library = self.root / "library"
+        roost.git(self.root, "init", "-q", "-b", "main", str(library))
+        roost.git(library, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(inner), "inner")
+        roost.git(library, "config", "-f", ".gitmodules", "submodule.inner.ignore", "dirty")
+        roost.git(library, "add", ".gitmodules")
+        roost.git(library, "-c", "user.name=T", "-c", "user.email=t@example.invalid", "commit", "-qm", "inner")
+        self.git("-c", "protocol.file.allow=always", "submodule", "add", "-q", str(library), "lib")
+        self.git("commit", "-qm", "library")
+        task = self.create()
+        wt = Path(task["worktree"])
+        self.git("-c", "protocol.file.allow=always", "submodule", "update", "-q", "--init", "--recursive", cwd=wt)
+        (wt / "lib" / "inner" / "notes").write_text("only here\n")
+        self.assertEqual(self.git("status", "--porcelain", cwd=wt), "")
+        self.assertIn("lib/inner holds 1 uncommitted file", self.request("retire", id=task["id"])["error"])
+        self.assertTrue((wt / "lib" / "inner" / "notes").exists())
+        self.assertEqual(self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]["changes"], 1)
+
+    def test_retire_sees_a_submodule_checked_out_at_a_commit_the_task_does_not_record(self):
+        # Pushed, so nothing in it is lost, but which commit it is would be.
+        self.add_submodule()
+        self.git("config", "-f", ".gitmodules", "submodule.lib.ignore", "all")
+        self.git("commit", "-qam", "Ignore lib")
+        task = self.create()
+        wt = Path(task["worktree"])
+        self.check_out_submodules(wt)
+        self.commit_in_submodule(wt)
+        self.git("push", "-q", "origin", "HEAD:refs/heads/fix", cwd=wt / "lib")
+        self.assertEqual(self.git("status", "--porcelain", cwd=wt), "")
+        self.assertIn("lib is checked out at a commit the task doesn't record",
+                      self.request("retire", id=task["id"])["error"])
+        told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+        self.assertEqual((told["changes"], told["submoduleCommits"]), (1, 0))
+
+    def test_retire_names_a_kept_submodule_repository_that_lost_its_head(self):
+        # Beside a clean one, which would otherwise let --force remove both.
+        self.add_submodule()
+        task = self.create()
+        wt = Path(task["worktree"])
+        self.check_out_submodules(wt)
+        old = Path(self.git("rev-parse", "--absolute-git-dir", cwd=wt / "lib")).parent / "old"
+        shutil.copytree(old.parent / "lib", old)
+        (old / "HEAD").unlink()
+        self.assertIn("old, whose repository Git can't read", self.request("retire", id=task["id"])["error"])
+        self.assertEqual(self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]["unreadSubmodules"],
+                         1)
+        # A detached HEAD naming no commit, with its branches fine.
+        (old / "HEAD").write_text("1" * 40 + "\n")
+        self.assertIn("old, whose repository Git can't read", self.request("retire", id=task["id"])["error"])
+        # A stash naming no commit.
+        shutil.rmtree(old)
+        (old.parent / "lib" / "refs" / "stash").write_text("1" * 40 + "\n")
+        self.assertIn("lib, whose repository Git can't read", self.request("retire", id=task["id"])["error"])
+        (old.parent / "lib" / "refs" / "stash").unlink()
+        # A checkout whose repository Git can't find, for a config it can't read.
+        with (old.parent / "lib" / "config").open("a") as config:
+            config.write("[broken\n")
+        self.assertEqual(self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]["unreadSubmodules"],
+                         2)
+        self.assertTrue(wt.exists())
+
+    def test_retire_names_a_submodule_left_with_files_but_no_git_file(self):
+        # Git sees it as not checked out, so its status shows nothing.
+        self.add_submodule()
+        task = self.create()
+        wt = Path(task["worktree"])
+        self.check_out_submodules(wt)
+        (wt / "lib" / ".git").unlink()
+        (wt / "lib" / "notes").write_text("only here\n")
+        self.assertEqual(self.git("status", "--porcelain", cwd=wt), "")
+        self.assertIn("lib, whose repository Git can't read", self.request("retire", id=task["id"])["error"])
+        self.assertTrue((wt / "lib" / "notes").exists())
+        self.assertEqual(self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]["unreadSubmodules"],
+                         1)
+
+    def test_retire_sees_untracked_files_status_is_set_not_to_show(self):
+        self.add_submodule()
+        self.git("config", "status.showUntrackedFiles", "no")
+        task = self.create()
+        wt = Path(task["worktree"])
+        self.check_out_submodules(wt)
+        self.git("config", "status.showUntrackedFiles", "no", cwd=wt / "lib")
+        (wt / "lib" / "notes").write_text("only here\n")
+        self.assertIn("lib holds 1 uncommitted file", self.request("retire", id=task["id"])["error"])
+        self.assertEqual(self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]["changes"], 1)
+        (wt / "lib" / "notes").unlink()
+        (wt / "notes").write_text("only here\n")
+        self.assertIn("Uncommitted or untracked", self.request("retire", id=task["id"])["error"])
+        self.assertTrue((wt / "notes").exists())
+
+    def test_retire_counts_a_stash_in_a_submodule_and_names_one_git_cannot_read(self):
+        self.add_submodule()
+        task = self.create()
+        wt = Path(task["worktree"])
+        self.check_out_submodules(wt)
+        (wt / "lib" / "notes").write_text("put aside\n")
+        self.git("-c", "user.name=T", "-c", "user.email=t@example.invalid",
+                 "stash", "push", "-q", "--include-untracked", cwd=wt / "lib")
+        self.assertEqual(self.git("status", "--porcelain", cwd=wt), "")
+        self.assertIn("lib holds 1 stash", self.request("retire", id=task["id"])["error"])
+        self.assertEqual(self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]["submoduleCommits"],
+                         1)
+        gitdir = Path(self.git("rev-parse", "--absolute-git-dir", cwd=wt / "lib"))
+        # An index Git can't read hides what changed there. Retiring fails
+        # in `git status`; discarding must still say so.
+        index = (gitdir / "index").read_bytes()
+        (gitdir / "index").write_bytes(b"not an index")
+        self.assertFalse(self.request("retire", id=task["id"])["ok"])
+        self.assertEqual(self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]["unreadSubmodules"],
+                         1)
+        (gitdir / "index").write_bytes(index)
+        # A branch there naming no commit: Git can't count, so nothing is
+        # taken to be safe, and discarding still says so.
+        (gitdir / "refs" / "heads" / "broken").write_text("1" * 40 + "\n")
+        self.assertIn("lib, whose repository Git can't read", self.request("retire", id=task["id"])["error"])
+        reply = self.request("discard", id=task["id"], dryRun=True)
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(reply["result"]["discard"]["unreadSubmodules"], 1)
+        self.assertTrue(self.request("discard", id=task["id"], expect=reply["result"]["discard"]["commit"])["ok"])
+        self.assertFalse(wt.exists())
+
+    def test_retire_counts_commits_in_submodules_of_its_agents_own_worktree(self):
+        self.add_submodule()
+        task = self.create()
+        own = self.repo / ".claude" / "worktrees" / "probe"
+        self.git("worktree", "add", "-q", "-b", "worktree-probe", str(own), task["branch"])
+        roost.update_hook(roost.Store(str(self.state)), task["id"], dict(hook_event_name="Stop", cwd=str(own)),
+                          task["runId"])
+        self.check_out_submodules(own)
+        # On a branch there, with lib back where the task has it.
+        self.git("checkout", "-q", "-b", "idea", cwd=own / "lib")
+        self.commit_in_submodule(own)
+        self.git("checkout", "-q", "--detach", "HEAD~", cwd=own / "lib")
+        self.assertEqual(self.git("status", "--porcelain", cwd=own), "")
+        error = self.request("retire", id=task["id"])["error"]
+        self.assertIn("its agent's worktree", error)
+        self.assertIn("lib holds 1 commit not on its remote", error)
+        self.assertTrue(own.exists())
+        told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+        self.assertEqual(told["submoduleCommits"], 1)
 
     def test_merge_into_a_branch_the_primary_checkout_has_not_checked_out(self):
         task = self.create()

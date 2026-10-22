@@ -2916,6 +2916,21 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
        (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "fix")))
          (roost-discard task))
        (should-not acted)
+       ;; Commits only in its submodules, which go with its worktree.
+       (setq told '((commits . 0) (submoduleCommits . 1) (changes . 0) (commit . "abc123")))
+       (roost-discard task)
+       (should (string-match-p "loses 1 commit in its submodules that no remote has," asked))
+       (setq acted nil)
+       ;; Several losses read as a list.
+       (setq told '((commits . 1) (submoduleCommits . 2) (unreadSubmodules . 1) (changes . 3)
+                    (commit . "abc123")))
+       (roost-discard task)
+       (should (string-match-p (concat "loses 1 commit no other branch has, 2 commits in its submodules that no "
+                                       "remote has, whatever is in 1 submodule repository Git can't read and "
+                                       "3 uncommitted files,")
+                               asked))
+       (should (equal acted '(("discard" (expect . "abc123")))))
+       (setq acted nil)
        ;; Nothing to lose: a plain question.
        (setq told '((commits . 0) (changes . 0) (commit . "abc123")))
        (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t))
