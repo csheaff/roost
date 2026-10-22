@@ -136,10 +136,6 @@
   "Host-side directory for task records, helper, settings, and worktrees."
   :type 'string)
 
-(defvar roost-claude-command '("claude")
-  "Claude executable and extra arguments; see `roost-agent-commands'.")
-(make-obsolete-variable 'roost-claude-command 'roost-agent-commands "0.9")
-
 (defcustom roost-default-agent "claude"
   "Default agent offered when creating a task.
 Existing tasks retain their agent."
@@ -187,28 +183,21 @@ Existing tasks keep their branch."
   "Tmux socket, or nil to use tmux-control's configured default."
   :type '(choice (const nil) string))
 
-(defvar roost-session-name nil
-  "Ignored: each task has a tmux session of its own.")
-(make-obsolete-variable 'roost-session-name "each task has a tmux session of its own" "0.9")
-
-(defcustom roost-startup-grace 15
+(defvar roost-startup-grace 15
   "Seconds after which a task still starting is taken to be waiting at a prompt.
 Agents report nothing until their folder-trust or hook-review prompts
-are answered, so a long start usually needs you."
-  :type 'number)
+are answered, so a long start usually needs you.")
 
 (defcustom roost-watch-interval 3
   "Seconds between asynchronous status refreshes."
   :type 'number)
 
-(defcustom roost-watch-unfocused-interval 15
+(defvar roost-watch-unfocused-interval 15
   "Seconds between status refreshes while no Emacs frame has focus.
-Notifications can then come that much later; nothing waits on screen."
-  :type 'number)
+Notifications can then come that much later; nothing waits on screen.")
 
-(defcustom roost-request-timeout 60
-  "Maximum seconds for a host operation."
-  :type 'number)
+(defvar roost-request-timeout 60
+  "Maximum seconds for a host operation.")
 
 (defcustom roost-ssh-share-connections t
   "Whether Roost's requests to a host share one SSH connection.
@@ -242,10 +231,6 @@ leaves your windows alone.  `auto' uses perspective.el when
                  (const :tag "perspective.el" perspective)
                  (const :tag "A tab per task" tab-bar)
                  (const :tag "None" nil)))
-
-(defvar roost-use-perspectives t
-  "Allow `roost-workspace' to use perspective.el.")
-(make-obsolete-variable 'roost-use-perspectives 'roost-workspace "0.9")
 
 (defcustom roost-evil-state 'emacs
   "Evil state for the dashboard and task panels, or nil for Evil's default.
@@ -384,7 +369,6 @@ Plain, so that a coloured light always means the agent needs you.")
   "The line you are on in the sidebar or a task panel, while you are in it.
 Their windows have no mode line to show that you are, and the
 sidebar's keys act on this row.")
-(define-obsolete-face-alias 'roost-sidebar-selection 'roost-selection "0.9")
 (defface roost-current '((t :inherit region :extend t))
   "The sidebar's row for the task you are working on.
 It shows whether or not you are in the sidebar, and `roost-selection'
@@ -1632,15 +1616,13 @@ made now."
                 'face (when active 'persp-selected-face)
                 'local-map roost--workspace-mode-line-map
                 'mouse-face 'mode-line-highlight
-                'help-echo (format "%s%d task workspaces. Click to switch tasks; roost-status shows the dashboard."
+                'help-echo (format "%s%d task workspaces. Click to switch tasks; roost-dashboard shows the dashboard."
                                    (if description (concat description ". ") "")
                                    count))))
 
 (defun roost--compact-perspective-mode-line (original)
   "Collapse task perspectives in ORIGINAL without changing their identity."
   (if (not (and original roost-compact-mode-line
-                (with-suppressed-warnings ((obsolete roost-use-perspectives))
-                  roost-use-perspectives)
                 (bound-and-true-p persp-mode)))
       original
     (let* ((current (persp-current-name))
@@ -1668,9 +1650,7 @@ made now."
 
 (defun roost--workspace-backend ()
   "The workspace mechanism in use: `perspective', `tab-bar' or nil."
-  (let ((perspective (and (with-suppressed-warnings ((obsolete roost-use-perspectives))
-                            roost-use-perspectives)
-                          (bound-and-true-p persp-mode)
+  (let ((perspective (and (bound-and-true-p persp-mode)
                           (fboundp 'persp-current-name))))
     (pcase roost-workspace
       ('auto (cond (perspective 'perspective)
@@ -2300,11 +2280,7 @@ a word, within 40 characters."
 
 (defun roost--agent-command (agent)
   "Executable and arguments for AGENT."
-  (or (with-suppressed-warnings ((obsolete roost-claude-command))
-        ;; Set before `roost-agent-commands' had Claude's.
-        (and (equal agent "claude") (not (equal roost-claude-command '("claude")))
-             roost-claude-command))
-      (cdr (assoc agent roost-agent-commands))
+  (or (cdr (assoc agent roost-agent-commands))
       (list agent)))
 
 (defun roost--project-value (directory variable)
@@ -4588,9 +4564,8 @@ while you wrote, gets no note."
         :box (:line-width (6 . 1) :style flat-button)))
   "The button saving the note, in the heading of the note box.")
 
-(defcustom roost-note-box-lines 4
-  "How many lines of text the box for writing a review note shows."
-  :type 'natnum)
+(defvar roost-note-box-lines 4
+  "How many lines of text the box for writing a review note shows.")
 
 (defvar-keymap roost-note-box-mode-map
   :doc "Keys for writing a review note."
@@ -7844,7 +7819,7 @@ terminal or worktree, or ask which task."
     ("n" "Next waiting" roost-next-waiting)
     ("l" "Switch task" roost-switch-task)
     ("/" "Search conversations" roost-search)]
-   [("S" "Dashboard" roost-status)
+   [("S" "Dashboard" roost-dashboard)
     ("w" "Workload" roost-workload)
     ("g" "Refresh" roost-refresh)]
    [("b" "Sidebar" roost-sidebar-mode)
@@ -7876,7 +7851,7 @@ terminal or worktree, or ask which task."
   "/" #'roost-search
   "c" #'roost-new-task
   "b" #'roost-sidebar-mode
-  "S" #'roost-status
+  "S" #'roost-dashboard
   "w" #'roost-workload
   "q" #'roost-task-info-quit
   "g" #'roost-task-info-refresh)
@@ -8769,7 +8744,7 @@ The mark stays where it was."
         (roost--render-visible #'roost--render-task-info)))))
 
 ;;;###autoload
-(defun roost-status ()
+(defun roost-dashboard ()
   "Open the dashboard and watch configured and remembered hosts."
   (interactive)
   (let ((buffer (get-buffer-create "*roost*")))
@@ -9111,7 +9086,7 @@ Hosts send a message's first 1,500 characters."
 (defvar-keymap roost-sidebar-list-mode-map
   :doc "Keys in the task sidebar."
   :parent roost-dashboard-mode-map
-  "S" #'roost-status
+  "S" #'roost-dashboard
   "q" #'roost-sidebar-mode)
 
 (define-derived-mode roost-sidebar-list-mode roost-dashboard-mode "Roost Sidebar"
@@ -10260,8 +10235,8 @@ See `roost-watch-unfocused-interval'."
     (setq roost--last-watch (float-time))
     (roost-refresh t)))
 
-(define-obsolete-function-alias 'roost-list #'roost-switch-task "0.9")
-(define-obsolete-function-alias 'roost-kill #'roost-stop "0.9")
+;;;###autoload
+(define-obsolete-function-alias 'roost-status #'roost-dashboard "1.0")
 
 (provide 'roost)
 ;;; roost.el ends here

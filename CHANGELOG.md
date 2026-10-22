@@ -4,6 +4,24 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- `M-x roost-dashboard` opens the dashboard, as `roost-status` did, and
+  `S` in the menu and sidebar runs it. `roost-status` still works, as an
+  obsolete alias, until 1.1. Upgrading: in your configuration, bind or
+  call `roost-dashboard` instead.
+- The names 0.9 made obsolete are gone: `roost-claude-command`,
+  `roost-use-perspectives`, `roost-session-name`, the
+  `roost-sidebar-selection` face, and the commands `roost-list` and
+  `roost-kill`. Upgrading: a configuration that still sets one of them
+  now changes nothing. Put Claude's command in the `"claude"` entry of
+  `roost-agent-commands`, set `roost-workspace` to `tab-bar` or nil
+  rather than `roost-use-perspectives` to nil, use the `roost-selection`
+  face, and `roost-switch-task` and `roost-stop` for the commands.
+- `roost-startup-grace`, `roost-request-timeout`,
+  `roost-watch-unfocused-interval` and `roost-note-box-lines` are plain
+  variables rather than options, outside what 1.0 will keep stable.
+  Upgrading: if you set one with Customize, set it with `setq` instead,
+  as Customize no longer applies it.
+
 ## 0.11.0
 
 To upgrade from 0.10:

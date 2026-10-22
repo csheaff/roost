@@ -1614,10 +1614,10 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
          (roost-resume (gethash '("dev" "0123456789abcdef") roost--tasks)))
        (should (equal (reverse requests) '(("create" . :false) ("create" . t) ("resume" . t))))))))
 
-(ert-deftest roost-creation-selects-agent-command-and-preserves-claude-configuration ()
+(ert-deftest roost-creation-selects-agent-command ()
   (roost-test--isolated
-   (let ((roost-claude-command '("claude" "--model" "sonnet"))
-         (roost-agent-commands '(("codex" "codex" "--model" "test-model") ("pi" "pi" "--provider" "anthropic")))
+   (let ((roost-agent-commands '(("claude" "claude" "--model" "sonnet") ("codex" "codex" "--model" "test-model")
+                                 ("pi" "pi" "--provider" "anthropic")))
          (roost-default-agent "pi") requests)
      (cl-letf (((symbol-function 'hack-dir-local-variables-non-file-buffer) #'ignore)
                ((symbol-function 'roost--request) (lambda (_host _action params &rest _) (push params requests))))
@@ -1628,14 +1628,9 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
        (should (equal (alist-get 'command (car requests)) ["codex" "--model" "test-model"]))
        (roost-new-task "/tmp/" "claude" nil nil "claude")
        (should (equal (alist-get 'command (car requests)) ["claude" "--model" "sonnet"]))
-       ;; Claude's command now lives with the others; the older setting still wins.
-       (let ((roost-claude-command '("claude"))
-             (roost-agent-commands '(("claude" "claude" "--model" "opus"))))
-         (roost-new-task "/tmp/" "claude" nil nil "claude")
-         (should (equal (alist-get 'command (car requests)) ["claude" "--model" "opus"]))
-         (should-not (assq 'session (pop requests))))
+       (should-not (assq 'session (pop requests)))
        (should-error (roost-new-task "/tmp/" "unknown" nil nil "unknown") :type 'user-error)
-       (should (= (length requests) 3))))))
+       (should (= (length requests) 2))))))
 
 (ert-deftest roost-empty-dashboard-does-not-target-previous-task ()
   (roost-test--isolated
@@ -1730,7 +1725,6 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
          (should (string-match-p "Roost: dev:" text))
          (should-not (string-match-p "123456" text)))
        (let ((roost-compact-mode-line nil)) (should (equal (roost--compact-perspective-mode-line '("original")) '("original"))))
-       (let ((roost-use-perspectives nil)) (should (equal (roost--compact-perspective-mode-line '("original")) '("original"))))
        (should-not (roost--compact-perspective-mode-line nil))))))
 
 (ert-deftest roost-shell-pane-context-targets-its-task ()
@@ -2682,7 +2676,7 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
      (let ((roost-sidebar-mode nil))
        (cl-letf (((symbol-function 'roost-watch-mode) #'ignore)
                  ((symbol-function 'roost-refresh) #'ignore))
-         (roost-status)
+         (roost-dashboard)
          (should-not roost-sidebar-mode)
          (should-not (get-buffer-window roost--sidebar-buffer)))))))
 
@@ -7574,7 +7568,7 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
      (setq persp-mode t)
      (cl-letf (((symbol-function 'persp-current-name) (lambda () "main")))
        (should (eq (roost--workspace-backend) 'perspective))
-       (let ((roost-use-perspectives nil))
+       (let ((roost-workspace 'tab-bar))
          (should (eq (roost--workspace-backend) 'tab-bar))))
      (let ((roost-workspace nil)) (should-not (roost--workspace-backend))))))
 
@@ -7676,8 +7670,13 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
     (should (eq (lookup-key map "c") #'roost-new-task))
     (should (eq (lookup-key map "b") #'roost-sidebar-mode))
     (should (eq (lookup-key map "h") #'roost-dispatch)))
-  (should (eq (lookup-key roost-task-info-mode-map "S") #'roost-status))
-  (should (eq (lookup-key roost-sidebar-list-mode-map "S") #'roost-status)))
+  (should (eq (lookup-key roost-task-info-mode-map "S") #'roost-dashboard))
+  (should (eq (lookup-key roost-sidebar-list-mode-map "S") #'roost-dashboard)))
+
+(ert-deftest roost-status-still-opens-the-dashboard ()
+  ;; Its name until 1.0, kept as an obsolete alias.
+  (should (eq (indirect-function 'roost-status) (indirect-function 'roost-dashboard)))
+  (should (get 'roost-status 'byte-obsolete-info)))
 
 (ert-deftest roost-draft-and-dashboard-take-the-window-you-are-in ()
   ;; A split squeezed the agent's terminal beside them; quitting gives the
@@ -7692,7 +7691,7 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
              (set-window-buffer main terminal)
              (cl-letf (((symbol-function 'roost-refresh) #'ignore)
                        ((symbol-function 'roost-watch-mode) #'ignore))
-               (roost-status))
+               (roost-dashboard))
              (should (equal (buffer-name (window-buffer main)) "*roost*"))
              (should (= (length (window-list)) 1))
              (quit-window)
