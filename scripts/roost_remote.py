@@ -2704,19 +2704,81 @@ def require_clean(repo):
         raise RoostError("Uncommitted or untracked files remain; review and commit in Magit first")
 
 
-def require_removable(worktree):
-    """Git will not remove a worktree with submodules checked out, as an
-    agent does to build: their repositories, perhaps holding the only copy
-    of commits made in them, live in the worktree's Git directory. Refuse
-    before stopping the agent rather than fail halfway through retiring."""
+def submodule_repositories(worktree):
+    """The repositories of WORKTREE's submodules, nested ones too, as
+    {Git directory: name}: those checked out, as an agent does to build,
+    and those Git keeps of submodules since deinitialized, which still keep
+    it from removing the worktree without --force. Removing it deletes them
+    all: Git keeps them in the worktree's own Git directory or, for one
+    added where it was cloned, in the submodule. The primary checkout's
+    are other clones."""
+    found = {}
+
+    def add(gitdir, name):
+        gitdir = gitdir.resolve()
+        if gitdir not in found and gitdir.is_dir():
+            found[gitdir] = name
+            walk(gitdir / "modules", name + "/")
+
+    def walk(modules, prefix):
+        # A submodule's name may hold slashes.
+        for directory, subdirectories, files in os.walk(modules):
+            if "HEAD" in files and "objects" in subdirectories:
+                subdirectories[:] = []
+                add(Path(directory), prefix + Path(directory).relative_to(modules).as_posix())
+
+    def checkouts(top, prefix):
+        for entry in read_git(top, "ls-files", "--stage", "-z").stdout.split("\0"):
+            mode, _, path = entry.partition("\t")
+            if mode.startswith("160000 ") and (top / path / ".git").exists():
+                gitdir = read_git(top / path, "rev-parse", "--absolute-git-dir").stdout.strip()
+                if gitdir:
+                    add(Path(gitdir), prefix + path)
+                    checkouts(top / path, prefix + path + "/")
+
+    worktree = Path(worktree)
+    checkouts(worktree, "")
     modules = read_git(worktree, "rev-parse", "--git-path", "modules").stdout.strip()
-    populated = [line[1:].split()[1] for line in
-                 read_git(worktree, "submodule", "status").stdout.splitlines()
-                 if line[:1] != "-" and len(line[1:].split()) > 1]
-    if populated or (modules and (worktree / modules).is_dir()):
-        raise RoostError("Git will not remove a worktree with submodules checked out%s. Once any commits made "
-                         "in them are safe, run git worktree remove --force %s, then retire again"
-                         % (" (" + ", ".join(populated) + ")" if populated else "", shlex.quote(str(worktree))))
+    if modules:
+        walk(worktree / modules, "")
+    return found
+
+
+def commits_on_no_remote(gitdir, name):
+    """How many commits the repository at GITDIR, submodule NAME's, has on
+    no remote-tracking branch or tag: from its HEAD, where a submodule's
+    commits sit, detached, as well as from its branches."""
+    def run(*args):
+        return execute(["git", "--git-dir=" + str(gitdir), "--no-optional-locks", *args], check=False)
+    head = ["HEAD"] if run("rev-parse", "-q", "--verify", "HEAD^{commit}").returncode == 0 else []
+    result = run("rev-list", "--count", *head, "--branches", "--not", "--remotes", "--tags")
+    if result.returncode:
+        raise RoostError("Git could not read the repository of submodule %s: %s"
+                         % (name, result.stderr.strip() or "rev-list failed"))
+    return int(result.stdout)
+
+
+def require_submodules_kept(worktree, where="its worktree"):
+    """Refuse to remove WORKTREE, which is WHERE and clean as `git status`
+    sees it, while its submodules hold work no remote has: commits, or
+    changes .gitmodules tells `git status` to leave out. Say whether it
+    has submodule repositories, which only --force removes. With nothing
+    in them to lose, as when its agent checked them out to build, that is
+    safe."""
+    repositories = submodule_repositories(worktree)
+    if not repositories:
+        return False
+    lost = ["%d commit%s in %s not on its remote" % (count, "" if count == 1 else "s", name)
+            for count, name in ((commits_on_no_remote(gitdir, name), name)
+                                for gitdir, name in repositories.items()) if count]
+    changed = [entry[3:] for entry in read_git(worktree, "status", "--porcelain", "-z",
+                                               "--ignore-submodules=none").stdout.split("\0") if entry]
+    lost += ["changes in %s that .gitmodules hides" % path for path in changed]
+    if lost:
+        raise RoostError("Removing %s would lose work in its submodules: %s. %s there, then retire again, "
+                         "or discard the task" % (where, ", ".join(lost),
+                                                  "Commit and push it" if changed else "Push it"))
+    return True
 
 
 MERGE_TREE_GIT = (2, 38)  # `git merge-tree --write-tree`
@@ -2912,7 +2974,8 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
     branch_exists = ref_exists(repo, branch)
     if worktree_exists:
         require_clean(str(worktree))
-        require_removable(worktree)
+        # Before stopping the agent, rather than fail halfway through.
+        require_submodules_kept(worktree)
     require_agent_work_kept(task)
     squashed = None
     if merge:
@@ -3073,7 +3136,8 @@ def update(store, task):
 def discard(store, task, expect=None, dry_run=False, teardown=None):
     """Delete a task's worktree, branch, window and record, whatever they
     hold. With DRY_RUN, only say what would be lost: commits on no other
-    branch, and uncommitted or untracked files. Otherwise EXPECT is the
+    branch, commits in submodules on no remote of theirs, and uncommitted
+    or untracked files, those in submodules too. Otherwise EXPECT is the
     branch's commit when you were told, and a branch that has moved since
     is not deleted. TEARDOWN, the project's teardown command, runs in the
     worktree before it is removed."""
@@ -3088,20 +3152,24 @@ def discard(store, task, expect=None, dry_run=False, teardown=None):
     # The worktrees its agent made go with it.
     work = agent_work(task)
     if dry_run:
+        paths = ([worktree] if worktree_exists else []) + [entry["path"] for entry in work]
         branches = ([branch] if branch_exists else []) + [entry["branch"] for entry in work if entry["branch"]]
         # Commits on a detached HEAD there, too; another branch keeps its own.
         heads = [head for head in [read_git(path, "rev-parse", "-q", "--verify", "HEAD").stdout.strip()
-                                   for path in ([worktree] if worktree_exists else [])
-                                   + [entry["path"] for entry in work]] if head]
+                                   for path in paths] if head]
         tips = ["refs/heads/" + name for name in branches] + heads
         # --exclude applies to the --branches that follows it, by short name.
         commits = int(git(repo, "rev-list", "--count", *tips, "--not",
                           *("--exclude=" + name for name in branches),
                           "--branches", "--remotes", "--tags").stdout) if tips else 0
-        changes = sum(len(read_git(path, "status", "--porcelain").stdout.splitlines())
-                      for path in ([worktree] if worktree_exists else []) + [entry["path"] for entry in work])
-        return dict(task, discard=dict(commits=commits, changes=changes, commit=commit,
-                                       agentWorktrees=len(work)))
+        # Removing the worktrees deletes their submodules' repositories.
+        submodule_commits = sum(commits_on_no_remote(gitdir, name) for path in paths
+                                for gitdir, name in submodule_repositories(path).items())
+        # Changes in a submodule too, whatever .gitmodules tells status.
+        changes = sum(len(read_git(path, "status", "--porcelain", "--ignore-submodules=none").stdout.splitlines())
+                      for path in paths)
+        return dict(task, discard=dict(commits=commits, submoduleCommits=submodule_commits, changes=changes,
+                                       commit=commit, agentWorktrees=len(work)))
     if commit != (expect or None):
         raise RoostError("The task's branch has moved since you were asked; look at it again before discarding")
     stop(store, task)
@@ -3717,7 +3785,10 @@ def remove_worktrees(store, task, worktree, agents, force=False, teardown=None):
                                              "or untracked files, which it may have left; look at them in "
                                              "Magit, then retire or discard the task")
                         raise
-                    git(task["repo"], "worktree", "remove", str(worktree))
+                    # Git won't remove submodules without --force, which
+                    # skips its own checks; once, so a lock still holds.
+                    force = ["--force"] if require_submodules_kept(worktree) else []
+                    git(task["repo"], "worktree", "remove", *force, str(worktree))
         finally:
             # The record may have changed meanwhile: clear only this mark.
             task.pop("removing", None)
@@ -3730,8 +3801,10 @@ def remove_worktrees(store, task, worktree, agents, force=False, teardown=None):
 
 def require_agent_work_kept(task):
     """Refuse to finish TASK while its agent's own worktrees hold work that
-    is not on the task's branch: nothing else would show it."""
-    left = [entry for entry in agent_work(task) if entry["ahead"] or entry["dirty"]]
+    is not on the task's branch, or in their submodules: nothing else would
+    show it."""
+    work = agent_work(task)
+    left = [entry for entry in work if entry["ahead"] or entry["dirty"]]
     if left:
         entry = left[0]
         what = ", ".join(filter(None, [
@@ -3741,6 +3814,8 @@ def require_agent_work_kept(task):
         raise RoostError("Its agent left work in its own worktree %s (%s%s). Merge it into the task, "
                          "or remove it with git worktree remove --force --force, then try again"
                          % (entry["path"], ("branch %s: " % entry["branch"]) if entry["branch"] else "", what))
+    for entry in work:
+        require_submodules_kept(entry["path"], "its agent's worktree " + entry["path"])
 
 
 def beside_program_status(updates, before, reports_turns=True):

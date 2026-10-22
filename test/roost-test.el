@@ -2621,6 +2621,12 @@
        (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "fix")))
          (roost-discard task))
        (should-not acted)
+       ;; Commits only in its submodules, which go with its worktree.
+       (setq told '((commits . 0) (submoduleCommits . 1) (changes . 0) (commit . "abc123")))
+       (roost-discard task)
+       (should (string-match-p "loses 1 commit in its submodules that no remote has," asked))
+       (should (equal acted '(("discard" (expect . "abc123")))))
+       (setq acted nil)
        ;; Nothing to lose: a plain question.
        (setq told '((commits . 0) (changes . 0) (commit . "abc123")))
        (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t))
