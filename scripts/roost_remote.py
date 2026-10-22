@@ -4336,16 +4336,21 @@ def relay(argv, cwd, env, report):
 
 
 WORKTREE_INCLUDE = ".worktreeinclude"
+UNREAD_DIRECTORY = re.compile(r"warning: could not open directory '(.*/)': (.*)")
 
 
-def git_fields(repo, *args, input=None, succeed=(0,)):
+def git_fields(repo, *args, input=None, succeed=(0,), warnings=None):
     """What `git ARGS` prints in REPO, given INPUT, split at its NULs, with
     paths as the file system names them, even ones not in UTF-8. An exit
-    status not in SUCCEED raises RoostError."""
+    status not in SUCCEED raises RoostError. With WARNINGS, a list, what
+    it says besides goes there, in English."""
     result = subprocess.run(["git", "-C", str(repo), *args], input=input, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, pass_fds=tuple(INHERITED))
+                            stderr=subprocess.PIPE, pass_fds=tuple(INHERITED),
+                            env=None if warnings is None else dict(os.environ, LC_ALL="C"))
     if result.returncode not in succeed:
         raise RoostError(os.fsdecode(result.stderr).strip() or "git %s failed in %s" % (args[0], repo))
+    if warnings is not None:
+        warnings.extend(os.fsdecode(result.stderr).splitlines())
     return [os.fsdecode(field) for field in result.stdout.split(b"\0") if field]
 
 
@@ -4375,7 +4380,19 @@ def included_files(repo):
     files = {path for path in ignored if not path.endswith("/")}
     directories = tuple(path for path in ignored if path.endswith("/"))
     # Untracked files the patterns match, and nested repositories, ending in "/".
-    matched = git_fields(repo, "ls-files", "-z", "--others", "--ignored", "--exclude-from=" + str(include))
+    warnings = []
+    matched = git_fields(repo, "ls-files", "-z", "--others", "--ignored", "--exclude-from=" + str(include),
+                         warnings=warnings)
+    # A directory Git can't read is left out, as it leaves it, unless the
+    # patterns name it whole, as `secrets/`, when its files are wanted.
+    unread = dict(match.groups() for match in map(UNREAD_DIRECTORY.match, warnings) if match)
+    if unread:
+        named = git_fields(repo, "ls-files", "-z", "--others", "--ignored", "--exclude-from=" + str(include),
+                           "--directory", "--", *(":(literal)" + path for path in unread))
+        for path in named:
+            if path in unread:
+                raise RoostError("Could not read %s, which %s lists (%s); resuming the task tries again"
+                                 % (shown(path), WORKTREE_INCLUDE, unread[path]))
     return [path for path in matched
             if path in files or not path.endswith("/") and path.startswith(directories)]
 
@@ -4527,25 +4544,33 @@ def copy_included(repo, worktree):
         # somewhere if it did; else, as through a link or past a file the
         # worktree lacks, it leads there from the primary checkout.
         if not failed:
-            for path in later:
-                try:
-                    os.symlink(os.readlink(repo / path), worktree / path)
-                except (FileExistsError, FileNotFoundError):
-                    continue
-                copied.append(path)
-            root, top = os.path.realpath(repo), os.path.realpath(worktree)
-            for path in copied:
-                target, source = worktree / path, repo / path
-                if not target.is_symlink() or os.path.isabs(os.readlink(target)):
-                    continue
-                try:
-                    link = os.readlink(source)
-                except OSError:
-                    continue  # Gone since, as a log rotated away: its copy stays as made.
-                if (within(os.path.realpath(source), root) != within(os.path.realpath(target), top)
-                        or source.exists() and not target.exists()):
-                    os.unlink(target)
-                    os.symlink(os.path.join(os.path.dirname(source), link), target)
+            links = []
+            try:
+                for path in later:
+                    try:
+                        os.symlink(os.readlink(repo / path), worktree / path)
+                    except (FileExistsError, FileNotFoundError):
+                        continue
+                    links.append(path)
+                root, top = os.path.realpath(repo), os.path.realpath(worktree)
+                for path in copied + links:
+                    target, source = worktree / path, repo / path
+                    if not target.is_symlink() or os.path.isabs(os.readlink(target)):
+                        continue
+                    try:
+                        link = os.readlink(source)
+                    except OSError:
+                        continue  # Gone since, as a log rotated away: its copy stays as made.
+                    if (within(os.path.realpath(source), root) != within(os.path.realpath(target), top)
+                            or source.exists() and not target.exists()):
+                        os.unlink(target)
+                        os.symlink(os.path.join(os.path.dirname(source), link), target)
+            except OSError as exc:
+                # All of them or none, so that the next try makes and judges each.
+                for made_link in links:
+                    with contextlib.suppress(OSError):
+                        os.unlink(worktree / made_link)
+                failed.append("%s (%s)" % (shown(path), exc.strerror or exc))
     finally:
         shutil.rmtree(staging, ignore_errors=True)
     if failed:

@@ -2,6 +2,7 @@
 import base64
 import concurrent.futures
 import datetime
+import errno
 import fcntl
 import http.server
 import importlib.util
@@ -4079,6 +4080,41 @@ class WorktreeInclude(unittest.TestCase):
         with patch.object(roost.os, "symlink", rotate):
             roost.copy_included(self.repo, worktree)
         self.assertEqual(os.readlink(worktree / "latest.log"), "current.log")
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads any file")
+    def test_a_directory_it_cant_read_stops_the_copy_only_if_the_patterns_name_it(self):
+        self.listed("secrets/\ndata/\n.env\n", ".env\n", ".env", "secrets/key.pem", "data/x")
+        worktree = self.worktree()
+        for name in ("secrets", "data"):
+            (self.repo / name).chmod(0)
+            self.addCleanup((self.repo / name).chmod, 0o755)
+        # A database's, say: Git can't say whether the patterns want any of it.
+        roost.copy_included(self.repo, worktree)
+        self.assertTrue((worktree / ".env").is_file())
+        (self.repo / ".worktreeinclude").write_text(".env\nsecrets/\n")
+        with self.assertRaisesRegex(roost.RoostError, r"Could not read secrets/, which \.worktreeinclude lists "
+                                                      r"\(Permission denied\)"):
+            roost.copy_included(self.repo, worktree)
+
+    def test_links_made_last_are_all_made_or_none(self):
+        (self.repo / "settings.env").write_text("SETTING=1\n")
+        for name in ("a.env", "b.env"):
+            (self.repo / name).symlink_to("settings.env")
+        self.listed("*.env\n", "a.env\nb.env\n")
+        worktree = self.worktree()
+        make = os.symlink
+
+        def full(link, target, *args, **kwargs):
+            if Path(target).name == "b.env":
+                raise OSError(errno.ENOSPC, "No space left on device")
+            return make(link, target, *args, **kwargs)
+        with patch.object(roost.os, "symlink", full):
+            with self.assertRaisesRegex(roost.RoostError, r"b\.env \(No space left on device\)"):
+                roost.copy_included(self.repo, worktree)
+        self.assertFalse(os.path.lexists(worktree / "a.env"))
+        roost.copy_included(self.repo, worktree)
+        self.assertEqual(((worktree / "a.env").read_text(), (worktree / "b.env").read_text()),
+                         ("SETTING=1\n", "SETTING=1\n"))
 
     def test_a_link_to_a_file_the_worktree_lacks_leads_to_the_primary_checkouts(self):
         (self.repo / "settings.env").write_text("SETTING=1\n")
