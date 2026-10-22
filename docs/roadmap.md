@@ -38,9 +38,6 @@ Small, and probably worth the most.
   with [the recipes and their status](melpa.md) current, and send them,
   tmux-control first, once people ask for them there. Features don't wait
   for it.
-- **`.worktreeinclude`.** Copy the ignored files it lists, such as `.env`,
-  into new worktrees, as Claude Code and Conductor do. Today that takes
-  `roost-setup-command`.
 - **Your phone, through Claude Code's Remote Control.** An option to start
   each Claude task with `--remote-control`, named after the task, so it
   shows in the Claude app and at claude.ai/code. Both send a push

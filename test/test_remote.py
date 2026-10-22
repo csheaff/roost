@@ -2,6 +2,7 @@
 import base64
 import concurrent.futures
 import datetime
+import errno
 import fcntl
 import http.server
 import importlib.util
@@ -2576,6 +2577,107 @@ class Lifecycle(unittest.TestCase):
         task = self.wait(reply["result"], "ready")
         self.assertEqual((Path(task["worktree"]) / ".env").read_text(), "SECRET=1\n")
 
+    def put(self, path, data="x\n", mode=0o644):
+        path = self.repo / path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(data)
+        path.chmod(mode)
+
+    def test_worktreeinclude_copies_the_ignored_files_it_lists(self):
+        (self.repo / ".gitignore").write_text(".env\nnode_modules/\n*.log\nsecrets/\nbuild/\nlinked.env\n")
+        self.put("tracked.json", "committed\n")
+        self.git("add", ".")
+        self.git("commit", "-m", "ignore")
+        self.put(".env", "SECRET=1\n", 0o600)
+        self.put("node_modules/pkg/cli.js", mode=0o755)
+        self.put("node_modules/pkg/.bin/tool")
+        self.put("app.log")
+        self.put("logs/deep/app.log")
+        self.put("debug.log")
+        self.put("secrets/dev/key.pem", mode=0o600)
+        (self.repo / "secrets/dev").chmod(0o700)
+        self.put("secrets/prod/key.pem")
+        self.put("build/.env")
+        self.put("notes.txt")
+        self.put("tracked.json", "changed\n")
+        (self.root / "outside.env").write_text("SHARED=1\n")
+        os.symlink("../outside.env", self.repo / "linked.env")
+        (self.repo / ".worktreeinclude").write_text(
+            "# What a task needs\n.env\nnode_modules\n*.log\n!debug.log\nsecrets/dev/\n"
+            "notes.txt\ntracked.json\nlinked.env\n")
+        task = self.create()
+        wt = Path(task["worktree"])
+        mode = lambda path: stat.S_IMODE((wt / path).stat().st_mode)
+        # A file, with its mode.
+        self.assertEqual(((wt / ".env").read_text(), mode(".env")), ("SECRET=1\n", 0o600))
+        # A directory, with all in it.
+        self.assertEqual(mode("node_modules/pkg/cli.js"), 0o755)
+        self.assertTrue((wt / "node_modules/pkg/.bin/tool").is_file())
+        # A glob, at any depth, but not what a negation leaves out.
+        self.assertTrue((wt / "app.log").is_file())
+        self.assertTrue((wt / "logs/deep/app.log").is_file())
+        self.assertFalse((wt / "debug.log").exists())
+        # In a directory Git ignores as a whole, and its directory's mode;
+        # `.env`, without a slash, at any depth, as in a .gitignore.
+        self.assertEqual((mode("secrets/dev/key.pem"), mode("secrets/dev")), (0o600, 0o700))
+        self.assertFalse((wt / "secrets/prod").exists())
+        self.assertTrue((wt / "build/.env").is_file())
+        # Listed, but Git doesn't ignore it, or tracks it.
+        self.assertFalse((wt / "notes.txt").exists())
+        self.assertEqual((wt / "tracked.json").read_text(), "committed\n")
+        # A link, still to where it led.
+        self.assertTrue((wt / "linked.env").is_symlink())
+        self.assertEqual((wt / "linked.env").read_text(), "SHARED=1\n")
+        self.assertEqual(self.git("status", "--porcelain", cwd=wt), "")
+        self.assertIs(roost.Store(str(self.state)).read(task["id"])["copyComplete"], True)
+
+    def test_retiring_or_discarding_a_task_clears_what_a_cut_off_copy_left(self):
+        for action in ("retire", "discard"):
+            task = self.create(name=action)
+            staging = roost.copy_staging(task["worktree"])
+            staging.mkdir()
+            (staging / "file").write_text("SECRET=1\n")
+            self.request("stop", id=task["id"])
+            told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+            reply = self.request(action, id=task["id"], **(dict(expect=told["commit"]) if action == "discard" else {}))
+            self.assertTrue(reply["ok"], reply)
+            self.assertFalse(staging.exists(), action)
+
+    def test_without_worktreeinclude_nothing_is_copied(self):
+        (self.repo / ".gitignore").write_text(".env\n")
+        self.git("add", ".")
+        self.git("commit", "-m", "ignore")
+        self.put(".env")
+        task = self.create()
+        self.assertFalse((Path(task["worktree"]) / ".env").exists())
+        self.assertNotIn("copyComplete", roost.Store(str(self.state)).read(task["id"]))
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads any file")
+    def test_a_file_that_fails_to_copy_stops_the_task_and_resuming_copies_it(self):
+        (self.repo / ".gitignore").write_text(".env\n*.pem\n")
+        self.git("add", ".")
+        self.git("commit", "-m", "ignore")
+        self.put(".env")
+        self.put("key.pem", mode=0)
+        (self.repo / ".worktreeinclude").write_text(".env\n*.pem\n")
+        reply = self.request("create", directory=str(self.repo), name="keys", socket=self.socket,
+                             setup="touch setup-ran", command=[sys.executable, str(FAKE)])
+        task = self.wait(reply["result"], "failed")
+        self.assertIn("key.pem (Permission denied)", task["error"])
+        self.assertIs(task["copyComplete"], False)
+        wt = Path(task["worktree"])
+        # What it could, and not the setup, which may need the rest.
+        self.assertTrue((wt / ".env").is_file())
+        self.assertFalse((wt / "setup-ran").exists())
+        self.wait_for_pane_exit(task)
+        # On its screen still, as tmux says the pane is dead.
+        self.assertIn("Roost: Could not copy", roost.tmux(self.socket, "capture-pane", "-p", "-t", task["paneId"]).stdout)
+        (self.repo / "key.pem").chmod(0o600)
+        self.assertTrue(self.request("resume", id=task["id"])["ok"])
+        self.assertIs(self.wait(task, "ready")["copyComplete"], True)
+        self.assertTrue((wt / "key.pem").is_file())
+        self.assertTrue((wt / "setup-ran").exists())
+
     def test_teardown_runs_in_the_worktree_just_before_it_goes(self):
         task = self.create()
         wt = Path(task["worktree"])
@@ -3837,6 +3939,366 @@ elif args[:2] == ["auth", "status"]:
         self.assertTrue(response["ok"])
         self.wait(response["result"], "failed")
         self.assertEqual(self.git("status", "--porcelain"), "")
+
+
+class WorktreeInclude(unittest.TestCase):
+    """Which files a .worktreeinclude lists, as Claude Code reads it."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.temp.name)
+        roost.git(self.repo, "init", "-q")
+        # Not the user's global excludes, which may ignore .env everywhere.
+        for name, value in (("user.name", "Roost Test"), ("user.email", "roost@example.invalid"),
+                            ("commit.gpgsign", "false"), ("core.excludesFile", os.devnull)):
+            roost.git(self.repo, "config", name, value)
+        self.addCleanup(self.temp.cleanup)
+
+    def listed(self, ignore, include, *files):
+        (self.repo / ".gitignore").write_text(ignore)
+        (self.repo / ".worktreeinclude").write_text(include)
+        for name in files:
+            (self.repo / name).parent.mkdir(parents=True, exist_ok=True)
+            (self.repo / name).write_text("x\n")
+        return sorted(roost.included_files(self.repo))
+
+    def test_a_pattern_without_a_slash_matches_at_any_depth_as_in_a_gitignore(self):
+        ignore = ".env\nnode_modules/\nvendor/\n"
+        files = (".env", "node_modules/pkg/.env", "vendor/x/config.json")
+        self.assertEqual(self.listed(ignore, ".env\n", *files), [".env", "node_modules/pkg/.env"])
+        # Claude Code leaves that one out; anchored, or with the directory left out, so does Roost.
+        self.assertEqual(self.listed(ignore, "/.env\n", *files), [".env"])
+        self.assertEqual(self.listed(ignore, ".env\n!node_modules/**\n", *files), [".env"])
+        self.assertEqual(self.listed(ignore, "vendor/**/config.json\n", *files), ["vendor/x/config.json"])
+
+    def test_a_directory_with_only_ignored_files_is_looked_through(self):
+        self.assertEqual(self.listed("*.log\n", "*.log\n", "logs/a.log", "logs/deep/b.log"),
+                         ["logs/a.log", "logs/deep/b.log"])
+
+    def test_negations_and_parents_read_as_in_a_gitignore(self):
+        files = (".env", ".env.local", ".env.example", "certs/a.pem", "certs/b.pem")
+        self.assertEqual(self.listed(".env*\ncerts/\n", ".env*\n!.env.example\ncerts/*\n!certs/b.pem\n", *files),
+                         [".env", ".env.local", "certs/a.pem"])
+        # A file can't come back from a directory left out, as in Git.
+        self.assertEqual(self.listed("certs/\n", "certs/\n!certs/b.pem\n", *files), ["certs/a.pem", "certs/b.pem"])
+
+    def test_nested_repositories_are_left_alone(self):
+        (self.repo / "inner").mkdir()
+        roost.git(self.repo / "inner", "init", "-q")
+        self.assertEqual(self.listed("inner/\n*.env\n", "inner/\n*.env\n", "inner/.env", "a.env"), ["a.env"])
+
+    def test_a_renamed_files_old_name_is_not_taken_for_an_ignored_one(self):
+        (self.repo / "!! old.env").write_text("x\n")
+        roost.git(self.repo, "add", ".")
+        roost.git(self.repo, "commit", "-q", "-m", "a")
+        roost.git(self.repo, "mv", "!! old.env", "new.txt")
+        self.assertEqual(roost.ignored_paths(self.repo), [])
+
+    def elsewhere(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        return Path(directory.name)
+
+    def worktree(self):
+        """A worktree of the repository, with its .gitignore committed."""
+        roost.git(self.repo, "add", ".gitignore")
+        roost.git(self.repo, "commit", "-q", "--allow-empty", "-m", "ignore")
+        worktree = self.elsewhere() / "worktree"
+        roost.git(self.repo, "worktree", "add", "-q", "--detach", str(worktree))
+        return worktree
+
+    def test_a_file_git_doesnt_ignore_on_the_tasks_branch_is_not_copied(self):
+        self.listed("", ".env\n")
+        worktree = self.worktree()
+        # Ignored only as the primary checkout's .gitignore stands, uncommitted.
+        (self.repo / ".gitignore").write_text(".env\n")
+        (self.repo / ".env").write_text("SECRET=1\n")
+        with self.assertRaisesRegex(roost.RoostError, r"\.env \(Git doesn't ignore it on the task's branch\)"):
+            roost.copy_included(self.repo, worktree)
+        self.assertFalse((worktree / ".env").exists())
+
+    def test_a_gitignore_it_copies_that_stops_git_ignoring_another_is_caught(self):
+        self.listed("config/*\n", "config/\n")
+        worktree = self.worktree()
+        # The primary checkout ignores config/ whole, and so the !.env in it.
+        (self.repo / ".gitignore").write_text("config/\n")
+        (self.repo / "config").mkdir()
+        (self.repo / "config/.gitignore").write_text("!.env\n")
+        (self.repo / "config/.env").write_text("SECRET=1\n")
+        with self.assertRaisesRegex(roost.RoostError, r"config/\.env \(Git doesn't ignore it on the task's branch\)"):
+            roost.copy_included(self.repo, worktree)
+        self.assertFalse((worktree / "config/.env").exists())
+        self.assertEqual(roost.git(worktree, "status", "--porcelain").stdout, "")
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads any file")
+    def test_nothing_is_copied_before_every_gitignore_is_in_on_this_try_or_one_before(self):
+        self.listed("config/*\n", "config/\n")
+        worktree = self.worktree()
+        (self.repo / ".gitignore").write_text("config/\n")
+        (self.repo / "config").mkdir()
+        rules = self.repo / "config/.gitignore"
+        rules.write_text("!.env\n")
+        rules.chmod(0)
+        (self.repo / "config/.env").write_text("SECRET=1\n")
+        with self.assertRaisesRegex(roost.RoostError, r"config/\.gitignore \(Permission denied\)"):
+            roost.copy_included(self.repo, worktree)
+        self.assertFalse((worktree / "config/.env").exists())
+        rules.chmod(0o644)
+        with self.assertRaisesRegex(roost.RoostError, r"config/\.env \(Git doesn't ignore it on the task's branch\)"):
+            roost.copy_included(self.repo, worktree)
+        self.assertFalse((worktree / "config/.env").exists())
+        self.assertEqual(roost.git(worktree, "status", "--porcelain").stdout, "")
+
+    def test_a_gitignore_named_in_other_letters_goes_first_where_case_does_not_count(self):
+        (self.repo / "Probe").write_text("")
+        if not (self.repo / "probe").exists():
+            self.skipTest("this file system tells letters' case apart")
+        (self.repo / "Probe").unlink()
+        self.listed("config/*\n", "config/\n")
+        worktree = self.worktree()
+        (self.repo / ".gitignore").write_text("config/\n")
+        (self.repo / "config").mkdir()
+        (self.repo / "config/.GITIGNORE").write_text("!.env\n")
+        (self.repo / "config/.env").write_text("SECRET=1\n")
+        with self.assertRaisesRegex(roost.RoostError, r"config/\.env \(Git doesn't ignore it on the task's branch\)"):
+            roost.copy_included(self.repo, worktree)
+        self.assertFalse((worktree / "config/.env").exists())
+
+    def test_a_link_that_leaves_the_repository_and_comes_back_leads_where_it_did(self):
+        (self.repo / "settings.env").write_text("SETTING=1\n")
+        (self.repo / ".env").symlink_to("../%s/settings.env" % self.repo.name)
+        self.listed("*.env\n.env\n", ".env\n")
+        worktree = self.worktree()
+        roost.copy_included(self.repo, worktree)
+        self.assertEqual((worktree / ".env").read_text(), "SETTING=1\n")
+
+    def test_a_link_that_goes_out_through_another_and_comes_back_leads_where_it_did(self):
+        elsewhere = self.elsewhere()
+        (self.repo / "settings.env").write_text("SETTING=1\n")
+        (self.repo / "bridge").symlink_to(elsewhere)
+        (elsewhere / "settings.env").symlink_to(self.repo / "settings.env")
+        back = os.path.relpath(self.repo, elsewhere.parent)
+        (self.repo / "a.env").symlink_to("bridge/../%s/settings.env" % back)
+        (self.repo / "b.env").symlink_to("bridge/settings.env")
+        self.listed("*.env\nbridge\n", "a.env\nb.env\n")
+        worktree = self.worktree()
+        roost.copy_included(self.repo, worktree)
+        self.assertEqual(((worktree / "a.env").read_text(), (worktree / "b.env").read_text()),
+                         ("SETTING=1\n", "SETTING=1\n"))
+
+    def test_a_link_that_would_lead_to_another_file_from_the_worktree_leads_to_the_primary_checkouts(self):
+        (self.repo / "bridge").mkdir()
+        (self.repo / "bridge/settings.env").write_text("TRACKED\n")
+        roost.git(self.repo, "add", "bridge")
+        self.listed("sub/\n.env\n", ".env\n")
+        worktree = self.worktree()
+        # The task's branch tracks bridge/settings.env; here bridge leads to sub/.
+        roost.git(self.repo, "rm", "-rq", "bridge")
+        (self.repo / "sub").mkdir()
+        (self.repo / "sub/settings.env").write_text("PRIMARY\n")
+        (self.repo / "bridge").symlink_to("sub")
+        (self.repo / ".gitignore").write_text("sub/\n.env\nbridge\n")
+        (self.repo / ".env").symlink_to("bridge/settings.env")
+        roost.copy_included(self.repo, worktree)
+        self.assertEqual((worktree / ".env").read_text(), "PRIMARY\n")
+
+    def test_a_chain_of_links_it_copies_whole_stays_the_worktrees_own(self):
+        (self.repo / "values.env").write_text("PRIMARY\n")
+        (self.repo / ".env.local").symlink_to("values.env")
+        (self.repo / ".env").symlink_to(".env.local")
+        self.listed(".env*\nvalues.env\n", ".env*\nvalues.env\n")
+        worktree = self.worktree()
+        roost.copy_included(self.repo, worktree)
+        (worktree / ".env").write_text("TASK\n")
+        self.assertEqual(((self.repo / "values.env").read_text(), (worktree / "values.env").read_text()),
+                         ("PRIMARY\n", "TASK\n"))
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads any file")
+    def test_a_chain_of_links_stays_the_worktrees_own_after_a_try_that_failed(self):
+        values = self.repo / "values.env"
+        values.write_text("PRIMARY\n")
+        (self.repo / ".env.local").symlink_to("values.env")
+        (self.repo / ".env").symlink_to(".env.local")
+        self.listed(".env*\nvalues.env\n", ".env*\nvalues.env\n")
+        worktree = self.worktree()
+        values.chmod(0)
+        with self.assertRaisesRegex(roost.RoostError, r"values\.env \(Permission denied\)"):
+            roost.copy_included(self.repo, worktree)
+        values.chmod(0o644)
+        roost.copy_included(self.repo, worktree)
+        (worktree / ".env").write_text("TASK\n")
+        self.assertEqual((values.read_text(), (worktree / "values.env").read_text()), ("PRIMARY\n", "TASK\n"))
+
+    def test_a_link_gone_once_its_copy_is_made_is_left_as_made(self):
+        (self.repo / "current.log").write_text("x\n")
+        (self.repo / "latest.log").symlink_to("current.log")
+        self.listed("*.log\n", "*.log\n")
+        worktree = self.worktree()
+        make = os.symlink
+
+        def rotate(link, target, *args, **kwargs):
+            make(link, target, *args, **kwargs)
+            if Path(target).name == "latest.log":
+                (self.repo / "latest.log").unlink()
+        with patch.object(roost.os, "symlink", rotate):
+            roost.copy_included(self.repo, worktree)
+        self.assertEqual(os.readlink(worktree / "latest.log"), "current.log")
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads any file")
+    def test_a_directory_it_cant_read_stops_the_copy_only_if_the_patterns_name_it(self):
+        self.listed("secrets/\ndata/\n.env\n", ".env\n", ".env", "secrets/key.pem", "data/x")
+        worktree = self.worktree()
+        for name in ("secrets", "data"):
+            (self.repo / name).chmod(0)
+            self.addCleanup((self.repo / name).chmod, 0o755)
+        # A database's, say: Git can't say whether the patterns want any of it.
+        roost.copy_included(self.repo, worktree)
+        self.assertTrue((worktree / ".env").is_file())
+        (self.repo / ".worktreeinclude").write_text(".env\nsecrets/\n")
+        with self.assertRaisesRegex(roost.RoostError, r"Could not read secrets/, which \.worktreeinclude lists "
+                                                      r"\(Permission denied\)"):
+            roost.copy_included(self.repo, worktree)
+
+    def test_links_made_last_are_all_made_or_none(self):
+        (self.repo / "settings.env").write_text("SETTING=1\n")
+        for name in ("a.env", "b.env"):
+            (self.repo / name).symlink_to("settings.env")
+        self.listed("*.env\n", "a.env\nb.env\n")
+        worktree = self.worktree()
+        make = os.symlink
+
+        def full(link, target, *args, **kwargs):
+            if Path(target).name == "b.env":
+                raise OSError(errno.ENOSPC, "No space left on device")
+            return make(link, target, *args, **kwargs)
+        with patch.object(roost.os, "symlink", full):
+            with self.assertRaisesRegex(roost.RoostError, r"b\.env \(No space left on device\)"):
+                roost.copy_included(self.repo, worktree)
+        self.assertFalse(os.path.lexists(worktree / "a.env"))
+        roost.copy_included(self.repo, worktree)
+        self.assertEqual(((worktree / "a.env").read_text(), (worktree / "b.env").read_text()),
+                         ("SETTING=1\n", "SETTING=1\n"))
+
+    def test_a_link_to_a_file_the_worktree_lacks_leads_to_the_primary_checkouts(self):
+        (self.repo / "settings.env").write_text("SETTING=1\n")
+        (self.repo / ".env").symlink_to("settings.env")
+        self.listed("*.env\n.env\n", ".env\n")
+        worktree = self.worktree()
+        roost.copy_included(self.repo, worktree)
+        self.assertEqual((worktree / ".env").read_text(), "SETTING=1\n")
+
+    @unittest.skipIf(sys.platform == "darwin", "macOS names files in UTF-8 only")
+    @unittest.skipIf(os.geteuid() == 0, "root reads any file")
+    def test_a_name_not_in_utf_8_is_shown_in_the_error_as_its_bytes(self):
+        name = os.fsdecode(b"caf\xe9.env")
+        self.listed("*.env\n", "*.env\n", name)
+        (self.repo / name).chmod(0)
+        with self.assertRaises(roost.RoostError) as caught:
+            roost.copy_included(self.repo, self.worktree())
+        self.assertIn("caf\\xe9.env (Permission denied)", str(caught.exception).encode("utf-8").decode())
+
+    def test_what_a_copy_cut_off_left_is_cleared_and_nothing_is_staged_in_the_worktree(self):
+        self.listed(".env\n", ".env\n", ".env")
+        worktree = self.worktree()
+        staging = worktree.with_name(".worktree.copying")
+        staging.mkdir()
+        (staging / "file").write_text("SECRET\n")
+        copy = shutil.copy
+        seen = []
+
+        def look(source, target):
+            copied = copy(source, target)
+            seen.append(roost.git(worktree, "status", "--porcelain", "--ignored=no").stdout)
+            return copied
+        with patch.object(roost.shutil, "copy", look):
+            roost.copy_included(self.repo, worktree)
+        self.assertEqual((seen, staging.exists()), ([""], False))
+        self.assertTrue((worktree / ".env").is_file())
+
+    def test_a_file_made_while_its_copy_runs_is_kept(self):
+        self.listed(".env\n", ".env\n", ".env")
+        worktree = self.worktree()
+        copy = shutil.copy
+
+        def meanwhile(source, target):
+            (worktree / ".env").write_text("MINE\n")
+            return copy(source, target)
+        with patch.object(roost.shutil, "copy", meanwhile):
+            roost.copy_included(self.repo, worktree)
+        self.assertEqual((worktree / ".env").read_text(), "MINE\n")
+
+    def test_a_file_named_like_a_partial_copy_is_copied_too(self):
+        self.listed("a/\n", "a/\n", "a/.roost-copy", "a/b.env")
+        worktree = self.worktree()
+        roost.copy_included(self.repo, worktree)
+        self.assertEqual(sorted(p.name for p in (worktree / "a").iterdir()), [".roost-copy", "b.env"])
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads any file")
+    def test_a_directory_without_write_takes_its_files_on_a_try_after_one_failed(self):
+        self.listed("secrets/\n", "secrets/\n", "secrets/a.pem", "secrets/b.pem")
+        (self.repo / "secrets/b.pem").chmod(0)
+        (self.repo / "secrets").chmod(0o500)
+        self.addCleanup((self.repo / "secrets").chmod, 0o700)
+        worktree = self.worktree()
+        with self.assertRaisesRegex(roost.RoostError, r"secrets/b\.pem \(Permission denied\)"):
+            roost.copy_included(self.repo, worktree)
+        (self.repo / "secrets").chmod(0o700)
+        (self.repo / "secrets/b.pem").chmod(0o600)
+        (self.repo / "secrets").chmod(0o500)
+        roost.copy_included(self.repo, worktree)
+        self.assertTrue((worktree / "secrets/b.pem").is_file())
+
+    def test_a_file_gone_while_copying_is_left_out(self):
+        self.listed("*.log\n", "*.log\n", "a.log", "b.log")
+        copy = shutil.copy
+
+        def rotate(source, target):
+            if Path(source).name == "a.log":
+                Path(source).unlink()
+            return copy(source, target)
+        worktree = self.worktree()
+        with patch.object(roost.shutil, "copy", rotate):
+            roost.copy_included(self.repo, worktree)
+        self.assertEqual(((worktree / "a.log").exists(), (worktree / "b.log").exists()), (False, True))
+
+    @unittest.skipIf(sys.platform == "darwin", "macOS names files in UTF-8 only")
+    def test_a_name_not_in_utf_8_matches_its_own_pattern(self):
+        name = os.fsdecode(b"caf\xe9")
+        (self.repo / ".gitignore").write_bytes(b"caf\xe9/\n")
+        (self.repo / ".worktreeinclude").write_bytes(b"caf\xe9/x/*.pem\n")
+        (self.repo / name / "x").mkdir(parents=True)
+        (self.repo / name / "x" / "a.pem").write_text("x\n")
+        self.assertEqual(roost.included_files(self.repo), [name + "/x/a.pem"])
+
+    def test_a_link_out_of_the_repository_leads_where_it_did(self):
+        elsewhere = self.elsewhere()
+        (elsewhere / "outside.env").write_text("chained\n")
+        (elsewhere / "shared.env").write_text("bridged\n")
+        (elsewhere / "a/b").mkdir(parents=True)
+        # Out through another link in the repository, and back up from where one leads.
+        (self.repo / ".env.local").symlink_to(os.path.relpath(elsewhere / "outside.env", self.repo))
+        (self.repo / ".env").symlink_to(".env.local")
+        (self.repo / "bridge").symlink_to(elsewhere / "a/b")
+        (self.repo / "x.env").symlink_to("bridge/../../shared.env")
+        self.listed(".env*\nbridge\nx.env\n", ".env\nx.env\n")
+        worktree = self.worktree()
+        roost.copy_included(self.repo, worktree)
+        self.assertEqual(((worktree / ".env").read_text(), (worktree / "x.env").read_text()),
+                         ("chained\n", "bridged\n"))
+
+    def test_a_link_or_file_the_worktree_has_on_the_way_is_left_as_it_is(self):
+        self.listed("config/\nlinked/\n", "config/\nlinked/\n", "config/local.json", "linked/x.env")
+        worktree, elsewhere = self.worktree(), self.elsewhere()
+        (worktree / "config").write_text("tracked\n")
+        (worktree / "linked").symlink_to(elsewhere)
+        roost.copy_included(self.repo, worktree)
+        self.assertEqual((worktree / "config").read_text(), "tracked\n")
+        self.assertFalse((elsewhere / "x.env").exists())
+
+    def test_no_worktreeinclude_lists_nothing(self):
+        (self.repo / ".gitignore").write_text(".env\n")
+        (self.repo / ".env").write_text("x\n")
+        self.assertEqual(roost.included_files(self.repo), [])
 
 
 class History(unittest.TestCase):

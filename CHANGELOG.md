@@ -4,6 +4,15 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A new task's worktree gets the files Git ignores that the project's
+  `.worktreeinclude` lists, such as `.env`, copied from the primary
+  checkout before `roost-setup-command` runs, as Claude Code and Conductor
+  do. A project with a `.worktreeinclude` already gets them in Roost's
+  tasks too; a setup command that copies them, as `cp "$ROOST_REPO/.env" .`,
+  can stop. Git reads its patterns as a `.gitignore`'s, so `.env` also
+  copies a `.env` inside an ignored `node_modules/`, which Claude Code
+  skips; `/.env` copies only the top one. If a file can't be copied, the
+  task stops before its agent starts and says which, and `s` tries again.
 - Retiring a task whose worktree has submodules checked out, as an
   agent does to build, removes it when nothing in them would be lost,
   rather than ask you to run `git worktree remove --force`. When a

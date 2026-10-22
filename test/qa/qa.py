@@ -2499,6 +2499,46 @@ def exits(qa, repo):
         ("its terminal", lambda s: (s.get("task") or {}).get("name") == name and selected_terminal(s))])
 
 
+@journey("Copy what .worktreeinclude lists")
+def include(qa, repo):
+    """A new task's worktree gets the ignored files the project's
+    .worktreeinclude lists, such as .env. One it can't copy stops the task
+    before its agent starts and says why, and s copies it then."""
+    exclude = repo / ".git" / "info" / "exclude"
+    before = exclude.read_text() if exclude.exists() else ""
+    key = repo / "key.pem"
+    try:
+        exclude.write_text(before + ".env\n*.pem\n.worktreeinclude\n")
+        (repo / ".worktreeinclude").write_text(".env\n*.pem\n")
+        (repo / ".env").write_text("SECRET=qa\n")
+        name = start_task(qa, "Read the settings")
+        env = Path(task_worktree(qa, name)) / ".env"
+        qa.step("The worktree has what .worktreeinclude lists", expect=[
+            ("its .env", lambda s: env.is_file() and env.read_text() == "SECRET=qa\n")])
+        key.write_text("KEY\n")
+        key.chmod(0)
+        stopped = new_task(qa, "Sign the build")
+        qa.status(stopped, "failed")
+        open_task(qa, stopped)
+        qa.wait("its panel to say why", lambda s: "key.pem (Permission denied)" in panel_text(qa, s), timeout=10)
+        qa.step("A file it can't copy stops the task", expect=[
+            ("the panel says which", lambda s: "key.pem (Permission denied)" in panel_text(qa, s)),
+            ("so does its terminal", lambda s: any("key.pem (Permission denied)" in w["text"]
+                                                   for w in terminals(s)))])
+        key.chmod(0o600)
+        qa.click_text(stopped, "roost-task-info-mode")
+        qa.keys("s")
+        qa.status(stopped, "ready", "idle")
+        copied = Path(task_worktree(qa, stopped)) / "key.pem"
+        qa.step("Resumed, it has the file", expect=[
+            ("its key.pem", lambda s: copied.is_file()),
+            ("its terminal", lambda s: (s.get("task") or {}).get("name") == stopped and selected_terminal(s))])
+    finally:
+        exclude.write_text(before)
+        for path in (repo / ".worktreeinclude", repo / ".env", key):
+            path.unlink(missing_ok=True)
+
+
 @journey("A host Roost can't reach")
 def unreachable(qa, repo):
     """A host that doesn't answer is named, in the sidebar and the dashboard, within their windows."""
@@ -2605,7 +2645,8 @@ JOURNEYS = [sweep, answer, next_waiting, fold, resize, merge, review, since_look
             dashboard, stop_resume, retire, teardown, send, attach, update, conflicts, restart, search, workload, question_left,
             walk_away,
             frames, draft_frames, org, drafts, overlap, tabs,
-            forget, rename, fork, other_branch, merged, large, pull_request, exits, unreachable, scrollback, fleet, dropped]
+            forget, rename, fork, other_branch, merged, large, pull_request, exits, include, unreachable, scrollback,
+            fleet, dropped]
 
 
 def main():
