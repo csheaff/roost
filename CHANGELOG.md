@@ -4,6 +4,23 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+## 0.11.0
+
+To upgrade from 0.10:
+
+- Restart Emacs after updating. Keys new in this release, such as `w`,
+  live in keymaps Emacs made when it first loaded Roost.
+- If you set `roost-notify-function`, check what it does with a title:
+  titles now start with the task and its status (`ledger — permission`)
+  rather than `Roost:`, and a notification that gathers several counts
+  the others on its body's second line.
+- If your `roost-setup-command` copies files Git ignores, such as `.env`,
+  a `.worktreeinclude` in the project can copy them instead.
+- Nothing else: each host gets the new helper with Roost's next request
+  to it, and agents at work carry on.
+
+Changes since 0.10.0:
+
 - When every agent on a host crashed, as after the host restarted or its
   tmux server ended, `s` on one of them asks once whether to resume the
   others that crashed there too, and `RET` asks in a single question

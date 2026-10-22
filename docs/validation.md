@@ -35,6 +35,25 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## Before 0.11.0 — 2026-10-22
+
+- **`make contract`** with Claude Code 2.1.303, Codex 0.163.0 and Pi
+  1.3.0: every check as expected; OpenCode isn't installed here, so it was
+  skipped. **`make contract-live`** with Claude Code 2.1.303: every check
+  as expected. The capture it wrote differed from the one kept only in
+  the model's wording and the timings, so the kept one stands.
+- **`make test compile`**: 361 ERT tests (26 skipped, those of Magit and
+  Evil) and 264 Python tests passed; no byte-compile warnings.
+- **`make qa`** on Emacs 32, the whole run: 248 steps, 3 with problems,
+  all three Emacs pausing for 1 to 2 s, mostly collecting garbage, in the
+  tab and rename journeys while `make test` ran beside it. Run again
+  alone, those journeys passed: 8 steps, none with problems. The new
+  journeys for `.worktreeinclude` and agents that crashed together passed,
+  and their screenshots read as intended.
+- **Not by hand this time.** 0.10.0's run by hand was the day before;
+  what changed since has journeys in `make qa`, and Claude Code's version
+  is the same.
+
 ## UX review — 2026-10-21
 
 - **Scope.** The first UX review with the `ux-review` skill, after 0.10.0:
