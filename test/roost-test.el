@@ -26,6 +26,7 @@
          (user-login-name "user")
          (roost--statuses (make-hash-table :test 'equal))
          (roost--pr-verdicts (make-hash-table :test 'equal))
+         (roost--agent-news (make-hash-table :test 'equal))
          (roost--merges-reported (make-hash-table :test 'equal))
          (roost--seen (make-hash-table :test 'equal))
          (roost--turns-sent (make-hash-table :test 'equal))
@@ -1237,6 +1238,39 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
        (roost-test--a-minute-on)
        (should (= (length notices) 1)))))))
 
+(ert-deftest roost-an-inspection-that-returns-late-notifies-of-nothing ()
+  ;; Its agent changed meanwhile, which notifies of itself.
+  (roost-test--isolated
+   (roost-test--held-notices
+    (let* ((roost-notify t) notices replies
+           (roost-notify-function (lambda (title body) (push (list title body) notices)))
+           (reply (lambda (said at)
+                    (funcall (pop replies)
+                             (roost-test--named "docs" "1" "ready" `(lastMessage . ,said) `(updatedAt . ,at))))))
+      (cl-letf (((symbol-function 'roost--redraw) #'ignore)
+                ((symbol-function 'roost--request)
+                 (lambda (_host _action _params success _failure) (setq replies (append replies (list success))))))
+        (roost--cache-task "dev" (roost-test--named "docs" "1" "running"))
+        (roost--cache-task "dev" (roost-test--named "docs" "1" "ready"))
+        ;; Resumed, it failed before its reply came back.
+        (roost--cache-task "dev" (roost-test--named "docs" "1" "running" '(updatedAt . "2026-10-03T20:01:00+00:00")))
+        (roost--cache-task "dev" (roost-test--named "docs" "1" "failed" '(updatedAt . "2026-10-03T20:02:00+00:00")
+                                                    '(error . "Exited with status 1")))
+        (funcall reply "First." "2026-10-03T20:00:00+00:00")
+        (roost-test--a-minute-on)
+        (should (equal notices '(("docs — failed" "dev · Exited with status 1"))))
+        ;; Two turns' replies, the first one last.
+        (roost--cache-task "dev" (roost-test--named "docs" "1" "running" '(updatedAt . "2026-10-03T20:03:00+00:00")))
+        (roost--cache-task "dev" (roost-test--named "docs" "1" "ready" '(updatedAt . "2026-10-03T20:04:00+00:00")))
+        (roost--cache-task "dev" (roost-test--named "docs" "1" "running" '(updatedAt . "2026-10-03T20:05:00+00:00")))
+        (roost--cache-task "dev" (roost-test--named "docs" "1" "ready" '(updatedAt . "2026-10-03T20:06:00+00:00")))
+        (setq replies (reverse replies))
+        (funcall reply "Second." "2026-10-03T20:06:00+00:00")
+        (funcall reply "First." "2026-10-03T20:04:00+00:00")
+        (roost-test--a-minute-on)
+        (should (equal (car notices) '("docs — ready" "dev · Second.")))
+        (should (= (length notices) 2)))))))
+
 (ert-deftest roost-a-held-notification-drops-once-you-see-its-task ()
   (roost-test--isolated
    (roost-test--inspecting
@@ -1319,7 +1353,10 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
       (should (timerp roost--notice-timer))
       (should (memq roost--notice-timer timer-list))
       (roost--apply-snapshot "dev" nil)
-      (roost--send-notices)
+      (let ((timer roost--notice-timer))
+        (roost--send-notices)
+        ;; Sent before its time, it goes no more.
+        (should-not (memq timer timer-list)))
       (should-not notices)
       (should-not roost--notice-timer)
       (should-not roost--held-notices)

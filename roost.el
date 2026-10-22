@@ -435,6 +435,9 @@ can tell that a list asked for after some moment has arrived.")
 (defvar roost--pr-verdicts (make-hash-table :test 'equal)
   "For each task key, what its pull request or work last waited on you for.
 As `roost--news-turn' has it, or nil, for notifications.")
+(defvar roost--agent-news (make-hash-table :test 'equal)
+  "For each task key, a token for the latest change its agent notified of.
+An inspection that returns after a newer one notifies of nothing.")
 (defvar roost--held-notices nil
   "Notifications held to go together, oldest first; see `roost--hold-notice'.")
 (defvar roost--notice-timer nil
@@ -978,7 +981,8 @@ must a reply with a newer look lose it for an older agent event."
                               (equal (roost--key watched) key))))))
       (if (gethash key roost--tasks)
           (puthash key turn roost--pr-verdicts)
-        (remhash key roost--pr-verdicts))
+        (remhash key roost--pr-verdicts)
+        (remhash key roost--agent-news))
       ;; A pull request or work that comes to wait on you is news, whatever
       ;; its agent last said; one there when Roost first saw the task is
       ;; not, nor one that comes as you stop its agent.  Before the
@@ -1061,13 +1065,17 @@ A permission request goes at once, since its agent can do nothing until
 you answer; the rest are held to go together, by `roost--hold-notice'.
 A ready agent or one asking permission is inspected first, since quiet
 polls leave out its latest reply, so the notification can say what it
-finished or wants."
+finished or wants; unless its agent changed again by then, which
+notifies of itself."
   (let* ((name (roost--status-name task))
          (label (roost--host-label host))
+         (key (roost--key task))
+         (news (puthash key (list status) roost--agent-news))
          (send (lambda (task body)
-                 (cond ((equal status "permission")
+                 (cond ((not (eq (gethash key roost--agent-news) news)))
+                       ((equal status "permission")
                         ;; It replaces one held about the task, which is older.
-                        (roost--drop-notices (roost--key task))
+                        (roost--drop-notices key)
                         (roost--notify (roost--notice-title task name) body task))
                        ;; Seen while it was inspected, as when `n' opened it.
                        ((not (roost--seen-p task))
@@ -1145,6 +1153,8 @@ or be looking at it now: WATCHED is the key of the task you look at."
 (defun roost--send-notices ()
   "Send the notifications held as one, about the most urgent of their tasks.
 It counts the others by status, and a click on it opens that task."
+  ;; Called before its time, the timer must not go again.
+  (when (timerp roost--notice-timer) (cancel-timer roost--notice-timer))
   (setq roost--notice-timer nil)
   (let* ((watched (when-let* ((task (roost--watched-task))) (roost--key task)))
          (notices (and roost-notify
@@ -1178,6 +1188,7 @@ in `roost--list-requests'; without one, TASKS count as asked for now."
                  (remhash key roost--tasks)
                  (remhash key roost--statuses)
                  (remhash key roost--pr-verdicts)
+                 (remhash key roost--agent-news)
                  (remhash key roost--seen)
                  (remhash key roost--turns-sent)
                  (remhash key roost--merges-reported)
@@ -1309,6 +1320,7 @@ Hosts in `roost-hosts' are watched until you take them out of it."
         (remhash (roost--key task) roost--tasks)
         (remhash (roost--key task) roost--statuses)
         (remhash (roost--key task) roost--pr-verdicts)
+        (remhash (roost--key task) roost--agent-news)
         (remhash (roost--key task) roost--turns-sent))
       (remhash host roost--errors)
       (remhash host roost--failures)
