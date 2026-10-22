@@ -17,21 +17,49 @@ jobs:
         emacs-version: ['29.1', '30.1']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # A change only to Markdown files or docs/, such as new screenshots,
+      # skips the tests, which read none of them. The job still passes, as
+      # main's required checks must, in seconds rather than ten minutes. Any
+      # other change, this workflow included, runs everything.
+      - name: Check what changed
+        id: changes
+        env:
+          # The pull request's merge commit has its base as first parent.
+          BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
+        run: |
+          if ! git rev-parse --verify --quiet "$BASE^{commit}" > /dev/null; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(git diff --name-only --no-renames "$BASE" HEAD)
+          printf '%s\n' "$files"
+          if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qvE '(\.md$|^docs/)'; then
+            echo "Only documentation changed, so the tests don't run."
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          fi
 
       # setup-emacs installs Emacs through Nix, which reads GitHub's API; an
       # authenticated Nix avoids the shared runners' per-IP rate limit (see
       # tmux-control's workflow for the details).
       - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+        if: steps.changes.outputs.code == 'true'
         with:
           extra-conf: |
             access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
 
       - uses: purcell/setup-emacs@34c6ded44899fd1bf74d2889558befd1750e61a7
+        if: steps.changes.outputs.code == 'true'
         with:
           version: ${{ matrix.emacs-version }}
 
       # The Python lifecycle tests drive real Git and isolated tmux servers.
       - name: Install tmux
+        if: steps.changes.outputs.code == 'true'
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q tmux
@@ -41,6 +69,7 @@ jobs:
       # Evil keys there. Without them those tests are skipped, so an
       # unreachable MELPA doesn't fail the run.
       - name: Install Magit and Evil
+        if: steps.changes.outputs.code == 'true'
         continue-on-error: true
         run: |
           cat > "$RUNNER_TEMP/magit.el" <<'EOF'
@@ -58,4 +87,5 @@ jobs:
       # ERT (protocol and UI, with tmux-control stubbed), the Python lifecycle
       # tests, and a byte-compile.
       - name: Test and compile
+        if: steps.changes.outputs.code == 'true'
         run: make test compile
