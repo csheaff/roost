@@ -299,7 +299,7 @@ them by those words at its top.
 | `interrupted` | Until you've seen it | You stopped its turn, with Esc or by declining a request |
 | `error` | Until you've seen it | A turn ended on an API error, such as a usage limit; `RET` opens it to try again |
 | `failed`, `exited` | Until you've seen it | The agent's CLI failed, or it exited; `RET` shows its last output |
-| `crashed` | Until you've seen it | Its tmux pane went, as when the tmux server restarted; `RET` or `s` resumes its conversation |
+| `crashed` | Until you've seen it | Its tmux pane went, as when the host or its tmux server restarted; `RET` or `s` resumes its conversation, and asks once to resume every other agent that crashed on that host. Those stopped, exited or failed stay as they are |
 | `conflicts` | Once you've seen its reply | Merging its commits into the branch it merges into would conflict; `u` brings that branch in |
 | `to merge` | Once you've seen its reply | Its pull request passed its checks and review, and GitHub finds no conflicts; `P` opens it |
 | `ci failed` | Once you've seen its reply | A check of its pull request failed |
@@ -422,7 +422,7 @@ counted once you stop and resume it (`K`, then `s`).
 | Key | Command | |
 | --- | --- | --- |
 | `h`, `?` | `roost-dispatch` | A Magit-style menu of every command below, naming the task they act on and what to do next |
-| `RET` | `roost-open-task` | Open the task's agent terminal and workspace; for a stopped or crashed agent, offer to resume it |
+| `RET` | `roost-open-task` | Open the task's agent terminal and workspace; for a stopped or crashed agent, offer to resume it, in the same question as the others that crashed on its host |
 | `c` | `roost-new-task` | Draft a new task, from the region or Org entry if any (`C-u` forks the current task's commits) |
 | `n` | `roost-next-waiting` | Next task waiting for you, permission requests first, saying why it waits; once none does, again goes back to where you started |
 | `t` | `roost-shell` | Shell beside the agent, in the worktree (reused) |
@@ -442,7 +442,7 @@ counted once you stop and resume it (`K`, then `s`).
 | `x` | `roost-retire` | Finish with a task: retire it when its work is merged or it has none, otherwise offer to discard it (`roost-discard`), first saying what would be lost; to lose commits or files you type its name |
 | `X` | `roost-forget` | Drop the task from Roost, leaving its worktree and branch as they are |
 | `K` | `roost-stop` | Stop the agent's window; keep all work |
-| `s` | `roost-resume` | Restart a stopped task in its recorded conversation |
+| `s` | `roost-resume` | Restart a stopped or crashed task in its recorded conversation; when other agents crashed on its host too, as after it restarted, ask whether to resume those as well |
 | `w` | `roost-workload` | How long agents worked and waited on you, each day of the past week ([below](#how-many-agents-you-keep-up-with)) |
 | `g` | `roost-refresh` | Refresh status and Git statistics |
 

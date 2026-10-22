@@ -97,6 +97,9 @@ KIND is `committed', `uncommitted', `untracked' or `binary'."
     ("stopped" (status . "stopped") (live) (diff . "") (ahead . 1)
      (files . ,(roost-sweep--files '("report.py" . committed))))
     ("crashed" (status . "crashed") (live) (error . "The agent exited with status 1"))
+    ;; With the one above, as after its host restarted: each offers the other.
+    ("crashed too" (status . "crashed") (live) (ahead . 1) (diff . "1 file +12 −3")
+     (files . ,(roost-sweep--files '("report.py" . committed))))
     ("worktree gone" (status . "ready") (live) (worktreeMissing . t))
     ("merge conflicts" (status . "ready") (live . t) (integrationBranch . "main")
      (merging (conflicts "ledger.py" "report.py")) (diff . "1 file +1 −1 · uncommitted")

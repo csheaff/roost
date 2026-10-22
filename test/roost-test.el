@@ -8042,6 +8042,152 @@ ssh: connect to host dev port 22: Operation timed out"
            (accept-process-output nil 0.05)
            (should asked)))))))
 
+(defun roost-test--crashed-host ()
+  "Cache tasks of each way an agent ends, and return the one named \"sum check\".
+On host \"dev\", \"sum check\", \"tidy\" and \"lint\" crashed; others
+stopped, exited, failed, crashed without a worktree, crashed on another
+host, or run."
+  (pcase-dolist (`(,id ,name ,status ,host . ,fields)
+                 '(("1111111111111111" "sum check" "crashed" "dev")
+                   ("2222222222222222" "tidy" "crashed" "dev")
+                   ("3333333333333333" "lint" "crashed" "dev")
+                   ("4444444444444444" "paused" "stopped" "dev")
+                   ("5555555555555555" "left" "exited" "dev")
+                   ("6666666666666666" "broke" "failed" "dev")
+                   ("7777777777777777" "gone" "crashed" "dev" (worktreeMissing . t))
+                   ("8888888888888888" "elsewhere" "crashed" "other")
+                   ("9999999999999999" "busy" "running" "dev" (live . t))))
+    (roost--cache-task host (append `((name . ,name)) fields '((live)) (roost-test--task id status))))
+  (gethash '("dev" "1111111111111111") roost--tasks))
+
+(defmacro roost-test--resuming (fail &rest body)
+  "Run BODY with requests to hosts recorded in `requests', as (ACTION NAME).
+Resume and open succeed, unless FAIL names the task, whose resume fails;
+`opened' has the tasks opened, `asked' the questions, `messages' what
+was said.  Questions are answered with `answer'."
+  (declare (indent 1))
+  `(let (requests opened asked messages answer)
+     (ignore answer)
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (host action params success &optional failure _timeout)
+                  (let ((task (gethash (list host (alist-get 'id params)) roost--tasks)))
+                    (push (list action (roost--field task 'name)) requests)
+                    (if (member (roost--field task 'name) ,fail)
+                        (funcall failure "Task worktree is gone; forget the task to remove it from Roost")
+                      (funcall success (append '((status . "starting") (live . t)) task))))))
+               ((symbol-function 'roost-open-task) (lambda (task &rest _) (push (roost--field task 'name) opened)))
+               ((symbol-function 'y-or-n-p) (lambda (question) (push question asked) answer))
+               ((symbol-function 'message)
+                (lambda (format &rest args) (when format (push (apply #'format format args) messages)))))
+       ,@body)))
+
+(ert-deftest roost-crashed-with-counts-only-agents-that-crashed-on-the-same-host ()
+  (roost-test--isolated
+   (let ((task (roost-test--crashed-host)))
+     (should (equal (mapcar (lambda (task) (roost--field task 'name)) (roost--crashed-with task))
+                    '("lint" "tidy")))
+     ;; One you stopped offers none: its agent didn't crash.
+     (should-not (roost--crashed-with (gethash '("dev" "4444444444444444") roost--tasks)))
+     (should-not (roost--crashed-with (gethash '("other" "8888888888888888") roost--tasks)))
+     (should (equal (substring-no-properties (roost--next-step task))
+                    "RET or s resumes its conversation, and offers the 2 others that crashed on dev"))
+     (roost--cache-task "dev" (append '((name . "lint") (status . "stopped"))
+                                      (gethash '("dev" "3333333333333333") roost--tasks)))
+     (should (equal (substring-no-properties (roost--next-step task))
+                    "RET or s resumes its conversation, and offers the other one that crashed on dev"))
+     (should (equal (substring-no-properties
+                     (roost--next-step (gethash '("dev" "4444444444444444") roost--tasks)))
+                    "RET or s resumes its conversation")))))
+
+(ert-deftest roost-resume-offers-the-others-that-crashed-on-its-host ()
+  (roost-test--isolated
+   (let ((task (roost-test--crashed-host)))
+     (roost-test--resuming nil
+       ;; y: this one, opened, then each of the others, unopened.
+       (setq answer t)
+       (roost-resume task t)
+       (should (equal asked '("Resume the 2 other agents that crashed on dev too? ")))
+       (should (equal (reverse requests) '(("resume" "sum check") ("resume" "lint") ("resume" "tidy"))))
+       (should (equal opened '("sum check")))
+       (should (equal (car messages) "Resumed 3 agents on dev"))))
+   (let ((task (roost-test--crashed-host)))
+     (roost-test--resuming nil
+       ;; n: this one only.
+       (roost-resume task t)
+       (should (= (length asked) 1))
+       (should (equal requests '(("resume" "sum check"))))
+       (should (equal opened '("sum check")))
+       (should (equal (car messages) "Resumed sum check"))
+       ;; Not given as a command, as when RET has asked already: no question.
+       (setq asked nil requests nil)
+       (roost--cache-task "dev" (append '((status . "crashed") (live)) (gethash (roost--key task) roost--tasks)))
+       (roost-resume (gethash (roost--key task) roost--tasks))
+       (should-not asked)
+       (should (equal requests '(("resume" "sum check"))))))
+   ;; One other: said so.
+   (let ((task (roost-test--crashed-host)))
+     (roost--cache-task "dev" (append '((status . "stopped")) (gethash '("dev" "3333333333333333") roost--tasks)))
+     (roost-test--resuming nil
+       (roost-resume task t)
+       (should (equal asked '("Resume the other agent that crashed on dev too? ")))))))
+
+(ert-deftest roost-opening-a-crashed-task-offers-the-others-in-one-question ()
+  (roost-test--isolated
+   (let ((task (roost-test--crashed-host)))
+     (roost-test--resuming nil
+       (cl-letf* ((resolve (symbol-function 'roost--request))
+                  ((symbol-function 'roost--request)
+                   (lambda (host action params success &optional failure timeout)
+                     (if (equal action "inspect")
+                         (funcall failure "The agent's tmux window is gone; resume the task")
+                       (funcall resolve host action params success failure timeout))))
+                  ((symbol-function 'roost--mark-seen) #'ignore))
+         ;; n: none resumes, as before.
+         (roost--open task)
+         (accept-process-output nil 0.05)
+         (should (equal asked '("sum check's agent isn't running, nor 2 others' on dev.  Resume all 3? ")))
+         (should-not requests)
+         ;; y: all of them, and no second question.
+         (setq asked nil answer t)
+         (roost--open task)
+         (accept-process-output nil 0.05)
+         (should (= (length asked) 1))
+         (should (equal (reverse requests) '(("resume" "sum check") ("resume" "lint") ("resume" "tidy"))))
+         (should (equal opened '("sum check")))
+         (should (equal (car messages) "Resumed 3 agents on dev")))))
+   (let ((task (roost-test--crashed-host)))
+     (roost--cache-task "dev" (append '((status . "stopped")) (gethash '("dev" "3333333333333333") roost--tasks)))
+     (roost-test--resuming nil
+       (cl-letf* ((resolve (symbol-function 'roost--request))
+                  ((symbol-function 'roost--request)
+                   (lambda (host action params success &optional failure timeout)
+                     (if (equal action "inspect")
+                         (funcall failure "The agent's tmux window is gone; resume the task")
+                       (funcall resolve host action params success failure timeout))))
+                  ((symbol-function 'roost--mark-seen) #'ignore))
+         (roost--open task)
+         (accept-process-output nil 0.05)
+         (should (equal asked '("sum check's agent isn't running, nor one other's on dev.  Resume both? "))))))))
+
+(ert-deftest roost-resuming-together-goes-on-past-a-failure ()
+  (roost-test--isolated
+   (let ((task (roost-test--crashed-host)))
+     (roost-test--resuming '("lint")
+       (setq answer t)
+       (roost-resume task t)
+       (should (equal (reverse requests) '(("resume" "sum check") ("resume" "lint") ("resume" "tidy"))))
+       (should (equal (car messages)
+                      "Resumed 2 of 3 agents on dev; lint didn't resume: Task worktree is gone; forget the task to remove it from Roost"))))
+   ;; Its own failing, the others still resume, and none opens.
+   (let ((task (roost-test--crashed-host)))
+     (roost-test--resuming '("sum check" "tidy")
+       (setq answer t)
+       (roost-resume task t)
+       (should (equal (reverse requests) '(("resume" "sum check") ("resume" "lint") ("resume" "tidy"))))
+       (should-not opened)
+       (should (string-prefix-p "Resumed 1 of 3 agents on dev; sum check didn't resume: " (car messages)))
+       (should (string-match-p "; tidy didn't resume: " (car messages)))))))
+
 (ert-deftest roost-task-sessions-stay-out-of-tmux-controls-activity-corner ()
   ;; The corner named every other task whose agent printed anything, and
   ;; clicking it showed that terminal without switching task.

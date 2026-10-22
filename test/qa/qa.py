@@ -2641,12 +2641,53 @@ def dropped(qa, repo):
         ("the agent replied", lambda s: "PROMPT After the drop" in selected_terminal(s)["text"])])
 
 
+@journey("Resume the agents that crashed together")
+def crashed(qa, repo):
+    """The host's tmux server ends, as when the host restarts, and every
+    agent on it crashes: s on one asks once, and resumes them all.  Last
+    in a run: the other journeys' agents crash too, and resume with these."""
+    first = start_task(qa, "Count the notes")
+    second = start_task(qa, "Sort the notes")
+    open_task(qa, first)
+    qa.tmux("kill-server")
+    qa.status(first, "crashed")
+    qa.status(second, "crashed")
+    offers = "crashed on %s" % qa.host_label
+    qa.wait("the panel to offer the others", lambda s: offers in panel_text(qa, s))
+    qa.step("Their tmux server gone", expect=[
+        ("the panel says s offers the others", lambda s: "resumes its conversation, and offers the" in panel_text(qa, s))])
+    qa.click_text(first, "roost-task-info-mode")
+    qa.keys("s")
+    screen = qa.wait("the question", lambda s: s["prompt"])
+    qa.step("s asks once for them all", expect=[
+        ("it names the host", lambda s: (offers + " too?") in (s["prompt"] or ""))])
+    counted = re.search(r"the (\d+) other agents", screen["prompt"] or "")
+    others = int(counted[1]) if counted else 1
+    qa.type("y")
+    # One after another, the other journeys' too.
+    timeout = 40 + 3 * others
+    qa.wait("word they all resumed", lambda s: (s["echo"] or "").startswith("Resumed %d" % (others + 1)),
+            timeout=timeout)
+    qa.status(first, "ready", "idle")
+    qa.status(second, "ready", "idle")
+    sessions = qa.tmux("list-sessions", "-F", "#{session_name}")
+    qa.step("All resumed", expect=[
+        ("the echo area says so", lambda s: (s["echo"] or "").startswith(
+            "Resumed %d agents on %s" % (others + 1, qa.host_label))),
+        ("its terminal", lambda s: (s.get("task") or {}).get("name") == first and selected_terminal(s)),
+        ("both agents run again", lambda s: all(
+            any(session.endswith("-" + qa.task(s, name)["key"].split("/")[1][:6]) for session in sessions)
+            for name in (first, second)))])
+
+
 JOURNEYS = [sweep, answer, next_waiting, fold, resize, merge, review, since_looked, panes, shell,
             dashboard, stop_resume, retire, teardown, send, attach, update, conflicts, restart, search, workload, question_left,
             walk_away,
             frames, draft_frames, org, drafts, overlap, tabs,
             forget, rename, fork, other_branch, merged, large, pull_request, exits, include, unreachable, scrollback,
-            fleet, dropped]
+            fleet, dropped,
+            # Last: it crashes every agent so far.
+            crashed]
 
 
 def main():
