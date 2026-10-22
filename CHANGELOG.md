@@ -12,10 +12,11 @@ What each release changes, and what to do when upgrading. Newest first.
   `roost-use-perspectives`, `roost-session-name`, the
   `roost-sidebar-selection` face, and the commands `roost-list` and
   `roost-kill`. Upgrading: a configuration that still sets one of them
-  now changes nothing, and `M-x roost-doctor` names it. Put Claude's command in the `"claude"` entry of
-  `roost-agent-commands`, set `roost-workspace` to `tab-bar` or nil
-  rather than `roost-use-perspectives` to nil, use the `roost-selection`
-  face, and `roost-switch-task` and `roost-stop` for the commands.
+  now changes nothing, and `M-x roost-doctor` names it. Put Claude's
+  command in the `"claude"` entry of `roost-agent-commands`, set
+  `roost-workspace` to `tab-bar` or nil rather than
+  `roost-use-perspectives` to nil, use the `roost-selection` face, and
+  `roost-switch-task` and `roost-stop` for the commands.
 - `roost-startup-grace`, `roost-request-timeout`,
   `roost-watch-unfocused-interval` and `roost-note-box-lines` are plain
   variables rather than options, outside what 1.0 will keep stable.
