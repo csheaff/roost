@@ -3145,15 +3145,36 @@ def linked_worktrees(repo):
     return places
 
 
+def kept_of_gone(repo, worktree):
+    """The Git directory Git keeps for WORKTREE, one of REPO's whose folder
+    is missing, or None."""
+    for gitdir, path in linked_worktrees(repo):
+        if Path(path).resolve() == worktree and not os.path.lexists(path):
+            return gitdir
+    return None
+
+
+def require_nothing_kept(repo, worktree):
+    """Refuse to finish a task whose worktree folder is missing while Git
+    keeps the repositories of its submodules, which may hold the only copy
+    of commits, with it: forgetting it would delete them uncounted."""
+    gitdir = kept_of_gone(repo, worktree) if Path(repo).is_dir() else None
+    modules = gitdir and gitdir / "modules"
+    if modules and modules.is_dir() and any(modules.iterdir()):
+        raise RoostError("The task's worktree folder is missing, and Git keeps the repositories of its submodules, "
+                         "which may hold work; restore the folder, or delete them with git worktree remove --force "
+                         "--force %s, then try again" % shlex.quote(str(worktree)))
+
+
 def unregister_gone(repo, worktree):
     """Have Git forget WORKTREE, one of REPO's whose folder is gone, so that
     the branch it held can be deleted: what Git keeps of it goes, as
     `git worktree prune` removes it, but never a folder, which may be back
     meanwhile, as when a drive is mounted again. Retiring refuses a locked
-    one first; discarding goes past its lock."""
-    for gitdir, path in linked_worktrees(repo):
-        if Path(path).resolve() == worktree and not os.path.lexists(path):
-            shutil.rmtree(gitdir)
+    one first, and both retiring and discarding one that keeps submodules."""
+    gitdir = kept_of_gone(repo, worktree)
+    if gitdir:
+        shutil.rmtree(gitdir)
 
 
 def worktree_lock(repo, worktree):
@@ -3310,6 +3331,8 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
         raise RoostError("The task's worktree is locked%s%s; %sunlock it with git worktree unlock %s, then try again"
                          % (" (%s)" % lock if lock else "", "" if worktree_exists else ", and its folder is missing",
                             "" if worktree_exists else "reconnect it, or ", shlex.quote(str(worktree))))
+    if not worktree_exists:
+        require_nothing_kept(repo, worktree)
     require_agent_work_kept(task)
     squashed = None
     if merge:
@@ -3479,8 +3502,18 @@ def overwritten_ignored(checkout, other):
     place of."""
     if git(checkout, "merge-base", "HEAD", other, check=False).returncode == 1:
         return []  # Nothing in common, so Git won't merge them.
-    changed = git_fields(checkout, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=d",
-                         "HEAD..." + other)
+    if merges_without_checkout():
+        # What the merge writes, where it moves a file to after a folder
+        # was renamed too, and in conflict or not.
+        merged = git(checkout, "merge-tree", "--write-tree", "--no-messages", "HEAD", other, check=False)
+        if merged.returncode not in (0, 1) or not merged.stdout.strip():
+            raise RoostError("Git can't say what merging would change: "
+                             + (merged.stderr.strip() or "git merge-tree failed"))
+        changed = git_fields(checkout, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=d", "HEAD",
+                             merged.stdout.split()[0])
+    else:
+        changed = git_fields(checkout, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=d",
+                             "HEAD..." + other)
     there, folders = set(), []
     for path in changed:
         parts = PurePosixPath(path).parts
@@ -3565,6 +3598,8 @@ def discard(store, task, expect=None, dry_run=False, teardown=None):
     branch_exists = ref_exists(repo, branch)
     ref = "refs/heads/" + branch
     commit = git(repo, "rev-parse", ref + "^{commit}").stdout.strip() if branch_exists else None
+    if not worktree_exists:
+        require_nothing_kept(repo, worktree)
     # The worktrees its agent made go with it.
     work = agent_work(task)
     if dry_run:

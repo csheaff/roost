@@ -4363,6 +4363,23 @@ elif args[:2] == ["auth", "status"]:
         self.git("config", "diff.orderFile", str(self.root / "missing"))
         self.cell(task, "merge", "failed to read orderfile")
         self.git("config", "--unset", "diff.orderFile")
+        # Or one where Git moves the task's work to, after a folder was renamed.
+        self.git("config", "merge.directoryRenames", "true")
+        (self.repo / "old").mkdir()
+        (self.repo / "old" / "file").write_text("old\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "Old folder")
+        task = self.create(name="adds old/.env")
+        (Path(task["worktree"]) / "old" / ".env").write_text("SECRET=example\n")
+        self.git("add", "-f", "old/.env", cwd=task["worktree"])
+        self.git("commit", "-qm", "Track old/.env", cwd=task["worktree"])
+        self.git("mv", "old", "new")
+        self.git("commit", "-qm", "Rename old to new")
+        (self.repo / "new" / ".env").write_text("SECRET=mine\n")
+        for action in ("merge", "squash"):
+            self.cell(task, action, "Merging would overwrite new/.env in the primary checkout")
+        (self.repo / "new" / ".env").unlink()
+        self.git("config", "--unset", "merge.directoryRenames")
         # Or ignored files in a folder the task's work makes a file.
         (self.repo / "config").mkdir()
         (self.repo / "config" / "tracked").write_text("tracked\n")
@@ -4425,6 +4442,25 @@ elif args[:2] == ["auth", "status"]:
         (hooks / "pre-merge-commit").write_text("#!/bin/sh\nexit 1\n")
         self.assertEqual(self.request("update", id=task["id"])["error"],
                          "Updating from main failed: a hook refused to commit it")
+
+    def test_git_states_a_missing_worktree_whose_submodules_git_keeps(self):
+        self.add_submodule()
+
+        def missing():
+            task = self.worked()
+            wt = Path(task["worktree"])
+            self.check_out_submodules(wt)
+            # A commit only its submodule's repository has, which Git keeps
+            # beside the worktree, not in its folder.
+            self.commit_in_submodule(wt)
+            modules = Path(self.git("rev-parse", "--path-format=absolute", "--git-path", "modules", cwd=wt))
+            self.assertFalse(modules.is_relative_to(wt))
+            shutil.rmtree(wt)
+            self.assertTrue(modules.is_dir())
+            return task
+        kept = "Git keeps the repositories of its submodules, which may hold work; restore the folder"
+        self.matrix(missing, {"list": True, "dry run": kept, "stop": True, "merge": kept, "squash": kept,
+                              "retire": kept, "discard": kept})
 
     def test_a_rebase_is_found_in_a_worktree_whose_path_is_not_utf8(self):
         # Git keeps a linked worktree's path as the file system names it.
