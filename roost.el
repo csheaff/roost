@@ -10011,7 +10011,12 @@ RESULT is `pending', a list of checks, or (error . MESSAGE).")
                     (seq-keep (lambda (variable)
                                 (when (get variable 'saved-value)
                                   (format "`%s' from Customize (set it with setq)" variable)))
-                              roost--tuning-variables))))
+                              roost--tuning-variables)
+                    ;; Roost defines it no more, so a face by that name is yours.
+                    (when (or (facep 'roost-sidebar-selection)
+                              (get 'roost-sidebar-selection 'saved-face)
+                              (get 'roost-sidebar-selection 'customized-face))
+                      (list "the face `roost-sidebar-selection' (use `roost-selection')")))))
     (list "Old settings" nil (format "%d Roost no longer reads" (length old))
           (concat "Your configuration sets " (string-join old ", ")))))
 

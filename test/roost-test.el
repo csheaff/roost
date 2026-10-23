@@ -7584,8 +7584,12 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
              (should-not (nth 1 check))
              (should (string-match-p "roost-claude-command' (use the \"claude\" entry" (nth 3 check)))
              (should (string-match-p "roost-request-timeout' from Customize" (nth 3 check)))
-             (should (member check (roost--doctor-local-checks)))))
-       (put 'roost-request-timeout 'saved-value nil)))))
+             (should (member check (roost--doctor-local-checks)))
+             (put 'roost-sidebar-selection 'saved-face '((t :weight bold)))
+             (should (string-match-p "face `roost-sidebar-selection' (use `roost-selection')"
+                                     (nth 3 (roost--doctor-old-settings))))))
+       (put 'roost-request-timeout 'saved-value nil)
+       (put 'roost-sidebar-selection 'saved-face nil)))))
 
 (ert-deftest roost-doctor-reports-checks-and-connection-fixes ()
   (roost-test--isolated
