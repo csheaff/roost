@@ -357,9 +357,12 @@ gives no score or verdict on whether to merge.
 Opening a task with `r`, or its whole diff with
 `D` when no new file is left out of it, or sending its agent your notes with
 `@`, records where its work stands as where you last looked at it,
-uncommitted work too. Once you've seen its agent's reply, the
+uncommitted work too. `v` records a look too, and opens nothing: for a task
+you judged by its panel, or whose diff you read in its agent's terminal.
+Once you've seen its agent's reply, the
 sidebar and dashboard say, dim, what changed since (`3 files changed since
-you looked`), and its panel says when you looked: `r` shows the changes. It
+you looked`), and its panel says when you looked: `r` shows the changes, and
+`v` marks it as looked at. It
 doesn't count as waiting. Roost compares content, so commits the agent
 makes of what you saw, amends or rebases don't count, nor do files only an
 update from the integration branch brought in; anything else changed does,
@@ -429,6 +432,7 @@ counted once you stop and resume it (`K`, then `s`).
 | `f` | `roost-files` | Dired in the worktree |
 | `r` | `roost-review` | Magit in the worktree, showing what changed since you last looked |
 | `D` | `roost-diff` | Diff the task's own changes, including uncommitted ones; with no new file left out, that counts as looking at it |
+| `v` | `roost-mark-looked` | Record that you've looked at the task as it stands now, opening nothing, so what changed since you looked starts from here |
 | `e` | `roost-send` | Paste a prompt into the agent and press Enter |
 | `i` | `roost-task-info` | The task's next step, prompt, your latest prompt, changes, checks, open review threads, the agent's latest reply and details |
 | `R` | `roost-rename` | Rename the task, in Roost, its tab or perspective, and its agent's tmux window; its branch and worktree keep the name it started with |

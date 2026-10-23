@@ -4163,11 +4163,11 @@ their changes together.  See `roost-magit-status-sections'."
 
 (defun roost--magit-insert-since-looked ()
   "In Magit's status of a task's worktree, insert what changed since you looked.
-That is between the last two times you looked at the task, opening it
-in Magit with `roost-review' or sending its agent your notes, the last
-one often this time: its files.  RET on the heading shows their changes
-together, as on Magit's sections of unmerged commits, and on a file,
-its own.  See `roost-magit-status-sections'."
+That is between the last two times you looked at the task, as by
+opening it in Magit with `roost-review', sending its agent your notes
+or `roost-mark-looked', the last one often this time: its files.  RET
+on the heading shows their changes together, as on Magit's sections of
+unmerged commits, and on a file, its own.  See `roost-magit-status-sections'."
   (when-let* ((roost-magit-status-sections)
               (task (roost--task-in-directory default-directory))
               (looked (roost--field task 'looked))
@@ -5309,10 +5309,33 @@ says changed since: see `roost--since-looked'."
                           (funcall show task)))))))))
     (if (gethash (roost--field task 'host) roost--errors)
         (funcall open)
-      (roost--act task "look" parameters open
-                  (lambda (err)
-                    (message "Roost could not record that you looked at %s: %s" (roost--field task 'name) err)
-                    (funcall open))))))
+      (roost--look task parameters open))))
+
+(defun roost--look (task parameters then)
+  "Record on TASK's host that you look at it now, then call THEN.
+PARAMETERS go with the request, as for `roost--look-then'.  THEN gets
+the task as its host recorded it, or nil when the host couldn't record
+it, as when it doesn't answer, which Roost has said by then."
+  (let ((failed (lambda (err)
+                  (message "Roost could not record that you looked at %s: %s" (roost--field task 'name) err)
+                  (funcall then nil))))
+    (if-let* ((err (gethash (roost--field task 'host) roost--errors)))
+        (funcall failed err)
+      (roost--act task "look" parameters then failed))))
+
+;;;###autoload
+(defun roost-mark-looked (&optional task)
+  "Record that you have looked at TASK as it stands now, opening nothing.
+Its host records where its work stands, files Git doesn't track too, as
+`roost-review' does, and what changed since you last looked starts
+from there: for a task you judged by its panel, or whose diff you read
+in its agent's terminal."
+  (interactive)
+  (setq task (roost--choose task))
+  (roost--look task nil
+               (lambda (updated)
+                 (when updated
+                   (message "Marked %s as looked at" (roost--field updated 'name))))))
 
 (defun roost--magit-status (task)
   "Open Magit's status of TASK's worktree in TASK's frame.
@@ -6618,20 +6641,21 @@ rest from its end: its status and name come first, and are read first."
 
 (defun roost--since-looked (task)
   "What changed in TASK since you last looked at it, as (COUNT . AT), or nil.
-You look at a task when you open it in Magit with `roost-review' or
-send its agent your notes.  COUNT is how many files changed since then,
-by content: uncommitted work counts, and commits remade of what you saw,
-as by an amend or a rebase, don't.  AT is when you looked, or nil if you
-never have, and then COUNT is how many files the task changes.  Nil
-until its host has measured it since you looked, and without Magit for
-a task you never looked at."
+You look at a task when you open it in Magit with `roost-review', send
+its agent your notes, or say so with `roost-mark-looked'.  COUNT is how
+many files changed since then, by content: uncommitted work counts, and
+commits remade of what you saw, as by an amend or a rebase, don't.  AT
+is when you looked, or nil if you never have, and then COUNT is how
+many files the task changes.  Nil until its host has measured it since
+you looked, and without Magit for a task you never looked at."
   (let ((looked (roost--field task 'looked))
         (since (roost--field task 'sinceLooked)))
     (cond (looked
            ;; Measured since this look, not the one before it.
            (when (equal (alist-get 'at since) (alist-get 'at looked))
              (cons (or (alist-get 'count since) 0) (alist-get 'at looked))))
-          ;; You look in Magit, so without it there is no way to.
+          ;; Without Magit, where `roost-review' opens Dired and records
+          ;; no look, it doesn't say so.
           ((and (fboundp 'magit-status) (assq 'diff task))
            (let ((diff (or (roost--field task 'diff) "")))
              (cons (or (alist-get 'files (roost--field task 'size))
@@ -6680,19 +6704,31 @@ It is no reason to wait for you."
       (concat (capitalize (substring text 0 1)) (substring text 1) ".  ")
     ""))
 
-(defun roost--insert-since-looked (task &optional named)
+(defun roost--insert-since-looked (task &optional next)
   "Insert, in TASK's panel, what changed since you last looked at it.
-NAMED means the next step names \\[roost-review] already, so this
-doesn't again."
-  (let ((key (unless named
-               (substitute-command-keys "\\<roost-task-info-mode-map>\\[roost-review]"))))
+It names the keys of `roost-review', to see what changed, and
+`roost-mark-looked', to say you have looked without opening Magit,
+unless NEXT, the panel's next step, names them already.  The task panel
+says a key once."
+  (let* ((key (lambda (command)
+                (let ((key (substitute-command-keys
+                            (format "\\<roost-task-info-mode-map>\\[%s]" command))))
+                  (when (and (roost--action-applies-p task command)
+                             (not (roost--names-key-p next key)))
+                    (propertize key 'face 'roost-key)))))
+         ;; Without Magit, it opens Dired.
+         (review (and (fboundp 'magit-status) (funcall key 'roost-review)))
+         (mark (funcall key 'roost-mark-looked))
+         (keys (lambda (shows)
+                 (when-let* ((said (delq nil (list (and review (concat review " " shows))
+                                                   (and mark (concat mark " marks it as looked at"))))))
+                   (concat ": " (string-join said ", "))))))
     (pcase (and (roost--since-looked-due-p task) (roost--since-looked task))
       (`(,count . ,at)
        (cond ((not at)
               (when (> count 0)
-                (roost--insert-indented
-                 (concat "Not looked at in Magit yet" (when key (format ": %s opens it" key)))
-                 'roost-dim)))
+                (roost--insert-indented (concat "Not looked at yet" (funcall keys "opens it in Magit"))
+                                        'roost-dim)))
              ((= count 0)
               ;; Only once its agent has done something since: right after
               ;; a look, it would say nothing you don't know.
@@ -6705,7 +6741,7 @@ doesn't again."
               (roost--insert-indented
                (concat (format "%d file%s changed since you looked, %s ago"
                                count (if (= count 1) "" "s") (roost--elapsed at))
-                       (when key (format ": %s shows them" key)))
+                       (funcall keys "shows them"))
                'roost-dim)))))))
 
 (defun roost--names-key-p (text key)
@@ -7643,6 +7679,7 @@ there are no tasks at all."
     "---"
     ["Review in Magit" roost-review :active (roost--menu-applies-p 'roost-review)]
     ["Diff the task's changes" roost-diff :active (roost--menu-applies-p 'roost-diff)]
+    ["Mark as looked at" roost-mark-looked :active (roost--menu-applies-p 'roost-mark-looked)]
     ["Bring up to date" roost-update :active (roost--menu-applies-p 'roost-update)]
     "---"
     ["Pull request…" roost-pr :active (roost--menu-applies-p 'roost-pr)]
@@ -7695,7 +7732,7 @@ With no task at all, none of the task commands do."
 ;; A predicate for each task entry of the menu, such as
 ;; `roost--stop-inapt-p': older transient doesn't say which entry it asks about.
 (dolist (command '(roost-open-task roost-shell roost-files roost-send roost-task-info roost-review
-                   roost-diff roost-update roost-pr roost-merge-retire roost-retire roost-forget
+                   roost-diff roost-mark-looked roost-update roost-pr roost-merge-retire roost-retire roost-forget
                    roost-stop roost-resume roost-goto-note roost-rename))
   (defalias (intern (format "roost--%s-inapt-p" (string-remove-prefix "roost-" (symbol-name command))))
     (lambda () (roost--dispatch-inapt-p command))
@@ -7719,7 +7756,7 @@ Unknown Git statistics count as making sense."
         (active (member (roost--field task 'status) '("starting" "running" "permission" "background"))))
     (pcase command
       ('roost-shell (and worktree (not (member (roost--field task 'status) '("stopped" "crashed")))))
-      ((or 'roost-files 'roost-review 'roost-diff 'roost-update) worktree)
+      ((or 'roost-files 'roost-review 'roost-diff 'roost-mark-looked 'roost-update) worktree)
       ((or 'roost-send 'roost-stop) (roost--agent-running-p task))
       ('roost-resume (and worktree (not (roost--agent-running-p task))))
       ('roost-pr (and worktree (or (roost--field task 'pr) (not (eql ahead 0)))))
@@ -7804,6 +7841,7 @@ terminal or worktree, or ask which task."
    ["Review"
     ("r" "Magit" roost-review :inapt-if roost--review-inapt-p)
     ("D" "Diff" roost-diff :inapt-if roost--diff-inapt-p)
+    ("v" "Mark looked at" roost-mark-looked :inapt-if roost--mark-looked-inapt-p)
     ("u" "Bring up to date" roost-update :inapt-if roost--update-inapt-p)
     ("'" "Go to note" roost-goto-note :inapt-if roost--goto-note-inapt-p)]
    ["Finish"
@@ -7833,6 +7871,7 @@ terminal or worktree, or ask which task."
   "RET" #'roost-open-task
   "r" #'roost-review
   "D" #'roost-diff
+  "v" #'roost-mark-looked
   "f" #'roost-files
   "t" #'roost-shell
   "e" #'roost-send
@@ -8163,7 +8202,7 @@ Windows showing the panel keep their scroll position, and the mark stays."
                     (spread (roost--spread task)))
           (roost--insert-indented spread))
         (roost--insert-changed-files task width)
-        (roost--insert-since-looked task (roost--names-key-p next "r"))
+        (roost--insert-since-looked task next)
         (if-let* ((notes (roost--notes-summary task)))
             (roost--insert-indented notes)
           (when (and (fboundp 'magit-status)
@@ -8358,6 +8397,7 @@ are told apart."
   "c" #'roost-new-task
   "r" #'roost-review
   "D" #'roost-diff
+  "v" #'roost-mark-looked
   "i" #'roost-task-info
   "I" #'roost-task-panel-mode
   "b" #'roost-sidebar-mode

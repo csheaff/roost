@@ -4,6 +4,13 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- `v` records that you've looked at a task, as `r` does, without opening
+  Magit or a diff: for a task you judged by its panel, by its checks,
+  threads and its agent's reply, or whose diff you read in its agent's
+  terminal. What changed since you looked then starts from there. The
+  task panel names `v` where it says what you haven't looked at, and the
+  menu (`h`) has it beside `D`. Upgrading: restart Emacs, as `v` lives
+  in keymaps Emacs made when it first loaded Roost.
 - The task panel shows your latest prompt for Pi and OpenCode tasks too,
   as it does for Claude Code and Codex. A message you send while Pi works
   shows at once, and one OpenCode queues shows once it takes it up. One a
