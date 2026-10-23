@@ -4,6 +4,17 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Colour in Roost's views now means a task needs you. The dot of a task
+  whose agent works, which was the brightest on the screen, is dim like
+  the dots of tasks that wait for nothing, and so is a merged task's,
+  whose word is plain rather than in a colour some themes, such as
+  ef-dream, share with `permission`. Line counts, an open pull request,
+  passed checks and the sidebar's `+` for a new task are plain or dim;
+  a failed check, an error and a word that waits on you keep their
+  colour. The dashboard's count at the top starts with what can't go on
+  without you, then what failed. Upgrading: to colour line counts again,
+  make `roost-diff-added` and `roost-diff-removed` inherit `success` and
+  `error`.
 - A merge (`m`) that a commit hook refuses in the primary checkout is now
   undone there, and Roost says so with what the hook printed. What the
   hook changed in other files stays, unstaged, and the message names

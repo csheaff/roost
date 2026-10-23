@@ -350,19 +350,23 @@ to show all of it in that font.")
   "A task waiting for a permission answer in its terminal.")
 (defface roost-status-ready '((t :inherit success))
   "A task waiting for your next prompt.")
-(defface roost-status-running '((t))
-  "A task whose agent is working.
-Plain, so that a coloured light always means the agent needs you.")
+(defface roost-status-running '((t :inherit shadow))
+  "The light of a task whose agent is working.
+Dim, as the dot of any task that waits for nothing: a light in colour
+means the task needs you, and a plain one would stand out more.")
 (defface roost-status-failed '((t :inherit error))
   "A task whose agent failed or disappeared.")
 (defface roost-status-inactive '((t :inherit shadow))
-  "Stopped, exited, starting or offline tasks.")
-(defface roost-pr-open '((t :inherit success))
-  "Face for an open pull request." :group 'roost)
+  "Stopped, exited, starting, merged or offline tasks.")
+(defface roost-pr-open '((t))
+  "Face for an open pull request.
+Plain: what of it waits on you, such as a failed check, has a colour
+of its own." :group 'roost)
 (defface roost-pr-draft '((t :inherit shadow))
   "Face for a draft pull request." :group 'roost)
-(defface roost-pr-merged '((t :inherit font-lock-keyword-face))
-  "Face for a merged pull request." :group 'roost)
+(defface roost-pr-merged '((t))
+  "Face for a merged pull request, and for the word of a merged task.
+Plain: nothing waits on you, and you retire it when you choose." :group 'roost)
 (defface roost-pr-closed '((t :inherit error))
   "Face for a pull request closed without merging." :group 'roost)
 (defface roost-selection '((t :inherit completions-highlight :extend t))
@@ -375,10 +379,13 @@ It shows whether or not you are in the sidebar, and `roost-selection'
 covers it on the line you are on.")
 (defface roost-search-match '((t :inherit match))
   "The words searched for, in search results.")
-(defface roost-diff-added '((t :inherit success))
-  "Inserted line counts.")
-(defface roost-diff-removed '((t :inherit error))
-  "Deleted line counts.")
+(defface roost-diff-added '((t))
+  "Inserted line counts.
+Plain, as the sign tells them apart, so that colour beside a task means
+it needs you; inherit `success' to colour them as Magit does.")
+(defface roost-diff-removed '((t))
+  "Deleted line counts.
+Plain, as the sign tells them apart; inherit `error' to colour them.")
 (defface roost-note '((t :inherit font-lock-doc-face))
   "Review notes, shown in Magit under the lines they are about.")
 
@@ -6027,9 +6034,9 @@ KEY is a function that formats a key, as in `roost--next-step'."
                                 (when counts
                                   (cond ((> (nth 1 counts) 0) (propertize "✗" 'face 'roost-status-failed))
                                         ((> (nth 2 counts) 0) (propertize "…" 'face 'roost-dim))
-                                        (t (propertize "✓" 'face 'roost-status-ready))))
+                                        (t (propertize "✓" 'face 'roost-dim))))
                                 (pcase review
-                                  ("APPROVED" (propertize "+" 'face 'roost-status-ready))
+                                  ("APPROVED" (propertize "+" 'face 'roost-dim))
                                   ("CHANGES_REQUESTED" (propertize "!" 'face 'roost-status-permission)))
                                 ;; Once merged, the commit counts no longer mean work to finish.
                                 (unless open
@@ -6104,7 +6111,7 @@ there are no CI results, which looks unlike checks that passed."
                                       (when (> pending (length waiting))
                                         (format " and %d more" (- pending (length waiting))))))))))
         (when (> passing 0)
-          (roost--insert-indented (funcall mark "✓" 'roost-status-ready (format "%d passed" passing))))
+          (roost--insert-indented (funcall mark "✓" 'roost-dim (format "%d passed" passing))))
         ;; Not of work since, which GitHub hasn't seen.
         (cond ((eq state 'closed)
                (roost--insert-indented (format "Run on %s, which is closed" number) 'roost-dim))
@@ -6885,16 +6892,17 @@ seen."
     ((or "ready" "interrupted" "to merge") 'roost-status-ready)
     ((or "running" "background") 'roost-status-running)
     ((or "failed" "crashed" "error" "ci failed") 'roost-status-failed)
-    ("merged" 'roost-pr-merged)
     (_ 'roost-status-inactive)))
 
 (defun roost--status-word-face (status)
   "Face for STATUS, from `roost--attention-status', written beside its dot.
 The dot has the status's colour.  The word has it too when the agent
-can't go on without you or failed, or the task is merged, is plain
-while the agent waits for you otherwise, and is dim the rest of the time."
+can't go on without you or failed, is plain while the agent waits for
+you otherwise, or the task is merged (`roost-pr-merged'), and is dim the
+rest of the time."
   (pcase status
-    ((or "permission" "prompt" "error" "failed" "crashed" "merged" "ci failed") (roost--status-face status))
+    ((or "permission" "prompt" "error" "failed" "crashed" "ci failed") (roost--status-face status))
+    ("merged" 'roost-pr-merged)
     ((or "ready" "interrupted" "to merge" "comments" "conflicts") nil)
     (_ 'roost-dim)))
 
@@ -8580,10 +8588,12 @@ Refreshes are asynchronous; rendering uses only cached state.
                      (format "%s %s" (roost--host-label (caar b)) (cadar b)))))))
 
 (defconst roost--row-words
-  '("permission" "starting" "ready" "interrupted" "ci failed" "comments" "conflicts"
-    "to merge" "seen" "merged" "error" "failed" "crashed" "exited" "running"
-    "background" "stopped" "offline")
-  "Each word a dashboard row can say, in the order its summary counts them.")
+  '("permission" "starting" "error" "failed" "crashed" "ci failed" "conflicts" "comments"
+    "ready" "interrupted" "to merge" "exited" "merged" "running" "background" "stopped"
+    "seen" "offline")
+  "Each word a dashboard row can say, in the order its summary counts them.
+What can't go on without you comes first, then what failed, what else
+waits on you, and last what waits for nothing.")
 
 (defun roost--row-word (task)
   "TASK's word on its dashboard row.
@@ -9442,7 +9452,7 @@ have seen that waits for nothing."
           (insert roost--gap (propertize label 'face (if (gethash host roost--errors)
                                                    'roost-status-failed 'roost-dim))
                   (make-string (max 1 (- width (string-width label) 1)) ?\s))
-          (insert-text-button "+" 'face 'roost-key 'follow-link t
+          (insert-text-button "+" 'face 'roost-dim 'follow-link t
                               'help-echo (format "New task in %s" (or repo "this project"))
                               'action (lambda (button)
                                         (goto-char (button-start button))
