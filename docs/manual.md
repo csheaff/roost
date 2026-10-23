@@ -290,8 +290,8 @@ table's second column says when a task waits for you: those are the tasks
 sidebar, their word is in its colour, and an agent you've seen that waits
 for nothing has none; the dashboard shows every task's word, and counts
 them by those words at its top, what can't go on without you first. In
-the dashboard and the task panel, the dot before a task's word is in
-colour only while it waits for you, or its agent failed.
+the dashboard and the task panel, the dot before a task's word is dim
+when the task waits for nothing.
 
 | Word | Waits for you | What it means |
 | --- | --- | --- |
