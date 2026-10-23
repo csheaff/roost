@@ -905,6 +905,34 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual((self.repo / "hello").read_text(), "changed\n")
         self.assertFalse(wt.exists())
 
+    def test_a_refusing_hooks_changes_to_other_files_are_named_and_left(self):
+        (self.repo / "generated").write_text("old\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "generated")
+        task = self.create()
+        wt = Path(task["worktree"])
+        (wt / "hello").write_text("changed\n")
+        self.git("commit", "-qam", "fix", cwd=wt)
+        self.hook("pre-commit", "echo new > generated\nexit 1")
+        error = self.request("merge", id=task["id"], style="squash")["error"]
+        self.assertEqual(error, "A commit hook in %s refused the merge, which is undone; changes to generated "
+                         "made as it ran are left there" % os.path.realpath(self.repo))
+        self.assertEqual(self.git("status", "--porcelain"), "M generated")
+        self.assertEqual((self.repo / "hello").read_text(), "base\n")
+
+    def test_a_squash_git_cannot_commit_changes_nothing(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        (wt / "hello").write_text("changed\n")
+        self.git("commit", "-qam", "fix", cwd=wt)
+        before = self.git("rev-parse", "main")
+        self.git("config", "commit.gpgsign", "true")
+        self.git("config", "gpg.program", "false")
+        error = self.request("merge", id=task["id"], style="squash")["error"]
+        self.assertTrue(error.startswith("Merge failed; task retained: "), error)
+        self.assertNotIn("hook", error)
+        self.assert_merge_refused(task, before)
+
     def test_a_conflicting_merge_without_checkout_changes_nothing(self):
         task = self.create()
         wt = Path(task["worktree"])

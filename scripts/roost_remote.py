@@ -3052,8 +3052,20 @@ def undo_merge(repo):
 
 
 def refused_by_hook(repo, said):
-    return RoostError("A commit hook in %s refused the merge, so nothing was changed%s"
-                      % (repo, ": " + said if said else ""))
+    """Undo the merge a commit hook refused in the primary checkout REPO,
+    and say so, with what the hook SAID."""
+    said = ": " + said if said else ""
+    try:
+        undo_merge(repo)
+    except RoostError as error:
+        return RoostError("A commit hook in %s refused the merge, and undoing it failed (%s); "
+                          "`git reset --merge` there undoes it%s" % (repo, error, said))
+    # Files the merge left alone, changed by the hook or by you as it ran.
+    left = [name for name in git(repo, "diff", "--name-only", "-z", "HEAD").stdout.split("\0") if name]
+    if left:
+        return RoostError("A commit hook in %s refused the merge, which is undone; changes to %s made "
+                          "as it ran are left there%s" % (repo, ", ".join(left), said))
+    return RoostError("A commit hook in %s refused the merge, so nothing was changed%s" % (repo, said))
 
 
 def squash_merge(task, integration, here):
@@ -3082,11 +3094,11 @@ def squash_merge(task, integration, here):
             return tip  # The task's work was there already.
         result = execute(["git", "-C", repo, "commit", "-q", "-F", "-"], input=message, check=False)
         if result.returncode:
-            undo_merge(repo)
             said = result.stderr.strip() or result.stdout.strip()
             # Git exits 1 when a hook refuses, and 128 when it can't commit.
             if result.returncode == 1:
                 raise refused_by_hook(repo, said)
+            undo_merge(repo)
             raise RoostError("Merge failed; task retained: " + said)
         return tip
     if (version_of(git(repo, "--version").stdout) or (0, 0)) < MERGE_TREE_GIT:
@@ -3188,8 +3200,6 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
             merging = git(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0
             if merging and conflicts:
                 git(repo, "merge", "--abort")
-            elif merging:
-                undo_merge(repo)
             if conflicts:
                 raise RoostError("%s conflicts with %s in %s. Nothing was changed; update the task from %s, then merge again"
                                  % (task["name"], task["integrationBranch"], ", ".join(conflicts),
@@ -3198,6 +3208,8 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
                 # A hook refused the merge commit. Git's last line says to
                 # commit the merge, which is undone.
                 raise refused_by_hook(repo, "\n".join(result.stderr.strip().splitlines()[:-1]).strip())
+            if merging:
+                undo_merge(repo)
             raise RoostError("Merge failed; task retained: " + (result.stderr.strip() or result.stdout.strip()))
     commit = None
     if branch_exists:
