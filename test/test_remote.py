@@ -4766,6 +4766,27 @@ elif args[:2] == ["auth", "status"]:
         self.matrix(missing, {"list": True, "dry run": kept, "stop": True, "merge": kept, "squash": kept,
                               "retire": kept, "discard": kept})
 
+    def test_git_states_a_missing_worktree_in_the_middle_of_a_cherry_pick(self):
+        def missing():
+            task = self.worked()
+            wt, mine = Path(task["worktree"]), "work-" + task["id"][:6]
+            # Two commits picked, stopped at the first, which the task has
+            # already, with nothing to resolve: the second is still to do.
+            self.git("switch", "-q", "-c", "side-" + task["id"])
+            for name in (mine, "other-" + task["id"]):
+                (self.repo / name).write_text(mine + "\n")
+                self.git("add", ".")
+                self.git("commit", "-qm", name)
+            self.git("switch", "-q", "main")
+            self.assertTrue(roost.git(wt, "cherry-pick", "side-%s~1" % task["id"], "side-" + task["id"],
+                                      check=False).returncode)
+            self.assertEqual(self.git("status", "--porcelain", cwd=wt), "")
+            shutil.rmtree(wt)
+            return task
+        kept = "Git keeps what may be work with it: a cherry-pick under way. Restore"
+        self.matrix(missing, {"list": True, "dry run": kept, "stop": True, "merge": kept, "squash": kept,
+                              "retire": kept, "discard": kept})
+
     def test_git_states_a_missing_worktree_with_changes_staged(self):
         def missing():
             task = self.worked()

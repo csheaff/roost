@@ -514,35 +514,42 @@ def operation_under_way(worktree):
     """What WORKTREE is in the middle of, as `git status` would say, and
     how to finish or undo it, or None. A merge is left to the callers,
     which say so themselves."""
-    names = ("rebase-merge", "rebase-apply", "rebase-apply/applying", "CHERRY_PICK_HEAD", "REVERT_HEAD",
-             "sequencer/todo", "BISECT_LOG")
-    # Each is in the worktree's own Git directory, whose path may hold any byte.
+    # In the worktree's own Git directory, whose path may hold any byte.
     try:
-        gitdir = Path(git_fields(worktree, "rev-parse", "--absolute-git-dir")[0].removesuffix("\n"))
+        command = operation_in(Path(git_fields(worktree, "rev-parse", "--absolute-git-dir")[0].removesuffix("\n")))
     except (RoostError, IndexError):
         return None
-    found = {name: gitdir / name for name in names if os.path.lexists(gitdir / name)}
-    command = None
-    if "rebase-apply/applying" in found:
-        command = "am"
-    elif "rebase-merge" in found or "rebase-apply" in found:
-        command = "rebase"
-    elif "CHERRY_PICK_HEAD" in found:
-        command = "cherry-pick"
-    elif "REVERT_HEAD" in found:
-        command = "revert"
-    elif "sequencer/todo" in found:
-        # A series of commits picked or reverted, stopped between two.
-        with contextlib.suppress(OSError, UnicodeDecodeError):
-            first = next((line.split()[0] for line in Path(found["sequencer/todo"]).read_text().splitlines()
-                          if line.strip() and not line.startswith("#")), "")
-            command = "revert" if first == "revert" else "cherry-pick"
+    if command == "bisect":
+        return "git bisect is under way in the task's worktree; end it with git bisect reset, then try again"
     if command:
         return ("git %s is under way in the task's worktree; finish it with git %s --continue, or undo it "
                 "with git %s --abort, then try again" % (command, command, command))
-    if "BISECT_LOG" in found:
-        return "git bisect is under way in the task's worktree; end it with git bisect reset, then try again"
     return None
+
+
+def operation_in(gitdir):
+    """The Git command under way in the worktree whose Git directory is
+    GITDIR, as `git status` would name it: "am", "rebase", "cherry-pick",
+    "revert" or "bisect"; or None. A merge is left to the callers."""
+    names = ("rebase-merge", "rebase-apply", "rebase-apply/applying", "CHERRY_PICK_HEAD", "REVERT_HEAD",
+             "sequencer/todo", "BISECT_LOG")
+    found = {name for name in names if os.path.lexists(gitdir / name)}
+    if "rebase-apply/applying" in found:
+        return "am"
+    if "rebase-merge" in found or "rebase-apply" in found:
+        return "rebase"
+    if "CHERRY_PICK_HEAD" in found:
+        return "cherry-pick"
+    if "REVERT_HEAD" in found:
+        return "revert"
+    if "sequencer/todo" in found:
+        # A series of commits picked or reverted, stopped between two.
+        with contextlib.suppress(OSError, UnicodeDecodeError):
+            first = next((line.split()[0] for line in (gitdir / "sequencer" / "todo").read_text().splitlines()
+                          if line.strip() and not line.startswith("#")), "")
+            return "revert" if first == "revert" else "cherry-pick"
+        return "cherry-pick"
+    return "bisect" if "BISECT_LOG" in found else None
 
 
 def ref_exists(repo, branch):
@@ -3230,9 +3237,16 @@ def require_nothing_kept(repo, worktree):
         if commits is None or commits:
             held.append("%s on its detached HEAD that no branch has"
                         % ("commits" if commits is None else "%d commit%s" % (commits, "" if commits == 1 else "s")))
-    # A rebase under way, and what it set aside, as with --autostash.
-    if any((gitdir / state).exists() for state in ("rebase-merge", "rebase-apply")):
+    # A command under way, and what it set aside, as a rebase with
+    # --autostash does, or what it has still to do, as a cherry-pick of
+    # several commits; finding a bisect's place again loses nothing.
+    command = operation_in(gitdir)
+    if command == "rebase":
         held.append("a rebase under way, and what it may have set aside")
+    elif command and command != "bisect":
+        held.append("git am under way" if command == "am" else "a %s under way" % command)
+    if (gitdir / "MERGE_HEAD").exists():
+        held.append("a merge under way")
     if (gitdir / "MERGE_AUTOSTASH").exists():
         held.append("changes a merge set aside")
     # What was staged there, kept in its index, and in no commit.
