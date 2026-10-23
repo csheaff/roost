@@ -4254,6 +4254,18 @@ elif args[:2] == ["auth", "status"]:
         task = moved()
         self.git("worktree", "move", str(self.root / ("moved " + task["id"])), task["worktree"])
         self.assertTrue(self.request("merge", id=task["id"])["ok"])
+
+        # Moved off the task's branch, before or after.
+        def moved_off(detach):
+            task = self.worked()
+            self.git(*(("checkout", "-q", "--detach") if detach else ("switch", "-q", "-c", "off-" + task["id"])),
+                     cwd=task["worktree"])
+            self.git("worktree", "move", task["worktree"], str(self.root / ("moved " + task["id"])))
+            return task
+        for detach in (True, False):
+            with self.subTest(detach=detach):
+                self.matrix(lambda: moved_off(detach), {"dry run": back, "merge": back, "retire": back,
+                                                        "discard": back})
         # A branch you checked out in the primary checkout is no worktree moved.
         task = self.worked()
         self.request("stop", id=task["id"])
@@ -4475,6 +4487,12 @@ elif args[:2] == ["auth", "status"]:
         kept = "Git keeps what may be work with it: 1 commit on its detached HEAD that no branch has. Restore"
         self.matrix(missing, {"list": True, "dry run": kept, "stop": True, "merge": kept, "squash": kept,
                               "retire": kept, "discard": kept})
+
+    def test_a_lock_is_found_whatever_the_worktrees_path_holds(self):
+        odd = self.root / "a tab\tand a\nnewline"
+        self.git("worktree", "add", "-q", "-b", "odd", str(odd))
+        self.git("worktree", "lock", "--reason", "on a drive", str(odd))
+        self.assertEqual(roost.worktree_lock(str(self.repo), odd.resolve()), "on a drive")
 
     def test_a_rebase_is_found_in_a_worktree_whose_path_is_not_utf8(self):
         # Git keeps a linked worktree's path as the file system names it.

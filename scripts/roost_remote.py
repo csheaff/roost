@@ -489,6 +489,11 @@ def moved_worktree(task, worktree):
     if not Path(task["repo"]).is_dir():
         return None
     with contextlib.suppress(RoostError):
+        # Git names what it keeps of a worktree after its folder, and keeps
+        # that name when it moves, on whatever branch it is then.
+        for gitdir, path in linked_worktrees(task["repo"]):
+            if gitdir.name == worktree.name and Path(path).resolve() != worktree and Path(path).is_dir():
+                return path
         for path, ref in worktree_branches(task["repo"]):
             # The primary checkout is no task's worktree moved, and can't move.
             if (ref == "refs/heads/" + task["branch"] and Path(path).is_dir()
@@ -3118,12 +3123,25 @@ def worktree_branches(repo):
     return [(path, ref) for path, ref, _ in worktree_entries(repo)]
 
 
+WORKTREE_LIST_Z_GIT = (2, 36)  # `git worktree list -z`
+
+
+@functools.lru_cache(maxsize=None)
+def lists_worktrees_whole():
+    """Whether this host's Git lists worktrees apart by NULs, which keeps a
+    path with a newline in it whole."""
+    return (version_of(execute(["git", "--no-optional-locks", "--version"], check=False).stdout)
+            or (0, 0)) >= WORKTREE_LIST_Z_GIT
+
+
 def worktree_entries(repo):
     """(path, branch ref or None, why it is locked or None) for each worktree
     of REPO; a lock with no reason given has an empty one."""
     entries = []
-    for block in git(repo, "worktree", "list", "--porcelain").stdout.split("\n\n"):
-        lines = block.splitlines()
+    whole = lists_worktrees_whole()
+    listed = git(repo, "worktree", "list", "--porcelain", *(["-z"] if whole else [])).stdout
+    for block in listed.split("\0\0" if whole else "\n\n"):
+        lines = block.strip("\0").split("\0") if whole else block.splitlines()
         if lines and lines[0].startswith("worktree "):
             ref = next((line[len("branch "):] for line in lines if line.startswith("branch ")), None)
             lock = next((line[len("locked"):].strip() for line in lines
