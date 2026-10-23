@@ -314,14 +314,27 @@ def send_while_it_works(session):
     session.until(lambda: session.record()["status"] == "running", 60, "the counting turn")
     time.sleep(2)
     more = "Then reply with the single word DONE."
-    working = session.record()["status"] == "running"
     session.send(more)
-    record = session.when(lambda task: task.get("lastPrompt") == more, 120, "the message to show as your latest prompt")
-    if working and record.get("lastEvent") != "Stop":
+
+    def reported():
+        """What the agent reported since the counting prompt, up to the
+        report that carries the message and with it, or None before that one."""
+        raw = session.store.root / "captures" / (session.task["id"] + ".jsonl")
+        entries = [json.loads(line) for line in raw.read_text().splitlines() if line.strip()]
+        since = max(i for i, entry in enumerate(entries) if entry.get("step") == "a message sent while it works")
+        hooks = [entry["hook"] for entry in entries[since:] if "hook" in entry]
+        taken = next((i for i, hook in enumerate(hooks) if hook.get("prompt") == more), None)
+        return None if taken is None else hooks[:taken + 1]
+
+    before = session.until(reported, 120, "the agent to report the message")
+    # A turn that ended first leaves the message to start one of its own.
+    if any(hook.get("event") == "agent_end" or (hook.get("event") == "status" and hook.get("status") == "idle")
+           for hook in before):
+        print("  --    the turn ended before the message came; not checked")
+    else:
+        record = session.when(lambda task: task.get("lastPrompt") == more, 10, "the message to show as your latest prompt")
         session.check(record["status"] == "running", "a message sent while it works shows as your latest prompt",
                       record["status"])
-    else:
-        print("  --    the turn ended before the message came; not checked")
     record = session.when(lambda task: task["status"] == "ready" and task.get("lastEvent") == "Stop", 180,
                           "the turn's end")
     session.check(record.get("lastPrompt") == more, "and stays so once the turn ends", record.get("lastPrompt"))
