@@ -4675,6 +4675,20 @@ elif args[:2] == ["auth", "status"]:
         self.cell(configured, "update", "Updating from main would overwrite config/.env in the task's worktree")
         self.assertEqual((Path(configured["worktree"]) / "config" / ".env").read_text(), "SECRET=its own\n")
 
+    def test_git_states_an_unrelated_history_merged_on_purpose(self):
+        (self.repo / ".gitignore").write_text(".env\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "Ignore .env")
+        (self.repo / ".env").write_text("SECRET=mine\n")
+        # main takes histories it shares nothing with.
+        self.git("config", "branch.main.mergeOptions", "--allow-unrelated-histories")
+        git = lambda *args, input=None: roost.execute(["git", "-C", str(self.repo), *args], input=input).stdout.strip()
+        blob = git("hash-object", "-w", "--stdin", input="SECRET=example\n")
+        unrelated = git("commit-tree", git("mktree", input="100644 blob %s\t.env\n" % blob), "-m", "Unrelated")
+        aside = "Merging would overwrite .env in the primary checkout"
+        self.matrix(lambda: self.create(name="unrelated", base=unrelated), {"merge": aside, "squash": aside})
+        self.assertEqual((self.repo / ".env").read_text(), "SECRET=mine\n")
+
     def test_git_states_a_hook_that_refuses_a_merge(self):
         hooks = self.root / "hooks"
         hooks.mkdir()

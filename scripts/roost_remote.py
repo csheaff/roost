@@ -3664,13 +3664,14 @@ def overwritten_ignored(checkout, other):
     for an untracked file: those OTHER adds or changes since the two parted
     that are there, untracked, and those in a folder it puts a file in
     place of."""
-    if git(checkout, "merge-base", "HEAD", other, check=False).returncode == 1:
-        return []  # Nothing in common, so Git won't merge them.
+    related = git(checkout, "merge-base", "HEAD", other, check=False).returncode != 1
     # What OTHER changed, where the merge writes it unless it follows a
-    # rename, as options such as branch.<name>.mergeOptions may not.
+    # rename, as options such as branch.<name>.mergeOptions may not. With
+    # nothing in common, which Git merges only when told to, as with
+    # --allow-unrelated-histories there, every file of OTHER's that differs.
     changed = set(git_fields(checkout, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=d",
-                             "HEAD..." + other))
-    if merges_without_checkout():
+                             "HEAD..." + other if related else "HEAD", *([] if related else [other])))
+    if related and merges_without_checkout():
         # And what the merge writes as it follows renames, in conflict or not.
         merged = git(checkout, "merge-tree", "--write-tree", "--no-messages", "HEAD", other, check=False)
         if merged.returncode not in (0, 1) or not merged.stdout.strip():
