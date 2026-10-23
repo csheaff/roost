@@ -35,6 +35,46 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## UX review — 2026-10-23
+
+- **Scope.** How every view presents what it shows: placement, prominence
+  and colour, held against research on visual search and status displays
+  (Healey and Enns on pop-out, Bartram, Ware and Calvert on motion, Few,
+  Carbon's status pattern, WCAG contrast). Personas: Clay (Emacs 32,
+  ef-dream and ef-reverie, FiraCode with Helvetica Neue prose, canvases
+  on), someone new (default theme, no canvases), and a fleet. Clay set
+  the rule during it: colour only where it has a use.
+- **Evidence.** `make qa` on Emacs 32, the whole run: 252 steps, 1 with a
+  problem, a 1.08 s garbage collection in the rename journey while
+  another session's tests ran beside it; the GUI sweep took 616 s for the
+  same reason. Every gallery state drawn in a scratch Emacs 32 under
+  ef-dream, ef-reverie, modus-vivendi and the default theme, with lights
+  on and off. Each status face's contrast and colour distance
+  (CIEDE2000, and for simulated deuteranopia and protanopia) in eight
+  themes. CPU, focused and uncompiled in `emacs -Q`: 0.0% with lights
+  off, 3.8% with one agent asking, 6.5% with five waiting.
+- **Found, most important first.** (1) About 25 coloured marks on a
+  nine-task dashboard, 5 or 6 of them for a task that needs you: line
+  counts on every row, down to a red `−0`, a green `Open`, coloured
+  passed checks and approvals, a cyan `+` per project, and a working
+  agent's plain dot, the brightest on the screen. (2) `merged` took
+  `font-lock-keyword-face`, 7.3 from `warning` in ef-dream. (3) Every
+  waiting agent's light moves, though only an asking one blocks; the
+  glows cost most of the CPU. (4) The default theme's `warning` is 2.3:1
+  on white, and `Roost:N` 1.3:1 on its mode line. (5) A docked panel
+  spends up to 9 lines on the prompt you wrote. (6) A task you've seen
+  says `seen` on its row and `ready` in its panel. (7) For a protanope,
+  ef-dream's `ready` and `error` are 2.2 apart, and the mode-line count
+  and "N waiting" carry them by colour alone. (8) The dashboard's count
+  put `error` after `seen`. (9) The note hint shows on every panel with
+  changes. Good as they were: the sidebar's one word per row, the panel's
+  order, the workload table, search results, keys in their own face.
+- **Chosen.** 1, 2 and 8 in #128: a dot is dim while its task waits for
+  nothing, `merged` is plain, line counts, open and merged pull requests,
+  passed checks and the `+` are plain or dim, and the count goes by
+  urgency. The rest wait for Clay. Canvases stay an addition to one
+  design rather than a second look.
+
 ## Your latest prompt from Pi and OpenCode — 2026-10-22
 
 - **`make contract-live CONTRACT_AGENTS="pi opencode"`** with Pi 1.3.0 and
