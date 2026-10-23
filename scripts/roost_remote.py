@@ -463,6 +463,9 @@ def check_worktree(store, task, branch=True):
         if moved and os.path.lexists(moved):
             raise RoostError("The task's worktree was moved; move it back with git worktree move %s %s, "
                              "then try again" % (shlex.quote(moved), shlex.quote(str(worktree))))
+        if not moved and Path(task["repo"]).is_dir() and current_branch(task["repo"]) == task["branch"]:
+            raise RoostError("The task's branch %s is checked out in the primary checkout %s; switch to another "
+                             "branch there, then try again" % (task["branch"], task["repo"]))
         if moved:
             raise RoostError("Git keeps the task's worktree at %s, which is missing; reconnect it and move it back "
                              "with git worktree move %s %s, or have Git forget it with git worktree prune, then "
@@ -3114,11 +3117,11 @@ def require_not_rebasing(repo, branch):
     """Refuse to merge into or from BRANCH while a rebase of it is under way
     in a worktree of REPO: Git moves BRANCH once the rebase is done, and
     can't if it moved meanwhile."""
-    common = git(repo, "rev-parse", "--git-common-dir", check=False).stdout.strip()
+    common = common_dir(repo)
     if not common:
         return
     # The primary checkout's Git directory, then each linked worktree's.
-    for gitdir, path in [(Path(repo) / common, repo)] + linked_worktrees(repo):
+    for gitdir, path in [(common, repo)] + linked_worktrees(repo):
         for state in ("rebase-merge", "rebase-apply"):
             with contextlib.suppress(OSError, UnicodeDecodeError):
                 if (gitdir / state / "head-name").read_text().strip() == "refs/heads/" + branch:
@@ -3164,10 +3167,20 @@ def worktree_entries(repo):
     return entries
 
 
+def common_dir(repo):
+    """REPO's Git directory, which its worktrees share, or None. Its path,
+    which may be anywhere with `--separate-git-dir`, may hold any byte."""
+    with contextlib.suppress(RoostError, IndexError):
+        return Path(repo) / git_fields(repo, "rev-parse", "--git-common-dir")[0].removesuffix("\n")
+    return None
+
+
 def linked_worktrees(repo):
     """(Git directory, path) for each linked worktree of REPO, as Git keeps
     them, whether or not its folder is there."""
-    common = Path(repo) / git(repo, "rev-parse", "--git-common-dir").stdout.strip()
+    common = common_dir(repo)
+    if not common:
+        raise RoostError("%s is not a Git repository" % repo)
     places = []
     with contextlib.suppress(OSError):
         for gitdir in sorted((common / "worktrees").iterdir()):

@@ -4498,12 +4498,19 @@ elif args[:2] == ["auth", "status"]:
         away = "which is missing; reconnect it and move it back with git worktree move"
         self.matrix(moved_away, {"list": True, "dry run": away, "stop": True, "resume": away, "update": away,
                                  "merge": away, "squash": away, "retire": away, "discard": away})
-        # A branch you checked out in the primary checkout is no worktree moved.
-        task = self.worked()
-        self.request("stop", id=task["id"])
-        self.git("worktree", "remove", task["worktree"])
-        self.git("switch", "-q", task["branch"])
-        self.cell(task, "retire", "unmerged commits")
+        # A branch you checked out in the primary checkout is no worktree
+        # moved, but Git won't delete it there either.
+        def in_the_primary():
+            roost.git(self.repo, "switch", "-q", "main", check=False)
+            task = self.worked()
+            self.git("worktree", "remove", task["worktree"])
+            self.git("switch", "-q", task["branch"])
+            return task
+        there = "is checked out in the primary checkout %s; switch to another branch there" % os.path.realpath(
+            self.repo)
+        self.matrix(in_the_primary, {"list": True, "dry run": there, "stop": True, "merge": there,
+                                     "squash": there, "retire": there, "discard": there})
+        self.git("switch", "-q", "main")
 
     def test_git_states_a_task_branch_renamed_in_its_worktree(self):
         def renamed():
@@ -4769,6 +4776,15 @@ elif args[:2] == ["auth", "status"]:
         self.assertIsNone(roost.operation_under_way(worktree))
         roost.git(worktree, "bisect", "start")
         self.assertIn("git bisect is under way", roost.operation_under_way(worktree))
+
+    def test_a_rebase_is_found_whatever_the_separate_git_directorys_path_holds(self):
+        repo, odd = self.root / "separate", self.root / "a carriage\rreturn.git"
+        roost.git(self.root, "init", "-q", "-b", "main", "--separate-git-dir", str(odd), str(repo))
+        roost.require_not_rebasing(str(repo), "main")
+        (odd / "rebase-merge").mkdir()
+        (odd / "rebase-merge" / "head-name").write_text("refs/heads/main\n")
+        with self.assertRaisesRegex(roost.RoostError, "A rebase of main is under way in"):
+            roost.require_not_rebasing(str(repo), "main")
 
     def test_a_rebase_is_found_in_a_worktree_whose_path_is_not_utf8(self):
         # Git keeps a linked worktree's path as the file system names it.
