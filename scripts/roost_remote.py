@@ -3449,22 +3449,31 @@ def require_history(repo, one, other, action):
 
 def overwritten_ignored(checkout, other):
     """The files Git ignores in CHECKOUT that merging OTHER into it would
-    write over, as Git does without asking, though it refuses to for an
-    untracked file: those OTHER adds or changes since the two parted that
-    are there, untracked."""
+    write over or delete, as Git does without asking, though it refuses to
+    for an untracked file: those OTHER adds or changes since the two parted
+    that are there, untracked, and those in a folder it puts a file in
+    place of."""
     changed = git_fields(checkout, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=d",
                          "HEAD..." + other, succeed=(0, 128))
-    there = set()
+    there, folders = set(), []
     for path in changed:
-        # Or a file where it needs a directory on the way.
         parts = PurePosixPath(path).parts
         for end in range(1, len(parts) + 1):
             place = os.path.join(checkout, *parts[:end])
-            if end == len(parts) and os.path.lexists(place) or end < len(parts) and (
-                    os.path.islink(place) or os.path.isfile(place)):
-                there.add("/".join(parts[:end]))
-                break
-    return sorted(ignored_in(checkout, sorted(there)))
+            if end < len(parts):
+                # A file where it needs a folder on the way.
+                if os.path.islink(place) or os.path.isfile(place):
+                    there.add("/".join(parts[:end]))
+                    break
+            elif os.path.isdir(place) and not os.path.islink(place):
+                folders.append(path)
+            elif os.path.lexists(place):
+                there.add(path)
+    overwritten = ignored_in(checkout, sorted(there))
+    if folders:
+        overwritten.update(git_fields(checkout, "ls-files", "-z", "--others", "--ignored", "--exclude-standard",
+                                      "--directory", "--", *(":(literal)" + folder + "/" for folder in folders)))
+    return sorted(overwritten)
 
 
 def ignored_refusal(doing, paths, where, action):

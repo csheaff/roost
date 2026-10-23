@@ -12,8 +12,9 @@ What each release changes, and what to do when upgrading. Newest first.
   longer says `merged` or `conflicts` from its own branch meanwhile.
 - Merging a task into the primary checkout no longer writes over a file
   Git ignores there, such as your `.env`, when the task's branch tracks
-  one: Git replaces such a file without asking, so Roost now refuses and
-  names it, for you to move aside. Bringing a task up to date (`u`) does
+  one, or deletes one in a folder the task makes a file: Git does both
+  without asking, so Roost now refuses and names it, for you to move
+  aside. Bringing a task up to date (`u`) does
   the same for its worktree's ignored files.
 - Roost refuses to merge or retire a task whose worktree is locked
   (`git worktree lock`), or to act on one whose worktree was moved

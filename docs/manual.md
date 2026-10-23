@@ -723,8 +723,8 @@ checkout (Git 2.38 or newer). A conflicting merge leaves nothing changed.
 Nor does one Roost refuses, saying what to do first: of a task whose
 worktree is locked, was moved, or is in the middle of a rebase, cherry-pick,
 revert or bisect, or into a branch whose rebase is under way. Neither a
-merge nor `u` writes over a file Git ignores in the checkout it merges in,
-such as your `.env`, which Git itself would replace without asking: Roost
+merge nor `u` writes over or deletes a file Git ignores in the checkout it
+merges in, such as your `.env`, as Git itself would without asking: Roost
 names it, for you to move aside.
 Branches are deleted only if they still point at the commit Roost verified.
 Removing a worktree deletes the repositories of its submodules, which may

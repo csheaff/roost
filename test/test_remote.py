@@ -4035,7 +4035,7 @@ elif args[:2] == ["auth", "status"]:
         return dict(refs=self.git("for-each-ref", "--format=%(refname) %(objectname)", cwd=task["repo"]),
                     worktrees=self.git("worktree", "list", "--porcelain", cwd=task["repo"]),
                     primary=checkout(task["repo"]), worktree=checkout(task["worktree"]),
-                    record=record and record["status"], agent=bool(pane and not pane["dead"]))
+                    record=record, agent=bool(pane and not pane["dead"]))
 
     def cell(self, task, action, expected):
         """Run ACTION, one of MATRIX, on TASK, and check that it ends as
@@ -4330,6 +4330,26 @@ elif args[:2] == ["auth", "status"]:
         self.git("commit", "-qm", "Track build/out", cwd=task["worktree"])
         self.cell(task, "merge", "Merging would overwrite build in the primary checkout")
         (self.repo / "build").unlink()
+        # Or ignored files in a folder the task's work makes a file.
+        (self.repo / "config").mkdir()
+        (self.repo / "config" / "tracked").write_text("tracked\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "Config folder")
+        (self.repo / "config" / ".env").write_text("SECRET=mine\n")
+
+        def config_file():
+            task = self.create(name="config is a file", base="main")
+            wt = Path(task["worktree"])
+            self.git("rm", "-rq", "config", cwd=wt)
+            (wt / "config").write_text("a file now\n")
+            self.git("add", "config", cwd=wt)
+            self.git("commit", "-qm", "Config is a file", cwd=wt)
+            return task
+        replaced = "Merging would overwrite config/.env in the primary checkout"
+        self.matrix(config_file, {"merge": replaced, "squash": replaced})
+        (self.repo / "config" / ".env").unlink()
+        configured = self.create(name="has config/.env")
+        (Path(configured["worktree"]) / "config" / ".env").write_text("SECRET=its own\n")
         # A task with an ignored .env of its own, brought up to date once
         # main tracks one: Git would write over its agent's.
         own = self.create(name="has its own .env")
@@ -4343,6 +4363,9 @@ elif args[:2] == ["auth", "status"]:
         self.cell(own, "update", "Updating from main would overwrite .env in the task's worktree, a file Git "
                                  "ignores and so replaces without asking; move it aside, then update again")
         self.assertEqual((Path(own["worktree"]) / ".env").read_text(), "SECRET=its own\n")
+        self.assertTrue(self.request("merge", id=config_file()["id"])["ok"])
+        self.cell(configured, "update", "Updating from main would overwrite config/.env in the task's worktree")
+        self.assertEqual((Path(configured["worktree"]) / "config" / ".env").read_text(), "SECRET=its own\n")
 
     def test_git_states_a_hook_that_refuses_a_merge(self):
         hooks = self.root / "hooks"
