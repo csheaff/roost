@@ -3256,6 +3256,69 @@ def squash_message(task, old, tip):
     return subjects[0] + "\n\n" + "\n".join("* " + subject for subject in subjects)
 
 
+def untracked_here(repo):
+    """The files of yours in REPO that Git neither tracks nor ignores, each
+    by name: a file the task adds beside them isn't yours."""
+    return set(git_fields(repo, "ls-files", "--others", "--exclude-standard", "-z"))
+
+
+def merge_paths(repo, tip):
+    """The paths that merging TIP into HEAD in REPO changes, as `git
+    merge-tree` merges them, renames and all, or None when Git, older than
+    2.38, can't say, or merges them otherwise than the merge did."""
+    if (version_of(git(repo, "--version").stdout) or (0, 0)) < MERGE_TREE_GIT:
+        return None
+    result = git(repo, "merge-tree", "--write-tree", "--no-messages", "HEAD", tip, check=False)
+    if result.returncode or not result.stdout.strip():
+        return None
+    return set(git_fields(repo, "diff-tree", "-r", "--name-only", "--no-renames", "-z", "HEAD",
+                          result.stdout.split()[0]))
+
+
+def undo_merge(repo, merged, untracked):
+    """Undo a merge or squash, without conflicts, that Roost began in the
+    primary checkout REPO, which had nothing uncommitted. MERGED are the
+    paths the merge may have changed, or None to take every staged path for
+    the merge's; UNTRACKED, what `untracked_here` said before it began. A
+    hook may have changed files too. What it staged of yours, or elsewhere,
+    is unstaged first, so `git reset --merge` keeps it in the working tree,
+    and a file of yours stays, untracked again. What it changed in a file
+    the merge brought in is to the task's work, which the task still has:
+    that goes back to the merge's version first, as `git reset --merge`
+    refuses it."""
+    fields = git_fields(repo, "diff-index", "--cached", "-z", "HEAD")
+    # ":mode mode sha sha status", then the path; HEAD's side comes first.
+    staged = {path: meta.split() for meta, path in zip(fields[::2], fields[1::2])}
+    hooks = {path for path in staged if path in untracked or merged is not None and path not in merged}
+    if hooks:
+        git_fields(repo, "update-index", "-z", "--index-info", input=b"".join(
+            b"%s %s\t%s\0" % (staged[path][0][1:].encode(), staged[path][2].encode(), os.fsencode(path))
+            for path in sorted(hooks)))
+    rewritten = (staged.keys() - hooks) & set(git_fields(repo, "diff", "--name-only", "--no-renames", "-z"))
+    if rewritten:
+        git_fields(repo, "checkout-index", "-f", "-u", "-z", "--stdin",
+                   input=b"".join(os.fsencode(path) + b"\0" for path in sorted(rewritten)))
+    git(repo, "reset", "-q", "--merge")
+
+
+def refused_by_hook(repo, said, merged, untracked):
+    """Undo the merge that a commit hook refused in the primary checkout
+    REPO, as `undo_merge` does with MERGED and UNTRACKED, and say so, with
+    what the hook SAID."""
+    said = ": " + said if said else ""
+    try:
+        undo_merge(repo, merged, untracked)
+    except RoostError as error:
+        return RoostError("A commit hook in %s refused the merge, and undoing it failed (%s); "
+                          "`git reset --merge` there undoes it%s" % (repo, error, said))
+    # Files the merge left alone, changed by the hook or by you as it ran.
+    left = git_fields(repo, "diff", "--name-only", "-z", "HEAD")
+    if left:
+        return RoostError("A commit hook in %s refused the merge, which is undone; changes to %s made "
+                          "as it ran are left there%s" % (repo, ", ".join(map(shown, left)), said))
+    return RoostError("A commit hook in %s refused the merge, which is undone%s" % (repo, said))
+
+
 def squash_merge(task, integration, here):
     """Put the task's work onto INTEGRATION as one commit. HERE says the
     primary checkout has INTEGRATION checked out; otherwise no working tree
@@ -3269,6 +3332,7 @@ def squash_merge(task, integration, here):
         return None  # Already there.
     message = squash_message(task, old, tip)
     if here:
+        untracked = untracked_here(repo)
         result = git(repo, "merge", "--squash", tip, check=False)
         if result.returncode:
             conflicts = conflicted_files(repo)
@@ -3280,7 +3344,15 @@ def squash_merge(task, integration, here):
             raise RoostError("Merge failed; task retained: " + (result.stderr.strip() or result.stdout.strip()))
         if not git(repo, "diff", "--cached", "--quiet", check=False).returncode:
             return tip  # The task's work was there already.
-        execute(["git", "-C", repo, "commit", "-q", "-F", "-"], input=message)
+        result = execute(["git", "-C", repo, "commit", "-q", "-F", "-"], input=message, check=False)
+        if result.returncode:
+            said = result.stderr.strip() or result.stdout.strip()
+            # Git exits 1 when a hook refuses, and 128 when it can't commit.
+            merged = merge_paths(repo, tip)
+            if result.returncode == 1:
+                raise refused_by_hook(repo, said, merged, untracked)
+            undo_merge(repo, merged, untracked)
+            raise RoostError("Merge failed; task retained: " + said)
         return tip
     if (version_of(git(repo, "--version").stdout) or (0, 0)) < MERGE_TREE_GIT:
         raise RoostError("Check out %s in the primary repository %s before merging "
@@ -3394,15 +3466,24 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
             tip = git(repo, "rev-parse", "refs/heads/" + branch + "^{commit}").stdout.strip()
             message = execute(["git", "-C", repo, "fmt-merge-msg"],
                               input="%s\t\tbranch '%s' of .\n" % (tip, branch)).stdout.strip()
+            untracked = untracked_here(repo)
             result = git(repo, "merge", "--no-ff", "--no-edit", "-m", message, "refs/heads/" + branch, check=False)
         if result is not None and result.returncode:
             conflicts = conflicted_files(repo)
-            if git(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0:
+            merging = git(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0
+            if merging and conflicts:
                 git(repo, "merge", "--abort")
             if conflicts:
                 raise RoostError("%s conflicts with %s in %s. Nothing was changed; update the task from %s, then merge again"
                                  % (task["name"], task["integrationBranch"], ", ".join(conflicts),
                                     task["integrationBranch"]))
+            if merging and result.returncode == 1:
+                # A hook refused the merge commit. Git's last line says to
+                # commit the merge, which is undone.
+                raise refused_by_hook(repo, "\n".join(result.stderr.strip().splitlines()[:-1]).strip(),
+                                      merge_paths(repo, tip), untracked)
+            if merging:
+                undo_merge(repo, merge_paths(repo, tip), untracked)
             raise RoostError("Merge failed; task retained: " + merge_said(result))
     commit = None
     if branch_exists:

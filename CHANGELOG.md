@@ -4,6 +4,17 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A merge (`m`) that a commit hook refuses in the primary checkout is now
+  undone there, and Roost says so with what the hook printed. What the
+  hook changed in other files stays, unstaged, and the message names
+  those Git tracks; a file of yours it staged stays untracked. A squash
+  used to leave the task's work staged in the primary checkout, so `m`
+  refused to merge again and your next commit there took the task's work
+  with it. Upgrading: if a hook refused a squash before, `git status` in
+  the primary checkout may still show the task's work staged. The task
+  still has it, so `git restore --source=HEAD --staged --worktree --`
+  with the task's files puts them back as they were; a file of yours a
+  hook staged needs only `git restore --staged`, which keeps it.
 - A task whose worktree you or its agent switched to another branch says
   so: its panel names the branch beside the changes, which are that
   branch's, says how to finish the task, and the dashboard's changes start
