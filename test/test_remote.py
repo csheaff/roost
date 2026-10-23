@@ -4244,19 +4244,37 @@ elif args[:2] == ["auth", "status"]:
                     files[str(file.relative_to(path))] = os.readlink(file) if file.is_symlink() else file.read_bytes()
         return files
 
+    def kept_state(self, task):
+        """What Git keeps of the task's worktree beside it, as when its
+        folder is missing: every file, as a rebase's autostash, but its
+        index, which `git status` may refresh, for whose entries, and the
+        notes Git makes as it undoes a merge a hook refused, ORIG_HEAD and
+        its reflog's new lines; or None."""
+        worktree = Path(task["worktree"]).resolve()
+        for gitdir, path in roost.linked_worktrees(task["repo"]):
+            if gitdir.name == worktree.name or Path(path).resolve() == worktree:
+                files = {name: data for name, data in self.checkout_files(gitdir).items()
+                         if name not in ("index", "ORIG_HEAD") and not name.startswith("logs/")}
+                entries = roost.git(task["repo"], "ls-files", "--stage", check=False,
+                                    env=dict(os.environ, GIT_INDEX_FILE=str(gitdir / "index"))).stdout
+                return files, entries
+        return None
+
     def git_state(self, task):
         """What a refusal leaves as it was: the refs and worktrees of the
         task's repository, its primary checkout and the task's worktree,
-        file by file and as Git sees them, and the task's record and agent."""
+        file by file and as Git sees them, what Git keeps of that worktree,
+        and the task's record and agent."""
         record = roost.Store(str(self.state)).recorded(task["id"])
         pane = record and (roost.pane_inventory(self.socket) or {}).get(record.get("paneId"))
 
         def checkout(path):
             files = self.checkout_files(path)
-            return files, files is not None and roost.git(path, "status", "--porcelain", "-b", "--ignored").stdout
+            return files, files is not None and roost.git(path, "--no-optional-locks", "status", "--porcelain", "-b",
+                                                          "--ignored").stdout
         return dict(refs=self.git("for-each-ref", "--format=%(refname) %(objectname)", cwd=task["repo"]),
                     worktrees=self.git("worktree", "list", "--porcelain", cwd=task["repo"]),
-                    primary=checkout(task["repo"]), worktree=checkout(task["worktree"]),
+                    primary=checkout(task["repo"]), worktree=checkout(task["worktree"]), kept=self.kept_state(task),
                     record=record, agent=bool(pane and not pane["dead"]))
 
     def cell(self, task, action, expected):
@@ -4785,6 +4803,13 @@ elif args[:2] == ["auth", "status"]:
         kept = "Git keeps what may be work with it: a rebase under way, and what it may have set aside. Restore"
         self.matrix(missing, {"list": True, "dry run": kept, "stop": True, "merge": kept, "squash": kept,
                               "retire": kept, "discard": kept})
+        # Were a refusal to lose the autostash, the matrix would see it.
+        task = missing()
+        before = self.git_state(task)
+        autostash = next(gitdir for gitdir, _ in roost.linked_worktrees(self.repo)
+                         if gitdir.name == Path(task["worktree"]).name) / "rebase-merge" / "autostash"
+        autostash.unlink()
+        self.assertNotEqual(self.git_state(task), before)
 
     def test_git_states_a_missing_worktree_in_the_middle_of_a_cherry_pick(self):
         def missing():
