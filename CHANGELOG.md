@@ -4,6 +4,13 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A merge (`m`) that a commit hook refuses in the primary checkout now
+  changes nothing there, and says so with what the hook printed. A squash
+  used to leave the task's work staged in the primary checkout, so `m`
+  refused to merge again and your next commit there took the task's work
+  with it. Upgrading: if a hook refused a squash before, `git status` in
+  the primary checkout shows the task's work staged; `git reset --merge`
+  there puts it back as it was, and the task still has its work.
 - An agent that has just started or been resumed, and waits at its
   prompt, no longer counts as waiting on you. After you resume the agents
   that crashed together, those you didn't open no longer each say `ready`

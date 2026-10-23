@@ -843,6 +843,68 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual((self.repo / "hello").read_text(), "main\n")
         self.assertTrue(wt.exists())
 
+    def hook(self, name, body):
+        """Install Git hook NAME for the repository and its worktrees."""
+        hooks = self.root / "hooks"
+        hooks.mkdir(exist_ok=True)
+        (hooks / name).write_text("#!/bin/sh\n" + body + "\n")
+        (hooks / name).chmod(0o755)
+        self.git("config", "core.hooksPath", str(hooks))
+        return hooks / name
+
+    def assert_merge_refused(self, task, before):
+        self.assertEqual(self.git("status", "--porcelain", "--untracked-files=no"), "")
+        for state in ("MERGE_HEAD", "SQUASH_MSG"):
+            self.assertFalse((self.repo / ".git" / state).exists(), state)
+        self.assertEqual(self.git("rev-parse", "main"), before)
+        self.assertEqual([listed["id"] for listed in self.request("list")["result"]], [task["id"]])
+        self.assertTrue(Path(task["worktree"]).exists())
+
+    def test_a_squash_merge_a_commit_hook_refuses_changes_nothing(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        (wt / "hello").write_text("changed\n")
+        (wt / "added").write_text("new\n")
+        self.git("add", ".", cwd=wt)
+        self.git("commit", "-qm", "fix", cwd=wt)
+        (self.repo / "notes.txt").write_text("scratch\n")
+        before = self.git("rev-parse", "main")
+        # As a formatter does: it rewrites what it checks, then refuses.
+        hook = self.hook("pre-commit", "echo reformatted >> hello\necho 'lint failed' >&2\nexit 1")
+        error = self.request("merge", id=task["id"], style="squash")["error"]
+        self.assertEqual(error, "A commit hook in %s refused the merge, so nothing was changed: lint failed"
+                         % os.path.realpath(self.repo))
+        self.assert_merge_refused(task, before)
+        self.assertEqual((self.repo / "hello").read_text(), "base\n")
+        self.assertFalse((self.repo / "added").exists())
+        self.assertEqual((self.repo / "notes.txt").read_text(), "scratch\n")
+        hook.unlink()
+        reply = self.request("merge", id=task["id"], style="squash")
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(self.git("log", "-1", "--format=%P", "main"), before)
+        self.assertEqual((self.repo / "hello").read_text(), "changed\n")
+        self.assertFalse(wt.exists())
+
+    def test_a_merge_a_commit_hook_refuses_changes_nothing(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        (wt / "hello").write_text("changed\n")
+        self.git("commit", "-qam", "fix", cwd=wt)
+        before = self.git("rev-parse", "main")
+        hook = self.hook("pre-merge-commit", "echo 'tests failed'\nexit 1")
+        error = self.request("merge", id=task["id"])["error"]
+        # Without Git's advice to commit the merge, which Roost undid.
+        self.assertEqual(error, "A commit hook in %s refused the merge, so nothing was changed: tests failed"
+                         % os.path.realpath(self.repo))
+        self.assert_merge_refused(task, before)
+        self.assertEqual((self.repo / "hello").read_text(), "base\n")
+        hook.unlink()
+        reply = self.request("merge", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(self.git("log", "-1", "--format=%P", "main").split()[0], before)
+        self.assertEqual((self.repo / "hello").read_text(), "changed\n")
+        self.assertFalse(wt.exists())
+
     def test_a_conflicting_merge_without_checkout_changes_nothing(self):
         task = self.create()
         wt = Path(task["worktree"])

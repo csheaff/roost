@@ -700,7 +700,8 @@ earlier run cannot overwrite a resumed one. Merging needs the task's worktree
 clean. With the primary checkout on the task's integration branch, the merge
 happens there and needs nothing uncommitted (untracked files stay); with it on
 another branch, Git merges into the integration branch without touching your
-checkout (Git 2.38 or newer). A conflicting merge leaves nothing changed.
+checkout (Git 2.38 or newer). A merge that conflicts, or that a commit hook
+in the primary checkout refuses, leaves nothing changed.
 Branches are deleted only if they still point at the commit Roost verified.
 Removing a worktree deletes the repositories of its submodules, which may
 hold the only copy of commits made in them. Retiring removes one only when
