@@ -4630,6 +4630,13 @@ elif args[:2] == ["auth", "status"]:
         for action in ("merge", "squash"):
             self.cell(task, action, "Merging would overwrite new/.env in the primary checkout")
         (self.repo / "new" / ".env").unlink()
+        # Or where it was, when main's merge options don't follow renames.
+        self.git("config", "branch.main.mergeOptions", "-Xno-renames")
+        (self.repo / "old").mkdir()
+        (self.repo / "old" / ".env").write_text("SECRET=mine\n")
+        self.cell(task, "merge", "Merging would overwrite old/.env in the primary checkout")
+        shutil.rmtree(self.repo / "old")
+        self.git("config", "--unset", "branch.main.mergeOptions")
         self.git("config", "--unset", "merge.directoryRenames")
         # Or ignored files in a folder the task's work makes a file.
         (self.repo / "config").mkdir()
@@ -4776,6 +4783,23 @@ elif args[:2] == ["auth", "status"]:
         self.assertIsNone(roost.operation_under_way(worktree))
         roost.git(worktree, "bisect", "start")
         self.assertIn("git bisect is under way", roost.operation_under_way(worktree))
+
+    def test_a_rebase_that_will_move_the_integration_branch_holds_merges(self):
+        # main is part of feature, rebased with --update-refs, which stopped
+        # at a conflict; main is checked out nowhere, but queued to move.
+        self.git("switch", "-q", "-c", "upstream")
+        (self.repo / "hello").write_text("upstream\n")
+        self.git("commit", "-qam", "Upstream")
+        self.git("switch", "-q", "main")
+        (self.repo / "hello").write_text("main\n")
+        self.git("commit", "-qam", "Main")
+        self.git("switch", "-q", "-c", "feature")
+        self.git("commit", "-q", "--allow-empty", "-m", "Feature")
+        self.assertTrue(roost.git(self.repo, "rebase", "-q", "--update-refs", "upstream", check=False).returncode)
+        with self.assertRaisesRegex(roost.RoostError, "A rebase under way in %s will move main once it is done"
+                                    % re.escape(str(self.repo))):
+            roost.require_not_rebasing(str(self.repo), "main")
+        roost.require_not_rebasing(str(self.repo), "upstream")
 
     def test_a_rebase_is_found_whatever_the_separate_git_directorys_path_holds(self):
         repo, odd = self.root / "separate", self.root / "a carriage\rreturn.git"

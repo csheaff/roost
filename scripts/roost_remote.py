@@ -3115,8 +3115,9 @@ def integration_branch(task):
 
 def require_not_rebasing(repo, branch):
     """Refuse to merge into or from BRANCH while a rebase of it is under way
-    in a worktree of REPO: Git moves BRANCH once the rebase is done, and
-    can't if it moved meanwhile."""
+    in a worktree of REPO, or one that will move it too, with --update-refs:
+    Git moves BRANCH once the rebase is done, and can't if it moved
+    meanwhile."""
     common = common_dir(repo)
     if not common:
         return
@@ -3127,6 +3128,11 @@ def require_not_rebasing(repo, branch):
                 if (gitdir / state / "head-name").read_text().strip() == "refs/heads/" + branch:
                     raise RoostError("A rebase of %s is under way in %s; finish or undo it there, then try again"
                                      % (branch, path))
+        with contextlib.suppress(OSError, UnicodeDecodeError):
+            # Each ref it will move, its commit before, and after.
+            if "refs/heads/" + branch in (gitdir / "rebase-merge" / "update-refs").read_text().splitlines()[::3]:
+                raise RoostError("A rebase under way in %s will move %s once it is done; finish or undo it there, "
+                                 "then try again" % (path, branch))
 
 
 def worktree_branches(repo):
@@ -3660,20 +3666,20 @@ def overwritten_ignored(checkout, other):
     place of."""
     if git(checkout, "merge-base", "HEAD", other, check=False).returncode == 1:
         return []  # Nothing in common, so Git won't merge them.
+    # What OTHER changed, where the merge writes it unless it follows a
+    # rename, as options such as branch.<name>.mergeOptions may not.
+    changed = set(git_fields(checkout, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=d",
+                             "HEAD..." + other))
     if merges_without_checkout():
-        # What the merge writes, where it moves a file to after a folder
-        # was renamed too, and in conflict or not.
+        # And what the merge writes as it follows renames, in conflict or not.
         merged = git(checkout, "merge-tree", "--write-tree", "--no-messages", "HEAD", other, check=False)
         if merged.returncode not in (0, 1) or not merged.stdout.strip():
             raise RoostError("Git can't say what merging would change: "
                              + (merged.stderr.strip() or "git merge-tree failed"))
-        changed = git_fields(checkout, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=d", "HEAD",
-                             merged.stdout.split()[0])
-    else:
-        changed = git_fields(checkout, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=d",
-                             "HEAD..." + other)
+        changed.update(git_fields(checkout, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=d", "HEAD",
+                                  merged.stdout.split()[0]))
     there, folders = set(), []
-    for path in changed:
+    for path in sorted(changed):
         parts = PurePosixPath(path).parts
         for end in range(1, len(parts) + 1):
             place = os.path.join(checkout, *parts[:end])
