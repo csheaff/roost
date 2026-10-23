@@ -3058,50 +3058,41 @@ def squash_message(task, old, tip):
     return subjects[0] + "\n\n" + "\n".join("* " + subject for subject in subjects)
 
 
-def git_paths(result):
-    """The paths a git command printed with -z."""
-    return set(result.stdout.split("\0")) - {""}
-
-
 def merging_paths(repo):
-    """The paths the merge under way in REPO changes, as Git merged them,
-    whatever a hook has staged since. Git older than 2.38 can't say so
-    exactly: every path the branch changed stands for them."""
-    if (version_of(git(repo, "--version").stdout) or (0, 0)) >= MERGE_TREE_GIT:
-        result = git(repo, "merge-tree", "--write-tree", "--no-messages", "HEAD", "MERGE_HEAD", check=False)
-        if result.returncode == 0 and result.stdout.strip():
-            return git_paths(git(repo, "diff-tree", "-r", "--name-only", "--no-renames", "-z", "HEAD",
-                                 result.stdout.split()[0]))
-    return git_paths(git(repo, "diff", "--name-only", "--no-renames", "-z", "HEAD...MERGE_HEAD"))
+    """The paths the merge under way in REPO may have changed, whatever a
+    hook has staged since: those the branch changed since the two parted
+    that HEAD has otherwise. A merge leaves the rest as HEAD has them."""
+    parted = git_fields(repo, "diff", "--name-only", "--no-renames", "-z", "HEAD...MERGE_HEAD")
+    return set(parted) & set(git_fields(repo, "diff", "--name-only", "--no-renames", "-z", "HEAD", "MERGE_HEAD"))
 
 
 def undo_merge(repo, merged):
     """Undo a merge or squash, without conflicts, that Roost began in the
     primary checkout REPO, which had nothing uncommitted. MERGED are the
-    paths the merge changed. A hook that refused to commit it may have
-    changed files too. What it staged elsewhere is unstaged first, so `git
-    reset --merge` keeps it in the working tree, and a file of yours it
-    staged stays, untracked again. What it changed in the merge's own files
-    is to the task's work, which the task still has: those go back to the
-    merge's version first, as `git reset --merge` refuses a file it brought
-    in that changed since."""
-    fields = git(repo, "diff-index", "--cached", "-z", "HEAD").stdout.split("\0")
+    paths the merge may have changed. A hook that refused to commit it may
+    have changed files too. What it staged elsewhere is unstaged first, so
+    `git reset --merge` keeps it in the working tree, and a file of yours it
+    staged stays, untracked again. What it changed in a file the merge
+    brought in is to the task's work, which the task still has: that goes
+    back to the merge's version first, as `git reset --merge` refuses it."""
+    fields = git_fields(repo, "diff-index", "--cached", "-z", "HEAD")
     # ":mode mode sha sha status", then the path; HEAD's side comes first.
-    outside = "".join("%s %s\t%s\0" % (meta.split()[0][1:], meta.split()[2], path)
-                      for meta, path in zip(fields[::2], fields[1::2]) if path not in merged)
+    staged = {path: meta.split() for meta, path in zip(fields[::2], fields[1::2])}
+    outside = b"".join(b"%s %s\t%s\0" % (meta[0][1:].encode(), meta[2].encode(), os.fsencode(path))
+                       for path, meta in staged.items() if path not in merged)
     if outside:
-        execute(["git", "-C", repo, "update-index", "-z", "--index-info"], input=outside)
-    rewritten = merged & git_paths(git(repo, "diff", "--name-only", "--no-renames", "-z"))
+        git_fields(repo, "update-index", "-z", "--index-info", input=outside)
+    rewritten = merged & staged.keys() & set(git_fields(repo, "diff", "--name-only", "--no-renames", "-z"))
     if rewritten:
-        execute(["git", "-C", repo, "checkout-index", "-f", "-u", "-z", "--stdin"],
-                input="".join(path + "\0" for path in sorted(rewritten)))
+        git_fields(repo, "checkout-index", "-f", "-u", "-z", "--stdin",
+                   input=b"".join(os.fsencode(path) + b"\0" for path in sorted(rewritten)))
     git(repo, "reset", "-q", "--merge")
 
 
 def refused_by_hook(repo, said, merged):
-    """Undo the merge of MERGED, the paths it changed, that a commit hook
-    refused in the primary checkout REPO, and say so, with what the hook
-    SAID."""
+    """Undo the merge of MERGED, the paths it may have changed, that a
+    commit hook refused in the primary checkout REPO, and say so, with what
+    the hook SAID."""
     said = ": " + said if said else ""
     try:
         undo_merge(repo, merged)
@@ -3109,11 +3100,11 @@ def refused_by_hook(repo, said, merged):
         return RoostError("A commit hook in %s refused the merge, and undoing it failed (%s); "
                           "`git reset --merge` there undoes it%s" % (repo, error, said))
     # Files the merge left alone, changed by the hook or by you as it ran.
-    left = [name for name in git(repo, "diff", "--name-only", "-z", "HEAD").stdout.split("\0") if name]
+    left = git_fields(repo, "diff", "--name-only", "-z", "HEAD")
     if left:
         return RoostError("A commit hook in %s refused the merge, which is undone; changes to %s made "
-                          "as it ran are left there%s" % (repo, ", ".join(left), said))
-    return RoostError("A commit hook in %s refused the merge, so nothing was changed%s" % (repo, said))
+                          "as it ran are left there%s" % (repo, ", ".join(map(shown, left)), said))
+    return RoostError("A commit hook in %s refused the merge, which is undone%s" % (repo, said))
 
 
 def squash_merge(task, integration, here):
@@ -3139,7 +3130,7 @@ def squash_merge(task, integration, here):
                                  % (task["name"], integration, ", ".join(conflicts), integration))
             raise RoostError("Merge failed; task retained: " + (result.stderr.strip() or result.stdout.strip()))
         # Before a hook can stage anything.
-        merged = git_paths(git(repo, "diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD"))
+        merged = set(git_fields(repo, "diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD"))
         if not merged:
             return tip  # The task's work was there already.
         result = execute(["git", "-C", repo, "commit", "-q", "-F", "-"], input=message, check=False)

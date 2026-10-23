@@ -721,7 +721,7 @@ happens there and needs nothing uncommitted (untracked files stay); with it on
 another branch, Git merges into the integration branch without touching your
 checkout (Git 2.38 or newer). A merge that conflicts leaves nothing changed.
 One that a commit hook in the primary checkout refuses is undone, leaving
-only what the hook changed in other files, which Roost names.
+what the hook changed in other files.
 Branches are deleted only if they still point at the commit Roost verified.
 Removing a worktree deletes the repositories of its submodules, which may
 hold the only copy of commits made in them. Retiring removes one only when
