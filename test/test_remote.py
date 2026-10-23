@@ -4180,6 +4180,12 @@ elif args[:2] == ["auth", "status"]:
         task = moved()
         self.git("worktree", "move", str(self.root / ("moved " + task["id"])), task["worktree"])
         self.assertTrue(self.request("merge", id=task["id"])["ok"])
+        # A branch you checked out in the primary checkout is no worktree moved.
+        task = self.worked()
+        self.request("stop", id=task["id"])
+        self.git("worktree", "remove", task["worktree"])
+        self.git("switch", "-q", task["branch"])
+        self.cell(task, "retire", "unmerged commits")
 
     def test_git_states_a_task_branch_renamed_in_its_worktree(self):
         def renamed():
@@ -4254,9 +4260,9 @@ elif args[:2] == ["auth", "status"]:
         self.assertEqual(roost.current_branch(self.repo), "main")
 
     def test_git_states_ignored_files_a_merge_would_write_over(self):
-        (self.repo / ".gitignore").write_text(".env\n")
+        (self.repo / ".gitignore").write_text(".env\nbuild\n")
         self.git("add", ".")
-        self.git("commit", "-qm", "Ignore .env")
+        self.git("commit", "-qm", "Ignore .env and build")
         (self.repo / ".env").write_text("SECRET=mine\n")
 
         def tracks_env():
@@ -4270,6 +4276,15 @@ elif args[:2] == ["auth", "status"]:
                  "without asking; move it aside, then merge again" % os.path.realpath(self.repo))
         self.matrix(tracks_env, {"list": True, "dry run": True, "update": True, "merge": aside, "squash": aside,
                                  "retire": "unmerged commits", "discard": True})
+        # An ignored file where the task's work needs a folder goes too.
+        (self.repo / "build").write_text("my notes\n")
+        task = self.create(name="adds build/")
+        (Path(task["worktree"]) / "build").mkdir()
+        (Path(task["worktree"]) / "build" / "out").write_text("out\n")
+        self.git("add", "-f", "build/out", cwd=task["worktree"])
+        self.git("commit", "-qm", "Track build/out", cwd=task["worktree"])
+        self.cell(task, "merge", "Merging would overwrite build in the primary checkout")
+        (self.repo / "build").unlink()
         # A task with an ignored .env of its own, brought up to date once
         # main tracks one: Git would write over its agent's.
         own = self.create(name="has its own .env")

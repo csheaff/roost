@@ -486,7 +486,9 @@ def moved_worktree(task, worktree):
         return None
     with contextlib.suppress(RoostError):
         for path, ref in worktree_branches(task["repo"]):
-            if ref == "refs/heads/" + task["branch"] and Path(path).resolve() != worktree and Path(path).is_dir():
+            # The primary checkout is no task's worktree moved, and can't move.
+            if (ref == "refs/heads/" + task["branch"] and Path(path).is_dir()
+                    and Path(path).resolve() not in (worktree, Path(task["repo"]).resolve())):
                 return path
     return None
 
@@ -1548,12 +1550,12 @@ def create(store, request):
     # still use the primary checkout for integration and repository identity.
     # Plain --porcelain: `-z` needs Git 2.36, and hosts often ship older Git.
     primary = git(checkout, "worktree", "list", "--porcelain").stdout.split("\n\n", 1)[0].split("\n")
-    if "bare" in primary and primary[0].startswith("worktree "):
+    if not primary[0].startswith("worktree "):
+        raise RoostError("Roost needs a primary working checkout")
+    if "bare" in primary:
         raise RoostError("%s is a worktree of the bare repository %s, and Roost needs a repository with a "
                          "working tree of its own; start tasks from a clone that isn't bare"
                          % (checkout, primary[0][len("worktree "):]))
-    if "bare" in primary or not primary[0].startswith("worktree "):
-        raise RoostError("Roost needs a primary working checkout")
     repo = primary[0][len("worktree "):]
     name = task_name(request.get("name"))
     slug = name_slug(name)
@@ -1616,13 +1618,13 @@ def create(store, request):
         task["copyComplete"] = False
     if request.get("programStatus") is True:
         task["programStatus"] = True
-    existed = ref_exists(repo, branch)
+    existed, there = ref_exists(repo, branch), worktree.exists()
     try:
         git(repo, "-c", "branch.autoSetupMerge=false", "worktree", "add", "-b", branch,
             str(worktree), commit)
     except RoostError as exc:
         said = "\n".join(line for line in str(exc).splitlines() if not line.startswith("Preparing worktree"))
-        if not worktree.exists():
+        if there or not worktree.exists():
             # A checkout that failed, as a filter can, leaves the new branch.
             if not existed:
                 with contextlib.suppress(RoostError):
@@ -3424,7 +3426,17 @@ def overwritten_ignored(checkout, other):
     are there, untracked."""
     changed = git_fields(checkout, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=d",
                          "HEAD..." + other, succeed=(0, 128))
-    return sorted(ignored_in(checkout, [path for path in changed if os.path.lexists(os.path.join(checkout, path))]))
+    there = set()
+    for path in changed:
+        # Or a file where it needs a directory on the way.
+        parts = PurePosixPath(path).parts
+        for end in range(1, len(parts) + 1):
+            place = os.path.join(checkout, *parts[:end])
+            if end == len(parts) and os.path.lexists(place) or end < len(parts) and (
+                    os.path.islink(place) or os.path.isfile(place)):
+                there.add("/".join(parts[:end]))
+                break
+    return sorted(ignored_in(checkout, sorted(there)))
 
 
 def ignored_refusal(doing, paths, where, action):
