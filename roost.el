@@ -6768,7 +6768,8 @@ It is no reason to wait for you."
 (defun roost--insert-other-branch (task &optional next)
   "Insert, in TASK's panel, the branch its worktree is on when not the task's.
 Its changes are that branch's.  How to finish the task follows, unless
-NEXT, the panel's next step, says it already."
+NEXT, the panel's next step, says it already, or `x' won't retire it, as
+while its agent is at work."
   (when-let* ((branch (roost--other-branch task))
               ((not (roost--field task 'worktreeMissing))))
     (roost--insert-indented
@@ -6776,7 +6777,7 @@ NEXT, the panel's next step, says it already."
                      (roost--field task 'branch))
              (unless (string-empty-p (roost--changes task))
                (if (equal branch "HEAD") ", so these are the changes there" (format ", so these are %s's changes" branch)))
-             (unless (roost--names-key-p next "x")
+             (unless (or (roost--names-key-p next "x") (not (roost--action-applies-p task 'roost-retire)))
                (concat ": " (roost--other-branch-ways task (lambda (key) (propertize key 'face 'roost-key)))))
              ".")
      'roost-status-permission)))

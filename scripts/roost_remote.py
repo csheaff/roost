@@ -3177,7 +3177,12 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
             merge_without_checkout(task, integration)
             result = None
         else:
-            result = git(repo, "merge", "--no-ff", "--no-edit", branch, check=False)
+            # By its full name, which a tag of the same name would otherwise
+            # shadow, with the message a merge of the short one has.
+            tip = git(repo, "rev-parse", "refs/heads/" + branch + "^{commit}").stdout.strip()
+            message = execute(["git", "-C", repo, "fmt-merge-msg"],
+                              input="%s\t\tbranch '%s' of .\n" % (tip, branch)).stdout.strip()
+            result = git(repo, "merge", "--no-ff", "--no-edit", "-m", message, "refs/heads/" + branch, check=False)
         if result is not None and result.returncode:
             conflicts = conflicted_files(repo)
             if git(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0:

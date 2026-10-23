@@ -968,6 +968,16 @@ class Lifecycle(unittest.TestCase):
         self.assertIsNone(self.request("list", full=True)["result"][0]["worktreeBranch"])
         reply = self.request("retire", id=task["id"])
         self.assertTrue(reply["ok"], reply)
+        # Merging takes the branch, not the tag, which is where it started.
+        task = self.create()
+        self.git("tag", task["branch"])
+        wt = Path(task["worktree"])
+        (wt / "hello").write_text("task\n")
+        self.git("commit", "-qam", "task", cwd=wt)
+        reply = self.request("merge", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual((self.repo / "hello").read_text(), "task\n")
+        self.assertTrue(self.git("log", "-1", "--format=%s").startswith("Merge branch '%s'" % task["branch"]))
 
     def test_names_in_any_script_get_ascii_branches(self):
         for name, slug in (("修复解析器", "task"), ("исправить ошибку", "task"), ("café menu", "cafe-menu"),
