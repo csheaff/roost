@@ -11,6 +11,12 @@ What each release changes, and what to do when upgrading. Newest first.
   with it. Upgrading: if a hook refused a squash before, `git status` in
   the primary checkout shows the task's work staged; `git reset --merge`
   there puts it back as it was, and the task still has its work.
+- A task whose worktree you or its agent switched to another branch says
+  so: its panel names the branch beside the changes, which are that
+  branch's, says how to finish the task, and the dashboard's changes start
+  with `on feat`. `x` asks whether to discard the task, keeping that
+  branch, rather than offering `m`, which refuses there. The task no
+  longer says `merged` or `conflicts` from its own branch meanwhile.
 - An agent that has just started or been resumed, and waits at its
   prompt, no longer counts as waiting on you. After you resume the agents
   that crashed together, those you didn't open no longer each say `ready`

@@ -403,6 +403,25 @@ Nothing is lost by retiring it with `x`: nothing is left uncommitted, and its
 commits are all in what was merged. Commits made after its pull request merged
 keep it from saying so.
 
+### A worktree on another branch
+
+You or a task's agent may make a branch in its worktree and work there, as
+with `git switch -c feat`. `m`, `P`, `u` and retiring act on the task's own
+branch, so its host refuses them until the worktree is back on it. The task
+panel says so beside the task's changes, which are then that branch's, as in
+Magit and the diff: "The worktree is on feat, not the task's branch
+roost/fix-parser". Its details say so too, the dashboard's changes start
+with `on feat` (`detached` for a detached HEAD), and the task doesn't say
+`merged` or `conflicts`, which go by its own branch. To finish it:
+
+- To merge the work with `m` or `P`, check out the task's branch in the
+  worktree and merge `feat` into it.
+- `x` discards the task: its worktree, its own branch and its window go,
+  and `feat` keeps its commits. It first says what that loses, as files not
+  committed, or commits made on a detached HEAD.
+
+Roost finds a pull request opened from the task's branch, not from `feat`.
+
 ### How many agents you keep up with
 
 `w`, or `M-x roost-workload`, shows, for

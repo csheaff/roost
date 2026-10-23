@@ -1024,6 +1024,51 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(self.request("merge", id=task["id"])["ok"])
         self.assertEqual((self.repo / "hello").read_text(), "search\n")
 
+    def test_a_worktree_on_another_branch_is_listed_with_its_name(self):
+        # Work on a branch made in the task's worktree read as the task's,
+        # with no sign that merging and retiring would refuse.
+        task = self.create()
+        wt = Path(task["worktree"])
+        listed = lambda: self.request("list", full=True)["result"][0]
+        self.assertIsNone(listed()["worktreeBranch"])
+        self.git("switch", "-q", "-c", "integ", cwd=wt)
+        self.git("switch", "-q", "-c", "feat", cwd=wt)
+        (wt / "hello").write_text("feat\n")
+        self.git("commit", "-qam", "feat", cwd=wt)
+        (self.repo / "hello").write_text("main\n")
+        self.git("commit", "-qam", "main")
+        told = listed()
+        self.assertEqual(told["worktreeBranch"], "feat")
+        # Its statistics are the worktree's, feat's; the task's branch has
+        # nothing to merge, and m refuses, so no conflict is told.
+        self.assertEqual((told["ahead"], told["files"]), (1, [dict(path="hello", added=1, deleted=1)]))
+        self.assertIsNone(told["conflicts"])
+        self.git("switch", "-q", "--detach", cwd=wt)
+        self.assertEqual(listed()["worktreeBranch"], "HEAD")
+        self.git("switch", "-q", task["branch"], cwd=wt)
+        told = listed()
+        self.assertIsNone(told["worktreeBranch"])
+        self.assertEqual((told["ahead"], told["conflicts"]), (0, []))
+
+    def test_a_tag_named_as_the_task_branch_is_no_other_branch(self):
+        # Beside a tag of its name, Git shortens the branch to heads/…, which
+        # read as the worktree on another branch: retiring was refused.
+        task = self.create()
+        self.git("tag", task["branch"])
+        self.assertIsNone(self.request("list", full=True)["result"][0]["worktreeBranch"])
+        reply = self.request("retire", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        # Merging takes the branch, not the tag, which is where it started.
+        task = self.create()
+        self.git("tag", task["branch"])
+        wt = Path(task["worktree"])
+        (wt / "hello").write_text("task\n")
+        self.git("commit", "-qam", "task", cwd=wt)
+        reply = self.request("merge", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual((self.repo / "hello").read_text(), "task\n")
+        self.assertTrue(self.git("log", "-1", "--format=%s").startswith("Merge branch '%s'" % task["branch"]))
+
     def test_names_in_any_script_get_ascii_branches(self):
         for name, slug in (("修复解析器", "task"), ("исправить ошибку", "task"), ("café menu", "cafe-menu"),
                            ("Ünïcödé--naming_test", "Unicode-naming_test"), ("fix #12: parser!", "fix-12-parser"),

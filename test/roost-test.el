@@ -3161,6 +3161,94 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
        (roost-retire task))
      (should (equal discarded "0123456789abcdef")))))
 
+(ert-deftest roost-a-task-whose-worktree-is-on-another-branch-says-so ()
+  ;; Work on a branch made in the task's worktree read as the task's, and
+  ;; nothing said that its host would refuse to merge or retire it there.
+  (roost-test--isolated
+   (let* ((on (lambda (branch &rest fields)
+                (roost--cache-task "dev" (append fields `((worktreeBranch . ,branch) (integrationBranch . "main")
+                                                          (ahead . 1) (dirty)
+                                                          (diff . "1 file changed, 12 insertions(+), 3 deletions(-)"))
+                                                 (roost-test--task nil "ready")))))
+          (task (funcall on "feat"))
+          (own "codex/roost/fix-auth-123456"))
+     (should (equal (substring-no-properties (roost--next-step task))
+                    (concat "Its worktree is on feat, not the task's branch: x discards the task, keeping feat; "
+                            "to merge its work with m or P, check out " own " there and merge feat into it")))
+     (should (equal (roost--changes task t) "on feat · 1 file +12 −3 · ↑1"))
+     ;; m says why it won't merge, rather than ask to and be refused.
+     (should-error (roost-merge-retire task) :type 'user-error)
+     (with-temp-buffer
+       (roost-task-info-mode)
+       (setq roost--buffer-task-key (roost--key task))
+       (roost--render-task-info)
+       ;; Beside its changes, which are that branch's, and in its details.
+       (should (string-search (format "The worktree is on feat, not the task's branch %s, so these are feat's changes.\n"
+                                      own)
+                              (buffer-string)))
+       (should (string-search "merges into main; the worktree is on feat\n" (buffer-string))))
+     ;; Stopped, the next step resumes it: the line beside its changes
+     ;; says how to finish it instead.
+     (setq task (funcall on "HEAD" '(status . "stopped") '(live)))
+     (should (equal (roost--changes task t) "detached · 1 file +12 −3 · ↑1"))
+     (with-temp-buffer
+       (roost-task-info-mode)
+       (setq roost--buffer-task-key (roost--key task))
+       (roost--render-task-info)
+       (should (string-search (concat "The worktree is on a detached HEAD, not the task's branch " own
+                                      ", so these are the changes there: x discards the task; to merge its work "
+                                      "with m or P, bring its commits onto " own " and check that out there.\n")
+                              (buffer-string))))
+     ;; Merged work there is no task to retire: its host won't retire it.
+     ;; Commits on the branch since are still to merge, once brought over.
+     (let ((merged '((landed . t) (seen . "2026-10-03T20:00:00+00:00"))))
+       (should-not (roost--merged-p (apply on "feat" merged)))
+       (should (string-search "to merge its work with m or P"
+                              (substring-no-properties (roost--next-step (apply on "feat" merged)))))
+       (should (roost--merged-p (apply on nil merged))))
+     ;; A quiet poll keeps it, as it keeps Git statistics; one that
+     ;; measured the worktree back on the task's branch forgets it.
+     (funcall on "feat")
+     (roost--apply-snapshot "dev" (list (roost-test--task nil "ready")))
+     (should (equal (roost--other-branch (car (roost-tasks))) "feat"))
+     (roost--cache-task "dev" (append '((worktreeBranch)) (roost-test--task nil "ready")))
+     (should-not (roost--other-branch (car (roost-tasks))))
+     ;; A helper too old to say leaves it as it was.
+     (should (equal (substring-no-properties (roost--next-step (funcall on nil '(landed))))
+                    "m merges it, or P opens a pull request")))))
+
+(ert-deftest roost-retire-on-another-branch-offers-to-discard-keeping-it ()
+  ;; x asked whether to discard work m would merge: m refused, and
+  ;; discarding loses nothing of the branch the work is on.
+  (roost-test--isolated
+   (let ((own "codex/roost/fix-auth-123456") asked discarded)
+     (cl-letf (((symbol-function 'y-or-n-p) (lambda (prompt &rest _) (push prompt asked) t))
+               ((symbol-function 'roost-discard) (lambda (task) (setq discarded (roost--field task 'id))))
+               ((symbol-function 'roost--request) (lambda (&rest _) (error "Asked its host"))))
+       (roost-retire (roost--cache-task "dev" (append '((ahead . 1) (dirty) (worktreeBranch . "feat"))
+                                                      (roost-test--task nil "ready"))))
+       (should (equal asked (list (format "fix auth's worktree is on feat, not its branch %s.  Discard the task, keeping feat? "
+                                          own))))
+       (should discarded)
+       ;; With changes not committed, which discarding loses.
+       (setq asked nil)
+       (roost-retire (roost--cache-task "dev" (append '((dirty . t) (worktreeBranch . "HEAD"))
+                                                      (roost-test--task nil "ready"))))
+       (should (equal asked (list (format (concat "fix auth's worktree is on a detached HEAD, not its branch %s, with "
+                                                  "changes not committed (r commits them in Magit).  Discard the task? ")
+                                          own))))
+       ;; Told only by its host, as when Roost hasn't measured it since.
+       (setq asked nil discarded nil)
+       (cl-letf (((symbol-function 'roost--request)
+                  (lambda (_host _action _params _success failure)
+                    (funcall failure (format "The task's worktree is on feat, not the task's branch %s; check out %s there, bringing over any commits you want, then try again"
+                                             own own)))))
+         (roost-retire (roost--cache-task "dev" (append '((ahead . 0) (dirty) (worktreeBranch))
+                                                        (roost-test--task nil "ready")))))
+       (should (string-match-p "nothing in them would be lost" (cadr asked)))
+       (should (string-suffix-p "Discard the task, keeping feat? " (car asked)))
+       (should discarded)))))
+
 (ert-deftest roost-finishing-a-task-runs-its-projects-teardown-and-warns-if-it-fails ()
   (roost-test--isolated
    (let* ((project (make-temp-file "roost-project" t))
