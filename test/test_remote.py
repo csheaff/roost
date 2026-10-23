@@ -913,12 +913,23 @@ class Lifecycle(unittest.TestCase):
         wt = Path(task["worktree"])
         (wt / "hello").write_text("changed\n")
         self.git("commit", "-qam", "fix", cwd=wt)
-        self.hook("pre-commit", "echo new > generated\nexit 1")
-        error = self.request("merge", id=task["id"], style="squash")["error"]
-        self.assertEqual(error, "A commit hook in %s refused the merge, which is undone; changes to generated "
-                         "made as it ran are left there" % os.path.realpath(self.repo))
-        self.assertEqual(self.git("status", "--porcelain"), "M generated")
-        self.assertEqual((self.repo / "hello").read_text(), "base\n")
+        # Yours, untracked, as the primary checkout allows.
+        (self.repo / "notes.txt").write_text("mine\n")
+        before = self.git("rev-parse", "main")
+        for style, name in (("squash", "pre-commit"), ("merge", "pre-merge-commit")):
+            with self.subTest(style):
+                # Changes it makes, and one of yours it stages, stay.
+                hook = self.hook(name, "echo new > generated\ngit add generated notes.txt\nexit 1")
+                error = self.request("merge", id=task["id"], style=style)["error"]
+                self.assertEqual(error, "A commit hook in %s refused the merge, which is undone; changes to "
+                                 "generated made as it ran are left there" % os.path.realpath(self.repo))
+                self.assertEqual(self.git("status", "--porcelain").splitlines(), ["M generated", "?? notes.txt"])
+                self.assertEqual((self.repo / "generated").read_text(), "new\n")
+                self.assertEqual((self.repo / "notes.txt").read_text(), "mine\n")
+                self.assertEqual((self.repo / "hello").read_text(), "base\n")
+                self.assertEqual(self.git("rev-parse", "main"), before)
+                hook.unlink()
+                self.git("checkout", "--", "generated")
 
     def test_a_squash_git_cannot_commit_changes_nothing(self):
         task = self.create()
