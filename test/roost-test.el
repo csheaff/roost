@@ -1142,6 +1142,21 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
                                         (roost-test--task "1123456789abcdef" "ready")))
        (should (roost--waiting-p (funcall task "1123456789abcdef"))))))))
 
+(ert-deftest roost-a-resumed-agent-still-shows-the-work-that-waits ()
+  ;; Resumed with others and not opened: its agent has nothing new, so its
+  ;; pull request's failed check waits on you, as it did before.
+  (roost-test--isolated
+   (let ((task (roost--cache-task
+                "dev" (append '((updatedAt . "2026-10-03T21:00:00+00:00") (lastEvent . "SessionStart"))
+                              (roost-test--turn-task '(checks . ((passing . 2) (failing . 1) (pending . 0)))
+                                                     `(failedAt . ,(roost-test--ago 600))
+                                                     ;; As GitHub said once it started.
+                                                     '(checkedAt . "2026-10-03T21:01:00+00:00"))))))
+     (should (equal (roost--display-status task) "ci failed"))
+     (should (roost--waiting-p task))
+     ;; And one whose work is merged can be retired, as `merged' says.
+     (should (roost--seen-p task)))))
+
 (ert-deftest roost-does-not-notify-about-the-agent-you-are-watching ()
   (roost-test--isolated
    (roost-test--without-inspect

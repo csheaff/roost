@@ -210,15 +210,27 @@ HISTORY_DAYS = 30
 HISTORY_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
+# What each agent's adapter records as its last event when it starts, or
+# resumes, and waits at its prompt.
+START_EVENTS = ("SessionStart", "session_start")
+
+
+def seen_since_last_event(task):
+    """Whether you have seen TASK's agent since its last event, as Emacs
+    counts it: one that has done nothing since it started counts as seen,
+    as it waits at its prompt, as one you resumed does."""
+    return bool(bool(task.get("updatedAt")) and task.get("seen") == task.get("updatedAt")
+                or task.get("status") == "ready" and task.get("lastEvent") in START_EVENTS)
+
+
 def history_state(task):
     """What the history keeps of TASK, a record or None: its status, whether
-    you have seen its agent since its last event, and its `turn`, what of
-    its pull request or work waits on you as Emacs last said."""
+    you have seen its agent since its last event (`seen_since_last_event`),
+    and its `turn`, what of its pull request or work waits on you as Emacs
+    last said."""
     if task is None:
         return None
-    return dict(status=task.get("status"),
-                seen=bool(task.get("updatedAt")) and task.get("seen") == task.get("updatedAt"),
-                turn=text(task.get("turn")))
+    return dict(status=task.get("status"), seen=seen_since_last_event(task), turn=text(task.get("turn")))
 
 
 class History:
@@ -2471,7 +2483,7 @@ def stop(store, task, inventory=None):
     if owned_pane(task, inventory):
         tmux(task["socket"], "kill-window", "-t", task["windowId"])
     # Stopping says nothing new: an agent you had seen stays seen.
-    was_seen = bool(task.get("seen")) and task.get("seen") == task.get("updatedAt")
+    was_seen = seen_since_last_event(task)
     # A pane ID owned by something else means ours is gone (for example after a
     # tmux server restart reused the ID): never touch it, and forget the IDs.
     task.update(status="stopped", updatedAt=now(), paneId=None, windowId=None)
