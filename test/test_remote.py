@@ -960,6 +960,57 @@ class Lifecycle(unittest.TestCase):
                 self.git("checkout", "--", "hello")
                 roost.git(self.repo, "config", "--unset", "branch.main.mergeOptions", check=False)
 
+    def test_a_merge_a_hook_refuses_is_undone_where_main_renamed_the_file(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        (wt / "hello").write_text("changed\n")
+        self.git("commit", "-qam", "fix", cwd=wt)
+        # Git takes the task's change to greeting.
+        self.git("mv", "hello", "greeting")
+        self.git("commit", "-qm", "rename")
+        before = self.git("rev-parse", "main")
+        hooks = (("squash", "pre-commit"), ("merge", "pre-merge-commit"))
+        for (style, name), git in [(hook, git) for hook in hooks for git in ("new", "old")]:
+            with self.subTest(style=style, git=git), \
+                 patch.object(roost, "MERGE_TREE_GIT", (99, 0) if git == "old" else roost.MERGE_TREE_GIT):
+                hook = self.hook(name, "exit 1")
+                error = self.request("merge", id=task["id"], style=style)["error"]
+                self.assertEqual(error, "A commit hook in %s refused the merge, which is undone"
+                                 % os.path.realpath(self.repo))
+                self.assert_merge_refused(task, before)
+                self.assertEqual((self.repo / "greeting").read_text(), "base\n")
+                hook.unlink()
+        reply = self.request("merge", id=task["id"], style="squash")
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual((self.repo / "greeting").read_text(), "changed\n")
+
+    def test_files_of_yours_a_post_merge_hook_stages_stay(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        (wt / "hello").write_text("changed\n")
+        self.git("commit", "-qam", "fix", cwd=wt)
+        (self.repo / "notes.txt").write_text("mine\n")
+        (self.repo / "drafts").mkdir()
+        (self.repo / "drafts" / "one").write_text("draft\n")
+        before = self.git("rev-parse", "main")
+        # `git merge --squash` runs post-merge before Roost commits.
+        staging = self.hook("post-merge", "git add notes.txt drafts")
+        hook = self.hook("pre-commit", "exit 1")
+        for git in ("new", "old"):
+            with self.subTest(git=git), \
+                 patch.object(roost, "MERGE_TREE_GIT", (99, 0) if git == "old" else roost.MERGE_TREE_GIT):
+                error = self.request("merge", id=task["id"], style="squash")["error"]
+                self.assertEqual(error, "A commit hook in %s refused the merge, which is undone"
+                                 % os.path.realpath(self.repo))
+                self.assertEqual(self.git("status", "--porcelain").splitlines(), ["?? drafts/", "?? notes.txt"])
+                self.assertEqual((self.repo / "notes.txt").read_text(), "mine\n")
+                self.assertEqual((self.repo / "drafts" / "one").read_text(), "draft\n")
+                self.assertEqual(self.git("rev-parse", "main"), before)
+        hook.unlink()
+        staging.unlink()
+        self.assertTrue(self.request("merge", id=task["id"], style="squash")["ok"])
+        self.assertEqual(self.git("status", "--porcelain").splitlines(), ["?? drafts/", "?? notes.txt"])
+
     def test_a_file_of_yours_not_named_in_utf8_stays_when_a_hook_stages_it(self):
         task = self.create()
         wt = Path(task["worktree"])
