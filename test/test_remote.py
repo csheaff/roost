@@ -4458,7 +4458,21 @@ elif args[:2] == ["auth", "status"]:
             shutil.rmtree(wt)
             self.assertTrue(modules.is_dir())
             return task
-        kept = "Git keeps the repositories of its submodules, which may hold work; restore the folder"
+        kept = "Git keeps what may be work with it: the repositories of its submodules. Restore the folder"
+        self.matrix(missing, {"list": True, "dry run": kept, "stop": True, "merge": kept, "squash": kept,
+                              "retire": kept, "discard": kept})
+
+    def test_git_states_a_missing_worktree_on_a_detached_head(self):
+        def missing():
+            task = self.worked()
+            wt = Path(task["worktree"])
+            # Commits its agent made on a detached HEAD, which Git keeps
+            # beside the worktree, not in its folder.
+            self.git("checkout", "-q", "--detach", cwd=wt)
+            self.commit_in(task, "detached-" + task["id"][:6])
+            shutil.rmtree(wt)
+            return task
+        kept = "Git keeps what may be work with it: 1 commit on its detached HEAD that no branch has. Restore"
         self.matrix(missing, {"list": True, "dry run": kept, "stop": True, "merge": kept, "squash": kept,
                               "retire": kept, "discard": kept})
 

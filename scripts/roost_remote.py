@@ -3155,15 +3155,29 @@ def kept_of_gone(repo, worktree):
 
 
 def require_nothing_kept(repo, worktree):
-    """Refuse to finish a task whose worktree folder is missing while Git
-    keeps the repositories of its submodules, which may hold the only copy
-    of commits, with it: forgetting it would delete them uncounted."""
+    """Refuse to finish a task whose worktree folder is missing while what
+    Git keeps of it holds what may be work no branch has: the repositories
+    of its submodules, or commits on its detached HEAD. Forgetting it would
+    delete them, uncounted."""
     gitdir = kept_of_gone(repo, worktree) if Path(repo).is_dir() else None
-    modules = gitdir and gitdir / "modules"
-    if modules and modules.is_dir() and any(modules.iterdir()):
-        raise RoostError("The task's worktree folder is missing, and Git keeps the repositories of its submodules, "
-                         "which may hold work; restore the folder, or delete them with git worktree remove --force "
-                         "--force %s, then try again" % shlex.quote(str(worktree)))
+    if not gitdir:
+        return
+    held = []
+    modules = gitdir / "modules"
+    if modules.is_dir() and any(modules.iterdir()):
+        held.append("the repositories of its submodules")
+    with contextlib.suppress(OSError, UnicodeDecodeError):
+        head = (gitdir / "HEAD").read_text().strip()
+        if head and not head.startswith("ref:"):
+            count = git(repo, "rev-list", "--count", head, "--not", "--branches", "--tags", "--remotes", check=False)
+            commits = int(count.stdout) if count.returncode == 0 and count.stdout.strip().isdigit() else None
+            if commits is None or commits:
+                held.append("%s on its detached HEAD that no branch has"
+                            % ("commits" if commits is None else "%d commit%s" % (commits, "" if commits == 1 else "s")))
+    if held:
+        raise RoostError("The task's worktree folder is missing, and Git keeps what may be work with it: %s. Restore "
+                         "the folder, or delete it all with git worktree remove --force --force %s, then try again"
+                         % (" and ".join(held), shlex.quote(str(worktree))))
 
 
 def unregister_gone(repo, worktree):
