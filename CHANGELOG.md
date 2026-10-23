@@ -11,8 +11,10 @@ What each release changes, and what to do when upgrading. Newest first.
   used to leave the task's work staged in the primary checkout, so `m`
   refused to merge again and your next commit there took the task's work
   with it. Upgrading: if a hook refused a squash before, `git status` in
-  the primary checkout shows the task's work staged; `git reset --merge`
-  there puts it back as it was, and the task still has its work.
+  the primary checkout may still show the task's work staged. The task
+  still has it, so `git restore --source=HEAD --staged --worktree --`
+  with the task's files puts them back as they were; a file of yours a
+  hook staged needs only `git restore --staged`, which keeps it.
 - A task whose worktree you or its agent switched to another branch says
   so: its panel names the branch beside the changes, which are that
   branch's, says how to finish the task, and the dashboard's changes start
