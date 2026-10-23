@@ -3953,6 +3953,445 @@ elif args[:2] == ["auth", "status"]:
         self.wait(response["result"], "failed")
         self.assertEqual(self.git("status", "--porcelain"), "")
 
+    # Git states × the helper's actions. Each cell ends one of three ways:
+    # it does the right thing; it refuses, naming the way forward, and
+    # changes nothing; or a discard loses just what its dry run counted.
+    # Ignored files in a task's worktree are the exception for now: merging,
+    # retiring or discarding the task deletes them uncounted.
+    MATRIX = ("list", "dry run", "pr", "stop", "resume", "update", "merge", "squash", "retire", "discard", "forget")
+    # Those that change the task when they go through.
+    CHANGING = ("update", "merge", "squash", "retire", "discard", "forget")
+
+    def checkout_files(self, path):
+        """Every file in the checkout at PATH but Git's own, with what it
+        holds, or None when the checkout is gone."""
+        path = Path(path)
+        if not path.is_dir():
+            return None
+        files = {}
+        for folder, folders, names in os.walk(path):
+            folders[:] = [name for name in folders if name != ".git"]
+            for name in names:
+                file = Path(folder) / name
+                if name != ".git":
+                    files[str(file.relative_to(path))] = os.readlink(file) if file.is_symlink() else file.read_bytes()
+        return files
+
+    def git_state(self, task):
+        """What a refusal leaves as it was: the refs and worktrees of the
+        task's repository, its primary checkout and the task's worktree,
+        file by file and as Git sees them, and the task's record and agent."""
+        record = roost.Store(str(self.state)).recorded(task["id"])
+        pane = record and (roost.pane_inventory(self.socket) or {}).get(record.get("paneId"))
+
+        def checkout(path):
+            files = self.checkout_files(path)
+            return files, files is not None and roost.git(path, "status", "--porcelain", "-b", "--ignored").stdout
+        return dict(refs=self.git("for-each-ref", "--format=%(refname) %(objectname)", cwd=task["repo"]),
+                    worktrees=self.git("worktree", "list", "--porcelain", cwd=task["repo"]),
+                    primary=checkout(task["repo"]), worktree=checkout(task["worktree"]),
+                    record=record and record["status"], agent=bool(pane and not pane["dead"]))
+
+    def cell(self, task, action, expected):
+        """Run ACTION, one of MATRIX, on TASK, and check that it ends as
+        EXPECTED: True for the right thing, or else what its refusal says."""
+        store = roost.Store(str(self.state))
+        record = store.read(task["id"])
+        repo, wt, integration = record["repo"], Path(record["worktree"]), record["integrationBranch"]
+        if action in ("resume", "forget"):
+            # Each refuses a running agent, whatever Git's state.
+            self.request("stop", id=task["id"])
+        before = self.git_state(record)
+        tip = roost.branch_tip(record)
+        head = roost.read_git(wt, "rev-parse", "-q", "--verify", "HEAD").stdout.strip() if wt.is_dir() else ""
+        here = roost.current_branch(repo) == integration
+        told = None
+        if action == "list":
+            reply = self.request("list", full=True)
+        elif action in ("dry run", "discard"):
+            reply = self.request("discard", id=task["id"], dryRun=True)
+            if action == "discard" and reply["ok"]:
+                told = reply["result"]["discard"]
+                reply = self.request("discard", id=task["id"], expect=told["commit"])
+        elif action == "pr":
+            reply = self.request("pr", id=task["id"], title="Matrix")
+        elif action == "squash":
+            reply = self.request("merge", id=task["id"], style="squash")
+        else:
+            reply = self.request(action, id=task["id"])
+        if expected is not True:
+            self.assertFalse(reply["ok"], reply)
+            self.assertIn(expected, reply["error"])
+            self.assertEqual(self.git_state(record), before, "refused, but changed something: " + reply["error"])
+            return
+        self.assertTrue(reply["ok"], reply)
+        after = self.git_state(record)
+        if not (action in ("merge", "squash") and here):
+            self.assertEqual(after["primary"], before["primary"])
+        if action not in self.CHANGING or action == "forget":
+            self.assertEqual((after["refs"], after["worktrees"], after["worktree"]),
+                             (before["refs"], before["worktrees"], before["worktree"]))
+        if action in ("merge", "squash", "retire", "discard"):
+            self.assertFalse(wt.exists())
+            self.assertFalse(roost.ref_exists(repo, record["branch"]))
+            self.assertIsNone(store.recorded(task["id"]))
+        if action == "list":
+            self.assertIn(task["id"], [listed["id"] for listed in reply["result"]])
+        elif action == "dry run":
+            self.assertIn("commits", reply["result"]["discard"])
+        elif action == "stop":
+            self.assertFalse(after["agent"])
+        elif action == "resume":
+            self.wait(task, "ready")
+            self.assertTrue(self.git_state(record)["agent"])
+        elif action == "update":
+            self.assertTrue(roost.is_ancestor(repo, "refs/heads/" + integration, self.git("rev-parse", "HEAD", cwd=wt)))
+        elif action in ("merge", "squash"):
+            # The task's files as it left them, and its commits too unless squashed.
+            mine = self.git("diff", "--name-only", record["baseCommit"], tip, cwd=repo).split()
+            self.assertEqual(self.git("diff", tip, "refs/heads/" + integration, "--", *mine, cwd=repo), "")
+            self.assertTrue(action == "squash" or roost.is_ancestor(repo, tip, "refs/heads/" + integration))
+        elif action == "retire":
+            self.assertEqual(self.git("rev-list", tip, "--not", "--all", cwd=repo), "")
+        elif action == "discard":
+            lost = self.git("rev-list", "--count", *{tip, head} - {None, ""}, "--not", "--all", cwd=repo)
+            self.assertEqual(int(lost), told["commits"])
+        elif action == "forget":
+            self.assertIsNone(store.recorded(task["id"]))
+
+    def matrix(self, setup, cells):
+        """CELLS, {action: what `cell` expects of it}, each run on a task in
+        the Git state SETUP returns one in. A task serves until a cell goes
+        through and changes it, or fails."""
+        task = None
+        for action in sorted(cells, key=lambda action: (cells[action] is True and action in self.CHANGING,
+                                                        self.MATRIX.index(action))):
+            task = task or setup()
+            passed = False
+            with self.subTest(action=action):
+                self.cell(task, action, cells[action])
+                passed = True
+            if not passed or (cells[action] is True and action in self.CHANGING):
+                task = None
+
+    def worked(self, name="task", **args):
+        """A new task with a commit of its own."""
+        task = self.create(name=name, **args)
+        self.commit_in(task, "work-" + task["id"][:6])
+        return task
+
+    def clone(self, name, *flags):
+        """A clone of the repository, three commits along, made with FLAGS."""
+        for number in range(3):
+            (self.repo / "hello").write_text("v%d\n" % number)
+            self.git("commit", "-qam", "v%d" % number)
+        self.git("config", "uploadpack.allowFilter", "true")
+        clone = self.root / name
+        roost.git(self.root, "clone", "-q", *flags, "file://" + str(self.repo), str(clone))
+        for key, value in (("user.name", "Roost Test"), ("user.email", "roost@example.invalid"),
+                           ("commit.gpgsign", "false")):
+            self.git("config", key, value, cwd=clone)
+        return clone
+
+    def test_git_states_a_bare_repository_with_worktrees(self):
+        bare = self.root / "bare.git"
+        roost.git(self.root, "clone", "-q", "--bare", str(self.repo), str(bare))
+        checkout = self.root / "main"
+        roost.git(bare, "worktree", "add", "-q", str(checkout), "main")
+        reply = self.request("create", directory=str(checkout), name="bare", socket=self.socket)
+        self.assertFalse(reply["ok"])
+        self.assertIn("is a worktree of the bare repository", reply["error"])
+        self.assertIn("start tasks from a clone that isn't bare", reply["error"])
+        self.assertEqual(self.git("branch", "--list", "roost/*", cwd=bare), "")
+        self.assertEqual(len(roost.worktree_branches(bare)), 2)
+
+    def test_git_states_a_shallow_or_partial_clone(self):
+        for flags in (("--depth", "1"), ("--filter=blob:none",)):
+            with self.subTest(flags=flags):
+                clone = self.clone("clone" + flags[0], *flags)
+
+                def moved_on():
+                    task = self.worked(directory=str(clone))
+                    # Upstream moves on, and the clone pulls it.
+                    (self.repo / ("upstream-" + task["id"])).write_text("upstream\n")
+                    self.git("add", ".")
+                    self.git("commit", "-qm", "Upstream")
+                    self.git("pull", "-q", "--no-rebase", cwd=clone)
+                    return task
+                self.matrix(moved_on, {"list": True, "dry run": True, "stop": True, "resume": True, "update": True,
+                                       "merge": True, "squash": True, "retire": "unmerged commits", "discard": True})
+
+    def test_git_states_a_shallow_clone_without_the_history_to_merge(self):
+        clone = self.clone("clone", "--depth", "1")
+
+        def cut_off():
+            task = self.worked(directory=str(clone))
+            # Upstream moves on, and the clone fetches only its tip, which
+            # has no history here in common with the task.
+            (self.repo / ("upstream-" + task["id"])).write_text("upstream\n")
+            self.git("add", ".")
+            self.git("commit", "-qm", "Upstream")
+            self.git("fetch", "-q", "--depth", "1", "origin", "main", cwd=clone)
+            self.git("reset", "-q", "--hard", "FETCH_HEAD", cwd=clone)
+            return task
+        unshallow = "fetch it with git fetch --unshallow"
+        self.matrix(cut_off, {"list": True, "dry run": True, "update": unshallow, "merge": unshallow,
+                              "squash": unshallow, "retire": "unmerged commits", "discard": True})
+
+    def test_git_states_a_sparse_checkout(self):
+        for folder in ("app", "docs"):
+            (self.repo / folder).mkdir()
+            (self.repo / folder / "file").write_text(folder + "\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "Folders")
+        self.git("sparse-checkout", "set", "app")
+
+        def widened():
+            task = self.create(name="sparse")
+            wt = Path(task["worktree"])
+            # Git makes its worktree sparse too; its agent widens it.
+            self.assertFalse((wt / "docs").exists())
+            self.git("sparse-checkout", "disable", cwd=wt)
+            (wt / "docs" / "file").write_text(task["id"] + "\n")
+            self.git("commit", "-qam", "Docs", cwd=wt)
+            return task
+        self.matrix(widened, {"list": True, "dry run": True, "stop": True, "resume": True, "update": True,
+                              "merge": True, "squash": True, "retire": "unmerged commits", "discard": True})
+        self.assertFalse((self.repo / "docs").exists())
+
+    def test_git_states_a_locked_worktree(self):
+        def locked():
+            task = self.worked()
+            self.git("worktree", "lock", "--reason", "on a removable drive", task["worktree"])
+            return task
+        unlock = "locked (on a removable drive); unlock it with git worktree unlock"
+        # Discarding a task removes its worktree whatever holds it.
+        self.matrix(locked, {"list": True, "dry run": True, "stop": True, "resume": True, "update": True,
+                             "merge": unlock, "squash": unlock, "retire": unlock, "discard": True})
+
+    def test_git_states_a_moved_worktree(self):
+        def moved():
+            task = self.worked()
+            self.git("worktree", "move", task["worktree"], str(self.root / ("moved " + task["id"])))
+            return task
+        back = "The task's worktree was moved; move it back with git worktree move"
+        self.matrix(moved, {"list": True, "dry run": back, "pr": back, "stop": True, "resume": back, "update": back,
+                            "merge": back, "squash": back, "retire": back, "discard": back, "forget": True})
+        task = moved()
+        self.git("worktree", "move", str(self.root / ("moved " + task["id"])), task["worktree"])
+        self.assertTrue(self.request("merge", id=task["id"])["ok"])
+
+    def test_git_states_a_task_branch_renamed_in_its_worktree(self):
+        def renamed():
+            task = self.worked()
+            self.git("branch", "-m", task["branch"], "renamed-" + task["id"], cwd=task["worktree"])
+            return task
+        back = "if you renamed the branch, rename it back with git branch -m renamed-"
+        # The branch it was renamed to keeps its commits, whatever happens to the task.
+        self.matrix(renamed, {"list": True, "dry run": True, "pr": back, "stop": True, "resume": True, "update": back,
+                              "merge": back, "squash": back, "retire": back, "discard": True})
+
+    def test_git_states_an_operation_under_way_in_a_worktree(self):
+        def under_way(command):
+            task = self.worked()
+            wt, mine = Path(task["worktree"]), "work-" + task["id"][:6]
+            if command == "bisect":
+                self.commit_in(task, "more-" + task["id"][:6])
+                self.git("bisect", "start", "HEAD", task["baseCommit"], cwd=wt)
+            elif command == "rebase":
+                # Onto main, which has the task's file too, otherwise.
+                (self.repo / mine).write_text("main\n")
+                self.git("add", ".")
+                self.git("commit", "-qm", "Main's own")
+                self.assertTrue(roost.git(wt, "rebase", "main", check=False).returncode)
+            elif command == "cherry-pick":
+                # Two commits picked from another branch; the task has the
+                # first already, so Git stops there with nothing to resolve.
+                self.git("switch", "-q", "-c", "side-" + task["id"])
+                for name in (mine, "other-" + task["id"]):
+                    (self.repo / name).write_text(mine + "\n")
+                    self.git("add", ".")
+                    self.git("commit", "-qm", name)
+                self.git("switch", "-q", "main")
+                self.assertTrue(roost.git(wt, "cherry-pick", "side-%s~1" % task["id"], "side-" + task["id"],
+                                          check=False).returncode)
+                self.assertEqual(self.git("status", "--porcelain", cwd=wt), "")
+            elif command == "revert":
+                (wt / mine).write_text("changed since\n")
+                self.git("commit", "-qam", "Changed since", cwd=wt)
+                self.assertTrue(roost.git(wt, "revert", "--no-edit", "HEAD~1", check=False).returncode)
+            return task
+        for command, says in (("bisect", "git bisect is under way in the task's worktree; end it with git bisect reset"),
+                              ("rebase", "finish it with git rebase --continue, or undo it with git rebase --abort"),
+                              ("cherry-pick", "finish it with git cherry-pick --continue"),
+                              ("revert", "finish it with git revert --continue")):
+            with self.subTest(command=command):
+                self.matrix(lambda: under_way(command),
+                            {"list": True, "dry run": True, "pr": says, "stop": True, "resume": True, "update": says,
+                             "merge": says, "squash": says, "retire": says, "discard": True})
+
+    def test_git_states_the_primary_checkout_rebasing_the_integration_branch(self):
+        self.git("switch", "-q", "-c", "upstream")
+        (self.repo / "hello").write_text("upstream\n")
+        self.git("commit", "-qam", "Upstream")
+        self.git("switch", "-q", "main")
+        (self.repo / "hello").write_text("main\n")
+        self.git("commit", "-qam", "Main")
+
+        def rebasing():
+            roost.git(self.repo, "rebase", "--abort", check=False)
+            task = self.worked()
+            self.assertTrue(roost.git(self.repo, "rebase", "upstream", check=False).returncode)
+            return task
+        under_way = "A rebase of main is under way in %s; finish or undo it there" % os.path.realpath(self.repo)
+        self.matrix(rebasing, {"list": True, "dry run": True, "stop": True, "resume": True, "update": under_way,
+                               "merge": under_way, "squash": under_way, "retire": "unmerged commits",
+                               "discard": True})
+        # Nothing stands in the way of finishing it.
+        (self.repo / "hello").write_text("both\n")
+        self.git("add", "hello")
+        roost.execute(["git", "-C", str(self.repo), "-c", "core.editor=true", "rebase", "--continue"])
+        self.assertEqual(roost.current_branch(self.repo), "main")
+
+    def test_git_states_ignored_files_a_merge_would_write_over(self):
+        (self.repo / ".gitignore").write_text(".env\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "Ignore .env")
+        (self.repo / ".env").write_text("SECRET=mine\n")
+
+        def tracks_env():
+            task = self.create(name="tracks .env")
+            wt = Path(task["worktree"])
+            (wt / ".env").write_text("SECRET=example\n")
+            self.git("add", "-f", ".env", cwd=wt)
+            self.git("commit", "-qm", "Track .env", cwd=wt)
+            return task
+        aside = ("Merging would overwrite .env in the primary checkout %s, a file Git ignores and so replaces "
+                 "without asking; move it aside, then merge again" % os.path.realpath(self.repo))
+        self.matrix(tracks_env, {"list": True, "dry run": True, "update": True, "merge": aside, "squash": aside,
+                                 "retire": "unmerged commits", "discard": True})
+        # A task with an ignored .env of its own, brought up to date once
+        # main tracks one: Git would write over its agent's.
+        own = self.create(name="has its own .env")
+        (Path(own["worktree"]) / ".env").write_text("SECRET=its own\n")
+        # Merged without the primary checkout, which it leaves alone.
+        task = tracks_env()
+        self.git("switch", "-q", "-c", "mine")
+        self.assertTrue(self.request("merge", id=task["id"])["ok"])
+        self.assertEqual(self.git("show", "main:.env"), "SECRET=example")
+        self.assertEqual((self.repo / ".env").read_text(), "SECRET=mine\n")
+        self.cell(own, "update", "Updating from main would overwrite .env in the task's worktree, a file Git "
+                                 "ignores and so replaces without asking; move it aside, then update again")
+        self.assertEqual((Path(own["worktree"]) / ".env").read_text(), "SECRET=its own\n")
+
+    def test_git_states_a_hook_that_refuses_a_merge(self):
+        hooks = self.root / "hooks"
+        hooks.mkdir()
+        (hooks / "pre-merge-commit").write_text("#!/bin/sh\necho 'pre-merge-commit says no' >&2\nexit 1\n")
+        (hooks / "pre-merge-commit").chmod(0o755)
+        self.git("config", "core.hooksPath", str(hooks))
+
+        def main_moved():
+            task = self.worked()
+            (self.repo / ("main-" + task["id"])).write_text("main\n")
+            self.git("add", ".")
+            self.git("commit", "-qm", "Main moved")
+            return task
+        says = "pre-merge-commit says no"
+        self.matrix(main_moved, {"list": True, "dry run": True, "stop": True, "resume": True, "update": says,
+                                 "merge": says, "retire": "unmerged commits", "discard": True})
+        # Roost undoes the merge, rather than leave it for you to commit.
+        task = main_moved()
+        for action in ("update", "merge"):
+            with self.subTest(action=action):
+                self.assertNotIn("git commit", self.request(action, id=task["id"])["error"])
+
+    def test_a_task_whose_checkout_fails_leaves_nothing_behind(self):
+        hooks = self.root / "hooks"
+        hooks.mkdir()
+        hook = hooks / "post-checkout"
+        hook.write_text("#!/bin/sh\necho 'post-checkout says no' >&2\nexit 1\n")
+        hook.chmod(0o755)
+        self.git("config", "core.hooksPath", str(hooks))
+        store = roost.Store(str(self.state))
+        reply = self.request("create", directory=str(self.repo), name="hooked", socket=self.socket)
+        self.assertEqual(reply["error"], "The repository's post-checkout hook failed in the task's new worktree, so "
+                                         "the task didn't start: post-checkout says no")
+        self.assertEqual(self.git("branch", "--list", "roost/*"), "")
+        self.assertEqual(len(roost.worktree_branches(self.repo)), 1)
+        self.assertEqual(store.all(), [])
+        # One that leaves files there leaves the task, failed, to look at.
+        hook.write_text("#!/bin/sh\necho made > made-by-hook\nexit 1\n")
+        reply = self.request("create", directory=str(self.repo), name="hooked", socket=self.socket)
+        self.assertIn("its worktree is kept, as the hook left files there", reply["error"])
+        [task] = store.all()
+        self.assertEqual(task["status"], "failed")
+        self.assertTrue((Path(task["worktree"]) / "made-by-hook").exists())
+        self.cell(task, "discard", True)
+        # A checkout that fails, as a filter can, leaves no branch.
+        self.git("config", "--unset", "core.hooksPath")
+        (self.repo / ".gitattributes").write_text("*.bin filter=broken\n")
+        (self.repo / "data.bin").write_text("data\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "Filtered")
+        self.git("config", "filter.broken.smudge", "false")
+        self.git("config", "filter.broken.required", "true")
+        reply = self.request("create", directory=str(self.repo), name="filtered", socket=self.socket)
+        self.assertIn("smudge filter broken failed", reply["error"])
+        self.assertNotIn("Preparing worktree", reply["error"])
+        self.assertEqual(self.git("branch", "--list", "roost/*"), "")
+        self.assertEqual(store.all(), [])
+
+    def test_git_states_the_integration_branch_rewritten_under_a_task(self):
+        def rewritten():
+            dropped = "dropped-" + uuid.uuid4().hex[:6]
+            (self.repo / dropped).write_text("dropped later\n")
+            self.git("add", ".")
+            self.git("commit", "-qm", "Dropped later")
+            task = self.create(name="started on a commit main drops")
+            self.git("reset", "-q", "--hard", "HEAD~1")
+            (self.repo / ("instead-" + task["id"])).write_text("instead\n")
+            self.git("add", ".")
+            self.git("commit", "-qm", "Instead")
+            return task
+        # Discarding the task loses for good the commit main dropped, and
+        # its dry run counts it. Merging the task would bring it back, and
+        # retiring it says merge it: see the roadmap.
+        self.matrix(rewritten, {"list": True, "dry run": True, "stop": True, "resume": True, "update": True,
+                                "retire": "unmerged commits", "discard": True})
+
+    def test_git_states_a_task_stacked_on_another(self):
+        def stacked():
+            parent = self.worked(name="parent")
+            child = self.worked(name="child", base=parent["branch"])
+            return parent, child
+
+        def child_files(child):
+            listed = next(task for task in self.request("list", full=True)["result"] if task["id"] == child["id"])
+            return [file["path"] for file in listed["files"]]
+        merged = lambda task: self.git("ls-tree", "--name-only", "main", "work-" + task["id"][:6])
+        # The parent merges first, either way; the child's work is then its own.
+        for style in ({}, dict(style="squash")):
+            with self.subTest(style=style):
+                parent, child = stacked()
+                self.assertTrue(self.request("merge", id=parent["id"], **style)["ok"])
+                self.assertEqual(child_files(child), ["work-" + child["id"][:6]])
+                self.cell(child, "squash" if style else "merge", True)
+                self.assertTrue(merged(parent) and merged(child))
+        # The child merges first, and the parent's work with it: the parent
+        # has landed, and retires.
+        parent, child = stacked()
+        self.cell(child, "merge", True)
+        self.assertTrue(self.request("list", full=True)["result"][0]["landed"])
+        self.cell(parent, "retire", True)
+        # Discarding the parent loses nothing its child holds, and the child
+        # still carries it.
+        parent, child = stacked()
+        self.assertEqual(self.request("discard", id=parent["id"], dryRun=True)["result"]["discard"]["commits"], 0)
+        self.cell(parent, "discard", True)
+        self.cell(child, "merge", True)
+        self.assertTrue(merged(parent))
+
 
 class WorktreeInclude(unittest.TestCase):
     """Which files a .worktreeinclude lists, as Claude Code reads it."""

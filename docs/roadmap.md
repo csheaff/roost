@@ -288,6 +288,43 @@ Larger, or undecided.
   diff beside it ("Error showing commit diff"); the commit goes through.
   The bug is Magit's, with any TRAMP method: from a linked worktree's Git
   directory, `magit-toplevel` drops the TRAMP prefix.
+- **Files Git ignores in a task's worktree** go uncounted. Merging,
+  retiring or discarding the task deletes them with the worktree, such as
+  an edited `.env` or an agent's `notes/`, and the discard question says
+  nothing about them. Ways out, smallest first: count them in the discard
+  question and before retiring, as `git status --ignored=matching` lists
+  them, a folder such as `node_modules/` as one, and leaving out the files
+  `.worktreeinclude` copied that are still as copied; keep them, moved
+  beside Roost's state for a while, rather than delete them; or refuse to
+  retire while any differ from the primary checkout's, and offer discard.
+- **An integration branch rewritten under a task**, as by a reset or a
+  forced pull: merging the task brings back what the branch dropped, since
+  the task's branch still has it, and a task with no commits of its own
+  can't retire, being told to merge first. The smallest fix: when the
+  commit a task started from is no longer on its integration branch, but
+  that branch's reflog shows it was since the task started, refuse to
+  merge, saying to rebase the task onto it (`git rebase --onto main
+  START`), and let such a task retire if its own commits are merged.
+- **A task started while the primary checkout is in the middle of a
+  rebase or bisect** gets no branch to merge into, as from a detached
+  HEAD, so it can only be discarded or forgotten. Starting one could
+  instead refuse, naming the rebase, or take the branch being rebased.
+- **Discarding a task another is stacked on** counts none of its commits
+  as lost, since the other task's branch holds them, and merging that task
+  later brings them into the branch you merge into. The discard question
+  could name the tasks whose branches keep them. A stacked task's `ahead`
+  also counts the commits it started from until the task under it merges.
+- **A moved worktree** shows as gone in the task panel, which offers `x`
+  and `X`; `x` then names the command that moves it back. The listing
+  could say where it is, and the panel say so.
+- **Partial clones** (`--filter=blob:none`): a full listing fetches the
+  file contents it lacks from the remote to tell conflicts, without the
+  time limit of Roost's other network calls. `GIT_NO_LAZY_FETCH=1` (Git
+  2.44) on its reads would keep listings local, saying conflicts are
+  unknown instead.
+- **A bare repository with worktrees**, a common layout, can't start
+  tasks: Roost takes the primary checkout for the repository, and a bare
+  one has none.
 
 ## Not planned
 
