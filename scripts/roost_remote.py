@@ -467,15 +467,19 @@ def check_worktree(store, task, branch=True):
         under_way = operation_under_way(worktree)
         if under_way:
             raise RoostError(under_way)
-        current = git(worktree, "symbolic-ref", "--short", "-q", "HEAD", check=False).stdout.strip()
-        if current and current != task["branch"] and not ref_exists(task["repo"], task["branch"]):
+        # In full, as in `other_branch`: a tag of the branch's name would
+        # make the short one heads/….
+        current = git(worktree, "symbolic-ref", "-q", "HEAD", check=False).stdout.strip()
+        short = current.removeprefix("refs/heads/")
+        if (short != task["branch"] and current.startswith("refs/heads/")
+                and not ref_exists(task["repo"], task["branch"])):
             raise RoostError("The task's branch %s is gone, and its worktree is on %s; if you renamed the "
                              "branch, rename it back with git branch -m %s %s, then try again"
-                             % (task["branch"], current, shlex.quote(current), shlex.quote(task["branch"])))
-        if current != task["branch"]:
+                             % (task["branch"], short, shlex.quote(short), shlex.quote(task["branch"])))
+        if current != "refs/heads/" + task["branch"]:
             raise RoostError("The task's worktree is on %s, not the task's branch %s; check out %s there, "
                              "bringing over any commits you want, then try again"
-                             % (current or "a detached HEAD", task["branch"], task["branch"]))
+                             % (short or "a detached HEAD", task["branch"], task["branch"]))
     return worktree
 
 
@@ -1969,8 +1973,8 @@ def unpushed(task, head, tip):
     a commit made on GitHub is not fetched, or when the task's worktree is
     on another branch, whose commits the count would miss. Zero when the
     pull request has them all, commits made on GitHub too."""
-    current = read_git(task["worktree"], "symbolic-ref", "--short", "-q", "HEAD")
-    if current.returncode or current.stdout.strip() != task["branch"]:
+    current = read_git(task["worktree"], "symbolic-ref", "-q", "HEAD")
+    if current.returncode or current.stdout.strip() != "refs/heads/" + task["branch"]:
         return None
     if head == tip:
         return 0
@@ -1982,6 +1986,22 @@ def unpushed(task, head, tip):
         return None
     count = read_git(task["repo"], "rev-list", "--count", head + ".." + tip)
     return int(count.stdout) if count.returncode == 0 and count.stdout.strip().isdigit() else None
+
+
+def other_branch(task, worktree):
+    """The branch TASK's WORKTREE is on when it isn't the task's, as after
+    you or its agent made one there: "HEAD" for a detached HEAD, as Git
+    names it, which no branch can be called. None on the task's branch,
+    or when Git can't say. Its Git statistics are then that branch's,
+    while merging, pushing and retiring refuse (`check_worktree`)."""
+    # In full: a tag of the branch's name would make the short one heads/….
+    current = read_git(worktree, "symbolic-ref", "-q", "HEAD")
+    if current.returncode == 1:
+        return "HEAD"
+    ref = current.stdout.strip()
+    if current.returncode or ref == "refs/heads/" + task["branch"]:
+        return None
+    return ref.removeprefix("refs/heads/") or None
 
 
 def branch_tip(task):
@@ -2536,6 +2556,8 @@ def add_git_stats(tasks):
             task["unpushed"] = unpushed(task, pr.get("head"), tip) if tip else None
         worktree = Path(task["worktree"])
         task["worktreeMissing"] = not worktree.is_dir()
+        # Null on the task's branch, so Emacs forgets one it was on.
+        task["worktreeBranch"] = None if task["worktreeMissing"] else other_branch(task, worktree)
         if task["worktreeMissing"]:
             continue
         base = fork_point(worktree, task)
@@ -2560,8 +2582,9 @@ def add_git_stats(tasks):
             if behind.returncode == 0 and ahead.returncode == 0:
                 task["behind"], task["ahead"] = int(behind.stdout), int(ahead.stdout)
         # GitHub says whether an open pull request conflicts, and work
-        # merged already has nothing left to conflict.
-        task["conflicts"] = (None if not integration or pr.get("state") == "OPEN"
+        # merged already has nothing left to conflict. With the worktree
+        # on another branch, `m` refuses, so there is nothing to tell.
+        task["conflicts"] = (None if not integration or pr.get("state") == "OPEN" or task["worktreeBranch"]
                              else [] if task["landed"] else merge_conflicts(task, tip, integration))
 
 
@@ -3291,7 +3314,12 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
             merge_without_checkout(task, integration)
             result = None
         else:
-            result = git(repo, "merge", "--no-ff", "--no-edit", branch, check=False)
+            # By its full name, which a tag of the same name would otherwise
+            # shadow, with the message a merge of the short one has.
+            tip = git(repo, "rev-parse", "refs/heads/" + branch + "^{commit}").stdout.strip()
+            message = execute(["git", "-C", repo, "fmt-merge-msg"],
+                              input="%s\t\tbranch '%s' of .\n" % (tip, branch)).stdout.strip()
+            result = git(repo, "merge", "--no-ff", "--no-edit", "-m", message, "refs/heads/" + branch, check=False)
         if result is not None and result.returncode:
             conflicts = conflicted_files(repo)
             if git(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0:

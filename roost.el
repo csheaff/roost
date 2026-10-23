@@ -868,8 +868,8 @@ TASK."
         (t (message "%s: %s" title body))))
 
 (defconst roost--measured-fields
-  '(diff dirty files size ahead behind update worktreeMissing prStatus unpushed gitStamp agentWork merging
-    landed conflicts pr sinceLooked)
+  '(diff dirty files size ahead behind update worktreeMissing worktreeBranch prStatus unpushed gitStamp agentWork
+    merging landed conflicts pr sinceLooked)
   "A task's fields its host measures for each reply, such as Git statistics.
 They are as new as the reply, whatever its `updatedAt': its pull
 request too, which the host records as it finds one on GitHub.")
@@ -939,8 +939,8 @@ must a reply with a newer look lose it for an older agent event."
     ;; Quiet polls skip Git and the latest reply; keep the last full refresh's.
     ;; Not what GitHub said of a pull request since recorded otherwise, as
     ;; by another Emacs: closed, or another in its place.
-    (dolist (field '(diff dirty files size ahead behind worktreeMissing prStatus unpushed lastMessage gitStamp
-                            agentWork merging landed conflicts sinceLooked))
+    (dolist (field '(diff dirty files size ahead behind worktreeMissing worktreeBranch prStatus unpushed lastMessage
+                            gitStamp agentWork merging landed conflicts sinceLooked))
       (unless (or (assoc field task)
                   (and (eq field 'prStatus)
                        (not (equal (roost--field task 'pr) (roost--field old 'pr)))))
@@ -6260,6 +6260,34 @@ and with MEASURED the answer is `unknown'."
         (measured 'unknown)
         (t (eq (roost--pr-state task) 'merged))))
 
+(defun roost--other-branch (task)
+  "The branch TASK's worktree is on when it isn't the task's, or nil.
+\"HEAD\" for a detached HEAD.  As after you or its agent made a branch
+there: its Git statistics are then that branch's, while its host
+refuses to merge, push, update or retire the task, which act on the
+task's branch.  Nil too from a helper too old to say."
+  (let ((branch (roost--field task 'worktreeBranch)))
+    (and (stringp branch) (not (string-empty-p branch)) branch)))
+
+(defun roost--branch-label (branch)
+  "BRANCH, from `roost--other-branch', as words."
+  (if (equal branch "HEAD") "a detached HEAD" branch))
+
+(defun roost--other-branch-ways (task key)
+  "How to finish TASK, whose worktree is on another branch, naming keys with KEY.
+KEY is a function that formats a key, as in `roost--next-step'.
+Discarding keeps that branch, and merging needs the task's back."
+  (let ((branch (roost--other-branch task))
+        (own (roost--field task 'branch))
+        (ahead (roost--field task 'ahead)))
+    (concat (funcall key "x") " discards the task"
+            (unless (equal branch "HEAD") (format ", keeping %s" branch))
+            (when (and (numberp ahead) (> ahead 0) (roost--action-applies-p task 'roost-merge-retire))
+              (concat "; to merge its work with " (funcall key "m") " or " (funcall key "P") ", "
+                      (if (equal branch "HEAD")
+                          (format "bring its commits onto %s and check that out there" own)
+                        (format "check out %s there and merge %s into it" own branch)))))))
+
 (defun roost--unmerged-work-p (task)
   "Whether TASK, as last seen, holds work that retiring it would refuse to lose.
 Commits not merged into its integration branch, or files not committed."
@@ -6274,19 +6302,29 @@ Commits not merged into its integration branch, or files not committed."
 When its work is merged, or it has none, retire it.  When it holds work
 nothing else has, offer to discard it, saying what that loses: `m'
 merges its commits instead, and for work not yet committed, `r' opens
-Magit to commit it."
+Magit to commit it.  With its worktree on another branch, which its host
+won't retire, offer to discard it, which keeps that branch."
   (interactive)
   (setq task (roost--choose task))
   (let* ((name (roost--field task 'name))
-         (offer (lambda ()
+         (offer (lambda (&optional branch)
                   (when (y-or-n-p
-                         (substitute-command-keys
-                          (format "%s has work not merged into %s (%s).  Discard it? "
-                                  name (or (roost--field task 'integrationBranch) "its branch")
-                                  ;; m merges only committed work.
-                                  (if (roost--field task 'dirty)
-                                      "\\<roost-task-info-mode-map>\\[roost-review] commits it in Magit"
-                                    "\\<roost-task-info-mode-map>\\[roost-merge-retire] merges it"))))
+                         (if branch
+                             ;; Discarding keeps the branch; m won't merge it.
+                             (format "%s's worktree is on %s, not its branch %s%s.  Discard the task%s? "
+                                     name (roost--branch-label branch) (roost--field task 'branch)
+                                     (if (roost--field task 'dirty)
+                                         (substitute-command-keys
+                                          ", with changes not committed (\\<roost-task-info-mode-map>\\[roost-review] commits them in Magit)")
+                                       "")
+                                     (if (equal branch "HEAD") "" (format ", keeping %s" branch)))
+                           (substitute-command-keys
+                            (format "%s has work not merged into %s (%s).  Discard it? "
+                                    name (or (roost--field task 'integrationBranch) "its branch")
+                                    ;; m merges only committed work.
+                                    (if (roost--field task 'dirty)
+                                        "\\<roost-task-info-mode-map>\\[roost-review] commits it in Magit"
+                                      "\\<roost-task-info-mode-map>\\[roost-merge-retire] merges it")))))
                     (roost-discard task))))
          (retire (lambda ()
                    (roost--act task "retire" nil
@@ -6296,12 +6334,18 @@ Magit to commit it."
                                  (message "Retired %s, and removed its worktree and branch" name))
                                (lambda (err)
                                  ;; Git statistics newer than Roost's.
-                                 (if (string-match-p "\\`\\(Task branch has unmerged\\|Uncommitted or untracked\\)" err)
-                                     (funcall offer)
-                                   (message "Roost %s: %s" (roost--host-label (roost--field task 'host)) err)))))))
+                                 (cond
+                                  ((string-match-p "\\`\\(Task branch has unmerged\\|Uncommitted or untracked\\)" err)
+                                   (funcall offer))
+                                  ((string-match "\\`The task's worktree is on \\(.+?\\), not the task's branch" err)
+                                   (let ((branch (match-string 1 err)))
+                                     (funcall offer (if (equal branch "a detached HEAD") "HEAD" branch))))
+                                  (t (message "Roost %s: %s" (roost--host-label (roost--field task 'host)) err))))))))
     (cond
      ((member (roost--field task 'status) '("starting" "running" "permission" "background"))
       (user-error "%s's agent is at work; stop it (K) first, or wait" name))
+     ((roost--other-branch task)
+      (funcall offer (roost--other-branch task)))
      ((roost--unmerged-work-p task)
       (funcall offer))
      ((y-or-n-p (format "Retire %s, removing its worktree and branch (nothing in them would be lost)? " name))
@@ -6315,6 +6359,11 @@ comes in as one squashed commit, or a merge commit; see `roost-merge-style'."
   (interactive)
   (setq task (roost--choose task))
   (cond
+   ;; Nor will it merge from a worktree on another branch.
+   ((roost--other-branch task)
+    (user-error "%s's worktree is on %s, not its branch %s; check out %s there, with the commits to merge, first"
+                (roost--field task 'name) (roost--branch-label (roost--other-branch task))
+                (roost--field task 'branch) (roost--field task 'branch)))
    ;; The host refuses a dirty worktree; say so rather than ask to merge.
    ((roost--field task 'dirty)
     (when (y-or-n-p (format "%s has uncommitted changes to commit first.  Open Magit? "
@@ -6716,6 +6765,23 @@ It is no reason to wait for you."
       (concat (capitalize (substring text 0 1)) (substring text 1) ".  ")
     ""))
 
+(defun roost--insert-other-branch (task &optional next)
+  "Insert, in TASK's panel, the branch its worktree is on when not the task's.
+Its changes are that branch's.  How to finish the task follows, unless
+NEXT, the panel's next step, says it already, or `x' won't retire it, as
+while its agent is at work."
+  (when-let* ((branch (roost--other-branch task))
+              ((not (roost--field task 'worktreeMissing))))
+    (roost--insert-indented
+     (concat (format "The worktree is on %s, not the task's branch %s" (roost--branch-label branch)
+                     (roost--field task 'branch))
+             (unless (string-empty-p (roost--changes task))
+               (if (equal branch "HEAD") ", so these are the changes there" (format ", so these are %s's changes" branch)))
+             (unless (or (roost--names-key-p next "x") (not (roost--action-applies-p task 'roost-retire)))
+               (concat ": " (roost--other-branch-ways task (lambda (key) (propertize key 'face 'roost-key)))))
+             ".")
+     'roost-status-permission)))
+
 (defun roost--insert-since-looked (task &optional next)
   "Insert, in TASK's panel, what changed since you last looked at it.
 It names the keys of `roost-review', to see what changed, and
@@ -6798,12 +6864,14 @@ while its pull request waits on you, and \"conflicts\" as
 (defun roost--merged-p (task)
   "Whether TASK's work is merged, as its host last measured, and nothing needs you.
 Its commits are in its integration branch or a pull request GitHub
-merged, nothing is left uncommitted, and its agent is not at work, did
-not fail, and has said nothing you haven't seen."
+merged, nothing is left uncommitted, its worktree is on its branch, and
+its agent is not at work, did not fail, and has said nothing you haven't
+seen."
   (and (eq (roost--landed task t) t)
        (not (roost--field task 'dirty))
        (not (roost--field task 'merging))
        (not (roost--field task 'worktreeMissing))
+       (not (roost--other-branch task))
        (not (roost--agent-work-left task))
        (not (member (roost--field task 'status)
                     '("starting" "running" "permission" "background" "failed" "crashed")))
@@ -7312,7 +7380,9 @@ shows starts it again."
 
 (defun roost--changes (task &optional compact listed)
   "Git summary for TASK from the last full refresh.
-COMPACT abbreviates commits ahead of and behind the integration branch.
+COMPACT abbreviates commits ahead of and behind the integration branch,
+and starts with the branch its worktree is on when not the task's,
+whose changes these are; the task panel says that on a line of its own.
 LISTED non-nil leaves out whether changes are uncommitted, for where
 the files are listed under labels that say so."
   (let* ((size (roost--field task 'size))
@@ -7333,7 +7403,10 @@ the files are listed under labels that say so."
          (commits (delq nil (list (when (> ahead 0) (format (if compact "↑%d" "%d ahead") ahead))
                                   (when (> behind 0) (format (if compact "↓%d" "%d behind") behind))))))
     (string-join
-     (delq nil (list (when (> files 0)
+     (delq nil (list (when-let* ((compact)
+                                 (branch (roost--other-branch task)))
+                       (if (equal branch "HEAD") "detached" (concat "on " branch)))
+                     (when (> files 0)
                        (concat (format "%d file%s" files (if (= files 1) "" "s"))
                                ;; Not for files with no lines, as a new one
                                ;; that is empty, or binary.
@@ -7772,7 +7845,9 @@ Unknown Git statistics count as making sense."
       ((or 'roost-send 'roost-stop) (roost--agent-running-p task))
       ('roost-resume (and worktree (not (roost--agent-running-p task))))
       ('roost-pr (and worktree (or (roost--field task 'pr) (not (eql ahead 0)))))
-      ('roost-merge-retire (and (not merged) (not (eql ahead 0)) (not active)
+      ;; Merged, the task's branch may be, but not work on another branch
+      ;; there, which `m' merges once the task's has it.
+      ('roost-merge-retire (and (or (not merged) (roost--other-branch task)) (not (eql ahead 0)) (not active)
                                 (not (roost--agent-work-left task))))
       ;; Retires the task, or discards work merged nowhere.
       ('roost-retire (and (not active) (not (roost--agent-work-left task))))
@@ -7829,6 +7904,11 @@ where RET would pick the agent's default answer, so no key is named."
       (concat "Its agent left work in a worktree of its own: merge it into this task in Magit, or remove it"
               ;; The panel lists those worktrees, with buttons, below this line.
               (when menu (concat "; " (funcall key "i") " shows it"))))
+     ;; Its host won't merge or retire it there.
+     ((roost--other-branch task)
+      (concat (format "Its worktree is on %s, not the task's branch: "
+                      (roost--branch-label (roost--other-branch task)))
+              (roost--other-branch-ways task key)))
      ;; As for one you haven't looked at since its agent finished.
      ((roost--landed task) (funcall retire))
      ((consp (roost--conflicts task)) (roost--conflict-next-step task key))
@@ -8213,6 +8293,7 @@ Windows showing the panel keep their scroll position, and the mark stays."
         (when-let* (((not (roost--field task 'worktreeMissing)))
                     (spread (roost--spread task)))
           (roost--insert-indented spread))
+        (roost--insert-other-branch task next)
         (roost--insert-changed-files task width)
         (roost--insert-since-looked task next)
         (if-let* ((notes (roost--notes-summary task)))
@@ -8237,6 +8318,8 @@ Windows showing the panel keep their scroll position, and the mark stays."
           (cond
            ;; Said once: the next step may say it already.
            ((roost--names-key-p next "u"))
+           ;; Nor would an update or a merge happen there.
+           ((roost--other-branch task))
            ((consp (roost--conflicts task))
             (roost--insert-indented
              (substitute-command-keys
@@ -8289,9 +8372,12 @@ Windows showing the panel keep their scroll position, and the mark stays."
         (roost--insert-issue task)
         (roost--insert-pull-request task)
         (roost--insert-heading "Details")
-        (dolist (entry `(("Branch" . ,(format "%s, from %s%s" (roost--field task 'branch) base
+        (dolist (entry `(("Branch" . ,(format "%s, from %s%s%s" (roost--field task 'branch) base
                                               (if (and integration (not (string-empty-p integration)))
                                                   (format ", merges into %s" integration)
+                                                "")
+                                              (if-let* ((other (roost--other-branch task)))
+                                                  (format "; the worktree is on %s" (roost--branch-label other))
                                                 "")))
                          ,@(unless (< width 72)
                              `(("Worktree" . ,(roost--abbreviate-path (or (roost--field task 'worktree) "")
