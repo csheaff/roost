@@ -3,7 +3,7 @@
 ;; Copyright (C) 2026  Clay Sheaff
 
 ;; Author: Clay Sheaff
-;; Version: 0.10.0
+;; Version: 0.11.0
 ;; Package-Requires: ((emacs "29.1") (tmux-control "0.8.2") (transient "0.4.1"))
 ;; Keywords: tools, processes
 ;; URL: https://github.com/csheaff/roost
