@@ -3110,7 +3110,8 @@ def require_not_rebasing(repo, branch):
     with contextlib.suppress(OSError):
         for gitdir in sorted((common / "worktrees").iterdir()):
             with contextlib.suppress(OSError):
-                places.append((gitdir, str(Path((gitdir / "gitdir").read_text().strip()).parent)))
+                # A path, which needn't be UTF-8.
+                places.append((gitdir, str(Path(os.fsdecode((gitdir / "gitdir").read_bytes().strip())).parent)))
     for gitdir, path in places:
         for state in ("rebase-merge", "rebase-apply"):
             with contextlib.suppress(OSError, UnicodeDecodeError):
@@ -3136,6 +3137,14 @@ def worktree_entries(repo):
                          if line == "locked" or line.startswith("locked ")), None)
             entries.append((lines[0][len("worktree "):], ref, lock))
     return entries
+
+
+def unregister_gone(repo, worktree):
+    """Have Git forget WORKTREE, one of REPO's whose folder is gone, as
+    `git worktree prune` would, so that the branch it held can be deleted.
+    Retiring refuses a locked one first; discarding goes past its lock."""
+    if any(Path(path).resolve() == worktree for path, _ in worktree_branches(repo)):
+        git(repo, "worktree", "remove", "--force", "--force", str(worktree))
 
 
 def worktree_lock(repo, worktree):
@@ -3286,10 +3295,12 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
         require_clean(str(worktree))
         # Before stopping the agent, rather than fail halfway through.
         require_submodules_kept(worktree)
-        lock = worktree_lock(repo, worktree)
-        if lock is not None:
-            raise RoostError("The task's worktree is locked%s; unlock it with git worktree unlock %s, then try again"
-                             % (" (%s)" % lock if lock else "", shlex.quote(str(worktree))))
+    # Its folder may be missing, as on a drive not mounted: Git keeps it then.
+    lock = worktree_lock(repo, worktree) if Path(repo).is_dir() else None
+    if lock is not None:
+        raise RoostError("The task's worktree is locked%s%s; %sunlock it with git worktree unlock %s, then try again"
+                         % (" (%s)" % lock if lock else "", "" if worktree_exists else ", and its folder is missing",
+                            "" if worktree_exists else "reconnect it, or ", shlex.quote(str(worktree))))
     require_agent_work_kept(task)
     squashed = None
     if merge:
@@ -3349,6 +3360,8 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
     # What a copy stopped partway left, which may hold a secret.
     shutil.rmtree(copy_staging(task["worktree"]), ignore_errors=True)
     if branch_exists:
+        if not worktree_exists:
+            unregister_gone(repo, worktree)
         delete_branch(repo, branch, commit)
     store.remove(task["id"])
     task.update(status="retired", updatedAt=now())
@@ -3433,7 +3446,9 @@ def merge_said(result):
     """What a `git merge` that failed, RESULT, said, but its advice to
     commit the merge, as after a hook refused it: Roost undoes it instead."""
     said = result.stderr.strip() or result.stdout.strip()
-    return "\n".join(line for line in said.splitlines() if not line.startswith("Not committing merge;"))
+    # A hook that says nothing leaves Git saying only that.
+    return ("\n".join(line for line in said.splitlines() if not line.startswith("Not committing merge;"))
+            or "a hook refused to commit it")
 
 
 def require_history(repo, one, other, action):
@@ -3569,6 +3584,8 @@ def discard(store, task, expect=None, dry_run=False, teardown=None):
     remove_worktrees(store, task, worktree if worktree_exists else None, work, force=True, teardown=teardown)
     shutil.rmtree(copy_staging(task["worktree"]), ignore_errors=True)
     if branch_exists:
+        if not worktree_exists:
+            unregister_gone(repo, worktree)
         delete_branch(repo, branch, commit)
     store.remove(task["id"])
     task.update(status="discarded", updatedAt=now(), live=False)

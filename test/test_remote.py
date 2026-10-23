@@ -4214,6 +4214,21 @@ elif args[:2] == ["auth", "status"]:
         self.matrix(locked, {"list": True, "dry run": True, "stop": True, "resume": True, "update": True,
                              "merge": unlock, "squash": unlock, "retire": unlock, "discard": True})
 
+        # Its folder missing, as on a drive not mounted, while Git keeps it,
+        # locked or not: Git can't delete a branch a worktree it keeps holds.
+        def missing(lock):
+            task = self.worked()
+            if lock:
+                self.git("worktree", "lock", "--reason", "on a removable drive", task["worktree"])
+            shutil.rmtree(task["worktree"])
+            return task
+        unlock = ("locked (on a removable drive), and its folder is missing; reconnect it, or unlock it with "
+                  "git worktree unlock")
+        self.matrix(lambda: missing(True), {"list": True, "dry run": True, "stop": True, "merge": unlock,
+                                            "squash": unlock, "retire": unlock, "discard": True})
+        self.matrix(lambda: missing(False), {"list": True, "dry run": True, "stop": True, "merge": True,
+                                             "squash": True, "retire": "unmerged commits", "discard": True})
+
     def test_git_states_a_moved_worktree(self):
         def moved():
             task = self.worked()
@@ -4388,6 +4403,20 @@ elif args[:2] == ["auth", "status"]:
         for action in ("update", "merge"):
             with self.subTest(action=action):
                 self.assertNotIn("git commit", self.request(action, id=task["id"])["error"])
+        # A hook that says nothing leaves Git saying only that.
+        (hooks / "pre-merge-commit").write_text("#!/bin/sh\nexit 1\n")
+        self.assertEqual(self.request("update", id=task["id"])["error"],
+                         "Updating from main failed: a hook refused to commit it")
+
+    def test_a_rebase_is_found_in_a_worktree_whose_path_is_not_utf8(self):
+        # Git keeps a linked worktree's path as the file system names it.
+        admin = self.repo / ".git" / "worktrees" / "odd"
+        (admin / "rebase-merge").mkdir(parents=True)
+        (admin / "gitdir").write_bytes(b"/tmp/caf\xe9/.git\n")
+        roost.require_not_rebasing(str(self.repo), "main")
+        (admin / "rebase-merge" / "head-name").write_text("refs/heads/main\n")
+        with self.assertRaisesRegex(roost.RoostError, "A rebase of main is under way in /tmp/caf"):
+            roost.require_not_rebasing(str(self.repo), "main")
 
     def test_a_task_whose_checkout_fails_leaves_nothing_behind(self):
         hooks = self.root / "hooks"

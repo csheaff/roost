@@ -20,7 +20,10 @@ What each release changes, and what to do when upgrading. Newest first.
   (`git worktree lock`), or to act on one whose worktree was moved
   (`git worktree move`), before anything changes, and names the command
   that unlocks it or moves it back. Before, the merge went through and
-  stopped the agent, then failed, leaving the task half retired.
+  stopped the agent, then failed, leaving the task half retired. The same
+  goes for a locked worktree whose folder is missing, as on a drive not
+  mounted; one not locked whose folder you deleted now merges, retires or
+  is discarded through to the end.
 - Roost no longer merges into a branch while a rebase of it is under way
   in any of the repository's worktrees. Before, the merge moved the
   branch, and Git then couldn't finish the rebase.
