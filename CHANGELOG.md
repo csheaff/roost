@@ -21,6 +21,41 @@ What each release changes, and what to do when upgrading. Newest first.
   with `on feat`. `x` asks whether to discard the task, keeping that
   branch, rather than offering `m`, which refuses there. The task no
   longer says `merged` or `conflicts` from its own branch meanwhile.
+- Merging a task into the primary checkout no longer writes over a file
+  Git ignores there, such as your `.env`, when the task's branch tracks
+  one, or deletes one in a folder the task makes a file: Git does both
+  without asking, so Roost now refuses and names it, for you to move
+  aside. Bringing a task up to date (`u`) does
+  the same for its worktree's ignored files.
+- Roost refuses to merge or retire a task whose worktree is locked
+  (`git worktree lock`), or to act on one whose worktree was moved
+  (`git worktree move`), before anything changes, and names the command
+  that unlocks it or moves it back. Before, the merge went through and
+  stopped the agent, then failed, leaving the task half retired. The same
+  goes for a locked worktree whose folder is missing, as on a drive not
+  mounted; one not locked whose folder you deleted now merges, retires or
+  is discarded through to the end, unless what Git keeps of it may hold
+  work, as its submodules' repositories, commits on a detached HEAD,
+  staged changes, or a rebase, cherry-pick or bisect under way, and Roost
+  says so.
+- Roost no longer merges into a branch while a rebase of it is under way
+  in any of the repository's worktrees. Before, the merge moved the
+  branch, and Git then couldn't finish the rebase.
+- For a task in the middle of a rebase, cherry-pick, revert or bisect in
+  its worktree, merging, retiring, `u` and opening a pull request say how
+  to finish or undo it, rather than to check out the task's branch. A
+  series of cherry-picks stopped between commits, with nothing to resolve,
+  used to be dropped on merge.
+- A task whose branch was renamed (`git branch -m`) says to rename it
+  back, rather than to check out a branch that no longer exists.
+- When the project's post-checkout hook fails as a task starts, or a
+  checkout filter does, Roost no longer leaves the new worktree or branch
+  behind; a worktree the hook left files in stays, as a failed task.
+- When a hook refuses the merge `u` makes in a task's worktree, the
+  message no longer tells you to commit it, which Roost has already undone.
+- In a shallow clone without the history a merge needs, Roost says to
+  fetch it with `git fetch --unshallow`; starting a task from a worktree
+  of a bare repository says that Roost needs a clone that isn't bare.
 - An agent that has just started or been resumed, and waits at its
   prompt, no longer counts as waiting on you. After you resume the agents
   that crashed together, those you didn't open no longer each say `ready`

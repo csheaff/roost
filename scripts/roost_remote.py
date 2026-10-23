@@ -458,16 +458,98 @@ def check_worktree(store, task, branch=True):
         raise RoostError("Task worktree is outside Roost's worktree directory")
     if worktree == Path(task["repo"]).resolve():
         raise RoostError("Refusing to remove the primary repository")
-    if branch and worktree.exists():
+    if not worktree.exists():
+        moved = moved_worktree(task, worktree)
+        if moved and os.path.lexists(moved):
+            raise RoostError("The task's worktree was moved; move it back with git worktree move %s %s, "
+                             "then try again" % (shlex.quote(moved), shlex.quote(str(worktree))))
+        if not moved and Path(task["repo"]).is_dir() and current_branch(task["repo"]) == task["branch"]:
+            raise RoostError("The task's branch %s is checked out in the primary checkout %s; switch to another "
+                             "branch there, then try again" % (task["branch"], task["repo"]))
+        if moved:
+            raise RoostError("Git keeps the task's worktree at %s, which is missing; reconnect it and move it back "
+                             "with git worktree move %s %s, or have Git forget it with git worktree prune, then "
+                             "try again" % (moved, shlex.quote(moved), shlex.quote(str(worktree))))
+    elif branch:
+        under_way = operation_under_way(worktree)
+        if under_way:
+            raise RoostError(under_way)
         # In full, as in `other_branch`: a tag of the branch's name would
         # make the short one heads/….
         current = git(worktree, "symbolic-ref", "-q", "HEAD", check=False).stdout.strip()
+        short = current.removeprefix("refs/heads/")
+        if (short != task["branch"] and current.startswith("refs/heads/")
+                and not ref_exists(task["repo"], task["branch"])):
+            raise RoostError("The task's branch %s is gone, and its worktree is on %s; if you renamed the "
+                             "branch, rename it back with git branch -m %s %s, then try again"
+                             % (task["branch"], short, shlex.quote(short), shlex.quote(task["branch"])))
         if current != "refs/heads/" + task["branch"]:
             raise RoostError("The task's worktree is on %s, not the task's branch %s; check out %s there, "
                              "bringing over any commits you want, then try again"
-                             % (current.removeprefix("refs/heads/") or "a detached HEAD", task["branch"],
-                                task["branch"]))
+                             % (short or "a detached HEAD", task["branch"], task["branch"]))
     return worktree
+
+
+def moved_worktree(task, worktree):
+    """Where Git keeps TASK's worktree, if not at WORKTREE, where it was,
+    which is gone, as after `git worktree move`, or keeps its branch
+    checked out, whether or not that folder is there; or None."""
+    if not Path(task["repo"]).is_dir():
+        return None
+    with contextlib.suppress(RoostError):
+        # Git names what it keeps of a worktree after its folder, and keeps
+        # that name when it moves, on whatever branch it is then.
+        for gitdir, path in linked_worktrees(task["repo"]):
+            if gitdir.name == worktree.name and Path(path).resolve() != worktree:
+                return path
+        for path, ref in worktree_branches(task["repo"]):
+            # The primary checkout is no task's worktree moved, and can't move.
+            if (ref == "refs/heads/" + task["branch"]
+                    and Path(path).resolve() not in (worktree, Path(task["repo"]).resolve())):
+                return path
+    return None
+
+
+def operation_under_way(worktree):
+    """What WORKTREE is in the middle of, as `git status` would say, and
+    how to finish or undo it, or None. A merge is left to the callers,
+    which say so themselves."""
+    # In the worktree's own Git directory, whose path may hold any byte.
+    try:
+        command = operation_in(Path(git_fields(worktree, "rev-parse", "--absolute-git-dir")[0].removesuffix("\n")))
+    except (RoostError, IndexError):
+        return None
+    if command == "bisect":
+        return "git bisect is under way in the task's worktree; end it with git bisect reset, then try again"
+    if command:
+        return ("git %s is under way in the task's worktree; finish it with git %s --continue, or undo it "
+                "with git %s --abort, then try again" % (command, command, command))
+    return None
+
+
+def operation_in(gitdir):
+    """The Git command under way in the worktree whose Git directory is
+    GITDIR, as `git status` would name it: "am", "rebase", "cherry-pick",
+    "revert" or "bisect"; or None. A merge is left to the callers."""
+    names = ("rebase-merge", "rebase-apply", "rebase-apply/applying", "CHERRY_PICK_HEAD", "REVERT_HEAD",
+             "sequencer/todo", "BISECT_LOG")
+    found = {name for name in names if os.path.lexists(gitdir / name)}
+    if "rebase-apply/applying" in found:
+        return "am"
+    if "rebase-merge" in found or "rebase-apply" in found:
+        return "rebase"
+    if "CHERRY_PICK_HEAD" in found:
+        return "cherry-pick"
+    if "REVERT_HEAD" in found:
+        return "revert"
+    if "sequencer/todo" in found:
+        # A series of commits picked or reverted, stopped between two.
+        with contextlib.suppress(OSError, UnicodeDecodeError):
+            first = next((line.split()[0] for line in (gitdir / "sequencer" / "todo").read_text().splitlines()
+                          if line.strip() and not line.startswith("#")), "")
+            return "revert" if first == "revert" else "cherry-pick"
+        return "cherry-pick"
+    return "bisect" if "BISECT_LOG" in found else None
 
 
 def ref_exists(repo, branch):
@@ -1495,8 +1577,12 @@ def create(store, request):
     # still use the primary checkout for integration and repository identity.
     # Plain --porcelain: `-z` needs Git 2.36, and hosts often ship older Git.
     primary = git(checkout, "worktree", "list", "--porcelain").stdout.split("\n\n", 1)[0].split("\n")
-    if "bare" in primary or not primary[0].startswith("worktree "):
+    if not primary[0].startswith("worktree "):
         raise RoostError("Roost needs a primary working checkout")
+    if "bare" in primary:
+        raise RoostError("%s is a worktree of the bare repository %s, and Roost needs a repository with a "
+                         "working tree of its own; start tasks from a clone that isn't bare"
+                         % (checkout, primary[0][len("worktree "):]))
     repo = primary[0][len("worktree "):]
     name = task_name(request.get("name"))
     slug = name_slug(name)
@@ -1559,27 +1645,53 @@ def create(store, request):
         task["copyComplete"] = False
     if request.get("programStatus") is True:
         task["programStatus"] = True
-    git(repo, "-c", "branch.autoSetupMerge=false", "worktree", "add", "-b", branch,
-        str(worktree), commit)
+    existed, there = ref_exists(repo, branch), worktree.exists()
+    try:
+        git(repo, "-c", "branch.autoSetupMerge=false", "worktree", "add", "-b", branch,
+            str(worktree), commit)
+    except RoostError as exc:
+        said = "\n".join(line for line in str(exc).splitlines() if not line.startswith("Preparing worktree"))
+        if there or not worktree.exists():
+            # A checkout that failed, as a filter can, leaves the new branch.
+            if not existed:
+                with contextlib.suppress(RoostError):
+                    delete_branch(repo, branch, commit)
+            raise RoostError(said)
+        # Git made the worktree, then its post-checkout hook failed.
+        with store.locked():
+            store.save(task)
+            abandon(store, task)
+        raise RoostError("The repository's post-checkout hook failed in the task's new worktree, so the task "
+                         "didn't start%s: %s" % ("; its worktree is kept, as the hook left files there"
+                                                 if worktree.exists() else "", said))
     with store.locked():
         try:
             store.save(task)
             spawn(store, task, size=size_options(request))
         except Exception:
-            if task.get("windowId"):
-                tmux(socket, "kill-window", "-t", task["windowId"], check=False)
-            # Never force-remove: a runner could already have written real work.
-            if not git(worktree, "status", "--porcelain", check=False).stdout:
-                git(repo, "worktree", "remove", str(worktree), check=False)
-                with contextlib.suppress(RoostError):
-                    delete_branch(repo, branch, commit)
-            if worktree.exists():
-                task.update(status="failed", error="Creation failed; inspect the worktree, then retire or forget the task")
-                store.save(task)
-            else:
-                store.remove(task_id)
+            abandon(store, task)
             raise
     return task
+
+
+def abandon(store, task):
+    """Undo creating TASK, which failed partway: its window, and its
+    worktree and branch, unless anything was written there, as its runner
+    may have; then it stays, failed, for you to look at. Under the
+    registry lock."""
+    worktree, repo = Path(task["worktree"]), task["repo"]
+    if task.get("windowId"):
+        tmux(task["socket"], "kill-window", "-t", task["windowId"], check=False)
+    # Never force-remove: a runner could already have written real work.
+    if not git(worktree, "status", "--porcelain", check=False).stdout:
+        git(repo, "worktree", "remove", str(worktree), check=False)
+        with contextlib.suppress(RoostError):
+            delete_branch(repo, task["branch"], task["baseCommit"])
+    if worktree.exists():
+        task.update(status="failed", error="Creation failed; inspect the worktree, then retire or forget the task")
+        store.save(task)
+    else:
+        store.remove(task["id"])
 
 
 ISSUE_BODY_LIMIT = 6000
@@ -2522,9 +2634,10 @@ def resume(store, task, program_status=None, size=()):
     pane = owned_pane(task, inventory)
     if pane and not pane["dead"]:
         raise RoostError("The agent is still running; open the existing task")
+    # First, as it says where a worktree that was moved went.
+    check_worktree(store, task, branch=False)
     if not Path(task["worktree"]).is_dir():
         raise RoostError("Task worktree is gone; forget the task to remove it from Roost")
-    check_worktree(store, task, branch=False)
     if pane:
         tmux(task["socket"], "kill-window", "-t", task["windowId"])
     # A task begun in a shared session, as before each had its own, moves to
@@ -2990,6 +3103,7 @@ def integration_branch(task):
     repo = task["repo"]
     if not branch:
         raise RoostError("The task has no integration branch (it was created from a detached HEAD); merge it manually, then retire")
+    require_not_rebasing(repo, branch)
     if current_branch(repo) == branch:
         if git(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0:
             raise RoostError("The primary repository already has a merge in progress")
@@ -3006,15 +3120,167 @@ def integration_branch(task):
     return branch, False
 
 
+def require_not_rebasing(repo, branch):
+    """Refuse to merge into or from BRANCH while a rebase of it is under way
+    in a worktree of REPO, or one that will move it too, with --update-refs:
+    Git moves BRANCH once the rebase is done, and can't if it moved
+    meanwhile."""
+    common = common_dir(repo)
+    if not common:
+        return
+    # The primary checkout's Git directory, then each linked worktree's.
+    for gitdir, path in [(common, repo)] + linked_worktrees(repo):
+        for state in ("rebase-merge", "rebase-apply"):
+            with contextlib.suppress(OSError, UnicodeDecodeError):
+                if (gitdir / state / "head-name").read_text().strip() == "refs/heads/" + branch:
+                    raise RoostError("A rebase of %s is under way in %s; finish or undo it there, then try again"
+                                     % (branch, path))
+        with contextlib.suppress(OSError, UnicodeDecodeError):
+            # Each ref it will move, its commit before, and after.
+            if "refs/heads/" + branch in (gitdir / "rebase-merge" / "update-refs").read_text().splitlines()[::3]:
+                raise RoostError("A rebase under way in %s will move %s once it is done; finish or undo it there, "
+                                 "then try again" % (path, branch))
+
+
 def worktree_branches(repo):
     """(path, branch ref or None) for each worktree of REPO."""
-    pairs = []
-    for block in git(repo, "worktree", "list", "--porcelain").stdout.split("\n\n"):
-        lines = block.splitlines()
+    return [(path, ref) for path, ref, _ in worktree_entries(repo)]
+
+
+WORKTREE_LIST_Z_GIT = (2, 36)  # `git worktree list -z`
+
+
+@functools.lru_cache(maxsize=None)
+def lists_worktrees_whole():
+    """Whether this host's Git lists worktrees apart by NULs, which keeps a
+    path with a newline in it whole."""
+    return (version_of(execute(["git", "--no-optional-locks", "--version"], check=False).stdout)
+            or (0, 0)) >= WORKTREE_LIST_Z_GIT
+
+
+def worktree_entries(repo):
+    """(path, branch ref or None, why it is locked or None) for each worktree
+    of REPO; a lock with no reason given has an empty one."""
+    entries = []
+    if lists_worktrees_whole():
+        # As bytes, for paths that hold a carriage return or aren't UTF-8.
+        blocks = []
+        for field in git_fields(repo, "worktree", "list", "--porcelain", "-z"):
+            if field.startswith("worktree ") or not blocks:
+                blocks.append([])
+            blocks[-1].append(field)
+    else:
+        blocks = [block.splitlines() for block in git(repo, "worktree", "list", "--porcelain").stdout.split("\n\n")]
+    for lines in blocks:
         if lines and lines[0].startswith("worktree "):
             ref = next((line[len("branch "):] for line in lines if line.startswith("branch ")), None)
-            pairs.append((lines[0][len("worktree "):], ref))
-    return pairs
+            lock = next((line[len("locked"):].strip() for line in lines
+                         if line == "locked" or line.startswith("locked ")), None)
+            entries.append((lines[0][len("worktree "):], ref, lock))
+    return entries
+
+
+def common_dir(repo):
+    """REPO's Git directory, which its worktrees share, or None. Its path,
+    which may be anywhere with `--separate-git-dir`, may hold any byte."""
+    with contextlib.suppress(RoostError, IndexError):
+        return Path(repo) / git_fields(repo, "rev-parse", "--git-common-dir")[0].removesuffix("\n")
+    return None
+
+
+def linked_worktrees(repo):
+    """(Git directory, path) for each linked worktree of REPO, as Git keeps
+    them, whether or not its folder is there."""
+    common = common_dir(repo)
+    if not common:
+        raise RoostError("%s is not a Git repository" % repo)
+    places = []
+    with contextlib.suppress(OSError):
+        for gitdir in sorted((common / "worktrees").iterdir()):
+            with contextlib.suppress(OSError):
+                # A path, which needn't be UTF-8, and is from GITDIR when
+                # relative, as with worktree.useRelativePaths.
+                back = os.fsdecode((gitdir / "gitdir").read_bytes().strip())
+                places.append((gitdir, os.path.dirname(os.path.normpath(os.path.join(gitdir, back)))))
+    return places
+
+
+# The tree with nothing in it, which Git knows without storing it.
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+def kept_of_gone(repo, worktree):
+    """The Git directory Git keeps for WORKTREE, one of REPO's whose folder
+    is missing, or None."""
+    for gitdir, path in linked_worktrees(repo):
+        if Path(path).resolve() == worktree and not os.path.lexists(path):
+            return gitdir
+    return None
+
+
+def require_nothing_kept(repo, worktree):
+    """Refuse to finish a task whose worktree folder is missing while what
+    Git keeps of it holds what may be work no branch has: the repositories
+    of its submodules, or commits on its detached HEAD. Forgetting it would
+    delete them, uncounted."""
+    gitdir = kept_of_gone(repo, worktree) if Path(repo).is_dir() else None
+    if not gitdir:
+        return
+    held = []
+    modules = gitdir / "modules"
+    if modules.is_dir() and any(modules.iterdir()):
+        held.append("the repositories of its submodules")
+    head = ""
+    with contextlib.suppress(OSError, UnicodeDecodeError):
+        head = (gitdir / "HEAD").read_text().strip()
+    if head and not head.startswith("ref:"):
+        count = git(repo, "rev-list", "--count", head, "--not", "--branches", "--tags", "--remotes", check=False)
+        commits = int(count.stdout) if count.returncode == 0 and count.stdout.strip().isdigit() else None
+        if commits is None or commits:
+            held.append("%s on its detached HEAD that no branch has"
+                        % ("commits" if commits is None else "%d commit%s" % (commits, "" if commits == 1 else "s")))
+    # A command under way, and what it set aside, as a rebase with
+    # --autostash does, what it has still to do, as a cherry-pick of
+    # several commits, or the commits a bisect started from, which may be
+    # on no branch.
+    command = operation_in(gitdir)
+    if command == "rebase":
+        held.append("a rebase under way, and what it may have set aside")
+    elif command:
+        held.append("git am under way" if command == "am" else "a %s under way" % command)
+    if (gitdir / "MERGE_HEAD").exists():
+        held.append("a merge under way")
+    if (gitdir / "MERGE_AUTOSTASH").exists():
+        held.append("changes a merge set aside")
+    # What was staged there, kept in its index, and in no commit.
+    if (gitdir / "index").is_file():
+        commit = git(repo, "rev-parse", "--verify", "-q", (head[len("ref:"):].strip() if head.startswith("ref:")
+                                                          else head) + "^{commit}", check=False).stdout.strip()
+        staged = git(repo, "--no-optional-locks", "diff-index", "--cached", "--quiet", commit or EMPTY_TREE,
+                     check=False, env=dict(os.environ, GIT_INDEX_FILE=str(gitdir / "index")))
+        if staged.returncode:
+            held.append("changes staged in its index")
+    if held:
+        raise RoostError("The task's worktree folder is missing, and Git keeps what may be work with it: %s. Restore "
+                         "the folder, or delete it all with git worktree remove --force --force %s, then try again"
+                         % (" and ".join(held), shlex.quote(str(worktree))))
+
+
+def unregister_gone(repo, worktree):
+    """Have Git forget WORKTREE, one of REPO's whose folder is gone, so that
+    the branch it held can be deleted: what Git keeps of it goes, as
+    `git worktree prune` removes it, but never a folder, which may be back
+    meanwhile, as when a drive is mounted again. Retiring refuses a locked
+    one first, and both retiring and discarding one that keeps submodules."""
+    gitdir = kept_of_gone(repo, worktree)
+    if gitdir:
+        shutil.rmtree(gitdir)
+
+
+def worktree_lock(repo, worktree):
+    """Why WORKTREE, one of REPO's, is locked, as `git worktree lock` says,
+    or None when it isn't. Git won't remove a locked worktree."""
+    return next((lock for path, _, lock in worktree_entries(repo) if Path(path).resolve() == worktree), None)
 
 
 def merge_without_checkout(task, integration):
@@ -3231,6 +3497,14 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
         require_clean(str(worktree))
         # Before stopping the agent, rather than fail halfway through.
         require_submodules_kept(worktree)
+    # Its folder may be missing, as on a drive not mounted: Git keeps it then.
+    lock = worktree_lock(repo, worktree) if Path(repo).is_dir() else None
+    if lock is not None:
+        raise RoostError("The task's worktree is locked%s%s; %sunlock it with git worktree unlock %s, then try again"
+                         % (" (%s)" % lock if lock else "", "" if worktree_exists else ", and its folder is missing",
+                            "" if worktree_exists else "reconnect it, or ", shlex.quote(str(worktree))))
+    if not worktree_exists:
+        require_nothing_kept(repo, worktree)
     require_agent_work_kept(task)
     squashed = None
     if merge:
@@ -3242,6 +3516,12 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
         if here and git(repo, "status", "--porcelain", "--untracked-files=no").stdout.strip():
             raise RoostError("The primary checkout %s has uncommitted changes; commit or stash them before merging"
                              % repo)
+        require_history(repo, "refs/heads/" + integration, "refs/heads/" + branch, "merge")
+        # Ignored files there are yours too, but Git writes over them.
+        if here:
+            overwritten = overwritten_ignored(repo, "refs/heads/" + branch)
+            if overwritten:
+                raise RoostError(ignored_refusal("Merging", overwritten, "the primary checkout " + repo, "merge"))
         if squash:
             squashed = squash_merge(task, integration, here)
             result = None
@@ -3272,7 +3552,7 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
                                       merge_paths(repo, tip), untracked)
             if merging:
                 undo_merge(repo, merge_paths(repo, tip), untracked)
-            raise RoostError("Merge failed; task retained: " + (result.stderr.strip() or result.stdout.strip()))
+            raise RoostError("Merge failed; task retained: " + merge_said(result))
     commit = None
     if branch_exists:
         commit = git(repo, "rev-parse", "refs/heads/" + branch + "^{commit}").stdout.strip()
@@ -3293,6 +3573,8 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
     # What a copy stopped partway left, which may hold a secret.
     shutil.rmtree(copy_staging(task["worktree"]), ignore_errors=True)
     if branch_exists:
+        if not worktree_exists:
+            unregister_gone(repo, worktree)
         delete_branch(repo, branch, commit)
     store.remove(task["id"])
     task.update(status="retired", updatedAt=now())
@@ -3373,6 +3655,78 @@ def conflicted_files(repo):
     return git(repo, "diff", "--name-only", "--diff-filter=U", check=False).stdout.splitlines()
 
 
+def merge_said(result):
+    """What a `git merge` that failed, RESULT, said, but its advice to
+    commit the merge, as after a hook refused it: Roost undoes it instead."""
+    said = result.stderr.strip() or result.stdout.strip()
+    # A hook that says nothing leaves Git saying only that.
+    return ("\n".join(line for line in said.splitlines() if not line.startswith("Not committing merge;"))
+            or "a hook refused to commit it")
+
+
+def require_history(repo, one, other, action):
+    """Refuse to ACTION, merging ONE and OTHER in REPO, when it is a shallow
+    clone that lacks the history joining them: Git says only that they are
+    unrelated."""
+    if (git(repo, "merge-base", one, other, check=False).returncode == 1
+            and git(repo, "rev-parse", "--is-shallow-repository", check=False).stdout.strip() == "true"):
+        raise RoostError("This shallow clone lacks the history that joins %s and %s; fetch it with "
+                         "git fetch --unshallow, then %s again"
+                         % (one.removeprefix("refs/heads/"), other.removeprefix("refs/heads/"), action))
+
+
+def overwritten_ignored(checkout, other):
+    """The files Git ignores in CHECKOUT that merging OTHER into it would
+    write over or delete, as Git does without asking, though it refuses to
+    for an untracked file: those OTHER adds or changes since the two parted
+    that are there, untracked, and those in a folder it puts a file in
+    place of."""
+    related = git(checkout, "merge-base", "HEAD", other, check=False).returncode != 1
+    # What OTHER changed, where the merge writes it unless it follows a
+    # rename, as options such as branch.<name>.mergeOptions may not. With
+    # nothing in common, which Git merges only when told to, as with
+    # --allow-unrelated-histories there, every file of OTHER's that differs.
+    changed = set(git_fields(checkout, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=d",
+                             "HEAD..." + other if related else "HEAD", *([] if related else [other])))
+    if related and merges_without_checkout():
+        # And what the merge writes as it follows renames, in conflict or not.
+        merged = git(checkout, "merge-tree", "--write-tree", "--no-messages", "HEAD", other, check=False)
+        if merged.returncode not in (0, 1) or not merged.stdout.strip():
+            raise RoostError("Git can't say what merging would change: "
+                             + (merged.stderr.strip() or "git merge-tree failed"))
+        changed.update(git_fields(checkout, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=d", "HEAD",
+                                  merged.stdout.split()[0]))
+    there, folders = set(), []
+    for path in sorted(changed):
+        parts = PurePosixPath(path).parts
+        for end in range(1, len(parts) + 1):
+            place = os.path.join(checkout, *parts[:end])
+            if end < len(parts):
+                # A file where it needs a folder on the way.
+                if os.path.islink(place) or os.path.isfile(place):
+                    there.add("/".join(parts[:end]))
+                    break
+            elif os.path.isdir(place) and not os.path.islink(place):
+                folders.append(path)
+            elif os.path.lexists(place):
+                there.add(path)
+    overwritten = ignored_in(checkout, sorted(there))
+    if folders:
+        overwritten.update(git_fields(checkout, "ls-files", "-z", "--others", "--ignored", "--exclude-standard",
+                                      "--directory", "--", *(":(literal)" + folder + "/" for folder in folders)))
+    return sorted(overwritten)
+
+
+def ignored_refusal(doing, paths, where, action):
+    """Why DOING, as "Merging", would overwrite PATHS, ignored files WHERE,
+    and how to ACTION again."""
+    one = len(paths) == 1
+    return ("%s would overwrite %s%s in %s, %s Git ignores and so replaces without asking; move %s aside, "
+            "then %s again" % (doing, ", ".join(map(shown, paths[:3])),
+                               " and %d more" % (len(paths) - 3) if len(paths) > 3 else "",
+                               where, "a file" if one else "files", "it" if one else "them", action))
+
+
 def update(store, task):
     """Merge the integration branch into the task's worktree, so the task can
     be brought up to date and its conflicts resolved there, not in the
@@ -3389,6 +3743,12 @@ def update(store, task):
     # Untracked files are fine; Git refuses the merge if it would overwrite one.
     if git(worktree, "status", "--porcelain", "--untracked-files=no").stdout.strip():
         raise RoostError("Commit the task's changes before updating it from " + integration)
+    require_not_rebasing(task["repo"], integration)
+    require_history(worktree, "refs/heads/" + task["branch"], "refs/heads/" + integration, "update")
+    # Ignored files are the agent's, but Git writes over them.
+    overwritten = overwritten_ignored(worktree, "refs/heads/" + integration)
+    if overwritten:
+        raise RoostError(ignored_refusal("Updating from " + integration, overwritten, "the task's worktree", "update"))
     before = git(worktree, "rev-parse", "HEAD").stdout.strip()
     # The full name, which a tag of the same name would otherwise shadow,
     # and the message a merge of the short one has.
@@ -3398,7 +3758,7 @@ def update(store, task):
     if result.returncode and not conflicts:
         if git(worktree, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0:
             git(worktree, "merge", "--abort")
-        raise RoostError("Updating from %s failed: %s" % (integration, result.stderr.strip() or result.stdout.strip()))
+        raise RoostError("Updating from %s failed: %s" % (integration, merge_said(result)))
     task["update"] = dict(conflicts=conflicts,
                           changed=before != git(worktree, "rev-parse", "HEAD").stdout.strip())
     return task
@@ -3420,6 +3780,8 @@ def discard(store, task, expect=None, dry_run=False, teardown=None):
     branch_exists = ref_exists(repo, branch)
     ref = "refs/heads/" + branch
     commit = git(repo, "rev-parse", ref + "^{commit}").stdout.strip() if branch_exists else None
+    if not worktree_exists:
+        require_nothing_kept(repo, worktree)
     # The worktrees its agent made go with it.
     work = agent_work(task)
     if dry_run:
@@ -3450,6 +3812,8 @@ def discard(store, task, expect=None, dry_run=False, teardown=None):
     remove_worktrees(store, task, worktree if worktree_exists else None, work, force=True, teardown=teardown)
     shutil.rmtree(copy_staging(task["worktree"]), ignore_errors=True)
     if branch_exists:
+        if not worktree_exists:
+            unregister_gone(repo, worktree)
         delete_branch(repo, branch, commit)
     store.remove(task["id"])
     task.update(status="discarded", updatedAt=now(), live=False)
