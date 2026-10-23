@@ -9,7 +9,51 @@ What each release changes, and what to do when upgrading. Newest first.
   threads and its agent's reply, or whose diff you read in its agent's
   terminal. What changed since you looked then starts from there. The
   task panel names `v` where it says what you haven't looked at, and the
-  menu (`h`) has it beside `D`. Nothing to do when upgrading.
+  menu (`h`) has it beside `D`. Upgrading: restart Emacs, as `v` lives
+  in keymaps Emacs made when it first loaded Roost.
+- The task panel shows your latest prompt for Pi and OpenCode tasks too,
+  as it does for Claude Code and Codex. A message you send while Pi works
+  shows at once, and one OpenCode queues shows once it takes it up. One a
+  Pi extension sends by itself isn't yours, so it doesn't show.
+  Upgrading: stop and resume running Pi and OpenCode tasks (`K`, then `s`)
+  for them to load the new extension or plugin; until then their panels
+  show no latest prompt.
+- `M-x roost-dashboard` opens the dashboard, as `roost-status` did, and
+  `S` in the menu and sidebar runs it. `roost-status` still works, as an
+  obsolete alias, until 1.1. Upgrading: in your configuration, bind or
+  call `roost-dashboard` instead.
+- The names 0.9 made obsolete are gone: `roost-claude-command`,
+  `roost-use-perspectives`, `roost-session-name`, the
+  `roost-sidebar-selection` face, and the commands `roost-list` and
+  `roost-kill`. Upgrading: a configuration that still sets one of them
+  now changes nothing, and `M-x roost-doctor` names it. Put Claude's
+  command in the `"claude"` entry of `roost-agent-commands`, set
+  `roost-workspace` to `tab-bar` or nil rather than
+  `roost-use-perspectives` to nil, use the `roost-selection` face, and
+  `roost-switch-task` and `roost-stop` for the commands.
+- `roost-startup-grace`, `roost-request-timeout`,
+  `roost-watch-unfocused-interval` and `roost-note-box-lines` are plain
+  variables rather than options, outside what 1.0 will keep stable.
+  Upgrading: if you set one with Customize, set it with `setq` instead,
+  as Customize no longer applies it; `M-x roost-doctor` names it.
+
+## 0.11.0
+
+To upgrade from 0.10:
+
+- Restart Emacs after updating. Keys new in this release, such as `w`,
+  live in keymaps Emacs made when it first loaded Roost.
+- If you set `roost-notify-function`, check what it does with a title:
+  titles now start with the task and its status (`ledger — permission`)
+  rather than `Roost:`, and a notification that gathers several counts
+  the others on its body's second line.
+- If your `roost-setup-command` copies files Git ignores, such as `.env`,
+  a `.worktreeinclude` in the project can copy them instead.
+- Nothing else: each host gets the new helper with Roost's next request
+  to it, and agents at work carry on.
+
+Changes since 0.10.0:
+
 - When every agent on a host crashed, as after the host restarted or its
   tmux server ended, `s` on one of them asks once whether to resume the
   others that crashed there too, and `RET` asks in a single question

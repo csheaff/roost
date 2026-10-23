@@ -8,8 +8,8 @@ what each covers. What only real agents, hosts and GitHub show needs a run by
 hand. In a separate Emacs, as CLAUDE.md says, go through these and record what
 happened in a section below:
 
-1. Claude Code: `make contract`, then `make contract-live`, and for Codex and
-   Pi `make contract-live CONTRACT_AGENTS="codex pi"`. Start a task from
+1. Claude Code: `make contract`, then `make contract-live`, and for Codex,
+   Pi and OpenCode `make contract-live CONTRACT_AGENTS="codex pi opencode"`. Start a task from
    a draft and one from an Org heading. Answer a permission prompt in its
    terminal, interrupt a turn with Esc, and let one finish while you look at
    another: it waits in the sidebar, and `n` reaches it.
@@ -34,6 +34,37 @@ happened in a section below:
    the sidebar then says `merged`.
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
+
+## Your latest prompt from Pi and OpenCode — 2026-10-22
+
+- **`make contract-live CONTRACT_AGENTS="pi opencode"`** with Pi 1.3.0 and
+  OpenCode 1.19.4 (installed in a scratch folder, with XDG folders of its
+  own), both on LM Studio's qwen3.6-35b-a3b loaded with 48k of context:
+  every check as expected, and both captures kept, OpenCode's the first.
+  The task's own prompt left "Your latest prompt" empty, and a later one
+  showed. So did one sent while the agent counted to 300: Pi reported it
+  at once, through its `input` event, and OpenCode 18 s later, when the
+  same turn took the queued message up. OpenCode saved each message
+  before it said it was busy, so the prompt comes with `busy`.
+
+## Before 0.11.0 — 2026-10-22
+
+- **`make contract`** with Claude Code 2.1.303, Codex 0.163.0 and Pi
+  1.3.0: every check as expected; OpenCode isn't installed here, so it was
+  skipped. **`make contract-live`** with Claude Code 2.1.303: every check
+  as expected. The capture it wrote differed from the one kept only in
+  the model's wording and the timings, so the kept one stands.
+- **`make test compile`**: 361 ERT tests (26 skipped, those of Magit and
+  Evil) and 264 Python tests passed; no byte-compile warnings.
+- **`make qa`** on Emacs 32, the whole run: 248 steps, 3 with problems,
+  all three Emacs pausing for 1 to 2 s, mostly collecting garbage, in the
+  tab and rename journeys while `make test` ran beside it. Run again
+  alone, those journeys passed: 8 steps, none with problems. The new
+  journeys for `.worktreeinclude` and agents that crashed together passed,
+  and their screenshots read as intended.
+- **Not by hand this time.** 0.10.0's run by hand was the day before;
+  what changed since has journeys in `make qa`, and Claude Code's version
+  is the same.
 
 ## UX review — 2026-10-21
 

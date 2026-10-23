@@ -1,0 +1,15 @@
+{"version": "1.19.4", "programStatus": false, "agent": "opencode", "recorded": "2026-10-22"}
+{"step": "a first turn, from the task's prompt"}
+{"hook": {"event": "start"}, "at": 0.0, "then": {"status": "ready", "lastEvent": "SessionStart"}}
+{"hook": {"event": "status", "session": "ses_1", "status": "busy", "prompt": "Reply with the single word PONG."}, "at": 0.5194230079650879, "then": {"status": "running", "lastEvent": "Busy", "agentSession": "ses_1"}}
+{"hook": {"event": "status", "session": "ses_1", "status": "idle", "reply": "\n\nPONG", "declined": false}, "at": 17.456449031829834, "then": {"status": "ready", "lastEvent": "Stop", "lastReply": "PONG", "agentSession": "ses_1"}}
+{"step": "stop a turn with Esc"}
+{"hook": {"event": "status", "session": "ses_1", "status": "busy", "prompt": "Write the numbers from 1 to 400, one per line, with no other text."}, "at": 17.90370798110962, "then": {"status": "running", "lastEvent": "Busy", "lastPrompt": "Write the numbers from 1 to 400, one per line, with no other text.", "agentSession": "ses_1"}}
+{"hook": {"event": "status", "session": "ses_1", "status": "idle", "reply": "", "declined": false, "error": {"name": "MessageAbortedError", "message": "Aborted"}}, "at": 21.770726919174194, "then": {"status": "ready", "lastEvent": "Interrupt", "lastPrompt": "Write the numbers from 1 to 400, one per line, with no other text.", "agentSession": "ses_1"}}
+{"step": "a second turn"}
+{"hook": {"event": "status", "session": "ses_1", "status": "busy", "prompt": "Reply with the single word PING."}, "at": 22.085819005966187, "then": {"status": "running", "lastEvent": "Busy", "lastPrompt": "Reply with the single word PING.", "agentSession": "ses_1"}}
+{"hook": {"event": "status", "session": "ses_1", "status": "idle", "reply": "\n\nPING", "declined": false}, "at": 23.692625999450684, "then": {"status": "ready", "lastEvent": "Stop", "lastReply": "PING", "lastPrompt": "Reply with the single word PING.", "agentSession": "ses_1"}}
+{"step": "a message sent while it works"}
+{"hook": {"event": "status", "session": "ses_1", "status": "busy", "prompt": "Write the numbers from 1 to 300, one per line, with no other text."}, "at": 24.138684034347534, "then": {"status": "running", "lastEvent": "Busy", "lastPrompt": "Write the numbers from 1 to 300, one per line, with no other text.", "agentSession": "ses_1"}}
+{"hook": {"event": "prompt", "session": "ses_1", "prompt": "Then reply with the single word DONE."}, "at": 42.53279900550842, "then": {"status": "running", "lastEvent": "Busy", "lastPrompt": "Then reply with the single word DONE.", "agentSession": "ses_1"}}
+{"hook": {"event": "status", "session": "ses_1", "status": "idle", "reply": "\n\nDONE", "declined": false}, "at": 44.11797094345093, "then": {"status": "ready", "lastEvent": "Stop", "lastReply": "DONE", "lastPrompt": "Then reply with the single word DONE.", "agentSession": "ses_1"}}

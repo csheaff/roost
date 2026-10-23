@@ -284,10 +284,6 @@ Larger, or undecided.
   a new task's first one can, shows `ready` while Codex works.
 - A Pi extension's dialog names only its title ("Run this command?"), not
   what it asks about, so that is all the request shows.
-- The task panel shows your latest prompt only for Claude Code and Codex,
-  whose `UserPromptSubmit` hooks carry it. Roost's Pi extension and
-  OpenCode plugin report no prompt, though Pi's `before_agent_start` event
-  and OpenCode's user messages have it.
 - While you write a commit message in a remote task, Magit can't show the
   diff beside it ("Error showing commit diff"); the commit goes through.
   The bug is Magit's, with any TRAMP method: from a linked worktree's Git

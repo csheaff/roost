@@ -56,7 +56,6 @@ PI_IGNORED_EVENTS = dict(
         "mcp_servers_change", "model_select", "resources_discover", "session_before_compact",
         "session_before_fork", "session_before_switch", "session_before_tree", "session_compact",
         "session_compact_failed", "session_info_changed", "session_tree", "thinking_level_select")},
-    input="what you typed, before it starts a run",
     project_trust="Pi asks to trust the project, as a dialog that ui_prompt_start reports",
     session_shutdown="Pi emits it when replacing a session too; the runner records the actual exit",
     user_bash="a command you ran yourself with !",
@@ -64,7 +63,9 @@ PI_IGNORED_EVENTS = dict(
 # What Roost's extension calls on Pi's context, and reads of its events.
 PI_API = (r"isIdle\(\): boolean", r"hasPendingMessages\(\): boolean", r"sessionManager: ",
           r"interface AgentSettledEvent \{[^}]*\baborted: boolean",
-          r"interface UIPromptStartEvent \{[^}]*\btitle\?: string")
+          r"interface UIPromptStartEvent \{[^}]*\btitle\?: string",
+          r"interface InputEvent \{[^}]*\btext: string[^}]*\bsource: InputSource",
+          r"type InputSource = [^;]*\"extension\"")
 PI_FLAGS = ("--extension", "--session-dir", "--session")
 
 # OpenCode events, of the kinds Roost's plugin reads, that it does not.
@@ -305,6 +306,40 @@ class CodexSession(claude_contract.Session):
                 path.unlink()
 
 
+def send_while_it_works(session):
+    """Send SESSION's agent a message while it works on a turn, which takes
+    it up, and check that it shows as your latest prompt meanwhile."""
+    session.step("a message sent while it works")
+    session.send("Write the numbers from 1 to 300, one per line, with no other text.")
+    session.until(lambda: session.record()["status"] == "running", 60, "the counting turn")
+    time.sleep(2)
+    more = "Then reply with the single word DONE."
+    session.send(more)
+
+    def reported():
+        """What the agent reported since the counting prompt, up to the
+        report that carries the message and with it, or None before that one."""
+        raw = session.store.root / "captures" / (session.task["id"] + ".jsonl")
+        entries = [json.loads(line) for line in raw.read_text().splitlines() if line.strip()]
+        since = max(i for i, entry in enumerate(entries) if entry.get("step") == "a message sent while it works")
+        hooks = [entry["hook"] for entry in entries[since:] if "hook" in entry]
+        taken = next((i for i, hook in enumerate(hooks) if hook.get("prompt") == more), None)
+        return None if taken is None else hooks[:taken + 1]
+
+    before = session.until(reported, 120, "the agent to report the message")
+    # A turn that ended first leaves the message to start one of its own.
+    if any(hook.get("event") == "agent_end" or (hook.get("event") == "status" and hook.get("status") == "idle")
+           for hook in before):
+        print("  --    the turn ended before the message came; not checked")
+    else:
+        record = session.when(lambda task: task.get("lastPrompt") == more, 10, "the message to show as your latest prompt")
+        session.check(record["status"] == "running", "a message sent while it works shows as your latest prompt",
+                      record["status"])
+    record = session.when(lambda task: task["status"] == "ready" and task.get("lastEvent") == "Stop", 180,
+                          "the turn's end")
+    session.check(record.get("lastPrompt") == more, "and stays so once the turn ends", record.get("lastPrompt"))
+
+
 class PiSession(claude_contract.Session):
     """A Roost task with real Pi, on the model Pi is set to use."""
 
@@ -315,6 +350,7 @@ class PiSession(claude_contract.Session):
         record = self.until(lambda: self.record().get("lastEvent") == "Stop" and self.record(), 180, "the first reply")
         self.check(record["status"] == "ready", "a finished turn is ready", record["status"])
         self.check(bool(record.get("agentSession")), "its extension reports the session", record.get("agentSession"))
+        self.check(record.get("lastPrompt") is None, "the task's own prompt is no later one", record.get("lastPrompt"))
 
         self.step("stop a turn with Esc")
         self.send("Write the numbers from 1 to 400, one per line, with no other text.")
@@ -341,6 +377,47 @@ class PiSession(claude_contract.Session):
                            180, "the reply")
         self.check("PING" in (record.get("lastReply") or self.listed(full=True).get("lastMessage") or ""),
                    "the reply is read", record.get("lastReply"))
+        self.check(record.get("lastPrompt") == "Reply with the single word PING.", "your latest prompt is kept",
+                   record.get("lastPrompt"))
+        send_while_it_works(self)
+
+
+class OpenCodeSession(claude_contract.Session):
+    """A Roost task with real OpenCode, on the model it is set to use."""
+
+    agent = "opencode"
+    command = ["opencode"]
+
+    def steps(self):
+        # Its TUI starts the session with the task's prompt.
+        record = self.until(lambda: self.record().get("lastEvent") == "Stop" and self.record(), 180, "the first reply")
+        self.check(record["status"] == "ready", "a finished turn is ready", record["status"])
+        self.check(bool(record.get("agentSession")), "its plugin reports the session", record.get("agentSession"))
+        self.check("PONG" in (record.get("lastReply") or ""), "the turn's end reports the reply", record.get("lastReply"))
+        self.check(record.get("lastPrompt") is None, "the task's own prompt is no later one", record.get("lastPrompt"))
+
+        self.step("stop a turn with Esc")
+        self.send("Write the numbers from 1 to 400, one per line, with no other text.")
+        self.until(lambda: self.record()["status"] == "running", 60, "the counting turn")
+        time.sleep(3)
+        # OpenCode interrupts at the second Esc.
+        self.keys("Escape", "Escape")
+        record = self.when(lambda task: task["status"] == "ready", 30, "the stopped turn to be noticed")
+        if record.get("lastEvent") == "Stop":
+            print("  --    Esc arrived after the turn ended; not checked")
+        else:
+            self.check(record.get("lastEvent") == "Interrupt", "a turn stopped with Esc shows interrupted",
+                       record.get("lastEvent"))
+
+        self.step("a second turn")
+        before = self.record().get("updatedAt")
+        self.send("Reply with the single word PING.")
+        record = self.when(lambda task: task.get("lastEvent") == "Stop" and task.get("updatedAt") != before,
+                           180, "the reply")
+        self.check("PING" in (record.get("lastReply") or ""), "the reply is read", record.get("lastReply"))
+        self.check(record.get("lastPrompt") == "Reply with the single word PING.", "your latest prompt is kept",
+                   record.get("lastPrompt"))
+        send_while_it_works(self)
 
 
 # A TOML table's header, on a line of its own: keys bare or quoted, joined by dots.
@@ -406,7 +483,7 @@ def restore_codex_tables(after, before, repo):
                    for i, text in enumerate(result) if text)
 
 
-SESSIONS = {"claude": claude_contract.Session, "codex": CodexSession, "pi": PiSession}
+SESSIONS = {"claude": claude_contract.Session, "codex": CodexSession, "pi": PiSession, "opencode": OpenCodeSession}
 
 
 def main():

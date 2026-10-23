@@ -38,6 +38,8 @@ import uuid
 HERE = Path(__file__).resolve().parent
 CHECKOUT = HERE.parent.parent
 FAKE = HERE.parent / "fake_claude.py"
+# Codex, Pi and OpenCode, as the helper's tests have them.
+FAKE_AGENT = HERE.parent / "fake_agent.py"
 FAKE_SSH = HERE / "fake_ssh.py"
 FAKE_GH = HERE / "fake_gh.py"
 
@@ -1468,6 +1470,26 @@ def send(qa, repo):
     qa.step("Back: the draft too", expect=[
         ("beside its terminal, which is selected", lambda s: shows(qa, name)(s)
          and "Half a thought" in (qa.window(s, "roost-send-mode") or {}).get("text", ""))])
+    # Pi and OpenCode say what you sent too, each through what Roost loads into it.
+    for agent, label, article in (("pi", "Pi", "A"), ("opencode", "OpenCode", "An")):
+        qa.emacs.eval("(setq qa-agents (cons roost-default-agent roost-agent-commands)"
+                      " roost-default-agent %s roost-agent-commands (cons (list %s %s %s %s) roost-agent-commands))"
+                      % (lisp(agent), lisp(agent), lisp(sys.executable), lisp(str(FAKE_AGENT)), lisp(agent)))
+        try:
+            other = start_task(qa, "Greet " + label)
+        finally:
+            qa.emacs.eval("(setq roost-default-agent (car qa-agents) roost-agent-commands (cdr qa-agents))")
+        open_task(qa, other)
+        qa.keys("C-c r e")
+        qa.wait("the prompt", lambda s: s["prompt"])
+        qa.type("And you, %s?\r" % label)
+        qa.wait("the agent to get it", lambda s: any("PROMPT And you, %s?" % label in w["text"]
+                                                    for w in terminals(s)))
+        latest = lambda s: re.search(r"Your latest prompt\n\s*And you, %s\?" % label, panel_text(qa, s))
+        qa.wait("the panel to hear it", latest)
+        qa.step("%s %s task's panel shows what you last said" % (article, label), expect=[
+            ("under the task's prompt", lambda s: latest(s) and panel_text(qa, s).index("Greet " + label)
+             < panel_text(qa, s).index("Your latest prompt"))])
 
 
 def attached(text, name):
