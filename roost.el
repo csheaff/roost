@@ -957,13 +957,6 @@ must a reply with a newer look lose it for an older agent event."
       (roost--name-panels))
     ;; Record the status before notifying, which may cache this task again.
     (puthash key status roost--statuses)
-    ;; An agent that has just started waits for a prompt, as one you
-    ;; resumed does: no news, as below, so it doesn't wait on you either,
-    ;; though you resumed it with others and never opened it.  One that
-    ;; finished a turn meanwhile does.
-    (when (and (equal previous "starting") (equal status "ready") (not new-stop)
-               (gethash key roost--tasks))
-      (roost--mark-seen task))
     (let ((turn (roost--news-turn task))
           (had (gethash key roost--pr-verdicts 'unknown))
           ;; Not when you are looking at it already.
@@ -993,6 +986,7 @@ must a reply with a newer look lose it for an older agent event."
                  ;; is no news; one that asks or fails at once is, and polls
                  ;; while Emacs is in the background may see only that.
                  (or (not (equal previous "starting")) (not (equal status "ready")) new-stop)
+                 (not (roost--just-started-p task))
                  (member status '("ready" "permission" "failed" "crashed" "exited"))
                  (funcall unwatched))
         (roost--notify-attention host task status)))
@@ -1378,6 +1372,13 @@ Here or in another Emacs: the task's host records it too."
     (or (equal (gethash (roost--key task) roost--seen) updated)
         (equal (roost--field task 'seen) updated))))
 
+(defun roost--just-started-p (task)
+  "Whether TASK's agent has done nothing since it started, as when resumed.
+It waits at its prompt, as it did before it stopped or crashed, and so
+waits for nothing from you that you don't know: you started it."
+  (and (equal (roost--field task 'status) "ready")
+       (member (roost--field task 'lastEvent) '("SessionStart" "session_start"))))
+
 (defun roost--attention-status (task)
   "TASK's status for attention.
 That is \"prompt\" when it has been starting too long, and \"idle\" when
@@ -1387,7 +1388,8 @@ it is ready and you have seen it since, rather than \"ready\"."
                 (> (or (roost--seconds-since (roost--field task 'updatedAt)) 0)
                    roost-startup-grace))
            "prompt")
-          ((and (member status '("ready" "interrupted")) (roost--seen-p task))
+          ((and (member status '("ready" "interrupted"))
+                (or (roost--seen-p task) (roost--just-started-p task)))
            "idle")
           (t status))))
 

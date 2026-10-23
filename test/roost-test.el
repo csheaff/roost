@@ -1112,26 +1112,35 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
 
 (ert-deftest roost-an-agent-just-started-does-not-wait-on-you ()
   ;; As after resuming the agents that crashed together: those you didn't
-  ;; open wait at their prompt, as before, and needn't be visited.
+  ;; open wait at their prompt, as before, and needn't be visited, however
+  ;; the polls and the resume's reply fall.
   (roost-test--isolated
-   (let (recorded)
-     (cl-letf (((symbol-function 'roost--record-seen) (lambda (task _updated) (push (roost--field task 'id) recorded))))
+   (roost-test--without-inspect
+    (roost-test--held-notices
+     (let* ((roost-notify t) notices
+            (roost-notify-function (lambda (title _body) (push title notices)))
+            (task (lambda (id) (gethash (list "dev" (or id "0123456789abcdef")) roost--tasks))))
        (roost--cache-task "dev" (roost-test--task nil "crashed"))
-       (should (roost--waiting-p (gethash '("dev" "0123456789abcdef") roost--tasks)))
-       (roost--cache-task "dev" (roost-test--task nil "starting"))
+       (should (roost--waiting-p (funcall task nil)))
+       ;; A poll sees it started before the resume's reply comes.
        (roost--cache-task "dev" (append '((updatedAt . "2026-10-03T20:00:05+00:00") (lastEvent . "SessionStart"))
                                         (roost-test--task nil "ready")))
-       (should-not (roost--waiting-p (gethash '("dev" "0123456789abcdef") roost--tasks)))
-       (should (equal recorded '("0123456789abcdef")))
-       ;; One that ran its first turn between two polls has news.
+       (should-not (roost--waiting-p (funcall task nil)))
+       (should (equal (roost--attention-status (funcall task nil)) "idle"))
+       ;; Pi's start, through the starting a reply says.
        (roost--cache-task "dev" (roost-test--task "1123456789abcdef" "starting"))
-       (roost--cache-task "dev" (append '((updatedAt . "2026-10-03T20:00:09+00:00") (lastEvent . "Stop"))
+       (roost--cache-task "dev" (append '((updatedAt . "2026-10-03T20:00:06+00:00") (lastEvent . "session_start"))
                                         (roost-test--task "1123456789abcdef" "ready")))
-       (should (roost--waiting-p (gethash '("dev" "1123456789abcdef") roost--tasks)))
-       ;; And so does the next turn of one that waited at its prompt.
+       (should-not (roost--waiting-p (funcall task "1123456789abcdef")))
+       (roost-test--a-minute-on)
+       (should-not notices)
+       ;; One that ran a turn, or was stopped in it, has news.
        (roost--cache-task "dev" (append '((updatedAt . "2026-10-03T20:01:00+00:00") (lastEvent . "Stop"))
                                         (roost-test--task nil "ready")))
-       (should (roost--waiting-p (gethash '("dev" "0123456789abcdef") roost--tasks)))))))
+       (should (roost--waiting-p (funcall task nil)))
+       (roost--cache-task "dev" (append '((updatedAt . "2026-10-03T20:01:05+00:00") (lastEvent . "Interrupt"))
+                                        (roost-test--task "1123456789abcdef" "ready")))
+       (should (roost--waiting-p (funcall task "1123456789abcdef"))))))))
 
 (ert-deftest roost-does-not-notify-about-the-agent-you-are-watching ()
   (roost-test--isolated

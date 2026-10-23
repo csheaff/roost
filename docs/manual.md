@@ -309,7 +309,7 @@ them by those words at its top.
 | `stopped` | No | Stopped with `K`; `s` resumes its conversation |
 | `merged` | No | Its work is merged, on GitHub or into its branch; `x` retires it |
 | `offline` | No | Its host doesn't answer; the row is as it was last known |
-| `seen` | No | You've seen an agent that waits for nothing. The sidebar leaves it without a word |
+| `seen` | No | You've seen an agent that waits for nothing, or it has done nothing since it started or you resumed it. The sidebar leaves it without a word |
 
 A task that waits for nothing may say, dim, what changed since you last
 looked at it, `3 files changed since you looked`, or with Magit,
