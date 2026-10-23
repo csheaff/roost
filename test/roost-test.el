@@ -4734,6 +4734,35 @@ of its own, which shows in the selected window of its workspace."
 (defvar roost-test--selected t)
 (defvar roost-test--graphic t)
 
+;; Colour beside a task means it needs you: a working or merged task's
+;; dot is dim, as is a passed check, and the count starts with the rest.
+(ert-deftest roost-colour-means-a-task-needs-you ()
+  (roost-test--isolated
+   (let* ((roost-animations nil)
+          (dot (lambda (task) (get-text-property 0 'face (roost--status-light task 'dashboard))))
+          (running (roost--cache-task "dev" (roost-test--task "1111111111111111" "running")))
+          (asking (roost--cache-task "dev" (roost-test--task "2222222222222222" "permission")))
+          (failed (roost--cache-task "dev" (append '((live . t) (error . "You've hit your usage limit"))
+                                                   (roost-test--task "3333333333333333" "failed"))))
+          (ready (roost--cache-task "dev" (roost-test--task "4444444444444444" "ready"))))
+     (should (eq (funcall dot asking) 'roost-status-permission))
+     (should (eq (funcall dot failed) 'roost-status-failed))
+     (should (eq (funcall dot ready) 'roost-status-ready))
+     ;; Dim, like the shadow of any task that waits for nothing.
+     (should (eq (funcall dot running) 'roost-status-running))
+     (should (eq (face-attribute 'roost-status-running :inherit nil t) 'shadow))
+     (should (eq (roost--status-face "merged") 'roost-status-inactive))
+     (should (eq (roost--status-word-face "merged") 'roost-pr-merged))
+     ;; What can't go on without you, then what failed, then the rest.
+     (should (equal (substring-no-properties (roost--summary (list ready running failed asking)))
+                    "1 permission · 1 error · 1 ready · 1 running"))))
+  (let ((marker (roost--pr-marker (roost-test--pr-task
+                                   '(prStatus . ((state . "OPEN") (review . "APPROVED")
+                                                 (checks . ((passing . 3)))))))))
+    (should (equal (substring-no-properties marker) "#12 ✓ +"))
+    (should (eq (get-text-property 4 'face marker) 'roost-dim))
+    (should (eq (get-text-property 6 'face marker) 'roost-dim))))
+
 (ert-deftest roost-status-lights-stay-dots-without-canvases ()
   ;; Off, or with no frame that shows canvases, a task's light is its dot.
   (roost-test--isolated

@@ -209,9 +209,9 @@ other machines and the next session.
 compact task list at the left of every frame, through perspective and tab
 switches and `C-x 1`; add `(roost-sidebar-mode 1)` to your configuration to have
 it from the start. Each task there is its name and, at the right, its status:
-in its colour when there is something to look at, such as `permission` or a
-`ready` you haven't seen, dim when the agent is only working or stopped, and
-none once you've seen an agent that waits for nothing; then, dim, what changed
+in its colour when the task waits for you, such as `permission` or a `ready`
+you haven't seen, plain when it is `merged`, dim when the agent is only
+working or stopped, and none once you've seen an agent that waits for nothing; then, dim, what changed
 since you last looked at it, if anything (below), where the whole name fits
 beside it. A click opens the task,
 quitting any question you left open in the minibuffer, which would hold it back,
@@ -289,7 +289,9 @@ table's second column says when a task waits for you: those are the tasks
 `n` visits, the mode line counts and a notification announces. In the
 sidebar, their word is in its colour, and an agent you've seen that waits
 for nothing has none; the dashboard shows every task's word, and counts
-them by those words at its top.
+them by those words at its top, what can't go on without you first. In
+the dashboard and the task panel, the dot before a task's word is in
+colour only while it waits for you, or its agent failed.
 
 | Word | Waits for you | What it means |
 | --- | --- | --- |
@@ -637,7 +639,11 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
   font; make it inherit `default` for one font throughout. `roost-field` is
   for actions and files you can click, plain until the mouse is over them;
   make it inherit `link` to underline them. `roost-current` is the band
-  across the sidebar's row for the task you are working on.
+  across the sidebar's row for the task you are working on. Colour is kept
+  for what needs you, so line counts (`roost-diff-added`,
+  `roost-diff-removed`), an open or merged pull request and passed checks
+  are plain; make the line counts inherit `success` and `error` to colour
+  them as Magit does.
   `M-x customize-group RET roost` lists the rest.
 - `roost-notify`, `roost-notify-function`: notifications use
   [terminal-notifier](https://github.com/julienXX/terminal-notifier) when it is
