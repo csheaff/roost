@@ -4708,6 +4708,20 @@ elif args[:2] == ["auth", "status"]:
         self.matrix(missing, {"list": True, "dry run": kept, "stop": True, "merge": kept, "squash": kept,
                               "retire": kept, "discard": kept})
 
+    def test_git_states_a_missing_worktree_with_changes_staged(self):
+        def missing():
+            task = self.worked()
+            wt = Path(task["worktree"])
+            # Staged and not committed: Git keeps it in the worktree's
+            # index, beside it, not in its folder.
+            (wt / "staged").write_text("staged\n")
+            self.git("add", "staged", cwd=wt)
+            shutil.rmtree(wt)
+            return task
+        kept = "Git keeps what may be work with it: changes staged in its index. Restore"
+        self.matrix(missing, {"list": True, "dry run": kept, "stop": True, "merge": kept, "squash": kept,
+                              "retire": kept, "discard": kept})
+
     def test_a_lock_is_found_whatever_the_worktrees_path_holds(self):
         odd = self.root / "a tab\tand a\nnewline"
         self.git("worktree", "add", "-q", "-b", "odd", str(odd))

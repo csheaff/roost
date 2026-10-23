@@ -3163,6 +3163,10 @@ def linked_worktrees(repo):
     return places
 
 
+# The tree with nothing in it, which Git knows without storing it.
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
 def kept_of_gone(repo, worktree):
     """The Git directory Git keeps for WORKTREE, one of REPO's whose folder
     is missing, or None."""
@@ -3184,14 +3188,23 @@ def require_nothing_kept(repo, worktree):
     modules = gitdir / "modules"
     if modules.is_dir() and any(modules.iterdir()):
         held.append("the repositories of its submodules")
+    head = ""
     with contextlib.suppress(OSError, UnicodeDecodeError):
         head = (gitdir / "HEAD").read_text().strip()
-        if head and not head.startswith("ref:"):
-            count = git(repo, "rev-list", "--count", head, "--not", "--branches", "--tags", "--remotes", check=False)
-            commits = int(count.stdout) if count.returncode == 0 and count.stdout.strip().isdigit() else None
-            if commits is None or commits:
-                held.append("%s on its detached HEAD that no branch has"
-                            % ("commits" if commits is None else "%d commit%s" % (commits, "" if commits == 1 else "s")))
+    if head and not head.startswith("ref:"):
+        count = git(repo, "rev-list", "--count", head, "--not", "--branches", "--tags", "--remotes", check=False)
+        commits = int(count.stdout) if count.returncode == 0 and count.stdout.strip().isdigit() else None
+        if commits is None or commits:
+            held.append("%s on its detached HEAD that no branch has"
+                        % ("commits" if commits is None else "%d commit%s" % (commits, "" if commits == 1 else "s")))
+    # What was staged there, kept in its index, and in no commit.
+    if (gitdir / "index").is_file():
+        commit = git(repo, "rev-parse", "--verify", "-q", (head[len("ref:"):].strip() if head.startswith("ref:")
+                                                          else head) + "^{commit}", check=False).stdout.strip()
+        staged = git(repo, "--no-optional-locks", "diff-index", "--cached", "--quiet", commit or EMPTY_TREE,
+                     check=False, env=dict(os.environ, GIT_INDEX_FILE=str(gitdir / "index")))
+        if staged.returncode:
+            held.append("changes staged in its index")
     if held:
         raise RoostError("The task's worktree folder is missing, and Git keeps what may be work with it: %s. Restore "
                          "the folder, or delete it all with git worktree remove --force --force %s, then try again"
