@@ -3200,8 +3200,11 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
                                       "with m or P, bring its commits onto " own " and check that out there.\n")
                               (buffer-string))))
      ;; Merged work there is no task to retire: its host won't retire it.
+     ;; Commits on the branch since are still to merge, once brought over.
      (let ((merged '((landed . t) (seen . "2026-10-03T20:00:00+00:00"))))
        (should-not (roost--merged-p (apply on "feat" merged)))
+       (should (string-search "to merge its work with m or P"
+                              (substring-no-properties (roost--next-step (apply on "feat" merged)))))
        (should (roost--merged-p (apply on nil merged))))
      ;; A quiet poll keeps it, as it keeps Git statistics; one that
      ;; measured the worktree back on the task's branch forgets it.

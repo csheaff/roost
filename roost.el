@@ -7844,7 +7844,9 @@ Unknown Git statistics count as making sense."
       ((or 'roost-send 'roost-stop) (roost--agent-running-p task))
       ('roost-resume (and worktree (not (roost--agent-running-p task))))
       ('roost-pr (and worktree (or (roost--field task 'pr) (not (eql ahead 0)))))
-      ('roost-merge-retire (and (not merged) (not (eql ahead 0)) (not active)
+      ;; Merged, the task's branch may be, but not work on another branch
+      ;; there, which `m' merges once the task's has it.
+      ('roost-merge-retire (and (or (not merged) (roost--other-branch task)) (not (eql ahead 0)) (not active)
                                 (not (roost--agent-work-left task))))
       ;; Retires the task, or discards work merged nowhere.
       ('roost-retire (and (not active) (not (roost--agent-work-left task))))

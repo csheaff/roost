@@ -960,6 +960,15 @@ class Lifecycle(unittest.TestCase):
         self.assertIsNone(told["worktreeBranch"])
         self.assertEqual((told["ahead"], told["conflicts"]), (0, []))
 
+    def test_a_tag_named_as_the_task_branch_is_no_other_branch(self):
+        # Beside a tag of its name, Git shortens the branch to heads/…, which
+        # read as the worktree on another branch: retiring was refused.
+        task = self.create()
+        self.git("tag", task["branch"])
+        self.assertIsNone(self.request("list", full=True)["result"][0]["worktreeBranch"])
+        reply = self.request("retire", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+
     def test_names_in_any_script_get_ascii_branches(self):
         for name, slug in (("修复解析器", "task"), ("исправить ошибку", "task"), ("café menu", "cafe-menu"),
                            ("Ünïcödé--naming_test", "Unicode-naming_test"), ("fix #12: parser!", "fix-12-parser"),

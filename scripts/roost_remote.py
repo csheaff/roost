@@ -459,11 +459,14 @@ def check_worktree(store, task, branch=True):
     if worktree == Path(task["repo"]).resolve():
         raise RoostError("Refusing to remove the primary repository")
     if branch and worktree.exists():
-        current = git(worktree, "symbolic-ref", "--short", "-q", "HEAD", check=False).stdout.strip()
-        if current != task["branch"]:
+        # In full, as in `other_branch`: a tag of the branch's name would
+        # make the short one heads/….
+        current = git(worktree, "symbolic-ref", "-q", "HEAD", check=False).stdout.strip()
+        if current != "refs/heads/" + task["branch"]:
             raise RoostError("The task's worktree is on %s, not the task's branch %s; check out %s there, "
                              "bringing over any commits you want, then try again"
-                             % (current or "a detached HEAD", task["branch"], task["branch"]))
+                             % (current.removeprefix("refs/heads/") or "a detached HEAD", task["branch"],
+                                task["branch"]))
     return worktree
 
 
@@ -1881,8 +1884,8 @@ def unpushed(task, head, tip):
     a commit made on GitHub is not fetched, or when the task's worktree is
     on another branch, whose commits the count would miss. Zero when the
     pull request has them all, commits made on GitHub too."""
-    current = read_git(task["worktree"], "symbolic-ref", "--short", "-q", "HEAD")
-    if current.returncode or current.stdout.strip() != task["branch"]:
+    current = read_git(task["worktree"], "symbolic-ref", "-q", "HEAD")
+    if current.returncode or current.stdout.strip() != "refs/heads/" + task["branch"]:
         return None
     if head == tip:
         return 0
