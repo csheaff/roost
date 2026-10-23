@@ -4486,6 +4486,18 @@ elif args[:2] == ["auth", "status"]:
             with self.subTest(detach=detach):
                 self.matrix(lambda: moved_off(detach), {"dry run": back, "merge": back, "retire": back,
                                                         "discard": back})
+
+        # Moved to a drive that was then unmounted.
+        def moved_away():
+            task = self.worked()
+            drive = self.root / ("drive " + task["id"])
+            drive.mkdir()
+            self.git("worktree", "move", task["worktree"], str(drive / "task"))
+            drive.rename(self.root / ("unmounted " + task["id"]))
+            return task
+        away = "which is missing; reconnect it and move it back with git worktree move"
+        self.matrix(moved_away, {"list": True, "dry run": away, "stop": True, "resume": away, "update": away,
+                                 "merge": away, "squash": away, "retire": away, "discard": away})
         # A branch you checked out in the primary checkout is no worktree moved.
         task = self.worked()
         self.request("stop", id=task["id"])
@@ -4708,6 +4720,24 @@ elif args[:2] == ["auth", "status"]:
         self.matrix(missing, {"list": True, "dry run": kept, "stop": True, "merge": kept, "squash": kept,
                               "retire": kept, "discard": kept})
 
+    def test_git_states_a_missing_worktree_in_the_middle_of_a_rebase(self):
+        def missing():
+            task = self.worked()
+            wt = Path(task["worktree"])
+            # A rebase stopped at once, which set aside the change not
+            # committed: the index is clean, and HEAD on the task's branch.
+            (wt / "hello").write_text("not committed\n")
+            roost.git(wt, "-c", "sequence.editor=sh -c 'echo break > \"$1\"' -", "rebase", "-q", "-i",
+                      "--autostash", "HEAD", check=False)
+            self.assertTrue(Path(self.git("rev-parse", "--path-format=absolute", "--git-path",
+                                          "rebase-merge/autostash", cwd=wt)).exists())
+            self.assertEqual(self.git("status", "--porcelain", "--untracked-files=no", cwd=wt), "")
+            shutil.rmtree(wt)
+            return task
+        kept = "Git keeps what may be work with it: a rebase under way, and what it may have set aside. Restore"
+        self.matrix(missing, {"list": True, "dry run": kept, "stop": True, "merge": kept, "squash": kept,
+                              "retire": kept, "discard": kept})
+
     def test_git_states_a_missing_worktree_with_changes_staged(self):
         def missing():
             task = self.worked()
@@ -4723,10 +4753,22 @@ elif args[:2] == ["auth", "status"]:
                               "retire": kept, "discard": kept})
 
     def test_a_lock_is_found_whatever_the_worktrees_path_holds(self):
-        odd = self.root / "a tab\tand a\nnewline"
+        odd = self.root / "a tab\tand a\nnewline and a\rreturn"
         self.git("worktree", "add", "-q", "-b", "odd", str(odd))
         self.git("worktree", "lock", "--reason", "on a drive", str(odd))
         self.assertEqual(roost.worktree_lock(str(self.repo), odd.resolve()), "on a drive")
+
+    def test_an_operation_is_found_whatever_the_git_directorys_path_holds(self):
+        odd = self.root / "a line\nbreak"
+        odd.mkdir()
+        roost.git(odd, "init", "-q", "-b", "main")
+        roost.git(odd, "-c", "user.name=T", "-c", "user.email=t@example.invalid", "commit", "-q",
+                  "--allow-empty", "-m", "one")
+        worktree = self.root / "linked"
+        roost.git(odd, "worktree", "add", "-q", "-b", "linked", str(worktree))
+        self.assertIsNone(roost.operation_under_way(worktree))
+        roost.git(worktree, "bisect", "start")
+        self.assertIn("git bisect is under way", roost.operation_under_way(worktree))
 
     def test_a_rebase_is_found_in_a_worktree_whose_path_is_not_utf8(self):
         # Git keeps a linked worktree's path as the file system names it.

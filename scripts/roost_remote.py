@@ -460,9 +460,13 @@ def check_worktree(store, task, branch=True):
         raise RoostError("Refusing to remove the primary repository")
     if not worktree.exists():
         moved = moved_worktree(task, worktree)
-        if moved:
+        if moved and os.path.lexists(moved):
             raise RoostError("The task's worktree was moved; move it back with git worktree move %s %s, "
                              "then try again" % (shlex.quote(moved), shlex.quote(str(worktree))))
+        if moved:
+            raise RoostError("Git keeps the task's worktree at %s, which is missing; reconnect it and move it back "
+                             "with git worktree move %s %s, or have Git forget it with git worktree prune, then "
+                             "try again" % (moved, shlex.quote(moved), shlex.quote(str(worktree))))
     elif branch:
         under_way = operation_under_way(worktree)
         if under_way:
@@ -484,19 +488,20 @@ def check_worktree(store, task, branch=True):
 
 
 def moved_worktree(task, worktree):
-    """Where Git has TASK's branch checked out, if not at WORKTREE, its
-    worktree, which is gone, as after `git worktree move`; or None."""
+    """Where Git keeps TASK's worktree, if not at WORKTREE, where it was,
+    which is gone, as after `git worktree move`, or keeps its branch
+    checked out, whether or not that folder is there; or None."""
     if not Path(task["repo"]).is_dir():
         return None
     with contextlib.suppress(RoostError):
         # Git names what it keeps of a worktree after its folder, and keeps
         # that name when it moves, on whatever branch it is then.
         for gitdir, path in linked_worktrees(task["repo"]):
-            if gitdir.name == worktree.name and Path(path).resolve() != worktree and Path(path).is_dir():
+            if gitdir.name == worktree.name and Path(path).resolve() != worktree:
                 return path
         for path, ref in worktree_branches(task["repo"]):
             # The primary checkout is no task's worktree moved, and can't move.
-            if (ref == "refs/heads/" + task["branch"] and Path(path).is_dir()
+            if (ref == "refs/heads/" + task["branch"]
                     and Path(path).resolve() not in (worktree, Path(task["repo"]).resolve())):
                 return path
     return None
@@ -508,9 +513,12 @@ def operation_under_way(worktree):
     which say so themselves."""
     names = ("rebase-merge", "rebase-apply", "rebase-apply/applying", "CHERRY_PICK_HEAD", "REVERT_HEAD",
              "sequencer/todo", "BISECT_LOG")
-    paths = read_git(worktree, "rev-parse", *(arg for name in names for arg in ("--git-path", name)))
-    found = {name: os.path.join(worktree, path) for name, path in zip(names, paths.stdout.splitlines())
-             if os.path.lexists(os.path.join(worktree, path))}
+    # Each is in the worktree's own Git directory, whose path may hold any byte.
+    try:
+        gitdir = Path(git_fields(worktree, "rev-parse", "--absolute-git-dir")[0].removesuffix("\n"))
+    except (RoostError, IndexError):
+        return None
+    found = {name: gitdir / name for name in names if os.path.lexists(gitdir / name)}
     command = None
     if "rebase-apply/applying" in found:
         command = "am"
@@ -3138,10 +3146,16 @@ def worktree_entries(repo):
     """(path, branch ref or None, why it is locked or None) for each worktree
     of REPO; a lock with no reason given has an empty one."""
     entries = []
-    whole = lists_worktrees_whole()
-    listed = git(repo, "worktree", "list", "--porcelain", *(["-z"] if whole else [])).stdout
-    for block in listed.split("\0\0" if whole else "\n\n"):
-        lines = block.strip("\0").split("\0") if whole else block.splitlines()
+    if lists_worktrees_whole():
+        # As bytes, for paths that hold a carriage return or aren't UTF-8.
+        blocks = []
+        for field in git_fields(repo, "worktree", "list", "--porcelain", "-z"):
+            if field.startswith("worktree ") or not blocks:
+                blocks.append([])
+            blocks[-1].append(field)
+    else:
+        blocks = [block.splitlines() for block in git(repo, "worktree", "list", "--porcelain").stdout.split("\n\n")]
+    for lines in blocks:
         if lines and lines[0].startswith("worktree "):
             ref = next((line[len("branch "):] for line in lines if line.startswith("branch ")), None)
             lock = next((line[len("locked"):].strip() for line in lines
@@ -3197,6 +3211,11 @@ def require_nothing_kept(repo, worktree):
         if commits is None or commits:
             held.append("%s on its detached HEAD that no branch has"
                         % ("commits" if commits is None else "%d commit%s" % (commits, "" if commits == 1 else "s")))
+    # A rebase under way, and what it set aside, as with --autostash.
+    if any((gitdir / state).exists() for state in ("rebase-merge", "rebase-apply")):
+        held.append("a rebase under way, and what it may have set aside")
+    if (gitdir / "MERGE_AUTOSTASH").exists():
+        held.append("changes a merge set aside")
     # What was staged there, kept in its index, and in no commit.
     if (gitdir / "index").is_file():
         commit = git(repo, "rev-parse", "--verify", "-q", (head[len("ref:"):].strip() if head.startswith("ref:")

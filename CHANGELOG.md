@@ -35,8 +35,8 @@ What each release changes, and what to do when upgrading. Newest first.
   goes for a locked worktree whose folder is missing, as on a drive not
   mounted; one not locked whose folder you deleted now merges, retires or
   is discarded through to the end, unless what Git keeps of it may hold
-  work, as its submodules' repositories, commits on a detached HEAD or
-  staged changes, and Roost says so.
+  work, as its submodules' repositories, commits on a detached HEAD,
+  staged changes or a rebase under way, and Roost says so.
 - Roost no longer merges into a branch while a rebase of it is under way
   in any of the repository's worktrees. Before, the merge moved the
   branch, and Git then couldn't finish the rebase.
