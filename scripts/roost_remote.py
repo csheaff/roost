@@ -3059,9 +3059,9 @@ def squash_message(task, old, tip):
 
 
 def untracked_here(repo):
-    """The files of yours in REPO that Git neither tracks nor ignores, and
-    each directory that holds only such files, ending in "/"."""
-    return set(git_fields(repo, "ls-files", "--others", "--exclude-standard", "--directory", "-z"))
+    """The files of yours in REPO that Git neither tracks nor ignores, each
+    by name: a file the task adds beside them isn't yours."""
+    return set(git_fields(repo, "ls-files", "--others", "--exclude-standard", "-z"))
 
 
 def merge_paths(repo, tip):
@@ -3088,13 +3088,10 @@ def undo_merge(repo, merged, untracked):
     the merge brought in is to the task's work, which the task still has:
     that goes back to the merge's version first, as `git reset --merge`
     refuses it."""
-    def yours(path):
-        parts = path.split("/")
-        return path in untracked or any("/".join(parts[:end]) + "/" in untracked for end in range(1, len(parts)))
     fields = git_fields(repo, "diff-index", "--cached", "-z", "HEAD")
     # ":mode mode sha sha status", then the path; HEAD's side comes first.
     staged = {path: meta.split() for meta, path in zip(fields[::2], fields[1::2])}
-    hooks = {path for path in staged if yours(path) or merged is not None and path not in merged}
+    hooks = {path for path in staged if path in untracked or merged is not None and path not in merged}
     if hooks:
         git_fields(repo, "update-index", "-z", "--index-info", input=b"".join(
             b"%s %s\t%s\0" % (staged[path][0][1:].encode(), staged[path][2].encode(), os.fsencode(path))

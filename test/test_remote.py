@@ -984,6 +984,27 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(reply["ok"], reply)
         self.assertEqual((self.repo / "greeting").read_text(), "changed\n")
 
+    def test_a_file_the_task_adds_beside_yours_goes_when_a_hook_refuses(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        (wt / "drafts").mkdir()
+        (wt / "drafts" / "two").write_text("the task's\n")
+        self.git("add", ".", cwd=wt)
+        self.git("commit", "-qm", "add", cwd=wt)
+        (self.repo / "drafts").mkdir()
+        (self.repo / "drafts" / "one").write_text("mine\n")
+        before = self.git("rev-parse", "main")
+        for style, name in (("squash", "pre-commit"), ("merge", "pre-merge-commit")):
+            with self.subTest(style):
+                hook = self.hook(name, "exit 1")
+                error = self.request("merge", id=task["id"], style=style)["error"]
+                self.assertEqual(error, "A commit hook in %s refused the merge, which is undone"
+                                 % os.path.realpath(self.repo))
+                self.assertEqual(self.git("status", "--porcelain", "--untracked-files=all"), "?? drafts/one")
+                self.assertEqual((self.repo / "drafts" / "one").read_text(), "mine\n")
+                self.assert_merge_refused(task, before)
+                hook.unlink()
+
     def test_files_of_yours_a_post_merge_hook_stages_stay(self):
         task = self.create()
         wt = Path(task["worktree"])
