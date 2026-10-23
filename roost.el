@@ -957,6 +957,13 @@ must a reply with a newer look lose it for an older agent event."
       (roost--name-panels))
     ;; Record the status before notifying, which may cache this task again.
     (puthash key status roost--statuses)
+    ;; An agent that has just started waits for a prompt, as one you
+    ;; resumed does: no news, as below, so it doesn't wait on you either,
+    ;; though you resumed it with others and never opened it.  One that
+    ;; finished a turn meanwhile does.
+    (when (and (equal previous "starting") (equal status "ready") (not new-stop)
+               (gethash key roost--tasks))
+      (roost--mark-seen task))
     (let ((turn (roost--news-turn task))
           (had (gethash key roost--pr-verdicts 'unknown))
           ;; Not when you are looking at it already.

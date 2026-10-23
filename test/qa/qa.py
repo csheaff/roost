@@ -2727,6 +2727,8 @@ def crashed(qa, repo):
         ("the echo area says so", lambda s: (s["echo"] or "").startswith(
             "Resumed %d agents on %s" % (others + 1, qa.host_label))),
         ("its terminal", lambda s: (s.get("task") or {}).get("name") == first and selected_terminal(s)),
+        # Back at its prompt, as before it crashed: nothing new to see.
+        ("one you didn't open doesn't wait on you", lambda s: (qa.task(s, second) or {}).get("waiting") is False),
         ("both agents run again", lambda s: all(
             any(session.endswith("-" + qa.task(s, name)["key"].split("/")[1][:6]) for session in sessions)
             for name in (first, second)))])

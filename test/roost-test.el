@@ -1110,6 +1110,29 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
       (roost-test--a-minute-on)
       (should (equal notices '("fix auth — failed" "fix auth — permission"))))))))
 
+(ert-deftest roost-an-agent-just-started-does-not-wait-on-you ()
+  ;; As after resuming the agents that crashed together: those you didn't
+  ;; open wait at their prompt, as before, and needn't be visited.
+  (roost-test--isolated
+   (let (recorded)
+     (cl-letf (((symbol-function 'roost--record-seen) (lambda (task _updated) (push (roost--field task 'id) recorded))))
+       (roost--cache-task "dev" (roost-test--task nil "crashed"))
+       (should (roost--waiting-p (gethash '("dev" "0123456789abcdef") roost--tasks)))
+       (roost--cache-task "dev" (roost-test--task nil "starting"))
+       (roost--cache-task "dev" (append '((updatedAt . "2026-10-03T20:00:05+00:00") (lastEvent . "SessionStart"))
+                                        (roost-test--task nil "ready")))
+       (should-not (roost--waiting-p (gethash '("dev" "0123456789abcdef") roost--tasks)))
+       (should (equal recorded '("0123456789abcdef")))
+       ;; One that ran its first turn between two polls has news.
+       (roost--cache-task "dev" (roost-test--task "1123456789abcdef" "starting"))
+       (roost--cache-task "dev" (append '((updatedAt . "2026-10-03T20:00:09+00:00") (lastEvent . "Stop"))
+                                        (roost-test--task "1123456789abcdef" "ready")))
+       (should (roost--waiting-p (gethash '("dev" "1123456789abcdef") roost--tasks)))
+       ;; And so does the next turn of one that waited at its prompt.
+       (roost--cache-task "dev" (append '((updatedAt . "2026-10-03T20:01:00+00:00") (lastEvent . "Stop"))
+                                        (roost-test--task nil "ready")))
+       (should (roost--waiting-p (gethash '("dev" "0123456789abcdef") roost--tasks)))))))
+
 (ert-deftest roost-does-not-notify-about-the-agent-you-are-watching ()
   (roost-test--isolated
    (roost-test--without-inspect

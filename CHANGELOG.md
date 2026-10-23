@@ -4,6 +4,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- An agent that has just started or been resumed, and waits at its
+  prompt, no longer counts as waiting on you. After you resume the agents
+  that crashed together, those you didn't open no longer each say `ready`
+  and count as waiting, in the sidebar and for `n`. One that finishes a
+  turn before Roost sees it start still waits.
 - `v` records that you've looked at a task, as `r` does, without opening
   Magit or a diff: for a task you judged by its panel, by its checks,
   threads and its agent's reply, or whose diff you read in its agent's
