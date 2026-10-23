@@ -150,6 +150,13 @@ KIND is `committed', `uncommitted', `untracked' or `binary'."
      (dirty) (diff . ""))
     ("from an issue" (status . "running") (live . t)
      (issue (number . 70) (url . "https://github.com/o/r/issues/70") (title . "Off-by-one scroll")))
+    ;; Its worktree on a branch made there, whose work its host won't merge.
+    ("on another branch" (status . "ready") (live . t) (seen . "2026-10-03T20:00:00+00:00")
+     (integrationBranch . "main") (worktreeBranch . "feat") (ahead . 1) (behind . 2) (conflicts)
+     (diff . "1 file +12 −3") (files . ,(roost-sweep--files '("report.py" . committed))))
+    ("detached, stopped" (status . "stopped") (live) (integrationBranch . "main") (worktreeBranch . "HEAD")
+     (ahead . 1) (dirty . t) (diff . "2 files +16 −4 · uncommitted")
+     (files . ,(roost-sweep--files '("report.py" . committed) '("ledger.py" . uncommitted))))
     ("agent's own worktrees" (status . "ready") (live . t) (ahead . 0)
      (agentWork ((path . "/repo/.claude/worktrees/probe") (branch . "probe") (ahead . 1))
                 ((path . "/repo/.claude/worktrees/spare") (ahead . 0))))

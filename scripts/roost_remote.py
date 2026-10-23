@@ -1896,6 +1896,22 @@ def unpushed(task, head, tip):
     return int(count.stdout) if count.returncode == 0 and count.stdout.strip().isdigit() else None
 
 
+def other_branch(task, worktree):
+    """The branch TASK's WORKTREE is on when it isn't the task's, as after
+    you or its agent made one there: "HEAD" for a detached HEAD, as Git
+    names it, which no branch can be called. None on the task's branch,
+    or when Git can't say. Its Git statistics are then that branch's,
+    while merging, pushing and retiring refuse (`check_worktree`)."""
+    # In full: a tag of the branch's name would make the short one heads/….
+    current = read_git(worktree, "symbolic-ref", "-q", "HEAD")
+    if current.returncode == 1:
+        return "HEAD"
+    ref = current.stdout.strip()
+    if current.returncode or ref == "refs/heads/" + task["branch"]:
+        return None
+    return ref.removeprefix("refs/heads/") or None
+
+
 def branch_tip(task):
     """The commit at the tip of the task's branch, or None when it is gone."""
     result = read_git(task["repo"], "rev-parse", "--verify", "--quiet",
@@ -2448,6 +2464,8 @@ def add_git_stats(tasks):
             task["unpushed"] = unpushed(task, pr.get("head"), tip) if tip else None
         worktree = Path(task["worktree"])
         task["worktreeMissing"] = not worktree.is_dir()
+        # Null on the task's branch, so Emacs forgets one it was on.
+        task["worktreeBranch"] = None if task["worktreeMissing"] else other_branch(task, worktree)
         if task["worktreeMissing"]:
             continue
         base = fork_point(worktree, task)
@@ -2472,8 +2490,9 @@ def add_git_stats(tasks):
             if behind.returncode == 0 and ahead.returncode == 0:
                 task["behind"], task["ahead"] = int(behind.stdout), int(ahead.stdout)
         # GitHub says whether an open pull request conflicts, and work
-        # merged already has nothing left to conflict.
-        task["conflicts"] = (None if not integration or pr.get("state") == "OPEN"
+        # merged already has nothing left to conflict. With the worktree
+        # on another branch, `m` refuses, so there is nothing to tell.
+        task["conflicts"] = (None if not integration or pr.get("state") == "OPEN" or task["worktreeBranch"]
                              else [] if task["landed"] else merge_conflicts(task, tip, integration))
 
 
