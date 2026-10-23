@@ -2415,7 +2415,9 @@ class Lifecycle(unittest.TestCase):
     def test_history_notes_each_change_of_status_seen_and_turn(self):
         started = time.time()
         task = self.create()
-        record = self.wait(task, "ready")
+        # At its prompt since it started, it counts as seen; after a turn, not.
+        self.assertTrue(self.request("send", id=task["id"], text="hello")["ok"])
+        record = self.wait(task, "ready", "Stop")
         self.assertTrue(self.request("seen", id=task["id"], updatedAt=record["updatedAt"])["ok"])
         for value in ("to merge", "to merge", None):
             reply = self.request("turn", id=task["id"], turn=value)
@@ -2429,7 +2431,8 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(reply["ok"], reply)
         changes = [change for change in reply["result"]["changes"] if change["id"] == task["id"]]
         self.assertEqual([(change["status"], change.get("seen"), change.get("turn")) for change in changes],
-                         [("starting", False, None), ("ready", False, None), ("ready", True, None),
+                         [("starting", False, None), ("ready", True, None), ("running", False, None),
+                          ("ready", False, None), ("ready", True, None),
                           ("ready", True, "to merge"), ("ready", True, None), ("stopped", True, None),
                           (None, None, None)])
         # Each says what it was, so a day's first change tells how the day began.
@@ -3650,13 +3653,20 @@ elif args[:2] == ["auth", "status"]:
 
     def test_stopping_an_agent_you_had_seen_keeps_it_seen(self):
         store = roost.Store(str(self.state))
-        seen, unseen = self.create(name="seen"), self.create(name="unseen")
-        self.assertTrue(self.request("seen", id=seen["id"], updatedAt=store.read(seen["id"])["updatedAt"])["ok"])
+        seen, unseen, started = self.create(name="seen"), self.create(name="unseen"), self.create(name="started")
         for task in (seen, unseen):
+            # A turn since it started, so it is news until you see it.
+            self.assertTrue(self.request("send", id=task["id"], text="hello")["ok"])
+            self.wait(task, "ready", "Stop")
+        self.assertTrue(self.request("seen", id=seen["id"], updatedAt=store.read(seen["id"])["updatedAt"])["ok"])
+        for task in (seen, unseen, started):
             self.assertTrue(self.request("stop", id=task["id"])["ok"])
         stopped = store.read(seen["id"])
         self.assertEqual(stopped["seen"], stopped["updatedAt"])
         self.assertNotEqual(store.read(unseen["id"]).get("seen"), store.read(unseen["id"])["updatedAt"])
+        # One at its prompt since it started had nothing new for you.
+        stopped = store.read(started["id"])
+        self.assertEqual(stopped["seen"], stopped["updatedAt"])
 
     def test_asking_github_keeps_within_its_deadline(self):
         # A stalled GitHub must not hold up the reply past Emacs's wait for it.

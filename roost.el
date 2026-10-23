@@ -986,6 +986,7 @@ must a reply with a newer look lose it for an older agent event."
                  ;; is no news; one that asks or fails at once is, and polls
                  ;; while Emacs is in the background may see only that.
                  (or (not (equal previous "starting")) (not (equal status "ready")) new-stop)
+                 (not (roost--just-started-p task))
                  (member status '("ready" "permission" "failed" "crashed" "exited"))
                  (funcall unwatched))
         (roost--notify-attention host task status)))
@@ -1358,6 +1359,14 @@ recently failed."
 (defconst roost--pr-turns '("ci failed" "comments" "to merge")
   "Statuses of a task whose pull request waits on you; see `roost--pr-turn'.")
 
+(defun roost--just-started-p (task)
+  "Whether TASK's agent has done nothing since it started, as when resumed.
+It waits at its prompt, as it did before it stopped or crashed, and so
+waits for nothing from you that you don't know: you started it.  Its
+host's history counts it so too (START_EVENTS)."
+  (and (equal (roost--field task 'status) "ready")
+       (member (roost--field task 'lastEvent) '("SessionStart" "session_start"))))
+
 (defconst roost--status-order
   '("permission" "prompt" "ready" "interrupted" "error" "failed" "crashed" "exited"
     "ci failed" "comments" "conflicts" "to merge" "running" "background" "merged" "idle"
@@ -1366,10 +1375,13 @@ recently failed."
 
 (defun roost--seen-p (task)
   "Whether you have seen TASK's agent since its last event.
-Here or in another Emacs: the task's host records it too."
-  (when-let* ((updated (roost--field task 'updatedAt)))
-    (or (equal (gethash (roost--key task) roost--seen) updated)
-        (equal (roost--field task 'seen) updated))))
+Here or in another Emacs: the task's host records it too.  An agent that
+has done nothing since it started counts as seen, as `roost--just-started-p'
+says: it waits at its prompt, as one you resumed does."
+  (or (roost--just-started-p task)
+      (when-let* ((updated (roost--field task 'updatedAt)))
+        (or (equal (gethash (roost--key task) roost--seen) updated)
+            (equal (roost--field task 'seen) updated)))))
 
 (defun roost--attention-status (task)
   "TASK's status for attention.

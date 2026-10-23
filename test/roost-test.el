@@ -1110,6 +1110,53 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
       (roost-test--a-minute-on)
       (should (equal notices '("fix auth — failed" "fix auth — permission"))))))))
 
+(ert-deftest roost-an-agent-just-started-does-not-wait-on-you ()
+  ;; As after resuming the agents that crashed together: those you didn't
+  ;; open wait at their prompt, as before, and needn't be visited, however
+  ;; the polls and the resume's reply fall.
+  (roost-test--isolated
+   (roost-test--without-inspect
+    (roost-test--held-notices
+     (let* ((roost-notify t) notices
+            (roost-notify-function (lambda (title _body) (push title notices)))
+            (task (lambda (id) (gethash (list "dev" (or id "0123456789abcdef")) roost--tasks))))
+       (roost--cache-task "dev" (roost-test--task nil "crashed"))
+       (should (roost--waiting-p (funcall task nil)))
+       ;; A poll sees it started before the resume's reply comes.
+       (roost--cache-task "dev" (append '((updatedAt . "2026-10-03T20:00:05+00:00") (lastEvent . "SessionStart"))
+                                        (roost-test--task nil "ready")))
+       (should-not (roost--waiting-p (funcall task nil)))
+       (should (equal (roost--attention-status (funcall task nil)) "idle"))
+       ;; Pi's start, through the starting a reply says.
+       (roost--cache-task "dev" (roost-test--task "1123456789abcdef" "starting"))
+       (roost--cache-task "dev" (append '((updatedAt . "2026-10-03T20:00:06+00:00") (lastEvent . "session_start"))
+                                        (roost-test--task "1123456789abcdef" "ready")))
+       (should-not (roost--waiting-p (funcall task "1123456789abcdef")))
+       (roost-test--a-minute-on)
+       (should-not notices)
+       ;; One that ran a turn, or was stopped in it, has news.
+       (roost--cache-task "dev" (append '((updatedAt . "2026-10-03T20:01:00+00:00") (lastEvent . "Stop"))
+                                        (roost-test--task nil "ready")))
+       (should (roost--waiting-p (funcall task nil)))
+       (roost--cache-task "dev" (append '((updatedAt . "2026-10-03T20:01:05+00:00") (lastEvent . "Interrupt"))
+                                        (roost-test--task "1123456789abcdef" "ready")))
+       (should (roost--waiting-p (funcall task "1123456789abcdef"))))))))
+
+(ert-deftest roost-a-resumed-agent-still-shows-the-work-that-waits ()
+  ;; Resumed with others and not opened: its agent has nothing new, so its
+  ;; pull request's failed check waits on you, as it did before.
+  (roost-test--isolated
+   (let ((task (roost--cache-task
+                "dev" (append '((updatedAt . "2026-10-03T21:00:00+00:00") (lastEvent . "SessionStart"))
+                              (roost-test--turn-task '(checks . ((passing . 2) (failing . 1) (pending . 0)))
+                                                     `(failedAt . ,(roost-test--ago 600))
+                                                     ;; As GitHub said once it started.
+                                                     '(checkedAt . "2026-10-03T21:01:00+00:00"))))))
+     (should (equal (roost--display-status task) "ci failed"))
+     (should (roost--waiting-p task))
+     ;; And one whose work is merged can be retired, as `merged' says.
+     (should (roost--seen-p task)))))
+
 (ert-deftest roost-does-not-notify-about-the-agent-you-are-watching ()
   (roost-test--isolated
    (roost-test--without-inspect
