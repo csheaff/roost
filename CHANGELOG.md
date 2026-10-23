@@ -4,6 +4,13 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- The task panel shows your latest prompt for Pi and OpenCode tasks too,
+  as it does for Claude Code and Codex. A message you send while Pi works
+  shows at once, and one OpenCode queues shows once it takes it up. One a
+  Pi extension sends by itself isn't yours, so it doesn't show.
+  Upgrading: stop and resume running Pi and OpenCode tasks (`K`, then `s`)
+  for them to load the new extension or plugin; until then their panels
+  show no latest prompt.
 - `M-x roost-dashboard` opens the dashboard, as `roost-status` did, and
   `S` in the menu and sidebar runs it. `roost-status` still works, as an
   obsolete alias, until 1.1. Upgrading: in your configuration, bind or
