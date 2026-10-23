@@ -4512,6 +4512,24 @@ elif args[:2] == ["auth", "status"]:
                                      "squash": there, "retire": there, "discard": there})
         self.git("switch", "-q", "main")
 
+    def test_git_states_worktrees_git_keeps_relative_paths_to(self):
+        if (roost.version_of(self.git("--version")) or (0, 0)) < (2, 48):
+            self.skipTest("worktree.useRelativePaths needs Git 2.48")
+        self.git("config", "worktree.useRelativePaths", "true")
+
+        def moved():
+            task = self.worked()
+            self.git("worktree", "move", task["worktree"], str(self.root / ("moved " + task["id"])))
+            return task
+
+        def missing():
+            task = self.worked()
+            shutil.rmtree(task["worktree"])
+            return task
+        back = "The task's worktree was moved; move it back with git worktree move"
+        self.matrix(moved, {"dry run": back, "merge": back, "discard": back})
+        self.matrix(missing, {"dry run": True, "merge": True, "discard": True})
+
     def test_git_states_a_task_branch_renamed_in_its_worktree(self):
         def renamed():
             task = self.worked()

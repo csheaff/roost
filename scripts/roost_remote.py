@@ -3198,8 +3198,10 @@ def linked_worktrees(repo):
     with contextlib.suppress(OSError):
         for gitdir in sorted((common / "worktrees").iterdir()):
             with contextlib.suppress(OSError):
-                # A path, which needn't be UTF-8.
-                places.append((gitdir, str(Path(os.fsdecode((gitdir / "gitdir").read_bytes().strip())).parent)))
+                # A path, which needn't be UTF-8, and is from GITDIR when
+                # relative, as with worktree.useRelativePaths.
+                back = os.fsdecode((gitdir / "gitdir").read_bytes().strip())
+                places.append((gitdir, os.path.dirname(os.path.normpath(os.path.join(gitdir, back)))))
     return places
 
 
