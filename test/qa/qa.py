@@ -2345,6 +2345,40 @@ def other_branch(qa, repo):
         ("main doesn't", lambda s: "For the release" not in qa.git(repo, "log", "--format=%s", "-3", "main"))])
 
 
+@journey("A worktree switched to another branch")
+def switched_branch(qa, repo):
+    """A task whose agent made branches in its worktree and committed there
+    says which branch the work is on, and x offers to discard the task,
+    keeping that branch, rather than to merge it with m, which refuses."""
+    # Its own names: a journey taken again in the same repository.
+    feat = "feat-" + uuid.uuid4().hex[:4]
+    name = new_task(qa, "ask sh -c \"git switch -q -c integ-%s && git switch -q -c %s"
+                        " && printf 'x\\n' > FEAT.md && git add FEAT.md && git commit -qm 'On feat'\"" % (feat, feat))
+    answer_yes(qa, name)
+    qa.wait("the branch", lambda s: "The worktree is on " + feat in panel_text(qa, s))
+    qa.step("On another branch", expect=[
+        ("the panel says how to finish it",
+         lambda s: ("Its worktree is on %s, not the task's branch: x discards the task, keeping %s; to merge its work"
+                    " with m or P" % (feat, feat)) in panel_text(qa, s)),
+        ("its changes are that branch's", lambda s: re.search(r"Committed\n\s*FEAT\.md", panel_text(qa, s))),
+        ("its row doesn't say merged", lambda s: not sidebar_row(qa, s, name).endswith("merged"))])
+    qa.keys("C-c r x")
+    qa.wait("the question", lambda s: s["prompt"])
+    qa.step("Retiring offers to discard it", expect=[
+        ("it names the branch, and that discarding keeps it",
+         lambda s: re.search(r"worktree is on %s, not its branch roost/.*Discard the task, keeping %s\?" % (feat, feat),
+                             s["prompt"] or "")),
+        ("not m, which refuses there", lambda s: "merges it" not in (s["prompt"] or ""))])
+    qa.type("y")
+    qa.wait("the next question", lambda s: "nothing in them would be lost" in (s["prompt"] or ""))
+    qa.step("Discarding it loses nothing")
+    qa.type("y")
+    qa.wait("the task to go", lambda s: qa.task(s, name) is None, timeout=30)
+    qa.step("Discarded, its branch kept", expect=[
+        ("the branch has its commit", lambda s: qa.git(repo, "log", "--format=%s", "-1", feat) == "On feat"),
+        ("the task's branch is gone", lambda s: not qa.git(repo, "branch", "--list", "roost/" + name + "-*"))])
+
+
 @journey("A task merged elsewhere")
 def merged(qa, repo):
     """A task whose commits reach its branch some other way says so, and x retires it."""
@@ -2738,7 +2772,7 @@ JOURNEYS = [sweep, answer, next_waiting, fold, resize, merge, review, since_look
             dashboard, stop_resume, retire, teardown, send, attach, update, conflicts, restart, search, workload, question_left,
             walk_away,
             frames, draft_frames, org, drafts, overlap, tabs,
-            forget, rename, fork, other_branch, merged, large, pull_request, exits, include, unreachable, scrollback,
+            forget, rename, fork, other_branch, switched_branch, merged, large, pull_request, exits, include, unreachable, scrollback,
             fleet, dropped,
             # Last: it crashes every agent so far.
             crashed]
