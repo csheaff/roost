@@ -50,8 +50,8 @@ What each release changes, and what to do when upgrading. Newest first.
 - When the project's post-checkout hook fails as a task starts, or a
   checkout filter does, Roost no longer leaves the new worktree or branch
   behind; a worktree the hook left files in stays, as a failed task.
-- When a hook refuses a merge, the message no longer tells you to commit
-  the merge, which Roost has already undone.
+- When a hook refuses the merge `u` makes in a task's worktree, the
+  message no longer tells you to commit it, which Roost has already undone.
 - In a shallow clone without the history a merge needs, Roost says to
   fetch it with `git fetch --unshallow`; starting a task from a worktree
   of a bare repository says that Roost needs a clone that isn't bare.
