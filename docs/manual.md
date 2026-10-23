@@ -417,7 +417,7 @@ counted once you stop and resume it (`K`, then `s`).
 
 ## Commands
 
-`roost-status` opens the dashboard. In it, and in a task's details panel:
+`roost-dashboard` opens the dashboard. In it, and in a task's details panel:
 
 | Key | Command | |
 | --- | --- | --- |
@@ -582,9 +582,7 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
   task's row gets its `±`. Leave one out to mark by the others, as
   `(:lines 400)`; nil marks none.
 - `roost-notes-file`: review notes not yet sent, kept across sessions.
-- `roost-note-box-lines` (4): how many lines of text the box for writing a
-  note shows. Faces `roost-note` and `roost-note-button` color the notes and
-  the `+`.
+  Faces `roost-note` and `roost-note-button` color the notes and the `+`.
 - `roost-magit-status-sections` (t): whether Magit's status of a task's
   worktree names the task and folds in its agent's latest reply.
 - `roost-branch-prefix`: topic branches are `PREFIX<name>-<id>`; default `roost/`.
@@ -654,8 +652,15 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
 
   `roost-draft-task` opens the new task draft with a prompt of your own, for
   commands that start a task from what they show, such as a mail.
-- `roost-watch-interval` (3 s), `roost-watch-unfocused-interval` (15 s),
-  `roost-request-timeout` (60 s), `roost-ssh-share-connections`.
+- `roost-watch-interval` (3 s), `roost-ssh-share-connections`.
+
+A few variables tune Roost without being options, and may change between
+releases; set them with `setq`. `roost-watch-unfocused-interval` (15 s)
+is how often Roost refreshes while no Emacs frame has focus,
+`roost-request-timeout` (60 s) how long a host operation may take,
+`roost-startup-grace` (15 s) how long a task starts before Roost takes it
+to wait at a prompt, and `roost-note-box-lines` (4) how many lines the box
+for writing a note shows.
 
 Each poll is one SSH command per host. Roost shares one connection per host
 across them (OpenSSH `ControlMaster`, with its socket in the state directory and

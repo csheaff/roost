@@ -46,7 +46,7 @@ afterwards.
 
 ## Try the same workflow
 
-1. In a Git project, press `c` in `roost-status` (or run `M-x roost-new-task`),
+1. In a Git project, press `c` in `roost-dashboard` (or run `M-x roost-new-task`),
    or `C-c r c` on an Org heading. Check the project, write a prompt such as:
 
    > Importing the same bank export twice duplicates every entry. Skip entries

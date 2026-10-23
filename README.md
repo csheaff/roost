@@ -46,7 +46,7 @@ and a task's panel its keys work alone.
    terminal. On the same menu, `u` brings a task up to date first, and `P`
    opens a pull request instead.
 
-**Watch them all.** `M-x roost-status` lists every agent on every host: what
+**Watch them all.** `M-x roost-dashboard` lists every agent on every host: what
 it's doing, what it changed, and its latest reply or what it asks. A
 notification says the same when one finishes or asks for something.
 
