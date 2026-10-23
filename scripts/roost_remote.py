@@ -3240,12 +3240,13 @@ def require_nothing_kept(repo, worktree):
             held.append("%s on its detached HEAD that no branch has"
                         % ("commits" if commits is None else "%d commit%s" % (commits, "" if commits == 1 else "s")))
     # A command under way, and what it set aside, as a rebase with
-    # --autostash does, or what it has still to do, as a cherry-pick of
-    # several commits; finding a bisect's place again loses nothing.
+    # --autostash does, what it has still to do, as a cherry-pick of
+    # several commits, or the commits a bisect started from, which may be
+    # on no branch.
     command = operation_in(gitdir)
     if command == "rebase":
         held.append("a rebase under way, and what it may have set aside")
-    elif command and command != "bisect":
+    elif command:
         held.append("git am under way" if command == "am" else "a %s under way" % command)
     if (gitdir / "MERGE_HEAD").exists():
         held.append("a merge under way")

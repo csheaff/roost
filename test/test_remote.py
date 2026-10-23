@@ -4235,7 +4235,9 @@ elif args[:2] == ["auth", "status"]:
             return None
         files = {}
         for folder, folders, names in os.walk(path):
-            folders[:] = [name for name in folders if name != ".git"]
+            # A link to a folder is listed among them, and not followed.
+            names += [name for name in folders if (Path(folder) / name).is_symlink()]
+            folders[:] = [name for name in folders if name != ".git" and not (Path(folder) / name).is_symlink()]
             for name in names:
                 file = Path(folder) / name
                 if name != ".git":
@@ -4804,6 +4806,31 @@ elif args[:2] == ["auth", "status"]:
         kept = "Git keeps what may be work with it: a cherry-pick under way. Restore"
         self.matrix(missing, {"list": True, "dry run": kept, "stop": True, "merge": kept, "squash": kept,
                               "retire": kept, "discard": kept})
+
+    def test_git_states_a_missing_worktree_in_the_middle_of_a_bisect(self):
+        def missing():
+            task = self.worked()
+            wt = Path(task["worktree"])
+            # A bisect from a commit on no branch, now on one the task's
+            # branch has: only the bisect keeps the first.
+            self.git("checkout", "-q", "--detach", cwd=wt)
+            self.commit_in(task, "unpublished-" + task["id"][:6])
+            self.git("bisect", "start", "HEAD", task["baseCommit"], cwd=wt)
+            self.assertTrue(roost.is_ancestor(self.repo, self.git("rev-parse", "HEAD", cwd=wt), task["branch"]))
+            shutil.rmtree(wt)
+            return task
+        kept = "Git keeps what may be work with it: a bisect under way. Restore"
+        self.matrix(missing, {"list": True, "dry run": kept, "stop": True, "merge": kept, "squash": kept,
+                              "retire": kept, "discard": kept})
+
+    def test_the_matrix_sees_a_link_to_a_folder_change(self):
+        for name in ("one", "two"):
+            (self.root / name).mkdir()
+        (self.repo / "build").symlink_to(self.root / "one")
+        before = self.checkout_files(self.repo)
+        (self.repo / "build").unlink()
+        (self.repo / "build").symlink_to(self.root / "two")
+        self.assertNotEqual(self.checkout_files(self.repo), before)
 
     def test_git_states_a_missing_worktree_with_changes_staged(self):
         def missing():
