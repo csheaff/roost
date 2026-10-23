@@ -3104,15 +3104,8 @@ def require_not_rebasing(repo, branch):
     common = git(repo, "rev-parse", "--git-common-dir", check=False).stdout.strip()
     if not common:
         return
-    common = Path(repo) / common
     # The primary checkout's Git directory, then each linked worktree's.
-    places = [(common, repo)]
-    with contextlib.suppress(OSError):
-        for gitdir in sorted((common / "worktrees").iterdir()):
-            with contextlib.suppress(OSError):
-                # A path, which needn't be UTF-8.
-                places.append((gitdir, str(Path(os.fsdecode((gitdir / "gitdir").read_bytes().strip())).parent)))
-    for gitdir, path in places:
+    for gitdir, path in [(Path(repo) / common, repo)] + linked_worktrees(repo):
         for state in ("rebase-merge", "rebase-apply"):
             with contextlib.suppress(OSError, UnicodeDecodeError):
                 if (gitdir / state / "head-name").read_text().strip() == "refs/heads/" + branch:
@@ -3139,12 +3132,28 @@ def worktree_entries(repo):
     return entries
 
 
+def linked_worktrees(repo):
+    """(Git directory, path) for each linked worktree of REPO, as Git keeps
+    them, whether or not its folder is there."""
+    common = Path(repo) / git(repo, "rev-parse", "--git-common-dir").stdout.strip()
+    places = []
+    with contextlib.suppress(OSError):
+        for gitdir in sorted((common / "worktrees").iterdir()):
+            with contextlib.suppress(OSError):
+                # A path, which needn't be UTF-8.
+                places.append((gitdir, str(Path(os.fsdecode((gitdir / "gitdir").read_bytes().strip())).parent)))
+    return places
+
+
 def unregister_gone(repo, worktree):
-    """Have Git forget WORKTREE, one of REPO's whose folder is gone, as
-    `git worktree prune` would, so that the branch it held can be deleted.
-    Retiring refuses a locked one first; discarding goes past its lock."""
-    if any(Path(path).resolve() == worktree for path, _ in worktree_branches(repo)):
-        git(repo, "worktree", "remove", "--force", "--force", str(worktree))
+    """Have Git forget WORKTREE, one of REPO's whose folder is gone, so that
+    the branch it held can be deleted: what Git keeps of it goes, as
+    `git worktree prune` removes it, but never a folder, which may be back
+    meanwhile, as when a drive is mounted again. Retiring refuses a locked
+    one first; discarding goes past its lock."""
+    for gitdir, path in linked_worktrees(repo):
+        if Path(path).resolve() == worktree and not os.path.lexists(path):
+            shutil.rmtree(gitdir)
 
 
 def worktree_lock(repo, worktree):
@@ -3468,8 +3477,10 @@ def overwritten_ignored(checkout, other):
     for an untracked file: those OTHER adds or changes since the two parted
     that are there, untracked, and those in a folder it puts a file in
     place of."""
+    if git(checkout, "merge-base", "HEAD", other, check=False).returncode == 1:
+        return []  # Nothing in common, so Git won't merge them.
     changed = git_fields(checkout, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=d",
-                         "HEAD..." + other, succeed=(0, 128))
+                         "HEAD..." + other)
     there, folders = set(), []
     for path in changed:
         parts = PurePosixPath(path).parts

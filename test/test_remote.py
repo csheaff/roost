@@ -4228,6 +4228,20 @@ elif args[:2] == ["auth", "status"]:
                                             "squash": unlock, "retire": unlock, "discard": True})
         self.matrix(lambda: missing(False), {"list": True, "dry run": True, "stop": True, "merge": True,
                                              "squash": True, "retire": "unmerged commits", "discard": True})
+        # One back while it merges, with work in it, stays as it is.
+        task = self.worked()
+        wt, aside = Path(task["worktree"]), self.root / "aside"
+        os.rename(wt, aside)
+        (aside / "draft").write_text("not committed\n")
+        stop = roost.stop
+
+        def back(*args):
+            os.rename(aside, wt)
+            return stop(*args)
+        with patch.object(roost, "stop", back):
+            self.assertIn("checked out in another worktree", self.request("merge", id=task["id"])["error"])
+        self.assertEqual((wt / "draft").read_text(), "not committed\n")
+        self.assertEqual(self.git("status", "--porcelain", cwd=wt), "?? draft")
 
     def test_git_states_a_moved_worktree(self):
         def moved():
@@ -4345,6 +4359,10 @@ elif args[:2] == ["auth", "status"]:
         self.git("commit", "-qm", "Track build/out", cwd=task["worktree"])
         self.cell(task, "merge", "Merging would overwrite build in the primary checkout")
         (self.repo / "build").unlink()
+        # Git failing to say what a merge would write refuses it too.
+        self.git("config", "diff.orderFile", str(self.root / "missing"))
+        self.cell(task, "merge", "failed to read orderfile")
+        self.git("config", "--unset", "diff.orderFile")
         # Or ignored files in a folder the task's work makes a file.
         (self.repo / "config").mkdir()
         (self.repo / "config" / "tracked").write_text("tracked\n")
