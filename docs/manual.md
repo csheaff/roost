@@ -551,7 +551,8 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
 
 - `roost-hosts`: hosts the dashboard watches (`nil` is local). Hosts and projects
   you create tasks in are remembered in `roost-hosts-file` and `roost-projects-file`;
-  `M-x roost-forget-host` stops watching one you no longer use.
+  `M-x roost-forget-host` stops watching one you no longer use, and closes
+  its tasks' terminals and panels; their agents keep running.
 - `roost-default-agent`, `roost-agent-commands`: which agent new tasks use, and
   each CLI with extra arguments, such as `("claude" "claude" "--model" "sonnet")`.
   Roost owns worktree, resume and hook flags and rejects conflicting ones.
@@ -948,25 +949,32 @@ what each journey has GitHub say. The run has a home directory of its own, so yo
 tmux, shell and Git configuration don't change it, and the fake agent writes
 its transcripts there, as Claude Code would in yours, for search. Its journeys start a task from the menu, answer
 it in its terminal, go through the tasks waiting with `n` and back, fold and unfold a long prompt with the mouse, resize the
-frame, merge a commit, review a change in Magit and send a note, work in the
+frame, merge a commit, review a change in Magit and send a note, edit,
+cancel, remove, send and discard review notes, work in the
 terminal with tmux-control's own keys (split a pane, open and move between
 tmux windows, switch to another task and back), open a shell beside the
-agent, use the dashboard, stop and
-resume an agent, retire a task or discard its work, send a prompt, bring a
+agent, use the dashboard, turn the panel and sidebar off and on, stop and
+resume an agent, retire a task or discard its work, discard a task by
+typing its name and from its row's menu, send a prompt, bring a
 task up to date, restart Emacs with agents at work, search the
 conversations, work in a second frame, start a task from an Org heading,
-draft one from a compilation error, a file and a URL,
-keep a tab per task, two of the same name among them, forget a task, fork
+draft one from a compilation error, a file and a URL, change a draft's
+project, agent and GitHub issue, quote a region or a Flymake warning from
+a task's file, keep a tab per task, two of the same name among them, forget a task, fork
 one's commits, follow a pull request from GitHub's checks and review to
 its merge, resume an agent that exited, see a host it can't reach,
+check the setup with `roost-doctor`,
 read back through a long reply in tmux-control's scrollback, move between
-agents that all print at once, and reconnect a terminal whose connection
-dropped. One leaves something unfinished, as you do (`M-x` or Roost's own
+agents that all print at once, reconnect a terminal whose connection
+dropped, and forget a host with tasks on it. One leaves something unfinished, as you do (`M-x` or Roost's own
 question open, its menu, a draft, a task whose host hasn't replied yet, a
-mouse press in a terminal that never let go), and
+mouse press in a terminal that never let go, a review note half written,
+the question before discarding a task), and
 then goes to a task another way: a click, `l`, `n` or `t` in the sidebar, a
 click on a notification, or a click in the terminal. They press keys
-and click through Emacs's command loop. After each step it checks for Lisp errors, in
+and click through Emacs's command loop. A menu or dialog of the system's
+own, which a right click or a question after a click opens, would hold Emacs
+up, so the journey says beforehand what you would choose in it. After each step it checks for Lisp errors, in
 commands, timers and process filters alike, for a backtrace, for lines of
 Roost's views cut off at the window's edge, for another task's terminal
 beside the current task's, for a terminal that shows other than what

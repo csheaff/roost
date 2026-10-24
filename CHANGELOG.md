@@ -4,6 +4,22 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A task opened while you write a review note, as from a notification
+  or Roost's menu, opens in the frame the note's box floats over. Its
+  terminal showed in the Magit window under the box instead, beside the
+  terminal of the task you were on, which the frame and its panel still
+  named.
+- `M-x roost-forget-host` takes its tasks' terminals, panels and tabs or
+  perspectives away with them, as it says ("will no longer show"). The
+  terminal you were in stayed on screen, naming a task Roost no longer
+  listed. Their agents still run on, and opening a task there again
+  connects to its terminal anew.
+- The pull request draft of a task started from a GitHub issue ends with
+  `Closes #N` when its body is the task's prompt too, as when its commits
+  have no message body. The prompt names the issue ("This is GitHub issue
+  #N"), which Roost took for a line that closes it, so the issue stayed
+  open when the pull request merged. A body that already says `Fixes #N`
+  or the like still gets no second line.
 - Writing a review note in a narrowed Magit diff, or saving one while
   another Magit buffer on the task is narrowed, no longer hangs Emacs.
   Roost read a hunk's lines up to the hunk's end, which the narrowing

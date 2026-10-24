@@ -370,11 +370,28 @@ class Run:
             raise Stuck("No button %r on screen to click" % label)
         self.settle()
 
-    def click_text(self, text, mode=None):
-        """Click on TEXT, as shown, in a window in MODE if given."""
-        if self.emacs.eval("(qa-click-text %s %s)" % (lisp(text), lisp(mode) if mode else "nil")) != "t":
+    def click_text(self, text, mode=None, button=1):
+        """Click on TEXT, as shown, in a window in MODE if given, with BUTTON."""
+        if self.emacs.eval("(qa-click-text %s %s %d)"
+                           % (lisp(text), lisp(mode) if mode else "nil", button)) != "t":
             raise Stuck("No %r on screen to click" % text)
         self.settle()
+
+    def click_in(self, how, what):
+        """Click as qa.el's qa-click-HOW does on WHAT: a header line's
+        button, the margin beside a line, or a review note."""
+        if self.emacs.eval("(qa-click-%s %s)" % (how, lisp(what))) != "t":
+            raise Stuck("No %r on screen to click, in a %s" % (what, how))
+        self.settle()
+
+    def answer_popups(self, *labels):
+        """Choose LABELS, one each, in the popup menus and dialogs to come:
+        the system's own, which no keys or clicks of ours reach."""
+        self.emacs.eval("(qa-answer-popups %s)" % " ".join(lisp(label) for label in labels))
+
+    def popups(self):
+        """The popup menus and dialogs shown since this was last asked."""
+        return self.emacs.json("(json-encode (qa-take-popups))")
 
     def settle(self, quiet=0.4):
         """Wait until Emacs has taken the input, and a moment for what it started."""
@@ -456,6 +473,9 @@ class Run:
             self.emacs.eval("(when-let* ((window (active-minibuffer-window))) (select-window window))")
             self.keys("C-g")
         self.emacs.eval("(qa-forget-drafts)")
+        # Answers to popups that never came.
+        self.answer_popups()
+        self.popups()
         self.left_open = set()
 
     def task(self, screen, name):
@@ -938,6 +958,130 @@ def review(qa, repo):
     qa.step("The agent has the note")
 
 
+@journey("Review notes, changed, cancelled, removed and discarded")
+def notes(qa, repo):
+    """In Magit on a task's changes, a note's box closes without saving on
+    C-c C-k, and its Remove button removes the note.  ' goes to a note;
+    C-c ; and a click on one offer to edit, send or discard it; and a click
+    in the margin beside a line starts one there.  = shows the whole file,
+    and roost-discard-notes discards the notes left, after asking."""
+    if qa.emacs.eval("(and (require 'magit nil t) t)") != "t":
+        qa.notes.add("No review notes journey: Magit isn't loaded")
+        return
+    if qa.host:
+        qa.notes.add("No review notes journey: Magit over TRAMP's ssh method is too slow on a host this far away")
+        return
+    # Named apart from other journeys' tasks, which new_task and
+    # sidebar_row, by its first 12 characters, need.
+    name = new_task(qa, "ask echo 'def due(note):' >> notes.py && echo '    return note' >> notes.py")
+    answer_yes(qa, name)
+    pane = qa.screen()["task"]["pane"]
+    qa.keys("C-c r r")
+    qa.wait("Magit", lambda s: (qa.window(s, "magit-status-mode") or {}).get("selected"))
+    magit = lambda s: (qa.window(s, "magit-status-mode") or {}).get("text", "")
+    box = lambda s: qa.window(s, "roost-note-box-mode")
+
+    def to_line(text):
+        qa.keys("M-<")
+        qa.keys("C-s")
+        qa.type(text)
+        qa.keys("RET")
+
+    def write(text):
+        qa.wait("the note box", lambda s: (box(s) or {}).get("selected"))
+        qa.type(text)
+        qa.keys("C-c C-c")
+        qa.wait("the note under its line", lambda s: text in magit(s))
+
+    to_line("+def due")
+    qa.keys(";")
+    write("Say what is due.")
+    to_line("+def due")
+    qa.keys(";")
+    qa.wait("the note box", lambda s: (box(s) or {}).get("selected"))
+    qa.step("; on a noted line edits its note", expect=[
+        ("the box holds the note", lambda s: "Say what is due." in box(s)["text"]),
+        ("and offers to remove it", lambda s: " Remove " in box(s)["header"]
+         and box(s)["header"].startswith(" Edit the note on notes.py:8"))])
+    qa.keys("M->")
+    qa.type(" By when?")
+    qa.keys("C-c C-k")
+    qa.wait("the box to close", lambda s: not box(s))
+    qa.step("C-c C-k closes it, the note as it was", expect=[
+        ("the note unchanged", lambda s: "Say what is due." in magit(s) and "By when?" not in magit(s)),
+        ("back in Magit", lambda s: qa.window(s, "magit-status-mode")["selected"])])
+    to_line("+def due")
+    qa.keys(";")
+    qa.wait("the note box", lambda s: (box(s) or {}).get("selected"))
+    qa.click_in("header", " Remove ")
+    qa.wait("the box to close", lambda s: not box(s))
+    qa.step("Its Remove button removes it", expect=[
+        ("the note is gone", lambda s: "Say what is due." not in magit(s)),
+        ("the echo area says it has none", lambda s: (s["echo"] or "") == "%s has no review notes" % name),
+        ("back in Magit", lambda s: qa.window(s, "magit-status-mode")["selected"])])
+    to_line("+def due")
+    qa.keys(";")
+    write("Name the due date.")
+    to_line("+    return note")
+    qa.keys(";")
+    write("Return a copy.")
+    qa.keys("M-<")
+    qa.keys("'")
+    qa.wait("which note", lambda s: (s["prompt"] or "").startswith("Go to note"))
+    qa.type("2.\t\r")
+    qa.wait("its line", lambda s: s["line"].startswith("+    return note"))
+    qa.step("' goes to a note", expect=[
+        ("point on its line", lambda s: s["line"].startswith("+    return note")),
+        ("in Magit", lambda s: qa.window(s, "magit-status-mode")["selected"])])
+    actions = ["Edit…", "Send to the Agent", "Discard"]
+    qa.answer_popups("Edit…")
+    qa.keys("C-c ;")
+    qa.wait("the note box", lambda s: (box(s) or {}).get("selected"))
+    qa.step("C-c ; offers what to do with the note, Edit… its box", expect=[
+        ("edit, send or discard it", lambda s: [p["items"] for p in qa.popups()] == [actions]),
+        ("the box holds it", lambda s: "Return a copy." in box(s)["text"])])
+    qa.keys("C-c C-k")
+    qa.wait("the box to close", lambda s: not box(s))
+    qa.answer_popups("Discard")
+    qa.keys("C-c ;")
+    qa.wait("the note to go", lambda s: "Return a copy." not in magit(s))
+    qa.step("Discard discards it", expect=[
+        ("chosen from the same menu", lambda s: [p["chose"] for p in qa.popups()] == ["Discard"]),
+        ("the other note stays", lambda s: "Name the due date." in magit(s))])
+    qa.answer_popups("Send to the Agent")
+    qa.click_in("note", "Name the due date.")
+    qa.wait("word it went", lambda s: (s["echo"] or "").startswith("Sent the note on notes.py:8"))
+    qa.step("A click on a note sends it alone", expect=[
+        ("the click offered it", lambda s: [p["items"] for p in qa.popups()] == [actions]),
+        ("the note is cleared", lambda s: "Name the due date." not in magit(s)),
+        ("the agent has it", lambda s: "Name the due date." in "".join(qa.tmux("capture-pane", "-p", "-J", "-t", pane)))])
+    qa.click_in("margin", "+    return note")
+    qa.wait("the note box", lambda s: (box(s) or {}).get("selected"))
+    qa.step("A click beside a line starts a note on it", expect=[
+        ("the box says which line", lambda s: box(s)["header"].startswith(" Note on notes.py:9"))])
+    write("Keep it short.")
+    # On the file, under its section's heading.
+    to_line("Unstaged changes")
+    qa.keys("C-n =")
+    diff = lambda s: (qa.window(s, "magit-diff-mode") or {}).get("text", "")
+    qa.wait("the whole file", lambda s: '"""Notes."""' in diff(s))
+    qa.step("= shows the whole file, its changes marked", expect=[
+        ("its first line, far from the change", lambda s: '"""Notes."""' in diff(s)),
+        ("and the change", lambda s: "+def due(note):" in diff(s)),
+        ("with the note under its line", lambda s: "Keep it short." in diff(s)),
+        ("it is selected", lambda s: qa.window(s, "magit-diff-mode")["selected"])])
+    qa.keys("q")
+    qa.keys("M-x")
+    qa.wait("the question", lambda s: s["prompt"])
+    qa.type("roost-discard-notes\r")
+    qa.wait("whether to discard them", lambda s: (s["prompt"] or "").startswith("Discard 1 review note for " + name))
+    qa.type("y")
+    qa.wait("the note to go", lambda s: "Keep it short." not in magit(s))
+    qa.step("roost-discard-notes discards the rest, after asking", expect=[
+        ("the echo area says so", lambda s: (s["echo"] or "") == "Discarded the review notes for " + name),
+        ("the panel counts none", lambda s: "review note" not in panel_text(qa, s))])
+
+
 @journey("What changed since you looked")
 def since_looked(qa, repo):
     """A task you never looked at says so, until v marks it as looked at,
@@ -1138,6 +1282,102 @@ def drafts(qa, repo):
         ("and not the URL", lambda s: "example.com" not in qa.window(s, "roost-compose-mode")["text"])])
 
 
+@journey("A draft's project, agent and issue, changed")
+def draft_fields(qa, repo):
+    """C-c C-p, C-c C-a and C-c C-t change a new task's draft before it
+    starts: another project, Pi rather than Claude Code, and one of the
+    project's GitHub issues, whose title and text become the prompt.  The
+    task's panel names the issue, its pull request draft closes it, and
+    C-c C-k there leaves the pull request unmade."""
+    ledger = qa.work / "ledger"
+    if not ledger.exists():
+        ledger.mkdir()
+        (ledger / "ledger.py").write_text('"""A ledger."""\n\nENTRIES = []\n')
+        qa.git(ledger, "init", "-q", "-b", "main")
+        for key, value in (("user.name", "Roost QA"), ("user.email", "qa@example.invalid")):
+            qa.git(ledger, "config", key, value)
+        qa.git(ledger, "add", "-A")
+        qa.git(ledger, "commit", "-q", "-m", "Start the ledger")
+    issue = dict(number=7, title="Entries lose their order", body="Adding an entry puts it first.",
+                 labels=[dict(name="bug")], url="https://github.com/qa/ledger/issues/7")
+    github(qa, issues=[issue])
+    qa.emacs.eval("(setq qa-agents (cons roost-default-agent roost-agent-commands)"
+                  " roost-agent-commands (cons (list \"pi\" %s %s \"pi\") roost-agent-commands))"
+                  % (lisp(sys.executable), lisp(str(FAKE_AGENT))))
+    draft = lambda s: (qa.window(s, "roost-compose-mode") or {}).get("text", "")
+    try:
+        qa.keys("C-c r c")
+        qa.wait("the draft", lambda s: (qa.window(s, "roost-compose-mode") or {}).get("selected"))
+        qa.keys("C-c C-p")
+        qa.wait("which project", lambda s: (s["prompt"] or "").startswith("Project: "))
+        qa.type("Other directory…\r")
+        qa.wait("which directory", lambda s: (s["prompt"] or "").startswith("Project checkout"))
+        qa.keys("C-a C-k")
+        qa.type(("/ssh:%s:" % qa.host if qa.host else "") + str(ledger) + "/\r")
+        qa.wait("the project", lambda s: re.search(r"Project .*/ledger\b", draft(s)))
+        qa.keys("C-c C-a")
+        qa.wait("which agent", lambda s: (s["prompt"] or "").startswith("Agent"))
+        qa.type("pi\r")
+        qa.wait("the agent", lambda s: re.search(r"Agent +pi\b", draft(s)))
+        qa.keys("C-c C-t")
+        qa.wait("which issue", lambda s: (s["prompt"] or "").startswith("Issue"))
+        qa.type("#7 Entries lose their order\r")
+        qa.wait("the issue", lambda s: re.search(r"Issue +#7 ", draft(s)))
+        qa.step("A draft in another project, for Pi, from an issue", expect=[
+            ("its project", lambda s: re.search(r"Project .*/ledger\b", draft(s))),
+            ("its agent", lambda s: re.search(r"Agent +pi\b", draft(s))),
+            ("its issue, which its pull request will close",
+             lambda s: re.search(r"Issue +#7 Entries lose their order\s+C-c C-t · the pull request will close it",
+                                 draft(s))),
+            ("the issue's title and text as its prompt",
+             lambda s: "Entries lose their order\n\nAdding an entry puts it first.\n\n"
+             "This is GitHub issue #7: https://github.com/qa/ledger/issues/7" in draft(s))])
+        before = {t["key"] for t in qa.screen()["tasks"]}
+        qa.keys("C-c C-c")
+        screen = qa.wait("the task", lambda s: {t["key"] for t in s["tasks"]} - before)
+        name = next(t["name"] for t in screen["tasks"] if t["key"] not in before)
+        qa.status(name, "ready", "idle")
+        qa.wait("its panel", lambda s: panel_text(qa, s).startswith(name))
+        worktree = task_worktree(qa, name)
+        qa.step("A Pi task in the other project", expect=[
+            ("its worktree is the ledger's", lambda s: qa.git(worktree, "log", "--format=%s", "-1") == "Start the ledger"),
+            ("Pi is its agent", lambda s: any("FAKE_AGENT_READY" in w["text"] for w in terminals(s))),
+            ("its panel names the issue",
+             lambda s: re.search(r"Issue\n\s*#7  Entries lose their order", panel_text(qa, s)))])
+        # Work to propose, as its agent would commit it.
+        (Path(worktree) / "ORDER.md").write_text("Newest last.\n")
+        qa.git(worktree, "add", "ORDER.md")
+        qa.git(worktree, "commit", "-qm", "Keep entries in order")
+        # Its agent reported nothing of it, so asked for, as with g.
+        qa.keys("C-c r g")
+        qa.wait("its commit", lambda s: "Committed" in panel_text(qa, s))
+        qa.keys("C-c r P")
+        qa.wait("the pull request's draft", lambda s: (qa.window(s, "roost-pr-mode") or {}).get("selected"))
+        qa.step("Its pull request closes the issue", expect=[
+            ("the draft says so", lambda s: "Closes #7" in qa.window(s, "roost-pr-mode")["text"])])
+        made = lambda: [line for line in ((qa.github / "log").read_text() if (qa.github / "log").exists() else "")
+                        .splitlines() if line.startswith('["pr", "create"')]
+        before = made()
+        qa.keys("C-c C-k")
+        qa.wait("whether to discard it", lambda s: (s["prompt"] or "").startswith("Discard this pull request"))
+        qa.type("y")
+        qa.step("C-c C-k leaves it unmade", expect=[
+            ("the draft is gone", lambda s: not qa.window(s, "roost-pr-mode")),
+            ("its terminal is selected again", shows(qa, name)),
+            ("no pull request was made", lambda s: made() == before)])
+        # Gone, as new tasks start in the project of the task you were on
+        # last, and the journeys after start theirs in notes.
+        qa.keys("C-c r x")
+        qa.wait("the question", lambda s: "Discard it?" in (s["prompt"] or ""))
+        qa.type("y")
+        qa.wait("its name", lambda s: "Type its name" in (s["prompt"] or ""))
+        qa.type(name + "\r")
+        qa.wait("the task to go", lambda s: qa.task(s, name) is None, timeout=30)
+    finally:
+        qa.emacs.eval("(setq roost-agent-commands (cdr qa-agents))")
+        github(qa, issues=[])
+
+
 def names_changing(text, name, how, path):
     """Whether TEXT has the line naming the tasks that change PATH, HOW
     ("also" or "already"), and NAME among them: one line, whatever their
@@ -1181,6 +1421,73 @@ def overlap(qa, repo):
     qa.step("C-c C-c starts it anyway", expect=[
         ("the task", lambda s: qa.task(s, started)),
         ("and the one that changes the file", lambda s: qa.task(s, name))])
+
+
+@journey("Quote code from a task's worktree")
+def region(qa, repo):
+    """In a file of a task's worktree, narrowed to a function, M-x
+    roost-send-region drafts a prompt to that task quoting the lines, as
+    the file numbers them, and C-c C-k discards it after asking.  M-x
+    roost-new-task-from-region drafts a new task quoting them, and M-x
+    roost-new-task-from-diagnostic one about the Flymake warning on the
+    line."""
+    name = start_task(qa, "Read the notes module")
+    path = Path(task_worktree(qa, name)) / "notes.py"
+    qa.keys("C-x C-f")
+    qa.type(("/ssh:%s:" % qa.host if qa.host else "") + str(path) + "\r")
+    qa.wait("notes.py", lambda s: s["selected"] == "notes.py")
+    # The function add, alone: the file's lines 6 and 7.  Narrowing asks
+    # first in a configuration that hasn't said it may.
+    qa.emacs.eval("(put 'narrow-to-region 'disabled nil)")
+    qa.keys("M-< C-n C-n C-n C-n C-n C-SPC M-> C-x n n")
+    quoted = "notes.py:6-7\n\ndef add(text):\n    NOTES.append(text)"
+    qa.keys("M-< C-SPC M->")
+    qa.keys("M-x")
+    qa.wait("the question", lambda s: s["prompt"])
+    qa.type("roost-send-region\r")
+    send = lambda s: qa.window(s, "roost-send-mode") or {}
+    qa.wait("the draft", lambda s: send(s).get("selected"))
+    task = qa.task(qa.screen(), name)
+    qa.step("A prompt to the task, quoting the lines", expect=[
+        ("for the task whose file it is", lambda s: send(s)["draft"] == task["key"]),
+        ("the lines, as the file numbers them", lambda s: quoted in send(s)["text"])])
+    qa.type("Why a list?")
+    qa.keys("C-c C-k")
+    qa.wait("whether to discard it", lambda s: (s["prompt"] or "").startswith("Discard this prompt"))
+    qa.type("y")
+    qa.step("C-c C-k discards it, after asking", expect=[
+        ("the draft is gone", lambda s: not send(s)),
+        ("and not kept", lambda s: not any("Why a list?" in draft
+                                           for draft in qa.emacs.json("(json-encode (vconcat (qa-drafts)))"))),
+        ("back in notes.py", lambda s: s["selected"] == "notes.py")])
+    qa.keys("M-< C-SPC M->")
+    qa.keys("M-x")
+    qa.wait("the question", lambda s: s["prompt"])
+    qa.type("roost-new-task-from-region\r")
+    compose = lambda s: (qa.window(s, "roost-compose-mode") or {}).get("text", "")
+    qa.wait("the draft", lambda s: (qa.window(s, "roost-compose-mode") or {}).get("selected"))
+    qa.step("A new task's draft, quoting the lines", expect=[
+        ("the lines, as the file numbers them", lambda s: quoted in compose(s)),
+        ("in the task's project", lambda s: re.search(r"Project .*/notes\b", compose(s)))])
+    qa.keys("C-c C-k")
+    qa.wait("whether to discard it", lambda s: (s["prompt"] or "").startswith("Discard this task draft"))
+    qa.type("y")
+    qa.wait("notes.py", lambda s: s["selected"] == "notes.py")
+    if qa.emacs.eval('(qa-flymake "NOTES" "NOTES is never read")') != "t":
+        raise Stuck("Flymake found nothing in notes.py")
+    # To the last line, in the function.
+    qa.keys("M-> C-p")
+    qa.keys("M-x")
+    qa.wait("the question", lambda s: s["prompt"])
+    qa.type("roost-new-task-from-diagnostic\r")
+    qa.wait("the draft", lambda s: (qa.window(s, "roost-compose-mode") or {}).get("selected"))
+    qa.step("A new task's draft about Flymake's warning", expect=[
+        ("the warning, where the file has it, then its line",
+         lambda s: "notes.py:7: NOTES is never read\n\n    NOTES.append(text)" in compose(s))])
+    qa.keys("C-c C-k")
+    qa.wait("whether to discard it", lambda s: (s["prompt"] or "").startswith("Discard this task draft"))
+    qa.type("y")
+    qa.keys("C-x n w")
 
 
 def new_task(qa, prompt):
@@ -1293,6 +1600,14 @@ def dashboard(qa, repo):
         ("it lists the task", lambda s: name in qa.window(s, "roost-dashboard-mode")["text"])])
     qa.keys("g")
     qa.step("Refreshed")
+    # From the top, to the first task's row, and back and forth between rows.
+    row = lambda s: any(t["name"][:12] in s["line"] for t in s["tasks"])
+    qa.keys("M-< TAB")
+    first = qa.step("TAB goes to a task's row", expect=[("a task's", row)])["line"]
+    qa.keys("TAB <backtab>")
+    qa.step("S-TAB goes back", expect=[("to the row before", lambda s: s["line"] == first)])
+    qa.keys("j k")
+    qa.step("So do j and k", expect=[("to the row before", lambda s: s["line"] == first)])
     # To its row, among the others.
     qa.keys("C-s")
     qa.type(name)
@@ -1307,6 +1622,48 @@ def dashboard(qa, repo):
     qa.keys("RET RET")
     qa.wait("its terminal", lambda s: (s.get("task") or {}).get("name") == name and selected_terminal(s))
     qa.step("RET opens it", expect=[("its panel beside it", lambda s: panel_text(qa, s).startswith(name))])
+
+
+@journey("The panel and sidebar, off and on")
+def panel_keys(qa, repo):
+    """g in a task's panel asks its host again, and q puts the panel away,
+    saying how to have it back: I in the sidebar.  M-x roost-sidebar turns
+    the sidebar off, saying how to have it back: b in the dashboard."""
+    name = start_task(qa, "Show me the panel")
+    open_task(qa, name)
+    try:
+        qa.click_text(name, "roost-task-info-mode")
+        qa.keys("g")
+        qa.step("g in the panel", expect=[
+            ("the panel is selected", lambda s: qa.window(s, "roost-task-info-mode")["selected"]),
+            ("it is the task's", lambda s: panel_text(qa, s).startswith(name))])
+        qa.keys("q")
+        qa.step("q puts the panel away", expect=[
+            ("it is gone", lambda s: not qa.window(s, "roost-task-info-mode")),
+            ("the echo area says how to have it back",
+             lambda s: s["echo"] == "Task panel off; I in the dashboard or sidebar turns it on"),
+            ("its terminal stays", lambda s: terminals(s))])
+        to_sidebar(qa)
+        qa.keys("I")
+        qa.wait("the panel", lambda s: panel_text(qa, s).startswith(name))
+        qa.step("I in the sidebar has it back", expect=[
+            ("beside the terminal", lambda s: panel_text(qa, s).startswith(name)),
+            ("the echo area says so", lambda s: s["echo"] == "Task panel on")])
+        qa.keys("M-x")
+        qa.wait("the question", lambda s: s["prompt"])
+        qa.type("roost-sidebar\r")
+        qa.step("M-x roost-sidebar turns it off", expect=[
+            ("it is gone", lambda s: not qa_sidebar(s)),
+            ("the echo area says how to have it back",
+             lambda s: s["echo"] == "Sidebar off; b in the dashboard turns it back on")])
+        qa.keys("C-c r S")
+        qa.wait("the dashboard", lambda s: (qa.window(s, "roost-dashboard-mode") or {}).get("selected"))
+        qa.keys("b")
+        qa.step("b in the dashboard has it back", expect=[
+            ("it is back", lambda s: qa_sidebar(s)),
+            ("the echo area says so", lambda s: s["echo"] == "Sidebar on")])
+    finally:
+        qa.emacs.eval("(progn (roost-task-panel-mode 1) (roost-sidebar-mode 1) t)")
 
 
 @journey("Stop and resume an agent")
@@ -1374,6 +1731,60 @@ def retire(qa, repo):
     qa.wait("the task to go", lambda s: qa.task(s, dirty) is None, timeout=30)
     qa.step("Discarded", expect=[
         ("its branch is gone", lambda s: not qa.git(repo, "branch", "--list", "roost/" + dirty + "*"))])
+
+
+@journey("Discard a task, typing its name")
+def discard(qa, repo):
+    """M-x roost-discard says what discarding a task would lose: its commits
+    no other branch has, its files not committed, and its agent, stopped.  A
+    name typed wrong keeps it, and its name discards it, worktree, branch
+    and all.  From its row's menu, a task with nothing to lose goes once a
+    dialog asks."""
+    name = new_task(qa, "ask printf 'kept\\n' > KEPT.md && git add KEPT.md && git commit -qm 'Keep a file'"
+                        " && touch LOOSE.md")
+    answer_yes(qa, name)
+    qa.wait("its changes", lambda s: re.search(r"Uncommitted\n\s*LOOSE\.md", panel_text(qa, s))
+            and "Committed" in panel_text(qa, s))
+    worktree = task_worktree(qa, name)
+    branch = qa.git(repo, "branch", "--list", "--format=%(refname:short)", "roost/%s-*" % name)
+    asks = "Discarding %s loses 1 commit no other branch has and 1 uncommitted file, and stops its agent.  " % name
+    for typed in ("not-" + name, name):
+        qa.keys("M-x")
+        qa.wait("the question", lambda s: s["prompt"])
+        qa.type("roost-discard\r")
+        qa.wait("what it would lose", lambda s: "Type its name" in (s["prompt"] or ""))
+        if typed != name:
+            qa.step("Discarding says what it would lose", expect=[
+                ("its commit, its file not committed, and its agent",
+                 lambda s: s["prompt"] == asks + "Type its name to discard it: ")])
+        qa.type(typed + "\r")
+        if typed != name:
+            qa.step("A name typed wrong keeps it", expect=[
+                ("the echo area says so", lambda s: s["echo"] == "%s was not discarded" % name),
+                ("the task is still there", lambda s: qa.task(s, name)),
+                ("and its worktree", lambda s: Path(worktree).is_dir())])
+    qa.wait("the task to go", lambda s: qa.task(s, name) is None, timeout=30)
+    qa.step("Its name discards it", expect=[
+        ("the echo area says so", lambda s: s["echo"] == "Discarded " + name),
+        ("its worktree is gone", lambda s: not Path(worktree).exists()),
+        ("its branch too", lambda s: branch and not qa.git(repo, "branch", "--list", branch)),
+        ("main is as it was", lambda s: "Keep a file" not in qa.git(repo, "log", "--format=%s", "-5"))])
+    # From its row in the sidebar, with the mouse.
+    clean = start_task(qa, "Try nothing much")
+    qa.emacs.eval("(qa-sidebar-show-row %s)" % lisp(clean))
+    qa.answer_popups("Discard…", "Yes")
+    # By the start of its name, which its row may cut short.
+    qa.click_text(clean[:10], "roost-sidebar-list-mode", button=3)
+    qa.wait("the task to go", lambda s: qa.task(s, clean) is None, timeout=30)
+    popups = qa.popups()
+    qa.step("Discarded from its row's menu", expect=[
+        ("the menu offered it", lambda s: popups and popups[0]["kind"] == "menu"
+         and "Discard…" in popups[0]["items"]),
+        ("a dialog asked first, saying nothing would be lost",
+         lambda s: len(popups) == 2 and popups[1]["kind"] == "dialog"
+         and ("Discard %s, stopping its agent and deleting its worktree and branch "
+              "(nothing in them would be lost)?" % clean) in popups[1]["title"]),
+        ("the echo area says so", lambda s: s["echo"] == "Discarded " + clean)])
 
 
 @journey("Tear down a task's worktree")
@@ -1653,6 +2064,18 @@ def search(qa, repo):
     qa.keys("TAB")
     qa.step("Folded again", expect=[
         ("as it was", lambda s: qa.window(s, "roost-search-mode")["text"] == results)])
+    message = lambda s: re.match(r"\s+\S.*  (You|Claude) ", s["line"])
+    first = qa.screen()["line"]
+    qa.keys("n")
+    qa.step("n goes to the next message", expect=[
+        ("a message", message), ("another", lambda s: s["line"] != first)])
+    qa.keys("p")
+    qa.step("p goes back", expect=[("to the first", lambda s: s["line"] == first)])
+    qa.keys("g")
+    qa.wait("the results again", lambda s: "Searching" not in qa.window(s, "roost-search-mode")["text"])
+    qa.step("g searches again", expect=[
+        ("the same messages", lambda s: unclocked(qa.window(s, "roost-search-mode")["text"]) == unclocked(results)),
+        ("point where it was", lambda s: s["line"] == first)])
     qa.keys("RET")
     qa.wait("its terminal", lambda s: (s.get("task") or {}).get("name") == name and selected_terminal(s))
     qa.step("RET opens its task", expect=[("its panel beside it", lambda s: panel_text(qa, s).startswith(name))])
@@ -1762,6 +2185,30 @@ def leave_opening(qa, tasks):
     qa.click_text(tasks["opening"], "roost-sidebar-list-mode")
 
 
+def leave_note_box(qa, tasks):
+    if qa.host or qa.emacs.eval("(and (require 'magit nil t) t)") != "t":
+        # Magit over TRAMP's ssh method is too slow on a host this far away.
+        raise NotApplicable()
+    # Written afresh each time, rather than added to the last pair's.
+    qa.emacs.eval("(roost--remove-notes #'always)")
+    qa.keys("C-c r r")
+    qa.wait("Magit", lambda s: (qa.window(s, "magit-status-mode") or {}).get("selected"))
+    qa.keys("C-s")
+    qa.type("+Sorted.")
+    qa.keys("RET ;")
+    qa.wait("the note box", lambda s: (qa.window(s, "roost-note-box-mode") or {}).get("selected"))
+    qa.type("Half a note")
+
+
+def leave_discard_question(qa, tasks):
+    # Its file not committed: discarding it asks for its name.
+    qa.keys("M-x")
+    qa.wait("the question", lambda s: s["prompt"])
+    qa.type("roost-discard\r")
+    qa.wait("its name", lambda s: "Type its name" in (s["prompt"] or ""))
+    qa.leave_question()
+
+
 def leave_mouse_press(qa, tasks):
     # In a terminal whose program takes the mouse, a press whose release
     # the terminal never gets, as when tmux wasn't replying.
@@ -1781,6 +2228,8 @@ WALK_STARTERS = [
     ("a prompt's file to attach not yet chosen", leave_attaching),
     ("another task still opening", leave_opening),
     ("a mouse press in the terminal never let go", leave_mouse_press),
+    ("a review note half written", leave_note_box),
+    ("Roost's question before discarding a task left open", leave_discard_question),
 ]
 
 
@@ -1960,6 +2409,13 @@ def walk_away(qa, repo):
     a task another way.  The task you went to opens, what you left is quit
     or kept, and nothing waits unseen."""
     home = start_task(qa, "Sort the notes")
+    # A change of its own, not committed: a line to write a note on in
+    # Magit, and a file discarding it would lose.
+    open_task(qa, home)
+    qa.keys("C-c r e")
+    qa.wait("the prompt", lambda s: s["prompt"])
+    qa.type("ask echo 'Sorted.' >> README.md\r")
+    answer_yes(qa, home)
     other = start_task(qa, "Tally the notes")
     # A change of its own, a file its panel lists.
     open_task(qa, other)
@@ -2041,6 +2497,19 @@ def walk_away(qa, repo):
             if leave in (leave_draft, leave_attaching):
                 expect.append(("the draft is kept", lambda s: any(
                     "Half a thought" in draft for draft in qa.emacs.json("(json-encode (vconcat (qa-drafts)))"))))
+            if leave is leave_note_box:
+                box = lambda s: qa.window(s, "roost-note-box-mode")
+                expect += [
+                    # Its box hides while its line is out of sight.
+                    ("the note is kept, saved or in its box",
+                     lambda s: qa.emacs.eval('(and (string-search "Half a note" (or (roost--note-box-text) ""))'
+                                             ' t)') == "t"
+                     or qa.emacs.eval('(and (seq-some (lambda (note) (string-search "Half a note" (alist-get \'text note)))'
+                                      ' (roost--notes)) t)') == "t"),
+                    ("its box only over its Magit", lambda s: not box(s)
+                     or any(w["mode"] == "magit-status-mode" and not w["child"] for w in s["windows"]))]
+            if leave is leave_discard_question:
+                expect.append(("the task you were asked about is still there", lambda s: qa.task(s, home)))
             qa.step(pair, expect=expect)
     # GitHub as other journeys find it.
     github(qa, list=[], reviews={})
@@ -2247,6 +2716,50 @@ def forget(qa, repo):
         ("and its worktree", lambda s: worktree in qa.git(repo, "worktree", "list", "--porcelain")),
         ("its agent's session is gone",
          lambda s: task["terminal"].split("/")[-1] not in qa.tmux("list-sessions", "-F", "#S"))])
+
+
+@journey("Forget a host its tasks are on")
+def forget_host(qa, repo):
+    """M-x roost-forget-host stops watching a host Roost remembers from a
+    task started there: its tasks go from view, and their agents keep
+    running.  A new task there watches it again, its other tasks with it."""
+    name = start_task(qa, "Stay on the host")
+    session = open_task(qa, name)["task"]["terminal"].split("/")[-1]
+    on_host = lambda s: [t for t in s["tasks"] if t["key"].split("/")[0] == qa.host_label]
+    known = {t["key"] for t in qa.screen()["tasks"]}
+    count = len(on_host(qa.screen()))
+    # Remembered rather than configured, as a host you started a task on
+    # once is: here roost-hosts names it.
+    qa.emacs.eval("(setq roost-hosts (remove %s roost-hosts))" % (lisp(qa.host) if qa.host else "nil"))
+    try:
+        qa.keys("M-x")
+        qa.wait("the question", lambda s: s["prompt"])
+        qa.type("roost-forget-host\r")
+        qa.wait("which host", lambda s: (s["prompt"] or "").startswith("Forget host"))
+        qa.type(qa.host_label + "\r")
+        qa.wait("whether to", lambda s: "will no longer show" in (s["prompt"] or ""))
+        qa.step("Forgetting it says what goes from view", expect=[
+            ("how many tasks, and that their agents keep running",
+             lambda s: re.match(r"%d tasks? on %s will no longer show; their agents keep running\.  Forget %s\?"
+                                % (count, re.escape(qa.host_label), re.escape(qa.host_label)), s["prompt"] or ""))])
+        qa.type("y")
+        qa.wait("its tasks to go", lambda s: not on_host(s))
+        qa.step("Forgotten", expect=[
+            ("the echo area says so", lambda s: s["echo"] == "Roost no longer watches " + qa.host_label),
+            ("the sidebar lists none of its tasks", lambda s: name not in sidebar_rows(s)),
+            ("its agents still run", lambda s: session in qa.tmux("list-sessions", "-F", "#S"))])
+        # Not `new_task', which takes the tasks coming back for new ones.
+        qa.keys("C-c r c")
+        qa.type("Watch the host again")
+        qa.keys("C-c C-c")
+        screen = qa.wait("the new task", lambda s: {t["key"] for t in s["tasks"]} - known)
+        again = next(t["key"] for t in screen["tasks"] if t["key"] not in known)
+        qa.wait("its other tasks", lambda s: len(on_host(s)) == count + 1, timeout=30)
+        qa.step("A new task there watches it again", expect=[
+            ("its other tasks are back", lambda s: qa.task(s, name) and len(on_host(s)) == count + 1),
+            ("and the new one, opened", lambda s: (s.get("task") or {}).get("key") == again and selected_terminal(s))])
+    finally:
+        qa.emacs.eval("(progn (setq roost-hosts '(%s)) (roost-refresh) t)" % qa.hosts)
 
 
 @journey("Rename a task")
@@ -2644,6 +3157,41 @@ def unreachable(qa, repo):
         qa.emacs.eval("(progn (setq roost-hosts '(%s)) (clrhash roost--errors) (roost--redraw) t)" % qa.hosts)
 
 
+@journey("Check the setup")
+def doctor(qa, repo):
+    """M-x roost-doctor checks what Roost needs here and on each host, and
+    says how to fix what fails; g checks again, C-u g another host, and q
+    puts it away."""
+    # All of it, as you would scroll through it: the window may show less.
+    report = lambda s: qa.window(s, "roost-doctor-mode") and qa.emacs.json(
+        '(json-encode (with-current-buffer "*roost doctor*" (buffer-substring-no-properties (point-min) (point-max))))')
+    done = lambda s: report(s) and "Checking…" not in report(s)
+    qa.keys("M-x")
+    qa.wait("the question", lambda s: s["prompt"])
+    qa.type("roost-doctor\r")
+    qa.wait("the checks", done, timeout=60)
+    qa.step("Roost's setup", expect=[
+        ("this Emacs's, then the host's", lambda s: re.search(r"Emacs\n(.*\n)+\n%s\n" % re.escape(qa.host_label),
+                                                               report(s))),
+        ("nothing Roost needs fails", lambda s: "✗" not in report(s)),
+        ("it says what g does", lambda s: "g checks again · C-u g checks another host" in report(s)),
+        ("it is selected", lambda s: qa.window(s, "roost-doctor-mode")["selected"])])
+    first = report(qa.screen())
+    qa.keys("g")
+    qa.wait("the checks", done, timeout=60)
+    qa.step("g checks again", expect=[("the same", lambda s: report(s) == first)])
+    qa.keys("C-u g")
+    qa.wait("which host", lambda s: (s["prompt"] or "").startswith("SSH host to check"))
+    qa.type("qa-unreachable.invalid\r")
+    qa.wait("its check", lambda s: done(s) and "qa-unreachable.invalid" in report(s), timeout=60)
+    qa.step("C-u g checks a host it can't reach", expect=[
+        ("only that host", lambda s: "\n%s\n" % qa.host_label not in report(s)),
+        ("it says why", lambda s: re.search(r"✗ SSH and Python +.*Could not resolve hostname", report(s))),
+        ("and how to fix it", lambda s: "Check the host name, or add it to ~/.ssh/config" in report(s))])
+    qa.keys("q")
+    qa.step("q puts it away", expect=[("it is gone", lambda s: not qa.window(s, "roost-doctor-mode"))])
+
+
 def pager(screen):
     """The window of tmux-control's scrollback pager, or None."""
     return next((w for w in screen["windows"] if w["mode"] == "tmux-control-scrollback-mode"), None)
@@ -2771,12 +3319,14 @@ def crashed(qa, repo):
             for name in (first, second)))])
 
 
-JOURNEYS = [sweep, answer, next_waiting, fold, resize, merge, review, since_looked, panes, shell,
-            dashboard, stop_resume, retire, teardown, send, attach, update, conflicts, restart, search, workload, question_left,
+JOURNEYS = [sweep, answer, next_waiting, fold, resize, merge, review, notes, since_looked, panes, shell,
+            dashboard, panel_keys, stop_resume, retire, discard, teardown, send, attach, update, conflicts, restart,
+            search, workload, question_left,
             walk_away,
-            frames, draft_frames, org, drafts, overlap, tabs,
-            forget, rename, fork, other_branch, switched_branch, merged, large, pull_request, exits, include, unreachable, scrollback,
-            fleet, dropped,
+            frames, draft_frames, org, drafts, draft_fields, overlap, region, tabs,
+            forget, rename, fork, other_branch, switched_branch, merged, large, pull_request, exits, include, unreachable,
+            doctor, scrollback,
+            fleet, dropped, forget_host,
             # Last: it crashes every agent so far.
             crashed]
 

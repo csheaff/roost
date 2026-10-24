@@ -1344,7 +1344,8 @@ those tasks."
 ;;;###autoload
 (defun roost-forget-host (host)
   "Stop watching HOST, which Roost remembered when you first used it.
-Agents there keep running, and using the host again watches it again.
+Its tasks' terminals, panels and workspaces close.  Agents there keep
+running, and using the host again watches it again.
 Hosts in `roost-hosts' are watched until you take them out of it."
   (interactive
    (progn
@@ -1362,6 +1363,10 @@ Hosts in `roost-hosts' are watched until you take them out of it."
                                    (roost--host-label host) (roost--host-label host))))
       (setq roost--remembered-hosts (delete host roost--remembered-hosts))
       (roost--write-json-list roost-hosts-file roost--remembered-hosts)
+      ;; Their terminals, panels and workspaces go too, as a retired
+      ;; task's do; their agents run on, and opening one again connects.
+      (roost--discard-terminal (mapcan #'roost--release-terminal tasks))
+      (mapc #'roost--retired-workspace tasks)
       (dolist (task tasks)
         (remhash (roost--key task) roost--tasks)
         (remhash (roost--key task) roost--statuses)
@@ -2141,6 +2146,14 @@ terminal, rather than Roost asking to resume the task.  DESCRIBE, if
 given, is called with TASK as its host replied, before it shows, as
 seeing it changes what it waits for; what it returns, the echo area
 says once the terminal shows."
+  ;; From a child frame, such as the box a review note is written in, in
+  ;; the frame it floats over: a terminal shown in the child frame's place
+  ;; would leave that frame naming the task it showed before.
+  (when (frame-parent)
+    (let ((frame (selected-frame)))
+      (while (frame-parent frame)
+        (setq frame (frame-parent frame)))
+      (select-frame-set-input-focus frame)))
   (let* ((generation (cl-incf roost--open-generation))
          (window (if (window-minibuffer-p) (minibuffer-selected-window) (selected-window)))
          (shown (window-buffer window))
@@ -5704,8 +5717,13 @@ closes it."
                                (when (cdr subjects)
                                  (mapconcat (lambda (subject) (concat "- " subject)) (cdr subjects) "\n")))))
          (issue (alist-get 'number (roost--field task 'issue))))
-    ;; Let GitHub close the task's issue when this merges.
-    (when (and issue (not (string-match-p (format "#%s\\b" issue) (string-join body "\n"))))
+    ;; Let GitHub close the task's issue when this merges, unless the text
+    ;; already says to with one of GitHub's words: the prompt names the
+    ;; issue without one.
+    (when (and issue (not (let ((case-fold-search t))
+                            (string-match-p (format "\\b\\(?:close[sd]?\\|fix\\(?:e[sd]\\)?\\|resolve[sd]?\\):? +#%s\\b"
+                                                    issue)
+                                            (string-join body "\n")))))
       (setq body (append body (list (format "Closes #%s" issue)))))
     (concat title "\n\n" (string-join body "\n\n") (if body "\n" ""))))
 

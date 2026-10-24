@@ -2,8 +2,9 @@
 """gh for make qa: GitHub as a journey sets it, in the directory QA_GITHUB.
 
 qa.py puts this first on PATH, as gh.  `pr list` answers with list.json
-there, `api graphql` with reviews.json, by pull request number, and
-`pr create` with pull request 21.  Each call is logged in log there."""
+there, `api graphql` with reviews.json, by pull request number, `issue
+list` with issues.json, and `pr create` with pull request 21.  Each call
+is logged in log there."""
 import json
 import os
 import re
@@ -38,7 +39,7 @@ def main(args):
     elif args[:2] == ["auth", "status"]:
         print("github.com\n  Logged in to github.com account qa (keyring)")
     elif args[:2] == ["issue", "list"]:
-        print("[]")
+        print(json.dumps(canned("issues.json", [])))
     else:
         sys.stderr.write("fake gh: nothing canned for gh %s\n" % " ".join(args))
         return 1
