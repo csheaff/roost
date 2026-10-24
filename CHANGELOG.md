@@ -4,6 +4,16 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- With `roost-animations` on, only the light of an agent asking you
+  something moves. One that finished, failed or exited, or whose pull
+  request waits on you, keeps its colour and rests, which costs nothing
+  once drawn: with five agents waiting, one of them asking, the lights
+  took about 10% of a core in an uncompiled Emacs 32, and now about 7%.
+- The mode line's count of agents waiting is `● Roost:2`: the dot has the
+  colour of the most pressing, and the count is in the mode line's own
+  colour. In Emacs's default theme the orange count was hard to read on
+  the grey mode line. A mode line of your own that places
+  `roost-mode-line-waiting` gets the same.
 - Colour in Roost's views now means a task needs you. The dot of a task
   whose agent works, which was the brightest on the screen, is dim like
   the dots of tasks that wait for nothing, and so is a merged task's,

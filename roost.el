@@ -7059,11 +7059,10 @@ more than MOST lines.  Return the lines."
 ;;;; Status lights
 
 (defcustom roost-animations nil
-  "Whether the status lights of agents waiting for you move.
-They fade out and back in: one asking you something deeply and quickly,
-and one that finished, failed, crashed or exited since you saw it, or
-whose pull request waits on you, less and slowly.  The rest stay still,
-so motion always means an agent needs you.
+  "Whether the status light of an agent asking you something moves.
+It fades out and back in, as it can't go on until you answer.  The rest
+stay still, in colour while they wait for you, so motion always means an
+agent is held up on you.
 This needs Emacs 32's canvas images; without them the lights stay the
 dots they are.  The motion pauses while no Emacs frame has focus.
 Changed with `setopt' or Customize, it shows at once."
@@ -7085,10 +7084,10 @@ it shows, or nil for the mode line; :phase, the step last drawn; and
 (defvar roost--lights-timer nil
   "Timer moving the status lights.")
 
-(defconst roost--light-periods '((pulse . 2.0) (glow . 3.0))
+(defconst roost--light-periods '((pulse . 2.0))
   "Seconds each motion of a status light takes.")
 
-(defconst roost--light-depths '((pulse . 0.75) (glow . 0.5))
+(defconst roost--light-depths '((pulse . 0.75))
   "How far towards its background each motion fades a status light.")
 
 (defun roost--light-frame-p (frame)
@@ -7112,11 +7111,11 @@ Only there do its lights show; a text frame shows their dots."
 
 (defun roost--light-motion (task)
   "How TASK's light moves, or nil if it rests.
-Only an agent waiting for you moves, as `roost--waiting-p' has it: one
-that can't go on without you pulses, fading deeply, and the others glow,
-fading less."
-  (cond ((roost--blocked-p task) 'pulse)
-        ((roost--waiting-p task) 'glow)))
+Only an agent that can't go on without you moves: it pulses.  One that
+finished or failed waits for you too, but nothing is held up, so its
+light rests in colour, which costs nothing once drawn; a moving light
+redraws, and Emacs redisplays, several times a second."
+  (when (roost--blocked-p task) 'pulse))
 
 (defun roost--light-pixel (color)
   "COLOR, a name or #RRGGBB, as an opaque ARGB32 pixel; mid-gray if unknown."
@@ -10312,9 +10311,11 @@ when they hide minor modes, and only while some agent waits."
   :type 'boolean)
 
 (defun roost--mode-line-count (&optional plain)
-  "\"Roost:N\" for the agents waiting for you, or nil when none are.
-Agents asking permission or stuck at a startup prompt color the count.
-PLAIN leaves out the status light, for a count no mode line shows."
+  "\"● Roost:N\" for the agents waiting for you, or nil when none are.
+The dot has the colour of the most pressing of them, as for an agent
+asking permission; the count is in the mode line's own colour, which
+themes keep legible there, as a warning colour may not be.  PLAIN
+leaves out the status light, for a count no mode line shows."
   (let ((blocked 0) (waiting 0) (tasks nil))
     (maphash (lambda (_key task)
                (push task tasks)
@@ -10325,22 +10326,26 @@ PLAIN leaves out the status light, for a count no mode line shows."
     (unless (and (> (+ blocked waiting) 0) (roost--animations-p))
       (remhash '(mode-line . waiting) roost--lights))
     (when (> (+ blocked waiting) 0)
-      ;; A canvas has one background, so the light shows only in the
-      ;; selected window's mode line, and only on a graphical frame.
-      (concat (when (and (not plain) (roost--animations-p) (roost--light-frame-p (selected-frame))
-                         (mode-line-window-selected-p))
-                (propertize " " 'display
-                            (roost--light 'mode-line 'waiting (if (> blocked 0) 'pulse 'glow)
-                                          (roost--waiting-face tasks) 'mode-line-active)))
-              (propertize (format " Roost:%d" (+ blocked waiting))
-                          'face (roost--waiting-face tasks)
-                          'help-echo "Agents waiting for you; mouse-1 opens the next"
-                          'mouse-face 'mode-line-highlight
-                          'local-map (make-mode-line-mouse-map 'mouse-1 #'roost-next-waiting))
-              " "))))
+      (let ((face (roost--waiting-face tasks)))
+        (concat " "
+                (propertize (concat
+                             ;; A canvas has one background, so the light shows only
+                             ;; in the selected window's mode line, and only on a
+                             ;; graphical frame; elsewhere the dot.
+                             (if (and (not plain) (roost--animations-p) (roost--light-frame-p (selected-frame))
+                                      (mode-line-window-selected-p))
+                                 (propertize "●" 'face face 'display
+                                             (roost--light 'mode-line 'waiting (and (> blocked 0) 'pulse)
+                                                           face 'mode-line-active))
+                               (propertize "●" 'face face))
+                             (format " Roost:%d" (+ blocked waiting)))
+                            'help-echo "Agents waiting for you; mouse-1 opens the next"
+                            'mouse-face 'mode-line-highlight
+                            'local-map (make-mode-line-mouse-map 'mouse-1 #'roost-next-waiting))
+                " ")))))
 
 (defun roost-mode-line-waiting ()
-  "Return \" Roost:N \" while agents wait for you, for your own mode line.
+  "Return \" ● Roost:N \" while agents wait for you, for your own mode line.
 Return nil while none wait, or while `roost-watch-mode' is off.  To place
 it yourself, set `roost-mode-line-count' to nil and add
 \(:eval (and (fboundp \='roost-mode-line-waiting) (roost-mode-line-waiting)))

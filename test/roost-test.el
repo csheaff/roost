@@ -2443,11 +2443,13 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
    (should-not (roost--mode-line-count))
    (roost--cache-task "dev" (roost-test--task "2222222222222222" "ready"))
    (let ((count (roost--mode-line-count)))
-     (should (equal (substring-no-properties count) " Roost:1 "))
-     (should (eq (get-text-property 1 'face count) 'roost-status-ready)))
+     (should (equal (substring-no-properties count) " ● Roost:1 "))
+     ;; The dot has the colour; the count is the mode line's own.
+     (should (eq (get-text-property 1 'face count) 'roost-status-ready))
+     (should-not (get-text-property 3 'face count)))
    (roost--cache-task "dev" (roost-test--task "3333333333333333" "permission"))
    (let ((count (roost--mode-line-count)))
-     (should (equal (substring-no-properties count) " Roost:2 "))
+     (should (equal (substring-no-properties count) " ● Roost:2 "))
      (should (eq (get-text-property 1 'face count) 'roost-status-permission)))
    (let ((global-mode-string '("" display-time-string)) (roost-watch-interval 3600))
      (unwind-protect
@@ -2458,7 +2460,7 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
            ;; Shown only while `roost-mode-line-count' is on.
            (should (eq (car roost--mode-line-entry) 'roost-mode-line-count))
            (should (equal (substring-no-properties (eval (cadr (cadr roost--mode-line-entry)) t))
-                          " Roost:2 ")))
+                          " ● Roost:2 ")))
        (roost-watch-mode -1))
      (should (equal global-mode-string '("" display-time-string))))))
 
@@ -4706,7 +4708,7 @@ of its own, which shows in the selected window of its workspace."
    (let ((roost-watch-mode nil))
      (should-not (roost-mode-line-waiting)))
    (let ((roost-watch-mode t))
-     (should (equal (substring-no-properties (roost-mode-line-waiting)) " Roost:1 ")))))
+     (should (equal (substring-no-properties (roost-mode-line-waiting)) " ● Roost:1 ")))))
 
 ;; Canvases come with Emacs 32, so these tests stand in for them.
 (defmacro roost-test--with-canvases (on &rest body)
@@ -4791,8 +4793,10 @@ of its own, which shows in the selected window of its workspace."
                      (prog1 (roost--light-motion task)
                        (remhash (roost--key task) roost--seen))))))
      (should (eq (funcall motion "permission") 'pulse))
+     ;; One that finished or failed waits for you too, but holds nothing
+     ;; up: its light rests, in colour.
      (dolist (status '("ready" "interrupted" "error" "failed" "crashed" "exited"))
-       (should (eq (funcall motion status) 'glow))
+       (should-not (funcall motion status))
        (should-not (funcall motion status t)))
      (dolist (status '("running" "stopped"))
        (should-not (funcall motion status)))))
@@ -4815,14 +4819,11 @@ of its own, which shows in the selected window of its workspace."
       (let ((still (funcall pixels-at nil 0.0))
             (middle (+ (/ width 2) (* (/ height 2) width)))
             (red (lambda (pixel) (logand (ash pixel -16) 255))))
-        (dolist (motion '(pulse glow))
-          (should (equal (funcall pixels-at motion 0.0) still))
-          (let ((faded (funcall pixels-at motion 0.5)))
-            (should (= (aref faded 0) #xFF1E1E1E))
-            (should (< #x1E (funcall red (aref faded middle)) #xAA))))
-        (should (< (funcall red (aref (funcall pixels-at 'pulse 0.5) middle))
-                   (funcall red (aref (funcall pixels-at 'glow 0.5) middle)))))
-      (should (= roost-test--refreshed 9)))))
+        (should (equal (funcall pixels-at 'pulse 0.0) still))
+        (let ((faded (funcall pixels-at 'pulse 0.5)))
+          (should (= (aref faded 0) #xFF1E1E1E))
+          (should (< #x1E (funcall red (aref faded middle)) #xAA))))
+      (should (= roost-test--refreshed 5)))))
 
 (ert-deftest roost-status-lights-paint-the-background-that-shows ()
   ;; A theme can leave the margin face of Emacs 31 and later without a
@@ -4959,12 +4960,12 @@ of its own, which shows in the selected window of its workspace."
              (should (= roost-test--refreshed before)))
            ;; The mode line has one too, for the agents waiting, in the
            ;; selected window, whose background it paints.
-           (should (eq (car (get-text-property 0 'display (roost--mode-line-count))) 'image))
+           (should (eq (car (get-text-property 1 'display (roost--mode-line-count))) 'image))
            (let ((roost-test--selected nil))
-             (should-not (get-text-property 0 'display (roost--mode-line-count))))
+             (should-not (get-text-property 1 'display (roost--mode-line-count))))
            ;; Comparing counts makes no light, and watching no more drops it.
            (remhash '(mode-line . waiting) roost--lights)
-           (should-not (get-text-property 0 'display (roost--mode-line-count t)))
+           (should-not (get-text-property 1 'display (roost--mode-line-count t)))
            (should-not (gethash '(mode-line . waiting) roost--lights))
            (roost--mode-line-count)
            (let ((roost-watch-interval 3600))
@@ -4997,7 +4998,7 @@ of its own, which shows in the selected window of its workspace."
                (let ((before roost-test--refreshed))
                  (roost--lights-tick)
                  (should (= roost-test--refreshed (1+ before))))
-               (should-not (get-text-property 0 'display (roost--mode-line-count)))
+               (should-not (get-text-property 1 'display (roost--mode-line-count)))
                ;; The lights get a margin, which goes when they are turned
                ;; off; a text frame's window keeps its own.
                (roost--light-margins)
