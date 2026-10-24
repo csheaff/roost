@@ -45,12 +45,13 @@ FAKE_GH = HERE / "fake_gh.py"
 
 FRAME = (172, 40)
 PANEL = 44  # roost-task-panel-width
-# The most times a command may collect garbage, at Emacs's default
-# threshold.  With 39 tasks, opening a draft, the most any journey's
-# command collects, does 8 or 9; before Roost stopped sorting every task
-# for each row of the sidebar (#139), with a tab per task, 40 to 50.  A
-# pause in a step whose commands collect fewer had another cause, most
-# likely the machine's load.
+# The most times one input may have Emacs collect garbage, at its default
+# threshold: a key sequence, typing or a click, and what its command sets
+# off until Emacs is idle, such as Roost's timer that draws a new draft.
+# In a whole run, with up to 39 tasks, none needed more than XX.  Before
+# Roost stopped sorting every task for each row of the sidebar (#139),
+# C-c r c with a tab per task needed 40 to 50.  A pause in a step whose
+# input needed fewer had another cause, most likely the machine's load.
 COLLECTIONS = 20
 
 LONG_PROMPT = (
@@ -391,6 +392,8 @@ class Run:
                 raise Stuck("Emacs didn't take the input in 20s")
             time.sleep(0.1)
         time.sleep(quiet)
+        # What garbage Emacs collected since the input is the input's.
+        self.emacs.eval("(qa-input-done)")
 
     def screen(self):
         return self.emacs.json("(qa-screen)")
@@ -518,13 +521,13 @@ class Run:
         self.settle()
         screen = self.screen()
         problems = ["Error: " + error for error in self.emacs.json("(json-encode (vconcat (qa-take-errors)))")]
-        # By command: a pause in the step is a command's garbage if one
-        # collected it often, and more likely the machine's load if none did.
+        # By input: a pause in the step was an input's garbage if one had
+        # Emacs collect it often, and more likely the machine's load if none did.
         collections = self.emacs.json("(json-encode (vconcat (mapcar #'vconcat (qa-take-collections))))")
         heavy = [entry for entry in collections if entry[1] > COLLECTIONS]
-        problems += ["The command %s collected garbage %d times (%.2f s), more than the %d a command may"
-                     % (command, count, seconds, COLLECTIONS) for command, count, seconds in heavy]
-        problems += ["Emacs stopped responding: %s. The step's commands collected garbage %d times (%.2f s): %s"
+        problems += ["%s had Emacs collect garbage %d times (%.2f s), more than the %d one input may"
+                     % (input, count, seconds, COLLECTIONS) for input, count, seconds in heavy]
+        problems += ["Emacs stopped responding: %s. The step's input had it collect garbage %d times (%.2f s): %s"
                      % (pause, sum(entry[1] for entry in collections), sum(entry[2] for entry in collections),
                         "the garbage of %s" % ", ".join(entry[0] for entry in heavy) if heavy
                         else "none often enough to explain it, so the machine's load, or a timer's "
@@ -661,7 +664,7 @@ class Run:
                            for key, label in (("echo", "Echo area"), ("prompt", "Minibuffer"))
                            if step["screen"].get(key))
             if step.get("collections"):
-                said += "<p><small>Garbage collected by: %s</small></p>" % html.escape(", ".join(
+                said += "<p><small>Garbage collected after: %s</small></p>" % html.escape(", ".join(
                     "%s %d (%.2f s)" % tuple(entry) for entry in step["collections"]))
             rows.append('<section class="%s"><h3>%s %s</h3><ul>%s</ul>%s%s%s</section>' % (
                 "bad" if step["problems"] else "good", "✗" if step["problems"] else "✓",
