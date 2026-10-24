@@ -4,6 +4,27 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Writing a review note in a narrowed Magit diff, or saving one while
+  another Magit buffer on the task is narrowed, no longer hangs Emacs.
+  Roost read a hunk's lines up to the hunk's end, which the narrowing
+  hid, so it never got there. Now the note is on its line, and notes
+  show under their lines, as in the whole diff.
+- Code quoted from an indirect buffer, as `C-x 4 c` makes, or from an
+  Org source block you are editing with `C-c '`, names the file it is
+  from and its lines there. It named the buffer, as
+  `*Org Src notes.org[ python ]*:1-2`, and now `notes.org:12-13`; and
+  `roost-send-region` from an indirect buffer in a task's worktree goes
+  to that task, without asking which.
+- A new task's draft names the file of the code it quotes from the top
+  of its checkout, as `roost-new-task-from-file` does, and in full
+  outside one. It was named from the top VC found, or from its own
+  folder when VC found none, as with VC turned off: `a.py` for
+  `src/a.py`. For a file on another host, finding the top took a round
+  trip for each folder, while you waited; a task's worktree or a project
+  Roost knows now comes first.
+- A task started from an Org heading shown with `C-c C-x b` is recorded
+  on the heading, though Org closes that buffer when you show the next
+  before the task is created.
 - Code quoted from a narrowed buffer, as after `C-x n d`, names its lines
   in the file: `roost-send-region`, a new task from the region and one
   from a Flymake diagnostic counted them from the start of what the
