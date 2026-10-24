@@ -1108,7 +1108,7 @@ def notes(qa, repo):
 
 @journey("What changed since you looked")
 def since_looked(qa, repo):
-    """A task you never looked at says so, until v marks it as looked at,
+    """A task you never looked at says so, until v marks it looked at,
     opening nothing; once its agent changes more, its row, panel, Magit
     and m say what changed since, as they do after a look in Magit."""
     if qa.emacs.eval("(and (require 'magit nil t) t)") != "t":
@@ -1134,7 +1134,7 @@ def since_looked(qa, repo):
     qa.wait("the mark", lambda s: row(s).endswith("not looked at"))
     qa.step("Not looked at yet", expect=[
         ("the panel says so, naming v, and r once, in the next step",
-         lambda s: "Not looked at yet: v marks it as looked at\n" in panel_text(qa, s)
+         lambda s: "Not looked at yet: v marks it looked at\n" in panel_text(qa, s)
          and "in Magit: r" in panel_text(qa, s) and ": r opens it" not in panel_text(qa, s)),
         ("it doesn't wait on you", lambda s: qa.task(s, name)["status"] == "idle")])
     # As for a task you judged by its panel, from its row.
@@ -1143,7 +1143,7 @@ def since_looked(qa, repo):
         raise Stuck("No row for %s in the sidebar" % name)
     qa.keys("v")
     qa.wait("the mark to go", lambda s: row(s) == name)
-    qa.step("v marks it as looked at", expect=[
+    qa.step("v marks it looked at", expect=[
         ("the echo area says so", lambda s: "Marked %s as looked at" % name in (s["echo"] or "")),
         ("the panel no longer says it isn't", lambda s: "Not looked at" not in panel_text(qa, s)
          and "since you looked" not in panel_text(qa, s)),
@@ -1157,7 +1157,7 @@ def since_looked(qa, repo):
     qa.wait("the count", lambda s: "since you looked" in panel_text(qa, s))
     qa.step("Changed since v", expect=[
         ("the panel counts from there, naming v, and r once, in the next step",
-         lambda s: re.search(r"1 file changed since you looked, \d+[smhd]\w* ago: v marks it as looked at\n",
+         lambda s: re.search(r"1 file changed since you looked, \d+[smhd]\w* ago: v marks it looked at\n",
                              panel_text(qa, s))),
         ("the sidebar says so", lambda s: row(s).endswith("1 file changed"))])
     qa.keys("C-c r r")
@@ -1181,7 +1181,7 @@ def since_looked(qa, repo):
     qa.wait("the count", lambda s: "since you looked" in panel_text(qa, s))
     qa.step("Changed since you looked", expect=[
         ("the panel says how much, that r shows it, and v",
-         lambda s: re.search(r"1 file changed since you looked, \d+[smhd]\w* ago: r shows them, v marks it as looked at",
+         lambda s: re.search(r"1 file changed since you looked, \d+[smhd]\w* ago: r shows them, v marks it looked at",
                              panel_text(qa, s))),
         ("the sidebar says so", lambda s: row(s).endswith("1 file changed")),
         ("it still doesn't wait on you", lambda s: qa.task(s, name)["status"] == "idle")])

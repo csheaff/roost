@@ -7081,14 +7081,14 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
          (roost-task-info-mode)
          (setq roost--buffer-task-key (roost--key task))
          (roost--render-task-info)
-         (should (string-match-p "^Not looked at yet: r opens it in Magit, v marks it as looked at$"
+         (should (string-match-p "^Not looked at yet: r opens it in Magit, v marks it looked at$"
                                  (buffer-string))))))))
 
 (ert-deftest roost-the-task-panel-says-what-changed-since-you-looked ()
   (roost-test--isolated
-   (dolist (case '((3 t "^3 files changed since you looked, [0-9]+d ago: r shows them, v marks it as looked at$")
+   (dolist (case '((3 t "^3 files changed since you looked, [0-9]+d ago: r shows them, v marks it looked at$")
                    ;; Without Magit, r opens Dired.
-                   (3 nil "^3 files changed since you looked, [0-9]+d ago: v marks it as looked at$")
+                   (3 nil "^3 files changed since you looked, [0-9]+d ago: v marks it looked at$")
                    (0 t "^Nothing changed since you looked, [0-9]+d ago$")))
      (let ((task (roost--cache-task "dev" (roost-test--looked
                                            `(sinceLooked (count . ,(car case))
@@ -7128,7 +7128,7 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
          (setq roost--buffer-task-key (roost--key task))
          (roost--render-task-info)
          (should (string-match-p "^Review and commit its changes in Magit: r$" (buffer-string)))
-         (should (string-match-p "^3 files changed since you looked, [0-9]+d ago: v marks it as looked at$"
+         (should (string-match-p "^3 files changed since you looked, [0-9]+d ago: v marks it looked at$"
                                  (buffer-string)))
          ;; Keys, as the next step's are, for the sweep to check.
          (goto-char (point-min))

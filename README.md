@@ -12,7 +12,7 @@ worktree, a branch and a terminal, here or on any SSH host. It tells you which
 agents need you, and you review and merge their work with Magit. If you've
 used Orca, it's that idea, inside Emacs.
 
-![Emacs with three columns: Roost's sidebar listing six agents on two machines, the one you are on marked with a band and asking permission, two ready, two you have seen and one working; that agent's Claude Code terminal on the SSH host claylien, asking to run python3 -m unittest; and the task's panel, which says to answer it in its terminal and shows the prompt it was given, your latest prompt and the files it has changed](docs/images/roost-hero.png)
+![Emacs with three columns: Roost's sidebar listing six agents on two machines, the one you are on marked with a band and asking permission, three ready, one you have seen and one working; that agent's Claude Code terminal on the SSH host claylien, asking to run python3 -m unittest; and the task's panel, which says to answer it in its terminal and shows the prompt it was given, your latest prompt and the files it has changed](docs/images/roost-hero.png)
 
 *Six Claude Code agents on two machines. The one on `claylien` wants to run
 its tests: its own terminal in the middle, every task at the left, and at the
@@ -33,7 +33,9 @@ and a task's panel its keys work alone.
 
 2. **Go where you're needed.** While it works, an agent on `claylien` asks to
    run its tests. `C-c r n` takes you to the next agent waiting for you, and
-   you answer it in its own terminal.
+   you answer it in its own terminal. With perspective.el or `tab-bar-mode`
+   on, each task has a perspective or tab of its own, which keeps its
+   terminal, diffs and files together as you left them.
 3. **Review, and reply in place.** The panel beside the terminal lists the
    files the agent changed, and the other tasks that change them too. A
    click opens one's diff in Magit, `;` writes a note on a line, and `@` in
@@ -51,7 +53,7 @@ and a task's panel its keys work alone.
 it's doing, what it changed, and its latest reply or what it asks. A
 notification says the same when one finishes or asks for something.
 
-![The dashboard, counting 1 permission, 2 ready, 2 seen and 1 running: two tasks on claylien, one ready and one asking to run python3 -m unittest, and four local ones, one ready, two you have seen and one working, each with its changes and latest reply](docs/images/roost-dashboard.png)
+![The dashboard, counting 1 permission, 3 ready, 1 running and 1 seen: two tasks on claylien, one ready and one asking to run python3 -m unittest, and four local ones, two ready, one you have seen and one working, each with its changes and latest reply](docs/images/roost-dashboard.png)
 
 ## How it differs
 
