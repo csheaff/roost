@@ -21,6 +21,18 @@ What each release changes, and what to do when upgrading. Newest first.
   host, or anything running as you there, could send an ID that Emacs
   ran as Lisp in place of opening the task. It needed terminal-notifier
   and an Emacs server. Now the ID stays data.
+- A reply from a host that Roost can't read, as when a dropped
+  connection cuts it short, says so with the start of what came: "Roost
+  can't read the host helper's reply: …". It gave the JSON reader's
+  words, or a Lisp error such as "Wrong type argument: listp". A list of
+  tasks in a form Roost doesn't know no longer stops in a Lisp error
+  each time the host is polled. Of what a failing host command printed,
+  Roost keeps the last 4000 characters, where a traceback says what
+  failed.
+- With a `#` in `roost-state-directory`, a task's agent window and shell
+  start in its worktree. tmux read the path as a format, so they could
+  start in your home directory instead; the agent itself always ran in
+  its worktree.
 - A task whose worktree is on another branch says so once at the top of
   its panel. The line beside its changes, which said it again, now says
   only whose they are, still naming the task's branch and in the same

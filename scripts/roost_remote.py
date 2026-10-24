@@ -1460,9 +1460,11 @@ def spawn(store, task, resume=False, size=()):
     if resume:
         argv.append("resume")
     # The runner waits on the registry lock, held here, until its stable pane
-    # ID is saved, so the agent starts only after this is done.
+    # ID is saved, so the agent starts only after this is done. tmux reads
+    # the name and the directory as formats, where # starts one.
     window_options = ["-P", "-F", "#{window_id}\t#{pane_id}\t#{window_index}\t#{session_name}",
-                      "-n", task["name"].replace("#", "##"), "-c", task["worktree"], shlex.join(argv)]
+                      "-n", task["name"].replace("#", "##"), "-c", task["worktree"].replace("#", "##"),
+                      shlex.join(argv)]
     if tmux(socket, "has-session", "-t", "=" + session, check=False).returncode:
         # The task's own session holds only its agent's window, so stopping
         # or retiring the task, which closes that window, ends the session.
@@ -2939,8 +2941,9 @@ def shell(store, task):
             raise RoostError("Task worktree is gone")
         if pane:
             tmux(task["socket"], "kill-pane", "-t", task["shellPaneId"])
+        # tmux reads the directory as a format, where # starts one.
         pane_id = tmux(task["socket"], "split-window", "-h", "-d", "-P", "-F", "#{pane_id}",
-                       "-t", task["paneId"], "-c", task["worktree"]).stdout.strip()
+                       "-t", task["paneId"], "-c", task["worktree"].replace("#", "##")).stdout.strip()
         tmux(task["socket"], "set-option", "-p", "-t", pane_id, "@roost_task_id", task["id"])
         task["shellPaneId"] = pane_id
     owner = inventory[task["paneId"]]

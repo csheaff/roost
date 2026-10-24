@@ -268,6 +268,8 @@ Called, they are recorded and stop the command.")
                              `((symbol-function ',f)
                                (lambda (&rest args)
                                  (push (cons ',f args) roost-sweep--effects)
+                                 ;; Stubbed, a process is checked here.
+                                 (roost-test--note-start ',f args)
                                  (signal 'roost-sweep-outside (list ',f)))))
                            roost-sweep--outside)
                  ,@(mapcar (lambda (f)
