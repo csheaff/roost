@@ -73,11 +73,13 @@ ssh and python3 run the host helper, Git reads a task's worktree, and
 osascript and terminal-notifier notify; osascript also reads an image
 on the clipboard.")
 
-(defconst roost-test--delegates "\\`\\(vc-\\|magit-\\|tmux-control-\\|browse-url\\)"
+(defconst roost-test--delegates "\\`\\(vc-\\|magit-\\|with-editor-\\|tmux-control-\\|browse-url\\)"
   "Packages that start what you set them to when Roost calls them.
 VC, finding a checkout, loads the backends in `vc-handled-backends',
 which may run theirs; tmux-control starts tmux, Magit Git, and
-`browse-url' your browser.")
+`browse-url' your browser.  Loading Magit loads with-editor, which
+runs each emacsclient it finds to learn its version: no function of
+Magit's is on the stack while a file loads.")
 
 (defconst roost-test--input-shell '("/bin/sh" "-c" "exec \"$@\" < \"$0\"")
   "How `roost--run' gives a host command its input from a file.

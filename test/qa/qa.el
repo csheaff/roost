@@ -60,23 +60,34 @@ process filters and sentinels, and hooks, which never reach a command."
 (defvar qa--pauses-seen nil
   "The latest of tmux-control's pause notes `qa-take-pauses' has returned.")
 
+(defvar qa--own-work-start nil
+  "When the long request from qa.py running now began, or nil.")
+
+(defun qa--own-work-took (&rest _)
+  "Count the long request from qa.py running now, if any, for the pause log."
+  (when (and qa--own-work-start (fboundp 'tmux-control--pause-log-took))
+    (tmux-control--pause-log-took qa--own-work-start (lambda () "qa.py's own request"))))
+
 (defmacro qa--own-work (&rest body)
   "Run BODY, a long request from qa.py, such as the sweep, as work of its own.
 The pause log then blames it for the pause it makes, which
-`qa-take-pauses' leaves out.  The server's own functions can't be
-advised for this: natively compiled, they call each other directly."
+`qa-take-pauses' leaves out: at its end, and at each check the log
+makes while it runs, as timers do when the sweep shows a child frame.
+The server's own functions can't be advised for this: natively
+compiled, they call each other directly."
   (declare (indent 0))
-  `(let ((start (float-time)))
+  `(let ((qa--own-work-start (float-time)))
      (unwind-protect
          (progn ,@body)
-       (when (fboundp 'tmux-control--pause-log-took)
-         (tmux-control--pause-log-took start (lambda () "qa.py's own request"))))))
+       (qa--own-work-took))))
 
 (defun qa-watch-pauses ()
   "Note each pause of a second or more, if tmux-control can, and say whether it can."
   (when (fboundp 'tmux-control-pause-log-mode)
     (setq tmux-control-pause-log-threshold 1.0)
     (tmux-control-pause-log-mode 1)
+    ;; Its timer calls the check by name, so advice reaches it.
+    (advice-add 'tmux-control--pause-log-check :before #'qa--own-work-took)
     t))
 
 (defun qa-take-pauses ()
@@ -1016,6 +1027,11 @@ question from another of the same prompt asked after it."
 (defun qa-sweep ()
   "Run test/roost-sweep.el's rules in a frame of their own here, where
 text is measured in pixels.  Return how many ran and the problems, as JSON."
+  ;; Magit, as it loads, runs Git and emacsclient, which the sweep's stubs
+  ;; refuse: it would stop partway, load again at each key that needs it,
+  ;; and leave with-editor no emacsclient for the journeys after.  Loaded
+  ;; first, as tests before the sweep load it in `make test'.
+  (require 'magit nil t)
   (let ((frame (make-frame '((visibility . nil) (width . 160) (height . 48))))
         (stats nil))
     (unwind-protect
