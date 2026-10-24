@@ -2641,13 +2641,28 @@ def tabs(qa, repo):
             ("it is the first task's", lambda s: (s.get("task") or {}).get("key") == elder),
             ("its panel beside it", lambda s: panel_text(qa, s).startswith(first)),
             ("no tab was added", lambda s: len(s["workspaces"]) == 3)])
+        # A tab of its own in a second frame too, which has tabs of its own.
+        tab = qa.host_label + "/" + first
+        anywhere = ("(and (seq-some (lambda (frame) (with-selected-frame frame (member %s (roost--tabs))))"
+                    " (seq-remove #'frame-parent (frame-list))) t)" % lisp(tab))
+        qa.keys("C-x 5 2")
+        qa.wait("the new frame", lambda s: len(s.get("frames") or {}) == 2)
+        qa.emacs.eval("(set-frame-size nil %d %d)" % FRAME)
+        qa.emacs.eval("(roost-open-task (seq-find (lambda (task) (equal (format \"%%s/%%s\" (or (roost--field task 'host)"
+                      " \"local\") (roost--field task 'id)) %s)) (roost-tasks)))" % lisp(elder))
+        qa.wait("its tab there", lambda s: tab in s["workspaces"] and (s.get("task") or {}).get("key") == elder)
+        qa.keys("C-x 5 o")
+        qa.wait("the first frame", lambda s: s["workspace"] == tab)
         qa.keys("C-c r x")
         qa.wait("the question", lambda s: s["prompt"])
         qa.type("y")
         qa.wait("the task to go", lambda s: not any(t["key"] == elder for t in s["tasks"]), timeout=30)
         qa.step("Retired, with its tab", expect=[
-            ("its tab is gone", lambda s: qa.host_label + "/" + first not in s["workspaces"]),
+            ("its tab is gone", lambda s: tab not in s["workspaces"]),
+            ("from the other frame too", lambda s: qa.emacs.eval(anywhere) == "nil"),
             ("the other's is still there", lambda s: len(s["workspaces"]) == 2)])
+        qa.emacs.eval("(dolist (frame (seq-remove #'frame-parent (frame-list)))"
+                      " (unless (eq frame (selected-frame)) (delete-frame frame)))")
         # A task whose tab you closed: a new tab starts with the terminal
         # you were in, which its own takes the place of.
         untabbed = start_task(qa, "Close my tab")

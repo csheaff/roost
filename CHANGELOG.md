@@ -4,6 +4,10 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Retiring, merging, discarding or forgetting a task closes its tab in
+  every frame with a tab per task, not only in the one you are in, and
+  you stay in your frame. A task whose panel showed in another frame
+  took you to that frame.
 - A task opened while you write a review note, as from a notification
   or Roost's menu, opens in the frame the note's box floats over. Its
   terminal showed in the Magit window under the box instead, beside the

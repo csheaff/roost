@@ -6617,25 +6617,34 @@ later, saying so over what the merge said."
 (defun roost--retired-workspace (task)
   "Remove TASK's workspace and panel, retaining other buffers.
 A window made to show the panel goes away; any other goes back to what
-it showed before."
-  (let ((key (roost--key task)))
+it showed before.  In every frame, and you stay in yours: quitting a
+window in another frame, or closing its current tab, which restores a
+window configuration of that frame, selects it."
+  (let ((key (roost--key task))
+        (selected (selected-frame)))
     (dolist (buffer (buffer-list))
       (when (and (equal (buffer-local-value 'roost--buffer-task-key buffer) key)
                  (eq (buffer-local-value 'major-mode buffer) 'roost-task-info-mode))
-        ;; In every frame.  Before Emacs 31 this kills only a panel that
-        ;; shows, so kill the rest too.
+        ;; Before Emacs 31 this kills only a panel that shows, so kill the
+        ;; rest too.
         (quit-windows-on buffer t)
-        (when (buffer-live-p buffer) (kill-buffer buffer)))))
-  (pcase (roost--workspace-backend)
-    ('perspective
-     (when (fboundp 'persp-kill)
-       (let ((persp-autokill-buffer-on-remove nil))
-         (persp-kill (roost--perspective-name task))))
-     (remhash (roost--key task) roost--perspectives))
-    ('tab-bar
-     (let ((name (roost--task-tab task)))
-       (when (and name (cdr (roost--tabs)))
-         (tab-bar-close-tab-by-name name))))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))
+    (pcase (roost--workspace-backend)
+      ('perspective
+       (when (fboundp 'persp-kill)
+         (let ((persp-autokill-buffer-on-remove nil))
+           (persp-kill (roost--perspective-name task))))
+       (remhash (roost--key task) roost--perspectives))
+      ('tab-bar
+       ;; Each frame has tabs of its own.
+       (dolist (frame (frame-list))
+         (unless (frame-parent frame)
+           (with-selected-frame frame
+             (let ((name (roost--task-tab task)))
+               (when (and name (cdr (roost--tabs)))
+                 (tab-bar-close-tab-by-name name))))))))
+    (unless (or (eq (selected-frame) selected) (not (frame-live-p selected)))
+      (select-frame selected))))
 
 ;;;###autoload
 (defun roost-next-waiting ()
