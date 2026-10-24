@@ -23,6 +23,8 @@
 ;; - What `n' says on opening a task that waits fits one line of the echo
 ;;   area, narrow or wide: its status and name first, then why it waits
 ;;   where there is room, and the keys it names apply.
+;; - A view costs no more for each task when there are more of them:
+;;   drawn for eight times the tasks, it allocates under twelve times as much.
 ;;
 ;; A new button or key is covered without a test of its own; a new kind
 ;; of task gets a state in `roost-sweep--gallery'.  The world outside the
@@ -883,6 +885,103 @@ Return them as (PROBLEM . PLACES), PLACES naming the view, state and width."
      (dolist (state '("permission" "stuck starting" "ready, reviewing" "crashed" "failed turn"
                       "conflicts with main" "pull request to merge" "pull request with comments"))
        (should (roost--waiting-p (gethash (roost-sweep--key state) roost--tasks)))))))
+
+;;;; Cost
+
+(defconst roost-sweep--fleet-states
+  '("permission" "pull request open" "ready, committed" "large change" "running")
+  "The gallery states a fleet's tasks take in turn.
+A reply, changed files, a pull request, a large change and a prompt.")
+
+(defun roost-sweep--fleet-id (index)
+  "The ID of the fleet's task INDEX."
+  (format "%016x" (+ #x1000 index)))
+
+(defun roost-sweep--fleet (count)
+  "Cache COUNT tasks, as many in each of `roost-sweep--fleet-states'.
+Of each ten, four are on host \"lab\" and the rest on \"dev\"; one has
+the name of the task before it, in its project on its host, and another
+that of one on the other host, so tasks are told apart by their IDs and
+hosts.  They are cached out of order, for the task list's sort to do,
+so COUNT must not be a multiple of 37."
+  (let ((states roost-sweep--fleet-states))
+    (dotimes (n count)
+      (let* ((index (mod (* n 37) count))
+             (named (if (memq (mod index 10) '(7 9)) (1- index) index))
+             (fields (cdr (assoc (nth (mod index (length states)) states) roost-sweep--gallery)))
+             (id (roost-sweep--fleet-id index)))
+        (roost--cache-task (if (memq (mod index 10) '(1 3 5 9)) "lab" "dev")
+                           (append (copy-tree fields)
+                                   `((id . ,id) (name . ,(format "%s %d" (nth (mod named (length states)) states)
+                                                                 named))
+                                     (repo . "/home/user/ledger")
+                                     (startedAt . ,(format "2026-10-01T%02d:%02d:00Z" (/ index 60) (mod index 60)))
+                                     (size . ,(roost-sweep--size (alist-get 'files fields))))
+                                   (roost-test--task id)))))))
+
+(defun roost-sweep--allocated (function)
+  "How much calling FUNCTION allocates: conses, vector cells and string characters.
+As it does a second time, past what it sets up or loads the first."
+  (funcall function)
+  (let ((before (memory-use-counts)))
+    (funcall function)
+    (let ((after (memory-use-counts)))
+      (apply #'+ (mapcar (lambda (n) (- (nth n after) (nth n before))) '(0 2 4))))))
+
+(defun roost-sweep--costs (count)
+  "What the task list and each view allocate with a fleet of COUNT tasks.
+As (WHAT . AMOUNT)."
+  (roost-sweep--world
+    (clrhash roost--tasks)
+    (clrhash roost--errors)
+    (setq roost--notes nil)
+    (roost-sweep--fleet count)
+    (let ((tasks (roost-tasks))
+          (costs (list (cons "The task list" (roost-sweep--allocated #'roost-tasks)))))
+      (with-temp-buffer
+        (roost-sidebar-list-mode)
+        (push (cons "The sidebar" (roost-sweep--allocated #'roost--render-sidebar)) costs))
+      (with-temp-buffer
+        (roost-dashboard-mode)
+        (push (cons "The dashboard" (roost-sweep--allocated #'roost--render-dashboard)) costs))
+      (with-temp-buffer
+        (roost-task-info-mode)
+        ;; One with a reply and changed files.
+        (setq roost--buffer-task-key (list "dev" (roost-sweep--fleet-id 0)))
+        (push (cons "A task panel" (roost-sweep--allocated #'roost--render-task-info)) costs))
+      ;; A tab for each task, in the last task's, which is the one found last.
+      (let ((roost-workspace 'tab-bar)
+            (original-tab-bar-mode tab-bar-mode))
+        (unwind-protect
+            (progn
+              (tab-bar-mode 1)
+              (dolist (task tasks)
+                (tab-bar-new-tab)
+                (tab-bar-rename-tab (roost--tab-name task)))
+              (with-temp-buffer
+                (setq default-directory "/")
+                (should (equal (roost--task-at-point) (car (last tasks))))
+                (push (cons "Finding the task of a tab" (roost-sweep--allocated #'roost--task-at-point))
+                      costs)))
+          (while (cdr (roost--tabs)) (tab-bar-close-tab))
+          (unless original-tab-bar-mode (tab-bar-mode -1))))
+      (nreverse costs))))
+
+(ert-deftest roost-sweep-costs-grow-no-faster-than-the-tasks ()
+  ;; Each row of the sidebar and dashboard, and each task when finding
+  ;; the one whose tab you are in, sorted every task: with 39, a sidebar
+  ;; redraw took 81 ms, 67 of them collecting garbage.  Measured by what
+  ;; is allocated, the same on any machine: eight times the tasks allocate
+  ;; about eight times as much when the cost is linear, and 64 times when
+  ;; quadratic.  Each row looking through every task once more, as for
+  ;; another with its name, comes to about 15.
+  (roost-test--isolated
+   (let ((few (roost-sweep--costs 25)) (many (roost-sweep--costs 200)) problems)
+     (pcase-dolist (`(,what . ,cost) few)
+       (let ((ratio (/ (float (alist-get what many nil nil #'equal)) cost)))
+         (when (>= ratio 12)
+           (push (format "%s allocates %.1f times as much for 200 tasks as for 25" what ratio) problems))))
+     (should-not problems))))
 
 ;;;; Your own buffers
 

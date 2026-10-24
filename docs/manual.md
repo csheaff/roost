@@ -924,7 +924,12 @@ and fails on:
   than opening the task, showing a menu, or saying why it can't: a
   completion popup hides a question once you click elsewhere;
 - a key the task panel tells you to press that isn't bound there, or whose
-  command doesn't apply to the task.
+  command doesn't apply to the task;
+- a view, the task list, or finding the task of the tab you're in, that
+  allocates twelve times as much or more for eight times the tasks: its cost
+  grows faster than the number of tasks, as when each row looks through
+  every task. Allocation is counted, not time, so it is the same on any
+  machine.
 
 Hosts, processes, terminals, Magit, the menu and the browser are stubbed, and
 every question is answered with `C-g`. A new button or key is covered as it
@@ -974,7 +979,12 @@ tmux has in its pane, or history nobody scrolled it to, and for a question
 open in the minibuffer that you aren't in, unless the journey left it so,
 or anything Roost holds back until such a question is done. With tmux-control's
 `tmux-control-pause-log-mode`, it also fails a step in which Emacs stopped
-responding for a second or more, and says what Emacs was doing. It runs the
+responding for a second or more, and says what Emacs was doing and how
+often the step's keys and clicks had it collect garbage, with what their
+commands set off, such as Roost's timers: many times, and the pause was
+that garbage; few, and the machine's load more likely. A key sequence or
+click that has Emacs collect garbage more than 20 times fails its step
+too. It runs the
 sweep where text is measured in pixels, too. It takes about 25 minutes,
 writes `report.html` with each step's windows, the echo area and, on macOS, a
 screenshot, and fails if anything was wrong. The report ends with the commands

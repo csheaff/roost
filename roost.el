@@ -1596,9 +1596,7 @@ nobody is looking."
                                                          (roost--field task 'shellPaneId))))
                    tasks))
        (roost--task-in-directory default-directory tasks)
-       (and workspace
-            (let ((current (roost--current-workspace)))
-              (seq-find (lambda (task) (equal current (roost--workspace-name task))) tasks)))
+       (and workspace (roost--workspace-task (roost--current-workspace) tasks))
        ;; An unrelated workspace or file must not silently target the last task.
        (and (not workspace) (not buffer-file-name)
             (gethash roost--current-task roost--tasks)))))))
@@ -1756,6 +1754,18 @@ started or gone since."
   (if (eq (roost--workspace-backend) 'tab-bar)
       (or (roost--task-tab task) (roost--tab-name task))
     (roost--perspective-name task)))
+
+(defun roost--workspace-task (workspace tasks)
+  "The task of TASKS whose workspace is named WORKSPACE, or nil."
+  (when workspace
+    (seq-find (lambda (task)
+                ;; Each name ends in the task's name or the start of its
+                ;; ID: only a task whose name or ID could be the one needs
+                ;; the tabs and namesakes that say which it is named for.
+                (and (or (string-suffix-p (or (roost--field task 'name) "") workspace)
+                         (string-suffix-p (substring (roost--field task 'id) 0 6) workspace))
+                     (equal workspace (roost--workspace-name task))))
+              tasks)))
 
 (defun roost--current-workspace ()
   "Name of the current workspace, or nil without a backend."
@@ -8732,6 +8742,20 @@ A count is in the colour of the most pressing of its tasks, as for
                          (seq-uniq (append roost--row-words (hash-table-keys counts)))))
      (propertize " · " 'face 'roost-dim))))
 
+(defvar roost--name-counts nil
+  "While a list of tasks is drawn, how many tasks have each name in each project.
+See `roost--count-names'.  Counted once for the list, not for each row.")
+
+(defun roost--name-key (task)
+  "TASK's host, project and name, which no other task's has unless it is a twin."
+  (list (roost--field task 'host) (roost--field task 'repo) (roost--field task 'name)))
+
+(defun roost--count-names ()
+  "How many tasks have each name in each project, by `roost--name-key'."
+  (let ((counts (make-hash-table :test 'equal)))
+    (maphash (lambda (_ task) (cl-incf (gethash (roost--name-key task) counts 0))) roost--tasks)
+    counts))
+
 (defun roost--row-name (task &optional width face)
   "TASK's name in FACE for its row under its project, cut to WIDTH columns.
 When another task in the project has the same name, the start of its ID
@@ -8741,13 +8765,8 @@ fit keeps the ID, and the ± while a column of the name is left beside
 them: a row that narrow keeps its room for an urgent status."
   (let* ((name (roost--field task 'name))
          (id (roost--field task 'id))
-         (twin (seq-some (lambda (other)
-                           (and (equal (roost--field other 'name) name)
-                                (not (equal (roost--field other 'id) id))
-                                (equal (roost--field other 'host) (roost--field task 'host))
-                                (equal (roost--field other 'repo) (roost--field task 'repo))))
-                         ;; Asked for each row: unsorted, as only whether counts.
-                         (hash-table-values roost--tasks)))
+         ;; TASK is one of them.
+         (twin (> (gethash (roost--name-key task) (or roost--name-counts (roost--count-names)) 0) 1))
          (suffix (if (and twin id) (concat " " (substring id 0 (min 6 (length id)))) ""))
          (mark (roost--large-change-mark task))
          (suffix (if (and mark (or (not width) (> width (+ (length suffix) 2))))
@@ -8868,6 +8887,7 @@ The mark stays where it was."
          ;; column to the truncation mark; this leaves room for it.
          (width (roost--narrowest-width 120))
          (tasks (roost-tasks))
+         (roost--name-counts (roost--count-names))
          (inhibit-read-only t))
     (erase-buffer)
     (roost--insert-unreachable-hosts tasks width)
@@ -9534,6 +9554,7 @@ have seen that waits for nothing."
          (roost--marked-key (if (roost--workspace-backend)
                                 (when-let* ((task (roost--frame-task))) (roost--key task))
                               'unset))
+         (roost--name-counts (roost--count-names))
          ;; The line each window showing it starts at, which erasing loses.
          (starts (mapcar (lambda (shown) (cons shown (line-number-at-pos (window-start shown))))
                          (get-buffer-window-list (current-buffer) nil t)))
@@ -9671,11 +9692,8 @@ perspective of its own, showing the terminal you were in.  Without
 workspaces, it is the task last used in the frame, or taken up since;
 see `roost--adopt-shown-task'."
   (if (roost--workspace-backend)
-      (let ((current (roost--current-workspace)))
-        (or (and current
-                 (seq-find (lambda (task) (equal (roost--workspace-name task) current))
-                           (roost-tasks)))
-            (roost--shown-task)))
+      (or (roost--workspace-task (roost--current-workspace) (roost-tasks))
+          (roost--shown-task))
     (gethash (frame-parameter nil 'roost-task) roost--tasks)))
 
 (defun roost--shown-task ()
