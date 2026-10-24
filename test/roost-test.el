@@ -3078,6 +3078,39 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
        (delete-process server-process)
        (delete-directory invocation-directory t)))))
 
+(ert-deftest roost-a-notification-click-runs-nothing-a-host-sent ()
+  ;; A host's reply is JSON, and an object in it reads as an alist whose
+  ;; keys are symbols: as a task's ID, unquoted in what a click evaluates,
+  ;; it would call the function its key names.
+  (roost-test--isolated
+   (let* ((id (json-parse-string "{\"lambda\": [], \"roost-test--canary\": []}"
+                                 :object-type 'alist :array-type 'list
+                                 :null-object nil :false-object nil))
+          (task `((host . "dev") (id . ,id)))
+          (invocation-directory (file-name-as-directory (make-temp-file "roost-emacs" t)))
+          (client (expand-file-name "bin/emacsclient" invocation-directory))
+          (server-process (make-pipe-process :name "roost-test-server" :noquery t))
+          (server-socket-dir "/tmp/emacs501") (server-name "server")
+          called opened)
+     (unwind-protect
+         (progn
+           (make-directory (file-name-directory client))
+           (write-region "" nil client nil 'silent)
+           (set-file-modes client #o755)
+           (cl-letf (((symbol-function 'roost-test--canary) (lambda (&rest _) (setq called t)))
+                     ((symbol-function 'roost--open-from-notification)
+                      (lambda (&rest args) (setq opened args))))
+             ;; With a group of their own, as held notices have, the ID
+             ;; goes into nothing else first.
+             (let ((command (split-string-shell-command
+                             (cadr (member "-execute" (roost--terminal-notifier-arguments
+                                                       "t" "b" task "roost-notices"))))))
+               (ignore-errors (eval (read (car (last command))) t)))
+             (should-not called)
+             (should (equal opened (list "dev" id)))))
+       (delete-process server-process)
+       (delete-directory invocation-directory t)))))
+
 (ert-deftest roost-work-in-the-agents-own-worktree-shows-and-holds-the-task ()
   (roost-test--isolated
    (let ((task (roost--cache-task "dev" (append '((live . t) (ahead . 1) (diff . "")
