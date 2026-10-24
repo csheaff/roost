@@ -3186,9 +3186,13 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
        (setq roost--buffer-task-key (roost--key task))
        (roost--render-task-info)
        ;; Beside its changes, which are that branch's, and in its details.
-       (should (string-search (format "The worktree is on feat, not the task's branch %s, so these are feat's changes.\n"
-                                      own)
-                              (buffer-string)))
+       ;; The next step has said which branch the worktree is on, so this
+       ;; says only whose the changes are, naming both, in its colour.
+       (should (string-search (format "These are feat's changes, not %s's.\n" own) (buffer-string)))
+       (should-not (string-search "The worktree is on" (buffer-string)))
+       (goto-char (point-min))
+       (search-forward "These are feat's")
+       (should (memq 'roost-status-permission (ensure-list (get-text-property (point) 'face))))
        (should (string-search "merges into main; the worktree is on feat\n" (buffer-string))))
      ;; Stopped, the next step resumes it: the line beside its changes
      ;; says how to finish it instead.

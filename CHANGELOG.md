@@ -4,6 +4,12 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A task whose worktree is on another branch says so once at the top of
+  its panel. The line beside its changes, which said it again, now says
+  only whose they are, still naming the task's branch and in the same
+  colour: "These are feat's changes, not roost/fix-parser's". When the
+  top is about something else, as for a stopped agent, the line says it
+  all, as before.
 - With `roost-animations` on, only the light of an agent asking you
   something moves. One that finished, failed or exited, or whose pull
   request waits on you, keeps its colour and rests, which costs nothing

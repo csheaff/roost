@@ -6776,18 +6776,26 @@ It is no reason to wait for you."
   "Insert, in TASK's panel, the branch its worktree is on when not the task's.
 Its changes are that branch's.  How to finish the task follows, unless
 NEXT, the panel's next step, says it already, or `x' won't retire it, as
-while its agent is at work."
+while its agent is at work.  When NEXT says it, it has said which branch
+the worktree is on, so this says only whose the changes are, naming the
+task's branch, which you would check out to merge them; in the same
+colour, which reminds you the worktree is not on it."
   (when-let* ((branch (roost--other-branch task))
               ((not (roost--field task 'worktreeMissing))))
-    (roost--insert-indented
-     (concat (format "The worktree is on %s, not the task's branch %s" (roost--branch-label branch)
-                     (roost--field task 'branch))
-             (unless (string-empty-p (roost--changes task))
-               (if (equal branch "HEAD") ", so these are the changes there" (format ", so these are %s's changes" branch)))
-             (unless (or (roost--names-key-p next "x") (not (roost--action-applies-p task 'roost-retire)))
-               (concat ": " (roost--other-branch-ways task (lambda (key) (propertize key 'face 'roost-key)))))
-             ".")
-     'roost-status-permission)))
+    (let ((own (roost--field task 'branch))
+          (changes (not (string-empty-p (roost--changes task)))))
+      (roost--insert-indented
+       (if (and changes (roost--names-key-p next "x"))
+           (if (equal branch "HEAD")
+               (format "These are the changes on a detached HEAD, not %s's." own)
+             (format "These are %s's changes, not %s's." branch own))
+         (concat (format "The worktree is on %s, not the task's branch %s" (roost--branch-label branch) own)
+                 (when changes
+                   (if (equal branch "HEAD") ", so these are the changes there" (format ", so these are %s's changes" branch)))
+                 (unless (or (roost--names-key-p next "x") (not (roost--action-applies-p task 'roost-retire)))
+                   (concat ": " (roost--other-branch-ways task (lambda (key) (propertize key 'face 'roost-key)))))
+                 "."))
+       'roost-status-permission))))
 
 (defun roost--insert-since-looked (task &optional next)
   "Insert, in TASK's panel, what changed since you last looked at it.
