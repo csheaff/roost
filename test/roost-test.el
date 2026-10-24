@@ -4961,6 +4961,12 @@ of its own, which shows in the selected window of its workspace."
            ;; The mode line has one too, for the agents waiting, in the
            ;; selected window, whose background it paints.
            (should (eq (car (get-text-property 1 'display (roost--mode-line-count))) 'image))
+           (should (eq (plist-get (gethash '(mode-line . waiting) roost--lights) :motion) 'pulse))
+           ;; With none asking, it rests: nothing is held up.
+           (let ((roost--tasks (make-hash-table :test 'equal)))
+             (roost--cache-task "dev" (roost-test--task "3333333333333333" "ready"))
+             (roost--mode-line-count)
+             (should-not (plist-get (gethash '(mode-line . waiting) roost--lights) :motion)))
            (let ((roost-test--selected nil))
              (should-not (get-text-property 1 'display (roost--mode-line-count))))
            ;; Comparing counts makes no light, and watching no more drops it.
