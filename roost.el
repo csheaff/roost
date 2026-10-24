@@ -4343,39 +4343,38 @@ must stay within one hunk."
       (user-error "Select lines within one hunk; write a note for each hunk"))
     (cond
      ((magit-section-match 'hunk section)
-      (let* ((lines (or (roost--hunk-lines section)
-                        (user-error "Roost cannot place notes in a combined diff")))
-             (from (save-excursion
-                     (goto-char (if (use-region-p) (region-beginning) (point)))
-                     (line-beginning-position)))
-             (to (if (not (use-region-p))
-                     (line-end-position)
-                   ;; A region ending where a line starts leaves that line out.
-                   (let ((end (region-end)))
-                     (if (and (> end from) (save-excursion (goto-char end) (bolp)))
-                         (1- end)
-                       end))))
-             (chosen (or (seq-filter (lambda (line) (<= from (car line) to)) lines)
-                         lines))
-             (numbered (or (seq-remove (lambda (line) (eq (nth 1 line) 'old)) chosen)
-                           chosen)))
-        `((file . ,(roost--slot (roost--slot section 'parent) 'value))
-          (line . ,(nth 2 (car numbered)))
-          (end . ,(nth 2 (car (last numbered))))
-          ,@(when (eq (nth 1 (car numbered)) 'old) '((removed . t)))
-          ;; The note shows under the last line chosen, though that may be
-          ;; a removed line after lines numbered in the new version.
-          (anchorLine . ,(nth 2 (car (last chosen))))
-          ,@(when (eq (nth 1 (car (last chosen))) 'old) '((anchorOld . t)))
-          (quote . ,(mapcar (lambda (line)
-                              (save-excursion
-                                (save-restriction
-                                  ;; On a hunk's heading, all its lines, some
-                                  ;; perhaps outside the narrowing.
-                                  (widen)
+      ;; By whole lines, though the buffer is narrowed to part of one.
+      (save-restriction
+        (widen)
+        (let* ((lines (or (roost--hunk-lines section)
+                          (user-error "Roost cannot place notes in a combined diff")))
+               (from (save-excursion
+                       (goto-char (if (use-region-p) (region-beginning) (point)))
+                       (line-beginning-position)))
+               (to (if (not (use-region-p))
+                       (line-end-position)
+                     ;; A region ending where a line starts leaves that line out.
+                     (let ((end (region-end)))
+                       (if (and (> end from) (save-excursion (goto-char end) (bolp)))
+                           (1- end)
+                         end))))
+               (chosen (or (seq-filter (lambda (line) (<= from (car line) to)) lines)
+                           lines))
+               (numbered (or (seq-remove (lambda (line) (eq (nth 1 line) 'old)) chosen)
+                             chosen)))
+          `((file . ,(roost--slot (roost--slot section 'parent) 'value))
+            (line . ,(nth 2 (car numbered)))
+            (end . ,(nth 2 (car (last numbered))))
+            ,@(when (eq (nth 1 (car numbered)) 'old) '((removed . t)))
+            ;; The note shows under the last line chosen, though that may be
+            ;; a removed line after lines numbered in the new version.
+            (anchorLine . ,(nth 2 (car (last chosen))))
+            ,@(when (eq (nth 1 (car (last chosen))) 'old) '((anchorOld . t)))
+            (quote . ,(mapcar (lambda (line)
+                                (save-excursion
                                   (goto-char (car line))
-                                  (buffer-substring-no-properties (point) (line-end-position)))))
-                            chosen)))))
+                                  (buffer-substring-no-properties (point) (line-end-position))))
+                              chosen))))))
      ((magit-section-match 'file section)
       `((file . ,(roost--slot section 'value))))
      (t (user-error "Put point on a changed line, or a file's name, in a diff")))))
@@ -5012,17 +5011,20 @@ showing it too; that one is left alone."
     (roost--note-hover-setup)))
 
 (defun roost--note-line-start (position)
-  "Where the diff line at POSITION starts, if notes can be written on it."
+  "Where the diff line at POSITION starts, if notes can be written on it.
+That may be before the narrowing, which can start within the line."
   (save-excursion
-    (goto-char position)
-    (let* ((start (line-beginning-position))
-           (section (get-text-property start 'magit-section)))
-      (and section
-           (magit-section-match 'hunk section)
-           (not (roost--slot section 'combined))
-           (>= start (roost--slot section 'content))
-           (memq (char-after start) '(?+ ?- ?\s))
-           start))))
+    (save-restriction
+      (widen)
+      (goto-char position)
+      (let* ((start (line-beginning-position))
+             (section (get-text-property start 'magit-section)))
+        (and section
+             (magit-section-match 'hunk section)
+             (not (roost--slot section 'combined))
+             (>= start (roost--slot section 'content))
+             (memq (char-after start) '(?+ ?- ?\s))
+             start)))))
 
 (defconst roost--note-mouse-interval 0.25
   "Seconds between looks at the mouse while the note button shows.

@@ -1452,28 +1452,44 @@ the link.")
     ("narrowed to a hunk's start"
      ,(lambda ()
         (narrow-to-region (progn (goto-char (point-min)) (re-search-forward "^@@") (line-beginning-position))
+                          (progn (roost-test--goto-line-text "line 5") (point)))))
+    ("narrowed from within a line"
+     ,(lambda ()
+        (narrow-to-region (progn (roost-sweep--goto-diff-text "ne 4") (point))
                           (progn (roost-test--goto-line-text "line 5") (point))))))
   "Narrowings of a Magit diff, each (NAME NARROW), NARROW narrowing it.")
 
+(defun roost-sweep--goto-diff-text (text)
+  "Move to TEXT in the diff, which may be all of a line that shows."
+  (goto-char (point-min))
+  (search-forward text)
+  (goto-char (match-beginning 0)))
+
 (defvar roost-sweep--note-commands
   `(("roost-note on a line"
-     ,(lambda () (roost-test--goto-line-text "new line") (roost-note)))
+     ,(lambda () (roost-sweep--goto-diff-text "ew line") (roost-note)))
+    ("roost-note on a line cut by the narrowing"
+     ,(lambda () (roost-sweep--goto-diff-text "ne 4") (roost-note)))
     ("roost-note on a region"
      ,(lambda ()
-        (roost-test--goto-line-text "line 4")
+        (roost-sweep--goto-diff-text "ne 4")
         (set-mark (point))
-        (roost-test--goto-line-text "new line")
+        (roost-sweep--goto-diff-text "ew line")
         (activate-mark)
         (roost-note)))
     ("roost-note-mouse, a click"
      ,(lambda ()
         (roost-note-mouse (roost-test--margin-event
-                           'mouse-1 (progn (roost-test--goto-line-text "new line") (point))))))
+                           'mouse-1 (progn (roost-sweep--goto-diff-text "ew line") (point))))))
+    ("roost-note-mouse, a click on a line cut by the narrowing"
+     ,(lambda ()
+        (roost-note-mouse (roost-test--margin-event
+                           'mouse-1 (progn (roost-sweep--goto-diff-text "ne 4") (point))))))
     ("roost-note-mouse, a drag"
      ,(lambda ()
         (roost-note-mouse (roost-test--margin-event
-                           'drag-mouse-1 (progn (roost-test--goto-line-text "line 4") (point))
-                           (progn (roost-test--goto-line-text "new line") (point)))))))
+                           'drag-mouse-1 (progn (roost-sweep--goto-diff-text "ne 4") (point))
+                           (progn (roost-sweep--goto-diff-text "ew line") (point)))))))
   "Ways to write a note in Magit, each (NAME OPEN), OPEN opening the note box.")
 
 (ert-deftest roost-sweep-notes-are-on-their-lines-in-a-narrowed-diff ()
