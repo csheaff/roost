@@ -4148,6 +4148,10 @@ less diff context.
 
 (defvar-local roost--note-overlays nil
   "Overlays showing review notes in this Magit buffer.")
+;; Magit calls its mode again on a buffer it reuses, which kills local
+;; variables but leaves the buffer's overlays: forgotten, a note would
+;; show again at the top.
+(put 'roost--note-overlays 'permanent-local t)
 
 (defun roost--magit-setup ()
   "Add Roost's notes, keys and task header to Magit on task worktrees."
@@ -5002,6 +5006,8 @@ Its foreground fills the button.")
 
 (defvar-local roost--note-hover nil
   "Overlay across this Magit buffer through which Emacs reports the mouse.")
+;; Kept when Magit calls its mode again, as `roost--note-overlays' is.
+(put 'roost--note-hover 'permanent-local t)
 (defvar roost--note-button-images nil
   "The note button's image, made for the colors and sizes in its key.")
 

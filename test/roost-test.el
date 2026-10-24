@@ -9477,6 +9477,33 @@ With INITIAL, the box must start out holding it."
       (should (equal (mapcar (lambda (note) (alist-get 'text note)) roost--notes)
                      '("These two" "Whole file"))))))
 
+(ert-deftest roost-a-note-shows-once-in-a-magit-buffer-opened-again ()
+  (roost-test--with-magit-task
+    (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")
+    (magit-diff-unstaged)
+    (with-current-buffer (magit-get-mode-buffer 'magit-diff-mode)
+      (roost-test--goto-line-text "new line")
+      (roost-test--write-note "Name it"))
+    ;; Magit calls its mode again on a buffer it reuses, which kills its
+    ;; local variables but not its overlays.  Twice, as in a graphic
+    ;; frame, for the overlay the note button follows the mouse through.
+    (cl-letf (((symbol-function 'display-graphic-p) #'always)
+              ((symbol-function 'display-images-p) #'ignore))
+      (magit-diff-unstaged)
+      (magit-diff-unstaged)
+      (with-current-buffer (magit-get-mode-buffer 'magit-diff-mode)
+        (unwind-protect
+            (let ((overlays (overlays-in (point-min) (point-max))))
+              (should (equal (roost-test--shown-notes) '(("+new line" . "Name it"))))
+              (should (= (seq-count (lambda (overlay) (overlay-get overlay 'roost-notes)) overlays) 1))
+              (should (= (seq-count (lambda (overlay) (eq (overlay-get overlay 'help-echo) #'roost--note-hover-echo))
+                                    overlays)
+                         1))
+              (should (= left-margin-width 2)))
+          (when (timerp roost--note-mouse-timer)
+            (cancel-timer roost--note-mouse-timer)
+            (setq roost--note-mouse-timer nil)))))))
+
 (ert-deftest roost-a-note-on-a-region-stays-within-one-hunk ()
   (roost-test--with-magit-task
     ;; Changes at the first and last lines make two hunks.
