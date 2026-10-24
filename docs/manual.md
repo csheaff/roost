@@ -189,7 +189,8 @@ others (`+2 more: 1 ready, 1 failed`). One you see in that minute, or whose
 task moves on, drops out. The agent whose terminal you are looking at
 doesn't notify. The dashboard
 shows the same for every agent, and the mode line counts the agents waiting
-(`Roost:2`; click it for the next one). `n` jumps to the next agent waiting
+(`● Roost:2`, the dot in the colour of the most pressing; click it for the
+next one). `n` jumps to the next agent waiting
 for you, permission requests first, and the echo area says which task it
 opened, why that one waits and how many more do, as in `permission ·
 ledger: Asks to run make test; 2 more waiting`; in a narrow frame, why it
@@ -628,12 +629,11 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
   `(:eval (and (fboundp 'roost-mode-line-waiting) (roost-mode-line-waiting)))`
   where you want the count.
 - `roost-animations` (nil): on Emacs 32, which draws canvas images, the
-  status light of an agent waiting for you fades out and back in: deeply
-  and quickly when it asks you something, less and slowly when it
-  finished, failed or exited since you saw it, or its pull request waits
-  on you. The rest stay still, and
-  the motion pauses while Emacs isn't in front. Elsewhere the lights stay
-  dots.
+  status light of an agent asking you something fades out and back in,
+  in the dashboard, the task panel and the mode line. The rest stay
+  still, in colour while they wait for you, as moving lights cost Emacs a
+  few percent of a core while they move. The motion pauses while Emacs
+  isn't in front. Elsewhere the lights stay dots.
 - Faces: `roost-prose` sets what you and the agents wrote (prompts, replies,
   requests) in `variable-pitch`, keeping tables and code in the fixed-pitch
   font; make it inherit `default` for one font throughout. `roost-field` is
