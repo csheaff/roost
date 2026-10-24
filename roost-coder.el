@@ -36,18 +36,14 @@ Roost asks for the parameters the template's active version publishes."
 (defvar roost-coder--busy (make-hash-table :test 'equal))
 (defvar roost-coder--polled (make-hash-table :test 'equal)
   "When a background refresh last asked Coder about each host, by `float-time'.")
-(defvar tramp-rpc-ssh-args)
-(defvar tramp-methods)
-(defvar tramp-connection-properties)
-(defvar tmux-control-ssh-options)
 (defvar tmux-control-remote-tmux-socket-setup)
+(defvar tmux-control-ssh-options)
 (defvar-local roost-coder--return nil)
 
 (defun roost-coder--load ()
   "Read controller identities without contacting Coder or its guests."
   (unless roost-coder--loaded
     (setq roost-coder--loaded t)
-    (when (featurep 'tramp) (roost-coder--tramp-setup))
     (when (file-directory-p (expand-file-name "coder" roost-coder-state-directory))
       (dolist (file (directory-files (expand-file-name "coder" roost-coder-state-directory)
                                      t "\\`[a-f0-9]\\{32\\}\\.json\\'"))
@@ -113,11 +109,14 @@ Roost asks for the parameters the template's active version publishes."
   "Ask Roost's Coder controller ACTION with PARAMETERS, and don't wait.
 The controller runs on this machine, with its records in
 `roost-coder-state-directory', and asks Coder through `coder''s client."
+  (require 'tmux-control nil t)
   (let ((roost-state-directory roost-coder-state-directory)
         (client (roost-coder--client)))
     (roost--request nil action
                     `((client . ((transport . ,(coder-client-transport client))
                                  (configuration . ,(coder-client-configuration client))))
+                      ;; So the agents' tmux server is where tmux-control looks.
+                      (socketSetup . ,(bound-and-true-p tmux-control-remote-tmux-socket-setup))
                       ,@parameters)
                     success (or failure (lambda (err) (message "Roost Coder: %s" err))) 1200)))
 
@@ -147,6 +146,7 @@ Only committed source history is copied.  The canonical checkout,
 selected base and resulting environment are separate, durable identities."
   (interactive)
   (unless roost-coder-templates (user-error "Set roost-coder-templates first"))
+  (roost-coder--require-include)
   (let* ((client (roost-coder--client))
          (template (assoc (completing-read "Coder template: " roost-coder-templates nil t)
                           roost-coder-templates))
@@ -283,70 +283,66 @@ Only when they changed: each refresh would otherwise write them."
 Its tasks are where the workspace was made to keep them, whatever
 `roost-state-directory' says now."
   (if-let* ((record (roost-coder--record host)))
-      (if (equal (alist-get 'state record) "running")
-          (let ((roost-state-directory (or (alist-get 'guestRoot record) roost-state-directory)))
-            (funcall request host action parameters success failure timeout))
-        (funcall (or failure (lambda (err) (user-error "%s" err)))
-                 "Its Coder workspace is asleep: E starts it"))
+      (cond ((not (equal (alist-get 'state record) "running"))
+             (funcall (or failure (lambda (err) (user-error "%s" err)))
+                      "Its Coder workspace is asleep: E starts it"))
+            ((not (roost-coder--included-p))
+             (funcall (or failure (lambda (err) (user-error "%s" err)))
+                      (format "SSH doesn't know its Coder workspace: add this line at the top of ~/.ssh/config, before any Host: %s"
+                              (roost-coder--include-line))))
+            (t (let ((roost-state-directory (or (alist-get 'guestRoot record) roost-state-directory)))
+                 (funcall request host action parameters success failure timeout))))
     (funcall request host action parameters success failure timeout)))
 
-(defun roost-coder--ssh-options (host)
-  "Isolated SSH arguments for a Coder HOST, else nil."
-  (when (roost-coder--record host)
-    (list "-F" (expand-file-name "coder/ssh_config" roost-coder-state-directory))))
+(defun roost-coder--ssh-file ()
+  "The SSH file naming Roost's workspaces, which ~/.ssh/config includes."
+  (expand-file-name "coder/ssh_config" roost-coder-state-directory))
+
+(defvar roost-coder--included nil
+  "Non-nil once SSH was seen to read `roost-coder--ssh-file', for this file.")
+
+(defun roost-coder--included-p ()
+  "Whether SSH reads Roost's SSH file before anything that would override it.
+Asks `ssh -G' of the file's first stanza, which is never connected to."
+  (or (equal roost-coder--included (roost-coder--ssh-file))
+      (and (member "proxycommand false roost-coder-include-check"
+                   ;; With the options Roost's own ssh has.
+                   (ignore-errors (apply #'process-lines "ssh" (append (bound-and-true-p tmux-control-ssh-options)
+                                                                      '("-G" "roost-coder-include-check")))))
+           (setq roost-coder--included (roost-coder--ssh-file)))))
+
+(defun roost-coder--include-line ()
+  "The line to add at the top of ~/.ssh/config."
+  (format "Include \"%s\"" (roost-coder--ssh-file)))
+
+(defun roost-coder--require-include ()
+  "Signal a `user-error' saying what to add unless SSH reads Roost's SSH file."
+  (unless (file-exists-p (roost-coder--ssh-file))
+    (let ((roost-state-directory roost-coder-state-directory)
+          (client (roost-coder--client)))
+      (roost--request-wait nil "coder-configure"
+                           `((client . ((transport . ,(coder-client-transport client))
+                                        (configuration . ,(coder-client-configuration client))))))))
+  (unless (roost-coder--included-p)
+    (user-error "Add this line at the top of ~/.ssh/config, before any Host: %s" (roost-coder--include-line))))
 
 (defun roost-coder--python-command (command host code)
-  "Run COMMAND for HOST with only that host's isolated SSH file."
-  (when host (require 'tmux-control nil t))
-  (let ((tmux-control-ssh-options (append (roost-coder--ssh-options host)
-                                          (bound-and-true-p tmux-control-ssh-options)))
-        (tmux-control-remote-tmux-socket-setup
-         (if (roost-coder--record host) "export TMUX_TMPDIR=/tmp"
-           (bound-and-true-p tmux-control-remote-tmux-socket-setup)))
-        (roost-state-directory (if (roost-coder--record host) roost-coder-state-directory roost-state-directory)))
+  "Call COMMAND with HOST and CODE, keeping the SSH socket Roost shares on this
+machine for a Coder workspace: `roost-state-directory', which holds it, is
+a directory in the workspace there."
+  (let ((roost-state-directory (if (roost-coder--record host) roost-coder-state-directory roost-state-directory)))
     (funcall command host code)))
 
-(defun roost-coder--tmux-ssh (command host remote-command)
-  "Give tmux COMMAND HOST's isolated SSH options, including on reconnect."
-  (let ((tmux-control-ssh-options (append (roost-coder--ssh-options host) tmux-control-ssh-options)))
-    (when (and (roost-coder--record host)
-               (stringp tmux-control-remote-tmux-socket-setup)
-               (string-prefix-p tmux-control-remote-tmux-socket-setup remote-command))
-      (setq remote-command (concat "export TMUX_TMPDIR=/tmp"
-                                   (substring remote-command (length tmux-control-remote-tmux-socket-setup)))))
-    (funcall command host remote-command)))
-
-(defconst roost-coder--host-regexp "roost-coder-[0-9a-f]\\{32\\}"
-  "Matches the host name of a Coder workspace of Roost's.")
-
-(defun roost-coder--tramp-setup ()
-  "Have TRAMP's ssh and scp methods use Roost's SSH file for its workspaces.
-Through `tramp-connection-properties', for file names on those hosts
-only: other hosts, and `tramp-methods', stay as they are."
-  (let ((options (list "-F" (expand-file-name "coder/ssh_config" roost-coder-state-directory))))
-    (dolist (method '("ssh" "sshx" "scp" "scpx"))
-      (let ((regexp (format "\\`/%s:\\(?:[^@:/]+@\\)?%s:" method roost-coder--host-regexp)))
-        (dolist (parameter '(tramp-login-args tramp-copy-args))
-          (when-let* ((arguments (cadr (assq parameter (cdr (assoc method tramp-methods)))))
-                      (property (string-remove-prefix "tramp-" (symbol-name parameter))))
-            (setq tramp-connection-properties
-                  (cons (list regexp property (cons options (remove options arguments)))
-                        (seq-remove (lambda (entry) (and (equal (car entry) regexp) (equal (cadr entry) property)))
-                                    tramp-connection-properties)))))))))
-
-(defun roost-coder--rpc-handler (handler operation &rest args)
-  "Call tramp-rpc's HANDLER for OPERATION on ARGS, through Roost's SSH file
-when the file is in a Coder workspace of Roost's.  tramp-rpc starts ssh
-itself, with `tramp-rpc-ssh-args'."
-  (if-let* ((host (seq-some (lambda (file)
-                              (and (stringp file)
-                                   (string-match "\\`/[^/:|]+:\\(?:[^@:/|]+@\\)?\\([^:/|]+\\):" file)
-                                   (match-string 1 file)))
-                            (append args (list default-directory))))
-            ((string-match-p (concat "\\`" roost-coder--host-regexp "\\'") host)))
-      (let ((tramp-rpc-ssh-args (append (roost-coder--ssh-options host) (bound-and-true-p tramp-rpc-ssh-args))))
-        (apply handler operation args))
-    (apply handler operation args)))
+(defun roost-coder--doctor-checks (checks)
+  "CHECKS, the setup check's, with whether SSH knows Roost's workspaces."
+  (append checks
+          (when roost-coder-connection
+            (list (if (and (file-exists-p (roost-coder--ssh-file)) (roost-coder--included-p))
+                      (list "Coder" t "~/.ssh/config includes Roost's workspaces" nil (roost-coder--ssh-file))
+                    (list "Coder" nil "SSH doesn't know Roost's workspaces"
+                          (concat "Add this line at the top of ~/.ssh/config, before any Host: "
+                                  (roost-coder--include-line))
+                          (roost-coder--ssh-file)))))))
 
 (defun roost-coder--host-label (label host)
   "LABEL for HOST, or a short one for a Coder workspace of Roost's, whose
@@ -532,17 +528,12 @@ changes must be committed."
 
 (advice-add 'roost--hosts :filter-return #'roost-coder--hosts)
 (advice-add 'roost--host-label :around #'roost-coder--host-label)
+(advice-add 'roost--doctor-local-checks :filter-return #'roost-coder--doctor-checks)
 (advice-add 'roost--refresh-host :around #'roost-coder--refresh)
 (advice-add 'roost--apply-snapshot :after #'roost-coder--snapshot)
 (advice-add 'roost--cache-task :filter-return #'roost-coder--decorate)
 (advice-add 'roost--request :around #'roost-coder--request)
 (advice-add 'roost--python-command :around #'roost-coder--python-command)
-(with-eval-after-load 'tramp
-  (roost-coder--tramp-setup))
-(with-eval-after-load 'tramp-rpc
-  (advice-add 'tramp-rpc-file-name-handler :around #'roost-coder--rpc-handler))
-(with-eval-after-load 'tmux-control
-  (advice-add 'tmux-control--ssh-args :around #'roost-coder--tmux-ssh))
 
 (defun roost-coder-unload-function ()
   "Take Coder workspaces out of Roost: their tasks, keys, menu and advice."
@@ -559,14 +550,7 @@ changes must be committed."
   (advice-remove 'roost--cache-task #'roost-coder--decorate)
   (advice-remove 'roost--request #'roost-coder--request)
   (advice-remove 'roost--python-command #'roost-coder--python-command)
-  (when (fboundp 'tramp-rpc-file-name-handler)
-    (advice-remove 'tramp-rpc-file-name-handler #'roost-coder--rpc-handler))
-  (when (fboundp 'tmux-control--ssh-args)
-    (advice-remove 'tmux-control--ssh-args #'roost-coder--tmux-ssh))
-  (when (boundp 'tramp-connection-properties)
-    (setq tramp-connection-properties
-          (seq-remove (lambda (entry) (string-search "roost-coder-" (or (car entry) "")))
-                      tramp-connection-properties)))
+  (advice-remove 'roost--doctor-local-checks #'roost-coder--doctor-checks)
   (when (fboundp 'roost--redraw) (roost--redraw))
   ;; Continue with the standard unloading.
   nil)

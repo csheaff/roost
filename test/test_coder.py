@@ -108,6 +108,7 @@ class CoderState(unittest.TestCase):
         self.coder.save(pending)
         self.coder.configure()
         text = self.coder.ssh_config.read_text()
+        self.assertTrue(text.startswith("Host roost-coder-include-check\n  ProxyCommand false roost-coder-include-check\n"))
         self.assertIn("Host " + self.record["host"], text)
         self.assertNotIn(pending["host"], text)
         self.assertIn("coder_client.py ssh", text)
@@ -124,6 +125,19 @@ class CoderState(unittest.TestCase):
             roost.Coder(self.store, dict(self.client, transport=str(moved))).dispatch(
                 dict(action="coder-status", environment=self.record["id"]))
         self.assertIn("moved/coder_client.py", self.coder.ssh_config.read_text())
+
+    def test_ssh_to_a_workspace_sets_its_tmux_socket_up_as_tmux_control_does(self):
+        calls = []
+        def run(argv, **kwargs):
+            calls.append(argv)
+            return subprocess.CompletedProcess(argv, 0, json.dumps(dict(ok=True, result=[])), "")
+        with patch.object(roost.subprocess, "run", side_effect=run):
+            self.coder.guest(self.record, dict(action="list"))
+            self.coder.dispatch(dict(action="coder-cached", socketSetup="export TMUX_TMPDIR=$HOME/.tmux-sock"))
+            self.coder.guest(self.record, dict(action="list"))
+        self.assertTrue(calls[0][-1].startswith("exec python3 -I -c "))
+        self.assertTrue(calls[1][-1].startswith("export TMUX_TMPDIR=$HOME/.tmux-sock && exec python3 -I -c "))
+        self.assertEqual(calls[1][:4], ["ssh", "-F", str(self.coder.ssh_config), "-T"])
 
     def test_coder_s_errors_are_the_controller_s(self):
         with self.assertRaisesRegex(roost.RoostError, "reached"):

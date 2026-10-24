@@ -1,8 +1,6 @@
 ;;; roost-coder-test.el --- Optional environment invariants -*- lexical-binding: t; -*-
 (require 'roost-test)
 (require 'roost-coder)
-(defvar tmux-control-ssh-options nil)
-(defvar tramp-rpc-ssh-args nil)
 (defvar tmux-control-remote-tmux-socket-setup nil)
 
 (defun roost-coder-test--record (&optional state)
@@ -78,7 +76,8 @@
     (let ((roost-coder-connection '(:url "https://coder.example.org" :tokenFile "~/token" :command ("coder")))
           (roost-coder-templates '(("GPU" :id "11111111-2222-3333-4444-555555555555" :directory "/home/coder/repo")))
           created finish)
-      (cl-letf (((symbol-function 'coder-request-wait)
+      (cl-letf (((symbol-function 'roost-coder--require-include) #'ignore)
+                ((symbol-function 'coder-request-wait)
                  (lambda (&rest _) '((version . "v1") (parameters . (((name . "size") (options . (((name . "Large") (value . "l"))))))))))
                 ((symbol-function 'completing-read) (lambda (prompt &rest _) (if (string-prefix-p "size" prompt) "Large" (if (string-prefix-p "Agent" prompt) "claude" "GPU"))))
                 ((symbol-function 'read-directory-name) (lambda (&rest _) "/src/notes/"))
@@ -119,55 +118,58 @@
         (funcall reply record))
       (should (equal (alist-get 'state (roost-coder--record host)) "running")))))
 
-(ert-deftest roost-coder-ordinary-hosts-keep-their-transport-and-refresh ()
+(ert-deftest roost-coder-ordinary-hosts-keep-their-requests-and-refresh ()
   (roost-test--isolated
     (let (refreshed)
       (roost-coder--refresh (lambda (&rest args) (setq refreshed args)) "ordinary" t '("id"))
       (should (equal refreshed '("ordinary" t ("id"))))
-      (should-not (roost-coder--ssh-options "ordinary"))
-      (should (equal (roost-coder--python-command (lambda (&rest _) tmux-control-ssh-options)
-                                                  "ordinary" "code")
-                      (bound-and-true-p tmux-control-ssh-options))))))
+      (should (equal (roost-coder--python-command (lambda (&rest _) roost-state-directory) "ordinary" "code")
+                     roost-state-directory))
+      (cl-letf (((symbol-function 'process-lines) (lambda (&rest _) (ert-fail "Asked SSH for an ordinary host"))))
+        (let (sent)
+          (roost-coder--request (lambda (&rest args) (setq sent args)) "ordinary" "list" nil #'ignore)
+          (should (equal (seq-take sent 2) '("ordinary" "list"))))))))
 
-(ert-deftest roost-coder-isolated-ssh-applies-only-to-the-workspace ()
+(ert-deftest roost-coder-workspaces-need-the-include-and-use-their-own-state-directory ()
   (roost-test--isolated
-    (let* ((record (roost-coder--accept (roost-coder-test--record "running")))
+    (let* ((record (roost-coder--accept (cons '(guestRoot . "/home/coder/roost-state")
+                                              (roost-coder-test--record "running"))))
            (host (alist-get 'host record))
-           (tmux-control-ssh-options '("-o" "KeepAlive=yes")))
-      (should (equal (car (roost-coder--python-command (lambda (&rest _) tmux-control-ssh-options) host "code")) "-F"))
-      (should (equal tmux-control-ssh-options '("-o" "KeepAlive=yes"))))))
+           (ssh-says nil) sent refused)
+      (cl-letf (((symbol-function 'process-lines)
+                 (lambda (program &rest args)
+                   (should (equal (cons program (last args 2)) '("ssh" "-G" "roost-coder-include-check")))
+                   ssh-says)))
+        ;; Without the Include, it says what to add, and nothing goes.
+        (setq ssh-says '("user clay" "proxycommand none"))
+        (roost-coder--request (lambda (&rest _) (ert-fail "Sent without the Include")) host "list" nil
+                              #'ignore (lambda (err) (setq refused err)))
+        (should (string-match-p (regexp-quote (concat "Include \"" (roost-coder--ssh-file) "\"")) refused))
+        (let ((roost-coder-connection '(:url "https://coder.example.org" :tokenFile "~/token" :command ("coder"))))
+          (should (equal (assoc "Coder" (roost--doctor-local-checks))
+                         (list "Coder" nil "SSH doesn't know Roost's workspaces"
+                               (concat "Add this line at the top of ~/.ssh/config, before any Host: "
+                                       (roost-coder--include-line))
+                               (roost-coder--ssh-file)))))
+        ;; With it, the request goes, with the workspace's state directory.
+        (setq ssh-says '("user clay" "proxycommand false roost-coder-include-check"))
+        (roost-coder--request (lambda (&rest args) (setq sent (cons roost-state-directory args))) host "list" nil #'ignore)
+        (should (equal (seq-take sent 3) (list "/home/coder/roost-state" host "list")))
+        ;; Once seen, not asked again.
+        (setq ssh-says nil)
+        (should (roost-coder--included-p)))
+      ;; Its shared SSH socket stays on this machine.
+      (should (equal (roost-coder--python-command (lambda (&rest _) roost-state-directory) host "code")
+                     roost-coder-state-directory)))))
 
-(ert-deftest roost-coder-tramp-reaches-only-its-workspaces-through-its-ssh-file ()
-  (require 'tramp)
+(ert-deftest roost-coder-controller-runs-tmux-as-tmux-control-does ()
   (roost-test--isolated
-    (let ((tramp-connection-properties nil)
-          (tramp-cache-data (make-hash-table :test #'equal))
-          (methods (copy-tree tramp-methods))
-          (file (expand-file-name "coder/ssh_config" roost-coder-state-directory)))
-      (roost-coder--tramp-setup)
-      ;; Again, as on loading it again: no second entry, nor -F twice.
-      (roost-coder--tramp-setup)
-      (should (equal tramp-methods methods))
-      (should (= (length tramp-connection-properties) 6))
-      (dolist (method '("ssh" "scpx"))
-        (let ((coder (tramp-dissect-file-name (format "/%s:roost-coder-%s:/repo" method (make-string 32 ?a))))
-              (other (tramp-dissect-file-name (format "/%s:ordinary:/repo" method))))
-          (should (equal (car (tramp-get-method-parameter coder 'tramp-login-args)) (list "-F" file)))
-          (should (equal (tramp-get-method-parameter other 'tramp-login-args)
-                         (cadr (assq 'tramp-login-args (cdr (assoc method tramp-methods)))))))))))
-
-(ert-deftest roost-coder-rpc-reaches-only-its-workspaces-through-its-ssh-file ()
-  (roost-test--isolated
-    (roost-coder--accept (roost-coder-test--record "running"))
-    (let ((tramp-rpc-ssh-args '("-v"))
-          (handler (lambda (&rest _) tramp-rpc-ssh-args)))
-      (should (equal (roost-coder--rpc-handler handler 'file-exists-p "/rpc:ordinary:/repo/file") '("-v")))
-      (should (equal (roost-coder--rpc-handler handler 'file-exists-p
-                                               (concat "/rpc:roost-coder-" (make-string 32 ?a) ":/repo/file"))
-                     (append (roost-coder--ssh-options (concat "roost-coder-" (make-string 32 ?a))) '("-v"))))
-      ;; Another host named, from a workspace's directory: that host's own.
-      (let ((default-directory (concat "/rpc:roost-coder-" (make-string 32 ?a) ":/repo/")))
-        (should (equal (roost-coder--rpc-handler handler 'file-exists-p "/rpc:ordinary:/repo/file") '("-v")))))))
+    (let ((roost-coder-connection '(:url "https://coder.example.org" :tokenFile "~/token" :command ("coder")))
+          (tmux-control-remote-tmux-socket-setup "export TMUX_TMPDIR=$HOME/.tmux-sock")
+          sent)
+      (cl-letf (((symbol-function 'roost--request) (lambda (_host _action parameters &rest _) (setq sent parameters))))
+        (roost-coder--call "coder-start" '((environment . "e")) #'ignore))
+      (should (equal (alist-get 'socketSetup sent) "export TMUX_TMPDIR=$HOME/.tmux-sock")))))
 
 (ert-deftest roost-coder-return-cannot-use-the-private-clone-merge-command ()
   (roost-test--isolated
@@ -274,20 +276,6 @@
         (roost-coder--snapshot host tasks))
       (should (string-match-p "python3" encoded)))))
 
-(ert-deftest roost-coder-helper-and-terminal-use-the-same-guest-socket-directory ()
-  (roost-test--isolated
-    (let* ((record (roost-coder--accept (roost-coder-test--record "running")))
-           (host (alist-get 'host record))
-           (tmux-control-remote-tmux-socket-setup "export TMUX_TMPDIR=$HOME/elsewhere")
-           (tmux-control-ssh-options nil))
-      (should (equal (roost-coder--python-command
-                      (lambda (&rest _) tmux-control-remote-tmux-socket-setup) host "code")
-                     "export TMUX_TMPDIR=/tmp"))
-      (should (equal (cadr (roost-coder--tmux-ssh #'list host
-                                                 "export TMUX_TMPDIR=$HOME/elsewhere && exec tmux"))
-                     "export TMUX_TMPDIR=/tmp && exec tmux"))
-      (should (equal tmux-control-remote-tmux-socket-setup "export TMUX_TMPDIR=$HOME/elsewhere")))))
-
 (ert-deftest roost-coder-unloads-without-a-trace-in-roost ()
   ;; In an Emacs of its own: unloading here would leave the other tests
   ;; without it.
@@ -300,7 +288,6 @@
                       (format "%S"
                               '(progn
                                  (require 'roost-coder)
-                                 (require 'tramp)
                                  (unload-feature 'roost-coder)
                                  (dolist (key '("C" "E" "Z" "F"))
                                    (when (ignore-errors (transient-get-suffix 'roost-dispatch key))
@@ -309,9 +296,8 @@
                                      (error "%s is still bound" key)))
                                  (when (advice-member-p #'roost-coder--request 'roost--request)
                                    (error "Still advised"))
-                                 (when (seq-some (lambda (entry) (string-search "roost-coder-" (or (car entry) "")))
-                                                 tramp-connection-properties)
-                                   (error "Still in TRAMP"))
+                                 (when (advice-member-p #'roost-coder--doctor-checks 'roost--doctor-local-checks)
+                                   (error "Still in the setup check"))
                                  ;; Roost's menu still shows, with no Environment.
                                  (with-temp-buffer
                                    (let ((transient--original-buffer (current-buffer)))

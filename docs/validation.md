@@ -68,9 +68,19 @@ happened in a section below:
   waiting on you. A task's next step on a workspace named `E` over its
   agent's question. Fetching needed the agent stopped, where merging needs
   it only not at work. A workspace's tasks followed `roost-state-directory`
-  rather than where it was made to keep them. TRAMP's file handler was
-  advised for every remote file; TRAMP's connection properties now scope
-  Roost's SSH file to its workspaces.
+  rather than where it was made to keep them.
+- **SSH through an `Include`.** Roost had given its SSH file to each program
+  itself, by advice on TRAMP's file handler, tramp-rpc and tmux-control; now
+  `~/.ssh/config` includes it, and the controller runs tmux-control's own
+  socket setup in a workspace. Checked by hand in a GUI Emacs of its own,
+  whose `ssh` read a file including Roost's SSH file and then
+  `~/.ssh/config`, as the line at its top would (`~/.ssh/config` itself
+  wasn't changed): the setup check's test of the `Include` passed; `E` on
+  the task's row started the workspace in 21 s; `s` resumed the agent, and
+  its terminal opened over tmux-control; a line typed there reached the
+  agent, whose host recorded it as the latest prompt, which the panel
+  showed; `K` and then `Z` stopped them. The panel had an empty line for a
+  workspace with no template recorded, now gone.
 
 ## Journeys for the commands none ran — 2026-10-24
 

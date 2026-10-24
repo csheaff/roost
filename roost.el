@@ -8426,9 +8426,9 @@ back to, and what went wrong last."
     (roost--insert-heading "Environment")
     (roost--insert-indented
      (string-join
-      (delq nil (list (string-join (delq nil (list (roost--field task 'environmentTemplate)
-                                                   (roost--field task 'environmentProfile)))
-                                   " · ")
+      (delq nil (list (when-let* ((made (delq nil (list (roost--field task 'environmentTemplate)
+                                                        (roost--field task 'environmentProfile)))))
+                        (string-join made " · "))
                       (when-let* ((home (roost--field task 'environmentReturn)))
                         (concat "Its commits come back to " home))
                       (when-let* ((failure (roost--field task 'environmentError)))

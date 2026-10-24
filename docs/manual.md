@@ -586,6 +586,17 @@ repository. Roost keeps what it knows of each workspace in
 `roost-coder-state-directory`, on this machine; back it up. Another Emacs with
 the same directory finds the same workspaces.
 
+Then add one line at the top of `~/.ssh/config`, before any `Host`, so SSH
+knows the workspaces by the names Roost gives them. `C`, and `!` (the setup
+check), say the line, with your state directory's path:
+
+```
+Include "~/.emacs.d/roost/coder/coder/ssh_config"
+```
+
+Roost never edits `~/.ssh/config`. The file it includes names only Roost's
+workspaces, each reached through `coder ssh --stdio`, which never starts one.
+
 ### A task in a workspace
 
 `C` (`roost-coder-new-task`), in Roost's menu, the dashboard or a task panel,
@@ -630,11 +641,10 @@ workspace in Coder.
 
 ### How it connects
 
-Roost writes an SSH configuration file of its own, in
-`roost-coder-state-directory`, that reaches each workspace through
-`coder ssh --stdio`, which never starts one. Roost's helper, its terminals and
-TRAMP use that file for those workspaces only; `~/.ssh/config` and other hosts
-stay as they are. The token stays in its file, out of every command line.
+A workspace is a host like any other to Roost's helper, its terminals, TRAMP
+and Magit, and to your own `ssh`, through the file `~/.ssh/config` includes.
+What your `Host *` sets applies to the workspaces too, but for the proxy and
+host keys, which the included file sets first. The token stays in its file, out of every command line.
 
 `coder.el`, which Roost asks Coder through, has no Roost in it: templates and
 their parameters, a workspace's state, starting, stopping and SSH.

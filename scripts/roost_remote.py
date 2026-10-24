@@ -5356,6 +5356,9 @@ def import_bundle(request):
     return result
 
 
+INCLUDE_CHECK = "Host roost-coder-include-check\n  ProxyCommand false roost-coder-include-check\n"
+
+
 def load_coder_client(transport):
     """coder.el's Coder client, scripts/coder_client.py, from where Emacs
     has it: Roost's controller asks Coder through it, as coder.el does."""
@@ -5381,6 +5384,8 @@ class Coder:
             raise RoostError("Give the Coder controller coder.el's client")
         self.transport, self.configuration = client["transport"], client["configuration"]
         self.client = load_coder_client(self.transport)
+        # tmux-control's, so the agents' tmux server is where its terminals look.
+        self.socket_setup = None
 
     def path(self, identity):
         if not isinstance(identity, str) or not re.fullmatch(r"[a-f0-9]{32}", identity):
@@ -5406,11 +5411,13 @@ class Coder:
         return self.call(self.client.api, self.configuration, path, body)
 
     def configure(self):
-        """The private SSH file naming each workspace Coder has given an ID:
-        Roost's own aliases, only in this file, never ~/.ssh."""
-        text = "\n".join(self.call(self.client.ssh_stanza, self.transport, self.configuration,
-                                   record["host"], record["workspaceId"])
-                         for record in self.records() if record.get("workspaceId"))
+        """The SSH file naming each workspace Coder has given an ID, which
+        ~/.ssh/config includes: you add the Include, Roost never edits it.
+        Its first stanza is never connected to: `ssh -G' on it says
+        whether the Include is there, and comes before what would override it."""
+        text = "\n".join([INCLUDE_CHECK] + [
+            self.call(self.client.ssh_stanza, self.transport, self.configuration, record["host"], record["workspaceId"])
+            for record in self.records() if record.get("workspaceId")])
         if not self.ssh_config.exists() or self.ssh_config.read_text() != text:
             atomic_text(self.ssh_config, text)
 
@@ -5460,8 +5467,9 @@ class Coder:
                 "ns=runpy.run_path(p); print(json.dumps(ns['rpc'](x['request'])))")
         request = dict(request, root=record["guestRoot"])
         payload = dict(root=record["guestRoot"], filename=filename, source=source, request=request)
+        setup = (self.socket_setup + " && ") if self.socket_setup else ""
         result = subprocess.run(["ssh", "-F", str(self.ssh_config), "-T", "-o", "BatchMode=yes",
-                                 record["host"], "export TMUX_TMPDIR=/tmp; python3 -I -c " + shlex.quote(code)],
+                                 record["host"], setup + "exec python3 -I -c " + shlex.quote(code)],
                                 input=json.dumps(payload), text=True, capture_output=True, timeout=timeout)
         if result.returncode:
             raise RoostError(result.stderr[-4000:] or "Coder workspace SSH failed")
@@ -5548,6 +5556,8 @@ class Coder:
 
     def dispatch(self, request):
         action = request["action"]
+        if isinstance(request.get("socketSetup"), str) and request["socketSetup"].strip():
+            self.socket_setup = request["socketSetup"]
         # Each time, for a client that moved, as when its package updated.
         self.configure()
         if action == "coder-cached":

@@ -50,6 +50,7 @@
          (roost-coder--busy (make-hash-table :test 'equal))
          (roost-coder--client nil)
          (roost-coder--polled (make-hash-table :test 'equal))
+         (roost-coder--included nil)
          (roost-coder-state-directory (expand-file-name "coder" (nth 0 ,scratch)))
          (roost--next-run nil)
          (roost--held-notices nil) (roost--notice-timer nil) (roost--resuming nil)
