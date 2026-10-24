@@ -48,10 +48,11 @@ PANEL = 44  # roost-task-panel-width
 # The most times one input may have Emacs collect garbage, at its default
 # threshold: a key sequence, typing or a click, and what its command sets
 # off until Emacs is idle, such as Roost's timer that draws a new draft.
-# In a whole run, with up to 39 tasks, none needed more than XX.  Before
-# Roost stopped sorting every task for each row of the sidebar (#139),
-# C-c r c with a tab per task needed 40 to 50.  A pause in a step whose
-# input needed fewer had another cause, most likely the machine's load.
+# In a whole run, with up to 39 tasks, none needed more than 7, and C-c r c
+# with a tab per task 1.  Before Roost stopped sorting every task for each
+# row of the sidebar (#139), that C-c r c needed 40 to 50.  A pause in a
+# step whose input needed fewer had another cause, most likely the
+# machine's load.
 COLLECTIONS = 20
 
 LONG_PROMPT = (

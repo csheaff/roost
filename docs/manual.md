@@ -969,9 +969,11 @@ open in the minibuffer that you aren't in, unless the journey left it so,
 or anything Roost holds back until such a question is done. With tmux-control's
 `tmux-control-pause-log-mode`, it also fails a step in which Emacs stopped
 responding for a second or more, and says what Emacs was doing and how
-often the step's commands collected garbage: many times, and the pause
-was Roost's own garbage; few, and the machine's load more likely. A
-command that collects garbage more than 20 times fails its step too. It runs the
+often the step's keys and clicks had it collect garbage, with what their
+commands set off, such as Roost's timers: many times, and the pause was
+that garbage; few, and the machine's load more likely. A key sequence or
+click that has Emacs collect garbage more than 20 times fails its step
+too. It runs the
 sweep where text is measured in pixels, too. It takes about 25 minutes,
 writes `report.html` with each step's windows, the echo area and, on macOS, a
 screenshot, and fails if anything was wrong. The report ends with the commands

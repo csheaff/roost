@@ -35,6 +35,44 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## Cost with many tasks — 2026-10-24
+
+- **What the new test measures.** `roost-sweep-costs-grow-no-faster-than-the-tasks`
+  caches 25 tasks across two hosts, then 100, with namesakes, pull
+  requests, files and replies, and counts what the task list, the sidebar,
+  the dashboard, a task panel and finding the task of a tab allocate. For
+  four times the tasks they allocate 4.0, 3.9, 3.5, 1.5 and 3.2 times as
+  much; the test fails at 6. On Emacs 30.2, and with Roost byte-compiled,
+  each is within 0.5 of that.
+- **Broken on purpose.** With `roost-tasks` as before #139, and
+  `roost--row-name` calling it, the test fails: the sidebar 20.8, the
+  dashboard 14.9 and the task list itself 6.1. With finding the task of a
+  tab as before this change, 8.8.
+- **What it found on main.** Two costs that still grew faster than the
+  tasks after #139: each sidebar row looked through every task three
+  times for another with its name (5.6), and finding the task of your tab
+  worked out every task's tab name, each looking through every task (8.6).
+  Both are fixed here: with 100 tasks, uncompiled, a sidebar redraw took
+  17 ms and now 7, and finding your tab's task 8.7 ms and now 0.2.
+- **`make qa`** on Emacs 32, the whole run, twice. The first: 253 steps, 1
+  with a problem, the fourth agent of the busy fleet not running within
+  40 s while other sessions loaded the machine; run alone, the journey
+  passed. It counted garbage per command, which missed most of Roost's
+  work, as Roost draws a new draft from a timer. The second counts it per
+  key sequence or click, until Emacs is idle again: 256 steps, none with a
+  problem. No input had Emacs collect garbage more than 7 times, with up to
+  39 tasks, and `C-c r c` with a tab per task once; QA now fails an input
+  past 20. With a sidebar made to drop 25 MB on each draw, the tab journey
+  failed: "f had Emacs collect garbage 23 times".
+- **The earlier pauses.** Those in the tab and rename journeys, which the
+  0.11.0 run and the UX review of 2026-10-23 put down to tests running
+  beside them, were Roost's own garbage: every row of the sidebar sorted
+  every task (#139).
+- **Left for later.** The dashboard parses each row's timestamps and takes
+  the Markdown out of each reply on every redraw: with 39 tasks, about a
+  fifth of what a draw allocates and 0.7 of its 7.8 ms, uncompiled. It
+  grows with the tasks, no faster.
+
 ## UX review — 2026-10-23
 
 - **Scope.** How every view presents what it shows: placement, prominence
@@ -47,7 +85,8 @@ happened in a section below:
 - **Evidence.** `make qa` on Emacs 32, the whole run: 252 steps, 1 with a
   problem, a 1.08 s garbage collection in the rename journey while
   another session's tests ran beside it; the GUI sweep took 616 s for the
-  same reason. Every gallery state drawn in a scratch Emacs 32 under
+  same reason. (That collection was Roost's own garbage, found later that
+  day: #139.) Every gallery state drawn in a scratch Emacs 32 under
   ef-dream, ef-reverie, modus-vivendi and the default theme, with lights
   on and off. Each status face's contrast and colour distance
   (CIEDE2000, and for simulated deuteranopia and protanopia) in eight
@@ -107,7 +146,8 @@ happened in a section below:
 - **`make qa`** on Emacs 32, the whole run: 248 steps, 3 with problems,
   all three Emacs pausing for 1 to 2 s, mostly collecting garbage, in the
   tab and rename journeys while `make test` ran beside it. Run again
-  alone, those journeys passed: 8 steps, none with problems. The new
+  alone, those journeys passed: 8 steps, none with problems. (The garbage
+  was Roost's own, found 2026-10-23: #139.) The new
   journeys for `.worktreeinclude` and agents that crashed together passed,
   and their screenshots read as intended.
 - **Not by hand this time.** 0.10.0's run by hand was the day before;
