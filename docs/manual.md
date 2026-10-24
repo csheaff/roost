@@ -8,7 +8,7 @@ day of work, every command and option, and how Roost works.
 - [A day with Roost](#a-day-with-roost), and [what a task says](#what-a-task-says)
 - [Commands](#commands)
 - [Configuration](#configuration)
-- [How it works](#how-it-works)
+- [How it works](#how-it-works), and [security](#security)
 - [Development](#development)
 
 ## Install
@@ -805,6 +805,90 @@ Things to know:
   other unreachable objects, after two weeks by default
   (`gc.pruneExpire`); Roost then compares from the `HEAD` of that time.
   Untracked files over 1 MB are left out, then and since.
+
+## Security
+
+Roost is not a sandbox. An agent runs as you, with your permissions and
+credentials on its host, and its own permission prompts decide what it
+may do without asking. Roost never answers them. A remote host is trusted
+as any SSH login is. [SECURITY.md](../SECURITY.md) says how to report a
+problem and which inputs are worth scrutiny. Each line below can be
+checked against `roost.el` and `scripts/roost_remote.py`.
+
+What runs where:
+
+- Emacs runs the helper as `python3 -I -c CODE`, on a remote host through
+  `ssh -T -o BatchMode=yes`, which uses your keys or agent and never asks
+  for a password (`roost--python-command`). `CODE` names only the state
+  directory and the helper's file. The request goes on stdin as JSON, from
+  a temporary file when it is over 4 KB, so nothing you type goes through
+  a shell. `-I` keeps Python from importing anything from the directory
+  it runs in.
+- The helper's source goes over the same connection, on stdin, and is
+  saved in the host's state directory as `remote-` and the first 16 hex
+  digits of its SHA-256 (`roost--helper`, `roost--request`), so a new
+  version of Roost installs a new file. One that no task uses is deleted
+  once it is a week old.
+- The helper runs `git`, `tmux`, `gh` and the agent with each argument
+  separate, not through a shell. The command lines that tmux and Claude
+  Code and Codex hooks hand to a shell, to start an agent's runner and to
+  report its events, are quoted with Python's `shlex.join` and hold only
+  Python, Roost's files in the state directory and the task's IDs. The
+  other shell commands are your `roost-setup-command` and
+  `roost-teardown-command`.
+- Each agent starts under the helper's runner, in a tmux window of its
+  own. Its hooks, Pi extension or OpenCode plugin run the helper with each
+  event on stdin, and the helper records it and prints nothing back: they
+  report, and never approve or decline. The runner and hooks run the
+  helper's file with the same Python, without `-I`.
+- Claude Code and OpenCode may read one folder outside the task's
+  worktree without asking: the task's attachments, under the state
+  directory, given to Claude Code as `--add-dir` and to OpenCode as a rule
+  allowing it.
+- Roost won't paste a prompt into an agent that is starting or asking for
+  permission unless you confirm, as the paste could answer its menu.
+
+Files:
+
+- Each host keeps task records, hook settings, worktrees, attachments, the
+  status history and the helper in `roost-state-directory`
+  (`~/.local/share/roost`), which Roost creates with mode `0700`. Records
+  are written to a new file from `mkstemp`, which only you can read, and
+  renamed over the old one, so none is ever half-written.
+- This machine keeps the hosts and projects you used, and review notes not
+  yet sent, in the `roost` folder of `user-emacs-directory`, each file set
+  to `0600`.
+
+The network:
+
+- Roost reaches other machines only through `ssh`, to the hosts you add,
+  and TRAMP over it for a remote task's worktree; `git` on a host, to
+  fetch and push a task's branch for its pull request, to delete that
+  branch once it is merged, and in `roost-doctor` to try a push with
+  `--dry-run`; and `gh` on a host, for issues, pull requests, their checks
+  and comments. It sends nothing anywhere else: no telemetry and no update
+  checks. Agents reach their own services as they would without Roost.
+- Roost listens on no socket of its own. Hooks report by running the
+  helper, which writes the task's record. The sockets involved are tmux's
+  server and, with `roost-ssh-share-connections` on, ssh's shared
+  connection, kept in the local state directory, which Roost sets to
+  `0700`.
+- Roost doesn't start an Emacs server. With one you started, a click on a
+  terminal-notifier notification runs `emacsclient` to open the task.
+
+What Roost never does:
+
+- answer an agent's prompts: no key approves or declines for you;
+- change your global agent settings, such as `~/.claude` or `~/.codex`:
+  each agent gets Roost's hooks when it starts, for that task alone;
+- stage or commit what is left uncommitted, yours or an agent's: merging
+  needs the task's worktree clean, and takes only what its branch holds;
+- delete work that is nowhere else, unless you discard its task and type
+  the task's name.
+
+Dependencies: Emacs 29.1 or newer, transient, tmux-control and the Eat
+terminal it uses, and on each host tmux, Git and Python 3.9 or newer. The
+helper is one file of Python's standard library.
 
 ## Development
 

@@ -1,6 +1,7 @@
 # Roost
 
 [![CI](https://github.com/csheaff/roost/actions/workflows/ci.yml/badge.svg)](https://github.com/csheaff/roost/actions/workflows/ci.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/csheaff/roost/badge)](https://scorecard.dev/viewer/?uri=github.com/csheaff/roost)
 
 **Run a fleet of coding agents from Emacs.** Roost gives each agent
 ([Claude Code](https://claude.com/claude-code),
