@@ -18,6 +18,10 @@ The [manual](docs/manual.md#how-it-works) says how it fits together.
   checks rules any of them must keep (no Lisp errors, a way back from each
   change to a view, keys it names apply). Give a new kind of task a state in
   `roost-sweep--gallery`, and a new view an entry in `roost-sweep--views`.
+  It also runs the commands that quote your own buffers (a region, a
+  diagnostic, an Org entry, a diff line) in a gallery of buffer states,
+  `roost-sweep--buffers`, and checks the file and lines they name. Give a
+  new kind of buffer a state there.
   To check a new rule, break Roost the way it should catch and watch it fail.
 - Tests hold Roost to what it says about security. Every ERT test fails if
   Roost starts a program not in `roost-test--programs`; the helper's
