@@ -926,7 +926,7 @@ and fails on:
 - a key the task panel tells you to press that isn't bound there, or whose
   command doesn't apply to the task;
 - a view, the task list, or finding the task of the tab you're in, that
-  allocates six times as much or more for four times the tasks: its cost
+  allocates twelve times as much or more for eight times the tasks: its cost
   grows faster than the number of tasks, as when each row looks through
   every task. Allocation is counted, not time, so it is the same on any
   machine.

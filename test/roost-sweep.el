@@ -24,7 +24,7 @@
 ;;   area, narrow or wide: its status and name first, then why it waits
 ;;   where there is room, and the keys it names apply.
 ;; - A view costs no more for each task when there are more of them:
-;;   drawn for four times the tasks, it allocates under six times as much.
+;;   drawn for eight times the tasks, it allocates under twelve times as much.
 ;;
 ;; A new button or key is covered without a test of its own; a new kind
 ;; of task gets a state in `roost-sweep--gallery'.  The world outside the
@@ -971,15 +971,16 @@ As (WHAT . AMOUNT)."
   ;; Each row of the sidebar and dashboard, and each task when finding
   ;; the one whose tab you are in, sorted every task: with 39, a sidebar
   ;; redraw took 81 ms, 67 of them collecting garbage.  Measured by what
-  ;; is allocated, the same on any machine: four times the tasks allocate
-  ;; about four times as much when the cost is linear, and sixteen times
-  ;; when quadratic.
+  ;; is allocated, the same on any machine: eight times the tasks allocate
+  ;; about eight times as much when the cost is linear, and 64 times when
+  ;; quadratic.  Each row looking through every task once more, as for
+  ;; another with its name, comes to about 15.
   (roost-test--isolated
-   (let ((few (roost-sweep--costs 25)) (many (roost-sweep--costs 100)) problems)
+   (let ((few (roost-sweep--costs 25)) (many (roost-sweep--costs 200)) problems)
      (pcase-dolist (`(,what . ,cost) few)
        (let ((ratio (/ (float (alist-get what many nil nil #'equal)) cost)))
-         (when (>= ratio 6)
-           (push (format "%s allocates %.1f times as much for 100 tasks as for 25" what ratio) problems))))
+         (when (>= ratio 12)
+           (push (format "%s allocates %.1f times as much for 200 tasks as for 25" what ratio) problems))))
      (should-not problems))))
 
 ;;;; Your own buffers

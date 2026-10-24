@@ -38,20 +38,24 @@ happened in a section below:
 ## Cost with many tasks — 2026-10-24
 
 - **What the new test measures.** `roost-sweep-costs-grow-no-faster-than-the-tasks`
-  caches 25 tasks across two hosts, then 100, with namesakes, pull
+  caches 25 tasks across two hosts, then 200, with namesakes, pull
   requests, files and replies, and counts what the task list, the sidebar,
   the dashboard, a task panel and finding the task of a tab allocate. For
-  four times the tasks they allocate 4.0, 3.9, 3.5, 1.5 and 3.2 times as
-  much; the test fails at 6. On Emacs 30.2, and with Roost byte-compiled,
-  each is within 0.5 of that.
+  eight times the tasks they allocate 8.5, 7.9, 7.1, 2.3 and 6.2 times as
+  much; the test fails at 12, where each row looking through every task
+  once more comes to 15. On Emacs 30.2, and with Roost byte-compiled,
+  none is more. At first it compared 25 tasks with 100 and failed at 6,
+  which let the sidebar's 5.6 below pass; Copilot's review found that.
 - **Broken on purpose.** With `roost-tasks` as before #139, and
-  `roost--row-name` calling it, the test fails: the sidebar 20.8, the
-  dashboard 14.9 and the task list itself 6.1. With finding the task of a
-  tab as before this change, 8.8.
+  `roost--row-name` calling it, the test fails: the sidebar 96.9, the
+  dashboard 65.7 and the task list itself 14.5. With only the sidebar's
+  search for a namesake as before this change, 15.0; with only finding
+  the task of a tab as before, 30.4.
 - **What it found on main.** Two costs that still grew faster than the
   tasks after #139: each sidebar row looked through every task three
-  times for another with its name (5.6), and finding the task of your tab
-  worked out every task's tab name, each looking through every task (8.6).
+  times for another with its name (15.4; 5.6 for 100 tasks), and finding
+  the task of your tab worked out every task's tab name, each looking
+  through every task (31.0).
   Both are fixed here: with 100 tasks, uncompiled, a sidebar redraw took
   17 ms and now 7, and finding your tab's task 8.7 ms and now 0.2.
 - **`make qa`** on Emacs 32, the whole run, twice. The first: 253 steps, 1

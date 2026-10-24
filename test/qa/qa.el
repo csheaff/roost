@@ -94,20 +94,35 @@ Since `qa-take-collections' last ran.
 Each (INPUT COLLECTIONS SECONDS), INPUT as text.")
 
 (defvar qa--own-collections (cons 0 0.0)
-  "How often Emacs collected garbage running qa.py's requests, and for how long.")
+  "How often Emacs collected garbage running qa.py's requests, and for how long.
+Those done; see `qa--own-now'.")
+
+(defvar qa--request-start nil
+  "`gcs-done' and `gc-elapsed' as the request from qa.py running now began, or nil.")
 
 (defvar qa--last-input nil
   "The input given last, until `qa-input-done': (INPUT GCS ELAPSED OWN).
 GCS and ELAPSED are `gcs-done' and `gc-elapsed' then, and OWN is
-`qa--own-collections'.")
+`qa--own-now'.")
+
+(defun qa--own-now ()
+  "How often Emacs has collected garbage for qa.py's requests, and for how long.
+With what the request running now has collected so far."
+  (if qa--request-start
+      (cons (+ (car qa--own-collections) (- gcs-done (car qa--request-start)))
+            (+ (cdr qa--own-collections) (- gc-elapsed (cdr qa--request-start))))
+    qa--own-collections))
 
 (defun qa--request (filter &rest args)
   "Run FILTER with ARGS, as a request from qa.py arrives.
-What garbage it collects is qa.py's."
-  (let ((gcs gcs-done) (elapsed gc-elapsed))
+What garbage it collects is qa.py's.  One that arrives while another
+waits is part of it."
+  (if qa--request-start
+      (apply filter args)
+    (setq qa--request-start (cons gcs-done gc-elapsed))
     (unwind-protect (apply filter args)
-      (setq qa--own-collections (cons (+ (car qa--own-collections) (- gcs-done gcs))
-                                      (+ (cdr qa--own-collections) (- gc-elapsed elapsed)))))))
+      (setq qa--own-collections (qa--own-now)
+            qa--request-start nil))))
 
 ;; Called from outside the command loop, so advised even natively compiled.
 (advice-add 'server-process-filter :around #'qa--request)
@@ -116,18 +131,19 @@ What garbage it collects is qa.py's."
   "Note INPUT, text for what was pressed or clicked, given now.
 How often Emacs collects garbage from now until `qa-input-done' is
 INPUT's: its command, and the timers and replies they set off, as
-Roost draws a new draft from a timer.  Not what qa.py's requests made."
+Roost draws a new draft from a timer.  Not what qa.py's requests made,
+this one among them: it and `qa-input-done' run in one."
   (qa-input-done)
-  (setq qa--last-input (list input gcs-done gc-elapsed qa--own-collections)))
+  (setq qa--last-input (list input gcs-done gc-elapsed (qa--own-now))))
 
 (defun qa-input-done ()
   "Note how often the input given last made Emacs collect garbage, if it did."
   (pcase qa--last-input
     (`(,input ,gcs ,elapsed ,own)
-     (let ((collections (- gcs-done gcs (- (car qa--own-collections) (car own)))))
+     (let* ((now (qa--own-now))
+            (collections (- gcs-done gcs (- (car now) (car own)))))
        (when (> collections 0)
-         (push (list input collections
-                     (- gc-elapsed elapsed (- (cdr qa--own-collections) (cdr own))))
+         (push (list input collections (- gc-elapsed elapsed (- (cdr now) (cdr own))))
                qa--collections)))))
   (setq qa--last-input nil)
   t)
