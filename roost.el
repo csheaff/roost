@@ -1355,15 +1355,17 @@ recently failed."
       (roost--refresh-host host quiet))))
 
 (defun roost-tasks ()
-  "Cached tasks across hosts, without network I/O."
-  (let (tasks)
-    (maphash (lambda (_ task) (push task tasks)) roost--tasks)
-    (sort tasks
-          (lambda (a b)
-            (string-lessp (concat (roost--host-label (roost--field a 'host))
-                                  (roost--field a 'name))
-                          (concat (roost--host-label (roost--field b 'host))
-                                  (roost--field b 'name)))))))
+  "Cached tasks across hosts, without network I/O.
+They are in order of host and name."
+  (let (keyed)
+    ;; Each task's key made once, rather than two for each comparison:
+    ;; views call this for each of their rows.
+    (maphash (lambda (_ task)
+               (push (cons (concat (roost--host-label (roost--field task 'host)) (roost--field task 'name))
+                           task)
+                     keyed))
+             roost--tasks)
+    (mapcar #'cdr (sort keyed (lambda (a b) (string-lessp (car a) (car b)))))))
 
 ;;;; Choosing a task
 
@@ -1695,7 +1697,8 @@ made now."
                       (and (equal (roost--field other 'host) (roost--field task 'host))
                            (equal (roost--field other 'name) (roost--field task 'name))
                            (not (equal (roost--field other 'id) (roost--field task 'id)))))
-                    (roost-tasks))
+                    ;; In any order, as they are sorted next.
+                    (hash-table-values roost--tasks))
         #'roost--started-before))
 
 (defun roost--tab-name (task &optional with-id)
@@ -8454,7 +8457,7 @@ Tasks with the same name on the same host are told apart by their IDs."
   (let* ((name (roost--field task 'name))
          (host (roost--field task 'host))
          (twins (seq-filter (lambda (other) (equal (roost--field other 'name) name))
-                            (roost-tasks))))
+                            (hash-table-values roost--tasks))))
     (cond ((length< twins 2) name)
           ((length< (seq-filter (lambda (other) (equal (roost--field other 'host) host)) twins) 2)
            (format "%s on %s" name (roost--host-label host)))
@@ -8665,7 +8668,8 @@ them: a row that narrow keeps its room for an urgent status."
                                 (not (equal (roost--field other 'id) id))
                                 (equal (roost--field other 'host) (roost--field task 'host))
                                 (equal (roost--field other 'repo) (roost--field task 'repo))))
-                         (roost-tasks)))
+                         ;; Asked for each row: unsorted, as only whether counts.
+                         (hash-table-values roost--tasks)))
          (suffix (if (and twin id) (concat " " (substring id 0 (min 6 (length id)))) ""))
          (mark (roost--large-change-mark task))
          (suffix (if (and mark (or (not width) (> width (+ (length suffix) 2))))
