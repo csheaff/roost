@@ -1,0 +1,15 @@
+# Keep GitHub Actions (the CI supply chain) patched and pinned.
+# Dependabot opens pull requests to bump the actions this repository uses
+# and flags any with known vulnerabilities. Roost's Emacs dependencies
+# (transient, tmux-control) come through the user's package manager, and
+# the host helper uses only Python's standard library, so only the
+# workflow actions are managed here.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]
