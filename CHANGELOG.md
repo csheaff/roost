@@ -4,6 +4,14 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A task panel docked beside a terminal shows three lines of the task's
+  prompt and of your latest one, with "Show the whole prompt" for the
+  rest, so its changes, checks and the agent's reply come higher. It
+  showed up to 400 characters, about nine lines at 44 columns. The line
+  on how to write a note in Magit shows in a wide panel only.
+- An agent you've seen that waits for nothing says `seen` in its panel,
+  the menu, `l` and search, as on its dashboard row. The panel said
+  `ready for 19d`.
 - Colour in Roost's views now means a task needs you. The dot of a task
   whose agent works, which was the brightest on the screen, is dim like
   the dots of tasks that wait for nothing, and so is a merged task's,
