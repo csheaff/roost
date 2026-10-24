@@ -14,6 +14,7 @@
 (require 'json)
 (require 'button)
 (require 'ert)
+(require 'flymake)
 (require 'roost)
 
 (declare-function tmux-control-pause-log-mode "tmux-control" (&optional arg))
@@ -207,6 +208,14 @@ view stubbed out, so it doesn't count here."
 
 ;;;; Input
 
+;; Emacs learns that a symbol such as `mouse-1' is a click from the first
+;; real one, and reads a click in a header line or margin with that
+;; area's prefix, and the keymaps of the buffer clicked, only then.  This
+;; Emacs may never get one, so its clicks are told so from the start.
+(dolist (button '(1 3))
+  (dolist (kind '("down-" "" "drag-"))
+    (put (intern (format "%smouse-%d" kind button)) 'event-kind 'mouse-click)))
+
 (defun qa-keys (keys)
   "Press KEYS, in `kbd' notation, as from the keyboard."
   (qa--input keys)
@@ -254,10 +263,13 @@ The button must be on screen.  Return nil when it isn't."
                   (list (list 'down-mouse-1 posn) (list 'mouse-1 posn))))
     t))
 
-(defun qa-click-text (text &optional mode)
+(defun qa-click-text (text &optional mode button)
   "Click with the mouse on the first TEXT on screen, in a window in MODE if given.
-Return nil when it isn't on screen."
-  (let (found)
+BUTTON is the mouse button, 1 unless given.  Return nil when it isn't on
+screen."
+  (let ((down (intern (format "down-mouse-%d" (or button 1))))
+        (up (intern (format "mouse-%d" (or button 1))))
+        found)
     (dolist (window (qa--windows))
       (unless found
         (with-current-buffer (window-buffer window)
@@ -269,8 +281,76 @@ Return nil when it isn't on screen."
     (when-let* ((posn (and found (posn-at-point (cdr found) (car found)))))
       (qa--input (format "a click on %S" text))
       (setq unread-command-events
-            (append unread-command-events (list (list 'down-mouse-1 posn) (list 'mouse-1 posn))))
+            (append unread-command-events (list (list down posn) (list up posn))))
       t)))
+
+(defun qa--click-at (posn)
+  "Click with the mouse at POSN, and return t."
+  (setq unread-command-events
+        (append unread-command-events (list (list 'down-mouse-1 posn) (list 'mouse-1 posn))))
+  t)
+
+(defun qa-click-header (label)
+  "Click with the mouse on LABEL in the header line of a window on screen.
+Return nil when no header line shows it."
+  (seq-some
+   (lambda (window)
+     (let ((height (window-header-line-height window))
+           (step (max 1 (/ (frame-char-width (window-frame window)) 2))))
+       (when (> height 0)
+         ;; Along the header line, to LABEL's middle.
+         (cl-loop for x from 0 below (window-body-width window t) by step
+                  for posn = (posn-at-x-y x (/ height 2) window)
+                  for string = (and (eq (posn-area posn) 'header-line) (posn-string posn))
+                  for start = (and string (string-search label (car string)))
+                  when (and start (>= (cdr string) (+ start (/ (length label) 2)))
+                            (< (cdr string) (+ start (length label))))
+                  return (qa--click-at posn)))))
+   (qa--windows)))
+
+(defun qa--text-window (text)
+  "The first window on screen showing TEXT, and where, as (WINDOW . POSITION)."
+  (seq-some (lambda (window)
+              (with-current-buffer (window-buffer window)
+                (save-excursion
+                  (goto-char (window-start window))
+                  (when (search-forward text (window-end window t) t)
+                    (cons window (match-beginning 0))))))
+            (qa--windows)))
+
+(defun qa-click-margin (text)
+  "Click with the mouse in the left margin, beside the line showing TEXT.
+Return nil when TEXT isn't on screen, or its window has no left margin."
+  (when-let* ((found (qa--text-window text))
+              (window (car found))
+              (y (cdr (posn-x-y (posn-at-point (cdr found) window))))
+              (line (with-current-buffer (window-buffer window) (line-number-at-pos (cdr found))))
+              (posn (with-current-buffer (window-buffer window)
+                      ;; Across the window from its left edge, to the margin
+                      ;; on that line, wherever the header line puts it.
+                      (cl-loop for dy in (list 1 (1+ (window-header-line-height window)))
+                               thereis (cl-loop for x from 0 below (* 4 (frame-char-width (window-frame window)))
+                                                for posn = (posn-at-x-y x (+ y dy) window t)
+                                                when (and (eq (posn-area posn) 'left-margin) (posn-point posn)
+                                                          (= (line-number-at-pos (posn-point posn)) line))
+                                                return posn)))))
+    (qa--click-at posn)))
+
+(defun qa-click-note (text)
+  "Click with the mouse on the review note showing TEXT, under its line in Magit.
+Return nil when no note on screen shows it."
+  (seq-some
+   (lambda (window)
+     (let ((line (default-line-height)))
+       (with-current-buffer (window-buffer window)
+         ;; Down the window, a column into the note's text.
+         (cl-loop for y from 0 below (window-body-height window t) by (max 1 (/ line 2))
+                  for posn = (posn-at-x-y (* 6 (frame-char-width (window-frame window))) y window)
+                  for string = (posn-string posn)
+                  when (and string (get-text-property (cdr string) 'roost-note-id (car string))
+                            (string-search text (car string)))
+                  return (qa--click-at posn)))))
+   (qa--windows)))
 
 (defun qa-scroll-to-text (text mode)
   "Scroll the first window in MODE that holds TEXT so that TEXT shows.
@@ -296,6 +376,172 @@ Return nil when no terminal is on screen."
     (setq unread-command-events
           (append unread-command-events (list (list 'down-mouse-1 posn) (list 'mouse-1 posn))))
     t))
+
+;;;; Popup menus and dialogs
+
+;; A menu or dialog of the system's own waits for the mouse, holding up
+;; Emacs and whatever drives it.  The journey says beforehand what you
+;; would choose; what each offered is kept for its checks.
+
+(defvar qa--popup-answers nil
+  "The labels the next popup menus and dialogs choose, the first first.")
+
+(defvar qa--popups nil
+  "The popup menus and dialogs shown since `qa-take-popups', newest first.
+Each is ((title . TITLE) (items . LABELS) (chose . LABEL)).")
+
+(defun qa-answer-popups (&rest labels)
+  "Choose LABELS in the next popup menus or dialogs, one each."
+  (setq qa--popup-answers labels)
+  t)
+
+(defun qa-take-popups ()
+  "The popup menus and dialogs shown since the last call, oldest first."
+  (prog1 (vconcat (reverse qa--popups))
+    (setq qa--popups nil)))
+
+(defun qa--menu-label (name)
+  "NAME of a menu item, which may be an expression giving it."
+  (if (stringp name) name (format "%s" (eval name t))))
+
+(defun qa--menu-items (menu)
+  "MENU's items, as `x-popup-menu' takes it, each (LABEL . RESULT).
+RESULT is what `x-popup-menu' returns for it; disabled items have none."
+  (cond
+   ((keymapp menu)
+    (let (items)
+      (map-keymap
+       (lambda (event binding)
+         (pcase binding
+           (`(menu-item ,name ,command . ,properties)
+            (unless (string-prefix-p "--" (qa--menu-label name))
+              (push (list (qa--menu-label name)
+                          (and (or (not (plist-member properties :enable))
+                                   (eval (plist-get properties :enable) t))
+                               (list event))
+                          command)
+                    items)))
+           ((and `(,(and (pred stringp) name) . ,command) (guard (commandp command)))
+            (push (list name (list event) command) items))))
+       menu)
+      (nreverse items)))
+   ;; A list of keymaps.
+   ((and (consp menu) (keymapp (car menu))) (mapcan #'qa--menu-items menu))
+   ;; (TITLE (PANE-TITLE (LABEL . VALUE) ...) ...)
+   ((consp menu)
+    (mapcan (lambda (pane)
+              (seq-keep (lambda (item) (and (consp item) (list (car item) (cdr item))))
+                        (cdr-safe pane)))
+            (cdr menu)))))
+
+(defun qa--popup (kind title items)
+  "Answer the popup of KIND, `menu' or `dialog', with TITLE and ITEMS.
+ITEMS are (LABEL RESULT COMMAND), with RESULT nil for a menu item
+that can't be chosen.  Return (RESULT) for the label `qa-answer-popups'
+gave, or nil, as for a popup dismissed.  A popup no answer was given
+for is an error, as it would have held Emacs up."
+  (let* ((answer (pop qa--popup-answers))
+         (item (assoc answer items)))
+    (push `((kind . ,kind) (title . ,title) (items . ,(vconcat (mapcar #'car items))) (chose . ,answer))
+          qa--popups)
+    (cond ((not answer)
+           (push (format "A popup %s QA has no answer for opened: %s" kind title) qa--errors)
+           nil)
+          ((not (and item (or (eq kind 'dialog) (nth 1 item))))
+           (push (format "The popup %s %s has no %s to choose" kind title answer) qa--errors)
+           nil)
+          (t
+           ;; Chosen from a menu: `popup-menu' calls it, not the command loop.
+           (when (and (nth 2 item) (symbolp (nth 2 item)))
+             (qa--note-command (nth 2 item)))
+           (list (nth 1 item))))))
+
+(defun qa--popup-menu (show position menu)
+  "Answer a popup MENU at POSITION, rather than SHOW it."
+  (if (null position)
+      ;; It only works out the menu's key equivalents.
+      (funcall show position menu)
+    (car (qa--popup 'menu (cond ((keymapp menu) (or (keymap-prompt menu) ""))
+                                ((stringp (car-safe menu)) (car menu))
+                                (t ""))
+                    (qa--menu-items menu)))))
+
+(defun qa--popup-dialog (_show _position contents &optional _header)
+  "Answer a dialog of CONTENTS, (TITLE (LABEL . VALUE) ...), rather than show it.
+A dialog dismissed quits, as `x-popup-dialog' does."
+  (let ((items (seq-keep (lambda (item) (and (consp item) (list (car item) (cdr item))))
+                         (cdr contents))))
+    (car (or (qa--popup 'dialog (car contents) items)
+             (signal 'quit nil)))))
+
+;; Roost runs from source here, so its own calls of these primitives take
+;; the advice; natively compiled code calls them directly.
+(advice-add 'x-popup-menu :around #'qa--popup-menu)
+(advice-add 'x-popup-dialog :around #'qa--popup-dialog)
+
+(defun qa--popup-menu-command (show menu &optional position &rest rest)
+  "Choose from MENU, as `popup-menu' would at POSITION, and run what is chosen.
+SHOW, `popup-menu' itself, takes REST too."
+  (when (and (consp menu) (stringp (car menu)))
+    ;; An easy-menu list.
+    (setq menu (easy-menu-create-menu (car menu) (cdr menu))))
+  (if (not (keymapp menu))
+      (apply show menu position rest)
+    (when-let* ((chosen (car (qa--popup 'menu (or (keymap-prompt menu) "") (qa--menu-items menu))))
+                (command (lookup-key menu (vconcat chosen)))
+                ((commandp command)))
+      ;; As `popup-menu' runs it: chosen from a menu, not by a key.
+      (setq last-command-event (car (last chosen)))
+      (let ((from--tty-menu-p t))
+        (call-interactively command)))))
+
+(defun qa--dialog-question (ask prompt &rest rest)
+  "Answer PROMPT in a dialog where Emacs would show one, or else ASK it.
+ASK is `y-or-n-p' or `yes-or-no-p', which shows one after a click."
+  (if (use-dialog-box-p)
+      (car (or (qa--popup 'dialog prompt '(("Yes" t) ("No" nil)))
+               (signal 'quit nil)))
+    (apply ask prompt rest)))
+
+(advice-add 'popup-menu :around #'qa--popup-menu-command)
+(advice-add 'y-or-n-p :around #'qa--dialog-question)
+(advice-add 'yes-or-no-p :around #'qa--dialog-question)
+
+(defvar-local qa--flymake-finds nil
+  "(WORD . TEXT): what `qa--flymake-backend' reports, and says of it.")
+
+(defun qa--flymake-backend (report &rest _)
+  "Check the buffer for Flymake, as a linter would, and give REPORT what it finds.
+Each word that `qa--flymake-finds' names is a warning.  It runs no code
+from the buffer."
+  (let (diagnostics)
+    (save-excursion
+      (save-restriction
+        (widen)
+        (goto-char (point-min))
+        (while (re-search-forward (concat "\\_<" (regexp-quote (car qa--flymake-finds)) "\\_>") nil t)
+          (push (flymake-make-diagnostic (current-buffer) (match-beginning 0) (match-end 0)
+                                         :warning (cdr qa--flymake-finds))
+                diagnostics))))
+    (funcall report diagnostics)))
+
+;; It reads the buffer's text only, so Flymake runs it in a file you
+;; haven't said you trust, as it does Eglot's.
+(function-put 'qa--flymake-backend 'flymake-always-safe t)
+
+(defun qa-flymake (word text)
+  "Check the selected window's buffer with Flymake, a checker that finds WORD.
+It reports each WORD as a warning that says TEXT.  Return once its
+diagnostics are in."
+  (with-current-buffer (window-buffer (selected-window))
+    (setq qa--flymake-finds (cons word text))
+    (setq-local flymake-diagnostic-functions (list #'qa--flymake-backend))
+    (flymake-mode 1)
+    (flymake-start)
+    (with-timeout (5 nil)
+      (while (not (flymake-diagnostics))
+        (sit-for 0.1)))
+    (and (flymake-diagnostics) t)))
 
 (defun qa-terminal-takes-mouse ()
   "Whether the program in the selected terminal takes the mouse."
@@ -676,6 +922,12 @@ question from another of the same prompt asked after it."
        (at . ,(with-current-buffer (window-buffer (selected-window))
                 (when-let* ((button (button-at (window-point))))
                   (button-label button))))
+       ;; The text of the line point is on, without what overlays add, such
+       ;; as the button in Magit's margin that follows the mouse.
+       (line . ,(with-current-buffer (window-buffer (selected-window))
+                  (save-excursion
+                    (goto-char (window-point))
+                    (buffer-substring-no-properties (line-beginning-position) (line-end-position)))))
        (prompt . ,(minibuffer-prompt))
        ;; Every question open, the first asked first, whether you are in
        ;; one, and what Roost holds back until they are done.
@@ -706,6 +958,8 @@ question from another of the same prompt asked after it."
                                      (and (derived-mode-p 'tmux-control-mode) (fboundp 'tmux-control-active-pane)
                                           (tmux-control-active-pane))))
                           (tabs . ,(qa--tabs window))
+                          (header . ,(substring-no-properties
+                                      (or (qa--line window 'header-line-format) "")))
                           (mode-line . ,(substring-no-properties
                                          (or (qa--line window 'mode-line-format) "")))
                           (child . ,(if (frame-parent (window-frame window)) t :json-false))

@@ -2206,6 +2206,15 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
                                                 (roost-test--task)))))
      (should (string-suffix-p "\n\nCloses #12\n" (roost--pr-initial-text task '("Fix CSV quoting"))))
      (should-not (string-match-p "Closes" (roost--pr-initial-text task '("Fix CSV quoting\n\nFixes #12."))))
+     (should-not (string-match-p "Closes" (roost--pr-initial-text task '("Fix CSV quoting\n\nresolves #12"))))
+     ;; The prompt drafted from the issue names it, which closes nothing.
+     (should (string-suffix-p "This is GitHub issue #12: https://github.com/o/r/issues/12\n\nCloses #12\n"
+                              (roost--pr-initial-text
+                               (cons (cons 'task (roost--issue-prompt
+                                                  '((number . 12) (title . "CSV import crashes") (body . "")
+                                                    (url . "https://github.com/o/r/issues/12"))))
+                                     task)
+                               '("Fix CSV quoting"))))
      (with-temp-buffer
        (setq roost--buffer-task-key (roost--key task))
        (roost--render-task-info)
@@ -3096,10 +3105,20 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
      (unwind-protect
          (progn
            (roost--write-json-list roost-hosts-file '("old-box" "dev"))
-           (roost--cache-task "old-box" (roost-test--task nil "ready"))
-           (should (member "old-box" (roost--hosts)))
-           (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_) t)))
-             (roost-forget-host "old-box"))
+           (let* ((task (roost--cache-task "old-box" (roost-test--task nil "ready")))
+                  (panel (with-current-buffer (generate-new-buffer "*roost: forgotten*")
+                           (roost-task-info-mode)
+                           (setq roost--buffer-task-key (roost--key task))
+                           (current-buffer)))
+                  (released nil))
+             (should (member "old-box" (roost--hosts)))
+             (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_) t))
+                       ((symbol-function 'roost--release-terminal)
+                        (lambda (task) (push (roost--key task) released) nil)))
+               (roost-forget-host "old-box"))
+             ;; Its views go with it, its agent left running.
+             (should (equal released (list (roost--key task))))
+             (should-not (buffer-live-p panel)))
            (should-not (member "old-box" (roost--hosts)))
            (should (member "dev" (roost--hosts)))
            (should-not (roost-tasks))

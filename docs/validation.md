@@ -35,6 +35,33 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## Journeys for the commands none ran — 2026-10-24
+
+- **Scope.** `make qa` listed 37 of Roost's commands that no journey ran.
+  New journeys take most of them as a person would: review notes
+  cancelled, removed, gone to, chosen from their menu, clicked and
+  discarded, the whole file's diff; discarding a task by its name and from
+  its row's menu; a draft's project, agent and GitHub issue changed, and
+  its pull request draft cancelled; a region and a Flymake warning quoted
+  from a task's file, narrowed; `roost-doctor`; forgetting a host with
+  tasks on it; the panel's `g` and `q`, the sidebar off and on; search's
+  `n`, `p` and `g`; the dashboard's `TAB` and `j`. The walk-away grid
+  gained a review note half written and the question before discarding a
+  task. QA now answers the system's popup menus and dialogs as the journey
+  says, and its synthetic clicks count as clicks, so ones in a header line
+  or margin reach their keymaps.
+- **Evidence.** `make qa` on Emacs 32, the whole run: 319 steps, 5 with
+  problems, all from a new task whose name began as the pull request
+  journey's (renamed, and both rerun clean). The list of Roost's commands
+  no journey ran went from 37 to 7: the menus, `roost-magit-mode`,
+  `roost-watch-mode` and the obsolete `roost-status`.
+- **Fixed.** A pull request draft of a task from an issue never said
+  `Closes #N` when its body was the prompt. `roost-forget-host` left the
+  forgotten tasks' terminals, panels and tabs on screen. A notification
+  clicked, or a task opened from the menu, while a review note's box was
+  selected showed the task's terminal under the box, beside the task the
+  frame still named.
+
 ## Cost with many tasks — 2026-10-24
 
 - **What the new test measures.** `roost-sweep-costs-grow-no-faster-than-the-tasks`
