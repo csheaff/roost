@@ -869,8 +869,12 @@ GROUP replaces this one: by default, one about TASK."
             (append (list "-group" (or group (concat "roost-" (or (roost--field task 'host) "local")
                                                      "-" (roost--field task 'id))))
                     (when-let* ((command (roost--emacsclient-command
+                                          ;; Quoted, so they stay data: a click
+                                          ;; evaluates this, and an ID a host sent
+                                          ;; that isn't a string, such as a JSON
+                                          ;; object, would otherwise run as code.
                                           `(roost--open-from-notification
-                                            ,(roost--field task 'host) ,(roost--field task 'id)))))
+                                            ',(roost--field task 'host) ',(roost--field task 'id)))))
                       (list "-execute" command))))))
 
 (defun roost--notify (title body &optional task group)
