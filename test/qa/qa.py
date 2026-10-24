@@ -518,17 +518,17 @@ class Run:
         self.settle()
         screen = self.screen()
         problems = ["Error: " + error for error in self.emacs.json("(json-encode (vconcat (qa-take-errors)))")]
-        # By command, which a pause the step had is Roost's if they collected
-        # garbage often, and more likely the machine's load if not.
+        # By command: a pause in the step is a command's garbage if one
+        # collected it often, and more likely the machine's load if none did.
         collections = self.emacs.json("(json-encode (vconcat (mapcar #'vconcat (qa-take-collections))))")
-        collected = sum(count for _, count, _ in collections)
-        collecting = sum(seconds for _, _, seconds in collections)
+        heavy = [entry for entry in collections if entry[1] > COLLECTIONS]
         problems += ["The command %s collected garbage %d times (%.2f s), more than the %d a command may"
-                     % (command, count, seconds, COLLECTIONS)
-                     for command, count, seconds in collections if count > COLLECTIONS]
+                     % (command, count, seconds, COLLECTIONS) for command, count, seconds in heavy]
         problems += ["Emacs stopped responding: %s. The step's commands collected garbage %d times (%.2f s): %s"
-                     % (pause, collected, collecting,
-                        "Roost's own garbage" if collected > COLLECTIONS else "too few to explain it, so load")
+                     % (pause, sum(entry[1] for entry in collections), sum(entry[2] for entry in collections),
+                        "the garbage of %s" % ", ".join(entry[0] for entry in heavy) if heavy
+                        else "none often enough to explain it, so the machine's load, or a timer's "
+                             "or tmux's output, more likely")
                      for pause in self.emacs.json("(json-encode (vconcat (qa-take-pauses)))")]
         for name in screen["buffers"]:
             if name == "*Backtrace*":
