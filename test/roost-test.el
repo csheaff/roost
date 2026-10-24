@@ -265,10 +265,11 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
                  ;; RET in the terminal would pick the agent's default answer.
                  (should (string-match-p "^Answer it in its terminal\n\nPrompt\nfix authentication\n" text))
                  (should-not (string-match-p "Waiting for your answer\\|Agent's latest reply\\|Fixed the" text))
-                 ;; The labels say what is uncommitted, and where notes are written.
+                 ;; The labels say what is uncommitted.  Where notes are
+                 ;; written is for a wide panel, as room here goes to changes.
                  (should (string-match-p "^Changes\n1 file \\+1 −0\n" text))
-                 (should (string-match-p "^  Committed\n  login\\.py  \\+1 −0\nIn a file's diff, ; writes a note for the agent$"
-                                         text))
+                 (should (string-match-p "^  Committed\n  login\\.py  \\+1 −0$" text))
+                 (should-not (string-match-p "writes a note" text))
                  (should-not (string-match-p "Actions" text))
                  ;; No CI results, without a pull request, stand beside a
                  ;; reply the terminal shows: not here.
@@ -5490,6 +5491,37 @@ of its own, which shows in the selected window of its workspace."
   (roost-test--isolated
    (dolist (command '(roost-dashboard-mouse-open roost-dashboard-mouse-menu roost-compose-open-task))
      (should (eq (lookup-key transient-predicate-map (vector command)) #'transient--do-exit)))))
+
+;; Beside a terminal, the panel's top goes to what you don't know yet:
+;; your own prompt is three lines, and how to write a note is taught in a
+;; wide panel.  An agent you've seen says so, as on its dashboard row.
+(ert-deftest roost-a-docked-panel-keeps-its-top-for-what-you-dont-know ()
+  (roost-test--isolated
+   (let* ((prompt (mapconcat (lambda (n) (format "Detail %d of what the report should do." n))
+                             (number-sequence 1 12) " "))
+          (task (roost--cache-task "dev" (append `((task . ,prompt) (diff . "1 file changed, 1 insertion(+)")
+                                                   (files ((path . "login.py") (added . 1) (deleted . 0))))
+                                                 (roost-test--task nil "ready"))))
+          (draw (lambda (width)
+                  (with-temp-buffer
+                    (roost-task-info-mode)
+                    (setq roost--buffer-task-key (roost--key task))
+                    (cl-letf (((symbol-function 'roost--task-info-width) (lambda () width))
+                              ((symbol-function 'magit-status) #'ignore))
+                      (roost--render-task-info))
+                    (buffer-substring-no-properties (point-min) (point-max))))))
+     (let ((narrow (funcall draw 44)) (wide (funcall draw 100)))
+       ;; Three lines and the button, rather than all 400 characters.
+       (should (string-match-p "^Prompt\n\\(?:[^\n]+\n\\)\\{3\\}Show the whole prompt$" narrow))
+       (should (string-match-p "…\nShow the whole prompt$" narrow))
+       (should (string-match-p "Detail 8 of" wide))
+       (should-not (string-match-p "writes a note" narrow))
+       (should (string-match-p "In a file's diff, ; writes a note for the agent" wide))
+       (should (string-match-p "^fix auth   ● ready for" narrow)))
+     (puthash (roost--key task) (roost--field task 'updatedAt) roost--seen)
+     (let ((narrow (funcall draw 44)))
+       (should (string-match-p "^fix auth   ● seen$" narrow))
+       (should (equal (roost--row-word task) "seen"))))))
 
 (ert-deftest roost-task-panel-shows-prompt-changes-and-details ()
   (roost-test--isolated

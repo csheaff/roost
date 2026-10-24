@@ -217,9 +217,9 @@ since you last looked at it, if anything (below), where the whole name fits
 beside it. A click opens the task,
 quitting any question you left open in the minibuffer, which would hold it back,
 and closing a menu left open. `I` docks a panel at the right of an open task's terminal,
-kept current as the agent works: what to do next, the task's prompt, the
-files it changed, those not yet committed first, and what a merge would rest
-on (below). Once you have sent the agent more, your latest prompt shows
+kept current as the agent works: what to do next, the start of the task's
+prompt, three lines there, the files it changed, those not yet committed
+first, and what a merge would rest on (below). Once you have sent the agent more, your latest prompt shows
 under the task's, a reminder of where you left off that the terminal may
 have scrolled away. A click or `RET` on a file
 opens its diff in Magit, where `;` writes a note for the agent (more under
@@ -312,7 +312,7 @@ when the task waits for nothing.
 | `stopped` | No | Stopped with `K`; `s` resumes its conversation |
 | `merged` | No | Its work is merged, on GitHub or into its branch; `x` retires it |
 | `offline` | No | Its host doesn't answer; the row is as it was last known |
-| `seen` | No | You've seen an agent that waits for nothing, or it has done nothing since it started or you resumed it. The sidebar leaves it without a word |
+| `seen` | No | You've seen an agent that waits for nothing, or it has done nothing since it started or you resumed it. The sidebar leaves it without a word; its panel, the menu and search say `seen` too |
 
 A task that waits for nothing may say, dim, what changed since you last
 looked at it, `3 files changed since you looked`, or with Magit,

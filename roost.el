@@ -1495,7 +1495,7 @@ nobody is looking."
          (annotate
           (lambda (label)
             (let* ((task (cdr (assoc label choices)))
-                   (status (roost--display-status task)))
+                   (status (roost--row-word task)))
               (concat "  " (propertize status 'face (roost--status-word-face (roost--attention-status task)))
                       (propertize (concat "  " (truncate-string-to-width
                                                 (roost--one-line (roost--field task 'task)) 60 nil nil "…"))
@@ -7809,7 +7809,7 @@ Below it, as in the task panel, what to do next, naming the key that
 does it in this menu."
   (if-let* ((task (roost--dispatch-task)))
       (concat (format "Task %s (%s)" (propertize (roost--field task 'name) 'face 'roost-title)
-                      (roost--display-status task))
+                      (roost--row-word task))
               (when-let* ((next (roost--next-step task t)))
                 (concat "\n" next)))
     "Task (chosen when needed)"))
@@ -8100,16 +8100,23 @@ A different one starts folded when it arrives.")
   "The reply expanded in a compact panel, or nil.
 A different reply starts collapsed when it arrives.")
 
-(defun roost--reply-preview (reply width)
-  "The first six lines of REPLY as shown wrapped in WIDTH columns.
+(defconst roost--wide-panel 72
+  "The fewest columns of a task panel that shows all it can.
+A narrower one, as docked beside a terminal, cuts prompts and replies
+short and leaves out the paths, the hint on notes and the footer's
+longer lines.")
+
+(defun roost--reply-preview (reply width &optional most)
+  "The first MOST lines of REPLY, six unless given, as wrapped in WIDTH columns.
 Return short replies unchanged.  Faces in REPLY, as from `roost--prose',
 count in its width."
-  (let* ((columns (max 12 (- width 2)))
-         (lines (roost--wrap-width reply columns 6)))
-    (if (<= (length lines) 6)
+  (let* ((most (or most 6))
+         (columns (max 12 (- width 2)))
+         (lines (roost--wrap-width reply columns most)))
+    (if (<= (length lines) most)
         reply
-      (let ((last (string-trim-right (nth 5 lines))))
-        (concat (string-join (seq-take lines 5) "\n") "\n"
+      (let ((last (string-trim-right (nth (1- most) lines))))
+        (concat (mapconcat (lambda (line) (concat line "\n")) (seq-take lines (1- most)) "")
                 (roost--truncate-width
                  (concat last (propertize "…" 'face (get-text-property (max 0 (1- (length last))) 'face last)))
                  columns))))))
@@ -8126,18 +8133,23 @@ prompt is returned whole."
                     paragraph)))
     (if (equal (string-trim preview) (string-trim prompt)) prompt preview)))
 
-(defun roost--insert-prompt (prompt what full)
+(defun roost--insert-prompt (prompt what full width)
   "Insert PROMPT, only its start when long, with a button for the rest.
 WHAT names the button, as for `roost--insert-toggle'.  FULL is the
-variable that holds the prompt shown in full, or nil."
-  (let ((preview (roost--prompt-preview prompt)))
+variable that holds the prompt shown in full, or nil.  In a panel
+WIDTH columns wide that is narrower than `roost--wide-panel', as beside
+a terminal, its start is three lines: you wrote it, and what you don't
+know yet comes below."
+  (let* ((preview (roost--prose (roost--prompt-preview prompt)))
+         (preview (if (< width roost--wide-panel) (roost--reply-preview preview width 3) preview)))
+    ;; As text, ignoring faces.
     (cond ((equal preview prompt)
            (roost--insert-indented (roost--prose prompt)))
           ((equal (symbol-value full) prompt)
            (roost--insert-toggle "Collapse prompt" what (lambda () (set full nil)))
            (roost--insert-indented (roost--prose prompt)))
           (t
-           (roost--insert-indented (roost--prose preview))
+           (roost--insert-indented preview)
            (roost--insert-toggle "Show the whole prompt" what (lambda () (set full prompt)))))))
 
 (defun roost--insert-indented (text &optional face)
@@ -8254,15 +8266,17 @@ Windows showing the panel keep their scroll position, and the mark stays."
              ;; Beside it in one frame, RET would answer the agent there.
              (next (roost--next-step task nil (setq roost--near-terminal
                                                     (roost--panel-beside-terminal-p task t)))))
-        (let ((name (propertize (roost--field task 'name) 'face 'roost-title))
-              (state (concat (roost--status-light task (cons 'panel (current-buffer)) t)
-                             (propertize (concat " " status)
-                                         'face (roost--status-word-face (roost--attention-status task)))
-                             ;; Not since it merged, or its pull request
-                             ;; came to wait on you, but since its agent last moved.
-                             (unless (member status (append '("merged" "conflicts") roost--pr-turns))
-                               (propertize (format " for %s" (roost--elapsed (roost--field task 'updatedAt)))
-                                           'face 'roost-dim)))))
+        (let* ((name (propertize (roost--field task 'name) 'face 'roost-title))
+               (word (roost--row-word task))
+               (state (concat (roost--status-light task (cons 'panel (current-buffer)) t)
+                              (propertize (concat " " word)
+                                          'face (roost--status-word-face (roost--attention-status task)))
+                              ;; Not since it merged, or its pull request
+                              ;; came to wait on you, but since its agent last moved;
+                              ;; nor for one you've seen, which isn't seen "for" a time.
+                              (unless (member word (append '("merged" "conflicts" "seen") roost--pr-turns))
+                                (propertize (format " for %s" (roost--elapsed (roost--field task 'updatedAt)))
+                                            'face 'roost-dim)))))
           ;; The status keeps to one line, below the name when both don't fit.
           (insert name (if (> (+ (roost--text-width name) 3 (roost--text-width state)) width) "\n" "   ")
                   state "\n"))
@@ -8279,7 +8293,7 @@ Windows showing the panel keep their scroll position, and the mark stays."
             (roost--insert-indented (roost--prose request))))
         (when-let* ((prompt (roost--prompt-text task)))
           (roost--insert-heading "Prompt")
-          (roost--insert-prompt prompt 'prompt 'roost--show-full-prompt))
+          (roost--insert-prompt prompt 'prompt 'roost--show-full-prompt width))
         ;; Where you left off, which the terminal may have scrolled away.
         (let ((prompt (roost--latest-prompt task)))
           ;; Another one, or none, leaves the next to come folded.
@@ -8287,7 +8301,7 @@ Windows showing the panel keep their scroll position, and the mark stays."
             (setq roost--show-full-latest-prompt nil))
           (when prompt
             (roost--insert-heading "Your latest prompt")
-            (roost--insert-prompt prompt 'latest-prompt 'roost--show-full-latest-prompt)))
+            (roost--insert-prompt prompt 'latest-prompt 'roost--show-full-latest-prompt width)))
         (roost--insert-heading "Changes")
         (roost--insert-indented
          (cond ((roost--field task 'worktreeMissing)
@@ -8305,7 +8319,10 @@ Windows showing the panel keep their scroll position, and the mark stays."
         (roost--insert-since-looked task next)
         (if-let* ((notes (roost--notes-summary task)))
             (roost--insert-indented notes)
-          (when (and (fboundp 'magit-status)
+          ;; Taught in a wide panel, as the line on what ready means below;
+          ;; beside a terminal, room goes to what changes.
+          (when (and (>= width roost--wide-panel)
+                     (fboundp 'magit-status)
                      (seq-some (lambda (file) (not (alist-get 'untracked file)))
                                (roost--field task 'files)))
             (roost--insert-indented
@@ -8368,7 +8385,7 @@ Windows showing the panel keep their scroll position, and the mark stays."
                       (reply (roost--last-message task))
                       (reply (roost--prose reply)))
             (roost--insert-heading "Agent's latest reply" (when evidence "its own account"))
-            (let* ((preview (if (< width 72) (roost--reply-preview reply width) reply))
+            (let* ((preview (if (< width roost--wide-panel) (roost--reply-preview reply width) reply))
                    (expanded (equal reply roost--expanded-reply)))
               (unless expanded (setq roost--expanded-reply nil))
               (when (and expanded (not (equal preview reply)))
@@ -8386,7 +8403,7 @@ Windows showing the panel keep their scroll position, and the mark stays."
                                               (if-let* ((other (roost--other-branch task)))
                                                   (format "; the worktree is on %s" (roost--branch-label other))
                                                 "")))
-                         ,@(unless (< width 72)
+                         ,@(unless (< width roost--wide-panel)
                              `(("Worktree" . ,(roost--abbreviate-path (or (roost--field task 'worktree) "")
                                                                       (roost--field task 'host)))
                                ("Project" . ,(roost--abbreviate-path (or (roost--field task 'repo) "")
@@ -8396,7 +8413,7 @@ Windows showing the panel keep their scroll position, and the mark stays."
                                ("Conversation" . ,(or (roost--field task 'agentSession)
                                                       (roost--field task 'claudeSession)
                                                       "not recorded yet"))))))
-          (if (< width 72)
+          (if (< width roost--wide-panel)
               ;; Too narrow for a label column: the value goes below its label.
               (insert "  " (propertize (car entry) 'face 'roost-dim) "\n"
                       (propertize (concat (or (cdr entry) "unknown") "\n")
@@ -8406,10 +8423,10 @@ Windows showing the panel keep their scroll position, and the mark stays."
                                 'wrap-prefix (make-string 15 ?\s)))))
         (insert roost--gap
                 (propertize (substitute-command-keys
-                             (concat (unless (< width 72)
+                             (concat (unless (< width roost--wide-panel)
                                        "Ready means the agent is waiting for you, not that the work is reviewed.\n")
                                      "\\<roost-task-info-mode-map>\\[roost-dispatch] opens the menu · "
-                                     (unless (< width 72) "\\[roost-task-info-refresh] refreshes · ")
+                                     (unless (< width roost--wide-panel) "\\[roost-task-info-refresh] refreshes · ")
                                      "\\[roost-task-info-quit] closes"))
                             'face 'roost-dim)
                 "\n")))
@@ -8595,9 +8612,10 @@ What can't go on without you comes first, then what failed, what else
 waits on you, and last what waits for nothing.")
 
 (defun roost--row-word (task)
-  "TASK's word on its dashboard row.
+  "TASK's word, on its dashboard row and wherever else Roost names its state.
 As `roost--display-status' has it, but \"seen\" for an agent you have
-seen that waits for nothing, which the sidebar leaves without a word."
+seen that waits for nothing, which the sidebar leaves without a word.
+The task panel, the menu, `roost-switch-task' and search say it too."
   (if (equal (roost--attention-status task) "idle") "seen" (roost--display-status task)))
 
 (defun roost--summary (tasks)
@@ -9094,7 +9112,7 @@ than WIDTH, such as a URL, is broken within, as in `roost--reply-preview'."
       (let* ((key (when-let* ((id (alist-get 'id result))) (list host id)))
              (task (and key (gethash key roost--tasks)))
              (key (unless (and key (not task) (roost--search-gone-p host)) key))
-             (status (cond (task (roost--display-status task)) ((not key) "past task")))
+             (status (cond (task (roost--row-word task)) ((not key) "past task")))
              (row (and key (list 'roost-task key)))
              (start (point)))
         (insert "\n" (propertize (or (alist-get 'name result) "?") 'face 'roost-heading) "  "
