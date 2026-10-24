@@ -89,6 +89,73 @@ advised for this: natively compiled, they call each other directly."
       (seq-remove (lambda (note) (string-match-p "qa\\.py's own request took" note))
                   (reverse new)))))
 
+(defvar qa--collections nil
+  "The input that made Emacs collect garbage, newest first.
+Since `qa-take-collections' last ran.
+Each (INPUT COLLECTIONS SECONDS), INPUT as text.")
+
+(defvar qa--own-collections (cons 0 0.0)
+  "How often Emacs collected garbage running qa.py's requests, and for how long.
+Those done; see `qa--own-now'.")
+
+(defvar qa--request-start nil
+  "`gcs-done' and `gc-elapsed' as the request from qa.py running now began, or nil.")
+
+(defvar qa--last-input nil
+  "The input given last, until `qa-input-done': (INPUT GCS ELAPSED OWN).
+GCS and ELAPSED are `gcs-done' and `gc-elapsed' then, and OWN is
+`qa--own-now'.")
+
+(defun qa--own-now ()
+  "How often Emacs has collected garbage for qa.py's requests, and for how long.
+With what the request running now has collected so far."
+  (if qa--request-start
+      (cons (+ (car qa--own-collections) (- gcs-done (car qa--request-start)))
+            (+ (cdr qa--own-collections) (- gc-elapsed (cdr qa--request-start))))
+    qa--own-collections))
+
+(defun qa--request (filter &rest args)
+  "Run FILTER with ARGS, as a request from qa.py arrives.
+What garbage it collects is qa.py's.  One that arrives while another
+waits is part of it."
+  (if qa--request-start
+      (apply filter args)
+    (setq qa--request-start (cons gcs-done gc-elapsed))
+    (unwind-protect (apply filter args)
+      (setq qa--own-collections (qa--own-now)
+            qa--request-start nil))))
+
+;; Called from outside the command loop, so advised even natively compiled.
+(advice-add 'server-process-filter :around #'qa--request)
+
+(defun qa--input (input)
+  "Note INPUT, text for what was pressed or clicked, given now.
+How often Emacs collects garbage from now until `qa-input-done' is
+INPUT's: its command, and the timers and replies they set off, as
+Roost draws a new draft from a timer.  Not what qa.py's requests made,
+this one among them: it and `qa-input-done' run in one."
+  (qa-input-done)
+  (setq qa--last-input (list input gcs-done gc-elapsed (qa--own-now))))
+
+(defun qa-input-done ()
+  "Note how often the input given last made Emacs collect garbage, if it did."
+  (pcase qa--last-input
+    (`(,input ,gcs ,elapsed ,own)
+     (let* ((now (qa--own-now))
+            (collections (- gcs-done gcs (- (car now) (car own)))))
+       (when (> collections 0)
+         (push (list input collections (- gc-elapsed elapsed (- (cdr now) (cdr own))))
+               qa--collections)))))
+  (setq qa--last-input nil)
+  t)
+
+(defun qa-take-collections ()
+  "The input that made Emacs collect garbage since the last call, oldest first.
+Forget them."
+  (qa-input-done)
+  (prog1 (reverse qa--collections)
+    (setq qa--collections nil)))
+
 (defvar qa--commands-run (make-hash-table :test 'eq)
   "The commands journeys ran, through the command loop.")
 
@@ -151,11 +218,13 @@ view stubbed out, so it doesn't count here."
 
 (defun qa-keys (keys)
   "Press KEYS, in `kbd' notation, as from the keyboard."
+  (qa--input keys)
   (setq unread-command-events (append unread-command-events (listify-key-sequence (kbd keys))))
   t)
 
 (defun qa-type (text)
   "Type TEXT, as from the keyboard."
+  (qa--input (format "typing %S" (truncate-string-to-width text 20 nil nil "…")))
   (setq unread-command-events (append unread-command-events (string-to-list text)))
   t)
 
@@ -188,6 +257,7 @@ The button must be on screen.  Return nil when it isn't."
               ;; Its middle: a step in from its start is past a button of one
               ;; character, such as the sidebar's +.
               (posn (posn-at-point (+ (cdr place) (/ (length label) 2)) (car place))))
+    (qa--input (format "a click on %S" label))
     (setq unread-command-events
           (append unread-command-events
                   (list (list 'down-mouse-1 posn) (list 'mouse-1 posn))))
@@ -209,6 +279,7 @@ screen."
               (when (search-forward text (window-end window t) t)
                 (setq found (cons window (match-beginning 0)))))))))
     (when-let* ((posn (and found (posn-at-point (cdr found) (car found)))))
+      (qa--input (format "a click on %S" text))
       (setq unread-command-events
             (append unread-command-events (list (list down posn) (list up posn))))
       t)))
@@ -301,6 +372,7 @@ Return nil when none holds it."
 Return nil when no terminal is on screen."
   (when-let* ((window (seq-find (lambda (window) (qa--terminal (window-buffer window))) (qa--windows)))
               (posn (posn-at-point (window-start window) window)))
+    (qa--input "a click in a terminal")
     (setq unread-command-events
           (append unread-command-events (list (list 'down-mouse-1 posn) (list 'mouse-1 posn))))
     t))
@@ -485,6 +557,7 @@ Return nil unless the selected window is a terminal."
   (let ((window (selected-window)))
     (when-let* (((qa--terminal (window-buffer window)))
                 (posn (posn-at-point (window-start window) window)))
+      (qa--input "a press in a terminal")
       (setq unread-command-events
             (append unread-command-events (list (list 'down-mouse-1 posn))))
       t)))

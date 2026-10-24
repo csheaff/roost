@@ -45,6 +45,15 @@ FAKE_GH = HERE / "fake_gh.py"
 
 FRAME = (172, 40)
 PANEL = 44  # roost-task-panel-width
+# The most times one input may have Emacs collect garbage, at its default
+# threshold: a key sequence, typing or a click, and what its command sets
+# off until Emacs is idle, such as Roost's timer that draws a new draft.
+# In a whole run, with up to 39 tasks, none needed more than 7, and C-c r c
+# with a tab per task 1.  Before Roost stopped sorting every task for each
+# row of the sidebar (#139), that C-c r c needed 40 to 50.  A pause in a
+# step whose input needed fewer had another cause, most likely the
+# machine's load.
+COLLECTIONS = 20
 
 LONG_PROMPT = (
     "Let notes have due dates. " + " ".join(
@@ -401,6 +410,8 @@ class Run:
                 raise Stuck("Emacs didn't take the input in 20s")
             time.sleep(0.1)
         time.sleep(quiet)
+        # What garbage Emacs collected since the input is the input's.
+        self.emacs.eval("(qa-input-done)")
 
     def screen(self):
         return self.emacs.json("(qa-screen)")
@@ -531,7 +542,17 @@ class Run:
         self.settle()
         screen = self.screen()
         problems = ["Error: " + error for error in self.emacs.json("(json-encode (vconcat (qa-take-errors)))")]
-        problems += ["Emacs stopped responding: " + pause
+        # By input: a pause in the step was an input's garbage if one had
+        # Emacs collect it often, and more likely the machine's load if none did.
+        collections = self.emacs.json("(json-encode (vconcat (mapcar #'vconcat (qa-take-collections))))")
+        heavy = [entry for entry in collections if entry[1] > COLLECTIONS]
+        problems += ["%s had Emacs collect garbage %d times (%.2f s), more than the %d one input may"
+                     % (input, count, seconds, COLLECTIONS) for input, count, seconds in heavy]
+        problems += ["Emacs stopped responding: %s. The step's input had it collect garbage %d times (%.2f s): %s"
+                     % (pause, sum(entry[1] for entry in collections), sum(entry[2] for entry in collections),
+                        "the garbage of %s" % ", ".join(entry[0] for entry in heavy) if heavy
+                        else "none often enough to explain it, so the machine's load, or a timer's "
+                             "or tmux's output, more likely")
                      for pause in self.emacs.json("(json-encode (vconcat (qa-take-pauses)))")]
         for name in screen["buffers"]:
             if name == "*Backtrace*":
@@ -597,7 +618,7 @@ class Run:
             elif not ok:
                 problems.append("Expected: " + description)
         self.steps.append(dict(journey=self.journey, title=title, problems=problems, known=known,
-                               shot=self.shot(), screen=screen))
+                               shot=self.shot(), screen=screen, collections=collections))
         mark = "✗" if problems else "✓"
         print("  %s %s" % (mark, title))
         for problem in problems:
@@ -663,6 +684,9 @@ class Run:
             said = "".join("<p><small>%s: %s</small></p>" % (label, html.escape(step["screen"][key]))
                            for key, label in (("echo", "Echo area"), ("prompt", "Minibuffer"))
                            if step["screen"].get(key))
+            if step.get("collections"):
+                said += "<p><small>Garbage collected after: %s</small></p>" % html.escape(", ".join(
+                    "%s %d (%.2f s)" % tuple(entry) for entry in step["collections"]))
             rows.append('<section class="%s"><h3>%s %s</h3><ul>%s</ul>%s%s%s</section>' % (
                 "bad" if step["problems"] else "good", "✗" if step["problems"] else "✓",
                 html.escape(step["title"]), problems, said, shot, windows))
