@@ -8101,6 +8101,12 @@ A different one starts folded when it arrives.")
   "The reply expanded in a compact panel, or nil.
 A different reply starts collapsed when it arrives.")
 
+(defconst roost--wide-panel 72
+  "The fewest columns of a task panel that shows all it can.
+A narrower one, as docked beside a terminal, cuts prompts and replies
+short and leaves out the paths, the hint on notes and the footer's
+longer lines.")
+
 (defun roost--reply-preview (reply width &optional most)
   "The first MOST lines of REPLY, six unless given, as wrapped in WIDTH columns.
 Return short replies unchanged.  Faces in REPLY, as from `roost--prose',
@@ -8132,10 +8138,11 @@ prompt is returned whole."
   "Insert PROMPT, only its start when long, with a button for the rest.
 WHAT names the button, as for `roost--insert-toggle'.  FULL is the
 variable that holds the prompt shown in full, or nil.  In a panel
-narrower than 72 columns, WIDTH, as beside a terminal, its start is
-three lines: you wrote it, and what you don't know yet comes below."
+WIDTH columns wide that is narrower than `roost--wide-panel', as beside
+a terminal, its start is three lines: you wrote it, and what you don't
+know yet comes below."
   (let* ((preview (roost--prose (roost--prompt-preview prompt)))
-         (preview (if (< width 72) (roost--reply-preview preview width 3) preview)))
+         (preview (if (< width roost--wide-panel) (roost--reply-preview preview width 3) preview)))
     ;; As text, ignoring faces.
     (cond ((equal preview prompt)
            (roost--insert-indented (roost--prose prompt)))
@@ -8315,7 +8322,7 @@ Windows showing the panel keep their scroll position, and the mark stays."
             (roost--insert-indented notes)
           ;; Taught in a wide panel, as the line on what ready means below;
           ;; beside a terminal, room goes to what changes.
-          (when (and (>= width 72)
+          (when (and (>= width roost--wide-panel)
                      (fboundp 'magit-status)
                      (seq-some (lambda (file) (not (alist-get 'untracked file)))
                                (roost--field task 'files)))
@@ -8379,7 +8386,7 @@ Windows showing the panel keep their scroll position, and the mark stays."
                       (reply (roost--last-message task))
                       (reply (roost--prose reply)))
             (roost--insert-heading "Agent's latest reply" (when evidence "its own account"))
-            (let* ((preview (if (< width 72) (roost--reply-preview reply width) reply))
+            (let* ((preview (if (< width roost--wide-panel) (roost--reply-preview reply width) reply))
                    (expanded (equal reply roost--expanded-reply)))
               (unless expanded (setq roost--expanded-reply nil))
               (when (and expanded (not (equal preview reply)))
@@ -8397,7 +8404,7 @@ Windows showing the panel keep their scroll position, and the mark stays."
                                               (if-let* ((other (roost--other-branch task)))
                                                   (format "; the worktree is on %s" (roost--branch-label other))
                                                 "")))
-                         ,@(unless (< width 72)
+                         ,@(unless (< width roost--wide-panel)
                              `(("Worktree" . ,(roost--abbreviate-path (or (roost--field task 'worktree) "")
                                                                       (roost--field task 'host)))
                                ("Project" . ,(roost--abbreviate-path (or (roost--field task 'repo) "")
@@ -8407,7 +8414,7 @@ Windows showing the panel keep their scroll position, and the mark stays."
                                ("Conversation" . ,(or (roost--field task 'agentSession)
                                                       (roost--field task 'claudeSession)
                                                       "not recorded yet"))))))
-          (if (< width 72)
+          (if (< width roost--wide-panel)
               ;; Too narrow for a label column: the value goes below its label.
               (insert "  " (propertize (car entry) 'face 'roost-dim) "\n"
                       (propertize (concat (or (cdr entry) "unknown") "\n")
@@ -8417,10 +8424,10 @@ Windows showing the panel keep their scroll position, and the mark stays."
                                 'wrap-prefix (make-string 15 ?\s)))))
         (insert roost--gap
                 (propertize (substitute-command-keys
-                             (concat (unless (< width 72)
+                             (concat (unless (< width roost--wide-panel)
                                        "Ready means the agent is waiting for you, not that the work is reviewed.\n")
                                      "\\<roost-task-info-mode-map>\\[roost-dispatch] opens the menu · "
-                                     (unless (< width 72) "\\[roost-task-info-refresh] refreshes · ")
+                                     (unless (< width roost--wide-panel) "\\[roost-task-info-refresh] refreshes · ")
                                      "\\[roost-task-info-quit] closes"))
                             'face 'roost-dim)
                 "\n")))
