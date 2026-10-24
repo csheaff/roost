@@ -186,6 +186,15 @@ account, with no badge or verdict.
   panes with it instead of Eat. First check that Ghostel can show output it
   doesn't read from its own process. The module is a prebuilt download, one
   more thing to install.
+- **A second sign on the count, beside colour.** The mode line's
+  `● Roost:2` and the sidebar's `2 waiting` tell an agent that asks from
+  one that failed or finished by colour alone. For a protanope, ef-dream's
+  `ready` and `error` are 2.2 apart (CIEDE2000), so the same colour; the
+  views beside them have words. A mark while an agent asks, such as
+  `Roost:2!`, or why in the count's help-echo, would add the second
+  channel WCAG's use of colour and Carbon's
+  [status pattern](https://www.carbondesignsystem.com/patterns/status-indicator-pattern)
+  ask for. From the [UX review of 2026-10-23](validation.md).
 
 ## Exploring
 
