@@ -367,7 +367,7 @@ you judged by its panel, or whose diff you read in its agent's terminal.
 Once you've seen its agent's reply, the
 sidebar and dashboard say, dim, what changed since (`3 files changed since
 you looked`), and its panel says when you looked: `r` shows the changes, and
-`v` marks it as looked at. It
+`v` marks it looked at. It
 doesn't count as waiting. Roost compares content, so commits the agent
 makes of what you saw, amends or rebases don't count, nor do files only an
 update from the integration branch brought in; anything else changed does,

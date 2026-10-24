@@ -6936,7 +6936,7 @@ says a key once."
          (mark (funcall key 'roost-mark-looked))
          (keys (lambda (shows)
                  (when-let* ((said (delq nil (list (and review (concat review " " shows))
-                                                   (and mark (concat mark " marks it as looked at"))))))
+                                                   (and mark (concat mark " marks it looked at"))))))
                    (concat ": " (string-join said ", "))))))
     (pcase (and (roost--since-looked-due-p task) (roost--since-looked task))
       (`(,count . ,at)

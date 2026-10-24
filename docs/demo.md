@@ -10,10 +10,10 @@ they asked before commands but not before edits.
 The capture Emacs was a plain Emacs 32 configuration, so that nothing personal
 distracts: the stock `modus-vivendi` theme and mode line, Menlo at 15 points,
 and Roost, tmux-control and Magit and nothing else. It had
-`roost-sidebar-mode`, `roost-task-panel-mode` and `roost-animations` on, and
-`roost-workspace` set to `nil`. It used a separate state directory and tmux
-socket named `roost-demo`; a normal setup shows `~/.local/share/roost` and
-your tmux-control socket.
+`roost-sidebar-mode` and `roost-task-panel-mode` on, `roost-animations` off,
+as it is by default, and `roost-workspace` set to `nil`. It used a separate
+state directory and tmux socket named `roost-demo`; a normal setup shows
+`~/.local/share/roost` and your tmux-control socket.
 
 | File | What it shows |
 | --- | --- |
@@ -24,17 +24,18 @@ your tmux-control socket.
 
 ## How they were made
 
-All four were taken on 2026-10-21, with Roost as of 0.10.0 and the changes
-after it from its UX review, replacing a clip that played a task through and
-the stills from before it. Five tasks were started with prompts that ask the
-agent to run the tests with `python3 -m unittest`, and their prompts
-answered in their terminals until each finished. `export` was then drafted
-from the heading in `plans.org`. To have one agent asking and one working at
-the moment of the hero and the dashboard, `budget-alerts` was asked to show
-amounts with a thousands separator and run its tests, and `export` was given
-a further prompt just before each capture. The review note was written in
-the note box and saved; the box itself floats over the diff in a frame of
-its own, which a capture of the Emacs window leaves out.
+All four were taken on 2026-10-24, with Roost as of 0.11.0 and the changes
+after it, once its views kept colour for what needs you and the panel beside
+a terminal had grown shorter. They replace the stills of 2026-10-21, which
+replaced a clip that played a task through. Five tasks were started with
+prompts that ask the agent to run the tests with `python3 -m unittest`, and
+their prompts answered in their terminals until each finished. `export` was
+then drafted from the heading in `plans.org`. To have one agent asking and
+one working at the moment of the hero and the dashboard, `budget-alerts` was
+asked to show amounts with a thousands separator and run its tests, and
+`export` was given a further prompt just before each capture. The review
+note was written in the note box and saved; the box itself floats over the
+diff in a frame of its own, which a capture of the Emacs window leaves out.
 
 Each was taken at its own frame size, so that the text reads at the width
 GitHub shows the README: 172 columns by 36 lines for the hero, 132 by 19 for
