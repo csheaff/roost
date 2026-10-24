@@ -617,7 +617,7 @@ A workspace runs, and costs, until you stop it. Roost never stops one on its own
 
 | Key | What it does |
 | --- | --- |
-| `E` | Start the task's workspace, or finish setting it up. Its agent stays stopped: `s` resumes it. |
+| `E` | Start the task's workspace, or ready one whose start or stop didn't finish. Its agent stays stopped: `s` resumes it. A workspace whose first task `C` didn't get to make, `E` finishes setting up, and its agent starts, as `C` would have started it. |
 | `Z` | Stop the workspace, once each agent in it is stopped with `K`. Everything running in it stops; its disk is kept. |
 | `F` | Fetch the task's commits to your checkout, as below. |
 

@@ -61,16 +61,6 @@
         (roost-coder--refresh #'ignore host nil)
         (should (equal calls '("coder-status" "coder-status")))))))
 
-(ert-deftest roost-coder-snapshots-only-what-changed ()
-  (roost-test--isolated
-    (let* ((record (roost-coder--accept (roost-coder-test--record "running")))
-           (host (alist-get 'host record)) calls)
-      (cl-letf (((symbol-function 'roost-coder--call) (lambda (action &rest _) (push action calls))))
-        (roost-coder--snapshot host (alist-get 'tasks (roost-coder--record host)))
-        (should-not calls)
-        (roost-coder--snapshot host (list (cons '(status . "running") (car (alist-get 'tasks record)))))
-        (should (equal calls '("coder-snapshot")))))))
-
 (ert-deftest roost-coder-a-new-task-has-its-row-while-coder-makes-it ()
   (roost-test--isolated
     (let ((roost-coder-connection '(:url "https://coder.example.org" :tokenFile "~/token" :command ("coder")))
@@ -130,6 +120,42 @@
         (should (roost--field task 'live))
         (should (string-match-p "can't be reached" (roost--field task 'environmentError)))
         (should-not (roost--environment-down-p task))))))
+
+(ert-deftest roost-coder-snapshots-keep-what-roost-merged-and-only-what-changed ()
+  (roost-test--isolated
+    (let* ((record (roost-coder--accept (roost-coder-test--record "running")))
+           (host (alist-get 'host record))
+           (key (list host "bbbbbbbbbbbbbbbb"))
+           (full (append '((diff . "1 file +2 −1") (ahead . 2) (command . ("python3" "fake.py")))
+                         (car (alist-get 'tasks record))))
+           calls)
+      (cl-letf (((symbol-function 'roost-coder--call)
+                 (lambda (action parameters &rest _) (push (cons action (roost--json-encode parameters)) calls))))
+        (roost--apply-snapshot host (list full))
+        ;; A quiet reply, without what the full one measured, twice.
+        (dotimes (_ 2)
+          (roost--apply-snapshot host (list (cons '(command . ("python3" "fake.py"))
+                                                  (car (alist-get 'tasks record)))))))
+      (should (equal (roost--field (gethash key roost--tasks) 'diff) "1 file +2 −1"))
+      (should (equal (roost--field (car (alist-get 'tasks (roost-coder--record host))) 'diff) "1 file +2 −1"))
+      ;; Written when they changed, once.
+      (should (equal (mapcar #'car calls) '("coder-snapshot")))
+      (should (string-match-p "python3" (cdar calls))))))
+
+(ert-deftest roost-coder-a-workspace-keeps-its-row-when-its-last-task-goes ()
+  (roost-test--isolated
+    (let* ((record (roost-coder--accept (roost-coder-test--record "running")))
+           (host (alist-get 'host record)))
+      (cl-letf (((symbol-function 'roost-coder--call) #'ignore))
+        (roost--apply-snapshot host nil)
+        (let ((rows (seq-filter (lambda (task) (equal (roost--field task 'host) host)) (roost-tasks))))
+          (should (equal (mapcar (lambda (task) (roost--display-status task)) rows) '("empty"))))
+        ;; And again, unchanged.
+        (roost--apply-snapshot host nil)
+        (should (= (length (seq-filter (lambda (task) (equal (roost--field task 'host) host)) (roost-tasks))) 1))
+        ;; A task again: the row goes.
+        (roost--apply-snapshot host (alist-get 'tasks (roost-coder-test--record "running")))
+        (should-not (seq-some (lambda (task) (roost--field task 'environmentOnly)) (roost-tasks)))))))
 
 (ert-deftest roost-coder-stale-metadata-does-not-win-over-explicit-start ()
   (roost-test--isolated
@@ -289,18 +315,6 @@
         (should (string-prefix-p "environment-" (alist-get 'id task)))
         (should (equal (alist-get 'environmentError task) "Template failed"))
         (should (equal (roost--display-status task) "start failed"))))))
-
-(ert-deftest roost-coder-snapshots-encode-decoded-agent-command-arrays ()
-  (roost-test--isolated
-    (let* ((record (roost-coder--accept (roost-coder-test--record "running")))
-           (host (alist-get 'host record))
-           (tasks (copy-tree (alist-get 'tasks record))) encoded)
-      (setf (alist-get 'command (car tasks)) '("python3" "fake.py"))
-      (cl-letf (((symbol-function 'roost-coder--call)
-                 (lambda (_action parameters _success &optional _failure)
-                   (setq encoded (roost--json-encode parameters)))))
-        (roost-coder--snapshot host tasks))
-      (should (string-match-p "python3" encoded)))))
 
 (ert-deftest roost-coder-unloads-without-a-trace-in-roost ()
   ;; In an Emacs of its own: unloading here would leave the other tests

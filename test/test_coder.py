@@ -168,6 +168,42 @@ class CoderState(unittest.TestCase):
         with self.assertRaisesRegex(roost.RoostError, "identity"):
             self.coder.dispatch(dict(request, id="../x"))
 
+    def test_a_start_whose_ssh_never_answers_leaves_it_to_be_readied_again(self):
+        running = dict(self.workspace, latest_build=dict(status="running"))
+        with patch.object(self.coder, "workspace", return_value=running), \
+             patch.object(self.coder, "wait", return_value=running), \
+             patch.object(self.coder, "guest", side_effect=roost.RoostError("no answer")), \
+             patch.object(roost.time, "monotonic", side_effect=[0, 0, 1000]), patch.object(roost.time, "sleep"):
+            with self.assertRaisesRegex(roost.RoostError, "E tries again"):
+                self.request("coder-start")
+        self.record["state"] = "running"
+        self.coder.save(dict(self.coder.read(self.record["id"]), state="running"))
+        self.assertEqual(self.request("coder-cached")[0]["state"], "preparing")
+        with patch.object(self.coder, "workspace", return_value=running):
+            self.assertEqual(self.request("coder-status")["state"], "preparing")
+        # Ready once the guest answers.
+        with patch.object(self.coder, "workspace", return_value=running), \
+             patch.object(self.coder, "wait", return_value=running), \
+             patch.object(self.coder, "guest", return_value=[]):
+            self.assertEqual(self.request("coder-start")["state"], "running")
+        self.assertNotIn("unready", self.coder.read(self.record["id"]))
+
+    def test_a_stop_coder_refuses_after_the_guest_quiesced_leaves_it_to_be_readied(self):
+        running = dict(self.workspace, latest_build=dict(status="running"))
+        with patch.object(self.coder, "workspace", return_value=running), \
+             patch.object(self.coder, "guest", return_value=[]), \
+             patch.object(self.coder, "api", side_effect=roost.RoostError("Coder said 403: no")):
+            with self.assertRaisesRegex(roost.RoostError, "403"):
+                self.request("coder-stop")
+            self.assertEqual(self.request("coder-status")["state"], "preparing")
+
+    def test_a_workspace_deleted_in_coder_is_missing(self):
+        with patch.object(self.coder, "api", side_effect=roost.RoostError("Coder said 404: Resource not found")):
+            self.assertEqual(self.request("coder-status")["state"], "missing")
+        with patch.object(self.coder, "api", side_effect=roost.RoostError("Coder can't be reached: refused")):
+            with self.assertRaisesRegex(roost.RoostError, "reached"):
+                self.request("coder-status")
+
     def test_pending_seed_and_prompt_not_in_cached_result(self):
         self.record.update(seed="private seed", pending=dict(prompt="private prompt"))
         self.coder.save(self.record)

@@ -5420,17 +5420,29 @@ class Coder:
         ~/.ssh/config includes: you add the Include, Roost never edits it.
         Its first stanza is never connected to: `ssh -G' on it says
         whether the Include is there, and comes before what would override it."""
-        text = "\n".join([INCLUDE_CHECK] + [
-            self.call(self.client.ssh_stanza, self.transport, self.configuration, record["host"], record["workspaceId"])
-            for record in self.records() if record.get("workspaceId")])
-        if not self.ssh_config.exists() or self.ssh_config.read_text() != text:
-            atomic_text(self.ssh_config, text)
+        # Another controller, making another workspace, may write it too:
+        # one at a time, each from all the records as they are then.
+        with (self.root / "ssh_config.lock").open("a") as lock:
+            os.chmod(lock.name, 0o600)
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            text = "\n".join([INCLUDE_CHECK] + [
+                self.call(self.client.ssh_stanza, self.transport, self.configuration, record["host"], record["workspaceId"])
+                for record in self.records() if record.get("workspaceId")])
+            if not self.ssh_config.exists() or self.ssh_config.read_text() != text:
+                atomic_text(self.ssh_config, text)
 
     def info(self, record):
-        result = {k: v for k, v in record.items() if k not in ("pending", "seed")}
-        if record.get("pending") and result["state"] == "running":
+        result = {k: v for k, v in record.items() if k not in ("pending", "seed", "unready")}
+        if self.unready(record) and result["state"] == "running":
             result["state"] = "preparing"
         return result
+
+    @staticmethod
+    def unready(record):
+        """Whether RECORD's workspace, running, isn't yet set up for agents:
+        its first task not made, or a start or stop that didn't finish, which
+        can leave the guest refusing agents. E finishes it."""
+        return bool(record.get("pending") or record.get("unready"))
 
     @contextlib.contextmanager
     def operation(self, identity):
@@ -5498,6 +5510,8 @@ class Coder:
         raise RoostError("Coder's build hasn't finished; refresh, and start it again if it has stopped")
 
     def start(self, record):
+        record["unready"] = True
+        self.save(record)
         workspace = self.workspace(record)
         if workspace is None:
             pending = record["pending"]
@@ -5523,8 +5537,10 @@ class Coder:
                 break
             except (RoostError, subprocess.TimeoutExpired):
                 if time.monotonic() > deadline:
-                    raise RoostError("Coder says it is running, but SSH into it doesn't answer yet; start it again") from None
+                    raise RoostError("Coder says it is running, but SSH into it doesn't answer yet; E tries again") from None
                 time.sleep(1)
+        record.pop("unready", None)
+        self.save(record)
         if record.get("pending"):
             pending = record["pending"]
             seed_file = self.root / (record["id"] + ".seed.json")
@@ -5574,16 +5590,24 @@ class Coder:
             return str(self.ssh_config)
         record = self.create(request) if action == "coder-create" else self.read(request["environment"])
         if action == "coder-status":
-            workspace = self.workspace(record, persist=False)
+            try:
+                workspace = self.workspace(record, persist=False)
+            except RoostError as exc:
+                # Deleted in Coder; anything else says nothing of it.
+                if not str(exc).startswith("Coder said 404:"):
+                    raise
+                workspace = None
             # Do not persist a poll's stale copy over an in-flight mutation.
             record = self.read(record["id"])
             result = self.info(record)
             if workspace:
                 result["state"] = workspace["latest_build"]["status"]
-            else:
+            elif record.get("pending") and not record.get("workspaceId"):
                 # Not made yet: still being asked for, or failed to be.
-                result["state"] = ("failed" if record.get("error") else "pending") if record.get("pending") else "missing"
-            if record.get("pending") and result["state"] == "running":
+                result["state"] = "failed" if record.get("error") else "pending"
+            else:
+                result["state"] = "missing"
+            if self.unready(record) and result["state"] == "running":
                 result["state"] = "preparing"
             return result
         if action == "coder-snapshot":
@@ -5605,6 +5629,9 @@ class Coder:
                         return self.info(record)
                     # Fresh guest check, under the same registry lock as spawn.
                     record["tasks"] = self.guest(record, dict(action="quiesce"))
+                    # The guest refuses agents now: should the stop not
+                    # happen, E takes them again.
+                    record["unready"] = True
                     self.save(record)
                     self.api("/workspaces/" + record["workspaceId"] + "/builds", dict(transition="stop"))
                     self.wait(record, "stopped")
@@ -5697,7 +5724,8 @@ def rpc(request):
                 if task["status"] in ACTIVE:
                     raise RoostError("Its agent is at work; wait for it to finish before fetching its commits")
                 require_clean(task["worktree"])
-                return {"ok": True, "result": export_bundle(task["worktree"], task["branch"], task["baseCommit"])}
+                return {"ok": True, "result": export_bundle(task["worktree"], "refs/heads/" + task["branch"],
+                                                            task["baseCommit"])}
         if action == "create":
             return {"ok": True, "result": outgoing(create_once(store, request))}
         if action == "doctor":

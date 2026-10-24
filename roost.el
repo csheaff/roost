@@ -8046,7 +8046,7 @@ where RET would pick the agent's default answer, so no key is named."
         ((or "starting" "stopping" "pending" "canceling" "deleting") nil)
         ((or "missing" "deleted") "Its environment is gone")
         ("stopped" (concat "Its environment is asleep: " (funcall key "E") " starts it"))
-        ("preparing" (concat "Its environment is not set up yet: " (funcall key "E") " finishes it"))
+        ("preparing" (concat "Its environment isn't ready for its agents yet: " (funcall key "E") " readies it"))
         ("running" (concat "Its environment runs with no task in it: " (funcall key "Z") " stops it"))
         (_ (concat "Its environment is not running: " (funcall key "E") " starts it"))))
      ((equal status "permission")

@@ -249,20 +249,32 @@ refreshes a running workspace's tasks as for any host."
                     (roost--redraw)))))))
     (funcall refresh host quiet ids)))
 
-(defun roost-coder--snapshot (host tasks &rest _)
-  "Keep TASKS, as HOST's workspace has them, for while it sleeps.
-Only when they changed: each refresh would otherwise write them."
-  (when-let* ((record (roost-coder--record host))
-              ((not (equal tasks (alist-get 'tasks record)))))
-    (let ((updated (copy-tree record)))
-      (setf (alist-get 'tasks updated) tasks)
-      (roost-coder--accept updated))
-    (roost-coder--call "coder-snapshot" `((environment . ,(alist-get 'id record))
-                                          (tasks . ,(json-parse-string
-                                                     (json-encode (vconcat tasks))
-                                                     :object-type 'alist :array-type 'array
-                                                     :null-object :null :false-object :false)))
-                       #'ignore #'ignore)))
+(defun roost-coder--snapshot (host &rest _)
+  "Keep HOST's tasks, as Roost has them once a refresh is merged in, for
+while its workspace sleeps: a quiet refresh's reply leaves out what a
+full one measured.  Written only when they changed."
+  (when-let* ((record (roost-coder--record host)))
+    (let ((tasks (mapcar (lambda (task)
+                           ;; In one order: merging a refresh moves the fields it keeps.
+                           (sort (copy-sequence task) (lambda (a b) (string< (car a) (car b)))))
+                         (seq-filter (lambda (task) (and (equal (roost--field task 'host) host)
+                                                         (not (roost--field task 'environmentOnly))))
+                                     (roost-tasks))))
+          (row (list host (concat "environment-" (alist-get 'id record)))))
+      (if tasks
+          (remhash row roost--tasks)
+        ;; Its tasks all retired: the workspace keeps its row, for Z.
+        (unless (gethash row roost--tasks)
+          (roost-coder--accept (let ((empty (copy-tree record))) (setf (alist-get 'tasks empty) nil) empty))))
+      (unless (equal tasks (alist-get 'tasks record))
+        (puthash host (let ((updated (copy-tree record))) (setf (alist-get 'tasks updated) tasks) updated)
+                 roost-coder--records)
+        (roost-coder--call "coder-snapshot" `((environment . ,(alist-get 'id record))
+                                              (tasks . ,(json-parse-string
+                                                         (json-encode (vconcat tasks))
+                                                         :object-type 'alist :array-type 'array
+                                                         :null-object :null :false-object :false)))
+                           #'ignore #'ignore)))))
 
 (defun roost-coder--decorate (task)
   "Keep environment identity on TASK after individual agent actions."
@@ -438,7 +450,9 @@ changes must be committed."
         (alist-get 'host canonical) "import-bundle"
         `((directory . ,(alist-get 'directory canonical)) (bundle . ,bundle))
         (lambda (returned)
-          (let ((buffer (get-buffer-create (format "*Roost return: %s*" (alist-get 'name task)))))
+          ;; Its own, though another task have its name.
+          (let ((buffer (get-buffer-create (format "*Roost fetched: %s (%s)*" (alist-get 'name task)
+                                                   (roost--host-label (alist-get 'host task))))))
             (with-current-buffer buffer
               (roost-coder-return-mode)
               (setq roost-coder--return returned

@@ -103,6 +103,18 @@ class Lifecycle(unittest.TestCase):
         self.assertFalse(retry["ok"])
         self.assertIn("already created and removed", retry["error"])
 
+    def test_environment_export_takes_the_branch_not_a_tag_of_its_name(self):
+        task = self.create()
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        worktree = Path(task["worktree"])
+        (worktree / "work").write_text("work\n")
+        self.git("add", "work", cwd=worktree)
+        self.git("commit", "-qm", "Work", cwd=worktree)
+        self.git("tag", task["branch"], task["baseCommit"])
+        reply = self.request("export-task", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(reply["result"]["tip"], self.git("rev-parse", "HEAD", cwd=worktree))
+
     def test_environment_export_refuses_live_agents_and_dirty_work(self):
         task = self.create()
         self.assertFalse(self.request("export-task", id=task["id"])["ok"])
