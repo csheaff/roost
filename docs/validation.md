@@ -72,8 +72,16 @@ happened in a section below:
 - **Chosen.** 1, 2 and 8 in #128: a dot is dim while its task waits for
   nothing, `merged` is plain, line counts, open and merged pull requests,
   passed checks and the `+` are plain or dim, and the count goes by
-  urgency. The rest wait for Clay. Canvases stay an addition to one
-  design rather than a second look.
+  urgency. Then Clay said to carry on. 3 and 4 in #131: only an asking
+  agent's light moves, and the mode line reads `● Roost:2`, its count in
+  the mode line's own colour; measured alternately in one Emacs, the
+  lights took about 7% of a core rather than 10%. 5, 6 and 9 in #130: a
+  docked panel shows three lines of a prompt, `seen` is said wherever a
+  task is seen, and the note hint shows in a wide panel only, rather than
+  until your first note, which would have needed a remembered flag. 7
+  went to the roadmap. Canvases stay an addition to one design rather
+  than a second look; the fade asked about on 10-13 had shipped with
+  0.9.0, and the local `light-fade` branch is an old copy of it.
 
 ## Your latest prompt from Pi and OpenCode — 2026-10-22
 
