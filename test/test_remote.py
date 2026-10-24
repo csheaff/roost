@@ -6946,13 +6946,22 @@ class Subprocesses(unittest.TestCase):
             """Note what COMMAND, run in SCOPE at LINE, might run that it shouldn't."""
             if isinstance(command, (ast.List, ast.Tuple)):
                 first = command.elts[0] if command.elts else None
-                if (isinstance(first, ast.Constant) and isinstance(first.value, str)
+                if isinstance(first, ast.Starred):
+                    # The program and more, from a list of its own.
+                    if isinstance(first.value, ast.Name) and not parameter(first.value.id, scope):
+                        for value in values_of(first.value.id, scope, line):
+                            check(value, scope, line)
+                    else:
+                        found.add("line %d: runs %s, which this test can't follow" % (line, ast.unparse(first)))
+                elif (isinstance(first, ast.Constant) and isinstance(first.value, str)
                         and os.path.basename(first.value) in self.SHELLS):
                     own = (len(command.elts) == 3 and isinstance(command.elts[1], ast.Constant)
                            and command.elts[1].value == "-lc" and isinstance(command.elts[2], ast.Name)
                            and (getattr(scope, "name", None), command.elts[2].id) in self.OWN_COMMANDS)
                     if not own:
                         found.add("line %d: runs a shell, %s" % (line, ast.unparse(command)))
+                else:
+                    program(first, scope, line)
             elif stringy(command):
                 found.add("line %d: runs a string, %s" % (line, ast.unparse(command)))
             elif isinstance(command, ast.Name):
@@ -6965,11 +6974,57 @@ class Subprocesses(unittest.TestCase):
             else:
                 found.add("line %d: runs %s, which this test can't follow" % (line, ast.unparse(command)))
 
+        def program(node, scope, line):
+            """Note it if NODE, the program a list names in SCOPE, may be a shell."""
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                if os.path.basename(node.value) in self.SHELLS:
+                    found.add("line %d: runs a shell, %s" % (line, node.value))
+            elif isinstance(node, ast.Attribute) and ast.unparse(node) == "sys.executable":
+                pass
+            elif isinstance(node, ast.Call) and ast.unparse(node.func) == "shutil.which":
+                # A program found by name on PATH, as gh or an agent's is.
+                if node.args and isinstance(node.args[0], ast.Constant):
+                    program(node.args[0], scope, line)
+            elif isinstance(node, ast.Name) and not parameter(node.id, scope):
+                for value in values_of(node.id, scope, line):
+                    program(value, scope, line)
+            else:
+                found.add("line %d: runs the program %s, which this test can't follow"
+                          % (line, ast.unparse(node) if node else "nothing"))
+
+        def parameter(name, scope):
+            arguments = getattr(scope, "args", None)
+            return bool(arguments) and name in [a.arg for a in arguments.posonlyargs + arguments.args
+                                                + arguments.kwonlyargs]
+
+        def values_of(name, scope, line):
+            """What NAME is given in SCOPE: assigned, or in a loop over a list
+            of tuples written out. Noted when there's nothing to follow."""
+            values = []
+            for node in ast.walk(scope):
+                if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
+                    values.append(node.value)
+                elif isinstance(node, (ast.AugAssign, ast.AnnAssign)) and getattr(node.target, "id", None) == name:
+                    found.add("line %d: changes %s in a way this test can't follow" % (node.lineno, name))
+                elif isinstance(node, ast.For) and isinstance(node.iter, (ast.List, ast.Tuple)):
+                    if isinstance(node.target, ast.Name) and node.target.id == name:
+                        values.extend(node.iter.elts)
+                    elif isinstance(node.target, ast.Tuple):
+                        at = [i for i, t in enumerate(node.target.elts) if isinstance(t, ast.Name) and t.id == name]
+                        for row in node.iter.elts if at else []:
+                            if isinstance(row, (ast.List, ast.Tuple)) and len(row.elts) == len(node.target.elts):
+                                values.append(row.elts[at[0]])
+                            else:
+                                found.add("line %d: runs %s, which this test can't follow" % (line, name))
+            if not values and not parameter(name, scope):
+                found.add("line %d: runs %s, which this test can't follow" % (line, name))
+            return values
+
         def follow(name, scope, line):
             """Check what NAME, a command in SCOPE, can be."""
             arguments = getattr(scope, "args", None)
             positional = [a.arg for a in arguments.posonlyargs + arguments.args] if arguments else []
-            if arguments and name in positional + [a.arg for a in arguments.kwonlyargs]:
+            if parameter(name, scope):
                 # A parameter: what each call passes.
                 if (scope, name) in followed:
                     return
@@ -6990,25 +7045,8 @@ class Subprocesses(unittest.TestCase):
                         found.add("line %d: passes %s a command this test can't follow" % (call.lineno, name))
                     else:
                         check(passed, scope_of(call), call.lineno)
-                return
-            # Assigned in SCOPE, or in a loop over a list of tuples written out.
-            values = []
-            for node in ast.walk(scope):
-                if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
-                    values.append(node.value)
-                elif isinstance(node, ast.For) and isinstance(node.iter, (ast.List, ast.Tuple)):
-                    if isinstance(node.target, ast.Name) and node.target.id == name:
-                        values.extend(node.iter.elts)
-                    elif isinstance(node.target, ast.Tuple):
-                        at = [i for i, t in enumerate(node.target.elts) if isinstance(t, ast.Name) and t.id == name]
-                        for row in node.iter.elts if at else []:
-                            if isinstance(row, (ast.List, ast.Tuple)) and len(row.elts) == len(node.target.elts):
-                                values.append(row.elts[at[0]])
-                            else:
-                                found.add("line %d: runs %s, which this test can't follow" % (line, name))
-            if not values:
-                found.add("line %d: runs %s, which this test can't follow" % (line, name))
-            for value in values:
+            # What it is given in SCOPE, such as a parameter set anew.
+            for value in values_of(name, scope, line):
                 check(value, scope, line)
 
         for node in ast.walk(tree):
@@ -7033,6 +7071,8 @@ class Subprocesses(unittest.TestCase):
                     found.add("line %d: runs a shell, shell=%s" % (call.lineno, ast.unparse(shell)))
                 if any(k.arg == "executable" for k in call.keywords):
                     found.add("line %d: runs another program than its command names" % call.lineno)
+                if any(k.arg is None for k in call.keywords):
+                    found.add("line %d: passes keywords this test can't read, %s" % (call.lineno, ast.unparse(call)))
                 command = call.args[0] if call.args else next((k.value for k in call.keywords if k.arg == "args"), None)
                 check(command, scope_of(call), call.lineno)
         return sorted(found, key=lambda problem: int(problem.split()[1].rstrip(":")))
@@ -7066,6 +7106,16 @@ class Subprocesses(unittest.TestCase):
             "subprocess.run(['-c', 'git log ' + name], executable='/bin/sh')": "another program",
             "def execute(argv):\n    subprocess.run(argv)\npool.submit(execute, 'git log')": "can't follow",
             "run = lambda argv: subprocess.run(argv)\nrun('git log')": "can't follow",
+            # The shell in a variable, in a list spread into the command, or
+            # set anew in a function that is given a safe command.
+            "def f():\n    program = '/bin/sh'\n    subprocess.run([program, '-c', command])": "runs a shell",
+            "def f():\n    argv = ['/bin/sh', '-c', command]\n    subprocess.run([*argv])": "runs a shell",
+            "def f():\n    subprocess.run([shutil.which('bash'), '-c', command])": "runs a shell",
+            "def f(program):\n    subprocess.run([program, '-c', command])\nf('sh')": "can't follow",
+            "def execute(argv):\n    argv = ['/bin/sh', '-c', 'git log']\n    subprocess.run(argv)\n"
+            "execute(['git', 'log'])": "runs a shell",
+            "subprocess.run(['echo', 'hello'], **{'shell': True})": "keywords this test can't read",
+            "subprocess.run(['echo', 'hello'], **options)": "keywords this test can't read",
         }
         for source, problem in cases.items():
             with self.subTest(source=source):
@@ -7075,6 +7125,9 @@ class Subprocesses(unittest.TestCase):
                        "def run_teardown(command):\n    subprocess.Popen(['/bin/sh', '-lc', command])",
                        "def execute(argv):\n    subprocess.run(argv)\nexecute(['git', *args])",
                        "for argv in (['git', '--version'], ['tmux', '-V']):\n    subprocess.run(argv)",
+                       # A program found on PATH, and Python itself.
+                       "def gh(*args):\n    executable = shutil.which('gh')\n    subprocess.run([executable, *args])",
+                       "subprocess.run([sys.executable, '-I', helper])",
                        # Another function of the same name, elsewhere, is another function.
                        "def f():\n    def run(argv):\n        subprocess.run(argv)\n    run(['git'])\n"
                        "def g():\n    def run(*args):\n        return args\n    run('log')"):

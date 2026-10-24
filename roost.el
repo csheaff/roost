@@ -630,8 +630,9 @@ connection cut it short."
         (progn (unless (string-prefix-p "{" line) (error "Not an object"))
                (json-parse-string line :object-type 'alist :array-type 'list
                                   :null-object nil :false-object nil))
+      ;; Its start, by characters: some, such as accents, take no room.
       (error (error "Roost can't read the host helper's reply: %s"
-                    (truncate-string-to-width line 200 nil nil "…"))))))
+                    (if (> (length line) 200) (concat (substring line 0 200) "…") line))))))
 
 (defconst roost--pipe-input-limit 4096
   "Bytes of request input written straight to a host command's pipe.

@@ -3167,8 +3167,10 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
                                          (buffer-string))
                                        "\0" t)))
                (should (equal (butlast argv) '("--socket-name" "/tmp/emacs501/server" "--no-wait" "--eval")))
-               (should (equal (read (car (last argv)))
-                              `(roost--open-from-notification ,hostile ,(roost--field task 'id))))))
+               (let ((form (read (car (last argv)))))
+                 (should (eq (car form) 'roost--open-from-notification))
+                 (should (equal (mapcar (lambda (argument) (eval argument t)) (cdr form))
+                                (list hostile (roost--field task 'id)))))))
            (should-not (directory-files marks nil directory-files-no-dot-files-regexp)))
        (delete-process server-process)
        (delete-directory invocation-directory t)
@@ -4712,6 +4714,7 @@ With FAILING, it prints it on stderr and exits with status 1."
                 ("{\"ok\": false, \"error\": \"\"}" (failed "\\`Host operation failed\\'"))
                 ;; Megabytes, of what Roost can't read, of errors, and of a reply.
                 (,roost-test--megabytes (failed ,(concat unreadable "x+…\\'")))
+                (,(concat "{" (make-string (* 1024 1024) #x301)) (failed ,unreadable))
                 (,(concat "Traceback (most recent call last):\n" roost-test--megabytes "\nOSError: gone")
                  (failed ,(format "\\`…x\\{%d\\}\nOSError: gone\\'" (- roost--error-limit 14))) t)
                 (,(format "{\"ok\": true, \"result\": \"%s\"}" roost-test--megabytes) (ok ,roost-test--megabytes))
@@ -4731,7 +4734,9 @@ With FAILING, it prints it on stderr and exits with status 1."
                (if (eq (car outcome) 'ok)
                    (should (equal (cadar outcomes) (cadr outcome)))
                  (should (stringp (cadar outcomes)))
-                 (should (string-match-p (cadr outcome) (cadar outcomes))))
+                 (should (string-match-p (cadr outcome) (cadar outcomes)))
+                 ;; Words to show, not the reply.
+                 (should (<= (length (cadar outcomes)) (1+ roost--error-limit))))
                (should-not roost--requests))))
        (delete-file file)))))
 
