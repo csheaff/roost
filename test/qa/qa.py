@@ -2355,12 +2355,15 @@ def switched_branch(qa, repo):
     name = new_task(qa, "ask sh -c \"git switch -q -c integ-%s && git switch -q -c %s"
                         " && printf 'x\\n' > FEAT.md && git add FEAT.md && git commit -qm 'On feat'\"" % (feat, feat))
     answer_yes(qa, name)
-    qa.wait("the branch", lambda s: "The worktree is on " + feat in panel_text(qa, s))
+    qa.wait("the branch", lambda s: "worktree is on " + feat in panel_text(qa, s))
     qa.step("On another branch", expect=[
         ("the panel says how to finish it",
          lambda s: ("Its worktree is on %s, not the task's branch: x discards the task, keeping %s; to merge its work"
                     " with m or P" % (feat, feat)) in panel_text(qa, s)),
-        ("its changes are that branch's", lambda s: re.search(r"Committed\n\s*FEAT\.md", panel_text(qa, s))),
+        ("its changes are that branch's, said once",
+         lambda s: re.search(r"These are %s's changes, not roost/[^ ]*'s\.\n\s*Committed\n\s*FEAT\.md" % feat,
+                             panel_text(qa, s))
+         and "The worktree is on" not in panel_text(qa, s)),
         ("its row doesn't say merged", lambda s: not sidebar_row(qa, s, name).endswith("merged"))])
     qa.keys("C-c r x")
     qa.wait("the question", lambda s: s["prompt"])

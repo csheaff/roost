@@ -411,9 +411,12 @@ keep it from saying so.
 You or a task's agent may make a branch in its worktree and work there, as
 with `git switch -c feat`. `m`, `P`, `u` and retiring act on the task's own
 branch, so its host refuses them until the worktree is back on it. The task
-panel says so beside the task's changes, which are then that branch's, as in
-Magit and the diff: "The worktree is on feat, not the task's branch
-roost/fix-parser". Its details say so too, the dashboard's changes start
+panel's next step says so, with how to finish the task, and beside the
+task's changes, which are then that branch's, as in Magit and the diff, a
+line in the colour of what needs you says whose they are: "These are feat's
+changes, not roost/fix-parser's". While the next step is about something
+else, as for a stopped agent, that line says which branch the worktree is
+on and how to finish the task itself. Its details say so too, the dashboard's changes start
 with `on feat` (`detached` for a detached HEAD), and the task doesn't say
 `merged` or `conflicts`, which go by its own branch. To finish it:
 
