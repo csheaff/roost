@@ -16,12 +16,19 @@ tmux-control is on MELPA. Each submission is a pull request to
 
 ```elisp
 (roost :fetcher github :repo "csheaff/roost"
-       :files (:defaults ("scripts" "scripts/roost_remote.py")))
+       :files (:defaults ("scripts" "scripts/roost_remote.py" "scripts/coder_client.py")))
 ```
 
 Roost's `:files` matter: Roost copies `scripts/roost_remote.py` to each host,
-and finds it next to `roost.el`. The default file list includes only Emacs
-Lisp, so without it a MELPA install would have no helper.
+and finds it next to `roost.el`; `coder.el` runs `scripts/coder_client.py`
+from next to itself. The default file list includes only Emacs Lisp, so
+without them a MELPA install would have neither.
+
+Before Roost goes to MELPA with Coder workspaces in it: `coder.el` defines
+`coder-` names, which package-lint refuses in a package named `roost`. It
+would go to MELPA as a package of its own first, under a name less likely
+to be taken than `coder`. melpazoid will also note `roost-coder.el`'s
+top-level `advice-add` calls, which `roost-coder-unload-function` undoes.
 
 ## Status (2026-10-17)
 

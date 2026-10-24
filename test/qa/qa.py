@@ -2186,6 +2186,17 @@ def leave_menu(qa, tasks):
     qa.wait("the menu", lambda s: qa.emacs.eval("(and transient--prefix t)") == "t")
 
 
+def leave_coder_profile(qa, tasks):
+    qa.emacs.eval('(progn (require \'roost-coder) (defun qa-coder-profile () (interactive) '
+                  '(roost-coder--parameters \'(((name . "profile") (default_value . "small") '
+                  '(options . (((name . "Small CPU") (value . "small")) '
+                  '((name . "Prepared GPU") (value . "gpu")))))))))')
+    qa.keys("M-x")
+    qa.type("qa-coder-profile\r")
+    qa.wait("the template profile", lambda s: (s["prompt"] or "").startswith("profile:"))
+    qa.leave_question()
+
+
 def leave_draft(qa, tasks):
     qa.keys("C-c r c")
     qa.wait("the draft", lambda s: (qa.window(s, "roost-compose-mode") or {}).get("selected"))
@@ -2248,6 +2259,7 @@ WALK_STARTERS = [
     ("M-x left behind in the terminal", leave_question_behind),
     ("Roost's Switch task left open", leave_roost_question),
     ("Roost's menu left open", leave_menu),
+    ("a Coder template profile not yet chosen", leave_coder_profile),
     ("a draft half written", leave_draft),
     ("a prompt's file to attach not yet chosen", leave_attaching),
     ("another task still opening", leave_opening),
@@ -3179,6 +3191,60 @@ def include(qa, repo):
             path.unlink(missing_ok=True)
 
 
+@journey("Coder tasks while their environment sleeps")
+def coder(qa, repo):
+    """Canned infrastructure metadata, real Roost views and menu. The bounded
+    live Coder proof is recorded separately; this journey provisions nothing."""
+    qa.emacs.eval('''(progn
+      (require 'roost-coder)
+      (setq qa-coder-record '((id . "cccccccccccccccccccccccccccccccc")
+        (host . "roost-coder-cccccccccccccccccccccccccccccccc")
+        (workspaceName . "qa-coder") (state . "stopped")
+        (templateName . "Prepared machine") (parameters . (((name . "profile") (value . "gpu"))))
+        (canonical . ((directory . "/Users/dev/notes")))
+        (tasks . (((id . "dddddddddddddddd") (name . "Sleeping Coder task")
+          (agent . "claude") (status . "ready") (live . nil) (updatedAt . "2026-10-24T09:00:00Z")
+          (branch . "roost/sleeping-coder-task") (baseRef . "main") (integrationBranch . "main")
+          (session . "roost-notes") (socket . "main") (ahead . 2)
+          (repo . "/home/coder/notes") (worktree . "/home/coder/.roost/worktrees/sleeping"))))))
+      (defun qa-coder-controller (call action parameters success &optional failure)
+        (if (equal (alist-get 'environment parameters) "cccccccccccccccccccccccccccccccc")
+            (funcall success qa-coder-record)
+          (funcall call action parameters success failure)))
+      (advice-add 'roost-coder--call :around #'qa-coder-controller)
+      (roost-coder--accept qa-coder-record)
+      (roost--redraw) t)''')
+    try:
+        qa.keys("C-c r S")
+        qa.wait("the dashboard", lambda s: qa.window(s, "roost-dashboard-mode"))
+        qa.keys("M-<")
+        qa.step("Sleeping workspace keeps its task visible", expect=[
+            ("asleep is shown", lambda s: "asleep" in qa.window(s, "roost-dashboard-mode")["text"])])
+        qa.emacs.eval('''(roost-task-info
+          (gethash '("roost-coder-cccccccccccccccccccccccccccccccc" "dddddddddddddddd") roost--tasks))''')
+        qa.step("Its panel says it is asleep, and how to start it", expect=[
+            ("its environment is named", lambda s: "Prepared machine · profile=gpu" in qa.window(s, "roost-task-info-mode")["text"]),
+            ("where its commits come back to", lambda s: "come back to /Users/dev/notes" in qa.window(s, "roost-task-info-mode")["text"]),
+            ("the way to start it is named", lambda s: "asleep: E starts it" in qa.window(s, "roost-task-info-mode")["text"])])
+        qa.keys("h")
+        qa.wait("the menu", lambda s: qa.emacs.eval("(and transient--prefix t)") == "t")
+        qa.step("Its environment's commands are in Roost's menu", expect=[
+            ("start, stop and fetch", lambda s: qa.emacs.eval(
+                "(and (seq-every-p (lambda (key) (transient-get-suffix 'roost-dispatch key)) '(\"E\" \"Z\" \"F\")) t)") == "t")])
+        qa.keys("C-g")
+        qa.emacs.eval('''(progn (setf (alist-get 'state qa-coder-record) "failed"
+           (alist-get 'error qa-coder-record) "Synthetic provisioning failure; retry start")
+           (roost-coder--accept qa-coder-record) (roost--redraw) t)''')
+        qa.step("Provisioning failure retains identity and a retry path", expect=[
+            ("the error explains recovery", lambda s: "Synthetic provisioning failure" in qa.window(s, "roost-task-info-mode")["text"])])
+    finally:
+        qa.emacs.eval('''(progn
+          (advice-remove 'roost-coder--call #'qa-coder-controller)
+          (remhash "roost-coder-cccccccccccccccccccccccccccccccc" roost-coder--records)
+          (remhash '("roost-coder-cccccccccccccccccccccccccccccccc" "dddddddddddddddd") roost--tasks)
+          (roost--redraw) t)''')
+
+
 @journey("A host Roost can't reach")
 def unreachable(qa, repo):
     """A host that doesn't answer is named, in the sidebar and the dashboard, within their windows."""
@@ -3358,7 +3424,7 @@ def crashed(qa, repo):
             for name in (first, second)))])
 
 
-JOURNEYS = [sweep, answer, next_waiting, fold, resize, merge, review, notes, since_looked, panes, shell,
+JOURNEYS = [sweep, coder, answer, next_waiting, fold, resize, merge, review, notes, since_looked, panes, shell,
             dashboard, panel_keys, stop_resume, retire, discard, teardown, send, attach, update, conflicts, restart,
             search, workload, question_left,
             walk_away,

@@ -9,7 +9,7 @@ TEST_LOAD_PATH ?=
 .PHONY: test
 test:
 	$(EMACS) -Q --batch -L . -L test $(TEST_LOAD_PATH) \
-	  -l test/roost-test.el -l test/roost-sweep.el -f ert-run-tests-batch-and-exit
+	  -l test/coder-test.el -l test/roost-test.el -l test/roost-coder-test.el -l test/roost-sweep.el -f ert-run-tests-batch-and-exit
 	python3 -m unittest discover -s test -p 'test_*.py' -v
 
 # Roost used as you would, in a GUI Emacs of its own with a fake agent,
@@ -25,8 +25,8 @@ qa:
 .PHONY: compile
 compile:
 	$(EMACS) -Q --batch -L . --eval '(setq byte-compile-error-on-warn t)' \
-	  -f batch-byte-compile roost.el
-	@rm -f roost.elc
+	  -f batch-byte-compile coder.el roost.el roost-coder.el
+	@rm -f coder.elc roost.elc roost-coder.elc
 
 # Roost's reading of the installed agents (see test/agent_contract.py): a
 # free scan of each, and with contract-live a real session of a few turns,

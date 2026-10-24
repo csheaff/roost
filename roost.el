@@ -6485,6 +6485,11 @@ comes in as one squashed commit, or a merge commit; see `roost-merge-style'."
   (interactive)
   (setq task (roost--choose task))
   (cond
+   ;; Its environment's clone is its own: merged there, the work would not
+   ;; reach yours.
+   ((roost--field task 'coderEnvironment)
+    (user-error "%s runs in a Coder workspace: F fetches its commits to your checkout, to merge there"
+                (roost--field task 'name)))
    ;; Nor will it merge from a worktree on another branch.
    ((roost--other-branch task)
     (user-error "%s's worktree is on %s, not its branch %s; check out %s there, with the commits to merge, first"
@@ -6998,11 +7003,25 @@ It is \"merged\" when you can retire it, losing nothing, and its agent
 neither works nor has anything new for you, one of `roost--pr-turns'
 while its pull request waits on you, and \"conflicts\" as
 `roost--conflict-turn' has it."
-  (cond ((gethash (roost--field task 'host) roost--errors) "offline")
+  (cond ((roost--environment-down-p task)
+         ;; None of an agent's words, which say what it does or waits for.
+         (pcase (roost--field task 'environmentState)
+           ("stopped" "asleep") ((or "starting" "pending") "waking") ("preparing" "setting up")
+           ((or "stopping" "canceling") "stopping") ((or "failed" "canceled") "start failed")
+           ((or "missing" "deleted" "deleting") "gone") (_ "offline")))
+        ((gethash (roost--field task 'host) roost--errors) "offline")
         ((roost--merged-p task) "merged")
         ((roost--pr-turn task))
         ((roost--conflict-turn task) "conflicts")
         (t (roost--status-name task))))
+
+(defun roost--environment-down-p (task)
+  "Whether TASK's environment, such as a Coder workspace, isn't running.
+Then Roost shows what it last saw of the task, and only its details and
+commands that say when they apply, with a `roost-applies' property, do."
+  (let ((state (roost--field task 'environmentState)))
+    (or (roost--field task 'environmentOnly)
+        (and state (not (equal state "running"))))))
 
 (defun roost--merged-p (task)
   "Whether TASK's work is merged, as its host last measured, and nothing needs you.
@@ -7975,8 +7994,14 @@ With no task at all, none of the task commands do."
 (defun roost--action-applies-p (task command)
   "Whether COMMAND makes sense for TASK as last seen.
 Its host would refuse the rest, or there is nothing for them to do.
-Unknown Git statistics count as making sense."
-  (let ((worktree (not (roost--field task 'worktreeMissing)))
+Unknown Git statistics count as making sense.
+A command with a `roost-applies' property, a function of the task, says
+for itself."
+  (cond
+   ((function-get command 'roost-applies) (funcall (function-get command 'roost-applies) task))
+   ((roost--environment-down-p task) (eq command 'roost-task-info))
+   (t
+    (let ((worktree (not (roost--field task 'worktreeMissing)))
         (ahead (roost--field task 'ahead))
         ;; All its work, not a pull request merged before its latest commits.
         (merged (roost--landed task))
@@ -7990,12 +8015,13 @@ Unknown Git statistics count as making sense."
       ('roost-pr (and worktree (or (roost--field task 'pr) (not (eql ahead 0)))))
       ;; Merged, the task's branch may be, but not work on another branch
       ;; there, which `m' merges once the task's has it.
-      ('roost-merge-retire (and (or (not merged) (roost--other-branch task)) (not (eql ahead 0)) (not active)
+      ('roost-merge-retire (and (not (roost--field task 'coderEnvironment))
+                                (or (not merged) (roost--other-branch task)) (not (eql ahead 0)) (not active)
                                 (not (roost--agent-work-left task))))
       ;; Retires the task, or discards work merged nowhere.
       ('roost-retire (and (not active) (not (roost--agent-work-left task))))
       ('roost-goto-note (and worktree (roost--task-notes task) t))
-      (_ t))))
+      (_ t))))))
 
 (defun roost--next-step (task &optional menu beside)
   "What to do next with TASK, as a line naming its key, or nil.
@@ -8012,6 +8038,14 @@ where RET would pick the agent's default answer, so no key is named."
                    (concat (if merged "Its pull request is merged; " "Its work is merged; ")
                            (funcall key "x") " retires it"))))
     (cond
+     ((roost--environment-down-p task)
+      (pcase (roost--field task 'environmentState)
+        ;; Under way, or gone from under Roost.
+        ((or "starting" "stopping" "pending" "canceling" "deleting") nil)
+        ((or "missing" "deleted") "Its environment is gone")
+        ("stopped" (concat "Its environment is asleep: " (funcall key "E") " starts it"))
+        ("preparing" (concat "Its environment is not set up yet: " (funcall key "E") " finishes it"))
+        (_ (concat "Its environment is not running: " (funcall key "E") " starts it"))))
      ((equal status "permission")
       (if beside "Answer it in its terminal"
         (concat "Answer it in its terminal: " (funcall key "RET"))))
@@ -8055,10 +8089,14 @@ where RET would pick the agent's default answer, so no key is named."
      ;; As for one you haven't looked at since its agent finished.
      ((roost--landed task) (funcall retire))
      ((consp (roost--conflicts task)) (roost--conflict-next-step task key))
-     (merged (concat "Its pull request is merged, but not its commits since: " (funcall key "m") " merges them"))
+     ;; Merged in its environment's own clone: its commits still come back.
+     ((and merged (not (roost--field task 'coderEnvironment)))
+      (concat "Its pull request is merged, but not its commits since: " (funcall key "m") " merges them"))
      ((memq state '(open draft)) (roost--pr-next-step task key))
      ((and (numberp (roost--field task 'ahead)) (> (roost--field task 'ahead) 0))
-      (concat (funcall key "m") " merges it, or " (funcall key "P") " opens a pull request")))))
+      (if (roost--field task 'coderEnvironment)
+          (concat (funcall key "F") " fetches its commits to your checkout, to review and merge there")
+        (concat (funcall key "m") " merges it, or " (funcall key "P") " opens a pull request"))))))
 
 ;;;###autoload (autoload 'roost-dispatch "roost" nil t)
 (transient-define-prefix roost-dispatch ()
@@ -8380,6 +8418,23 @@ For `window-buffer-change-functions'."
       (setq roost--stale nil)
       (funcall render))))
 
+(defun roost--insert-environment (task)
+  "Insert where TASK runs, when that is an environment such as a Coder workspace.
+Its template and the choices it was made with, where its commits come
+back to, and what went wrong last."
+  (when (roost--field task 'environmentState)
+    (roost--insert-heading "Environment")
+    (roost--insert-indented
+     (string-join
+      (delq nil (list (string-join (delq nil (list (roost--field task 'environmentTemplate)
+                                                   (roost--field task 'environmentProfile)))
+                                   " · ")
+                      (when-let* ((home (roost--field task 'environmentReturn)))
+                        (concat "Its commits come back to " home))
+                      (when-let* ((failure (roost--field task 'environmentError)))
+                        (propertize failure 'face 'roost-status-failed))))
+      "\n"))))
+
 (defun roost--render-task-info ()
   "Update the current task panel from the cache, without changing focus.
 Windows showing the panel keep their scroll position, and the mark stays."
@@ -8392,7 +8447,16 @@ Windows showing the panel keep their scroll position, and the mark stays."
     (roost--lights-forget (cons 'panel (current-buffer)) (and task (list (roost--key task))))
     (if (not task)
         (insert "This task has been retired or is no longer available.\n")
-      (let* ((status (roost--display-status task))
+      (if (roost--field task 'environmentOnly)
+          ;; An environment still being set up, or that failed to be: no
+          ;; task in it yet, only the request for one.
+          (progn
+            (insert (propertize (roost--field task 'name) 'face 'roost-title) "   "
+                    (propertize (roost--display-status task) 'face 'roost-dim) "\n")
+            (when-let* ((next (roost--next-step task)))
+              (insert roost--gap next "\n"))
+            (roost--insert-environment task))
+        (let* ((status (roost--display-status task))
              (changes (roost--changes task nil (roost--field task 'files)))
              (width (roost--task-info-width))
              (base (roost--field task 'baseRef))
@@ -8427,6 +8491,7 @@ Windows showing the panel keep their scroll position, and the mark stays."
           (when-let* ((request (roost--permission-request task)))
             (roost--insert-heading "Waiting for your answer")
             (roost--insert-indented (roost--prose request))))
+        (roost--insert-environment task)
         (when-let* ((prompt (roost--prompt-text task)))
           (roost--insert-heading "Prompt")
           (roost--insert-prompt prompt 'prompt 'roost--show-full-prompt width))
@@ -8443,6 +8508,8 @@ Windows showing the panel keep their scroll position, and the mark stays."
          (cond ((roost--field task 'worktreeMissing)
                 (propertize "The worktree is gone"
                             'face 'roost-status-failed))
+               ((and (roost--environment-down-p task) (not (assq 'diff task)))
+                (propertize "Not known while its environment is not running" 'face 'roost-dim))
                ((not (assq 'diff task)) (propertize "Refreshing…" 'face 'roost-dim))
                ((string-empty-p changes) (propertize "No changes yet" 'face 'roost-dim))
                (t (concat (when-let* ((mark (roost--large-change-mark task))) (concat mark " "))
@@ -8565,7 +8632,7 @@ Windows showing the panel keep their scroll position, and the mark stays."
                                      (unless (< width roost--wide-panel) "\\[roost-task-info-refresh] refreshes · ")
                                      "\\[roost-task-info-quit] closes"))
                             'face 'roost-dim)
-                "\n")))
+                "\n"))))
     (goto-char (min position (point-max)))
     (roost--restore-mark mark)
     (roost--restore-window-places places)

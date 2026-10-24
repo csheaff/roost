@@ -4,6 +4,12 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Run a task in a Coder workspace, made from a template your administrator
+  prepared, such as a machine with a GPU: experimental, and off unless you
+  `(require 'roost-coder)`. `C` starts one; `E` and `Z` start and stop its
+  workspace, and `F` fetches its commits to your checkout to merge there.
+  Nothing changes for local and SSH hosts. See the manual's "Coder
+  workspaces".
 - A review note shows once in a Magit diff or status you open again, as
   when you click a file in a task's panel a second time. Magit sets the
   buffer up anew, and Roost lost the note it showed there, which then

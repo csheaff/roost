@@ -35,6 +35,43 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## Coder workspaces — 2026-10-24
+
+- **Scope.** The experimental Coder backend (`roost-coder.el`), and
+  `coder.el` with `scripts/coder_client.py`, the client it asks Coder
+  through, which has no Roost in it. Tried on a private Coder v2.37.6, over
+  an SSH tunnel to loopback, with a CPU Docker template (`profile=small`)
+  and a fake agent: no EC2, GPU, real model or paid call.
+- **Evidence, by hand.** With Roost's own code in a batch Emacs, against a
+  workspace made earlier and stopped: two metadata polls and an `ssh` to it
+  left it stopped, and Roost's helper refused it while asleep; `E` started
+  it with its agent still stopped; Roost's helper listed and resumed the
+  agent, keeping its conversation; TRAMP's default method, through Roost's
+  SSH file, wrote and committed a file; `F` fetched the task's commits to
+  `refs/roost/returns/…` in the canonical clone, its HEAD and index as they
+  were; `Z` stopped it. A fetch with an untracked file in the worktree was
+  refused, as it should be. Earlier runs, before the client was its own:
+  creation from the template, the stop guard refusing a live agent, a file
+  and the agent's conversation kept across a stop and start, and TRAMP RPC
+  editing and Git in the workspace.
+- **Evidence, tests.** `make test`: coder.el's requests against a transport
+  of the tests' own (errors in callbacks, timeouts, cancelling); the client
+  against a local server answering as Coder's API (the token only in a
+  header, refusals, redirects, IDs in paths, SSH never starting a stopped
+  workspace); the controller's identity, retries and stop guard; the
+  workspace's commands, keys and statuses in Roost.
+- **Found and fixed.** Coder's environment menu, left open, took the keys
+  pressed in the sidebar, and its `s`, `K` and `r` meant other things than
+  the sidebar's (seven walk-away cases in `make qa`): its commands are now in
+  Roost's menu, as `E`, `Z` and `F`, which mean nothing else. Environment
+  states took agent status words, so a workspace starting counted as
+  waiting on you. A task's next step on a workspace named `E` over its
+  agent's question. Fetching needed the agent stopped, where merging needs
+  it only not at work. A workspace's tasks followed `roost-state-directory`
+  rather than where it was made to keep them. TRAMP's file handler was
+  advised for every remote file; TRAMP's connection properties now scope
+  Roost's SSH file to its workspaces.
+
 ## Journeys for the commands none ran — 2026-10-24
 
 - **Scope.** `make qa` listed 37 of Roost's commands that no journey ran.

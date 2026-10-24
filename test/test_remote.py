@@ -74,6 +74,44 @@ class Lifecycle(unittest.TestCase):
     def git(self, *args, cwd=None):
         return roost.git(cwd or self.repo, *args).stdout.strip()
 
+    def test_environment_quiesce_refuses_live_and_unknown_tasks_and_blocks_resume(self):
+        task = self.create()
+        refused = self.request("quiesce")
+        self.assertFalse(refused["ok"])
+        self.assertIn("stop each with K", refused["error"])
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        with patch.object(roost, "pane_inventory", return_value=None):
+            self.assertFalse(self.request("quiesce")["ok"])
+        self.assertTrue(self.request("quiesce")["ok"])
+        self.assertTrue((self.state / "environment-stopping").exists())
+        refused = self.request("resume", id=task["id"])
+        self.assertFalse(refused["ok"])
+        self.assertIn("was being stopped", refused["error"])
+        self.assertTrue(self.request("unquiesce")["ok"])
+        self.assertTrue(self.request("resume", id=task["id"])["ok"])
+
+    def test_environment_creation_retries_reuse_the_task_and_do_not_recreate_removed_work(self):
+        identity = uuid.uuid4().hex
+        task = self.create(creationId=identity)
+        repeated = self.create(creationId=identity)
+        self.assertEqual(task["id"], repeated["id"])
+        self.assertEqual(len(self.request("list")["result"]), 1)
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        self.assertTrue(self.request("retire", id=task["id"])["ok"])
+        retry = self.request("create", creationId=identity, directory=str(self.repo), name="task",
+                             socket=self.socket, command=[sys.executable, str(FAKE)])
+        self.assertFalse(retry["ok"])
+        self.assertIn("already created and removed", retry["error"])
+
+    def test_environment_export_refuses_live_agents_and_dirty_work(self):
+        task = self.create()
+        self.assertFalse(self.request("export-task", id=task["id"])["ok"])
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        (Path(task["worktree"]) / "hello").write_text("uncommitted\n")
+        reply = self.request("export-task", id=task["id"])
+        self.assertFalse(reply["ok"])
+        self.assertIn("uncommitted", reply["error"].lower())
+
     def request(self, action, **args):
         return roost.rpc(dict(root=str(self.state), action=action, **args))
 

@@ -13,6 +13,7 @@ import fcntl
 import functools
 import hashlib
 import heapq
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -1451,6 +1452,8 @@ def size_options(request):
 
 
 def spawn(store, task, resume=False, size=()):
+    if (store.root / "environment-stopping").exists():
+        raise RoostError("Its Coder workspace was being stopped: E starts it again")
     socket = task["socket"]
     session = task["session"]
     script = str(Path(__file__).resolve())
@@ -1636,6 +1639,8 @@ def create(store, request):
                 session=session_name(repo, task_id),
                 agent=agent_name, command=command, setup=setup, prompt=prompt,
                 status="starting", startedAt=now(), updatedAt=now(), claudeSession=None)
+    if text(request.get("creationId")):
+        task["creationId"] = request["creationId"]
     issue = request.get("issue")
     if isinstance(issue, dict) and isinstance(issue.get("number"), int) and not isinstance(issue["number"], bool):
         task["issue"] = dict(number=issue["number"], title=text(issue.get("title")),
@@ -5292,6 +5297,335 @@ def outgoing(result):
     return result
 
 
+# Optional Coder control runs on Emacs's machine, never in an agent adapter.
+# Environment identities and cached observations outlive the guest. No action
+# deletes a workspace, installs a template, or invents an idle-stop policy.
+CODER_BUNDLE_LIMIT = 64 * 1024 * 1024
+
+
+def export_bundle(repo, revision, base=None):
+    """Export committed history only, pinned to a verified object ID."""
+    repo = str(Path(repo).expanduser())
+    tip = git(repo, "rev-parse", "--verify", "--end-of-options", revision + "^{commit}").stdout.strip()
+    if base is not None and not re.fullmatch(r"[a-f0-9]{40}|[a-f0-9]{64}", base):
+        raise RoostError("Invalid Git base object ID")
+    ref = "refs/roost/export/" + uuid.uuid4().hex
+    with tempfile.TemporaryDirectory(prefix="roost-bundle-") as folder:
+        path = Path(folder) / "return.bundle"
+        git(repo, "update-ref", ref, tip, "0" * len(tip))
+        try:
+            git(repo, "bundle", "create", str(path), ref, *(["^" + base] if base else []))
+        finally:
+            git(repo, "update-ref", "-d", ref, tip)
+        if path.stat().st_size > CODER_BUNDLE_LIMIT:
+            raise RoostError("Committed history exceeds the 64 MiB transfer limit; use a prepared repository or Git remote")
+        data = path.read_bytes()
+    primary = git(repo, "worktree", "list", "--porcelain").stdout.splitlines()[0][len("worktree "):]
+    return dict(tip=tip, ref=ref, base=base, directory=primary, sha256=hashlib.sha256(data).hexdigest(),
+                data=base64.b64encode(data).decode("ascii"))
+
+
+def import_bundle(request):
+    """Fetch a verified bundle to a review ref, leaving HEAD and index alone."""
+    bundle = request["bundle"]
+    if (not re.fullmatch(r"[a-f0-9]{40}|[a-f0-9]{64}", bundle["tip"])
+            or not re.fullmatch(r"refs/roost/export/[a-f0-9]{32}", bundle["ref"])
+            or (bundle.get("base") is not None and not re.fullmatch(r"[a-f0-9]{40}|[a-f0-9]{64}", bundle["base"]))):
+        raise RoostError("Invalid Git bundle object ID or ref")
+    if len(bundle["data"]) > (CODER_BUNDLE_LIMIT + 2) // 3 * 4:
+        raise RoostError("Git bundle exceeds the transfer limit")
+    data = base64.b64decode(bundle["data"], validate=True)
+    if len(data) > CODER_BUNDLE_LIMIT or hashlib.sha256(data).hexdigest() != bundle["sha256"]:
+        raise RoostError("Git bundle checksum or size does not match")
+    repo = str(Path(request["directory"]).expanduser())
+    ref = "refs/roost/returns/" + bundle["tip"]
+    git(repo, "check-ref-format", ref)
+    with tempfile.TemporaryDirectory(prefix="roost-import-") as folder:
+        path = Path(folder) / "return.bundle"
+        path.write_bytes(data)
+        git(repo, "bundle", "verify", str(path))
+        heads = git(repo, "bundle", "list-heads", str(path)).stdout.splitlines()
+        if heads != [bundle["tip"] + " " + bundle["ref"]]:
+            raise RoostError("Git bundle contains unexpected refs")
+        git(repo, "-c", "core.hooksPath=/dev/null", "fetch", "--no-tags", "--no-write-fetch-head",
+            str(path), bundle["ref"] + ":" + ref)
+    result = dict(ref=ref, tip=bundle["tip"], directory=repo)
+    if bundle.get("base"):
+        result["diff"] = git(repo, "diff", "--no-ext-diff", "--no-textconv",
+                             bundle["base"], ref, "--").stdout
+    return result
+
+
+def load_coder_client(transport):
+    """coder.el's Coder client, scripts/coder_client.py, from where Emacs
+    has it: Roost's controller asks Coder through it, as coder.el does."""
+    path = Path(transport)
+    if not path.is_absolute() or path.name != "coder_client.py" or not path.is_file():
+        raise RoostError("Roost can't find coder.el's client at %s" % transport)
+    spec = importlib.util.spec_from_file_location("coder_client", str(path))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class Coder:
+    """Roost's environments in Coder workspaces, controlled from Emacs's
+    machine: each its record, kept here, never in the workspace."""
+
+    def __init__(self, store, client):
+        self.store = store
+        self.root = store.root / "coder"
+        self.root.mkdir(mode=0o700, exist_ok=True)
+        self.ssh_config = self.root / "ssh_config"
+        if not isinstance(client, dict) or not all(isinstance(client.get(k), str) for k in ("transport", "configuration")):
+            raise RoostError("Give the Coder controller coder.el's client")
+        self.transport, self.configuration = client["transport"], client["configuration"]
+        self.client = load_coder_client(self.transport)
+
+    def path(self, identity):
+        if not isinstance(identity, str) or not re.fullmatch(r"[a-f0-9]{32}", identity):
+            raise RoostError("Invalid Coder environment identity")
+        return self.root / (identity + ".json")
+
+    def read(self, identity):
+        return json.loads(self.path(identity).read_text())
+
+    def records(self):
+        return [json.loads(p.read_text()) for p in sorted(self.root.glob("[0-9a-f]" * 32 + ".json"))]
+
+    def save(self, record):
+        atomic_json(self.path(record["id"]), record)
+
+    def call(self, function, *args):
+        try:
+            return function(*args)
+        except self.client.ClientError as exc:
+            raise RoostError(str(exc)) from None
+
+    def api(self, path, body=None):
+        return self.call(self.client.api, self.configuration, path, body)
+
+    def configure(self):
+        """The private SSH file naming each workspace Coder has given an ID:
+        Roost's own aliases, only in this file, never ~/.ssh."""
+        text = "\n".join(self.call(self.client.ssh_stanza, self.transport, self.configuration,
+                                   record["host"], record["workspaceId"])
+                         for record in self.records() if record.get("workspaceId"))
+        if not self.ssh_config.exists() or self.ssh_config.read_text() != text:
+            atomic_text(self.ssh_config, text)
+
+    def info(self, record):
+        result = {k: v for k, v in record.items() if k not in ("pending", "seed")}
+        if record.get("pending") and result["state"] == "running":
+            result["state"] = "preparing"
+        return result
+
+    @contextlib.contextmanager
+    def operation(self, identity):
+        with (self.root / (identity + ".lock")).open("a") as lock:
+            os.chmod(lock.name, 0o600)
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise RoostError("Something else is starting or stopping this environment; refresh and try again") from None
+            yield
+
+    def workspace(self, record, persist=True):
+        """RECORD's workspace as Coder has it, or None before it is made.
+        Made, it is found by the random name it was asked for, which
+        a create that timed out can have left, and from then by its ID."""
+        if record.get("workspaceId"):
+            return self.api("/workspaces/" + record["workspaceId"])
+        workspace = self.call(self.client.workspace_by_name, self.configuration, record["workspaceName"])
+        if workspace is None:
+            return None
+        if workspace["template_id"] != record["templateId"]:
+            raise RoostError("A workspace from another template is named %s" % record["workspaceName"])
+        record["workspaceId"] = workspace["id"]
+        if persist:
+            self.save(record)
+            self.configure()
+        return workspace
+
+    def guest(self, record, request, timeout=180):
+        # Install this content-hashed helper, then invoke it. No shell input or
+        # paths supplied by a task are interpolated into the command.
+        source = Path(__file__).read_text()
+        filename = "remote-" + hashlib.sha256(source.encode()).hexdigest()[:16] + ".py"
+        code = ("import os,sys,json,runpy,tempfile; x=json.load(sys.stdin); "
+                "r=os.path.expanduser(x['root']); os.makedirs(r,mode=0o700,exist_ok=True); "
+                "p=os.path.join(r,x['filename']); "
+                "fd,t=tempfile.mkstemp(dir=r); f=os.fdopen(fd,'w'); f.write(x['source']); f.close(); "
+                "os.chmod(t,0o700); os.replace(t,p); "
+                "ns=runpy.run_path(p); print(json.dumps(ns['rpc'](x['request'])))")
+        request = dict(request, root=record["guestRoot"])
+        payload = dict(root=record["guestRoot"], filename=filename, source=source, request=request)
+        result = subprocess.run(["ssh", "-F", str(self.ssh_config), "-T", "-o", "BatchMode=yes",
+                                 record["host"], "export TMUX_TMPDIR=/tmp; python3 -I -c " + shlex.quote(code)],
+                                input=json.dumps(payload), text=True, capture_output=True, timeout=timeout)
+        if result.returncode:
+            raise RoostError(result.stderr[-4000:] or "Coder workspace SSH failed")
+        response = json.loads(result.stdout.strip())
+        if not response.get("ok"):
+            raise RoostError(response.get("error", "Coder workspace operation failed"))
+        return response["result"]
+
+    def wait(self, record, state):
+        deadline = time.monotonic() + 600
+        while time.monotonic() < deadline:
+            workspace = self.workspace(record)
+            status = workspace["latest_build"]["status"]
+            record["state"] = status
+            self.save(record)
+            if status == state:
+                return workspace
+            if status in ("failed", "canceled", "deleted"):
+                raise RoostError("Coder's build is %s; see its log in Coder, then start it again" % status)
+            time.sleep(1)
+        raise RoostError("Coder's build hasn't finished; refresh, and start it again if it has stopped")
+
+    def start(self, record):
+        workspace = self.workspace(record)
+        if workspace is None:
+            pending = record["pending"]
+            workspace = self.api("/users/me/workspaces", dict(name=record["workspaceName"],
+                template_version_id=pending["version"], rich_parameter_values=pending["parameters"], ttl_ms=0))
+            record["workspaceId"] = workspace["id"]
+            self.save(record)
+            self.configure()
+        status = workspace["latest_build"]["status"]
+        if status == "stopping" or (status == "pending" and workspace["latest_build"].get("transition") == "stop"):
+            workspace = self.wait(record, "stopped")
+            status = "stopped"
+        if status not in ("running", "starting", "pending"):
+            self.api("/workspaces/" + workspace["id"] + "/builds", dict(transition="start"))
+        workspace = self.wait(record, "running")
+        if workspace["latest_build"].get("deadline"):
+            raise RoostError("Its template stops it on a deadline; remove that before running Roost's tasks in it")
+        # Infrastructure ready is not SSH/agent ready. No implicit wake by SSH.
+        deadline = time.monotonic() + 120
+        while True:
+            try:
+                self.guest(record, dict(action="unquiesce"), timeout=15)
+                break
+            except (RoostError, subprocess.TimeoutExpired):
+                if time.monotonic() > deadline:
+                    raise RoostError("Coder says it is running, but SSH into it doesn't answer yet; start it again") from None
+                time.sleep(1)
+        if record.get("pending"):
+            pending = record["pending"]
+            seed_file = self.root / (record["id"] + ".seed.json")
+            seed = record.get("seed") or json.loads(seed_file.read_text())
+            self.guest(record, dict(action="import-bundle", directory=pending["task"]["directory"], bundle=seed))
+            task = self.guest(record, dict(pending["task"], action="create", creationId=record["id"]))
+            record["tasks"] = [task]
+            record.pop("pending", None)
+            record.pop("seed", None)
+            self.save(record)
+            seed_file.unlink(missing_ok=True)
+        record["tasks"] = self.guest(record, dict(action="list", full=True))
+        record["state"] = "running"
+        record.pop("error", None)
+        self.save(record)
+        return self.info(record)
+
+    def create(self, request):
+        # Emacs's, so it can show the workspace's row while it is made.
+        identity = request.get("id") or uuid.uuid4().hex
+        if self.path(identity).exists():
+            raise RoostError("A Coder environment with this identity exists already")
+        record = dict(id=identity, host="roost-coder-" + identity, state="pending",
+                      workspaceName="roost-" + identity[:16], templateId=request["template"],
+                      templateName=request.get("templateName", request["template"]),
+                      templateVersion=request["version"], parameters=request["parameters"],
+                      taskName=request["task"]["name"],
+                      taskAgent=request["task"].get("agent", "claude"), createdAt=now(),
+                      guestRoot=request["guestRoot"], canonical=request["canonical"], tasks=[],
+                      pending=dict(version=request["version"], parameters=request["parameters"], task=request["task"]))
+        atomic_json(self.root / (identity + ".seed.json"), request["seed"])
+        self.save(record)  # Identity exists even if create times out.
+        return record
+
+    def dispatch(self, request):
+        action = request["action"]
+        # Each time, for a client that moved, as when its package updated.
+        self.configure()
+        if action == "coder-cached":
+            return [self.info(record) for record in self.records()]
+        if action == "coder-configure":
+            self.configure()
+            return str(self.ssh_config)
+        record = self.create(request) if action == "coder-create" else self.read(request["environment"])
+        if action == "coder-status":
+            workspace = self.workspace(record, persist=False)
+            # Do not persist a poll's stale copy over an in-flight mutation.
+            record = self.read(record["id"])
+            result = self.info(record)
+            if workspace:
+                result["state"] = workspace["latest_build"]["status"]
+            else:
+                # Not made yet: still being asked for, or failed to be.
+                result["state"] = ("failed" if record.get("error") else "pending") if record.get("pending") else "missing"
+            if record.get("pending") and result["state"] == "running":
+                result["state"] = "preparing"
+            return result
+        if action == "coder-snapshot":
+            with self.operation(record["id"]), self.store.locked():
+                record = self.read(record["id"])
+                record["tasks"] = request["tasks"]
+                self.save(record)
+            return self.info(record)
+        with self.operation(record["id"]):
+            try:
+                if action in ("coder-create", "coder-start"):
+                    return self.start(record)
+                if action == "coder-stop":
+                    workspace = self.workspace(record)
+                    if workspace and workspace["latest_build"]["status"] == "stopped":
+                        record["state"] = "stopped"
+                        record.pop("error", None)
+                        self.save(record)
+                        return self.info(record)
+                    # Fresh guest check, under the same registry lock as spawn.
+                    record["tasks"] = self.guest(record, dict(action="quiesce"))
+                    self.save(record)
+                    self.api("/workspaces/" + record["workspaceId"] + "/builds", dict(transition="stop"))
+                    self.wait(record, "stopped")
+                elif action == "coder-export":
+                    return self.guest(record, dict(action="export-task", id=request["taskId"]))
+                else:
+                    raise RoostError("Unknown Coder action")
+                record.pop("error", None)
+                self.save(record)
+                return self.info(record)
+            except Exception as exc:
+                record["error"] = str(exc)
+                if record["state"] == "pending" and not record.get("workspaceId"):
+                    record["state"] = "failed"
+                self.save(record)
+                raise
+
+
+def create_once(store, request):
+    """Serialize retries even when an SSH client dies before create replies."""
+    identity = text(request.get("creationId"))
+    if not identity:
+        return create(store, request)
+    stem = "create-" + hashlib.sha256(identity.encode()).hexdigest()
+    with (store.root / (stem + ".lock")).open("a") as lock:
+        os.chmod(lock.name, 0o600)
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        for task in store.all():
+            if task.get("creationId") == identity:
+                return task
+        receipt = store.root / (stem + ".json")
+        if receipt.exists():
+            raise RoostError("This environment's task was already created and removed; inspect its history rather than create it again")
+        task = create(store, request)
+        atomic_json(receipt, dict(id=task["id"]))
+        return task
+
+
 TASK_ACTIONS = {
     "resume": lambda store, task, request: resume(store, task, request.get("programStatus"),
                                                         size_options(request)),
@@ -5320,8 +5654,35 @@ def rpc(request):
     try:
         store = Store(request["root"])
         action = request["action"]
+        if action.startswith("coder-"):
+            return {"ok": True, "result": Coder(store, request.get("client")).dispatch(request)}
+        if action == "export-bundle":
+            return {"ok": True, "result": export_bundle(request["directory"], request["revision"])}
+        if action == "import-bundle":
+            return {"ok": True, "result": import_bundle(request)}
+        if action in ("quiesce", "unquiesce"):
+            with store.locked():
+                flag = store.root / "environment-stopping"
+                if action == "quiesce":
+                    tasks = list_tasks(store, request)
+                    if any(t.get("live") is not False for t in tasks):
+                        raise RoostError("An agent runs in the workspace: stop each with K first")
+                    atomic_text(flag, now())
+                else:
+                    flag.unlink(missing_ok=True)
+                    tasks = []
+            return {"ok": True, "result": outgoing(tasks)}
+        if action == "export-task":
+            # As for merging: committed work, its agent not at work.
+            with store.locked():
+                task = store.read(request["id"])
+                check_worktree(store, task)
+                if task["status"] in ACTIVE:
+                    raise RoostError("Its agent is at work; wait for it to finish before fetching its commits")
+                require_clean(task["worktree"])
+                return {"ok": True, "result": export_bundle(task["worktree"], task["branch"], task["baseCommit"])}
         if action == "create":
-            return {"ok": True, "result": outgoing(create(store, request))}
+            return {"ok": True, "result": outgoing(create_once(store, request))}
         if action == "doctor":
             return {"ok": True, "result": doctor(store, request)}
         if action == "issues":

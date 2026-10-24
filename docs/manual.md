@@ -547,6 +547,103 @@ tag or commit, it is the branch the primary checkout has checked out.
 In the pull request draft: `C-c C-c` creates the pull request (`C-u` as a draft)
 and `C-c C-k` cancels. A failed creation keeps the draft.
 
+## Coder workspaces
+
+Experimental, and off unless you load it. With [Coder](https://coder.com), a
+task can run in a workspace made from a template your administrator prepared,
+such as a machine with a GPU, and you work with it in Roost as with any other.
+Local and SSH hosts need none of this.
+
+It has been tried with a CPU Docker template on a private Coder and a fake
+agent, not with EC2 GPUs or real model credentials.
+
+You need:
+
+- The Coder CLI on this machine, and a Coder API token in a file only you can
+  read (`chmod 600`).
+- A template whose workspaces keep their disk when stopped: the repository, at
+  a fixed path, the home directory and Roost's state. In it, Git, Python 3.9 or
+  later, tmux and your agent, signed in. Roost copies no credentials, settings
+  or uncommitted files into a workspace.
+- No automatic stop deadline on its workspaces, and no policy that deletes
+  dormant ones. Roost refuses a workspace with a deadline.
+
+```elisp
+(require 'roost-coder)
+(setq roost-coder-connection
+      '(:url "https://coder.example.org"
+        :tokenFile "~/.config/roost/coder-token"
+        :command ("/usr/local/bin/coder"))
+      roost-coder-templates
+      '(("GPU machine"
+         :id "00000000-0000-0000-0000-000000000000"
+         :directory "/home/coder/repo")))
+```
+
+The URL is HTTPS, or HTTP to a tunnel on this machine, such as
+`http://127.0.0.1:3000`. `:directory` is where the template keeps the
+repository. Roost keeps what it knows of each workspace in
+`roost-coder-state-directory`, on this machine; back it up. Another Emacs with
+the same directory finds the same workspaces.
+
+### A task in a workspace
+
+`C` (`roost-coder-new-task`), in Roost's menu, the dashboard or a task panel,
+asks for a template, a value for each parameter its active version publishes,
+such as an instance type, the checkout and commit to start from, a name and an
+agent. Roost copies the commit's history, at most 64 MiB of it, creates the
+workspace, fetches the history into its repository and starts the task there.
+That can take minutes; Roost says when it is done, and leaves you where you
+are. A workspace that failed to start keeps its row, and `E` tries again
+without making another. Secret parameters are refused: set them in Coder.
+
+From then on the task is like any other: its terminal, its panel, review in
+Magit.
+
+### Starting and stopping
+
+A workspace runs, and costs, until you stop it. Roost never stops one on its own.
+
+| Key | What it does |
+| --- | --- |
+| `E` | Start the task's workspace, or finish setting it up. Its agent stays stopped: `s` resumes it. |
+| `Z` | Stop the workspace, once each agent in it is stopped with `K`. Everything running in it stops; its disk is kept. |
+| `F` | Fetch the task's commits to your checkout, as below. |
+
+Roost's menu shows them for a task in a workspace. While a workspace is
+stopped, its tasks say `asleep`, with what Roost last saw of them; while it
+starts, `waking`, or `setting up` the first time; `start failed` when it
+didn't. Nothing Roost does starts it, refreshing included.
+
+### Bringing the work back
+
+`m` doesn't apply to a task in a workspace: it would merge in the workspace's
+own clone. With the work committed and the agent not at work, `F` fetches the
+task's commits into the checkout it started from, to
+`refs/roost/returns/COMMIT`, and shows their diff. That checkout's branch, index
+and files stay as they are. Review, then merge the ref there yourself, in Magit
+or with `git merge refs/roost/returns/COMMIT`.
+
+The task and its workspace stay. `x` retires the task, and asks you to type its
+name, as its commits aren't merged in the workspace's clone. Delete the
+workspace in Coder.
+
+### How it connects
+
+Roost writes an SSH configuration file of its own, in
+`roost-coder-state-directory`, that reaches each workspace through
+`coder ssh --stdio`, which never starts one. Roost's helper, its terminals and
+TRAMP use that file for those workspaces only; `~/.ssh/config` and other hosts
+stay as they are. The token stays in its file, out of every command line.
+
+`coder.el`, which Roost asks Coder through, has no Roost in it: templates and
+their parameters, a workspace's state, starting, stopping and SSH.
+
+### Not yet
+
+Using a workspace Roost didn't make; moving `roost-coder-state-directory` to
+another machine; histories over 64 MiB, submodules and LFS.
+
 ## Configuration
 
 - `roost-hosts`: hosts the dashboard watches (`nil` is local). Hosts and projects

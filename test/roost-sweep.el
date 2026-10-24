@@ -38,6 +38,7 @@
 (require 'cl-lib)
 (require 'roost)
 (require 'roost-test)
+(require 'roost-coder)
 
 (defconst roost-sweep--long-prompt
   (concat "Make the report show how much is left of each budget, and flag the "
@@ -188,6 +189,14 @@ KIND is `committed', `uncommitted', `untracked' or `binary'."
                               '("docs" "scripts" "src" "test" "tools")))))
     ("with notes" (status . "ready") (live . t) (dirty . t) (diff . "1 file +4 −1 · uncommitted")
      (files . ,(roost-sweep--files '("ledger.py" . uncommitted))))
+    ("Coder asleep" (status . "stopped") (live) (coderEnvironment . "fixture") (environmentState . "stopped"))
+    ("Coder pending task" (status . "stopped") (live) (environmentOnly . t)
+     (coderEnvironment . "fixture") (environmentState . "preparing"))
+    ("Coder provisioning" (status . "stopped") (live) (coderEnvironment . "fixture") (environmentState . "starting"))
+    ("Coder failed" (status . "stopped") (live) (coderEnvironment . "fixture") (environmentState . "failed")
+     (environmentError . "Template failed; inspect the retained environment and retry start"))
+    ("Coder awake" (status . "ready") (live . t) (coderEnvironment . "fixture") (environmentState . "running")
+     (ahead . 2) (diff . "1 file +2 −1"))
     ("unreachable host" (host . "gone") (status . "running") (live . t)))
   "Task states the views are drawn for: (NAME . FIELDS).
 FIELDS go over those of `roost-test--task', on host \"dev\" unless they
@@ -372,6 +381,11 @@ among them."
     (dolist (file (seq-take files 2))
       (insert "\n\n" (roost--quoting file) ":3-4\n\ntotal = 0"))))
 
+(defun roost-sweep--return-setup (_state)
+  "A pinned synthetic return, with its review ref and a way back."
+  (setq roost-coder--return '((ref . "refs/roost/returns/abcdef") (directory . "/canonical")
+                             (diff . "diff --git a/file b/file\n--- a/file\n+++ b/file\n@@ -1 +1 @@\n-before\n+after\n"))))
+
 (defvar roost-sweep--views
   '((panel :mode roost-task-info-mode :render roost--render-task-info :widths (40 100)
            :layouts (selected none other both) :setup roost-sweep--panel-setup)
@@ -385,6 +399,8 @@ among them."
     (workload :mode roost-workload-mode :render roost--render-workload :buffer "*roost workload*"
               :layouts (selected none other both) :setup roost-sweep--workload-setup
               :keys (roost-workload))
+    (return :mode roost-coder-return-mode :render roost-coder--render-return :setup roost-sweep--return-setup
+            :layouts (selected none other both) :widths (40 100) :keys (quit-window))
     (draft :mode roost-compose-mode :render roost--compose-render :buffer "*roost new task*"
            :layouts (selected none other both) :setup roost-sweep--draft-setup
            :keys (roost-compose-submit roost-compose-cancel roost-compose-set-project)))
