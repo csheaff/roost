@@ -4,6 +4,13 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- With many tasks, the sidebar and dashboard redraw several times faster,
+  and Roost no longer pauses to collect garbage when you open the menu
+  with a tab per task. Each row asked for every task sorted by name, to
+  see whether another had its name, and the sort made two strings for
+  each comparison: with 39 tasks, a sidebar redraw, made on each poll,
+  took 81 ms, 67 of them collecting garbage, and now 14; finding the task
+  you're in, with a tab per task, took 68 ms, and now 13.
 - A click on a notification can no longer run code a host chose. What
   the click runs named the task by its ID as the host sent it, so a
   host, or anything running as you there, could send an ID that Emacs
