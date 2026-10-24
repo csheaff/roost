@@ -7007,6 +7007,8 @@ while its pull request waits on you, and \"conflicts\" as
          ;; None of an agent's words, which say what it does or waits for.
          (pcase (roost--field task 'environmentState)
            ("stopped" "asleep") ((or "starting" "pending") "waking") ("preparing" "setting up")
+           ;; Its tasks all retired.
+           ("running" "empty")
            ((or "stopping" "canceling") "stopping") ((or "failed" "canceled") "start failed")
            ((or "missing" "deleted" "deleting") "gone") (_ "offline")))
         ((gethash (roost--field task 'host) roost--errors) "offline")
@@ -8045,6 +8047,7 @@ where RET would pick the agent's default answer, so no key is named."
         ((or "missing" "deleted") "Its environment is gone")
         ("stopped" (concat "Its environment is asleep: " (funcall key "E") " starts it"))
         ("preparing" (concat "Its environment is not set up yet: " (funcall key "E") " finishes it"))
+        ("running" (concat "Its environment runs with no task in it: " (funcall key "Z") " stops it"))
         (_ (concat "Its environment is not running: " (funcall key "E") " starts it"))))
      ((equal status "permission")
       (if beside "Answer it in its terminal"

@@ -193,6 +193,9 @@ KIND is `committed', `uncommitted', `untracked' or `binary'."
     ("Coder pending task" (status . "stopped") (live) (environmentOnly . t)
      (coderEnvironment . "fixture") (environmentState . "preparing"))
     ("Coder provisioning" (status . "stopped") (live) (coderEnvironment . "fixture") (environmentState . "starting"))
+    ;; Its workspace's own host: no other agent runs there.
+    ("Coder empty" (host . "coder-empty") (status . "stopped") (live) (environmentOnly . t)
+     (coderEnvironment . "fixture") (environmentState . "running"))
     ("Coder failed" (status . "stopped") (live) (coderEnvironment . "fixture") (environmentState . "failed")
      (environmentError . "Template failed; inspect the retained environment and retry start"))
     ("Coder awake" (status . "ready") (live . t) (coderEnvironment . "fixture") (environmentState . "running")

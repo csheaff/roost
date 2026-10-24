@@ -81,6 +81,15 @@ happened in a section below:
   agent, whose host recorded it as the latest prompt, which the panel
   showed; `K` and then `Z` stopped them. The panel had an empty line for a
   workspace with no template recorded, now gone.
+- **Review.** `/code-review high` found that `C` from Emacs could never set
+  a workspace up: the commit an export starts from, nil, reached the
+  workspace as an empty JSON object, which its check of object IDs refused.
+  The live runs, scripts calling the controller in Python, didn't send it
+  through Emacs. Also fixed: a running workspace whose tasks were all
+  retired said `offline`, and named `E`; one failed ask of Coder put a
+  running workspace's tasks to sleep for 30 s; a task with no commits got
+  Git's own error from `F`. Not changed: the setup check still marks a
+  sleeping workspace's host with ✗, saying it is asleep.
 
 ## Journeys for the commands none ran — 2026-10-24
 

@@ -44,6 +44,10 @@ Roost asks for the parameters the template's active version publishes."
   "Read controller identities without contacting Coder or its guests."
   (unless roost-coder--loaded
     (setq roost-coder--loaded t)
+    ;; Its SSH file names the client's path, which moves as its package
+    ;; updates: written again once a session.
+    (when roost-coder-connection
+      (ignore-errors (roost-coder--call "coder-configure" nil #'ignore #'ignore)))
     (when (file-directory-p (expand-file-name "coder" roost-coder-state-directory))
       (dolist (file (directory-files (expand-file-name "coder" roost-coder-state-directory)
                                      t "\\`[a-f0-9]\\{32\\}\\.json\\'"))
@@ -236,9 +240,12 @@ refreshes a running workspace's tasks as for any host."
                       (roost--redraw))))
                 (lambda (err)
                   (remhash host roost-coder--polling)
+                  ;; Coder out of reach says nothing of the workspace:
+                  ;; it keeps the state it had, and its tasks, with why.
                   (when (= revision (gethash host roost--revisions 0))
-                    (setf (alist-get 'state record) "unavailable" (alist-get 'error record) err)
-                    (roost-coder--accept record)
+                    (let ((updated (copy-tree record)))
+                      (setf (alist-get 'error updated) (format "Couldn't ask Coder about it: %s" err))
+                      (roost-coder--accept updated t))
                     (roost--redraw)))))))
     (funcall refresh host quiet ids)))
 
@@ -503,9 +510,10 @@ changes must be committed."
   "Whether the task `roost-dispatch' acts on runs in a Coder workspace."
   (and (roost--field (roost--dispatch-task) 'coderEnvironment) t))
 
-(defun roost-coder--start-inapt-p () "See `roost--dispatch-inapt-p'." (roost--dispatch-inapt-p 'roost-coder-start))
-(defun roost-coder--stop-inapt-p () "See `roost--dispatch-inapt-p'." (roost--dispatch-inapt-p 'roost-coder-stop))
-(defun roost-coder--return-inapt-p () "See `roost--dispatch-inapt-p'." (roost--dispatch-inapt-p 'roost-coder-return))
+(dolist (command '(roost-coder-start roost-coder-stop roost-coder-return))
+  (defalias (intern (format "roost-coder--%s-inapt-p" (string-remove-prefix "roost-coder-" (symbol-name command))))
+    (lambda () (roost--dispatch-inapt-p command))
+    (format "Whether `%s' does not apply to the task of `roost-dispatch'." command)))
 
 ;; One menu, Roost's: each key in it means what it means in the
 ;; dashboard, sidebar and task panel, so a key pressed there with the

@@ -5309,6 +5309,8 @@ def export_bundle(repo, revision, base=None):
     tip = git(repo, "rev-parse", "--verify", "--end-of-options", revision + "^{commit}").stdout.strip()
     if base is not None and not re.fullmatch(r"[a-f0-9]{40}|[a-f0-9]{64}", base):
         raise RoostError("Invalid Git base object ID")
+    if base == tip:
+        raise RoostError("It has no commits to fetch")
     ref = "refs/roost/export/" + uuid.uuid4().hex
     with tempfile.TemporaryDirectory(prefix="roost-bundle-") as folder:
         path = Path(folder) / "return.bundle"
@@ -5327,10 +5329,13 @@ def export_bundle(repo, revision, base=None):
 
 def import_bundle(request):
     """Fetch a verified bundle to a review ref, leaving HEAD and index alone."""
-    bundle = request["bundle"]
-    if (not re.fullmatch(r"[a-f0-9]{40}|[a-f0-9]{64}", bundle["tip"])
-            or not re.fullmatch(r"refs/roost/export/[a-f0-9]{32}", bundle["ref"])
-            or (bundle.get("base") is not None and not re.fullmatch(r"[a-f0-9]{40}|[a-f0-9]{64}", bundle["base"]))):
+    bundle = dict(request["bundle"])
+    # Emacs encodes a nil within the request as an empty object.
+    bundle["base"] = text(bundle.get("base"))
+    if (not re.fullmatch(r"[a-f0-9]{40}|[a-f0-9]{64}", text(bundle.get("tip")) or "")
+            or not re.fullmatch(r"refs/roost/export/[a-f0-9]{32}", text(bundle.get("ref")) or "")
+            or (bundle["base"] is not None and not re.fullmatch(r"[a-f0-9]{40}|[a-f0-9]{64}", bundle["base"]))
+            or not isinstance(bundle.get("data"), str) or not isinstance(bundle.get("sha256"), str)):
         raise RoostError("Invalid Git bundle object ID or ref")
     if len(bundle["data"]) > (CODER_BUNDLE_LIMIT + 2) // 3 * 4:
         raise RoostError("Git bundle exceeds the transfer limit")
@@ -5558,8 +5563,10 @@ class Coder:
         action = request["action"]
         if isinstance(request.get("socketSetup"), str) and request["socketSetup"].strip():
             self.socket_setup = request["socketSetup"]
-        # Each time, for a client that moved, as when its package updated.
-        self.configure()
+        if action in ("coder-configure", "coder-create", "coder-start"):
+            # For a client that moved, as when its package updated: Emacs
+            # asks once a session, and a workspace's ID, learned, adds it.
+            self.configure()
         if action == "coder-cached":
             return [self.info(record) for record in self.records()]
         if action == "coder-configure":

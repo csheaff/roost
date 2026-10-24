@@ -106,6 +106,31 @@
             (funcall (nth 1 finish) "Coder said 400: no"))
           (should-not (gethash host roost-coder--busy)))))))
 
+(ert-deftest roost-coder-a-running-workspace-with-no-task-says-so ()
+  (roost-test--isolated
+    (let ((record (roost-coder-test--record "running")))
+      (setf (alist-get 'tasks record) nil)
+      (roost-coder--accept record)
+      (let ((row (car (roost-tasks))))
+        (should (equal (roost--display-status row) "empty"))
+        (should (string-match-p "no task in it: Z stops it" (substring-no-properties (roost--next-step row))))
+        (should (roost--action-applies-p row 'roost-coder-stop))
+        (should-not (roost--action-applies-p row 'roost-coder-start))))))
+
+(ert-deftest roost-coder-coder-out-of-reach-leaves-a-running-workspace-running ()
+  (roost-test--isolated
+    (let* ((record (roost-coder--accept (roost-coder-test--record "running")))
+           (host (alist-get 'host record)) refreshed)
+      (cl-letf (((symbol-function 'roost-coder--call)
+                 (lambda (_action _parameters _success &optional failure) (funcall failure "Coder can't be reached")))
+                ((symbol-function 'roost--redraw) #'ignore))
+        (roost-coder--refresh (lambda (&rest _) (setq refreshed t)) host nil))
+      (let ((task (car (roost-tasks))))
+        (should (equal (alist-get 'state (roost-coder--record host)) "running"))
+        (should (roost--field task 'live))
+        (should (string-match-p "can't be reached" (roost--field task 'environmentError)))
+        (should-not (roost--environment-down-p task))))))
+
 (ert-deftest roost-coder-stale-metadata-does-not-win-over-explicit-start ()
   (roost-test--isolated
     (let* ((record (roost-coder--accept (roost-coder-test--record)))
@@ -187,29 +212,30 @@
 (ert-deftest roost-coder-menu-keys-mean-what-they-mean-in-roost-s-views ()
   ;; With Roost's menu left open, a key pressed in a list or panel is the
   ;; menu's: it must do there what it does in the list.
-  (let (keys)
-    (dolist (key '("C" "E" "Z" "F"))
-      (should (transient-get-suffix 'roost-dispatch key)))
-    ;; Transient's layouts differ by version: a suffix is (CLASS . PLIST),
-    ;; or (LEVEL CLASS PLIST).
-    (cl-labels ((walk (layout)
-                  (cond ((vectorp layout) (mapc #'walk layout))
-                        ((not (proper-list-p layout)))
-                        ((keywordp (car layout))
-                         (when (plist-get layout :command)
-                           (push (cons (plist-get layout :key) (plist-get layout :command)) keys)))
-                        ((and (symbolp (car layout)) (keywordp (cadr layout))) (walk (cdr layout)))
-                        (t (mapc #'walk layout)))))
-      (walk (get 'roost-dispatch 'transient--layout)))
-    (should (length> keys 25))
-    (pcase-dolist (`(,key . ,command) keys)
-      (dolist (map (list roost-dashboard-mode-map roost-sidebar-list-mode-map roost-task-info-mode-map))
-        (let ((bound (keymap-lookup map key)))
-          ;; The panel's g refreshes it, and its task, first.
-          (unless (or (null bound) (and (eq bound 'roost-task-info-refresh) (eq command 'roost-refresh)))
-            (should (equal (list key bound) (list key command)))))))
-    ;; Each key once.
-    (should (equal (length keys) (length (seq-uniq (mapcar #'car keys)))))))
+  (roost-test--isolated
+    (let (keys)
+      (dolist (key '("C" "E" "Z" "F"))
+        (should (transient-get-suffix 'roost-dispatch key)))
+      ;; Transient's layouts differ by version: a suffix is (CLASS . PLIST),
+      ;; or (LEVEL CLASS PLIST).
+      (cl-labels ((walk (layout)
+                    (cond ((vectorp layout) (mapc #'walk layout))
+                          ((not (proper-list-p layout)))
+                          ((keywordp (car layout))
+                           (when (plist-get layout :command)
+                             (push (cons (plist-get layout :key) (plist-get layout :command)) keys)))
+                          ((and (symbolp (car layout)) (keywordp (cadr layout))) (walk (cdr layout)))
+                          (t (mapc #'walk layout)))))
+        (walk (get 'roost-dispatch 'transient--layout)))
+      (should (length> keys 25))
+      (pcase-dolist (`(,key . ,command) keys)
+        (dolist (map (list roost-dashboard-mode-map roost-sidebar-list-mode-map roost-task-info-mode-map))
+          (let ((bound (keymap-lookup map key)))
+            ;; The panel's g refreshes it, and its task, first.
+            (unless (or (null bound) (and (eq bound 'roost-task-info-refresh) (eq command 'roost-refresh)))
+              (should (equal (list key bound) (list key command)))))))
+      ;; Each key once.
+      (should (equal (length keys) (length (seq-uniq (mapcar #'car keys))))))))
 
 (ert-deftest roost-coder-environment-commands-show-only-for-coder-tasks ()
   (roost-test--isolated
@@ -279,31 +305,32 @@
 (ert-deftest roost-coder-unloads-without-a-trace-in-roost ()
   ;; In an Emacs of its own: unloading here would leave the other tests
   ;; without it.
-  (let ((emacs (expand-file-name invocation-name invocation-directory))
-        (root (file-name-directory (locate-library "roost"))))
-    (with-temp-buffer
-      (should (zerop (call-process
-                      emacs nil t nil "-Q" "--batch" "-L" root
-                      "--eval"
-                      (format "%S"
-                              '(progn
-                                 (require 'roost-coder)
-                                 (unload-feature 'roost-coder)
-                                 (dolist (key '("C" "E" "Z" "F"))
-                                   (when (ignore-errors (transient-get-suffix 'roost-dispatch key))
-                                     (error "%s is still in the menu" key))
-                                   (when (keymap-lookup roost-dashboard-mode-map key)
-                                     (error "%s is still bound" key)))
-                                 (when (advice-member-p #'roost-coder--request 'roost--request)
-                                   (error "Still advised"))
-                                 (when (advice-member-p #'roost-coder--doctor-checks 'roost--doctor-local-checks)
-                                   (error "Still in the setup check"))
-                                 ;; Roost's menu still shows, with no Environment.
-                                 (with-temp-buffer
-                                   (let ((transient--original-buffer (current-buffer)))
-                                     (transient-setup 'roost-dispatch)
-                                     (transient-quit-all)))
-                                 (princ "unloaded"))))))
-        (should (string-search "unloaded" (buffer-string))))))
+  (roost-test--isolated
+    (let ((emacs (expand-file-name invocation-name invocation-directory))
+          (root (file-name-directory (locate-library "roost"))))
+      (with-temp-buffer
+        (should (zerop (call-process
+                        emacs nil t nil "-Q" "--batch" "-L" root
+                        "--eval"
+                        (format "%S"
+                                '(progn
+                                   (require 'roost-coder)
+                                   (unload-feature 'roost-coder)
+                                   (dolist (key '("C" "E" "Z" "F"))
+                                     (when (ignore-errors (transient-get-suffix 'roost-dispatch key))
+                                       (error "%s is still in the menu" key))
+                                     (when (keymap-lookup roost-dashboard-mode-map key)
+                                       (error "%s is still bound" key)))
+                                   (when (advice-member-p #'roost-coder--request 'roost--request)
+                                     (error "Still advised"))
+                                   (when (advice-member-p #'roost-coder--doctor-checks 'roost--doctor-local-checks)
+                                     (error "Still in the setup check"))
+                                   ;; Roost's menu still shows, with no Environment.
+                                   (with-temp-buffer
+                                     (let ((transient--original-buffer (current-buffer)))
+                                       (transient-setup 'roost-dispatch)
+                                       (transient-quit-all)))
+                                   (princ "unloaded"))))))
+          (should (string-search "unloaded" (buffer-string)))))))
 
 (provide 'roost-coder-test)

@@ -117,13 +117,11 @@ class CoderState(unittest.TestCase):
         for path in (self.coder.ssh_config, self.coder.path(self.record["id"])):
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
-    def test_every_request_rewrites_the_ssh_file_for_a_client_that_moved(self):
+    def test_configure_rewrites_the_ssh_file_for_a_client_that_moved(self):
         moved = self.root / "moved" / "coder_client.py"
         moved.parent.mkdir()
         moved.write_text(CLIENT.read_text())
-        with patch.object(roost.Coder, "workspace", return_value=self.workspace):
-            roost.Coder(self.store, dict(self.client, transport=str(moved))).dispatch(
-                dict(action="coder-status", environment=self.record["id"]))
+        roost.Coder(self.store, dict(self.client, transport=str(moved))).dispatch(dict(action="coder-configure"))
         self.assertIn("moved/coder_client.py", self.coder.ssh_config.read_text())
 
     def test_ssh_to_a_workspace_sets_its_tmux_socket_up_as_tmux_control_does(self):
@@ -248,6 +246,19 @@ class GitReturn(unittest.TestCase):
         self.assertNotIn("do not transfer", result["diff"])
         self.assertEqual(self.git(self.canonical, "ls-files", "--stage"),
                          self.git(self.canonical, "ls-tree", "HEAD").replace("blob ", "").replace("\t", " 0\t"))
+
+    def test_a_seed_with_no_base_imports_as_emacs_encodes_it(self):
+        bundle = roost.export_bundle(str(self.canonical), "HEAD")
+        self.assertIsNone(bundle["base"])
+        # A nil within a request reaches the helper as an empty object.
+        result = roost.import_bundle(dict(directory=str(self.guest), bundle=dict(bundle, base={})))
+        self.assertEqual(self.git(self.guest, "rev-parse", result["ref"]), bundle["tip"])
+        with self.assertRaisesRegex(roost.RoostError, "object ID"):
+            roost.import_bundle(dict(directory=str(self.guest), bundle=dict(bundle, tip={})))
+
+    def test_a_task_with_no_commits_says_so(self):
+        with self.assertRaisesRegex(roost.RoostError, "no commits to fetch"):
+            roost.export_bundle(str(self.canonical), "HEAD", self.base)
 
     def test_corrupt_bundle_is_refused_before_ref_or_checkout_changes(self):
         bundle = roost.export_bundle(str(self.canonical), "HEAD")
