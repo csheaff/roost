@@ -45,6 +45,13 @@ FAKE_GH = HERE / "fake_gh.py"
 
 FRAME = (172, 40)
 PANEL = 44  # roost-task-panel-width
+# The most times a command may collect garbage, at Emacs's default
+# threshold.  With 39 tasks, opening a draft, the most any journey's
+# command collects, does 8 or 9; before Roost stopped sorting every task
+# for each row of the sidebar (#139), with a tab per task, 40 to 50.  A
+# pause in a step whose commands collect fewer had another cause, most
+# likely the machine's load.
+COLLECTIONS = 20
 
 LONG_PROMPT = (
     "Let notes have due dates. " + " ".join(
@@ -511,7 +518,17 @@ class Run:
         self.settle()
         screen = self.screen()
         problems = ["Error: " + error for error in self.emacs.json("(json-encode (vconcat (qa-take-errors)))")]
-        problems += ["Emacs stopped responding: " + pause
+        # By command, which a pause the step had is Roost's if they collected
+        # garbage often, and more likely the machine's load if not.
+        collections = self.emacs.json("(json-encode (vconcat (mapcar #'vconcat (qa-take-collections))))")
+        collected = sum(count for _, count, _ in collections)
+        collecting = sum(seconds for _, _, seconds in collections)
+        problems += ["The command %s collected garbage %d times (%.2f s), more than the %d a command may"
+                     % (command, count, seconds, COLLECTIONS)
+                     for command, count, seconds in collections if count > COLLECTIONS]
+        problems += ["Emacs stopped responding: %s. The step's commands collected garbage %d times (%.2f s): %s"
+                     % (pause, collected, collecting,
+                        "Roost's own garbage" if collected > COLLECTIONS else "too few to explain it, so load")
                      for pause in self.emacs.json("(json-encode (vconcat (qa-take-pauses)))")]
         for name in screen["buffers"]:
             if name == "*Backtrace*":
@@ -577,7 +594,7 @@ class Run:
             elif not ok:
                 problems.append("Expected: " + description)
         self.steps.append(dict(journey=self.journey, title=title, problems=problems, known=known,
-                               shot=self.shot(), screen=screen))
+                               shot=self.shot(), screen=screen, collections=collections))
         mark = "✗" if problems else "✓"
         print("  %s %s" % (mark, title))
         for problem in problems:
@@ -643,6 +660,9 @@ class Run:
             said = "".join("<p><small>%s: %s</small></p>" % (label, html.escape(step["screen"][key]))
                            for key, label in (("echo", "Echo area"), ("prompt", "Minibuffer"))
                            if step["screen"].get(key))
+            if step.get("collections"):
+                said += "<p><small>Garbage collected by: %s</small></p>" % html.escape(", ".join(
+                    "%s %d (%.2f s)" % tuple(entry) for entry in step["collections"]))
             rows.append('<section class="%s"><h3>%s %s</h3><ul>%s</ul>%s%s%s</section>' % (
                 "bad" if step["problems"] else "good", "✗" if step["problems"] else "✓",
                 html.escape(step["title"]), problems, said, shot, windows))

@@ -9,6 +9,13 @@ What each release changes, and what to do when upgrading. Newest first.
   from a Flymake diagnostic counted them from the start of what the
   buffer showed, so the agent was told `a.py:1-2` for the first two
   lines of a function narrowed to at line 40.
+- With many tasks, the sidebar redraws faster still, and finding the task
+  of the tab you're in no longer works out every task's tab. Each row of
+  the sidebar, three times, and of the dashboard looked through every
+  task for another with its name; and finding your tab's task worked out
+  each task's tab name, looking through every task for namesakes. With
+  100 tasks, a sidebar redraw took 17 ms and now 7, and finding your
+  tab's task 8.7 ms and now 0.2.
 - With many tasks, the sidebar and dashboard redraw several times faster,
   and Roost no longer pauses to collect garbage when you open the menu
   with a tab per task. Each row asked for every task sorted by name, to

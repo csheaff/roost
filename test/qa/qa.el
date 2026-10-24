@@ -88,6 +88,44 @@ advised for this: natively compiled, they call each other directly."
       (seq-remove (lambda (note) (string-match-p "qa\\.py's own request took" note))
                   (reverse new)))))
 
+(defvar qa--collections nil
+  "The commands that collected garbage since `qa-take-collections', newest first.
+Each (COMMAND COLLECTIONS SECONDS), COMMAND by name.")
+
+(defvar qa--command-gc nil
+  "`gcs-done' and `gc-elapsed' as the running command began, or nil.")
+
+(defun qa--command-gc-start ()
+  "Note how often Emacs has collected garbage, as a command begins."
+  (setq qa--command-gc (cons gcs-done gc-elapsed)))
+
+(defun qa--command-gc-end ()
+  "Note how often the command that just ended collected garbage, if it did.
+Not one that waited, as for a minibuffer whose commands ran within it,
+or while qa.py asked something: what ran meanwhile wasn't its own."
+  (when qa--command-gc
+    (let ((collections (- gcs-done (car qa--command-gc))))
+      (when (> collections 0)
+        (push (list (if (and this-command (symbolp this-command))
+                        (symbol-name this-command)
+                      "a command with no name")
+                    collections (- gc-elapsed (cdr qa--command-gc)))
+              qa--collections))))
+  (setq qa--command-gc nil))
+
+(add-hook 'pre-command-hook #'qa--command-gc-start)
+(add-hook 'post-command-hook #'qa--command-gc-end)
+;; Called from outside the command loop, as each request from qa.py
+;; arrives: a command it comes during is waiting.
+(advice-add 'server-process-filter :before (lambda (&rest _) (setq qa--command-gc nil))
+            '((name . qa--request)))
+
+(defun qa-take-collections ()
+  "The commands that collected garbage since the last call, oldest first.
+Forget them."
+  (prog1 (reverse qa--collections)
+    (setq qa--collections nil)))
+
 (defvar qa--commands-run (make-hash-table :test 'eq)
   "The commands journeys ran, through the command loop.")
 
