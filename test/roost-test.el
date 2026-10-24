@@ -5753,6 +5753,42 @@ of its own, which shows in the selected window of its workspace."
         (should (string-match-p (concat (regexp-quote name) ":1-2\n\none\ntwo\n") (buffer-string)))
         (should (= (point) (point-min))))))))
 
+;; Narrowed, as to a function with C-x n d, the lines quoted for the agent
+;; are still where they are in the file.
+(ert-deftest roost-quoted-lines-are-the-files-in-a-narrowed-buffer ()
+  (roost-test--isolated
+   (roost-test--with-send-buffers
+    (require 'flymake)
+    (let (name)
+      (with-temp-buffer
+        (python-mode)
+        (rename-buffer "roost-narrowed.py" t)
+        (setq name (buffer-name))
+        (insert "import os\n\n\ndef f():\n    return 1\n")
+        (goto-char (point-min))
+        (forward-line 3)
+        (narrow-to-region (point) (point-max))
+        (should (string-match-p (concat (regexp-quote name) ":4-5\n")
+                                (car (roost--region-seed (point-min) (point-max)))))
+        (cl-letf (((symbol-function 'roost--read-task) (lambda (_) (roost-test--task)))
+                  ((symbol-function 'pop-to-buffer) #'set-buffer))
+          (save-current-buffer (roost-send-region (point-min) (point-max))))
+        (let ((flymake-mode t))
+          (cl-letf (((symbol-function 'flymake-diagnostics)
+                     (lambda (&rest _)
+                       (list (flymake-make-diagnostic (current-buffer) (+ (point-min) 4) (+ (point-min) 5)
+                                                      :error "f is unused")))))
+            (save-window-excursion
+              (unwind-protect
+                  (progn
+                    (save-current-buffer (roost-new-task-from-diagnostic))
+                    (with-current-buffer roost--compose-buffer
+                      (should (string-match-p (concat (regexp-quote name) ":4: f is unused")
+                                              (roost--compose-prompt)))))
+                (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
+      (with-current-buffer "*roost send: fix auth*"
+        (should (string-match-p (concat (regexp-quote name) ":4-5\n\ndef f") (buffer-string))))))))
+
 (ert-deftest roost-send-region-targets-the-task-owning-the-file ()
   (roost-test--isolated
    (roost-test--with-send-buffers
