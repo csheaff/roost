@@ -4,6 +4,10 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A review note shows once in a Magit diff or status you open again, as
+  when you click a file in a task's panel a second time. Magit sets the
+  buffer up anew, and Roost lost the note it showed there, which then
+  showed a second time at the top of the buffer.
 - Retiring, merging, discarding or forgetting a task closes its tab in
   every frame with a tab per task, not only in the one you are in, and
   you stay in your frame. A task whose panel showed in another frame
