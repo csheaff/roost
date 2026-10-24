@@ -143,7 +143,9 @@ starts the agent in tmux, and opens its terminal.
   `ROOST_TASK` property), so Roost commands run there, such as
   `roost-open-task` or `roost-review`, act on it.
 - Select a region first, and the selection becomes the prompt. Code is quoted
-  with its file and lines, ready for you to say what to do with it.
+  with its file and lines, ready for you to say what to do with it: its lines
+  in the whole file, though you have narrowed to it, and from an Org source
+  block you are editing with `C-c '`, the Org file and its lines.
 - On an error in a compilation buffer, or a match in a grep buffer, that line
   becomes the prompt, with its file and line.
 - With [Embark](https://github.com/oantolin/embark), act on a region, a file,
@@ -933,6 +935,15 @@ Hosts, processes, terminals, Magit, the menu and the browser are stubbed, and
 every question is answered with `C-g`. A new button or key is covered as it
 is. A new kind of task needs a state in `roost-sweep--gallery`, and a new view
 an entry in `roost-sweep--views`.
+
+The commands that quote what you are looking at read buffers Roost doesn't
+make. The sweep runs each in a gallery of buffer states, `roost-sweep--buffers`
+(narrowed, read-only, indirect, an Org source block being edited, no file, a
+remote file, a rectangle, CRLF line endings, a task's worktree and others), and
+in Org entries, agenda lines and narrowed Magit diffs, and fails on a Lisp
+error, a connection to a host TRAMP isn't connected to, a file or lines that
+aren't where the quoted text is in the whole file, quoted text that isn't the
+region's, or a change to your buffer.
 
 `make qa` uses Roost as you would, in a GUI Emacs of its own: a plain
 configuration with its own server, state directory and tmux socket, and

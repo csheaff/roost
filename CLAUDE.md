@@ -18,7 +18,17 @@ The [manual](docs/manual.md#how-it-works) says how it fits together.
   checks rules any of them must keep (no Lisp errors, a way back from each
   change to a view, keys it names apply). Give a new kind of task a state in
   `roost-sweep--gallery`, and a new view an entry in `roost-sweep--views`.
+  It also runs the commands that quote your own buffers (a region, a
+  diagnostic, an Org entry, a diff line) in a gallery of buffer states,
+  `roost-sweep--buffers`, and checks the file and lines they name. Give a
+  new kind of buffer a state there.
   To check a new rule, break Roost the way it should catch and watch it fail.
+- Tests hold Roost to what it says about security. Every ERT test fails if
+  Roost starts a program not in `roost-test--programs`; the helper's
+  `Subprocesses` test allows a shell only for the project's own setup and
+  teardown commands; and hostile names, prompts, branches and paths go
+  through each action against real Git and tmux. A new program, or a new
+  way to start one, goes on those lists on purpose.
 - One ERT test, or those matching a regexp:
   `emacs -Q --batch -L . -L test -l test/roost-test.el -l test/roost-sweep.el --eval '(ert-run-tests-batch-and-exit "REGEXP")'`.
   Python: `python3 -m unittest discover -s test -p 'test_remote.py' -k PATTERN`.

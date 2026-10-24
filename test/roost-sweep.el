@@ -270,6 +270,8 @@ Called, they are recorded and stop the command.")
                              `((symbol-function ',f)
                                (lambda (&rest args)
                                  (push (cons ',f args) roost-sweep--effects)
+                                 ;; Stubbed, a process is checked here.
+                                 (roost-test--note-start ',f args)
                                  (signal 'roost-sweep-outside (list ',f)))))
                            roost-sweep--outside)
                  ,@(mapcar (lambda (f)
@@ -979,6 +981,651 @@ As (WHAT . AMOUNT)."
          (when (>= ratio 6)
            (push (format "%s allocates %.1f times as much for 100 tasks as for 25" what ratio) problems))))
      (should-not problems))))
+
+;;;; Your own buffers
+
+;; The commands that quote what you are looking at read buffers Roost
+;; doesn't make, which can be in states of their own.  For each command
+;; in each state of `roost-sweep--buffers':
+;;
+;; - It quotes, or says why it can't (`user-error'); it never ends in a
+;;   Lisp error, nor connects to a host TRAMP isn't connected to.
+;; - It names the file the text is from, and the lines where the text
+;;   is in the whole of that file, as an agent reading it counts them.
+;; - The text it quotes is the region's.
+;; - Your buffer is as it was: its text, point, mark and narrowing.
+
+(defconst roost-sweep--code
+  "import os\n\n\ndef f():\n    x = 1\n    return x\n\n\ndef g():\n    return 2\n"
+  "The code the states of `roost-sweep--buffers' quote.")
+
+(defun roost-sweep--write (file text &optional coding)
+  "Write TEXT to FILE, making its directory, with CODING if given."
+  (make-directory (file-name-directory file) t)
+  (let ((coding-system-for-write (or coding 'utf-8-unix)))
+    (write-region text nil file nil 'silent)))
+
+(defun roost-sweep--places ()
+  "Make the files the states of `roost-sweep--buffers' visit; return where.
+A plist: :project, a checkout with code, prose and Org notes in it;
+:worktree, a task's worktree; :loose, a directory outside any checkout."
+  (let* ((top (file-name-as-directory (file-truename (make-temp-file "roost-buffers" t))))
+         (project (expand-file-name "ledger/" top))
+         (worktree (expand-file-name "worktrees/fix-auth/" top))
+         (loose (expand-file-name "loose/" top)))
+    (make-directory (expand-file-name ".git" project) t)
+    (roost-sweep--write (expand-file-name "src/a.py" project) roost-sweep--code)
+    (roost-sweep--write (expand-file-name "src/end.py" project) (string-trim-right roost-sweep--code))
+    (roost-sweep--write (expand-file-name "src/crlf.py" project) roost-sweep--code 'utf-8-dos)
+    (roost-sweep--write (expand-file-name "notes.txt" project)
+                        "Ideas.\n\nThe report should show each budget,\nand flag those that are over.\n")
+    (roost-sweep--write (expand-file-name "notes.org" project)
+                        (concat "* Speed up the importer\nIt reads the file twice.\n\n"
+                                "#+begin_src python\ndef f():\n    x = 1\n    return x\n#+end_src\n"))
+    (roost-sweep--write (expand-file-name ".git" worktree) "gitdir: /elsewhere\n")
+    (roost-sweep--write (expand-file-name "src/a.py" worktree) roost-sweep--code)
+    (roost-sweep--write (expand-file-name "a.py" loose) roost-sweep--code)
+    (list :top top :project project :worktree worktree :loose loose)))
+
+(defun roost-sweep--visit (file &optional mode)
+  "A buffer visiting FILE in MODE, by default Python's, as without hooks."
+  (with-current-buffer (generate-new-buffer (file-name-nondirectory file))
+    (insert-file-contents file t)
+    (setq default-directory (file-name-directory file))
+    (funcall (or mode #'python-mode))
+    (current-buffer)))
+
+(defun roost-sweep--select (from to)
+  "Make the region FROM to TO, with point at TO."
+  (goto-char from)
+  (push-mark from t t)
+  (goto-char to))
+
+(defun roost-sweep--line (n)
+  "The position at the start of line N of the accessible text."
+  (save-excursion (goto-char (point-min)) (forward-line (1- n)) (point)))
+
+(defun roost-sweep--in (buffer &rest fields)
+  "STATE fields for BUFFER, the current buffer, with FIELDS.
+Its file and whole text default to the buffer's, widened."
+  (append fields
+          (list :buffer buffer
+                :file (buffer-file-name buffer)
+                :whole (save-restriction (widen) (buffer-substring-no-properties (point-min) (point-max))))))
+
+(defun roost-sweep--defun-f ()
+  "Select f, from its line to the line after it."
+  (roost-sweep--select (roost-sweep--line 4) (roost-sweep--line 7)))
+
+(defun roost-sweep--local (places file &rest fields)
+  "A state of FILE in the checkout of PLACES, as FIELDS add to it.
+Code, named from the checkout's top by a new task and in full by a
+region sent to another task, which you are asked to choose."
+  (let ((file (expand-file-name file (plist-get places :project))))
+    (apply #'roost-sweep--in (current-buffer)
+           (append fields
+                   (list :quote (file-relative-name file (plist-get places :project))
+                         :sent file :code t)))))
+
+(defvar roost-sweep--remote-task
+  '((id . "2222222222222222") (name . "remote fix") (worktree . "/home/user/work/fix-auth"))
+  "The task on host dev whose worktree the remote states are in.")
+
+(defvar roost-sweep--buffers
+  `(("a file in a checkout"
+     ,(lambda (places)
+        (set-buffer (roost-sweep--visit (expand-file-name "src/a.py" (plist-get places :project))))
+        (roost-sweep--defun-f)
+        (roost-sweep--local places "src/a.py")))
+    ("narrowed"
+     ,(lambda (places)
+        (set-buffer (roost-sweep--visit (expand-file-name "src/a.py" (plist-get places :project))))
+        (narrow-to-region (roost-sweep--line 4) (roost-sweep--line 10))
+        (roost-sweep--select (point-min) (point-max))
+        (roost-sweep--local places "src/a.py")))
+    ("narrowed to a defun"
+     ,(lambda (places)
+        (set-buffer (roost-sweep--visit (expand-file-name "src/a.py" (plist-get places :project))))
+        (goto-char (roost-sweep--line 10))
+        (narrow-to-defun)
+        (roost-sweep--select (point-min) (point-max))
+        (roost-sweep--local places "src/a.py")))
+    ("read-only"
+     ,(lambda (places)
+        (set-buffer (roost-sweep--visit (expand-file-name "src/a.py" (plist-get places :project))))
+        (read-only-mode 1)
+        (roost-sweep--defun-f)
+        (roost-sweep--local places "src/a.py")))
+    ("an indirect buffer, narrowed"
+     ,(lambda (places)
+        (let ((base (roost-sweep--visit (expand-file-name "src/a.py" (plist-get places :project)))))
+          (set-buffer (with-current-buffer base (clone-indirect-buffer nil nil)))
+          (goto-char (roost-sweep--line 5))
+          (narrow-to-defun)
+          (roost-sweep--select (point-min) (point-max))
+          (append (roost-sweep--local places "src/a.py") (list :also (list base))))))
+    ("an Org source block being edited"
+     ,(lambda (places)
+        (let ((org (roost-sweep--visit (expand-file-name "notes.org" (plist-get places :project))
+                                       #'org-mode)))
+          (with-current-buffer org
+            (goto-char (point-min))
+            (search-forward "x = 1")
+            (save-window-excursion (org-edit-special)))
+          (set-buffer (seq-find (lambda (buffer) (buffer-local-value 'org-src-mode buffer)) (buffer-list)))
+          (roost-sweep--select (point-min) (point-max))
+          (append (list :file (buffer-file-name org) :also (list org)
+                        :whole (with-current-buffer org (buffer-string)))
+                  (roost-sweep--local places "notes.org")))))
+    ("visiting no file"
+     ,(lambda (_places)
+        (set-buffer (generate-new-buffer "draft.py"))
+        (insert roost-sweep--code)
+        (python-mode)
+        (roost-sweep--defun-f)
+        (roost-sweep--in (current-buffer) :quote (buffer-name) :sent (buffer-name) :code t :unmarked t)))
+    ("remote, in a task's worktree"
+     ,(lambda (_places)
+        (set-buffer (generate-new-buffer "a.py"))
+        (insert roost-sweep--code)
+        (python-mode)
+        (setq buffer-file-name "/ssh:dev:/home/user/work/fix-auth/src/a.py"
+              default-directory "/ssh:dev:/home/user/work/fix-auth/src/")
+        (set-buffer-modified-p nil)
+        (roost-sweep--defun-f)
+        (roost-sweep--in (current-buffer) :quote "src/a.py" :sent "src/a.py" :code t
+                         :task (list "dev" (alist-get 'id roost-sweep--remote-task)))))
+    ("remote, on a host not connected to"
+     ,(lambda (_places)
+        (set-buffer (generate-new-buffer "a.py"))
+        (insert roost-sweep--code)
+        (python-mode)
+        (setq buffer-file-name "/ssh:far:/srv/app/src/a.py"
+              default-directory "/ssh:far:/srv/app/src/")
+        (set-buffer-modified-p nil)
+        (roost-sweep--defun-f)
+        (roost-sweep--in (current-buffer) :quote buffer-file-name :sent "/srv/app/src/a.py"
+                         :code t :unmarked t)))
+    ;; What a rectangle should quote, the rectangle or its lines, is
+    ;; undecided: for now, all from one corner to the other.
+    ("a rectangle"
+     ,(lambda (places)
+        (set-buffer (roost-sweep--visit (expand-file-name "src/a.py" (plist-get places :project))))
+        (roost-sweep--select (+ (roost-sweep--line 5) 4) (+ (roost-sweep--line 6) 10))
+        (rectangle-mark-mode 1)
+        (roost-sweep--local places "src/a.py")))
+    ("to the end, with a final newline"
+     ,(lambda (places)
+        (set-buffer (roost-sweep--visit (expand-file-name "src/a.py" (plist-get places :project))))
+        (roost-sweep--select (roost-sweep--line 9) (point-max))
+        (roost-sweep--local places "src/a.py")))
+    ("to the end, without one"
+     ,(lambda (places)
+        (set-buffer (roost-sweep--visit (expand-file-name "src/end.py" (plist-get places :project))))
+        (roost-sweep--select (roost-sweep--line 9) (point-max))
+        (roost-sweep--local places "src/end.py")))
+    ("CRLF line endings"
+     ,(lambda (places)
+        (set-buffer (roost-sweep--visit (expand-file-name "src/crlf.py" (plist-get places :project))))
+        (roost-sweep--defun-f)
+        (roost-sweep--local places "src/crlf.py")))
+    ("in a task's worktree"
+     ,(lambda (places)
+        (let ((file (expand-file-name "src/a.py" (plist-get places :worktree))))
+          (set-buffer (roost-sweep--visit file))
+          (roost-sweep--defun-f)
+          (roost-sweep--in (current-buffer) :quote "src/a.py" :sent "src/a.py" :code t
+                           :task (list nil "1111111111111111")))))
+    ("outside any checkout"
+     ,(lambda (places)
+        (let ((file (expand-file-name "a.py" (plist-get places :loose))))
+          (set-buffer (roost-sweep--visit file))
+          (roost-sweep--defun-f)
+          (roost-sweep--in (current-buffer) :quote (abbreviate-file-name file) :sent file
+                           :code t :unmarked t))))
+    ("prose"
+     ,(lambda (places)
+        (set-buffer (roost-sweep--visit (expand-file-name "notes.txt" (plist-get places :project))
+                                        #'text-mode))
+        (roost-sweep--select (roost-sweep--line 3) (point-max))
+        (roost-sweep--local places "notes.txt" :code nil))))
+  "States of a buffer you quote from, each (NAME SETUP).
+SETUP, called with the places `roost-sweep--places' makes, makes the
+buffer current, with its region active, and returns a plist: :buffer,
+:file, the file its text is from, and :whole, that file's text; :quote,
+the file as a new task's draft names it, and :sent, as a region sent to
+a task does, which is :task, a task's key, or one you are asked to
+choose; :code, whether a new task's draft quotes it as code; :unmarked,
+whether the draft doesn't mark the file as quoted, as for one outside a
+checkout; and :also, other buffers that must not change.")
+
+(defun roost-sweep--quotes (text)
+  "TEXT's quote, as (NAME FIRST LAST BODY), or nil.
+As a region quotes code, NAME:FIRST-LAST and a blank line, or as a
+diagnostic does, NAME:LINE: and its message."
+  (cond ((string-match "\\`\n\n\\(.+\\):\\([0-9]+\\)-\\([0-9]+\\)\n\n\\(\\(?:.\\|\n\\)*\\)\\'" text)
+         (list (match-string 1 text) (string-to-number (match-string 2 text))
+               (string-to-number (match-string 3 text)) (match-string 4 text)))
+        ((string-match "\\`\n\n\\(.+\\):\\([0-9]+\\): undefined name\n\n\\(\\(?:.\\|\n\\)*\\)\\'" text)
+         (let ((line (string-to-number (match-string 2 text))))
+           (list (match-string 1 text) line nil (match-string 3 text))))))
+
+(defun roost-sweep--lines-of (whole text)
+  "Where WHOLE holds TEXT, as (FIRST . LAST), its lines, for each place."
+  (with-temp-buffer
+    (insert whole)
+    (goto-char (point-min))
+    (let ((text (string-trim-right text)) found)
+      (while (and (not (string-empty-p text)) (search-forward text nil t))
+        (push (cons (line-number-at-pos (match-beginning 0)) (line-number-at-pos (match-end 0))) found)
+        (goto-char (1+ (match-beginning 0))))
+      found)))
+
+(defun roost-sweep--snapshot (buffers)
+  "What must not change in each of BUFFERS."
+  (mapcar (lambda (buffer)
+            (with-current-buffer buffer
+              (list (buffer-name) (save-restriction (widen) (buffer-string))
+                    (point) (mark t) mark-active (point-min) (point-max) (buffer-modified-p)
+                    buffer-read-only)))
+          buffers))
+
+(defun roost-sweep--drafts ()
+  "The follow-up and new task drafts there are."
+  (seq-filter (lambda (buffer)
+                (or (buffer-local-value 'roost--send-task buffer)
+                    (equal (buffer-name buffer) roost--compose-buffer)))
+              (buffer-list)))
+
+(defun roost-sweep--quote-in (command state asked)
+  "Run COMMAND in STATE's buffer, as `roost-sweep--check-quoting' does.
+ASKED is the task chosen when asked.  Return a plist: :draft, the text
+COMMAND added, :marked, the files a new task's draft marks as quoted,
+:to, the task a follow-up goes to, :asked, :error, :connected."
+  (let (result connected chosen)
+    (mapc #'kill-buffer (roost-sweep--drafts))
+    (cl-letf* (((symbol-function 'tramp-maybe-open-connection)
+                (lambda (vec &rest _)
+                  (push (tramp-file-name-host vec) connected)
+                  (signal 'roost-sweep-outside (list 'tramp-maybe-open-connection))))
+               ((symbol-function 'roost--read-task) (lambda (_) (setq chosen t) asked))
+               ((symbol-function 'flymake-diagnostics)
+                (lambda (&rest _)
+                  (list (flymake-make-diagnostic (current-buffer) (region-beginning) (1+ (region-beginning))
+                                                 :error "undefined name")))))
+      (condition-case err
+          (save-window-excursion
+            (save-current-buffer
+              (let ((flymake-mode t))
+                (pcase command
+                  ('roost-new-task (roost--compose))
+                  ('roost-new-task-from-file (roost-new-task-from-file (plist-get state :file)))
+                  ('roost-new-task-from-diagnostic (roost-new-task-from-diagnostic))
+                  (_ (funcall command (region-beginning) (region-end))))))
+            (let ((draft (car (roost-sweep--drafts))))
+              (with-current-buffer draft
+                (setq result
+                      (if (derived-mode-p 'roost-compose-mode)
+                          (list :draft (buffer-substring-no-properties roost--compose-body (point-max))
+                                :marked (roost--compose-quoted-files))
+                        (list :draft (buffer-string) :to (roost--key roost--send-task)))))))
+        (error (setq result (list :error err)))))
+    (mapc #'kill-buffer (roost-sweep--drafts))
+    (append (list :asked chosen :connected connected) result)))
+
+(defun roost-sweep--quoting-tasks (places)
+  "Cache the tasks of the states of `roost-sweep--buffers'.
+Return the one you choose when asked."
+  (roost--cache-task nil (append `((worktree . ,(directory-file-name (plist-get places :worktree)))
+                                   (repo . ,(directory-file-name (plist-get places :project))))
+                                 (roost-test--task "1111111111111111")))
+  (roost--cache-task "dev" (append roost-sweep--remote-task '((repo . "/home/user/ledger"))
+                                   (roost-test--task)))
+  (roost--cache-task "dev" (append '((name . "other") (worktree . "/srv/other") (repo . "/srv/other"))
+                                   (roost-test--task "3333333333333333"))))
+
+(defun roost-sweep--check-quoting (command state)
+  "Problems COMMAND has in STATE, a state of `roost-sweep--buffers'."
+  (let ((places (roost-sweep--places))
+        (buffers (buffer-list))
+        problems)
+    (cl-flet ((problem (format-string &rest args)
+                (push (apply #'format format-string args) problems)))
+      (unwind-protect
+          (let* ((asked (roost-sweep--quoting-tasks places))
+                 (fields (save-current-buffer
+                           (funcall (cadr (assoc state roost-sweep--buffers)) places)))
+                 (buffer (plist-get fields :buffer))
+                 (watched (cons buffer (plist-get fields :also)))
+                 (before (roost-sweep--snapshot watched))
+                 (region (with-current-buffer buffer
+                           (buffer-substring-no-properties (region-beginning) (region-end))))
+                 (result (unless (and (eq command 'roost-new-task-from-file) (not (plist-get fields :file)))
+                           (with-current-buffer buffer (roost-sweep--quote-in command fields asked))))
+                 (draft (plist-get result :draft))
+                 (sent (eq command 'roost-send-region))
+                 (name (plist-get fields (if sent :sent :quote))))
+            (when-let* ((connected (plist-get result :connected)))
+              (problem "connects to %s" (string-join (delete-dups connected) ", ")))
+            (when-let* ((err (plist-get result :error)))
+              (problem (if (eq (car err) 'user-error) "says %S" "signals %S") err))
+            (pcase command
+              ((guard (not draft)))
+              ('roost-new-task-from-file
+               (unless (equal draft (concat "\n\n" name))
+                 (problem "names the file as %S" draft)))
+              ;; Prose is quoted without its file.
+              ((guard (and (memq command '(roost-new-task roost-new-task-from-region))
+                           (not (plist-get fields :code))))
+               (unless (equal draft (string-trim region))
+                 (problem "quotes %S, not the region's text" draft)))
+              (_
+               (pcase-let* ((diagnostic (eq command 'roost-new-task-from-diagnostic))
+                            (`(,quoted ,first ,last ,body) (or (roost-sweep--quotes draft)
+                                                                (list nil nil nil nil)))
+                            (at (and body (roost-sweep--lines-of (plist-get fields :whole) body))))
+                 (cond ((not quoted) (problem "quotes no file and lines: %S" draft))
+                       ((not (equal quoted name)) (problem "names %S, not %S" quoted name)))
+                 (when (and quoted
+                            (not (if diagnostic
+                                     (assoc first at)
+                                   (member (cons first last) at))))
+                   (problem "quotes lines %s, but the text is at %S in the file"
+                            (if last (format "%d-%d" first last) first) (reverse at)))
+                 (unless (or (not quoted) diagnostic (equal body (if sent region (string-trim-right region))))
+                   (problem "quotes %S, not the region's %S" body region))
+                 (unless (or sent (equal (plist-get result :marked)
+                                         (unless (plist-get fields :unmarked) (list name))))
+                   (problem "marks %S as quoted" (plist-get result :marked))))))
+            (when (and sent draft)
+              (unless (equal (plist-get result :to) (or (plist-get fields :task) (roost--key asked)))
+                (problem "sends to %S" (plist-get result :to)))
+              (unless (eq (plist-get result :asked) (not (plist-get fields :task)))
+                (problem (if (plist-get result :asked) "asks which task" "doesn't ask which task"))))
+            (unless (equal (roost-sweep--snapshot (seq-filter #'buffer-live-p watched)) before)
+              (problem "changes your buffer")))
+        (dolist (buffer (buffer-list))
+          ;; An indirect buffer goes with its base.
+          (unless (or (memq buffer buffers) (not (buffer-live-p buffer)))
+            (with-current-buffer buffer (set-buffer-modified-p nil))
+            (kill-buffer buffer)))
+        (delete-directory (plist-get places :top) t)))
+    (nreverse problems)))
+
+(defconst roost-sweep--quoting-commands
+  '(roost-send-region roost-new-task-from-region roost-new-task roost-new-task-from-diagnostic
+    roost-new-task-from-file)
+  "The commands that quote the buffer you are in.")
+
+(defun roost-sweep--add-problems (found place problems)
+  "PROBLEMS, as `roost-sweep--run' gathers them, with those FOUND at PLACE."
+  (dolist (problem found problems)
+    (if-let* ((entry (assoc problem problems)))
+        (setcdr entry (append (cdr entry) (list place)))
+      (setq problems (append problems (list (list problem place)))))))
+
+(ert-deftest roost-sweep-quotes-name-the-file-and-lines-the-text-is-from ()
+  (require 'org)
+  (require 'flymake)
+  (require 'rect)
+  (require 'tramp-sh)
+  (roost-test--isolated
+   (let ((inhibit-message t) (message-log-max nil) (create-lockfiles nil) (vc-handled-backends nil)
+         (transient-mark-mode t) problems)
+     (dolist (state (mapcar #'car roost-sweep--buffers))
+       (dolist (command roost-sweep--quoting-commands)
+         (setq problems (roost-sweep--add-problems (roost-sweep--check-quoting command state)
+                                                   (format "%s, %s" command state) problems))))
+     (roost-sweep--report problems))))
+
+;; Org entries and grep matches start a draft too, with what is at point,
+;; and a task started from an Org entry is recorded on it once created.
+
+(defconst roost-sweep--entries-text
+  "* TODO Speed up the importer\nIt reads the file twice.\n* Other\nText.\n"
+  "The Org file the states of `roost-sweep--sources' start from.")
+
+(defun roost-sweep--entry-buffer (places)
+  "A buffer visiting the Org file of PLACES, with point in its first entry."
+  (let ((file (expand-file-name "tasks.org" (plist-get places :project))))
+    (roost-sweep--write file roost-sweep--entries-text)
+    (with-current-buffer (roost-sweep--visit file #'org-mode)
+      (goto-char (roost-sweep--line 2))
+      (current-buffer))))
+
+(defvar roost-sweep--sources
+  `(("an Org entry"
+     ,(lambda (places)
+        (set-buffer (roost-sweep--entry-buffer places))
+        (list :buffer (current-buffer) :org (current-buffer))))
+    ("an Org entry, narrowed to it"
+     ,(lambda (places)
+        (set-buffer (roost-sweep--entry-buffer places))
+        (org-narrow-to-subtree)
+        (list :buffer (current-buffer) :org (current-buffer))))
+    ("an Org entry, read-only"
+     ,(lambda (places)
+        (set-buffer (roost-sweep--entry-buffer places))
+        (read-only-mode 1)
+        ;; Org writes the link though.
+        (list :buffer (current-buffer) :org (current-buffer))))
+    ("an Org entry, narrowed elsewhere meanwhile"
+     ,(lambda (places)
+        (set-buffer (roost-sweep--entry-buffer places))
+        (list :buffer (current-buffer) :org (current-buffer)
+              :meanwhile (lambda (buffer)
+                           (with-current-buffer buffer
+                             (widen)
+                             (goto-char (roost-sweep--line 3))
+                             (org-narrow-to-subtree))))))
+    ("an Org entry in an indirect buffer, closed meanwhile"
+     ,(lambda (places)
+        (let ((org (roost-sweep--entry-buffer places)))
+          (with-current-buffer org (save-window-excursion (org-tree-to-indirect-buffer)))
+          (set-buffer (seq-find (lambda (buffer) (eq (buffer-base-buffer buffer) org)) (buffer-list)))
+          (goto-char (roost-sweep--line 2))
+          (list :buffer (current-buffer) :org org :also (list org)
+                :meanwhile #'kill-buffer))))
+    ("an agenda line"
+     ,(lambda (places)
+        (let ((org (roost-sweep--entry-buffer places)))
+          (with-current-buffer org
+            (goto-char (roost-sweep--line 3))
+            (org-narrow-to-subtree))
+          (set-buffer (generate-new-buffer "*Org Agenda*"))
+          (org-agenda-mode)
+          (let ((inhibit-read-only t))
+            (insert (propertize "  TODO Speed up the importer\n"
+                                'org-hd-marker (with-current-buffer org (copy-marker 1)))))
+          (goto-char (point-min))
+          (list :buffer (current-buffer) :org org :also (list org)))))
+    ("a grep match, narrowed to it"
+     ,(lambda (places)
+        (set-buffer (generate-new-buffer "*grep*"))
+        (setq default-directory (plist-get places :project))
+        (grep-mode)
+        (let ((inhibit-read-only t))
+          (insert "grep -n x src/a.py\nsrc/a.py:5:    x = 1\n"))
+        (compilation--ensure-parse (point-max))
+        (goto-char (roost-sweep--line 2))
+        (narrow-to-region (point) (line-end-position))
+        (list :buffer (current-buffer) :prompt "src/a.py:5:    x = 1" :marked '("src/a.py")))))
+  "Other states a draft starts from, each (NAME SETUP), as `roost-sweep--buffers'.
+SETUP returns a plist: :buffer; :prompt, what the draft starts with, by
+default the Org entry's text, and :marked, the files the draft marks as
+quoted; :org, the buffer visiting the Org file, whose entry links to the
+task; :meanwhile, a function called with :buffer while the task is
+being created; and :also, other buffers that must not change but for
+the link.")
+
+(defun roost-sweep--without-link (text)
+  "TEXT of an Org file without the property drawer of a link."
+  (replace-regexp-in-string ":PROPERTIES:\n:ROOST_TASK: +[0-9a-f]+\n:END:\n" "" text))
+
+(defun roost-sweep--check-source (state)
+  "Problems starting a task from STATE, a state of `roost-sweep--sources'."
+  (let ((places (roost-sweep--places))
+        (buffers (buffer-list))
+        problems)
+    (cl-flet ((problem (format-string &rest args)
+                (push (apply #'format format-string args) problems))
+              ;; Point and narrowing, by the text around them, which only
+              ;; the link may change.
+              (snapshot (watched)
+                (seq-keep (lambda (buffer)
+                            (when (buffer-live-p buffer)
+                              (with-current-buffer buffer
+                                (list buffer
+                                      (roost-sweep--without-link
+                                       (buffer-substring-no-properties (point-min) (point)))
+                                      (roost-sweep--without-link
+                                       (buffer-substring-no-properties (point) (point-max)))
+                                      mark-active buffer-read-only))))
+                          watched)))
+      (unwind-protect
+          (let* ((fields (save-current-buffer (funcall (cadr (assoc state roost-sweep--sources)) places)))
+                 (buffer (plist-get fields :buffer))
+                 (org (plist-get fields :org))
+                 (watched (cons buffer (plist-get fields :also)))
+                 (before (snapshot watched))
+                 (task (append '((repo . "/repo")) (roost-test--task "abcdefabcdef0001" "starting"))))
+            (condition-case err
+                (save-window-excursion
+                  (cl-letf (((symbol-function 'roost--create-task)
+                             (lambda (_directory _name _base _prompt _agent success _failure &optional _extra)
+                               (when-let* ((meanwhile (plist-get fields :meanwhile)))
+                                 (funcall meanwhile buffer)
+                                 ;; As you left it.
+                                 (setq before (snapshot watched)))
+                               (funcall success (roost--cache-task "dev" task)))))
+                    (with-current-buffer buffer (save-current-buffer (roost--compose)))
+                    (with-current-buffer roost--compose-buffer
+                      (let ((prompt (roost--compose-prompt))
+                            (expected (or (plist-get fields :prompt)
+                                          "Speed up the importer\n\nIt reads the file twice.")))
+                        (unless (equal prompt expected)
+                          (problem "starts the draft with %S, not %S" prompt expected)))
+                      (unless (equal (roost--compose-quoted-files) (plist-get fields :marked))
+                        (problem "marks %S as quoted" (roost--compose-quoted-files)))
+                      (setq roost--compose-fields (plist-put roost--compose-fields :directory "/ssh:dev:/repo/"))
+                      (roost-compose-submit))))
+              (error (problem (if (eq (car err) 'user-error) "says %S" "signals %S") err)))
+            (when org
+              (with-current-buffer org
+                (save-restriction
+                  (widen)
+                  (let ((linked (org-map-entries (lambda () (org-get-heading t t t t)) "ROOST_TASK<>\"\"")))
+                    (unless (equal linked '("Speed up the importer"))
+                      (problem "links %S to the task" linked)))
+                  (unless (equal (roost-sweep--without-link (buffer-string)) roost-sweep--entries-text)
+                    (problem "changes the Org file but for the link: %S" (buffer-string))))))
+            (unless (equal (snapshot watched) before)
+              (problem "changes your buffer")))
+        (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer))
+        (dolist (buffer (buffer-list))
+          (unless (or (memq buffer buffers) (not (buffer-live-p buffer)))
+            (with-current-buffer buffer (set-buffer-modified-p nil))
+            (kill-buffer buffer)))
+        (delete-directory (plist-get places :top) t)))
+    (nreverse problems)))
+
+(ert-deftest roost-sweep-org-entries-start-and-link-their-tasks ()
+  (require 'org)
+  (require 'org-agenda)
+  (require 'grep)
+  (roost-test--isolated
+   (let ((inhibit-message t) (message-log-max nil) (create-lockfiles nil) (vc-handled-backends nil)
+         (default-directory "/tmp/") problems)
+     (dolist (state (mapcar #'car roost-sweep--sources))
+       (setq problems (roost-sweep--add-problems (roost-sweep--check-source state) state problems)))
+     (roost-sweep--report problems))))
+
+;; A note on a diff line in Magit is about that line, wherever the diff
+;; is narrowed.
+
+(defvar roost-sweep--diff-narrowings
+  `(("the whole diff" ,#'ignore)
+    ("narrowed within a hunk"
+     ,(lambda ()
+        (narrow-to-region (progn (roost-test--goto-line-text "line 4") (point))
+                          (progn (roost-test--goto-line-text "line 5") (point)))))
+    ("narrowed to a hunk's start"
+     ,(lambda ()
+        (narrow-to-region (progn (goto-char (point-min)) (re-search-forward "^@@") (line-beginning-position))
+                          (progn (roost-test--goto-line-text "line 5") (point)))))
+    ("narrowed from within a line"
+     ,(lambda ()
+        (narrow-to-region (progn (roost-sweep--goto-diff-text "ne 4") (point))
+                          (progn (roost-test--goto-line-text "line 5") (point))))))
+  "Narrowings of a Magit diff, each (NAME NARROW), NARROW narrowing it.")
+
+(defun roost-sweep--goto-diff-text (text)
+  "Move to TEXT in the diff, which may be all of a line that shows."
+  (goto-char (point-min))
+  (search-forward text)
+  (goto-char (match-beginning 0)))
+
+(defvar roost-sweep--note-commands
+  `(("roost-note on a line"
+     ,(lambda () (roost-sweep--goto-diff-text "ew line") (roost-note)))
+    ("roost-note on a line cut by the narrowing"
+     ,(lambda () (roost-sweep--goto-diff-text "ne 4") (roost-note)))
+    ("roost-note on a region"
+     ,(lambda ()
+        (roost-sweep--goto-diff-text "ne 4")
+        (set-mark (point))
+        (roost-sweep--goto-diff-text "ew line")
+        (activate-mark)
+        (roost-note)))
+    ("roost-note-mouse, a click"
+     ,(lambda ()
+        (roost-note-mouse (roost-test--margin-event
+                           'mouse-1 (progn (roost-sweep--goto-diff-text "ew line") (point))))))
+    ("roost-note-mouse, a click on a line cut by the narrowing"
+     ,(lambda ()
+        (roost-note-mouse (roost-test--margin-event
+                           'mouse-1 (progn (roost-sweep--goto-diff-text "ne 4") (point))))))
+    ("roost-note-mouse, a drag"
+     ,(lambda ()
+        (roost-note-mouse (roost-test--margin-event
+                           'drag-mouse-1 (progn (roost-sweep--goto-diff-text "ne 4") (point))
+                           (progn (roost-sweep--goto-diff-text "ew line") (point)))))))
+  "Ways to write a note in Magit, each (NAME OPEN), OPEN opening the note box.")
+
+(ert-deftest roost-sweep-notes-are-on-their-lines-in-a-narrowed-diff ()
+  (roost-test--with-magit-task
+    (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")
+    (magit-diff-unstaged)
+    (let ((buffer (magit-get-mode-buffer 'magit-diff-mode)) wanted problems)
+      (set-window-buffer (selected-window) buffer)
+      (with-current-buffer buffer
+        (pcase-dolist (`(,narrowing ,narrow) roost-sweep--diff-narrowings)
+          (pcase-dolist (`(,command ,open) roost-sweep--note-commands)
+            (let (found)
+              (widen)
+              (deactivate-mark)
+              (funcall narrow)
+              (condition-case err
+                  (let ((place (progn (save-current-buffer (funcall open))
+                                      (plist-get roost--note-box :place))))
+                    (with-current-buffer (plist-get roost--note-box :buffer)
+                      (insert "Why?")
+                      (roost-note-box-save))
+                    (save-restriction
+                      (widen)
+                      (let ((seen (list place (roost-test--shown-notes))))
+                        ;; As in the whole diff.
+                        (if-let* ((whole (assoc command wanted)))
+                            (unless (equal (cdr whole) seen)
+                              (push (format "writes %S, not %S" seen (cdr whole)) found))
+                          (push (cons command seen) wanted)))))
+                (error (push (format "signals %S" err) found)))
+              (when roost--note-box (roost-note-box-cancel))
+              (setq roost--notes nil)
+              (roost--show-notes-everywhere)
+              (setq problems (roost-sweep--add-problems found (format "%s, %s" command narrowing)
+                                                        problems))))))
+      (roost-sweep--report problems))))
 
 (provide 'roost-sweep)
 

@@ -621,11 +621,18 @@ there would run as you."
     (list "python3" "-I" "-c" code)))
 
 (defun roost--decode-response (output)
-  "Parse the last nonempty line of OUTPUT as the protocol response."
+  "Parse the last nonempty line of OUTPUT as the protocol response, an object.
+Signal an error saying so when it is anything else, as when a dropped
+connection cut it short."
   (let ((line (car (last (split-string output "\n" t "[ \t\r]+")))))
     (unless line (error "The host helper returned no response"))
-    (json-parse-string line :object-type 'alist :array-type 'list
-                       :null-object nil :false-object nil)))
+    (condition-case nil
+        (progn (unless (string-prefix-p "{" line) (error "Not an object"))
+               (json-parse-string line :object-type 'alist :array-type 'list
+                                  :null-object nil :false-object nil))
+      ;; Its start, by characters: some, such as accents, take no room.
+      (error (error "Roost can't read the host helper's reply: %s"
+                    (if (> (length line) 200) (concat (substring line 0 200) "…") line))))))
 
 (defconst roost--pipe-input-limit 4096
   "Bytes of request input written straight to a host command's pipe.
@@ -633,6 +640,9 @@ Longer input, such as the helper itself or a long prompt, is read from a
 file instead.  Writing it to the pipe would wait, with Emacs frozen,
 until ssh had connected and read it: for a host that is down, the whole
 connection timeout.")
+
+(defconst roost--error-limit 4000
+  "Characters of what a failing host command printed that Roost keeps.")
 
 (defun roost--expire-request (process on-timeout &optional timeout)
   "Kill host request PROCESS, calling ON-TIMEOUT, unless it ends in time.
@@ -698,16 +708,23 @@ is the seconds it may take, if not `roost-request-timeout'."
                                 (outcome
                                  (condition-case parse-error
                                      (if (= (process-exit-status proc) 0)
-                                         (let ((response (roost--decode-response stdout)))
-                                           (if (alist-get 'ok response)
+                                         (let* ((response (roost--decode-response stdout))
+                                                (said (alist-get 'error response)))
+                                           (if (eq (alist-get 'ok response) t)
                                                (list success (alist-get 'result response))
-                                             (list failure (or (alist-get 'error response)
-                                                               "Host operation failed"))))
+                                             ;; Words to show, which callers take apart.
+                                             (list failure (if (and (stringp said) (not (string-empty-p said)))
+                                                               said
+                                                             "Host operation failed"))))
                                        (list failure
                                              (cond (timed-out
                                                     (format "No reply after %ss; the operation may still finish on the host, so refresh before retrying"
                                                             (or timeout roost-request-timeout)))
                                                    ((string-empty-p stderr) "Host operation failed")
+                                                   ;; Its end, where a traceback says what
+                                                   ;; failed: the sidebar shows it all.
+                                                   ((> (length stderr) roost--error-limit)
+                                                    (concat "…" (substring stderr (- roost--error-limit))))
                                                    (t stderr))))
                                    (error (list failure (error-message-string parse-error))))))
                            (funcall (car outcome) (cadr outcome)))
@@ -1266,52 +1283,63 @@ those tasks."
                       (remhash host roost--full-refresh-pending)
                       (roost--refresh-host host nil (unless (eq pending t) pending))))))
       (when pull-requests (puthash host (float-time) roost--pull-requests-asked))
-      (roost--request
-       host "list" `((full . ,(cond (quiet :false) (ids (vconcat ids)) (t t)))
-                     ,@(when (and quiet pull-requests) '((pullRequests . t))))
-       ;; Each ends the refresh even if drawing what it found fails, or
-       ;; the host would never be asked again.
-       (lambda (tasks)
-         (unwind-protect
-             (progn
-               (remhash host roost--failures)
-               (remhash host roost--errors)
-               ;; A newer mutation must win over a stale list reply, and a host
-               ;; forgotten meanwhile stays forgotten.
-               (when (and (= revision (gethash host roost--revisions 0))
-                          (member host (roost--hosts)))
-                 (let ((before (roost--task-states host)))
-                   (roost--apply-snapshot host tasks request)
-                   ;; Quiet polls leave out Git statistics.  An agent that reported
-                   ;; something, such as finishing an edit, may have changed files,
-                   ;; and a commit moves the task's Git stamp: measure those tasks
-                   ;; once this poll is done.
-                   (when-let* ((quiet)
-                               (changed (seq-keep (lambda (state)
-                                                    (unless (equal state (assoc (car state) before))
-                                                      (car state)))
-                                                  (roost--task-states host))))
-                     (roost--refresh-host host nil changed))))
-               (roost--redraw))
-           (funcall finish)))
-       (lambda (err)
-         (unwind-protect
-             (progn
-               ;; Once per outage: ssh words a sleeping host's failure differently
-               ;; from one poll to the next, and the sidebar shows it meanwhile.
-               ;; Its last line says what failed; ssh's earlier ones say less, such
-               ;; as that a shared connection broke.  The sidebar's tooltip has all.
-               (unless (gethash host roost--errors)
-                 (message "Roost %s: %s (M-x roost-doctor checks this host)" (roost--host-label host)
-                          (car (last (split-string err "\n" t "[ \t\r]+")))))
-               (puthash host err roost--errors)
-               ;; Back off from unreachable hosts, up to a minute between attempts.
-               (let ((count (1+ (or (car (gethash host roost--failures)) 0))))
-                 (puthash host (cons count (+ (float-time)
-                                              (min 60 (* roost-watch-interval (expt 2 (1- count))))))
-                          roost--failures))
-               (roost--redraw))
-           (funcall finish)))))))
+      (let ((failed
+             (lambda (err)
+               (unwind-protect
+                   (progn
+                     ;; Once per outage: ssh words a sleeping host's failure differently
+                     ;; from one poll to the next, and the sidebar shows it meanwhile.
+                     ;; Its last line says what failed; ssh's earlier ones say less, such
+                     ;; as that a shared connection broke.  The sidebar's tooltip has all.
+                     (unless (gethash host roost--errors)
+                       (message "Roost %s: %s (M-x roost-doctor checks this host)" (roost--host-label host)
+                                (car (last (split-string err "\n" t "[ \t\r]+")))))
+                     (puthash host err roost--errors)
+                     ;; Back off from unreachable hosts, up to a minute between attempts.
+                     (let ((count (1+ (or (car (gethash host roost--failures)) 0))))
+                       (puthash host (cons count (+ (float-time)
+                                                    (min 60 (* roost-watch-interval (expt 2 (1- count))))))
+                                roost--failures))
+                     (roost--redraw))
+                 (funcall finish)))))
+        (roost--request
+         host "list" `((full . ,(cond (quiet :false) (ids (vconcat ids)) (t t)))
+                       ,@(when (and quiet pull-requests) '((pullRequests . t))))
+         ;; Each ends the refresh even if drawing what it found fails, or
+         ;; the host would never be asked again.
+         (lambda (tasks)
+           (if (not (roost--task-list-p tasks))
+               (funcall failed "Roost can't read the tasks the host helper listed")
+             (unwind-protect
+                 (progn
+                   (remhash host roost--failures)
+                   (remhash host roost--errors)
+                   ;; A newer mutation must win over a stale list reply, and a host
+                   ;; forgotten meanwhile stays forgotten.
+                   (when (and (= revision (gethash host roost--revisions 0))
+                              (member host (roost--hosts)))
+                     (let ((before (roost--task-states host)))
+                       (roost--apply-snapshot host tasks request)
+                       ;; Quiet polls leave out Git statistics.  An agent that reported
+                       ;; something, such as finishing an edit, may have changed files,
+                       ;; and a commit moves the task's Git stamp: measure those tasks
+                       ;; once this poll is done.
+                       (when-let* ((quiet)
+                                   (changed (seq-keep (lambda (state)
+                                                        (unless (equal state (assoc (car state) before))
+                                                          (car state)))
+                                                      (roost--task-states host))))
+                         (roost--refresh-host host nil changed))))
+                   (roost--redraw))
+               (funcall finish))))
+         failed)))))
+
+(defun roost--task-list-p (tasks)
+  "Whether TASKS, as a host listed them, is a list of tasks, each with an ID."
+  (and (proper-list-p tasks)
+       (seq-every-p (lambda (task)
+                      (and (consp task) (proper-list-p task) (stringp (alist-get 'id task))))
+                    tasks)))
 
 ;;;###autoload
 (defun roost-forget-host (host)
@@ -2412,13 +2440,8 @@ actions."
 The draft names FILE from the top of its checkout."
   (interactive (list (read-file-name "New task about: ")))
   (setq file (expand-file-name file))
-  (let ((root (roost--checkout-of file)))
-    (roost--compose nil (cons (concat "\n\n" (if root
-                                                 (roost--quoting (file-relative-name (file-local-name file)
-                                                                                     (file-local-name root)))
-                                               (abbreviate-file-name file)))
-                              t)
-                    (roost--draft-directory (file-name-directory file)))))
+  (roost--compose nil (cons (concat "\n\n" (roost--file-quote file)) t)
+                  (roost--draft-directory (file-name-directory file))))
 
 (defun roost--checkout-of (file)
   "The top of FILE's checkout, as a directory, or nil.
@@ -2463,7 +2486,7 @@ on, and you write above them."
        nil (cons (concat "\n\n"
                          (mapconcat (lambda (diagnostic)
                                       (format "%s:%d: %s" file
-                                              (line-number-at-pos (flymake-diagnostic-beg diagnostic) t)
+                                              (roost--source-line (flymake-diagnostic-beg diagnostic))
                                               (string-trim (flymake-diagnostic-text diagnostic))))
                                     diagnostics "\n")
                          "\n\n" (string-trim-right (buffer-substring-no-properties start end)))
@@ -2612,25 +2635,53 @@ Code is quoted with its file and lines, and the writer starts above it."
         (text (buffer-substring-no-properties start end)))
     (if (derived-mode-p 'prog-mode)
         (cons (format "\n\n%s:%d-%d\n\n%s" (roost--buffer-file-quote)
-                      ;; In the file, though the buffer is narrowed.
-                      (line-number-at-pos start t) (line-number-at-pos last t)
+                      (roost--source-line start) (roost--source-line last)
                       (string-trim-right text))
               t)
       (cons (string-trim text) nil))))
 
-(defun roost--buffer-file-label ()
-  "The current buffer's file from the top of its checkout, or its name."
-  (if buffer-file-name
-      (file-relative-name (file-local-name buffer-file-name)
-                          (file-local-name
-                           (or (ignore-errors (vc-root-dir)) default-directory)))
-    (buffer-name)))
+(defvar org-src--beg-marker)
+
+(defun roost--org-src-start ()
+  "Where the Org source block edited in this buffer starts, or nil.
+A marker in the Org buffer, at the block's first line, for a buffer
+`org-edit-special' opened."
+  (when-let* (((bound-and-true-p org-src-mode))
+              ((markerp org-src--beg-marker))
+              ((buffer-live-p (marker-buffer org-src--beg-marker))))
+    org-src--beg-marker))
+
+(defun roost--source-file ()
+  "The file the current buffer's text is from, or nil.
+The current buffer's file, or its base buffer's for an indirect one, as
+`clone-indirect-buffer' makes; for an Org source block being edited,
+the Org file."
+  (let ((buffer (if-let* ((start (roost--org-src-start))) (marker-buffer start) (current-buffer))))
+    (buffer-file-name (or (buffer-base-buffer buffer) buffer))))
+
+(defun roost--source-line (position)
+  "POSITION's line in the file the current buffer's text is from.
+Counted in the whole file, though the buffer is narrowed, and for an Org
+source block being edited, from the top of the Org file."
+  (+ (line-number-at-pos position t)
+     (if-let* ((start (roost--org-src-start)))
+         (with-current-buffer (marker-buffer start) (1- (line-number-at-pos start t)))
+       0)))
+
+(defun roost--file-quote (file)
+  "FILE as a draft names it: from the top of its checkout, or in full.
+From its checkout, it is marked as quoting the file; see `roost--quoting'."
+  (if-let* ((root (roost--checkout-of file)))
+      (roost--quoting (file-relative-name (file-local-name file) (file-local-name root)))
+    (abbreviate-file-name file)))
 
 (defun roost--buffer-file-quote ()
-  "`roost--buffer-file-label', marked as quoting the file if there is one."
-  (if buffer-file-name
-      (roost--quoting (roost--buffer-file-label))
-    (roost--buffer-file-label)))
+  "The file the current buffer's text is from, as a draft names it.
+Or the buffer's name, for text from no file.  See `roost--source-file'
+and `roost--file-quote'."
+  (if-let* ((file (roost--source-file)))
+      (roost--file-quote file)
+    (buffer-name)))
 
 (defun roost--quoting (text &optional file)
   "TEXT, marked as quoting FILE, by default TEXT itself.
@@ -2657,9 +2708,18 @@ is not connected to."
     (file-relative-name file root)))
 
 (defun roost--org-marker ()
-  "Marker at the Org heading at point or on the agenda line, or nil."
+  "Marker at the Org heading at point or on the agenda line, or nil.
+In an indirect buffer, as `org-tree-to-indirect-buffer' makes, the
+marker is in its base buffer, which outlives it: Org closes the one it
+made last as it makes the next."
   (cond ((and (derived-mode-p 'org-mode) (not (org-before-first-heading-p)))
-         (save-excursion (org-back-to-heading t) (point-marker)))
+         (let ((base (buffer-base-buffer)))
+           (save-excursion
+             (org-back-to-heading t)
+             (set-marker (make-marker) (point)
+                         (if (and base (with-current-buffer base (derived-mode-p 'org-mode)))
+                             base
+                           (current-buffer))))))
         ((derived-mode-p 'org-agenda-mode)
          (when-let* ((marker (get-text-property (line-beginning-position) 'org-hd-marker))
                      ((markerp marker)))
@@ -3532,16 +3592,17 @@ Inside a task's worktree the prompt goes to that task, otherwise to a
 chosen one.  A draft already begun keeps its text, and the quote follows."
   (interactive "r")
   (let* ((last (if (and (> end start) (eq (char-before end) ?\n)) (1- end) end))
-         (task (or (and buffer-file-name (roost--task-in-directory buffer-file-name))
+         ;; As from an indirect buffer, or an Org source block being edited.
+         (file (roost--source-file))
+         (task (or (and file (roost--task-in-directory file))
                    (roost--read-task "Send region to task: "))))
     (roost--send-draft
      task
      (format "%s:%d-%d\n\n%s"
-             (cond ((and buffer-file-name (roost--worktree-relative task buffer-file-name)))
-                   (buffer-file-name (file-local-name buffer-file-name))
+             (cond ((and file (roost--worktree-relative task file)))
+                   (file (file-local-name file))
                    (t (buffer-name)))
-             ;; In the file, though the buffer is narrowed.
-             (line-number-at-pos start t) (line-number-at-pos last t)
+             (roost--source-line start) (roost--source-line last)
              (buffer-substring-no-properties start end)))))
 
 ;;;; Attachments
@@ -4291,17 +4352,21 @@ A combined diff, of a merge with conflicts, has none."
         (to (roost--slot hunk 'to-range)))
     (when (and from to (not (roost--slot hunk 'combined)))
       (save-excursion
-        (goto-char (roost--slot hunk 'content))
-        (let ((old (car from)) (new (car to)) (end (roost--slot hunk 'end)) lines)
-          (while (< (point) end)
-            (let ((text (buffer-substring-no-properties
-                         (min (1+ (point)) (line-end-position)) (line-end-position))))
-              (pcase (char-after)
-                (?- (push (list (point) 'old old text) lines) (cl-incf old))
-                (?+ (push (list (point) 'new new text) lines) (cl-incf new))
-                (?\s (push (list (point) 'new new text) lines) (cl-incf old) (cl-incf new))))
-            (forward-line))
-          (nreverse lines))))))
+        ;; All its lines, though the buffer is narrowed to some: there
+        ;; `forward-line' stops short of the hunk's end.
+        (save-restriction
+          (widen)
+          (goto-char (roost--slot hunk 'content))
+          (let ((old (car from)) (new (car to)) (end (roost--slot hunk 'end)) lines)
+            (while (and (< (point) end) (not (eobp)))
+              (let ((text (buffer-substring-no-properties
+                           (min (1+ (point)) (line-end-position)) (line-end-position))))
+                (pcase (char-after)
+                  (?- (push (list (point) 'old old text) lines) (cl-incf old))
+                  (?+ (push (list (point) 'new new text) lines) (cl-incf new))
+                  (?\s (push (list (point) 'new new text) lines) (cl-incf old) (cl-incf new))))
+              (forward-line))
+            (nreverse lines)))))))
 
 (defun roost--magit-note-place ()
   "What a note written at point would be about, as part of a note.
@@ -4316,35 +4381,38 @@ must stay within one hunk."
       (user-error "Select lines within one hunk; write a note for each hunk"))
     (cond
      ((magit-section-match 'hunk section)
-      (let* ((lines (or (roost--hunk-lines section)
-                        (user-error "Roost cannot place notes in a combined diff")))
-             (from (save-excursion
-                     (goto-char (if (use-region-p) (region-beginning) (point)))
-                     (line-beginning-position)))
-             (to (if (not (use-region-p))
-                     (line-end-position)
-                   ;; A region ending where a line starts leaves that line out.
-                   (let ((end (region-end)))
-                     (if (and (> end from) (save-excursion (goto-char end) (bolp)))
-                         (1- end)
-                       end))))
-             (chosen (or (seq-filter (lambda (line) (<= from (car line) to)) lines)
-                         lines))
-             (numbered (or (seq-remove (lambda (line) (eq (nth 1 line) 'old)) chosen)
-                           chosen)))
-        `((file . ,(roost--slot (roost--slot section 'parent) 'value))
-          (line . ,(nth 2 (car numbered)))
-          (end . ,(nth 2 (car (last numbered))))
-          ,@(when (eq (nth 1 (car numbered)) 'old) '((removed . t)))
-          ;; The note shows under the last line chosen, though that may be
-          ;; a removed line after lines numbered in the new version.
-          (anchorLine . ,(nth 2 (car (last chosen))))
-          ,@(when (eq (nth 1 (car (last chosen))) 'old) '((anchorOld . t)))
-          (quote . ,(mapcar (lambda (line)
-                              (save-excursion
-                                (goto-char (car line))
-                                (buffer-substring-no-properties (point) (line-end-position))))
-                            chosen)))))
+      ;; By whole lines, though the buffer is narrowed to part of one.
+      (save-restriction
+        (widen)
+        (let* ((lines (or (roost--hunk-lines section)
+                          (user-error "Roost cannot place notes in a combined diff")))
+               (from (save-excursion
+                       (goto-char (if (use-region-p) (region-beginning) (point)))
+                       (line-beginning-position)))
+               (to (if (not (use-region-p))
+                       (line-end-position)
+                     ;; A region ending where a line starts leaves that line out.
+                     (let ((end (region-end)))
+                       (if (and (> end from) (save-excursion (goto-char end) (bolp)))
+                           (1- end)
+                         end))))
+               (chosen (or (seq-filter (lambda (line) (<= from (car line) to)) lines)
+                           lines))
+               (numbered (or (seq-remove (lambda (line) (eq (nth 1 line) 'old)) chosen)
+                             chosen)))
+          `((file . ,(roost--slot (roost--slot section 'parent) 'value))
+            (line . ,(nth 2 (car numbered)))
+            (end . ,(nth 2 (car (last numbered))))
+            ,@(when (eq (nth 1 (car numbered)) 'old) '((removed . t)))
+            ;; The note shows under the last line chosen, though that may be
+            ;; a removed line after lines numbered in the new version.
+            (anchorLine . ,(nth 2 (car (last chosen))))
+            ,@(when (eq (nth 1 (car (last chosen))) 'old) '((anchorOld . t)))
+            (quote . ,(mapcar (lambda (line)
+                                (save-excursion
+                                  (goto-char (car line))
+                                  (buffer-substring-no-properties (point) (line-end-position))))
+                              chosen))))))
      ((magit-section-match 'file section)
       `((file . ,(roost--slot section 'value))))
      (t (user-error "Put point on a changed line, or a file's name, in a diff")))))
@@ -4451,22 +4519,25 @@ in place of the note it edits."
                    roost--note-box))
          (notes (and task (remq (plist-get box :old) (roost--task-notes task)))))
     (when (and (or notes box) (bound-and-true-p magit-root-section))
-      (let ((files (roost--magit-file-lines)) shown room)
-        (dolist (note notes)
-          (when-let* ((entry (assoc (alist-get 'file note) files)))
-            (dolist (position (roost--note-positions note (nth 1 entry) (nth 2 entry)))
-              (push note (alist-get position shown)))))
-        (pcase-dolist (`(,position . ,notes) shown)
-          (push (roost--note-overlay position (reverse notes)) roost--note-overlays))
-        ;; The box goes after the notes already under its line.
-        (when-let* ((place (plist-get box :place))
-                    (entry (assoc (alist-get 'file place) files)))
-          ;; The copy the box was opened at, of a note shown more than once.
-          (let ((positions (roost--note-positions place (nth 1 entry) (nth 2 entry))))
-            (setq room (or (nth (or (plist-get box :copy) 0) positions) (car positions))))
-          (when room
-            (push (roost--note-room-overlay room (plist-get box :room) (plist-get box :window))
-                  roost--note-overlays)))))))
+      ;; All of them, though the buffer is narrowed.
+      (save-restriction
+        (widen)
+        (let ((files (roost--magit-file-lines)) shown room)
+          (dolist (note notes)
+            (when-let* ((entry (assoc (alist-get 'file note) files)))
+              (dolist (position (roost--note-positions note (nth 1 entry) (nth 2 entry)))
+                (push note (alist-get position shown)))))
+          (pcase-dolist (`(,position . ,notes) shown)
+            (push (roost--note-overlay position (reverse notes)) roost--note-overlays))
+          ;; The box goes after the notes already under its line.
+          (when-let* ((place (plist-get box :place))
+                      (entry (assoc (alist-get 'file place) files)))
+            ;; The copy the box was opened at, of a note shown more than once.
+            (let ((positions (roost--note-positions place (nth 1 entry) (nth 2 entry))))
+              (setq room (or (nth (or (plist-get box :copy) 0) positions) (car positions))))
+            (when room
+              (push (roost--note-room-overlay room (plist-get box :room) (plist-get box :window))
+                    roost--note-overlays))))))))
 
 (defun roost--magit-file-lines ()
   "For each file in this Magit buffer's diffs, (FILE HEADINGS LINES).
@@ -4489,13 +4560,15 @@ HEADINGS are the ends of its headings, and LINES its lines, from
   "Which of the places this Magit buffer shows PLACE is nearest point.
 A note on a whole file shows under each of its headings, as when it is
 both staged and unstaged.  The result indexes `roost--note-positions'."
-  (when-let* (((bound-and-true-p magit-root-section))
-              (entry (assoc (alist-get 'file place) (roost--magit-file-lines)))
-              (positions (roost--note-positions place (nth 1 entry) (nth 2 entry))))
-    (let* ((here (line-end-position))
-           (nearest (car (sort (copy-sequence positions)
-                               (lambda (a b) (< (abs (- a here)) (abs (- b here))))))))
-      (seq-position positions nearest))))
+  (save-restriction
+    (widen)
+    (when-let* (((bound-and-true-p magit-root-section))
+                (entry (assoc (alist-get 'file place) (roost--magit-file-lines)))
+                (positions (roost--note-positions place (nth 1 entry) (nth 2 entry))))
+      (let* ((here (line-end-position))
+             (nearest (car (sort (copy-sequence positions)
+                                 (lambda (a b) (< (abs (- a here)) (abs (- b here))))))))
+        (seq-position positions nearest)))))
 
 (defun roost--show-notes-everywhere ()
   "Show the current review notes in every Magit buffer on a task."
@@ -4976,17 +5049,20 @@ showing it too; that one is left alone."
     (roost--note-hover-setup)))
 
 (defun roost--note-line-start (position)
-  "Where the diff line at POSITION starts, if notes can be written on it."
+  "Where the diff line at POSITION starts, if notes can be written on it.
+That may be before the narrowing, which can start within the line."
   (save-excursion
-    (goto-char position)
-    (let* ((start (line-beginning-position))
-           (section (get-text-property start 'magit-section)))
-      (and section
-           (magit-section-match 'hunk section)
-           (not (roost--slot section 'combined))
-           (>= start (roost--slot section 'content))
-           (memq (char-after start) '(?+ ?- ?\s))
-           start))))
+    (save-restriction
+      (widen)
+      (goto-char position)
+      (let* ((start (line-beginning-position))
+             (section (get-text-property start 'magit-section)))
+        (and section
+             (magit-section-match 'hunk section)
+             (not (roost--slot section 'combined))
+             (>= start (roost--slot section 'content))
+             (memq (char-after start) '(?+ ?- ?\s))
+             start)))))
 
 (defconst roost--note-mouse-interval 0.25
   "Seconds between looks at the mouse while the note button shows.
