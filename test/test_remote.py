@@ -7004,7 +7004,14 @@ class Subprocesses(unittest.TestCase):
             for node in ast.walk(scope):
                 if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
                     values.append(node.value)
-                elif isinstance(node, (ast.AugAssign, ast.AnnAssign)) and getattr(node.target, "id", None) == name:
+                elif ((isinstance(node, (ast.AugAssign, ast.AnnAssign)) and getattr(node.target, "id", None) == name)
+                      or (isinstance(node, ast.Assign)
+                          and any(isinstance(t, ast.Subscript) and getattr(t.value, "id", None) == name
+                                  for t in node.targets))
+                      or (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                          and getattr(node.func.value, "id", None) == name
+                          and node.func.attr in ("insert", "extend", "append", "__setitem__"))):
+                    # Changed in place, as by argv[0] = or argv.insert().
                     found.add("line %d: changes %s in a way this test can't follow" % (node.lineno, name))
                 elif isinstance(node, ast.For) and isinstance(node.iter, (ast.List, ast.Tuple)):
                     if isinstance(node.target, ast.Name) and node.target.id == name:
@@ -7049,9 +7056,20 @@ class Subprocesses(unittest.TestCase):
             for value in values_of(name, scope, line):
                 check(value, scope, line)
 
+        # Calls are read by their module's own name: under another, or
+        # imported bare, they would go unread.
         for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module in ("subprocess", "pty", "asyncio"):
+            if isinstance(node, ast.ImportFrom) and (
+                    node.module in ("subprocess", "pty", "asyncio")
+                    or node.module == "os" and any(alias.name in ("system", "popen") or alias.name == "*"
+                                                   or alias.name.startswith(("exec", "spawn", "posix_spawn"))
+                                                   for alias in node.names)):
                 found.add("line %d: imports from %s, which this test doesn't read" % (node.lineno, node.module))
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name in ("subprocess", "os", "pty", "asyncio") and alias.asname not in (None, alias.name):
+                        found.add("line %d: imports %s as %s, which this test doesn't read"
+                                  % (node.lineno, alias.name, alias.asname))
         for call in calls:
             func = call.func
             module = func.value.id if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) else None
@@ -7116,6 +7134,13 @@ class Subprocesses(unittest.TestCase):
             "execute(['git', 'log'])": "runs a shell",
             "subprocess.run(['echo', 'hello'], **{'shell': True})": "keywords this test can't read",
             "subprocess.run(['echo', 'hello'], **options)": "keywords this test can't read",
+            # Set in place, or imported under another name or bare.
+            "def f():\n    argv = ['git', 'status']\n    argv[:] = ['/bin/sh', '-c', command]\n    subprocess.run(argv)":
+                "changes argv",
+            "def execute(argv):\n    argv[0] = '/bin/sh'\n    subprocess.run(argv)\nexecute(['git', 'log'])": "changes argv",
+            "def f():\n    argv = []\n    argv.extend(['/bin/sh', '-c', command])\n    subprocess.run(argv)": "changes argv",
+            "import subprocess as sp\nsp.run(['/bin/sh', '-c', command])": "imports subprocess as sp",
+            "from os import system\nsystem(command)": "imports from os",
         }
         for source, problem in cases.items():
             with self.subTest(source=source):
@@ -7128,6 +7153,7 @@ class Subprocesses(unittest.TestCase):
                        # A program found on PATH, and Python itself.
                        "def gh(*args):\n    executable = shutil.which('gh')\n    subprocess.run([executable, *args])",
                        "subprocess.run([sys.executable, '-I', helper])",
+                       "from os import path\nimport os\nsubprocess.run(['git', '-C', path.join(a, b)])",
                        # Another function of the same name, elsewhere, is another function.
                        "def f():\n    def run(argv):\n        subprocess.run(argv)\n    run(['git'])\n"
                        "def g():\n    def run(*args):\n        return args\n    run('log')"):
