@@ -55,10 +55,97 @@
                ;; A question nobody stubbed would wait for input forever.
                ((symbol-function 'y-or-n-p) (lambda (prompt &rest _) (error "Unexpected question: %s" prompt)))
                ((symbol-function 'yes-or-no-p) (lambda (prompt) (error "Unexpected question: %s" prompt))))
-       (unwind-protect (progn ,@body)
+       (unwind-protect (prog1 (progn ,@body) (roost-test--check-programs))
          ;; Held notifications would go a minute later, in another test.
          (when (timerp roost--notice-timer) (cancel-timer roost--notice-timer))
          (set-frame-parameter nil 'roost-task nil)))))
+
+;;;; What Roost starts
+
+;; The programs Roost starts on this machine, by any of Emacs's ways to
+;; start one, are noted as every test runs, and the sweep's stubs note
+;; theirs.  `roost-test--isolated' fails a test in which Roost started
+;; one it shouldn't, or the test after, for one started in a callback.
+
+(defconst roost-test--programs '("ssh" "python3" "git" "osascript" "terminal-notifier")
+  "The programs Roost starts.
+ssh and python3 run the host helper, Git reads a task's worktree, and
+osascript and terminal-notifier notify; osascript also reads an image
+on the clipboard.")
+
+(defconst roost-test--delegates "\\`\\(vc-\\|magit-\\|tmux-control-\\|browse-url\\)"
+  "Packages that start what you set them to when Roost calls them.
+VC, finding a checkout, loads the backends in `vc-handled-backends',
+which may run theirs; tmux-control starts tmux, Magit Git, and
+`browse-url' your browser.")
+
+(defconst roost-test--input-shell '("/bin/sh" "-c" "exec \"$@\" < \"$0\"")
+  "How `roost--run' gives a host command its input from a file.
+The shell runs the command after the file, without reading it.")
+
+(defvar roost-test--forbidden nil
+  "What Roost started that it shouldn't have, each (COMMAND . CALLER).")
+
+(defvar roost-test--starting nil
+  "Non-nil while a start is checked, so the starts it makes aren't.")
+
+(defun roost-test--caller ()
+  "The innermost of Roost's own functions on the stack, or nil.
+Nil too when one of `roost-test--delegates' is nearer: what it starts
+is its own."
+  (cl-loop for frame in (backtrace-frames)
+           for name = (and (symbolp (cadr frame)) (symbol-name (cadr frame)))
+           when (and name (string-match-p roost-test--delegates name))
+           return nil
+           when (and name (string-prefix-p "roost-" name)
+                     (not (string-match-p "\\`roost-\\(test\\|sweep\\)-" name)))
+           return (cadr frame)))
+
+(defun roost-test--command (function args)
+  "The command FUNCTION, called with ARGS, runs, or nil if it runs none."
+  (pcase function
+    ('make-process (plist-get args :command))
+    ((or 'call-process 'process-file) (cons (car args) (nthcdr 4 args)))
+    ('call-process-region (cons (nth 2 args) (nthcdr 6 args)))
+    ((or 'start-process 'start-file-process) (nthcdr 2 args))))
+
+(defun roost-test--forbidden-start (function args)
+  "What FUNCTION, called with ARGS, starts that Roost shouldn't, or nil."
+  (if (memq function '(make-network-process make-serial-process))
+      ;; Roost listens on no socket and connects to nothing itself.
+      (format "%s %s" function (plist-get args :name))
+    (when-let* ((command (roost-test--command function args)))
+      (when (equal (take 3 command) roost-test--input-shell)
+        (setq command (nthcdr 4 command)))
+      (unless (and (stringp (car command))
+                   (member (file-name-nondirectory (car command)) roost-test--programs))
+        (mapconcat (lambda (part) (format "%s" part)) (take 3 command) " ")))))
+
+(defun roost-test--note-start (function args)
+  "Note what FUNCTION, called by Roost with ARGS, starts, if it shouldn't."
+  (when-let* ((forbidden (roost-test--forbidden-start function args))
+              (caller (roost-test--caller)))
+    (push (cons forbidden caller) roost-test--forbidden)))
+
+(defun roost-test--check-programs ()
+  "Fail if Roost started what it shouldn't since this was last called."
+  (when roost-test--forbidden
+    (let ((forbidden (reverse roost-test--forbidden)))
+      (setq roost-test--forbidden nil)
+      (ert-fail (list "Roost started what it shouldn't (see `roost-test--programs')" forbidden)))))
+
+(defvar native-comp-enable-subr-trampolines)
+
+;; Roost runs from source here, so advice on a primitive sees its calls,
+;; and compiling a trampoline for each would itself run a process.
+(let ((native-comp-enable-subr-trampolines nil))
+  (dolist (function '(make-process call-process call-process-region start-process process-file
+                      start-file-process make-network-process make-serial-process))
+    (advice-add function :around
+                (lambda (start &rest args)
+                  (unless roost-test--starting (roost-test--note-start function args))
+                  (let ((roost-test--starting t)) (apply start args)))
+                '((name . roost-test--note-start)))))
 
 (defmacro roost-test--held-notices (&rest body)
   "Run BODY with held notifications sent by calling `roost-test--a-minute-on'.
@@ -3031,6 +3118,62 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
 (defvar server-socket-dir)
 (defvar server-name)
 
+(defconst roost-test--applescript-string "\"\\(\\(?:[^\"\\\\]\\|\\\\.\\)*\\)\""
+  "An AppleScript string literal, its text the first group.")
+
+(ert-deftest roost-notifications-take-names-as-text ()
+  ;; A task's name, its host and what its agent said reach a notification
+  ;; as text, though osascript reads it as AppleScript and the command a
+  ;; click on terminal-notifier's runs goes through a shell.
+  (roost-test--isolated
+   (let* ((marks (make-temp-file "roostmarks" t))
+          (hostile (format "-n \" & (do shell script \"touch %s/apple\") & \" \\\" $(touch %s/subst) `touch %s/tick` ; touch %s/semi ; ' ; touch %s/single ; ' é漢"
+                           marks marks marks marks marks))
+          (task (roost--cache-task hostile (roost-test--task (concat "0123456789abcdef" hostile) "ready")))
+          (invocation-directory (file-name-as-directory (make-temp-file "roost-emacs" t)))
+          (client (expand-file-name "bin/emacsclient" invocation-directory))
+          (said (expand-file-name "said" invocation-directory))
+          (server-process (make-pipe-process :name "roost-test-server" :noquery t))
+          (server-socket-dir "/tmp/emacs501") (server-name "server")
+          started)
+     (unwind-protect
+         (progn
+           ;; osascript gets the title and body as AppleScript strings, and
+           ;; nothing else.
+           (cl-letf (((symbol-function 'executable-find) #'ignore)
+                     ((symbol-function 'call-process) (lambda (&rest args) (push args started) 0)))
+             (let ((system-type 'darwin))
+               (roost--notify (concat "title " hostile) (concat "body " hostile) task)))
+           (pcase-let ((`("osascript" nil 0 nil "-e" ,script) (car started))
+                       (strings nil) (start 0))
+             (should (equal (replace-regexp-in-string roost-test--applescript-string "S" script t t)
+                            "display notification S with title S"))
+             (while (string-match roost-test--applescript-string script start)
+               (push (replace-regexp-in-string "\\\\\\(.\\)" "\\1" (match-string 1 script) t) strings)
+               (setq start (match-end 0)))
+             (should (equal (nreverse strings) (list (concat "body " hostile) (concat "title " hostile)))))
+           ;; A click runs a command in a shell, which hands emacsclient
+           ;; what opens the task, as it is.
+           (make-directory (file-name-directory client))
+           (write-region (format "#!/bin/sh\nfor a; do printf '%%s\\0' \"$a\"; done > %s\n"
+                                 (shell-quote-argument said))
+                         nil client nil 'silent)
+           (set-file-modes client #o755)
+           (let ((command (cadr (member "-execute" (roost--terminal-notifier-arguments hostile hostile task)))))
+             (should (zerop (call-process "/bin/sh" nil nil nil "-c" command)))
+             (let ((argv (split-string (with-temp-buffer
+                                         (let ((coding-system-for-read 'utf-8))
+                                           (insert-file-contents said))
+                                         (buffer-string))
+                                       "\0" t)))
+               (should (equal (butlast argv) '("--socket-name" "/tmp/emacs501/server" "--no-wait" "--eval")))
+               (should (equal (read (car (last argv)))
+                              `(roost--open-from-notification ,hostile ,(roost--field task 'id))))))
+           (should-not (directory-files marks nil directory-files-no-dot-files-regexp)))
+       (delete-process server-process)
+       (delete-directory invocation-directory t)
+       (delete-directory marks t)))))
+
 (ert-deftest roost-a-notification-click-opens-its-task ()
   (roost-test--isolated
    (let* ((task (roost--cache-task "dev" (roost-test--task nil "ready")))
@@ -4490,6 +4633,109 @@ of its own, which shows in the selected window of its workspace."
        (should (equal result '(200001 "éxx"))))
      (should-not roost--requests)
      (should (equal (directory-files temporary-file-directory nil "\\`roost-input-") inputs)))))
+
+(defun roost-test--host-printing (file &optional failing)
+  "A stub of `roost--python-command' for a host that prints FILE.
+With FAILING, it prints it on stderr and exits with status 1."
+  (lambda (_host _code)
+    (list "python3" "-I" "-c"
+          (if failing
+              "import sys; sys.stderr.write(open(sys.argv[1], encoding='utf-8').read()); sys.exit(1)"
+            "import sys; sys.stdout.write(open(sys.argv[1], encoding='utf-8').read())")
+          file)))
+
+(defun roost-test--write (file text)
+  "Write TEXT to FILE as UTF-8."
+  (let ((coding-system-for-write 'utf-8-unix))
+    (write-region text nil file nil 'silent)))
+
+(defconst roost-test--megabytes (make-string (* 4 1024 1024) ?x)
+  "A reply's worth of megabytes.")
+
+(ert-deftest roost-a-reply-it-cannot-read-is-an-error-it-reports ()
+  ;; Whatever a host sends back, as when a dropped connection cuts the
+  ;; reply short or a login prints around it, the request ends at once in
+  ;; one call of a callback, and a failure in words to show.
+  (roost-test--isolated
+   (let ((file (make-temp-file "roost-reply"))
+         (unreadable "\\`Roost can.t read the host helper.s reply: "))
+     (unwind-protect
+         (pcase-dolist
+             (`(,output ,outcome ,failing)
+              `(("{\"ok\": true, \"result\": [{\"id\": \"0123" (failed ,(concat unreadable "{\"ok\": true")))
+                ;; Not an object.
+                ("[1, 2, 3]" (failed ,unreadable)) ("\"done\"" (failed ,unreadable)) ("42" (failed ,unreadable))
+                ("null" (failed ,unreadable)) ("true" (failed ,unreadable))
+                (,(concat (make-string 100000 ?\[) (make-string 100000 ?\])) (failed ,unreadable))
+                ;; Nested deeper than Emacs reads.
+                (,(concat (apply #'concat (make-list 100000 "{\"a\": ")) "1" (make-string 100000 ?\}))
+                 (failed ,unreadable))
+                ("{\"ok\": true, \"result\": 1}\nTraceback (most recent call last):"
+                 (failed ,(concat unreadable "Traceback")))
+                ;; An answer that isn't yes, an error that isn't words.
+                ("{\"ok\": \"yes\", \"result\": 1}" (failed "\\`Host operation failed\\'"))
+                ("{\"ok\": false, \"error\": {\"text\": \"gone\"}}" (failed "\\`Host operation failed\\'"))
+                ("{\"ok\": false, \"error\": 42}" (failed "\\`Host operation failed\\'"))
+                ("{\"ok\": false, \"error\": \"\"}" (failed "\\`Host operation failed\\'"))
+                ;; Megabytes, of what Roost can't read, of errors, and of a reply.
+                (,roost-test--megabytes (failed ,(concat unreadable "x+…\\'")))
+                (,(concat "Traceback (most recent call last):\n" roost-test--megabytes) (failed "\\`Traceback") t)
+                (,(format "{\"ok\": true, \"result\": \"%s\"}" roost-test--megabytes) (ok ,roost-test--megabytes))
+                ;; What a newer helper adds, and what a login prints before.
+                ("Welcome to dev\n{\"ok\": true, \"result\": {\"id\": \"0123\", \"later\": {\"a\": [1]}}, \"since\": 2}"
+                 (ok ((id . "0123") (later (a 1)))))))
+           (let ((start (float-time)) outcomes)
+             (roost-test--write file output)
+             (cl-letf (((symbol-function 'roost--python-command) (roost-test--host-printing file failing)))
+               (roost--run nil "" "" (lambda (value) (push (list 'ok value) outcomes))
+                           (lambda (err) (push (list 'failed err) outcomes))))
+             (roost-test--wait-for (lambda () outcomes))
+             (ert-info ((format "Reply %S" (truncate-string-to-width output 60 nil nil "…")))
+               (should (< (- (float-time) start) 5))
+               (should (= (length outcomes) 1))
+               (should (eq (caar outcomes) (car outcome)))
+               (if (eq (car outcome) 'ok)
+                   (should (equal (cadar outcomes) (cadr outcome)))
+                 (should (stringp (cadar outcomes)))
+                 (should (string-match-p (cadr outcome) (cadar outcomes))))
+               (should-not roost--requests))))
+       (delete-file file)))))
+
+(ert-deftest roost-a-poll-of-a-reply-it-cannot-read-is-reported-and-asked-again ()
+  ;; The list a host sends is polled for, every few seconds: an error in
+  ;; reading it would say nothing, and stop that host being asked again.
+  (roost-test--isolated
+   (let* ((file (make-temp-file "roost-reply"))
+          (roost-state-directory (file-name-directory file))
+          (task (append '((later . ((a . [1 2])))) (roost-test--task)))
+          (poll (lambda (output)
+                  (roost-test--write file output)
+                  (remhash nil roost--errors)
+                  (roost--refresh-host nil t)
+                  (should (gethash nil roost--refreshing))
+                  (roost-test--wait-for (lambda () (not (gethash nil roost--refreshing))))
+                  (should-not (gethash nil roost--refreshing)))))
+     (puthash (list nil roost-state-directory) (car (roost--helper)) roost--installed)
+     (unwind-protect
+         (cl-letf (((symbol-function 'roost--python-command) (roost-test--host-printing file))
+                   ((symbol-function 'message) #'ignore))
+           ;; What a newer helper adds to a task is kept.
+           (funcall poll (json-serialize `((ok . t) (result . [,task]) (since . 2))))
+           (should-not (gethash nil roost--errors))
+           (should (equal (roost--field (car (roost-tasks)) 'later) '((a 1 2))))
+           (dolist (output (list "{\"ok\": true, \"result\": [{\"id\": \"0123"
+                                 "[1, 2]" "{\"ok\": true, \"result\": \"tasks\"}"
+                                 "{\"ok\": true, \"result\": {\"id\": \"0123456789abcdef\"}}"
+                                 "{\"ok\": true, \"result\": [1, 2]}" "{\"ok\": true, \"result\": [{\"name\": \"x\"}]}"
+                                 "{\"ok\": false, \"error\": {\"text\": \"gone\"}}"
+                                 roost-test--megabytes))
+             (ert-info ((format "Reply %S" (truncate-string-to-width output 60 nil nil "…")))
+               (funcall poll output)
+               (should (stringp (gethash nil roost--errors)))
+               ;; The tasks it had stay.
+               (should (equal (mapcar (lambda (task) (roost--field task 'id)) (roost-tasks))
+                              (list (roost--field task 'id)))))))
+       (delete-file file)))))
 
 (ert-deftest roost-a-request-that-slept-with-this-computer-gets-its-time-again ()
   ;; A request in flight when a laptop slept, or between Power Nap wakes,

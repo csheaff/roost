@@ -1,4 +1,5 @@
 """Real Git/tmux lifecycle tests. Isolated sockets; no API calls or user config."""
+import ast
 import base64
 import concurrent.futures
 import datetime
@@ -120,6 +121,139 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(self.request("retire", id=task["id"])["ok"])
         self.assertFalse(Path(task["worktree"]).exists())
         self.assertEqual(self.request("list")["result"], [])
+
+    def test_hostile_values_go_through_as_themselves_and_nothing_runs(self):
+        """Names, prompts, branches and paths, as you type them or an issue
+        brings them, reach Git, tmux and the agent intact, through creating,
+        renaming, sending to, updating, merging and discarding a task. None
+        of it runs: each part a shell or tmux would run leaves a file."""
+        marks, place = (Path(tempfile.mkdtemp(prefix=prefix, dir="/tmp")) for prefix in ("roostmarks", "roostplace"))
+        for folder in (marks, place):
+            self.addCleanup(shutil.rmtree, folder, True)
+        # Where a shell, and tmux, would run what has no folder of its own.
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(place)
+
+        def hostile(tag):
+            # A leading dash, which a command would take for an option, then
+            # what a shell runs, read as it is, in double quotes or in single;
+            # and what tmux runs, or reads as a format.
+            return ("-{0} $(touch {1}/{0}-subst) `touch {1}/{0}-tick` ; touch {1}/{0}-semi ; "
+                    "' ; touch {1}/{0}-single ; ' \" ; touch {1}/{0}-double ; \" "
+                    "#(touch {1}/{0}-tmux) #{{pane_id}} ## é漢🙂").format(tag, marks)
+
+        def tmux_says(target, form):
+            # As a UTF-8 client, which tmux shows what isn't ASCII.
+            return roost.execute(["tmux", "-u", "-L", self.socket, "display-message", "-p", "-t", target,
+                                  form]).stdout.rstrip("\n")
+
+        def reply_to(task, prompt):
+            deadline = time.monotonic() + 8
+            while time.monotonic() < deadline:
+                record = roost.Store(str(self.state)).read(task["id"])
+                if record.get("lastReply") == "PROMPT " + prompt:
+                    return record
+                time.sleep(.04)
+            self.fail("The agent didn't answer %r; its record says %s" % (prompt, record))
+
+        # A state directory with what tmux reads as formats in it, as in its
+        # worktrees' paths; a repository named to run things, in a folder
+        # whose name doesn't stop a shell reading on; its branch, starting
+        # with a dash, and a branch prefix, as Git allows, without spaces.
+        self.state = self.root / "state #{session_name} #H ##"
+        repo = place / ("-repo $(touch pwned-subst) `touch pwned-tick` ; touch pwned-semi ; "
+                            "' ; touch pwned-single ; ' \" ; touch pwned-double ; \" é")
+        branch = ("-main-$(touch${{IFS}}{0}/branch-subst)-`touch${{IFS}}{0}/branch-tick`-;touch${{IFS}}{0}/branch-semi;"
+                  "'${{IFS}};touch${{IFS}}{0}/branch-single;'\"${{IFS}};touch${{IFS}}{0}/branch-double;\"é").format(marks)
+        prefix = "x$(touch${{IFS}}{0}/prefix-subst)/'${{IFS}};touch${{IFS}}{0}/prefix-single;'/".format(marks)
+        # Each would run in a shell, read as it is, in double quotes or in single.
+        for value in (hostile("probe"), str(repo), branch, prefix):
+            for form in ("true %s", 'true "%s"', "true '%s'"):
+                with self.subTest(form=form, value=value):
+                    subprocess.run(["/bin/sh", "-c", form % value], cwd=str(marks), stderr=subprocess.DEVNULL)
+                    ran = list(marks.iterdir())
+                    self.assertTrue(ran)
+                    for path in ran:
+                        path.unlink()
+        roost.git(self.root, "init", "-q", str(repo))
+        roost.git(repo, "symbolic-ref", "HEAD", "refs/heads/" + branch)
+        for key, value in (("user.name", "Roost Test"), ("user.email", "roost@example.invalid"),
+                           ("commit.gpgsign", "false")):
+            roost.git(repo, "config", key, value)
+        (repo / "hello").write_text("base\n")
+        roost.git(repo, "add", ".")
+        roost.git(repo, "commit", "-qm", "base")
+
+        name, prompt = hostile("name"), hostile("prompt") + "\n" + hostile("second-line")
+        task = self.create(directory=str(repo), name=name, prompt=prompt, branchPrefix=prefix)
+        record = reply_to(task, prompt)
+        self.assertEqual((record["name"], record["prompt"], record["task"]), (name, prompt, prompt))
+        self.assertEqual(record["repo"], os.path.realpath(repo))
+        self.assertEqual(record["integrationBranch"], branch)
+        self.assertTrue(record["branch"].startswith(prefix), record["branch"])
+        self.assertEqual(tmux_says(task["windowId"], "#{window_name}"), name)
+        worktree = os.path.realpath(record["worktree"])
+        self.assertEqual(tmux_says(task["paneId"], "#{pane_current_path}"), worktree)
+        listed = self.request("list", full=True)
+        self.assertTrue(listed["ok"], listed)
+        self.assertEqual([(t["name"], t["behind"]) for t in listed["result"]], [(name, 0)])
+
+        # What can't be a name, or a branch, is refused, and nothing is made.
+        made = lambda: (self.git("for-each-ref", cwd=repo), self.git("worktree", "list", cwd=repo),
+                        roost.tmux(self.socket, "list-windows", "-a").stdout)
+        before = made()
+        for args in (dict(name="two\nlines %s" % hostile("newline")), dict(name="x", branchPrefix="-x/")):
+            with self.subTest(**args):
+                reply = self.request("create", directory=str(repo), socket=self.socket,
+                                     command=[sys.executable, str(FAKE)], **args)
+                self.assertFalse(reply["ok"], reply)
+        self.assertFalse(self.request("rename", id=task["id"], name="two\nlines %s" % hostile("newline"))["ok"])
+        self.assertEqual(made(), before)
+
+        said = hostile("send")
+        self.assertTrue(self.request("send", id=task["id"], text=said)["ok"])
+        self.assertEqual(reply_to(task, said)["lastPrompt"], said)
+        renamed = hostile("rename")
+        reply = self.request("rename", id=task["id"], name=renamed)
+        self.assertEqual(reply["result"]["name"], renamed)
+        self.assertEqual(tmux_says(task["windowId"], "#{window_name}"), renamed)
+        shell = self.request("shell", id=task["id"])["result"]["shellPaneId"]
+        self.assertEqual(tmux_says(shell, "#{pane_current_path}"), worktree)
+
+        # Merged into its branch, as is a second task, squashed, once it is
+        # brought up to date.
+        second = self.create(directory=str(repo), name=hostile("squash"))
+        wt = Path(record["worktree"])
+        (wt / "hello").write_text("changed\n")
+        self.git("commit", "-qam", hostile("commit"), cwd=wt)
+        reply = self.request("merge", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(((repo / "hello").read_text(), roost.current_branch(str(repo))), ("changed\n", branch))
+        self.assertFalse(wt.exists())
+        wt = Path(second["worktree"])
+        self.assertTrue(self.request("update", id=second["id"])["ok"])
+        self.assertEqual((wt / "hello").read_text(), "changed\n")
+        (wt / "other").write_text("x\n")
+        self.git("add", "other", cwd=wt)
+        self.git("commit", "-qm", hostile("squashed"), cwd=wt)
+        reply = self.request("merge", id=second["id"], style="squash")
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(self.git("log", "-1", "--format=%B", cwd=repo), hostile("squashed"))
+        self.assertTrue((repo / "other").exists())
+
+        # Discarded.
+        third = self.create(directory=str(repo), name=hostile("discard"))
+        told = self.request("discard", id=third["id"], dryRun=True)["result"]["discard"]
+        reply = self.request("discard", id=third["id"], expect=told["commit"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertFalse(Path(third["worktree"]).exists())
+        self.assertFalse(roost.ref_exists(repo, third["branch"]))
+        self.assertEqual(self.request("list")["result"], [])
+
+        time.sleep(0.5)  # tmux runs #() in the background.
+        self.assertEqual(sorted(path.name for path in marks.iterdir()), [])
+        self.assertEqual([str(path) for folder in (place, self.root) for path in folder.rglob("pwned-*")]
+                         + [str(path) for path in Path.home().glob("pwned-*")], [])
 
     def test_attachments_keep_their_names_and_go_with_the_task(self):
         task = self.create()
@@ -6761,6 +6895,181 @@ class ProgramStatus(unittest.TestCase):
             subprocess.run(["node", str(nested)], env=dict(env, ROOST_OPENCODE_OBSERVER="1"), check=True, timeout=30)
             self.assertEqual(len(log.read_text().splitlines()), len(reports))
 
+
+
+class Subprocesses(unittest.TestCase):
+    """The helper starts programs from lists of arguments, never a shell,
+    but for the project's own setup and teardown commands, which you would
+    type in one. Read from its source, so a path no test takes is checked
+    too."""
+
+    # What subprocess runs from a command it is given.
+    RUNS = ("run", "Popen", "call", "check_call", "check_output")
+    SHELLS = ("sh", "bash", "zsh", "dash", "ksh", "fish", "csh", "tcsh")
+    # The project's own commands, run in a login shell: (function, variable).
+    OWN_COMMANDS = (("run_teardown", "command"), ("runner", "setup"))
+
+    def problems(self, source):
+        """Where SOURCE might run a shell or a string, as "line N: what"."""
+        tree = ast.parse(source)
+        parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+        calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+        found, followed = set(), set()
+
+        def scope_of(node):
+            while node in parents:
+                node = parents[node]
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                    return node
+            return tree
+
+        def within(node, ancestor):
+            """Whether NODE is in ANCESTOR, where a function it calls is defined."""
+            while node in parents and node is not ancestor:
+                node = parents[node]
+            return node is ancestor
+
+        def stringy(node):
+            """Whether NODE is plainly a string, which a shell would read."""
+            if isinstance(node, ast.Constant):
+                return isinstance(node.value, (str, bytes))
+            if isinstance(node, ast.JoinedStr):
+                return True
+            if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Mod, ast.Add)):
+                return stringy(node.left) or stringy(node.right)
+            if isinstance(node, ast.Call):
+                return ((isinstance(node.func, ast.Attribute) and node.func.attr in ("format", "join", "quote"))
+                        or (isinstance(node.func, ast.Name) and node.func.id == "str"))
+            return False
+
+        def check(command, scope, line):
+            """Note what COMMAND, run in SCOPE at LINE, might run that it shouldn't."""
+            if isinstance(command, (ast.List, ast.Tuple)):
+                first = command.elts[0] if command.elts else None
+                if (isinstance(first, ast.Constant) and isinstance(first.value, str)
+                        and os.path.basename(first.value) in self.SHELLS):
+                    own = (len(command.elts) == 3 and isinstance(command.elts[1], ast.Constant)
+                           and command.elts[1].value == "-lc" and isinstance(command.elts[2], ast.Name)
+                           and (getattr(scope, "name", None), command.elts[2].id) in self.OWN_COMMANDS)
+                    if not own:
+                        found.add("line %d: runs a shell, %s" % (line, ast.unparse(command)))
+            elif stringy(command):
+                found.add("line %d: runs a string, %s" % (line, ast.unparse(command)))
+            elif isinstance(command, ast.Name):
+                follow(command.id, scope, line)
+            elif (isinstance(command, ast.Call) and isinstance(command.func, ast.Attribute)
+                  and command.func.attr == "launch"):
+                # An agent's arguments, from its adapter, which
+                # test_initial_prompts_are_literal_and_not_replayed_on_resume reads.
+                pass
+            else:
+                found.add("line %d: runs %s, which this test can't follow" % (line, ast.unparse(command)))
+
+        def follow(name, scope, line):
+            """Check what NAME, a command in SCOPE, can be."""
+            arguments = getattr(scope, "args", None)
+            positional = [a.arg for a in arguments.posonlyargs + arguments.args] if arguments else []
+            if arguments and name in positional + [a.arg for a in arguments.kwonlyargs]:
+                # A parameter: what each call passes.
+                if (scope, name) in followed:
+                    return
+                followed.add((scope, name))
+                index = positional.index(name) if name in positional else None
+                for call in calls:
+                    if (isinstance(call.func, ast.Name) and call.func.id == getattr(scope, "name", None)
+                            and within(call, parents.get(scope))):
+                        passed = next((k.value for k in call.keywords if k.arg == name), None)
+                        if passed is None and index is not None and index < len(call.args):
+                            passed = call.args[index]
+                        if passed is None or isinstance(passed, ast.Starred):
+                            found.add("line %d: passes %s a command this test can't follow" % (call.lineno, name))
+                        else:
+                            check(passed, scope_of(call), call.lineno)
+                return
+            # Assigned in SCOPE, or in a loop over a list of tuples written out.
+            values = []
+            for node in ast.walk(scope):
+                if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
+                    values.append(node.value)
+                elif isinstance(node, ast.For) and isinstance(node.iter, (ast.List, ast.Tuple)):
+                    if isinstance(node.target, ast.Name) and node.target.id == name:
+                        values.extend(node.iter.elts)
+                    elif isinstance(node.target, ast.Tuple):
+                        at = [i for i, t in enumerate(node.target.elts) if isinstance(t, ast.Name) and t.id == name]
+                        for row in node.iter.elts if at else []:
+                            if isinstance(row, (ast.List, ast.Tuple)) and len(row.elts) == len(node.target.elts):
+                                values.append(row.elts[at[0]])
+                            else:
+                                found.add("line %d: runs %s, which this test can't follow" % (line, name))
+            if not values:
+                found.add("line %d: runs %s, which this test can't follow" % (line, name))
+            for value in values:
+                check(value, scope, line)
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module in ("subprocess", "pty", "asyncio"):
+                found.add("line %d: imports from %s, which this test doesn't read" % (node.lineno, node.module))
+        for call in calls:
+            func = call.func
+            module = func.value.id if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) else None
+            if not module:
+                continue
+            if (module, func.attr) in (("os", "system"), ("os", "popen"), ("subprocess", "getoutput"),
+                                       ("subprocess", "getstatusoutput")):
+                found.add("line %d: runs a shell, %s" % (call.lineno, ast.unparse(call)))
+            elif (module == "os" and func.attr.startswith(("exec", "spawn", "posix_spawn"))
+                  or module in ("pty", "asyncio") and func.attr in ("spawn", "create_subprocess_exec",
+                                                                       "create_subprocess_shell")):
+                found.add("line %d: starts a process in a way this test doesn't read, %s"
+                          % (call.lineno, ast.unparse(func)))
+            elif module == "subprocess" and func.attr in self.RUNS:
+                shell = next((k.value for k in call.keywords if k.arg == "shell"), None)
+                if shell is not None and not (isinstance(shell, ast.Constant) and shell.value is False):
+                    found.add("line %d: runs a shell, shell=%s" % (call.lineno, ast.unparse(shell)))
+                command = call.args[0] if call.args else next((k.value for k in call.keywords if k.arg == "args"), None)
+                check(command, scope_of(call), call.lineno)
+        return sorted(found, key=lambda problem: int(problem.split()[1].rstrip(":")))
+
+    def test_only_the_projects_own_commands_run_in_a_shell(self):
+        self.assertEqual(self.problems(SOURCE.read_text()), [])
+
+    def test_the_check_finds_each_way_to_run_a_shell(self):
+        # As the helper might come to, each caught where it is.
+        cases = {
+            "subprocess.run(argv, shell=True)": "runs a shell, shell=True",
+            "subprocess.run('git status')": "runs a string",
+            "subprocess.Popen(['git', '-C', repo, 'log'], shell=flag)": "runs a shell, shell=flag",
+            "subprocess.call('git -C %s log' % repo)": "runs a string",
+            "subprocess.run(f'git -C {repo} log')": "runs a string",
+            "subprocess.run(shlex.join(argv))": "runs a string",
+            "subprocess.run(['/bin/sh', '-c', 'git log'])": "runs a shell",
+            "subprocess.run(['bash', '-lc', command])": "runs a shell",
+            "os.system('git log')": "runs a shell",
+            "os.popen('git log')": "runs a shell",
+            "subprocess.getoutput('git log')": "runs a shell",
+            "os.execvp('git', ['git', 'log'])": "in a way this test doesn't read",
+            "def execute(argv):\n    subprocess.run(argv)\nexecute('git log')": "line 3: runs a string",
+            "def execute(argv):\n    subprocess.run(argv)\nexecute(argv=' '.join(parts))": "line 3: runs a string",
+            "def f():\n    def run(argv):\n        subprocess.run(argv)\n    run('git log')": "line 4: runs a string",
+            "def f():\n    argv = 'git ' + name\n    subprocess.run(argv)": "runs a string",
+            "def f(command):\n    subprocess.run(['/bin/sh', '-lc', command])\nf(x)": "runs a shell",
+            "def runner(setup):\n    subprocess.run(['/bin/sh', '-c', setup])": "runs a shell",
+            "subprocess.run(make_command())": "which this test can't follow",
+            "from subprocess import run": "imports from subprocess",
+        }
+        for source, problem in cases.items():
+            with self.subTest(source=source):
+                self.assertTrue(any(problem in found for found in self.problems(source)), self.problems(source))
+        # And what it allows.
+        for source in ("subprocess.run(['git', 'log'], shell=False)",
+                       "def run_teardown(command):\n    subprocess.Popen(['/bin/sh', '-lc', command])",
+                       "def execute(argv):\n    subprocess.run(argv)\nexecute(['git', *args])",
+                       "for argv in (['git', '--version'], ['tmux', '-V']):\n    subprocess.run(argv)",
+                       # Another function of the same name, elsewhere, is another function.
+                       "def f():\n    def run(argv):\n        subprocess.run(argv)\n    run(['git'])\n"
+                       "def g():\n    def run(*args):\n        return args\n    run('log')"):
+            with self.subTest(source=source):
+                self.assertEqual(self.problems(source), [])
 
 
 if __name__ == "__main__":

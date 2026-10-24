@@ -621,11 +621,17 @@ there would run as you."
     (list "python3" "-I" "-c" code)))
 
 (defun roost--decode-response (output)
-  "Parse the last nonempty line of OUTPUT as the protocol response."
+  "Parse the last nonempty line of OUTPUT as the protocol response, an object.
+Signal an error saying so when it is anything else, as when a dropped
+connection cut it short."
   (let ((line (car (last (split-string output "\n" t "[ \t\r]+")))))
     (unless line (error "The host helper returned no response"))
-    (json-parse-string line :object-type 'alist :array-type 'list
-                       :null-object nil :false-object nil)))
+    (condition-case nil
+        (progn (unless (string-prefix-p "{" line) (error "Not an object"))
+               (json-parse-string line :object-type 'alist :array-type 'list
+                                  :null-object nil :false-object nil))
+      (error (error "Roost can't read the host helper's reply: %s"
+                    (truncate-string-to-width line 200 nil nil "…"))))))
 
 (defconst roost--pipe-input-limit 4096
   "Bytes of request input written straight to a host command's pipe.
@@ -698,11 +704,14 @@ is the seconds it may take, if not `roost-request-timeout'."
                                 (outcome
                                  (condition-case parse-error
                                      (if (= (process-exit-status proc) 0)
-                                         (let ((response (roost--decode-response stdout)))
-                                           (if (alist-get 'ok response)
+                                         (let* ((response (roost--decode-response stdout))
+                                                (said (alist-get 'error response)))
+                                           (if (eq (alist-get 'ok response) t)
                                                (list success (alist-get 'result response))
-                                             (list failure (or (alist-get 'error response)
-                                                               "Host operation failed"))))
+                                             ;; Words to show, which callers take apart.
+                                             (list failure (if (and (stringp said) (not (string-empty-p said)))
+                                                               said
+                                                             "Host operation failed"))))
                                        (list failure
                                              (cond (timed-out
                                                     (format "No reply after %ss; the operation may still finish on the host, so refresh before retrying"
@@ -1262,52 +1271,63 @@ those tasks."
                       (remhash host roost--full-refresh-pending)
                       (roost--refresh-host host nil (unless (eq pending t) pending))))))
       (when pull-requests (puthash host (float-time) roost--pull-requests-asked))
-      (roost--request
-       host "list" `((full . ,(cond (quiet :false) (ids (vconcat ids)) (t t)))
-                     ,@(when (and quiet pull-requests) '((pullRequests . t))))
-       ;; Each ends the refresh even if drawing what it found fails, or
-       ;; the host would never be asked again.
-       (lambda (tasks)
-         (unwind-protect
-             (progn
-               (remhash host roost--failures)
-               (remhash host roost--errors)
-               ;; A newer mutation must win over a stale list reply, and a host
-               ;; forgotten meanwhile stays forgotten.
-               (when (and (= revision (gethash host roost--revisions 0))
-                          (member host (roost--hosts)))
-                 (let ((before (roost--task-states host)))
-                   (roost--apply-snapshot host tasks request)
-                   ;; Quiet polls leave out Git statistics.  An agent that reported
-                   ;; something, such as finishing an edit, may have changed files,
-                   ;; and a commit moves the task's Git stamp: measure those tasks
-                   ;; once this poll is done.
-                   (when-let* ((quiet)
-                               (changed (seq-keep (lambda (state)
-                                                    (unless (equal state (assoc (car state) before))
-                                                      (car state)))
-                                                  (roost--task-states host))))
-                     (roost--refresh-host host nil changed))))
-               (roost--redraw))
-           (funcall finish)))
-       (lambda (err)
-         (unwind-protect
-             (progn
-               ;; Once per outage: ssh words a sleeping host's failure differently
-               ;; from one poll to the next, and the sidebar shows it meanwhile.
-               ;; Its last line says what failed; ssh's earlier ones say less, such
-               ;; as that a shared connection broke.  The sidebar's tooltip has all.
-               (unless (gethash host roost--errors)
-                 (message "Roost %s: %s (M-x roost-doctor checks this host)" (roost--host-label host)
-                          (car (last (split-string err "\n" t "[ \t\r]+")))))
-               (puthash host err roost--errors)
-               ;; Back off from unreachable hosts, up to a minute between attempts.
-               (let ((count (1+ (or (car (gethash host roost--failures)) 0))))
-                 (puthash host (cons count (+ (float-time)
-                                              (min 60 (* roost-watch-interval (expt 2 (1- count))))))
-                          roost--failures))
-               (roost--redraw))
-           (funcall finish)))))))
+      (let ((failed
+             (lambda (err)
+               (unwind-protect
+                   (progn
+                     ;; Once per outage: ssh words a sleeping host's failure differently
+                     ;; from one poll to the next, and the sidebar shows it meanwhile.
+                     ;; Its last line says what failed; ssh's earlier ones say less, such
+                     ;; as that a shared connection broke.  The sidebar's tooltip has all.
+                     (unless (gethash host roost--errors)
+                       (message "Roost %s: %s (M-x roost-doctor checks this host)" (roost--host-label host)
+                                (car (last (split-string err "\n" t "[ \t\r]+")))))
+                     (puthash host err roost--errors)
+                     ;; Back off from unreachable hosts, up to a minute between attempts.
+                     (let ((count (1+ (or (car (gethash host roost--failures)) 0))))
+                       (puthash host (cons count (+ (float-time)
+                                                    (min 60 (* roost-watch-interval (expt 2 (1- count))))))
+                                roost--failures))
+                     (roost--redraw))
+                 (funcall finish)))))
+        (roost--request
+         host "list" `((full . ,(cond (quiet :false) (ids (vconcat ids)) (t t)))
+                       ,@(when (and quiet pull-requests) '((pullRequests . t))))
+         ;; Each ends the refresh even if drawing what it found fails, or
+         ;; the host would never be asked again.
+         (lambda (tasks)
+           (if (not (roost--task-list-p tasks))
+               (funcall failed "Roost can't read the tasks the host helper listed")
+             (unwind-protect
+                 (progn
+                   (remhash host roost--failures)
+                   (remhash host roost--errors)
+                   ;; A newer mutation must win over a stale list reply, and a host
+                   ;; forgotten meanwhile stays forgotten.
+                   (when (and (= revision (gethash host roost--revisions 0))
+                              (member host (roost--hosts)))
+                     (let ((before (roost--task-states host)))
+                       (roost--apply-snapshot host tasks request)
+                       ;; Quiet polls leave out Git statistics.  An agent that reported
+                       ;; something, such as finishing an edit, may have changed files,
+                       ;; and a commit moves the task's Git stamp: measure those tasks
+                       ;; once this poll is done.
+                       (when-let* ((quiet)
+                                   (changed (seq-keep (lambda (state)
+                                                        (unless (equal state (assoc (car state) before))
+                                                          (car state)))
+                                                      (roost--task-states host))))
+                         (roost--refresh-host host nil changed))))
+                   (roost--redraw))
+               (funcall finish))))
+         failed)))))
+
+(defun roost--task-list-p (tasks)
+  "Whether TASKS, as a host listed them, is a list of tasks, each with an ID."
+  (and (proper-list-p tasks)
+       (seq-every-p (lambda (task)
+                      (and (consp task) (proper-list-p task) (stringp (alist-get 'id task))))
+                    tasks)))
 
 ;;;###autoload
 (defun roost-forget-host (host)
