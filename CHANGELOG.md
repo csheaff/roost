@@ -4,6 +4,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Code quoted from a narrowed buffer, as after `C-x n d`, names its lines
+  in the file: `roost-send-region`, a new task from the region and one
+  from a Flymake diagnostic counted them from the start of what the
+  buffer showed, so the agent was told `a.py:1-2` for the first two
+  lines of a function narrowed to at line 40.
 - A task whose worktree is on another branch says so once at the top of
   its panel. The line beside its changes, which said it again, now says
   only whose they are, still naming the task's branch and in the same

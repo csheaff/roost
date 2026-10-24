@@ -2446,7 +2446,7 @@ on, and you write above them."
        nil (cons (concat "\n\n"
                          (mapconcat (lambda (diagnostic)
                                       (format "%s:%d: %s" file
-                                              (line-number-at-pos (flymake-diagnostic-beg diagnostic))
+                                              (line-number-at-pos (flymake-diagnostic-beg diagnostic) t)
                                               (string-trim (flymake-diagnostic-text diagnostic))))
                                     diagnostics "\n")
                          "\n\n" (string-trim-right (buffer-substring-no-properties start end)))
@@ -2595,7 +2595,8 @@ Code is quoted with its file and lines, and the writer starts above it."
         (text (buffer-substring-no-properties start end)))
     (if (derived-mode-p 'prog-mode)
         (cons (format "\n\n%s:%d-%d\n\n%s" (roost--buffer-file-quote)
-                      (line-number-at-pos start) (line-number-at-pos last)
+                      ;; In the file, though the buffer is narrowed.
+                      (line-number-at-pos start t) (line-number-at-pos last t)
                       (string-trim-right text))
               t)
       (cons (string-trim text) nil))))
@@ -3522,7 +3523,8 @@ chosen one.  A draft already begun keeps its text, and the quote follows."
              (cond ((and buffer-file-name (roost--worktree-relative task buffer-file-name)))
                    (buffer-file-name (file-local-name buffer-file-name))
                    (t (buffer-name)))
-             (line-number-at-pos start) (line-number-at-pos last)
+             ;; In the file, though the buffer is narrowed.
+             (line-number-at-pos start t) (line-number-at-pos last t)
              (buffer-substring-no-properties start end)))))
 
 ;;;; Attachments
