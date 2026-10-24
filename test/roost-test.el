@@ -4679,7 +4679,8 @@ With FAILING, it prints it on stderr and exits with status 1."
                 ("{\"ok\": false, \"error\": \"\"}" (failed "\\`Host operation failed\\'"))
                 ;; Megabytes, of what Roost can't read, of errors, and of a reply.
                 (,roost-test--megabytes (failed ,(concat unreadable "x+…\\'")))
-                (,(concat "Traceback (most recent call last):\n" roost-test--megabytes) (failed "\\`Traceback") t)
+                (,(concat "Traceback (most recent call last):\n" roost-test--megabytes "\nOSError: gone")
+                 (failed ,(format "\\`…x\\{%d\\}\nOSError: gone\\'" (- roost--error-limit 14))) t)
                 (,(format "{\"ok\": true, \"result\": \"%s\"}" roost-test--megabytes) (ok ,roost-test--megabytes))
                 ;; What a newer helper adds, and what a login prints before.
                 ("Welcome to dev\n{\"ok\": true, \"result\": {\"id\": \"0123\", \"later\": {\"a\": [1]}}, \"since\": 2}"

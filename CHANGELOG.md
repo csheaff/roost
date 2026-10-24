@@ -9,7 +9,9 @@ What each release changes, and what to do when upgrading. Newest first.
   can't read the host helper's reply: …". It gave the JSON reader's
   words, or a Lisp error such as "Wrong type argument: listp". A list of
   tasks in a form Roost doesn't know no longer stops in a Lisp error
-  each time the host is polled.
+  each time the host is polled. Of what a failing host command printed,
+  Roost keeps the last 4000 characters, where a traceback says what
+  failed.
 - With a `#` in `roost-state-directory`, a task's agent window and shell
   start in its worktree. tmux read the path as a format, so they could
   start in your home directory instead; the agent itself always ran in

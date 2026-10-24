@@ -640,6 +640,9 @@ file instead.  Writing it to the pipe would wait, with Emacs frozen,
 until ssh had connected and read it: for a host that is down, the whole
 connection timeout.")
 
+(defconst roost--error-limit 4000
+  "Characters of what a failing host command printed that Roost keeps.")
+
 (defun roost--expire-request (process on-timeout &optional timeout)
   "Kill host request PROCESS, calling ON-TIMEOUT, unless it ends in time.
 That is TIMEOUT seconds, or `roost-request-timeout'.  A timer that runs
@@ -717,6 +720,10 @@ is the seconds it may take, if not `roost-request-timeout'."
                                                     (format "No reply after %ss; the operation may still finish on the host, so refresh before retrying"
                                                             (or timeout roost-request-timeout)))
                                                    ((string-empty-p stderr) "Host operation failed")
+                                                   ;; Its end, where a traceback says what
+                                                   ;; failed: the sidebar shows it all.
+                                                   ((> (length stderr) roost--error-limit)
+                                                    (concat "…" (substring stderr (- roost--error-limit))))
                                                    (t stderr))))
                                    (error (list failure (error-message-string parse-error))))))
                            (funcall (car outcome) (cadr outcome)))

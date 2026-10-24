@@ -6975,16 +6975,21 @@ class Subprocesses(unittest.TestCase):
                     return
                 followed.add((scope, name))
                 index = positional.index(name) if name in positional else None
-                for call in calls:
-                    if (isinstance(call.func, ast.Name) and call.func.id == getattr(scope, "name", None)
-                            and within(call, parents.get(scope))):
-                        passed = next((k.value for k in call.keywords if k.arg == name), None)
-                        if passed is None and index is not None and index < len(call.args):
-                            passed = call.args[index]
-                        if passed is None or isinstance(passed, ast.Starred):
-                            found.add("line %d: passes %s a command this test can't follow" % (call.lineno, name))
-                        else:
-                            check(passed, scope_of(call), call.lineno)
+                function = getattr(scope, "name", None)
+                uses = [node for node in ast.walk(parents.get(scope, tree))
+                        if isinstance(node, ast.Name) and node.id == function]
+                called = [call for call in calls if call.func in uses]
+                # Passed along, or never called by name, its calls can't be read.
+                if not called or len(called) < len(uses):
+                    found.add("line %d: runs %s, which this test can't follow to each call" % (line, name))
+                for call in called:
+                    passed = next((k.value for k in call.keywords if k.arg == name), None)
+                    if passed is None and index is not None and index < len(call.args):
+                        passed = call.args[index]
+                    if passed is None or isinstance(passed, ast.Starred):
+                        found.add("line %d: passes %s a command this test can't follow" % (call.lineno, name))
+                    else:
+                        check(passed, scope_of(call), call.lineno)
                 return
             # Assigned in SCOPE, or in a loop over a list of tuples written out.
             values = []
@@ -7026,6 +7031,8 @@ class Subprocesses(unittest.TestCase):
                 shell = next((k.value for k in call.keywords if k.arg == "shell"), None)
                 if shell is not None and not (isinstance(shell, ast.Constant) and shell.value is False):
                     found.add("line %d: runs a shell, shell=%s" % (call.lineno, ast.unparse(shell)))
+                if any(k.arg == "executable" for k in call.keywords):
+                    found.add("line %d: runs another program than its command names" % call.lineno)
                 command = call.args[0] if call.args else next((k.value for k in call.keywords if k.arg == "args"), None)
                 check(command, scope_of(call), call.lineno)
         return sorted(found, key=lambda problem: int(problem.split()[1].rstrip(":")))
@@ -7056,6 +7063,9 @@ class Subprocesses(unittest.TestCase):
             "def runner(setup):\n    subprocess.run(['/bin/sh', '-c', setup])": "runs a shell",
             "subprocess.run(make_command())": "which this test can't follow",
             "from subprocess import run": "imports from subprocess",
+            "subprocess.run(['-c', 'git log ' + name], executable='/bin/sh')": "another program",
+            "def execute(argv):\n    subprocess.run(argv)\npool.submit(execute, 'git log')": "can't follow",
+            "run = lambda argv: subprocess.run(argv)\nrun('git log')": "can't follow",
         }
         for source, problem in cases.items():
             with self.subTest(source=source):
