@@ -4,6 +4,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A click on a notification can no longer run code a host chose. What
+  the click runs named the task by its ID as the host sent it, so a
+  host, or anything running as you there, could send an ID that Emacs
+  ran as Lisp in place of opening the task. It needed terminal-notifier
+  and an Emacs server. Now the ID stays data.
 - A task whose worktree is on another branch says so once at the top of
   its panel. The line beside its changes, which said it again, now says
   only whose they are, still naming the task's branch and in the same
