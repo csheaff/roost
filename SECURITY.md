@@ -53,8 +53,8 @@ worth scrutiny:
 
 In scope: a way for any of these to run code, inject a command or its
 arguments, read or write files they shouldn't, send data off the machine,
-delete work without the typed confirmation that discarding asks for, or
-crash or hang Emacs. What an agent does with the permissions you give it
+delete commits or uncommitted work without the typed confirmation that
+discarding asks for, or crash or hang Emacs. What an agent does with the permissions you give it
 is for its own prompts and settings.
 
 ## Automated checks

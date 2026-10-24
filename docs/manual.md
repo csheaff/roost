@@ -881,10 +881,15 @@ What Roost never does:
 - answer an agent's prompts: no key approves or declines for you;
 - change your global agent settings, such as `~/.claude` or `~/.codex`:
   each agent gets Roost's hooks when it starts, for that task alone;
-- stage or commit what is left uncommitted, yours or an agent's: merging
-  needs the task's worktree clean, and takes only what its branch holds;
-- delete work that is nowhere else, unless you discard its task and type
-  the task's name.
+- stage what is left uncommitted, yours or an agent's, or commit it to a
+  branch: merging needs the task's worktree clean, and takes only what
+  its branch holds. Where you last looked at a task is kept in a commit
+  no branch points at, made with a copy of the index, until Git prunes
+  it (see [How it works](#how-it-works));
+- delete commits no other branch holds, or uncommitted or untracked
+  files, unless you discard the task and type its name. Removing a
+  worktree, as merging and retiring do, deletes the files Git ignores in
+  it, such as build output or a `.env` made there.
 
 Dependencies: Emacs 29.1 or newer, transient, tmux-control and the Eat
 terminal it uses, and on each host tmux, Git and Python 3.9 or newer. The
