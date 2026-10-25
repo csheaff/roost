@@ -786,6 +786,12 @@ class ClaudeAgent:
         if not status:
             return None
         updates = dict(status=status, updatedAt=now(), lastEvent=event, error=None)
+        # A prompt that runs no PermissionRequest, as when a sandboxed
+        # command needs a new network host, is named by its notification.
+        message = payload.get("message") if isinstance(payload.get("message"), str) else ""
+        if (event == "Notification" and payload.get("notification_type") == "permission_prompt"
+                and current != "permission" and one_line(message)):
+            updates["request"] = one_line(message)[:REQUEST_LIMIT]
         if event == "StopFailure":
             # The turn ended on an API error, such as a usage limit; the
             # agent itself still runs and waits for you.
@@ -4273,6 +4279,10 @@ def permission_request(payload, worktree=None):
         # the command.
         command = raw("command", "cmd")
         verb, detail = "run", command and (clip(shown_command(command, worktree)) or clip(command))
+        # With its sandbox on, Claude Code asks before a command it would
+        # run outside it, as one the sandbox stopped.
+        if args.get("dangerouslyDisableSandbox") is True:
+            verb = "run outside the sandbox:"
     elif tool in ("Edit", "MultiEdit", "NotebookEdit", "Write", "Read"):
         verb, detail = {"Write": "write", "Read": "read"}.get(tool, "edit"), arg("file_path", "notebook_path")
     elif tool == "WebFetch":

@@ -12,12 +12,13 @@ change without notice.
       has not seen. Free; an agent that is not installed is skipped.
 
   python3 test/agent_contract.py --live [--program-status] [AGENT...]
-      Also take each AGENT (claude by default) through a real session
+      Also take each AGENT (claude by default) through real sessions
       driven through Roost's helper, check the status Roost derives at each
       step, and keep what the agent reported in test/captures (see
-      agent_captures.py). Claude uses Haiku; Codex its default model; Pi
-      and OpenCode the model they are set to use. --program-status relays
-      the agent's OSC 7501 reports too, as roost-program-status does.
+      agent_captures.py). Claude uses Haiku, in three sessions (see
+      claude_contract.py); Codex its default model; Pi and OpenCode the
+      model they are set to use. --program-status relays the agent's OSC
+      7501 reports too, as roost-program-status does.
 
 Exits nonzero when something is new or a check fails.
 """
@@ -483,7 +484,8 @@ def restore_codex_tables(after, before, repo):
                    for i, text in enumerate(result) if text)
 
 
-SESSIONS = {"claude": claude_contract.Session, "codex": CodexSession, "pi": PiSession, "opencode": OpenCodeSession}
+SESSIONS = {"claude": claude_contract.SESSIONS, "codex": (CodexSession,), "pi": (PiSession,),
+            "opencode": (OpenCodeSession,)}
 
 
 def main():
@@ -499,7 +501,8 @@ def main():
         if agent not in SESSIONS:
             print("No live session for %s yet" % agent)
             continue
-        problems += SESSIONS[agent]("--program-status" in sys.argv).run()
+        for session in SESSIONS[agent]:
+            problems += session("--program-status" in sys.argv).run()
     print("All as expected" if not problems else "%d to look at" % problems)
     return 1 if problems else 0
 

@@ -128,9 +128,9 @@ These work in the dashboard, the sidebar and a task's panel, and on the menu.
 - Roost never answers an agent's prompts, never changes your global agent
   settings, and never stages or commits your work. It deletes work only when
   you discard a task and type its name.
-- Claude Code starts in auto mode for some accounts and rarely asks. To be
-  asked before each command, add `"--permission-mode" "manual"` to its entry
-  in `roost-agent-commands`.
+- Claude Code 2.1.284 and later start in auto mode unless a permission mode
+  is set, and rarely ask. To be asked before each command, add
+  `"--permission-mode" "manual"` to its entry in `roost-agent-commands`.
 
 ## More
 

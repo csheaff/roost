@@ -757,6 +757,18 @@ Things to know:
   showing `permission` until the agent moves on, and `e` asks before sending
   to a task in that state. With `roost-program-status` on, both say so
   themselves, at once.
+- In auto mode, Claude Code refuses some commands without asking: the
+  task stays `running`, and Claude's reply says what it refused. A
+  dangerous `rm` asks for two minutes, and is refused if you don't
+  answer; the task shows `permission` until Claude's next step. Once it
+  has refused five commands, Claude may end a turn by offering to teach
+  auto mode about your environment, which no hook reports: the task shows
+  `ready`, but a prompt sent from Roost goes to the offer, so answer it in
+  the terminal first. With Claude's sandbox on, a command that needs a
+  new network host asks too: the task shows `permission` about six
+  seconds later and, once you allow the host, until the command ends.
+  With `roost-program-status` on, Claude says at once that it asks,
+  naming the host, and that it goes on once answered or refused.
 - Pi has no permission prompts of its own, but an extension can ask, as one
   that asks before each command does. Pi 0.84.4 and later say when such a
   dialog waits on you, and Pi 1.1.0 and later when you stop a turn with Esc;
@@ -1101,9 +1113,14 @@ reads, and names any it has not seen: Claude Code's hook events,
 notification types and payload fields; the hook events Codex's binary
 describes; the extension events Pi's types declare; and the events OpenCode
 defines. An agent that isn't installed is skipped. `make contract-live`
-also takes Claude Code through a real session (a few short Haiku turns,
-about three minutes) and checks each status Roost derives: a reply, a
-permission request approved and declined, Esc, a minute idle and `/clear`.
+also takes Claude Code through real sessions (short Haiku turns, about
+seven minutes) and checks each status Roost derives: in manual mode, a
+reply, a permission request approved and declined, Esc, a minute idle and
+`/clear`; in auto mode, as Claude starts with no mode set, a command it
+lets run, one it refuses and a dangerous `rm` left to time out; and with
+Claude's sandbox on, from a branch of the scratch repository whose
+settings turn it on, a sandboxed command, a new network host allowed and a
+command approved outside the sandbox.
 `make contract-live CONTRACT_AGENTS="codex pi opencode"` does the same
 with Codex (its default model; trusting the scratch repository and Roost's
 hooks is undone afterwards), and with Pi and OpenCode (the model each is

@@ -29,7 +29,7 @@ compile:
 	@rm -f roost.elc
 
 # Roost's reading of the installed agents (see test/agent_contract.py): a
-# free scan of each, and with contract-live a real session of a few turns,
+# free scan of each, and with contract-live real sessions of a few turns,
 # kept in test/captures. Claude Code by default; for others, as in
 #   make contract-live CONTRACT_AGENTS="codex pi opencode" CONTRACT_FLAGS=--program-status
 CONTRACT_AGENTS ?= claude

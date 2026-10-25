@@ -35,6 +35,60 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## Claude Code's waits in auto mode and its sandbox — 2026-10-25
+
+- **Why.** Claude Code's changelog and docs say that since 2.1.284 it
+  starts in auto mode unless a permission mode is set, that since 2.1.281
+  a dangerous `rm` in auto mode asks for two minutes and is then refused,
+  that auto mode goes back to asking after 3 refusals in a row or 20 in
+  all, and that with its sandbox on a command can ask for a network host,
+  or to run outside the sandbox. These runs check that each task's word
+  stays true through those waits.
+- **Ran.** `make contract` and `make contract-live` with Claude Code
+  2.1.303 and Haiku on macOS, with two new sessions beside the manual-mode
+  one, then those two with `--program-status`. Each passed every check.
+  They ran from a Claude Code session, whose `CLAUDE_CODE_*` variables
+  were unset by hand; `CLAUDE_CODE_DISABLE_TERMINAL_TITLE`, which keeps
+  Claude from reporting its status, the contract now unsets itself.
+- **Auto mode**, no mode given: hooks say `permission_mode` `auto`. A
+  command it lets run, and `curl … | sh` from a file you didn't write,
+  which it refused ("[Code from External]"), both showed `running` to the
+  turn's end, then `ready`, never `permission`; Claude's reply said what
+  it refused. `PermissionDenied`, which Roost doesn't listen to, didn't
+  come for either of two refusals while a probe listened for it, though
+  the docs say it fires on each. A dangerous `rm` ran `PermissionRequest`,
+  so the task showed `permission`, "Asks to run rm -rf …", for 122
+  seconds, until Claude refused it and went on; the task then showed
+  `running` or `ready` at Claude's next event, about three seconds later,
+  not `interrupted`. No hook reports the refusal itself; with the relay,
+  Claude said it was working again the moment it refused.
+- **An offer at a turn's end.** Claude counts auto mode's refusals in
+  `~/.claude.json` (`autoModeEnvSetup`), up to five, and these runs
+  brought it there. From then on, in auto mode and with no
+  `autoMode.environment` set, it ends a turn with "Teach auto mode about
+  your environment?", which no hook or notification reports: the task
+  showed `ready`. A prompt sent from Roost the moment the turn ended
+  didn't start a turn, and the offer stayed; keys in a dialog's first
+  moment are dropped, and later ones might answer it. Esc puts it off for
+  a week, which the auto-mode session now does when it shows.
+- **Sandbox on**, from a branch of the scratch repository whose
+  `.claude/settings.json` turns it on, manual mode: a sandboxed command
+  ran without asking. One that needed a new host ran no
+  `PermissionRequest`, only a `permission_prompt` notification six seconds
+  later, "A sandboxed command needs network access": the task showed
+  `permission` with nothing to say what for, and now says that. Once
+  allowed, it stayed `permission` until the command ended, 11 seconds
+  later for one with `sleep 10` after it, as Claude reports nothing when
+  you answer. With the relay, Claude said it was blocked at once, "allow
+  network: example.com", and working 1.3 seconds later, once allowed. A
+  command run outside the sandbox (`dangerouslyDisableSandbox`) ran
+  `PermissionRequest` as any command does, and read the same; it now reads
+  "Asks to run outside the sandbox: python3 contract_check.py".
+- **Not tried.** Auto mode going back to asking after repeated refusals,
+  whose prompt is an ordinary `PermissionRequest`, as the manual-mode
+  session checks; three `rm` prompts left to time out, after which Claude
+  refuses the next at once; strict sandbox mode; a sandbox on Linux.
+
 ## Agents' own sandboxes — 2026-10-25
 
 - **Why.** Roost builds no sandbox and leaves it to the agents, so the
