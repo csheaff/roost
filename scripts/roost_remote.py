@@ -111,12 +111,11 @@ def measuring(repo):
     the agent out of the repository's own config may let it write a
     submodule's, or a worktree's. Git runs core.fsmonitor whenever it
     reads an index, in submodules too, which the option reaches; Git's own
-    monitor stays on where it is on. Diffs take --no-ext-diff and
-    --no-textconv, and logs --no-show-signature, which runs gpg.program.
-    Clean filters and merge drivers, which attributes pick by name, still
+    monitor stays on where it is on. Logs show no signatures, which runs
+    gpg.program, and diffs take --no-ext-diff and --no-textconv. Clean filters and merge drivers, which attributes pick by name, still
     run: turning them off would break Git LFS."""
-    return ("--no-optional-locks", "-c",
-            "core.fsmonitor=" + ("true" if gits_own_fsmonitor(str(repo)) else "false"))
+    return ("--no-optional-locks", "-c", "log.showSignature=false",
+            "-c", "core.fsmonitor=" + ("true" if gits_own_fsmonitor(str(repo)) else "false"))
 
 
 def read_git(repo, *args, env=None):
@@ -2238,8 +2237,7 @@ def own_commits(task):
     as when an update fast-forwards a task that had none; True, meaning it
     can't tell, if Git keeps no reflog. A rebase's makes count unless its
     integration branch has it."""
-    log = read_git(task["repo"], "log", "--no-show-signature", "--walk-reflogs", "--format=%H %gs",
-                   "refs/heads/" + task["branch"], "--")
+    log = read_git(task["repo"], "log", "--walk-reflogs", "--format=%H %gs", "refs/heads/" + task["branch"], "--")
     if log.returncode or not log.stdout.strip():
         return True
     made, rebased = set(), set()
@@ -2996,7 +2994,7 @@ def require_finished(task, pane):
 def require_clean(repo):
     # Untracked files too, which removing the worktree deletes, whatever
     # status.showUntrackedFiles says.
-    if git(repo, "status", "--porcelain", "--untracked-files=normal").stdout.strip():
+    if git(repo, *measuring(repo), "status", "--porcelain", "--untracked-files=normal").stdout.strip():
         raise RoostError("Uncommitted or untracked files remain; review and commit in Magit first")
 
 
@@ -3094,8 +3092,8 @@ def require_submodules_kept(worktree, where="its worktree"):
     if not work:
         return False
     lost = ["%s is checked out at a commit the task doesn't record" % entry[3:]
-            for entry in git(worktree, "status", "--porcelain", "-z", "--untracked-files=no",
-                             "--ignore-submodules=dirty")
+            for entry in git(worktree, *measuring(worktree), "status", "--porcelain", "-z",
+                             "--untracked-files=no", "--ignore-submodules=dirty")
             .stdout.split("\0") if entry]
     for entry in work:
         held = ([counted(entry["commits"], "commit") + " not on its remote"] if entry["commits"] else []) \

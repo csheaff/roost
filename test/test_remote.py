@@ -1601,6 +1601,9 @@ class Lifecycle(unittest.TestCase):
             listed = self.request("list", full=True)
             looked = self.request("look", id=task["id"])
             told = self.request("discard", id=task["id"], dryRun=True)
+            # As merging and retiring check first.
+            with self.assertRaises(roost.RoostError):
+                roost.require_clean(str(wt))
         self.assertEqual(ran(), [])
         for reply in (listed, looked, told):
             self.assertTrue(reply["ok"], reply)
@@ -1618,11 +1621,11 @@ class Lifecycle(unittest.TestCase):
             if "diff" in argv:
                 self.assertTrue({"--no-ext-diff", "--no-textconv"} <= set(argv), argv)
             if "log" in argv:
-                self.assertIn("--no-show-signature", argv)
+                self.assertTrue({"--no-show-signature", "log.showSignature=false"} & set(argv), argv)
         # Git's own monitor, a daemon of Git's, stays on where it is on.
         self.git("config", "--file", config(wt), "core.fsmonitor", "yes")
         roost.gits_own_fsmonitor.cache_clear()
-        self.assertEqual(roost.measuring(wt), ("--no-optional-locks", "-c", "core.fsmonitor=true"))
+        self.assertIn("core.fsmonitor=true", roost.measuring(wt))
 
     def test_a_full_listing_can_name_the_tasks_to_measure(self):
         first, second = self.create(), self.create(name="second")
