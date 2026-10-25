@@ -1902,14 +1902,13 @@ buffer list of one task would offer the terminals of the others."
 
 (defun roost--gather-task-terminals (&optional buffer)
   "Add the terminals of the current perspective's task to it.
-For `persp-activated-hook', and with BUFFER for
+For `persp-switch-hook', and with BUFFER for
 `tmux-control-window-buffer-functions'.  perspective.el adds a buffer
 when it is shown, but tmux-control makes a buffer for a tmux window
 you haven't visited without showing it, when
 `tmux-control-window-buffers' is `all'.  BUFFER goes in its task's
 perspective now if that is current, and otherwise when it becomes so."
-  ;; Each perspective switch runs this, perspective.el's own brief ones
-  ;; too: look the task up once, not each buffer's.
+  ;; Look the task up once, not each buffer's.
   (when-let* ((tasks (and (eq (roost--workspace-backend) 'perspective)
                           (fboundp 'persp-add-buffer)
                           (roost-tasks)))
@@ -1978,7 +1977,7 @@ not another task's: they keep their grid."
   (add-hook 'tmux-control-switch-session-functions #'roost--switch-session)
   (add-hook 'after-change-major-mode-hook #'roost--keep-terminal-in-its-workspace 90)
   (add-hook 'tmux-control-window-buffer-functions #'roost--gather-task-terminals)
-  (add-hook 'persp-activated-hook #'roost--gather-task-terminals)
+  (add-hook 'persp-switch-hook #'roost--gather-task-terminals)
   (roost--leave-side-window)
   (roost--activate-workspace task)
   (roost--leave-side-window)
@@ -9966,7 +9965,7 @@ Beside a terminal, that turns off `roost-task-panel-mode'."
   (remove-hook 'tmux-control-switch-session-functions #'roost--switch-session)
   (remove-hook 'after-change-major-mode-hook #'roost--keep-terminal-in-its-workspace)
   (remove-hook 'tmux-control-window-buffer-functions #'roost--gather-task-terminals)
-  (remove-hook 'persp-activated-hook #'roost--gather-task-terminals)
+  (remove-hook 'persp-switch-hook #'roost--gather-task-terminals)
   (when roost-sidebar-mode (roost-sidebar-mode -1))
   (dolist (frame (frame-list))
     (with-selected-frame frame
