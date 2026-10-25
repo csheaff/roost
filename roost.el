@@ -1908,13 +1908,27 @@ when it is shown, but tmux-control makes a buffer for a tmux window
 you haven't visited without showing it, when
 `tmux-control-window-buffers' is `all'.  BUFFER goes in its task's
 perspective now if that is current, and otherwise when it becomes so."
-  (when-let* ((task (and (eq (roost--workspace-backend) 'perspective)
-                         (fboundp 'persp-add-buffer)
-                         (roost--workspace-task (roost--current-workspace)
-                                                (roost-tasks)))))
-    (dolist (buffer (if buffer (list buffer) (buffer-list)))
-      (when-let* ((owner (and (buffer-live-p buffer) (roost--terminal-task buffer))))
-        (when (equal (roost--key owner) (roost--key task))
+  ;; Each perspective switch runs this, perspective.el's own brief ones
+  ;; too: look the task up once, not each buffer's.
+  (when-let* ((tasks (and (eq (roost--workspace-backend) 'perspective)
+                          (fboundp 'persp-add-buffer)
+                          (roost-tasks)))
+              (task (roost--workspace-task (roost--current-workspace) tasks))
+              (session (roost--field task 'session)))
+    ;; A session shared by tasks from before each had its own is no one's.
+    (unless (seq-find (lambda (other)
+                        (and (not (eq other task))
+                             (equal (roost--field other 'host) (roost--field task 'host))
+                             (equal (roost--field other 'socket) (roost--field task 'socket))
+                             (equal (roost--field other 'session) session)))
+                      tasks)
+      (dolist (buffer (if buffer (list buffer) (buffer-list)))
+        (when (and (buffer-live-p buffer)
+                   (provided-mode-derived-p (buffer-local-value 'major-mode buffer) 'tmux-control-mode)
+                   (with-current-buffer buffer
+                     (and (equal (tmux-control-buffer-session) session)
+                          (equal (tmux-control-buffer-host) (roost--field task 'host))
+                          (equal (tmux-control-buffer-socket-name) (roost--field task 'socket)))))
           (persp-add-buffer buffer))))))
 
 (defun roost--task-terminal-window (task)

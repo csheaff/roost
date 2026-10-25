@@ -1859,7 +1859,12 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
             (let ((roost-workspace 'tab-bar))
               (setq current (roost--perspective-name a))
               (roost--gather-task-terminals window)
-              (should-not added))))
+              (should-not added))
+            ;; A session shared by tasks from before each had its own is
+            ;; no one's.
+            (roost--cache-task "dev" (append '((session . "roost-a")) (roost-test--task "3333333333333333")))
+            (roost--gather-task-terminals)
+            (should-not added)))
        (mapc #'kill-buffer (list window other plain))))))
 
 (ert-deftest roost-context-distinguishes-hosts-and-directory-boundaries ()
