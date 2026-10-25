@@ -4,6 +4,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- With perspective.el, a task's perspective lists every tmux window of its
+  session from when you open the task, such as a shell you opened there,
+  when `tmux-control-window-buffers` is `all`. A window you hadn't visited
+  was in no perspective's buffer list. This needs tmux-control 0.9.0: when
+  upgrading, update it and set the option to get this.
 - Measuring a task, keeping where you last looked at it, counting what
   discarding it would lose, or checking it is clean before merging or
   retiring it no longer runs a program that Git's config names for its

@@ -80,6 +80,7 @@
 (declare-function persp-switch "perspective" (name))
 (declare-function persp-kill "perspective" (name))
 (declare-function persp-remove-buffer "perspective" (buffer &optional persp))
+(declare-function persp-add-buffer "perspective" (buffer-or-name))
 (declare-function persp-current-name "perspective" ())
 (declare-function persp-names "perspective" ())
 (declare-function persp-format-name "perspective" (name))
@@ -1899,6 +1900,23 @@ buffer list of one task would offer the terminals of the others."
         (let ((persp-autokill-buffer-on-remove nil))
           (persp-remove-buffer (current-buffer)))))))
 
+(defun roost--gather-task-terminals (&optional buffer)
+  "Add the terminals of the current perspective's task to it.
+For `persp-activated-hook', and with BUFFER for
+`tmux-control-window-buffer-functions'.  perspective.el adds a buffer
+when it is shown, but tmux-control makes a buffer for a tmux window
+you haven't visited without showing it, when
+`tmux-control-window-buffers' is `all'.  BUFFER goes in its task's
+perspective now if that is current, and otherwise when it becomes so."
+  (when-let* ((task (and (eq (roost--workspace-backend) 'perspective)
+                         (fboundp 'persp-add-buffer)
+                         (roost--workspace-task (roost--current-workspace)
+                                                (roost-tasks)))))
+    (dolist (buffer (if buffer (list buffer) (buffer-list)))
+      (when-let* ((owner (and (buffer-live-p buffer) (roost--terminal-task buffer))))
+        (when (equal (roost--key owner) (roost--key task))
+          (persp-add-buffer buffer))))))
+
 (defun roost--task-terminal-window (task)
   "The window of the selected frame showing TASK's terminal, or nil."
   (when (and task (fboundp 'tmux-control-window-id))
@@ -1945,6 +1963,8 @@ not another task's: they keep their grid."
   (require 'tmux-control)
   (add-hook 'tmux-control-switch-session-functions #'roost--switch-session)
   (add-hook 'after-change-major-mode-hook #'roost--keep-terminal-in-its-workspace 90)
+  (add-hook 'tmux-control-window-buffer-functions #'roost--gather-task-terminals)
+  (add-hook 'persp-activated-hook #'roost--gather-task-terminals)
   (roost--leave-side-window)
   (roost--activate-workspace task)
   (roost--leave-side-window)
@@ -9930,6 +9950,9 @@ Beside a terminal, that turns off `roost-task-panel-mode'."
 (defun roost-unload-function ()
   "Remove Roost's hooks, advice and side windows for `unload-feature'."
   (remove-hook 'tmux-control-switch-session-functions #'roost--switch-session)
+  (remove-hook 'after-change-major-mode-hook #'roost--keep-terminal-in-its-workspace)
+  (remove-hook 'tmux-control-window-buffer-functions #'roost--gather-task-terminals)
+  (remove-hook 'persp-activated-hook #'roost--gather-task-terminals)
   (when roost-sidebar-mode (roost-sidebar-mode -1))
   (dolist (frame (frame-list))
     (with-selected-frame frame
