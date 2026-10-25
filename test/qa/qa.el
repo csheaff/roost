@@ -1030,8 +1030,9 @@ text is measured in pixels.  Return how many ran and the problems, as JSON."
   ;; Magit, as it loads, runs Git and emacsclient, which the sweep's stubs
   ;; refuse: it would stop partway, load again at each key that needs it,
   ;; and leave with-editor no emacsclient for the journeys after.  Loaded
-  ;; first, as tests before the sweep load it in `make test'.
-  (require 'magit nil t)
+  ;; first, as tests before the sweep load it in `make test'.  One that
+  ;; fails to load fails the sweep's tests that need it.
+  (qa--own-work (with-demoted-errors "Loading Magit: %S" (require 'magit nil t)))
   (let ((frame (make-frame '((visibility . nil) (width . 160) (height . 48))))
         (stats nil))
     (unwind-protect
