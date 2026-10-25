@@ -79,7 +79,8 @@
 (declare-function magit-get-upstream-branch "magit-git" (&optional branch))
 (declare-function persp-switch "perspective" (name))
 (declare-function persp-kill "perspective" (name))
-(declare-function persp-remove-buffer "perspective" (buffer &optional persp))
+(declare-function persp-forget-buffer "perspective" (buffer))
+(declare-function persp-scratch-buffer "perspective" (&optional name))
 (declare-function persp-current-name "perspective" ())
 (declare-function persp-names "perspective" ())
 (declare-function persp-format-name "perspective" (name))
@@ -117,7 +118,6 @@
 (defvar server-process)
 (defvar server-socket-dir)
 (defvar server-name)
-(defvar persp-autokill-buffer-on-remove)
 (defvar persp-mode)
 (defvar persp-modestring-short)
 (defvar persp-modestring-dividers)
@@ -1882,7 +1882,7 @@ panel, rather than inside the workspace of the task you were in."
 For `after-change-major-mode-hook': a terminal reconnecting in the
 background is added to whichever perspective is current, so the
 buffer list of one task would offer the terminals of the others."
-  (when (and (fboundp 'persp-remove-buffer)
+  (when (and (fboundp 'persp-forget-buffer)
              (eq (roost--workspace-backend) 'perspective)
              (fboundp 'tmux-control-buffer-session)
              (tmux-control-buffer-session))
@@ -1896,8 +1896,11 @@ buffer list of one task would offer the terminals of the others."
                               (roost-tasks))))
       (when (and tasks (null (cdr tasks))
                  (not (equal (persp-current-name) (roost--perspective-name (car tasks)))))
-        (let ((persp-autokill-buffer-on-remove nil))
-          (persp-remove-buffer (current-buffer)))))))
+        ;; Not `persp-remove-buffer', which kills a buffer no other
+        ;; perspective has.  This one makes the selected window's buffer
+        ;; current, in the middle of the terminal's mode hooks.
+        (save-current-buffer
+          (persp-forget-buffer (current-buffer)))))))
 
 (defun roost--task-terminal-window (task)
   "The window of the selected frame showing TASK's terminal, or nil."
@@ -6648,8 +6651,7 @@ window configuration of that frame, selects it."
     (pcase (roost--workspace-backend)
       ('perspective
        (when (fboundp 'persp-kill)
-         (let ((persp-autokill-buffer-on-remove nil))
-           (persp-kill (roost--perspective-name task))))
+         (roost--kill-perspective (roost--perspective-name task)))
        (remhash (roost--key task) roost--perspectives))
       ('tab-bar
        ;; Each frame has tabs of its own.
@@ -6661,6 +6663,22 @@ window configuration of that frame, selects it."
                  (tab-bar-close-tab-by-name name))))))))
     (unless (or (eq (selected-frame) selected) (not (frame-live-p selected)))
       (select-frame selected))))
+
+(defun roost--kill-perspective (name)
+  "Kill the selected frame's perspective NAME, but not its buffers.
+`persp-kill' kills each buffer no other perspective has, files you
+opened in a task's workspace among them.  Those stay, in no perspective,
+as `persp-forget-buffer' leaves one.  The perspective's own scratch
+buffer goes while it holds only what it began with."
+  (when (member name (persp-names))
+    (let* ((scratch (get-buffer (persp-scratch-buffer name)))
+           (may-kill (lambda ()
+                       (and (eq (current-buffer) scratch) (not (buffer-modified-p))))))
+      ;; Bound where no buffer-local value hides the global one, which
+      ;; is what the buffers being killed run.
+      (with-temp-buffer
+        (let ((kill-buffer-query-functions (cons may-kill kill-buffer-query-functions)))
+          (persp-kill name))))))
 
 ;;;###autoload
 (defun roost-next-waiting ()

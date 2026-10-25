@@ -4,6 +4,7 @@
 (defvar persp-mode nil)
 (defvar persp-modestring-short nil)
 (defvar persp-modestring-dividers nil)
+(defvar persp-suppress-no-prefix-key-warning t)
 (defvar evil-want-keybinding)
 
 (defconst roost-test--report-turn (symbol-function 'roost--report-turn)
@@ -179,6 +180,18 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
              ((symbol-function 'tmux-control-active-pane) (lambda () (plist-get roost-test--tmux :pane)))
              ((symbol-function 'tmux-control-window-id) (lambda () (plist-get roost-test--tmux :window))))
      ,@body))
+
+(defmacro roost-test--with-perspectives (&rest body)
+  "Run BODY isolated, with perspective.el's `persp-mode' on for workspaces.
+Skips the test without perspective.el on the load path."
+  `(progn
+     (skip-unless (require 'perspective nil t))
+     (roost-test--isolated
+      (let ((roost-workspace 'perspective))
+        (save-window-excursion
+          (persp-mode 1)
+          (unwind-protect (progn ,@body)
+            (persp-mode -1)))))))
 
 (defun roost-test--task (&optional id status)
   (copy-tree `((id . ,(or id "0123456789abcdef")) (name . "fix auth") (status . ,(or status "ready"))
@@ -1801,7 +1814,7 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
      (setf (alist-get 'session a) "roost-a" (alist-get 'session b) "roost-b")
      (roost--cache-task nil a)
      (roost--cache-task nil b)
-     (cl-letf (((symbol-function 'persp-remove-buffer) (lambda (buffer) (push buffer removed)))
+     (cl-letf (((symbol-function 'persp-forget-buffer) (lambda (buffer) (push buffer removed)))
                ((symbol-function 'tmux-control-buffer-host) (lambda () nil))
                ((symbol-function 'tmux-control-buffer-socket-name) (lambda () (roost--field a 'socket)))
                ((symbol-function 'tmux-control-buffer-session) (lambda () "roost-a"))
@@ -1814,6 +1827,68 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
          (with-temp-buffer
            (roost--keep-terminal-in-its-workspace)
            (should-not removed)))))))
+
+(ert-deftest roost-a-terminal-taken-from-another-tasks-perspective-lives ()
+  ;; `persp-remove-buffer' killed it when no other perspective had it,
+  ;; and left its mode hooks going on in another buffer.
+  (roost-test--with-perspectives
+   (let ((mine (roost--cache-task nil (roost-test--task "1111111111111111")))
+         (other (roost--cache-task nil (roost-test--task "2222222222222222")))
+         (terminal (generate-new-buffer "terminal")))
+     (setf (alist-get 'session mine) "roost-a" (alist-get 'session other) "roost-b")
+     (roost--cache-task nil mine)
+     (roost--cache-task nil other)
+     (unwind-protect
+         (cl-letf (((symbol-function 'tmux-control-buffer-host) (lambda () nil))
+                   ((symbol-function 'tmux-control-buffer-socket-name) (lambda () (roost--field mine 'socket)))
+                   ((symbol-function 'tmux-control-buffer-session) (lambda () "roost-a")))
+           (roost--activate-workspace other)
+           ;; As a terminal reconnecting in the background joins the
+           ;; perspective you are in.
+           (switch-to-buffer terminal)
+           (should (memq terminal (persp-get-buffers)))
+           (with-current-buffer terminal
+             (roost--keep-terminal-in-its-workspace)
+             (should (eq (current-buffer) terminal)))
+           (should (buffer-live-p terminal))
+           (should-not (memq terminal (persp-get-buffers))))
+       (roost--retired-workspace other)
+       (when (buffer-live-p terminal) (kill-buffer terminal))))))
+
+(ert-deftest roost-retiring-a-task-keeps-the-buffers-of-its-perspective ()
+  ;; `persp-kill' killed each buffer no other perspective had: retiring a
+  ;; task killed the files opened in its workspace.
+  (roost-test--with-perspectives
+   (let* ((here (roost--cache-task "dev" (roost-test--task "1111111111111111")))
+          (away (roost--cache-task "dev" (roost-test--task "2222222222222222")))
+          (start (persp-current-name))
+          (file (generate-new-buffer "opened-in-task.el"))
+          (notes (generate-new-buffer "opened-in-another-task"))
+          (scratches (mapcar (lambda (task) (persp-scratch-buffer (roost--perspective-name task t)))
+                             (list here away))))
+     (unwind-protect
+         (progn
+           (roost--activate-workspace away)
+           (switch-to-buffer notes)
+           ;; A scratch buffer you wrote in stays too.
+           (with-current-buffer (nth 1 scratches) (insert "a note"))
+           (roost--activate-workspace here)
+           (switch-to-buffer file)
+           ;; Retired from a buffer with query functions of its own.
+           (add-hook 'kill-buffer-query-functions #'always nil t)
+           ;; One perspective goes while you are in it, the other while not.
+           (roost--retired-workspace away)
+           (should (equal (persp-current-name) (roost--perspective-name here)))
+           (roost--retired-workspace here)
+           (should (equal (persp-names) (list start)))
+           (should (buffer-live-p file))
+           (should (buffer-live-p notes))
+           (should (get-buffer (nth 1 scratches)))
+           (should-not (get-buffer (nth 0 scratches)))
+           ;; In no perspective, rather than in the one you are back in.
+           (should-not (memq file (persp-get-buffers))))
+       (dolist (buffer (cons file (cons notes scratches)))
+         (when (get-buffer buffer) (kill-buffer buffer)))))))
 
 (ert-deftest roost-context-distinguishes-hosts-and-directory-boundaries ()
   (roost-test--isolated
