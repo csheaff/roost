@@ -4,6 +4,17 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Measuring a task, keeping where you last looked at it, or counting what
+  discarding it would lose no longer runs a program that Git's config
+  names for its file system monitor, diffs or signatures
+  (`core.fsmonitor`, `diff.external`, a textconv driver, or `gpg.program`
+  with `log.showSignature`). An agent whose sandbox keeps it out of the
+  repository's config may still write a submodule's, or a worktree's,
+  and the helper, outside the sandbox, ran what it named at the next
+  measurement. Git's own monitor (`core.fsmonitor=true`) stays on. If
+  you set `core.fsmonitor` to a hook, as for Watchman, Roost's
+  measurements of a large repository no longer use it; `git config
+  core.fsmonitor true` speeds them up again.
 - A review note shows once in a Magit diff or status you open again, as
   when you click a file in a task's panel a second time. Magit sets the
   buffer up anew, and Roost lost the note it showed there, which then

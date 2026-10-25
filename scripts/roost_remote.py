@@ -95,11 +95,36 @@ def git(repo, *args, check=True, env=None):
     return execute(["git", "-C", str(repo), *args], check=check, env=env)
 
 
+@functools.lru_cache(maxsize=None)
+def gits_own_fsmonitor(repo):
+    """Whether REPO's config turns on Git's own file system monitor, a
+    daemon of Git's, rather than naming a program for core.fsmonitor.
+    Asked once a request: `rpc` forgets it."""
+    return execute(["git", "-C", repo, "--no-optional-locks", "config", "--bool", "--get", "core.fsmonitor"],
+                   check=False).stdout.strip() == "true"
+
+
+def measuring(repo):
+    """Git's options for reading REPO for Roost: no optional locks, and no
+    program the repository's config names for its file system monitor.
+    Roost reads outside any sandbox its agent works in, and one that keeps
+    the agent out of the repository's own config may let it write a
+    submodule's, or a worktree's. Git runs core.fsmonitor whenever it
+    reads an index, in submodules too, which the option reaches; Git's own
+    monitor stays on where it is on. Diffs take --no-ext-diff and
+    --no-textconv, and logs --no-show-signature, which runs gpg.program.
+    Clean filters and merge drivers, which attributes pick by name, still
+    run: turning them off would break Git LFS."""
+    return ("--no-optional-locks", "-c",
+            "core.fsmonitor=" + ("true" if gits_own_fsmonitor(str(repo)) else "false"))
+
+
 def read_git(repo, *args, env=None):
-    """Run a read-only git command for statistics, without optional locks.
-    `git status` would otherwise refresh the index under its lock, and an
-    agent committing in the same worktree at that moment would fail."""
-    return git(repo, "--no-optional-locks", *args, check=False, env=env)
+    """Run a read-only git command for statistics, as `measuring` has it.
+    Without optional locks, as `git status` would otherwise refresh the
+    index under its lock, and an agent committing in the same worktree at
+    that moment would fail."""
+    return git(repo, *measuring(repo), *args, check=False, env=env)
 
 
 REMOTE_GIT_TIMEOUT = 120
@@ -2213,7 +2238,8 @@ def own_commits(task):
     as when an update fast-forwards a task that had none; True, meaning it
     can't tell, if Git keeps no reflog. A rebase's makes count unless its
     integration branch has it."""
-    log = read_git(task["repo"], "log", "--walk-reflogs", "--format=%H %gs", "refs/heads/" + task["branch"], "--")
+    log = read_git(task["repo"], "log", "--no-show-signature", "--walk-reflogs", "--format=%H %gs",
+                   "refs/heads/" + task["branch"], "--")
     if log.returncode or not log.stdout.strip():
         return True
     made, rebased = set(), set()
@@ -2259,7 +2285,8 @@ def changed_files(worktree, base, uncommitted=frozenset(), limit=50):
     files = []
     # Where files were moved from: a move changes the directory it leaves.
     moved = []
-    fields = iter(read_git(worktree, "diff", "--numstat", "-z", base).stdout.split("\0"))
+    fields = iter(read_git(worktree, "diff", "--no-ext-diff", "--no-textconv", "--numstat", "-z", base)
+                  .stdout.split("\0"))
     for entry in fields:
         if not entry:
             break
@@ -2391,12 +2418,16 @@ LOOK_FILES_LIMIT = 100
 # The paths a comparison that leaves out files names, for Magit's diff
 # of it; past this many, the diff shows every file.
 LOOK_PATHS_LIMIT = 1000
-# For Git staging in a copy of an index, or reading one: a whole index of
-# its own, and none of your hooks, which Git runs on writing an index.
-SCRATCH_INDEX_GIT = ("--no-optional-locks", "-c", "core.splitIndex=false", "-c", "core.hooksPath=/dev/null")
 # Who the commit a look makes says made it.
 LOOK_IDENTITY = dict(GIT_AUTHOR_NAME="Roost", GIT_AUTHOR_EMAIL="roost@invalid",
                      GIT_COMMITTER_NAME="Roost", GIT_COMMITTER_EMAIL="roost@invalid")
+
+
+def scratch_index_git(worktree):
+    """Git's options for staging in a copy of WORKTREE's index, or reading
+    one: as `measuring`, with a whole index of its own, and none of your
+    hooks, which Git runs on writing an index."""
+    return (*measuring(worktree), "-c", "core.splitIndex=false", "-c", "core.hooksPath=/dev/null")
 
 
 def untracked_files(worktree):
@@ -2434,9 +2465,9 @@ def scratch_index(worktree, untracked, intent):
             shutil.copyfile(os.path.join(worktree, index), copy)
         except OSError:
             # Slower, as Git then reads every file again, but not empty.
-            git(worktree, *SCRATCH_INDEX_GIT, "read-tree", "HEAD", check=False, env=env)
+            git(worktree, *scratch_index_git(worktree), "read-tree", "HEAD", check=False, env=env)
         for start in range(0, len(untracked), LOOK_ADD_BATCH):
-            git(worktree, *SCRATCH_INDEX_GIT, "--literal-pathspecs", "add",
+            git(worktree, *scratch_index_git(worktree), "--literal-pathspecs", "add",
                 *(["--intent-to-add"] if intent else []), "--", *untracked[start:start + LOOK_ADD_BATCH],
                 env=env)
         yield env
@@ -2467,8 +2498,8 @@ def snapshot(worktree, tracked=False):
     if tracked and untracked:
         raise LeftOut()
     with scratch_index(worktree, untracked, intent=False) as env:
-        git(worktree, *SCRATCH_INDEX_GIT, "add", "--update", env=env)
-        tree = git(worktree, *SCRATCH_INDEX_GIT, "write-tree", env=env).stdout.strip()
+        git(worktree, *scratch_index_git(worktree), "add", "--update", env=env)
+        tree = git(worktree, *scratch_index_git(worktree), "write-tree", env=env).stdout.strip()
     if tree == git(worktree, "--no-optional-locks", "rev-parse", head + "^{tree}").stdout.strip():
         return head, head
     made = git(worktree, "--no-optional-locks", "-c", "commit.gpgSign=false", "commit-tree", "-p", head,
@@ -2483,8 +2514,8 @@ def changed_between(worktree, start, end=None, env=None, names=False):
     counts None for a binary file; with NAMES, a set of their paths. A
     renamed file is one removed and one added. None if Git can't tell."""
     # A look keeps a submodule's commit, not what is uncommitted inside it.
-    result = git(worktree, *SCRATCH_INDEX_GIT, "diff", "--name-only" if names else "--numstat", "-z",
-                 "--no-renames", "--no-textconv", "--ignore-submodules=dirty",
+    result = git(worktree, *scratch_index_git(worktree), "diff", "--name-only" if names else "--numstat", "-z",
+                 "--no-renames", "--no-ext-diff", "--no-textconv", "--ignore-submodules=dirty",
                  start, *([end] if end else []), "--", check=False, env=env)
     if result.returncode:
         return None
@@ -2587,14 +2618,14 @@ def add_git_stats(tasks):
             continue
         base = fork_point(worktree, task)
         task["sinceLooked"] = since_looked(task, worktree, base)
-        stats = read_git(worktree, "diff", "--shortstat", base)
+        stats = read_git(worktree, "diff", "--no-ext-diff", "--no-textconv", "--shortstat", base)
         dirty = read_git(worktree, "status", "--porcelain", "-z")
         task["diff"] = stats.stdout.strip()
         task["dirty"] = bool(dirty.stdout)
         task["files"], task["size"] = changed_files(worktree, base, status_paths(dirty.stdout))
         # A merge under way, as when an update conflicted, with its files in
         # conflict; null otherwise, so Emacs forgets one that has finished.
-        task["merging"] = (dict(conflicts=read_git(worktree, "diff", "--name-only",
+        task["merging"] = (dict(conflicts=read_git(worktree, "diff", "--no-ext-diff", "--no-textconv", "--name-only",
                                                    "--diff-filter=U").stdout.splitlines())
                            if read_git(worktree, "rev-parse", "-q", "--verify", "MERGE_HEAD").returncode == 0
                            else None)
@@ -3004,7 +3035,7 @@ def submodule_work(worktree):
                            "--ignore-submodules=dirty") if checkout else None)
         # A stash ref, whether or not Git can read what it names.
         stashed = run("rev-parse", "-q", "--verify", "refs/stash").returncode == 0
-        stashes = run("log", "-g", "--format=%H", "refs/stash", "--") if stashed else None
+        stashes = run("log", "--no-show-signature", "-g", "--format=%H", "refs/stash", "--") if stashed else None
         unread = ((not head and not unborn) or commits.returncode or (status is not None and status.returncode)
                   or (stashes is not None and stashes.returncode))
         found[gitdir] = dict(name=name, commits=None if unread else int(commits.stdout),
@@ -5317,6 +5348,8 @@ TASK_ACTIONS = {
 
 
 def rpc(request):
+    # What Git's config said is for one request, each a process of its own but in tests.
+    gits_own_fsmonitor.cache_clear()
     try:
         store = Store(request["root"])
         action = request["action"]

@@ -839,6 +839,14 @@ What runs where:
   Python, Roost's files in the state directory and the task's IDs. The
   other shell commands are your `roost-setup-command` and
   `roost-teardown-command`.
+- When the helper measures a task, or keeps where you last looked at it,
+  Git runs no program that config names for its file system monitor,
+  diffs or signatures, which an agent may write for a submodule or a
+  worktree though its sandbox keeps it out of the repository's own config:
+  `core.fsmonitor` is off there unless it is Git's own monitor, diffs
+  take `--no-ext-diff --no-textconv`, and logs `--no-show-signature`.
+  Clean filters, as Git LFS uses, and merge drivers still run, as when
+  checking for conflicts, and merging runs your hooks.
 - Each agent starts under the helper's runner, in a tmux window of its
   own. Its hooks, Pi extension or OpenCode plugin run the helper with each
   event on stdin, and the helper records it and prints nothing back: they
