@@ -35,6 +35,34 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## Agents' own sandboxes — 2026-10-25
+
+- **Why.** Roost builds no sandbox and leaves it to the agents, so the
+  manual's Security section now says how theirs work in a task. These runs
+  check what it says.
+- **Claude Code on macOS.** Claude Code 2.1.303 with
+  `{"sandbox": {"enabled": true, "allowUnsandboxedCommands": false}}`, in a
+  linked worktree outside the main checkout, as Roost makes them. The
+  agent's commit went through, and `touch` into the common `.git/hooks`
+  and `git config` were both refused with "Operation not permitted".
+- **Claude Code on claylien.** Ubuntu 26.04.1, kernel 7.0, AppArmor 5.0.2,
+  bubblewrap 0.11.1, `kernel.apparmor_restrict_unprivileged_userns=1` and
+  Ubuntu's stock `bwrap-userns-restrict` profile. Plain
+  `bwrap --unshare-user` worked, and the manual's check printed
+  `bwrap//&unpriv_bwrap (enforce)`. Claude Code 2.1.310 failed every
+  sandboxed command with `apply-seccomp: write /proc/self/setgroups
+  (nested userns is capability-restricted; caller must provide
+  CAP_SYS_ADMIN): Permission denied`, as in
+  [anthropics/claude-code#101946](https://github.com/anthropics/claude-code/issues/101946).
+  With `"network": {"allowAllUnixSockets": true}` added, through
+  `--settings` in a scratch folder, the same command wrote a file in its
+  folder, and `touch` in the home folder was refused with "Read-only file
+  system".
+- **Not tried.** Codex on Linux (claylien has none; the manual goes by
+  #101946's report of Codex 0.162.1 working on Ubuntu 26.04.1), Claude
+  Code's sandbox in a Roost task on Linux, Pi's example extension, and the
+  fix that needs root.
+
 ## Journeys for the commands none ran — 2026-10-24
 
 - **Scope.** `make qa` listed 37 of Roost's commands that no journey ran.

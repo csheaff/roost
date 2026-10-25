@@ -779,9 +779,10 @@ Things to know:
   lights up whenever an agent prints anything, and only shows its terminal.
   Roost tells you when an agent needs you, and `n` or a click on `Roost:N`
   switches to the task.
-- Claude Code now starts in auto mode for some accounts, approving most
-  commands itself, so its tasks rarely ask. To be asked before each command,
-  add `"--permission-mode" "manual"` to Claude's entry in `roost-agent-commands`.
+- Since 2.1.284 (2026-09-28), Claude Code starts in auto mode unless a
+  permission mode is set, approving most commands itself, so its tasks
+  rarely ask. To be asked before each command, add
+  `"--permission-mode" "manual"` to Claude's entry in `roost-agent-commands`.
 - Roost turns on tmux's `extended-keys` on the server it starts agents on, so
   they can tell Shift+Return and Option+Return from Return (a new line in
   Claude's prompt rather than sending it). Programs that do not ask for
@@ -812,8 +813,9 @@ Things to know:
 ## Security
 
 Roost is not a sandbox. An agent runs as you, with your permissions and
-credentials on its host, and its own permission prompts decide what it
-may do without asking. Roost never answers them. A remote host is trusted
+credentials on its host, and its own permission prompts and sandbox
+([Sandboxes](#sandboxes)) decide what it may do without asking. Roost
+never answers them. A remote host is trusted
 as any SSH login is. [SECURITY.md](../SECURITY.md) says how to report a
 problem and which inputs are worth scrutiny. Each line below can be
 checked against `roost.el` and `scripts/roost_remote.py`.
@@ -906,6 +908,68 @@ What Roost never does:
 Dependencies: Emacs 29.1 or newer, transient, tmux-control and the Eat
 terminal it uses, and on each host tmux, Git and Python 3.9 or newer. The
 helper is one file of Python's standard library.
+
+### Sandboxes
+
+Claude Code and Codex can each run the commands they start in a sandbox
+of their own, which limits what those commands may write and reach on the
+network. Each works in Roost's tasks. Whether it is on is yours to choose,
+in the agent's own settings: Roost never writes them. As of 2026-10-25,
+with Claude Code 2.1.303 and Codex 0.163.0:
+
+- Claude Code's sandbox is off by default. Turn it on with
+  `"sandbox": {"enabled": true}` in the project's `.claude/settings.json`
+  or your own `~/.claude/settings.json`, and add
+  `"allowUnsandboxedCommands": false` beside `enabled`, so that a command
+  the sandbox stops can't run again outside it. It covers shell commands
+  only: Claude's file tools, MCP servers and hooks run outside it, Roost's
+  hooks among them, so tasks report their status as before. Commits work
+  in a task: in a linked worktree, the sandbox lets commands write the
+  main repository's `.git`, except its `hooks/` and `config`
+  ([Claude Code's docs](https://code.claude.com/docs/en/sandboxing)).
+- Codex's sandbox is on by default. It keeps `.git` read-only by design, a
+  worktree's shared one included, so Codex asks before each commit
+  ([openai/codex#14338](https://github.com/openai/codex/issues/14338)).
+  Don't widen it to the Git directory with `--add-dir` or `writable_roots`
+  to stop those questions: a sandboxed command could then write Git
+  settings that run, outside the sandbox, at the next Git command, yours,
+  Roost's or Magit's.
+- Pi has no sandbox of its own. Its repository has an example extension
+  that runs Pi's commands in one, built on Anthropic's sandbox runtime; it
+  hasn't been tried with Roost.
+- OpenCode has none, and its security policy suggests a container or a VM.
+
+A VM you reach over SSH is an ordinary Roost host, and keeps a task's
+worktree, its Git and its agent inside the VM.
+
+On a Linux host, Claude Code's sandbox needs `bubblewrap` and `socat`. On
+Ubuntu 24.04 and later, Ubuntu's stock AppArmor policy can make every
+sandboxed command fail with `apply-seccomp: write /proc/self/setgroups
+(nested userns is capability-restricted; caller must provide
+CAP_SYS_ADMIN): Permission denied`, as it did for Claude Code 2.1.310 on
+Ubuntu 26.04.1 on 2026-10-25
+([anthropics/claude-code#101946](https://github.com/anthropics/claude-code/issues/101946),
+open then). This command checks for it, and changes nothing:
+
+```sh
+bwrap --ro-bind / / --dev /dev --proc /proc --unshare-user cat /proc/self/attr/current
+```
+
+If it prints `bwrap//&unpriv_bwrap (enforce)`, the policy applies, and
+there are two ways out:
+
+- Set `"sandbox": {"network": {"allowAllUnixSockets": true}}` in your own
+  Claude settings on that host. It needs no root, and the sandbox still
+  limits writes, but sandboxed commands can then reach any Unix socket,
+  such as D-Bus or Docker's.
+- With root, replace Ubuntu's `bwrap-userns-restrict` profile with the
+  one in Claude Code's docs, as
+  [a comment on that issue](https://github.com/anthropics/claude-code/issues/101946#issuecomment-6372201031)
+  describes. This lifts Ubuntu's restriction for every program that uses
+  bubblewrap, such as Flatpak.
+
+Codex's sandbox works on such hosts, since it needs only one level of
+bubblewrap.
 
 ## Development
 
