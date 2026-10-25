@@ -1623,8 +1623,10 @@ def window_buffers(qa, repo):
     qa.emacs.eval("(setq tmux-control-window-buffers 'all tmux-control-window-buffer-names 'tab)")
     perspective = qa.emacs.eval("(roost--workspace-backend)") == "perspective"
     try:
-        first = start_task(qa, "Count to three", "count-three")
-        second = start_task(qa, "Count to five", "count-five")
+        # Names no other journey's tasks have: a task named as one already
+        # listed would not be told apart from it.
+        first = start_task(qa, "Keep notes beside the agent")
+        second = start_task(qa, "Keep a log beside the agent")
         session = open_task(qa, first)["task"]["terminal"].split("/")[-1]
         qa.tmux("new-window", "-d", "-t", session + ":", "-n", "notes", "printf 'notes ready\\n'; exec sleep 3600")
         qa.wait("the notes window's buffer", lambda s: any(n.endswith(":notes*") for n in listed_terminals(qa)))
