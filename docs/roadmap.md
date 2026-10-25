@@ -221,6 +221,15 @@ Larger, or undecided.
   an existing branch to continue, and work in place without a worktree,
   such as dotfiles. Today, fetch the ref and start a task from it with
   `C-c C-b` in the draft.
+- **Tasks in Coder workspaces.** A task on a machine that
+  [Coder](https://coder.com) makes from a template your administrator
+  prepared, such as one with a GPU, chosen by the template's parameters,
+  and used in Roost as any other task: its terminal, its panel, Magit. A
+  first version is on the integration branch `coder-integration`, tried
+  with a CPU template and a fake agent but not a GPU; whether it belongs in
+  Roost is still open. Tracked in
+  [#146](https://github.com/csheaff/roost/issues/146): work on it branches
+  off `coder-integration`, not main.
 - **A snapshot at each prompt.** A commit of the worktree under a private
   ref as each prompt is sent, uncommitted work included, would give a diff
   of one turn, and "since you last looked" could start from one. It takes
