@@ -391,9 +391,19 @@ Larger, or undecided.
 - **A docked review column.** Magit, opened with `r`, stages and takes
   notes; see [the Orca comparison](orca-comparison.md#review-notes-and-staging-in-magit).
 - **Built-in browsers and design modes** (Orca, cmux, Superset), **a kanban
-  view** (Org's agenda instead), **containers** for now (agent-deck,
-  workmux), and **scheduled runs** (Orca, Codex, Superset), which need
-  something always running; cron on the host does that.
+  view** (Org's agenda instead), and **scheduled runs** (Orca, Codex,
+  Superset), which need something always running; cron on the host does
+  that.
+- **A container per task**, for now (agent-deck, workmux). Each container
+  needs a copy of the agent's login, whose refresh tokens rotate, so copies
+  sign each other out; a way for hooks inside it to report status out; and
+  the repository's Git metadata mounted at the same path, with its hooks and
+  config read-only. Use the agents' own sandboxes instead, or a VM reached
+  over SSH ([Sandboxes](manual.md#sandboxes)).
+- **Tasks in vendor cloud agents** (Claude Code on the web, Codex cloud).
+  Their machines offer no SSH or terminal to attach to, so Roost meets them
+  at the branches they push: fetch one and start a task from it with
+  `C-c C-b` in the draft.
 
 ## Prior art
 
