@@ -1860,6 +1860,17 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
               (setq current (roost--perspective-name a))
               (roost--gather-task-terminals window)
               (should-not added))
+            ;; Its task's perspective is current in a frame you aren't in:
+            ;; it joins there.  (Batch Emacs has one frame: it stands in for
+            ;; both, each with its own current perspective.)
+            (setq added nil)
+            (let ((names (list (roost--perspective-name b) (roost--perspective-name a))))
+              (cl-letf (((symbol-function 'frame-list)
+                         (lambda () (list (selected-frame) (selected-frame))))
+                        ((symbol-function 'persp-current-name) (lambda () (pop names))))
+                (roost--gather-task-terminals window)))
+            (should (equal added (list window)))
+            (setq added nil)
             ;; A session shared by tasks from before each had its own is
             ;; no one's.
             (roost--cache-task "dev" (append '((session . "roost-a")) (roost-test--task "3333333333333333")))

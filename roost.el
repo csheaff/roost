@@ -1907,7 +1907,20 @@ For `persp-switch-hook', and with BUFFER for
 when it is shown, but tmux-control makes a buffer for a tmux window
 you haven't visited without showing it, when
 `tmux-control-window-buffers' is `all'.  BUFFER goes in its task's
-perspective now if that is current, and otherwise when it becomes so."
+perspective now in each frame where that is current, and otherwise
+when it becomes so."
+  (if buffer
+      ;; Each frame has perspectives of its own, and the task's may be
+      ;; current in one you aren't in.
+      (dolist (frame (frame-list))
+        (unless (frame-parent frame)
+          (with-selected-frame frame
+            (roost--gather-frame-terminals (list buffer)))))
+    (roost--gather-frame-terminals (buffer-list))))
+
+(defun roost--gather-frame-terminals (buffers)
+  "Add those of BUFFERS that are terminals of the current perspective's task to it.
+That is the selected frame's current perspective."
   ;; Look the task up once, not each buffer's.
   (when-let* ((tasks (and (eq (roost--workspace-backend) 'perspective)
                           (fboundp 'persp-add-buffer)
@@ -1921,7 +1934,7 @@ perspective now if that is current, and otherwise when it becomes so."
                              (equal (roost--field other 'socket) (roost--field task 'socket))
                              (equal (roost--field other 'session) session)))
                       tasks)
-      (dolist (buffer (if buffer (list buffer) (buffer-list)))
+      (dolist (buffer buffers)
         (when (and (buffer-live-p buffer)
                    (provided-mode-derived-p (buffer-local-value 'major-mode buffer) 'tmux-control-mode)
                    (with-current-buffer buffer
