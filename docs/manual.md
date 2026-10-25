@@ -844,12 +844,12 @@ What runs where:
 - When the helper measures a task, keeps where you last looked at it, or
   checks it is clean, Git runs no program that config names for its file
   system monitor, diffs or signatures, which an agent may write for a
-  submodule or a worktree though its sandbox keeps it out of the
-  repository's own config: `core.fsmonitor` is off there unless it is
-  Git's own monitor, `log.showSignature` is off, and diffs take
-  `--no-ext-diff --no-textconv`.
-  Clean filters, as Git LFS uses, and merge drivers still run, as when
-  checking for conflicts, and merging runs your hooks.
+  submodule or a worktree though its sandbox ([Sandboxes](#sandboxes))
+  keeps it out of the repository's own config: `core.fsmonitor` is off
+  there unless it is Git's own monitor, `log.showSignature` is off, and
+  diffs take `--no-ext-diff --no-textconv`. Clean filters, as Git LFS
+  uses, and merge drivers still run, as when checking for conflicts, and
+  merging runs your hooks.
 - Each agent starts under the helper's runner, in a tmux window of its
   own. Its hooks, Pi extension or OpenCode plugin run the helper with each
   event on stdin, and the helper records it and prints nothing back: they
