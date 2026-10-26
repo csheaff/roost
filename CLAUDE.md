@@ -32,8 +32,9 @@ The [manual](docs/manual.md#how-it-works) says how it fits together.
 - One ERT test, or those matching a regexp:
   `emacs -Q --batch -L . -L test -l test/roost-test.el -l test/roost-sweep.el --eval '(ert-run-tests-batch-and-exit "REGEXP")'`.
   Python: `python3 -m unittest discover -s test -p 'test_remote.py' -k PATTERN`.
-- The tests of Roost in Magit and its Evil keys are skipped unless Magit,
-  Evil and evil-collection are on `TEST_LOAD_PATH`.
+- The tests of Roost in Magit, its Evil keys and real perspective.el are
+  skipped unless Magit, Evil, evil-collection and perspective.el are on
+  `TEST_LOAD_PATH`.
 - After an agent updates, or when changing what Roost reads from it:
   `make contract` (a free scan of each installed agent), then
   `make contract-live` (real Claude sessions of a few Haiku turns, in

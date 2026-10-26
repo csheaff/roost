@@ -11,6 +11,44 @@ What each release changes, and what to do when upgrading. Newest first.
   make test". The first showed `permission` with nothing to say what
   for, and the second read as any other command. Upgrading: stop and
   resume running Claude tasks (`K`, then `s`) for them to say so.
+- With perspective.el, a task's perspective lists every tmux window of its
+  session from when you open the task, such as a shell you opened there,
+  when `tmux-control-window-buffers` is `all`. A window you hadn't visited
+  was in no perspective's buffer list. This needs tmux-control 0.9.0: when
+  upgrading, update it and set the option to get this.
+- With perspective.el, retiring, merging, discarding or forgetting a task
+  no longer kills the buffers you opened only in its perspective, such as
+  the files you visited there, nor asks whether to kill one with unsaved
+  changes. They stay, outside any perspective: visiting one of those
+  files again finds its buffer, unsaved changes and all. Its scratch
+  buffer still goes, unless you wrote in it. Roost set an option of
+  persp-mode.el, a different package, which perspective.el doesn't read.
+  Nothing to do when upgrading.
+- With perspective.el, retiring, merging, discarding or forgetting a task
+  closes its perspective in every frame, not only in the one you are in,
+  and you stay in your frame. Each frame has perspectives of its own: one
+  you had opened the task in kept its perspective, under the name the
+  task had when you last opened it there. Nothing to do when upgrading.
+- With perspective.el, a task's terminal that reconnects in the
+  background, as `tmux-control-auto-reconnect` does, no longer joins the
+  perspective of the task you are in, whose buffer list then offered it.
+  0.9.0 said this was fixed, but Roost looked before the terminal knew
+  its session and never took one out, nor did switching tasks. One you
+  show in another task's perspective yourself stays there. Nothing to do
+  when upgrading; restarting Emacs clears those added before.
+- Measuring a task, keeping where you last looked at it, counting what
+  discarding it would lose, or checking it is clean before merging or
+  retiring it no longer runs a program that Git's config names for its
+  file system monitor, diffs or signatures
+  (`core.fsmonitor`, `diff.external`, a textconv driver, or `gpg.program`
+  with `log.showSignature`). An agent whose sandbox keeps it out of the
+  repository's config may still write a submodule's, or a worktree's,
+  and the helper, outside the sandbox, ran what it named at the next
+  measurement. Git's own monitor (`core.fsmonitor=true`) stays on. If
+  you set `core.fsmonitor` to a hook, as for Watchman, Roost's
+  measurements of a large repository no longer use it; on macOS and
+  Windows, where Git has a monitor of its own, `git config
+  core.fsmonitor true` speeds them up again.
 - A review note shows once in a Magit diff or status you open again, as
   when you click a file in a task's panel a second time. Magit sets the
   buffer up anew, and Roost lost the note it showed there, which then

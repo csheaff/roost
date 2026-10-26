@@ -1558,6 +1558,88 @@ class Lifecycle(unittest.TestCase):
             if argv[0] == "git" and "merge-base" not in argv:
                 self.assertIn("--no-optional-locks", argv)
 
+    def test_measuring_runs_no_program_a_sandboxed_agent_could_name(self):
+        """A sandbox that keeps its agent out of the repository's own config
+        and hooks, as Claude Code's does for a worktree, still lets it write
+        a submodule's config, and a worktree's where the repository reads
+        those. What Roost does there itself, outside the sandbox, runs no
+        program they name, though Git run by hand would."""
+        self.add_submodule()
+        task = self.create()
+        wt = Path(task["worktree"])
+        self.check_out_submodules(wt)
+        self.commit_in(task)
+        # A signed commit of the task's, merged, whose reflog Roost reads.
+        signed = roost.execute(["git", "-C", str(wt), "hash-object", "-t", "commit", "-w", "--stdin"], input=(
+            "tree %s\nparent %s\nauthor T <t@example.invalid> 1700000000 +0000\n"
+            "committer T <t@example.invalid> 1700000000 +0000\ngpgsig -----BEGIN PGP SIGNATURE-----\n \n"
+            " c2lnbmVk\n -----END PGP SIGNATURE-----\n\nSigned\n"
+            % (self.git("rev-parse", "HEAD^{tree}", cwd=wt), self.git("rev-parse", "HEAD", cwd=wt)))).stdout.strip()
+        self.git("update-ref", "-m", "commit: Signed", "refs/heads/" + task["branch"], signed, cwd=wt)
+        self.git("merge", "-q", "--ff-only", task["branch"])
+        self.assertTrue(self.request("look", id=task["id"])["ok"])
+        (wt / "hello").write_text("changed\n")
+        (wt / "lib" / "built").write_text("built\n")
+        # You read worktrees' config, as for a sparse checkout.
+        self.git("config", "extensions.worktreeConfig", "true")
+        # Where no shell reads anything into the programs' names.
+        marks = Path(tempfile.mkdtemp(prefix="roostplanted", dir="/tmp"))
+        self.addCleanup(shutil.rmtree, marks, True)
+
+        def plant(name):
+            program = marks / name
+            program.write_text("#!/bin/sh\ntouch %s\nexit 1\n" % shlex.quote(str(marks / (name + ".ran"))))
+            program.chmod(0o755)
+            return str(program)
+        ran = lambda: sorted(path.stem for path in marks.glob("*.ran"))
+        config = lambda where: str(where / self.git("rev-parse", "--git-path", "config.worktree", cwd=where))
+        for key, value in (("core.fsmonitor", plant("fsmonitor")), ("diff.external", plant("external")),
+                           ("diff.planted.textconv", plant("textconv"))):
+            self.git("config", "--file", config(wt), key, value)
+        (wt / ".gitattributes").write_text("* diff=planted\n")
+        submodule = Path(os.path.realpath(self.git("rev-parse", "--absolute-git-dir", cwd=wt / "lib")))
+        self.assertIn(Path(os.path.realpath(self.repo / ".git")), submodule.parents)
+        self.git("config", "--file", str(submodule / "config"), "core.fsmonitor", plant("submodule"))
+        for key, value in (("log.showSignature", "true"), ("gpg.program", plant("gpg"))):
+            self.git("config", "--file", config(self.repo), key, value)
+        for where, *args in ((wt, "status"), (wt, "diff", "main"), (wt, "diff", "--no-ext-diff", "main"),
+                             (self.repo, "log", "-1", task["branch"])):
+            roost.git(where, *args, check=False)
+        self.assertEqual(ran(), ["external", "fsmonitor", "gpg", "submodule", "textconv"])
+        for path in marks.glob("*.ran"):
+            path.unlink()
+        calls = []
+        real = roost.execute
+        with patch.object(roost, "execute", lambda argv, **kw: calls.append(argv) or real(argv, **kw)):
+            listed = self.request("list", full=True)
+            looked = self.request("look", id=task["id"])
+            told = self.request("discard", id=task["id"], dryRun=True)
+            # As merging and retiring check first.
+            with self.assertRaises(roost.RoostError):
+                roost.require_clean(str(wt))
+        self.assertEqual(ran(), [])
+        for reply in (listed, looked, told):
+            self.assertTrue(reply["ok"], reply)
+        # Measured all the same.
+        listed = listed["result"][0]
+        self.assertTrue(listed["dirty"] and listed["landed"])
+        self.assertEqual(listed["sinceLooked"]["count"], 2)
+        self.assertIn(dict(path="hello", added=1, deleted=1, uncommitted=True), listed["files"])
+        self.assertEqual(told["result"]["discard"]["changes"], 3)
+        self.assertTrue(calls)
+        for argv in calls:
+            # Those that read an index.
+            if argv[0] == "git" and {"status", "diff", "ls-files", "add", "read-tree", "write-tree"} & set(argv):
+                self.assertIn("core.fsmonitor=false", argv)
+            if "diff" in argv:
+                self.assertTrue({"--no-ext-diff", "--no-textconv"} <= set(argv), argv)
+            if "log" in argv:
+                self.assertTrue({"--no-show-signature", "log.showSignature=false"} & set(argv), argv)
+        # Git's own monitor, a daemon of Git's, stays on where it is on.
+        self.git("config", "--file", config(wt), "core.fsmonitor", "yes")
+        roost.gits_own_fsmonitor.cache_clear()
+        self.assertIn("core.fsmonitor=true", roost.measuring(wt))
+
     def test_a_full_listing_can_name_the_tasks_to_measure(self):
         first, second = self.create(), self.create(name="second")
         (Path(first["worktree"]) / "hello").write_text("changed\n")

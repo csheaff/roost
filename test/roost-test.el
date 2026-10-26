@@ -4,6 +4,7 @@
 (defvar persp-mode nil)
 (defvar persp-modestring-short nil)
 (defvar persp-modestring-dividers nil)
+(defvar persp-suppress-no-prefix-key-warning t)
 (defvar evil-want-keybinding)
 
 (defconst roost-test--report-turn (symbol-function 'roost--report-turn)
@@ -179,6 +180,40 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
              ((symbol-function 'tmux-control-active-pane) (lambda () (plist-get roost-test--tmux :pane)))
              ((symbol-function 'tmux-control-window-id) (lambda () (plist-get roost-test--tmux :window))))
      ,@body))
+
+(defmacro roost-test--with-perspectives (&rest body)
+  "Run BODY isolated, with perspective.el's `persp-mode' on for workspaces.
+Skips the test without perspective.el on the load path."
+  `(progn
+     (skip-unless (require 'perspective nil t))
+     (roost-test--isolated
+      (let ((roost-workspace 'perspective))
+        (save-window-excursion
+          (persp-mode 1)
+          (unwind-protect (progn ,@body)
+            (persp-mode -1)))))))
+
+(defmacro roost-test--with-another-frame (frame &rest body)
+  "Run BODY with FRAME bound to a new frame, the selected one still selected.
+Batch Emacs makes no other frame on its own terminal, so FRAME is a
+terminal's, on a pty.  Skips the test where it can't be made."
+  (let ((pty (make-symbol "pty")))
+    `(let* ((,pty (ignore-errors
+                    (make-process :name "roost-test-pty" :command '("sleep" "600")
+                                  :connection-type 'pty :noquery t)))
+            ;; Without a pty, not on the terminal the tests run in.
+            (,frame (and ,pty (process-tty-name ,pty)
+                         (ignore-errors
+                           ;; No terminal initialization, which for xterm
+                           ;; waits for replies.
+                           (let ((term-file-prefix nil))
+                             (with-selected-frame (selected-frame)
+                               (make-frame `((window-system . nil) (tty . ,(process-tty-name ,pty))
+                                             (tty-type . "vt100")))))))))
+       (unwind-protect
+           (progn (skip-unless ,frame) ,@body)
+         (when (frame-live-p ,frame) (delete-frame ,frame t))
+         (when ,pty (delete-process ,pty))))))
 
 (defun roost-test--task (&optional id status)
   (copy-tree `((id . ,(or id "0123456789abcdef")) (name . "fix auth") (status . ,(or status "ready"))
@@ -1793,27 +1828,213 @@ seconds, and goes when BODY calls `roost-test--a-minute-on'."
      (cl-letf (((symbol-function 'persp-current-name) (lambda () "unrelated")))
        (with-temp-buffer (setq default-directory "/tmp/") (should-not (roost--task-at-point)))))))
 
-(ert-deftest roost-terminal-leaves-the-workspace-of-another-task ()
+;; Its terminal reconnects as `tmux-control-connect' does it: the mode,
+;; which drops the buffer's locals and runs the mode hooks, before it
+;; knows its session again, then shown in the selected window, inside
+;; `save-window-excursion' when in the background.
+(defun roost-test--reconnect (terminal session)
+  "Reconnect TERMINAL, a stand-in for a tmux-control buffer, to SESSION."
+  (with-current-buffer terminal
+    (kill-all-local-variables)
+    (setq major-mode 'tmux-control-mode)
+    (let ((after-change-major-mode-hook (list #'roost--keep-terminal-in-its-workspace)))
+      (run-mode-hooks))
+    (setq roost-test--tmux (list :socket "main" :session session)))
+  (let ((display-buffer-overriding-action '((display-buffer-same-window))))
+    (save-window-excursion (pop-to-buffer terminal))))
+
+(ert-deftest roost-a-terminal-reconnecting-in-the-background-leaves-another-task-s-perspective ()
+  ;; perspective.el adds a buffer to the perspective you are in when it
+  ;; is shown, so a terminal that reconnected in the background was in
+  ;; the buffer list of the task you were in.  Roost looked during the
+  ;; terminal's mode hooks, before it knew its session or was shown:
+  ;; it never took one out.  It looks once the reconnect is done now,
+  ;; and leaves the terminal alive, in its own task's perspective.
+  (roost-test--with-perspectives
+   (let ((mine (roost--cache-task nil (append '((session . "roost-a")) (roost-test--task "1111111111111111"))))
+         (other (roost--cache-task nil (append '((session . "roost-b")) (roost-test--task "2222222222222222"))))
+         (terminal (generate-new-buffer "*tmux roost-a*"))
+         (beside (generate-new-buffer "*tmux roost-b*"))
+         timers)
+     (unwind-protect
+         (roost-test--with-tmux-buffers
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (_time _repeat function &rest args)
+                       (push (cons function args) timers)
+                       (timer-create))))
+            (cl-flet ((done ()
+                        (pcase-dolist (`(,function . ,args) (prog1 timers (setq timers nil)))
+                          (apply function args))))
+              (with-current-buffer beside
+                (setq major-mode 'tmux-control-mode roost-test--tmux (list :socket "main" :session "roost-b")))
+              ;; In its own task's perspective, it stays.
+              (roost--activate-workspace mine)
+              (roost-test--reconnect terminal "roost-a")
+              (done)
+              (should (memq terminal (persp-get-buffers)))
+              (switch-to-buffer terminal)
+              (roost--activate-workspace other)
+              (switch-to-buffer beside)
+              (roost-test--reconnect terminal "roost-a")
+              (should (memq terminal (persp-get-buffers)))
+              ;; From a buffer no window shows, as a timer may run.
+              (with-current-buffer terminal
+                (done)
+                (should (eq (current-buffer) terminal)))
+              (should-not (memq terminal (persp-get-buffers)))
+              (should (eq (window-buffer) beside))
+              (should (buffer-live-p terminal))
+              (should (memq terminal (persp-get-buffers (roost--perspective-name mine))))
+              ;; One you show in another task's perspective yourself stays.
+              (let ((window (split-window)))
+                (set-window-buffer window terminal)
+                (roost-test--reconnect terminal "roost-a")
+                (done)
+                (should (memq terminal (persp-get-buffers)))
+                (should (eq (window-buffer window) terminal))
+                (delete-window window))
+              ;; As does one of a session that tasks from before each had
+              ;; its own share, which is no one's.
+              (persp-forget-buffer terminal)
+              (roost--cache-task nil (append '((session . "roost-a")) (roost-test--task "3333333333333333")))
+              (roost-test--reconnect terminal "roost-a")
+              (done)
+              (should (memq terminal (persp-get-buffers))))))
+       (roost--retired-workspace mine)
+       (roost--retired-workspace other)
+       (mapc #'kill-buffer (list terminal beside))))))
+
+(ert-deftest roost-retiring-a-task-keeps-the-buffers-of-its-perspective ()
+  ;; `persp-kill' killed each buffer no other perspective had: retiring a
+  ;; task killed the files opened in its workspace.
+  (roost-test--with-perspectives
+   (let* ((here (roost--cache-task "dev" (roost-test--task "1111111111111111")))
+          (away (roost--cache-task "dev" (roost-test--task "2222222222222222")))
+          (start (persp-current-name))
+          (file (generate-new-buffer "opened-in-task.el"))
+          (notes (generate-new-buffer "opened-in-another-task"))
+          (scratches (mapcar (lambda (task) (persp-scratch-buffer (roost--perspective-name task t)))
+                             (list here away))))
+     (unwind-protect
+         (progn
+           (roost--activate-workspace away)
+           (switch-to-buffer notes)
+           ;; A scratch buffer you wrote in stays too.
+           (with-current-buffer (nth 1 scratches) (insert "a note"))
+           (roost--activate-workspace here)
+           (switch-to-buffer file)
+           ;; Retired from a buffer with query functions of its own.
+           (add-hook 'kill-buffer-query-functions #'always nil t)
+           ;; One perspective goes while you are in it, the other while not.
+           (roost--retired-workspace away)
+           (should (equal (persp-current-name) (roost--perspective-name here)))
+           (roost--retired-workspace here)
+           (should (equal (persp-names) (list start)))
+           (should (buffer-live-p file))
+           (should (buffer-live-p notes))
+           (should (get-buffer (nth 1 scratches)))
+           (should-not (get-buffer (nth 0 scratches)))
+           ;; In no perspective, rather than in the one you are back in.
+           (should-not (memq file (persp-get-buffers))))
+       (dolist (buffer (cons file (cons notes scratches)))
+         (when (get-buffer buffer) (kill-buffer buffer)))))))
+
+(ert-deftest roost-retiring-a-task-closes-its-perspective-in-every-frame ()
+  ;; Each frame has perspectives of its own, and Roost killed only the
+  ;; selected frame's.
+  (roost-test--with-perspectives
+   (roost-test--with-another-frame other
+    (let* ((task (roost--cache-task "dev" (roost-test--task "1111111111111111")))
+           (old (roost--perspective-name task t))
+           (renamed (roost--cache-task "dev" (append '((name . "fix login")) task)))
+           (mine (selected-frame))
+           (start (persp-current-name))
+           (file (generate-new-buffer "opened-in-the-other-frame.el")))
+      (unwind-protect
+          (progn
+            (with-selected-frame other
+              (roost--activate-workspace task)
+              (persp-switch start))
+            ;; Renamed while the other frame was in another perspective:
+            ;; there it keeps the name it had.
+            (roost--rename-workspace task renamed)
+            (with-selected-frame other
+              (persp-switch old)
+              (switch-to-buffer file))
+            (roost--activate-workspace renamed)
+            (should-not (equal (roost--perspective-name renamed) old))
+            (roost--retired-workspace renamed)
+            (should (eq (selected-frame) mine))
+            (should (equal (persp-names) (list start)))
+            (with-selected-frame other
+              (should (equal (persp-names) (list start)))
+              (should (equal (persp-current-name) start)))
+            (should (buffer-live-p file))
+            (should-not (gethash (roost--key renamed) roost--perspectives)))
+        (kill-buffer file))))))
+
+(ert-deftest roost-window-buffers-join-their-task-s-perspective ()
+  ;; With `tmux-control-window-buffers' set to `all', tmux-control makes a
+  ;; buffer for a tmux window you haven't visited without showing it, so
+  ;; perspective.el puts it in no perspective, and the task's buffer list
+  ;; left it out.  It joins its task's perspective at once if that is
+  ;; current, and otherwise when that becomes current.  Another task's
+  ;; terminals, and other buffers, stay out.
   (roost-test--isolated
-   (let* ((a (roost--cache-task nil (roost-test--task "1111111111111111")))
-          (b (roost--cache-task nil (roost-test--task "2222222222222222")))
-          (persp-mode t) removed)
-     (setf (alist-get 'session a) "roost-a" (alist-get 'session b) "roost-b")
-     (roost--cache-task nil a)
-     (roost--cache-task nil b)
-     (cl-letf (((symbol-function 'persp-remove-buffer) (lambda (buffer) (push buffer removed)))
-               ((symbol-function 'tmux-control-buffer-host) (lambda () nil))
-               ((symbol-function 'tmux-control-buffer-socket-name) (lambda () (roost--field a 'socket)))
-               ((symbol-function 'tmux-control-buffer-session) (lambda () "roost-a"))
-               ((symbol-function 'persp-current-name) (lambda () (roost--perspective-name b))))
-       (with-temp-buffer
-         (roost--keep-terminal-in-its-workspace)
-         (should (equal removed (list (current-buffer)))))
-       (setq removed nil)
-       (cl-letf (((symbol-function 'persp-current-name) (lambda () (roost--perspective-name a))))
-         (with-temp-buffer
-           (roost--keep-terminal-in-its-workspace)
-           (should-not removed)))))))
+   (let ((a (roost--cache-task "dev" (append '((session . "roost-a")) (roost-test--task "1111111111111111"))))
+         (b (roost--cache-task "dev" (append '((session . "roost-b")) (roost-test--task "2222222222222222"))))
+         (window (generate-new-buffer " a's shell"))
+         (other (generate-new-buffer " b's shell"))
+         (plain (generate-new-buffer " plain"))
+         (persp-mode t)
+         current added)
+     (unwind-protect
+         (roost-test--with-tmux-buffers
+          (with-current-buffer window
+            (setq major-mode 'tmux-control-mode
+                  roost-test--tmux (list :host "dev" :socket "main" :session "roost-a" :window "@2")))
+          (with-current-buffer other
+            (setq major-mode 'tmux-control-mode
+                  roost-test--tmux (list :host "dev" :socket "main" :session "roost-b" :window "@2")))
+          (cl-letf (((symbol-function 'persp-current-name) (lambda () current))
+                    ((symbol-function 'persp-add-buffer) (lambda (buffer) (push buffer added))))
+            ;; Made while you are in another task: it waits.
+            (setq current (roost--perspective-name b))
+            (roost--gather-task-terminals window)
+            (should-not added)
+            ;; Made while you are in its own: it joins.
+            (setq current (roost--perspective-name a))
+            (roost--gather-task-terminals window)
+            (should (equal added (list window)))
+            ;; Its task's perspective becomes current: it joins then.
+            (setq added nil)
+            (roost--gather-task-terminals)
+            (should (equal added (list window)))
+            ;; A perspective of no task gathers nothing.
+            (setq current "main" added nil)
+            (roost--gather-task-terminals)
+            (should-not added)
+            (let ((roost-workspace 'tab-bar))
+              (setq current (roost--perspective-name a))
+              (roost--gather-task-terminals window)
+              (should-not added))
+            ;; Its task's perspective is current in a frame you aren't in:
+            ;; it joins there.  (Batch Emacs has one frame: it stands in for
+            ;; both, each with its own current perspective.)
+            (setq added nil)
+            (let ((names (list (roost--perspective-name b) (roost--perspective-name a))))
+              (cl-letf (((symbol-function 'frame-list)
+                         (lambda () (list (selected-frame) (selected-frame))))
+                        ((symbol-function 'persp-current-name) (lambda () (pop names))))
+                (roost--gather-task-terminals window)))
+            (should (equal added (list window)))
+            (setq added nil)
+            ;; A session shared by tasks from before each had its own is
+            ;; no one's.
+            (roost--cache-task "dev" (append '((session . "roost-a")) (roost-test--task "3333333333333333")))
+            (roost--gather-task-terminals)
+            (should-not added)))
+       (mapc #'kill-buffer (list window other plain))))))
 
 (ert-deftest roost-context-distinguishes-hosts-and-directory-boundaries ()
   (roost-test--isolated

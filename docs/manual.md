@@ -82,8 +82,13 @@ Magit is optional (review falls back to Dired).
   [perspective.el](https://github.com/nex3/perspective-el), otherwise a tab when
   `tab-bar-mode` is on, otherwise none: a frame shows one task, whose
   terminal takes the place of another's. `r`, `f` or `D` on another task's
-  row opens its terminal first, then its Magit, files or diff. Set
-  `roost-workspace` to choose.
+  row opens its terminal first, then its Magit, files or diff. Retiring,
+  merging, discarding or forgetting a task closes its workspace; files you
+  opened in it stay open. Set `roost-workspace` to choose. A task's
+  perspective lists the tmux windows of its session you have visited; to
+  list every one from the start, such as a shell you left open, set
+  `tmux-control-window-buffers` to `all` (tmux-control 0.9.0), and to tell
+  them apart by name, `tmux-control-window-buffer-names` to `tab`.
 - **Evil.** Roost's dashboard and panels start in Emacs state so their keys work
   (`roost-evil-state`); `j`/`k` move between tasks. Drafts start in insert
   state. In Magit, Roost's keys work in normal state, with the whole file's
@@ -764,9 +769,10 @@ Things to know:
   has refused five commands, Claude may end a turn by offering to teach
   auto mode about your environment, which no hook reports: the task shows
   `ready`, but a prompt sent from Roost goes to the offer, so answer it in
-  the terminal first. With Claude's sandbox on, a command that needs a
-  new network host asks too: the task shows `permission` about six
-  seconds later and, once you allow the host, until the command ends.
+  the terminal first. With Claude's sandbox on
+  ([Sandboxes](#sandboxes)), a command that needs a new network host
+  asks too: the task shows `permission` about six seconds later and,
+  once you allow the host, until the command ends.
   With `roost-program-status` on, Claude says at once that it asks,
   naming the host, and that it goes on once answered or refused.
 - Pi has no permission prompts of its own, but an extension can ask, as one
@@ -853,6 +859,15 @@ What runs where:
   Python, Roost's files in the state directory and the task's IDs. The
   other shell commands are your `roost-setup-command` and
   `roost-teardown-command`.
+- When the helper measures a task, keeps where you last looked at it, or
+  checks it is clean, Git runs no program that config names for its file
+  system monitor, diffs or signatures, which an agent may write for a
+  submodule or a worktree though its sandbox ([Sandboxes](#sandboxes))
+  keeps it out of the repository's own config: `core.fsmonitor` is off
+  there unless it is Git's own monitor, `log.showSignature` is off, and
+  diffs take `--no-ext-diff --no-textconv`. Clean filters, as Git LFS
+  uses, and merge drivers still run, as when checking for conflicts, and
+  merging runs your hooks.
 - Each agent starts under the helper's runner, in a tmux window of its
   own. Its hooks, Pi extension or OpenCode plugin run the helper with each
   event on stdin, and the helper records it and prints nothing back: they
@@ -981,8 +996,9 @@ Git and isolated tmux sockets (fixture agents drive the actual hook commands,
 without model calls), and a warning-free byte-compile. CI runs it on Emacs 29.1
 and 30.1, except for a change only to Markdown files or `docs/`, which no test
 reads: then its checks pass without running it. The tests of Roost in Magit need Magit and its dependencies on the
-load path, as `make test TEST_LOAD_PATH="-L …/magit/lisp -L …"`, and Evil
-and evil-collection for its Evil keys there; without them they are skipped.
+load path, as `make test TEST_LOAD_PATH="-L …/magit/lisp -L …"`, Evil
+and evil-collection for its Evil keys there, and perspective.el for the tests
+of task perspectives in it; without them they are skipped.
 
 Most ERT tests check one thing someone thought to check. `test/roost-sweep.el`
 checks rules instead. It draws the task panel, dashboard, sidebar and search

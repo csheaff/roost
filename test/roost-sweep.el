@@ -255,35 +255,68 @@ Called, they are recorded and stop the command.")
 
 (defvar native-comp-enable-subr-trampolines)
 
+(defun roost-sweep--keeping-perspectives (body)
+  "Call BODY, then put the selected frame's perspectives back as they were.
+Under perspective.el, a view of a task, such as its changed files, opens
+the task's perspective first.  Kept, it would make each buffer killed
+after cost more, as perspective.el switches to every perspective to ask
+whether the buffer is its last; and the next action would start in that
+task's perspective rather than where the others start."
+  (if (not (and (bound-and-true-p persp-mode) (fboundp 'persp-names)))
+      (funcall body)
+    (let ((frame (selected-frame))
+          (names (persp-names))
+          (current (persp-current-name))
+          (windows (current-window-configuration))
+          (buffers (buffer-list)))
+      (unwind-protect (funcall body)
+        (when (frame-live-p frame)
+          (with-selected-frame frame
+            (unless (and (equal (persp-current-name) current) (seq-set-equal-p (persp-names) names))
+              (when (member current (persp-names))
+                (persp-switch current 'norecord))
+              ;; Killing a perspective kills the buffers no other one has:
+              ;; those made since, but not those that were here before.
+              (let ((keep (lambda () (not (memq (current-buffer) buffers)))))
+                (add-hook 'kill-buffer-query-functions keep)
+                (unwind-protect
+                    (dolist (name (persp-names))
+                      (unless (member name names) (persp-kill name)))
+                  (remove-hook 'kill-buffer-query-functions keep)))
+              (set-window-configuration windows))))))))
+
 (defmacro roost-sweep--world (&rest body)
-  "Run BODY with the outside world stubbed and fresh Roost state."
+  "Run BODY with the outside world stubbed and fresh Roost state.
+Under perspective.el, in the perspectives it started with."
   (declare (indent 0))
   `(roost-test--isolated
     (roost-sweep--populate)
-    (let ((roost-sweep--effects nil)
-          (inhibit-message t)
-          (message-log-max nil)
-          ;; Natively compiled, a stubbed primitive needs a trampoline,
-          ;; and compiling one runs a process; Roost runs from source here.
-          (native-comp-enable-subr-trampolines nil))
-      (cl-letf* (,@(mapcar (lambda (f)
-                             `((symbol-function ',f)
-                               (lambda (&rest args)
-                                 (push (cons ',f args) roost-sweep--effects)
-                                 ;; Stubbed, a process is checked here.
-                                 (roost-test--note-start ',f args)
-                                 (signal 'roost-sweep-outside (list ',f)))))
-                           roost-sweep--outside)
-                 ,@(mapcar (lambda (f)
-                             `((symbol-function ',f)
-                               (lambda (&rest args)
-                                 (push (cons ',f args) roost-sweep--effects)
-                                 (signal 'quit nil))))
-                           roost-sweep--questions)
-                 ;; Global modes have tests of their own; here they are only noted.
-                 ((symbol-function 'roost-watch-mode)
-                  (lambda (&rest args) (push (cons 'roost-watch-mode args) roost-sweep--effects))))
-        ,@body))))
+    (roost-sweep--keeping-perspectives
+     (lambda ()
+       (let ((roost-sweep--effects nil)
+             (inhibit-message t)
+             (message-log-max nil)
+             ;; Natively compiled, a stubbed primitive needs a trampoline,
+             ;; and compiling one runs a process; Roost runs from source here.
+             (native-comp-enable-subr-trampolines nil))
+         (cl-letf* (,@(mapcar (lambda (f)
+                                `((symbol-function ',f)
+                                  (lambda (&rest args)
+                                    (push (cons ',f args) roost-sweep--effects)
+                                    ;; Stubbed, a process is checked here.
+                                    (roost-test--note-start ',f args)
+                                    (signal 'roost-sweep-outside (list ',f)))))
+                              roost-sweep--outside)
+                    ,@(mapcar (lambda (f)
+                                `((symbol-function ',f)
+                                  (lambda (&rest args)
+                                    (push (cons ',f args) roost-sweep--effects)
+                                    (signal 'quit nil))))
+                              roost-sweep--questions)
+                    ;; Global modes have tests of their own; here they are only noted.
+                    ((symbol-function 'roost-watch-mode)
+                     (lambda (&rest args) (push (cons 'roost-watch-mode args) roost-sweep--effects))))
+           ,@body))))))
 
 ;;;; Views
 
