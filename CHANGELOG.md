@@ -17,6 +17,13 @@ What each release changes, and what to do when upgrading. Newest first.
   buffer still goes, unless you wrote in it. Roost set an option of
   persp-mode.el, a different package, which perspective.el doesn't read.
   Nothing to do when upgrading.
+- With perspective.el, a task's terminal that reconnects in the
+  background, as `tmux-control-auto-reconnect` does, no longer joins the
+  perspective of the task you are in, whose buffer list then offered it.
+  0.9.0 said this was fixed, but Roost looked before the terminal knew
+  its session and never took one out, nor did switching tasks. One you
+  show in another task's perspective yourself stays there. Nothing to do
+  when upgrading; restarting Emacs clears those added before.
 - Measuring a task, keeping where you last looked at it, counting what
   discarding it would lose, or checking it is clean before merging or
   retiring it no longer runs a program that Git's config names for its

@@ -1653,6 +1653,45 @@ def window_buffers(qa, repo):
         qa.emacs.eval("(setq tmux-control-window-buffers t tmux-control-window-buffer-names 'id)")
 
 
+def terminal_of(session):
+    """Lisp for the buffer holding the connection to tmux session SESSION."""
+    return ('(seq-find (lambda (b) (and (get-buffer-process b) (with-current-buffer b'
+            ' (equal (tmux-control-buffer-session) %s)))) (buffer-list))' % lisp(session))
+
+
+@journey("A terminal reconnecting while you are in another task")
+def reconnect_away(qa, repo):
+    """With tmux-control-auto-reconnect on, a task's terminal whose
+    connection dropped comes back by itself, even while you are in another
+    task. It stays out of that task's buffer list, and is in its own's when
+    you go back."""
+    qa.emacs.eval("(setq tmux-control-auto-reconnect t)")
+    perspective = qa.emacs.eval("(roost--workspace-backend)") == "perspective"
+    try:
+        first = start_task(qa, "Drop the line and come back")
+        second = start_task(qa, "Stay on the line")
+        away = open_task(qa, first)["task"]["terminal"].split("/")[-1]
+        here = open_task(qa, second)["task"]["terminal"].split("/")[-1]
+        dropped = qa.emacs.eval("(process-id (get-buffer-process %s))" % terminal_of(away))
+        # As a closed lid or a dropped link does, not C-c C-k.
+        qa.emacs.eval("(signal-process (get-buffer-process %s) 'KILL)" % terminal_of(away))
+        qa.wait("the first task's terminal to reconnect", lambda s: qa.emacs.eval(
+            "(when-let* ((b %s)) (process-id (get-buffer-process b)))" % terminal_of(away)) not in ("nil", dropped))
+        qa.step("The first task's terminal back, while you are in the second", expect=[
+            ("the second task lists none of the first's terminals",
+             lambda s: not perspective or not any(away in n for n in listed_terminals(qa))),
+            ("it lists its own", lambda s: any(here in n for n in listed_terminals(qa))),
+            ("the second task's terminal is still on screen",
+             lambda s: (selected_terminal(s) or {}).get("terminal", "").endswith("/" + here))])
+        open_task(qa, first)
+        qa.step("Back to the first task", expect=[
+            ("it lists its terminal", lambda s: any(away in n for n in listed_terminals(qa))),
+            ("the terminal is live", lambda s: qa.emacs.eval(
+                "(process-live-p (get-buffer-process %s))" % terminal_of(away)) == "t")])
+    finally:
+        qa.emacs.eval("(setq tmux-control-auto-reconnect nil)")
+
+
 def to_shell(qa):
     """Move to the shell pane beside the agent, wherever the view has put you:
     what is typed next must not reach the agent."""
@@ -3412,7 +3451,7 @@ def crashed(qa, repo):
             for name in (first, second)))])
 
 
-JOURNEYS = [sweep, answer, next_waiting, fold, resize, merge, review, notes, since_looked, panes, window_buffers, shell,
+JOURNEYS = [sweep, answer, next_waiting, fold, resize, merge, review, notes, since_looked, panes, window_buffers, reconnect_away, shell,
             dashboard, panel_keys, stop_resume, retire, discard, teardown, send, attach, update, conflicts, restart,
             search, workload, question_left,
             walk_away,
