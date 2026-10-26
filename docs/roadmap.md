@@ -247,16 +247,19 @@ Larger, or undecided.
   unknown, and "fixed soon after" needs a definition Git can answer.
 - **Rex in place of tmux.** [Rex](https://www.superlogical.com/rex/docs),
   from Superlogical, is a terminal and multiplexer built on Ghostty's
-  engine, in beta on macOS since 2026-10-05. Its server API covers what the
-  helper asks of tmux: start a terminal running a command in a folder, type
-  into it, close it, and push events for its exit code and its program
-  status (OSC 7501, which tmux blocks; see
+  engine, in beta on macOS since 2026-10-05, and its Linux server with
+  testers since late October. Its server API covers what the helper asks
+  of tmux: start a terminal running a command in a folder, type into it,
+  close it, and push events for its exit code and its program status (OSC
+  7501, which tmux blocks; see
   [tmux#5713](https://github.com/tmux/tmux/issues/5713)). Its IDs are never
   reused, so a stale ID can't reach another terminal. Missing: a documented
   way for Emacs to attach to a terminal and stream it, as tmux-control does
-  with control mode, and Rex servers on Linux outside Superlogical. Ask for
-  the first in the beta. Look again once both exist, or once tmux turns
-  down OSC 7501 for good.
+  with control mode. Rex's stream starts with a snapshot in Ghostty's own
+  format, and `rex block stream` isn't implemented: asked for in the beta
+  on 2026-10-21, and still so on 2026-10-26 ([validation](validation.md)).
+  Look again once Emacs can attach, or once tmux turns down OSC 7501 for
+  good.
 - **zmx and Ghostel in place of tmux.** [zmx](https://github.com/neurosnap/zmx)
   keeps each task's terminal in a small daemon of its own and redraws it
   from Ghostty's engine when you attach. Emacs would show a task as a plain
