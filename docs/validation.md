@@ -66,6 +66,13 @@ happened in a section below:
   go, with tasks running while no frame is open: no errors. Tasks of
   0.11.0's helper, its runners still running, then every action from
   main's helper: all worked. A host with Python 3.8 now says so (#158).
+- **`draft_fields` over `--remote`, afterwards.** The row off was tmux's:
+  given a wider size and then a narrower one after the agent printed, it
+  wrapped the line again and pushed the screen's first row into history.
+  With #162 and tmux-control#212, which asks tmux for a terminal's size
+  once its window has settled, it passes, local and remote. The journey
+  now waits for the agent's first screen, which over the slow link comes a
+  moment after the terminal opens.
 
 ## Claude Code's waits in auto mode and its sandbox — 2026-10-25
 
