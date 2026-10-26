@@ -4,6 +4,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- With the task panel on, an agent starts at the width its terminal
+  will have beside the panel. Started from a draft, which has no panel
+  beside it, it started that much wider, drew its first screen for that
+  width, and tmux wrapped those lines again once the panel docked.
+  Nothing to do when upgrading.
 - With a tab or perspective per task, the sidebar keeps marking your
   task while you write a review note. The box you write it in is a frame
   of its own, with no task's tab or perspective, so the sidebar marked

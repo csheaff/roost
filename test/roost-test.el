@@ -10750,3 +10750,34 @@ it of the same ID's, or nil for the first."
          (select-window small)
          (should (> (alist-get 'width (roost--terminal-size))
                     (window-max-chars-per-line large))))))))
+
+(ert-deftest roost-terminal-size-leaves-room-for-the-panel-to-come ()
+  ;; A task created from a draft, which has no panel beside it, started
+  ;; its agent at the draft's width: then the panel docked, and tmux
+  ;; wrapped the agent's first screen again for the narrower terminal.
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let ((roost-task-panel-mode t)
+           (width (window-max-chars-per-line)))
+       (cl-letf (((symbol-function 'roost--workspace-backend) (lambda () nil))
+                 ((symbol-function 'roost--task-panel-fits-p) (lambda (_) t)))
+         (should (= (alist-get 'width (roost--terminal-size)) (- width roost-task-panel-width)))
+         (should (= (alist-get 'height (roost--terminal-size))
+                    (alist-get 'height (roost--area-size (selected-window) (selected-window)))))
+         ;; One docked already makes room as it is.
+         (cl-letf (((symbol-function 'roost--task-panel-window) #'selected-window))
+           (should (= (alist-get 'width (roost--terminal-size)) width)))
+         (let ((roost-task-panel-mode nil))
+           (should (= (alist-get 'width (roost--terminal-size)) width))))
+       ;; Nor where it wouldn't fit.
+       (cl-letf (((symbol-function 'roost--workspace-backend) (lambda () nil))
+                 ((symbol-function 'roost--task-panel-fits-p) (lambda (_) nil)))
+         (should (= (alist-get 'width (roost--terminal-size)) width)))
+       ;; Nor to a window beside another, whose columns it doesn't take.
+       (let ((left (selected-window)))
+         (split-window left nil 'right)
+         (select-window left)
+         (cl-letf (((symbol-function 'roost--workspace-backend) (lambda () nil))
+                   ((symbol-function 'roost--task-panel-fits-p) (lambda (_) t)))
+           (should (= (alist-get 'width (roost--terminal-size)) (window-max-chars-per-line left)))))))))
