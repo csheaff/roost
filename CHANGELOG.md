@@ -9,6 +9,14 @@ What each release changes, and what to do when upgrading. Newest first.
   when `tmux-control-window-buffers` is `all`. A window you hadn't visited
   was in no perspective's buffer list. This needs tmux-control 0.9.0: when
   upgrading, update it and set the option to get this.
+- With perspective.el, retiring, merging, discarding or forgetting a task
+  no longer kills the buffers you opened only in its perspective, such as
+  the files you visited there, nor asks whether to kill one with unsaved
+  changes. They stay, outside any perspective: visiting one of those
+  files again finds its buffer, unsaved changes and all. Its scratch
+  buffer still goes, unless you wrote in it. Roost set an option of
+  persp-mode.el, a different package, which perspective.el doesn't read.
+  Nothing to do when upgrading.
 - Measuring a task, keeping where you last looked at it, counting what
   discarding it would lose, or checking it is clean before merging or
   retiring it no longer runs a program that Git's config names for its

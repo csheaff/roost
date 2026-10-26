@@ -82,12 +82,13 @@ Magit is optional (review falls back to Dired).
   [perspective.el](https://github.com/nex3/perspective-el), otherwise a tab when
   `tab-bar-mode` is on, otherwise none: a frame shows one task, whose
   terminal takes the place of another's. `r`, `f` or `D` on another task's
-  row opens its terminal first, then its Magit, files or diff. Set
-  `roost-workspace` to choose. A task's perspective lists the tmux windows
-  of its session you have visited; to list every one from the start, such
-  as a shell you left open, set `tmux-control-window-buffers` to `all`
-  (tmux-control 0.9.0), and to tell them apart by name,
-  `tmux-control-window-buffer-names` to `tab`.
+  row opens its terminal first, then its Magit, files or diff. Retiring,
+  merging, discarding or forgetting a task closes its workspace; files you
+  opened in it stay open. Set `roost-workspace` to choose. A task's
+  perspective lists the tmux windows of its session you have visited; to
+  list every one from the start, such as a shell you left open, set
+  `tmux-control-window-buffers` to `all` (tmux-control 0.9.0), and to tell
+  them apart by name, `tmux-control-window-buffer-names` to `tab`.
 - **Evil.** Roost's dashboard and panels start in Emacs state so their keys work
   (`roost-evil-state`); `j`/`k` move between tasks. Drafts start in insert
   state. In Magit, Roost's keys work in normal state, with the whole file's
@@ -982,8 +983,9 @@ Git and isolated tmux sockets (fixture agents drive the actual hook commands,
 without model calls), and a warning-free byte-compile. CI runs it on Emacs 29.1
 and 30.1, except for a change only to Markdown files or `docs/`, which no test
 reads: then its checks pass without running it. The tests of Roost in Magit need Magit and its dependencies on the
-load path, as `make test TEST_LOAD_PATH="-L …/magit/lisp -L …"`, and Evil
-and evil-collection for its Evil keys there; without them they are skipped.
+load path, as `make test TEST_LOAD_PATH="-L …/magit/lisp -L …"`, Evil
+and evil-collection for its Evil keys there, and perspective.el for the tests
+of task perspectives in it; without them they are skipped.
 
 Most ERT tests check one thing someone thought to check. `test/roost-sweep.el`
 checks rules instead. It draws the task panel, dashboard, sidebar and search
