@@ -17,6 +17,11 @@ What each release changes, and what to do when upgrading. Newest first.
   buffer still goes, unless you wrote in it. Roost set an option of
   persp-mode.el, a different package, which perspective.el doesn't read.
   Nothing to do when upgrading.
+- With perspective.el, retiring, merging, discarding or forgetting a task
+  closes its perspective in every frame, not only in the one you are in,
+  and you stay in your frame. Each frame has perspectives of its own: one
+  you had opened the task in kept its perspective, under the name the
+  task had when you last opened it there. Nothing to do when upgrading.
 - With perspective.el, a task's terminal that reconnects in the
   background, as `tmux-control-auto-reconnect` does, no longer joins the
   perspective of the task you are in, whose buffer list then offered it.
