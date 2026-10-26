@@ -607,9 +607,22 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(store.read(task["id"])["request"], "Asks to run cd sub && make test")
         hook(hook_event_name="PostToolUse", tool_name="Bash", tool_input=dict(command="make test"))
         self.assertNotIn("request", store.read(task["id"]))
-        # A prompt reported only by a notification has nothing to show.
+        # A prompt reported only by a notification says what its words say,
+        # as a sandboxed command's network request does.
         hook(hook_event_name="Notification", notification_type="permission_prompt")
         self.assertEqual(store.read(task["id"])["status"], "permission")
+        self.assertNotIn("request", store.read(task["id"]))
+        hook(hook_event_name="PreToolUse", tool_name="Bash", tool_input=dict(command="npm install"))
+        hook(hook_event_name="Notification", notification_type="permission_prompt",
+             message="A sandboxed command\nneeds network access")
+        record = store.read(task["id"])
+        self.assertEqual((record["status"], record["request"]), ("permission", "A sandboxed command needs network access"))
+        self.assertNotIn("requestCommand", record)
+        # Another that follows says no more.
+        hook(hook_event_name="Notification", notification_type="permission_prompt",
+             message="Claude needs your permission")
+        self.assertEqual(store.read(task["id"])["request"], "A sandboxed command needs network access")
+        hook(hook_event_name="PostToolUse", tool_name="Bash", tool_input=dict(command="npm install"))
         self.assertNotIn("request", store.read(task["id"]))
         hook(hook_event_name="PermissionRequest", tool_name="Write",
              tool_input=dict(file_path=str(Path(task["worktree"]) / "docs" / "notes.md")))
@@ -5803,6 +5816,10 @@ class PermissionRequest(unittest.TestCase):
         self.assertEqual(ask("mcp__github__create_issue", title="x"), "Asks to use mcp__github__create_issue")
         self.assertEqual(ask("Bash"), "Asks to use Bash")
         self.assertEqual(len(ask("Bash", command="x" * 1000)), len("Asks to run ") + roost.REQUEST_LIMIT)
+        # Claude Code's request to leave its sandbox says so before the command.
+        self.assertEqual(ask("Bash", command="curl https://example.com", dangerouslyDisableSandbox=True),
+                         "Asks to run outside the sandbox: curl https://example.com")
+        self.assertEqual(ask("Bash", command="make", dangerouslyDisableSandbox=False), "Asks to run make")
         # A cd into the worktree the command runs in anyway is left out.
         self.assertEqual(ask("Bash", command="cd /work/task 2>/dev/null || true; git status --short"),
                          "Asks to run git status --short")

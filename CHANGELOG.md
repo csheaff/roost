@@ -4,6 +4,13 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- With Claude Code's sandbox on, a task whose sandboxed command needs a
+  new network host says so in its panel and notification, "A sandboxed
+  command needs network access", and one that asks to run a command
+  outside the sandbox says that too: "Asks to run outside the sandbox:
+  make test". The first showed `permission` with nothing to say what
+  for, and the second read as any other command. Upgrading: stop and
+  resume running Claude tasks (`K`, then `s`) for them to say so.
 - With perspective.el, a task's perspective lists every tmux window of its
   session from when you open the task, such as a shell you opened there,
   when `tmux-control-window-buffers` is `all`. A window you hadn't visited
