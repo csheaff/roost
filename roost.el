@@ -2616,8 +2616,12 @@ Nil too on another host, where reading it would hold up the draft."
   "Draft a coding agent task.  Write the prompt below the line.
 \\{roost-compose-mode-map}"
   (setq-local header-line-format
-              (substitute-command-keys
-               " \\[roost-compose-submit] create · \\[roost-compose-cancel] cancel · click a field to change it"))
+              (list (substitute-command-keys
+                     " \\[roost-compose-submit] create · \\[roost-compose-cancel] cancel")
+                    ;; As the frame it shows in reads clicks: a text
+                    ;; frame does with `xterm-mouse-mode'.
+                    '(:eval (when (or (display-graphic-p) (bound-and-true-p xterm-mouse-mode))
+                              " · click a field to change it"))))
   (add-hook 'after-change-functions #'roost--compose-changed nil t)
   (add-hook 'after-change-major-mode-hook #'roost--quiet-display 90 t)
   (roost--evil-state 'roost-compose-mode 'insert)
@@ -4554,8 +4558,11 @@ Thin rules in the notes' color set each note apart from the diff."
                                   (propertize line 'face `(,rule roost-note default))
                                   ;; Rules go across the window, as the note's
                                   ;; background does, whatever the next line is.
+                                  ;; Not in a text frame, which keeps the last
+                                  ;; column for its sign that a line runs on: a
+                                  ;; space up to the edge showed a $ there.
                                   (when rule
-                                    (propertize " " 'display '(space :align-to right)
+                                    (propertize " " 'display '(when (display-graphic-p) . (space :align-to right))
                                                 'face `(,rule roost-note default)))
                                   (propertize "\n" 'face '(:inherit (roost-note default) :extend t)))))
                       lines "")
