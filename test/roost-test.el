@@ -1973,6 +1973,29 @@ terminal's, on a pty.  Skips the test where it can't be made."
             (should-not (gethash (roost--key renamed) roost--perspectives)))
         (kill-buffer file))))))
 
+(ert-deftest roost-a-child-frame-s-task-is-its-parent-s ()
+  ;; The box for a review note is a child frame, which has a perspective
+  ;; of its own but no task's: while you wrote a note, the sidebar
+  ;; marked no task.
+  (roost-test--with-perspectives
+   (roost-test--with-another-frame child
+    (let* ((task (roost--cache-task "dev" (roost-test--task "1111111111111111")))
+           (parent (selected-frame))
+           (start (persp-current-name)))
+      (unwind-protect
+          (cl-letf (((symbol-function 'frame-parent)
+                     (lambda (&optional frame) (and (eq (or frame (selected-frame)) child) parent))))
+            (roost--activate-workspace task)
+            (with-selected-frame child
+              (should-not (equal (persp-current-name) (roost--perspective-name task)))
+              (should (equal (roost--frame-task) task))
+              (should (roost--current-task-p task))))
+        (persp-switch start)
+        (let ((name (roost--perspective-name task)))
+          (persp-kill name)
+          (when-let* ((scratch (get-buffer (persp-scratch-buffer name))))
+            (kill-buffer scratch))))))))
+
 (ert-deftest roost-window-buffers-join-their-task-s-perspective ()
   ;; With `tmux-control-window-buffers' set to `all', tmux-control makes a
   ;; buffer for a tmux window you haven't visited without showing it, so

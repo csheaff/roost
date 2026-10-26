@@ -4,6 +4,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- With a tab or perspective per task, the sidebar keeps marking your
+  task while you write a review note. The box you write it in is a frame
+  of its own, with no task's tab or perspective, so the sidebar marked
+  none, and kept marking none after you went back to the terminal until
+  something redrew it. Nothing to do when upgrading.
 - With Claude Code's sandbox on, a task whose sandboxed command needs a
   new network host says so in its panel and notification, "A sandboxed
   command needs network access", and one that asks to run a command
