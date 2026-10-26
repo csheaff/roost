@@ -10808,4 +10808,13 @@ it of the same ID's, or nil for the first."
          (select-window left)
          (cl-letf (((symbol-function 'roost--workspace-backend) (lambda () nil))
                    ((symbol-function 'roost--task-panel-fits-p) (lambda (_) t)))
-           (should (= (alist-get 'width (roost--terminal-size)) (window-max-chars-per-line left)))))))))
+           (should (= (alist-get 'width (roost--terminal-size)) (window-max-chars-per-line left))))
+         ;; In a workspace of its own the terminal fills the main area, all
+         ;; of whose windows the panel docks beside.
+         (cl-letf (((symbol-function 'roost--workspace-backend) (lambda () 'tab-bar))
+                   ((symbol-function 'roost--task-panel-fits-p) (lambda (_) t)))
+           (let ((area (alist-get 'width (roost--area-size (window-main-window) left))))
+             (should (> area (window-max-chars-per-line left)))
+             (should (= (alist-get 'width (roost--terminal-size)) (- area roost-task-panel-width)))
+             (let ((roost-task-panel-mode nil))
+               (should (= (alist-get 'width (roost--terminal-size)) area))))))))))
