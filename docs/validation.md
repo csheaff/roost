@@ -35,6 +35,27 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## A terminal reconnecting in another task — 2026-10-25
+
+- **Why.** 0.9.0 said a task's terminal that reconnected in the background
+  no longer joined the perspective of the task you were in. These runs
+  check whether that was ever so.
+- **Before.** Emacs 32.0.50 in batch, tmux 3.6a on a socket of its own,
+  tmux-control at 531b7d1 with `tmux-control-auto-reconnect` on, and
+  perspective.el 2.19. Task A's terminal was open in A's perspective and
+  B's in B's. A's control client was killed while in B. Roost's hook ran
+  before the terminal knew its session, so it did nothing, and B's
+  perspective listed A's terminal after the reconnect. It still did after
+  switching to A and back. tmux-control at #22's time set the session
+  after the mode too.
+- **After.** In the same run, B lists only its own terminal, A lists its
+  own, and B's window still shows B's terminal. With
+  `tmux-control-window-buffers` set to `all` and a second tmux window in
+  A, none of A's buffers joined B. A's terminal shown beside B's on
+  purpose stays in B.
+- **GUI.** The `reconnect_away` journey passes with `--popular` and
+  without it. It fails with the old timing.
+
 ## Agents' own sandboxes — 2026-10-25
 
 - **Why.** Roost builds no sandbox and leaves it to the agents, so the
