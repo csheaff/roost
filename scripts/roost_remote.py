@@ -4125,8 +4125,8 @@ def doctor(store, request):
     def check(name, ok, detail, hint=None, path=None, optional=False):
         checks.append(dict(name=name, ok=ok, detail=detail, hint=hint, path=path, optional=optional))
 
-    check("Python", sys.version_info >= (3, 9), sys.version.split()[0],
-          None if sys.version_info >= (3, 9) else "Install Python 3.9 or newer")
+    check("Python", sys.version_info >= PYTHON_FLOOR, sys.version.split()[0],
+          None if sys.version_info >= PYTHON_FLOOR else "Install Python %d.%d or newer as python3" % PYTHON_FLOOR)
     path = agent_path(os.environ.get("PATH", ""))
     env = dict(os.environ, PATH=path)
 
@@ -5355,9 +5355,18 @@ TASK_ACTIONS = {
 }
 
 
+PYTHON_FLOOR = (3, 9)
+
+
 def rpc(request):
     # What Git's config said is for one request, each a process of its own but in tests.
     gits_own_fsmonitor.cache_clear()
+    # An older Python runs the helper until it meets what it lacks, partway
+    # through an action, and says only that, as "'PosixPath' object has no
+    # attribute 'is_relative_to'". The doctor says which Python it is.
+    if sys.version_info < PYTHON_FLOOR and request.get("action") != "doctor":
+        return {"ok": False, "error": "Roost needs Python %d.%d or newer as python3 on this host, which has %s"
+                % (PYTHON_FLOOR + (sys.version.split()[0],))}
     try:
         store = Store(request["root"])
         action = request["action"]
