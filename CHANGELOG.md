@@ -4,6 +4,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- On a host whose `python3` is older than 3.9, as on Ubuntu 20.04, Roost
+  says "Roost needs Python 3.9 or newer as python3 on this host, which
+  has 3.8.10" and starts nothing. It ran until it met what that Python
+  lacks, and said only that, as "AttributeError: 'PosixPath' object has
+  no attribute 'is_relative_to'". Nothing to do when upgrading.
 - With Claude Code's sandbox on, a task whose sandboxed command needs a
   new network host says so in its panel and notification, "A sandboxed
   command needs network access", and one that asks to run a command
