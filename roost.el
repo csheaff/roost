@@ -82,6 +82,7 @@
 (declare-function persp-forget-buffer "perspective" (buffer))
 (declare-function persp-scratch-buffer "perspective" (&optional name))
 (declare-function persp-add-buffer "perspective" (buffer-or-name))
+(declare-function persp-is-current-buffer "perspective" (buf &optional include-global))
 (declare-function persp-current-name "perspective" ())
 (declare-function persp-names "perspective" ())
 (declare-function persp-format-name "perspective" (name))
@@ -1879,29 +1880,36 @@ panel, rather than inside the workspace of the task you were in."
       t)))
 
 (defun roost--keep-terminal-in-its-workspace ()
-  "Take the current buffer out of another task's workspace.
+  "Keep the current buffer, a terminal, out of other tasks' workspaces.
 For `after-change-major-mode-hook': a terminal reconnecting in the
-background is added to whichever perspective is current, so the
-buffer list of one task would offer the terminals of the others."
-  (when (and (fboundp 'persp-forget-buffer)
-             (eq (roost--workspace-backend) 'perspective)
-             (fboundp 'tmux-control-buffer-session)
-             (tmux-control-buffer-session))
-    (let* ((host (tmux-control-buffer-host))
-           (socket (tmux-control-buffer-socket-name))
-           (session (tmux-control-buffer-session))
-           (tasks (seq-filter (lambda (task)
-                                (and (equal (roost--field task 'host) host)
-                                     (equal (roost--field task 'socket) socket)
-                                     (equal (roost--field task 'session) session)))
-                              (roost-tasks))))
-      (when (and tasks (null (cdr tasks))
-                 (not (equal (persp-current-name) (roost--perspective-name (car tasks)))))
-        ;; Not `persp-remove-buffer', which kills a buffer no other
-        ;; perspective has.  This one makes the selected window's buffer
-        ;; current, in the middle of the terminal's mode hooks.
-        (save-current-buffer
-          (persp-forget-buffer (current-buffer)))))))
+background joins whichever perspective is current, so the buffer list
+of one task would offer the terminals of the others.  The terminal's
+mode comes before it knows its session, and it joins the perspective
+when it is shown, later still: this looks once the reconnect is done."
+  (when (and (derived-mode-p 'tmux-control-mode)
+             (eq (roost--workspace-backend) 'perspective))
+    (run-at-time 0 nil #'roost--forget-terminal-elsewhere (current-buffer))))
+
+(defun roost--forget-terminal-elsewhere (buffer)
+  "Take BUFFER, a task's terminal, out of perspectives not its task's.
+That is the current perspective of each frame, where it lists BUFFER
+without showing it: one you show it in is yours."
+  (when-let* (((buffer-live-p buffer))
+              ((fboundp 'persp-forget-buffer))
+              ((eq (roost--workspace-backend) 'perspective))
+              (task (roost--terminal-task buffer)))
+    ;; Each frame has perspectives of its own, and the task's may have
+    ;; another name in each.
+    (dolist (frame (frame-list))
+      (unless (frame-parent frame)
+        (with-selected-frame frame
+          (when (and (persp-is-current-buffer buffer)
+                     (not (get-buffer-window buffer))
+                     (not (equal (persp-current-name) (roost--perspective-name task))))
+            ;; Not `persp-remove-buffer', which kills a buffer no other
+            ;; perspective has.  This one makes the selected window's
+            ;; buffer current, until `with-selected-frame' puts it back.
+            (persp-forget-buffer buffer)))))))
 
 (defun roost--gather-task-terminals (&optional buffer)
   "Add the terminals of the current perspective's task to it.
