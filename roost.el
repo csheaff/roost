@@ -9796,11 +9796,18 @@ workspace that is no task's, the task whose terminal the frame shows: a
 frame made with \\[make-frame-command] under perspective.el starts in a
 perspective of its own, showing the terminal you were in.  Without
 workspaces, it is the task last used in the frame, or taken up since;
-see `roost--adopt-shown-task'."
-  (if (roost--workspace-backend)
-      (or (roost--workspace-task (roost--current-workspace) (roost-tasks))
-          (roost--shown-task))
-    (gethash (frame-parameter nil 'roost-task) roost--tasks)))
+see `roost--adopt-shown-task'.  In a child frame, as the box for a
+review note is, it is the task of the frame the child is in: a child
+has no workspace or task of its own, so the sidebar marked none while
+you wrote a note."
+  (let ((frame (selected-frame)))
+    (while (frame-parent frame)
+      (setq frame (frame-parent frame)))
+    (with-selected-frame frame
+      (if (roost--workspace-backend)
+          (or (roost--workspace-task (roost--current-workspace) (roost-tasks))
+              (roost--shown-task))
+        (gethash (frame-parameter nil 'roost-task) roost--tasks)))))
 
 (defun roost--shown-task ()
   "The task whose terminal the selected frame shows, the one used last.
