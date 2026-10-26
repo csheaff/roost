@@ -126,9 +126,9 @@ With what the request running now has collected so far."
     qa--own-collections))
 
 (defun qa--request (filter &rest args)
-  "Run FILTER with ARGS, as a request from qa.py arrives.
-What garbage it collects is qa.py's.  One that arrives while another
-waits is part of it."
+  "Run FILTER with ARGS, as a request from qa.py arrives, or TRAMP works.
+What garbage it collects is qa.py's, not an input's.  One that arrives
+while another waits is part of it."
   (if qa--request-start
       (apply filter args)
     (setq qa--request-start (cons gcs-done gc-elapsed))
@@ -138,6 +138,13 @@ waits is part of it."
 
 ;; Called from outside the command loop, so advised even natively compiled.
 (advice-add 'server-process-filter :around #'qa--request)
+
+;; With --remote, a journey visits files on that host: TRAMP reads them,
+;; and asks Git about them for VC, over a slow connection, collecting
+;; garbage as it waits for each reply, far more than 20 times for one
+;; file.  None of it is Roost's, so it isn't the input's either.
+(with-eval-after-load 'tramp
+  (advice-add 'tramp-file-name-handler :around #'qa--request))
 
 (defun qa--input (input)
   "Note INPUT, text for what was pressed or clicked, given now.

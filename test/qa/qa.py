@@ -1411,6 +1411,15 @@ def names_changing(text, name, how, path):
                for line in text.splitlines())
 
 
+def find_file(qa, path):
+    """Visit PATH, on the tasks' host, with C-x C-f.  Typed in place of the
+    directory it offers: after one already on that host, TRAMP reads a
+    second /ssh: name as a path there, and visits an empty file."""
+    qa.keys("C-x C-f")
+    qa.keys("C-a C-k")
+    qa.type(("/ssh:%s:" % qa.host if qa.host else "") + str(path) + "\r")
+
+
 @journey("A draft about a file another task changes")
 def overlap(qa, repo):
     """Code quoted in a new task's draft names the tasks that already
@@ -1418,8 +1427,7 @@ def overlap(qa, repo):
     name = new_task(qa, "ask echo '# Totals' >> notes.py")
     answer_yes(qa, name)
     qa.wait("its change", lambda s: "notes.py" in panel_text(qa, s))
-    qa.keys("C-x C-f")
-    qa.type(("/ssh:%s:" % qa.host if qa.host else "") + str(repo / "notes.py") + "\r")
+    find_file(qa, repo / "notes.py")
     qa.wait("notes.py", lambda s: s["selected"] == "notes.py")
     qa.keys("M-< C-SPC C-n C-n C-n")
     qa.keys("C-c r c")
@@ -1457,8 +1465,7 @@ def region(qa, repo):
     line."""
     name = start_task(qa, "Read the notes module")
     path = Path(task_worktree(qa, name)) / "notes.py"
-    qa.keys("C-x C-f")
-    qa.type(("/ssh:%s:" % qa.host if qa.host else "") + str(path) + "\r")
+    find_file(qa, path)
     qa.wait("notes.py", lambda s: s["selected"] == "notes.py")
     # The function add, alone: the file's lines 6 and 7.  Narrowing asks
     # first in a configuration that hasn't said it may.
@@ -1629,7 +1636,10 @@ def window_buffers(qa, repo):
         second = start_task(qa, "Keep a log beside the agent")
         session = open_task(qa, first)["task"]["terminal"].split("/")[-1]
         qa.tmux("new-window", "-d", "-t", session + ":", "-n", "notes", "printf 'notes ready\\n'; exec sleep 3600")
-        qa.wait("the notes window's buffer", lambda s: any(n.endswith(":notes*") for n in listed_terminals(qa)))
+        # Its screen follows its buffer a round trip later, which over
+        # --remote is after the buffer is listed.
+        qa.wait("the notes window's screen", lambda s: any(n.endswith(":notes*") for n in listed_terminals(qa))
+                and "notes ready" in window_buffer(qa, "notes", "(buffer-string)"))
         qa.step("A window you haven't visited", expect=[
             ("its task lists it by its name", lambda s: any(n.endswith(":notes*") for n in listed_terminals(qa))),
             ("it shows the window's screen", lambda s: "notes ready" in window_buffer(qa, "notes", "(buffer-string)")),
