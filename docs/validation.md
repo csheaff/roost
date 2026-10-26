@@ -35,6 +35,38 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## A bug hunt — 2026-10-26
+
+- **Why.** Ways of running Roost the journeys had seldom or never met.
+- **`make qa`** on Emacs 32 with `--popular --tuned`: 321 steps, 6 with
+  problems. With a perspective per task the sidebar marked no task while
+  a review note was written, as its box is a frame of its own (#159). The
+  last journey once waited 220 s for 60 agents to resume one after another,
+  while test suites ran on the same machine; it passed in the runs below.
+- **`make qa --remote`:** 257 steps, 17 with problems, most of them the
+  journeys': TRAMP's garbage counted as Roost's, a `/ssh:` name typed after
+  a remote directory, and checks made before a window's screen came over the
+  slow link (#161). With those fixed, 260 steps and 9 with problems. A new
+  task's agent started at the width of its draft's window, not of the
+  terminal beside the task panel (#162). Left for tmux-control: a terminal
+  painted a row off when it attaches after a wrapped line was printed
+  (`draft_fields` every time; `shell` and `walk_away`'s "history above its
+  screen"), and, beside Dired, "tiling: could not arrange windows".
+- **Emacs 30.2:** 324 steps, 1 with problems, in the last journey, while
+  processes left from earlier runs still ran.
+- **Main with all of the above, Emacs 32:** 325 steps, 3 with problems:
+  two pauses of 1.2 s, half of it collecting garbage, late in the run, and
+  `dashboard` comparing a row's whole text, whose age had turned a minute
+  (fixed here).
+- **By hand.** Emacs in a terminal (`emacs -nw` in tmux), driven key by
+  key: the sidebar, panel, draft, Magit review, the note box (a window
+  there), merge, dashboard, workload, search, and clicks with
+  `xterm-mouse-mode` all work; a note ended in a `$` and the draft offered
+  clicks without the mouse (#160). A daemon whose client frames come and
+  go, with tasks running while no frame is open: no errors. Tasks of
+  0.11.0's helper, its runners still running, then every action from
+  main's helper: all worked. A host with Python 3.8 now says so (#158).
+
 ## Claude Code's waits in auto mode and its sandbox — 2026-10-25
 
 - **Why.** Claude Code's changelog and docs say that since 2.1.284 it
