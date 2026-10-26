@@ -1729,12 +1729,15 @@ def dashboard(qa, repo):
     qa.step("Refreshed")
     # From the top, to the first task's row, and back and forth between rows.
     row = lambda s: any(t["name"][:12] in s["line"] for t in s["tasks"])
+    # The row by its task's name: its age, further along, may have
+    # turned a minute between steps.
+    name_of = lambda line: (line.split("●")[-1].split() or [None])[0]
     qa.keys("M-< TAB")
-    first = qa.step("TAB goes to a task's row", expect=[("a task's", row)])["line"]
+    first = name_of(qa.step("TAB goes to a task's row", expect=[("a task's", row)])["line"])
     qa.keys("TAB <backtab>")
-    qa.step("S-TAB goes back", expect=[("to the row before", lambda s: s["line"] == first)])
+    qa.step("S-TAB goes back", expect=[("to the row before", lambda s: name_of(s["line"]) == first)])
     qa.keys("j k")
-    qa.step("So do j and k", expect=[("to the row before", lambda s: s["line"] == first)])
+    qa.step("So do j and k", expect=[("to the row before", lambda s: name_of(s["line"]) == first)])
     # To its row, among the others.
     qa.keys("C-s")
     qa.type(name)
