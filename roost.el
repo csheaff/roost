@@ -780,15 +780,24 @@ its text take."
 (defun roost--terminal-size (&optional task)
   "The columns and rows of the window TASK's terminal will fill, or nil.
 That is the window already showing it; otherwise, in a workspace of its
-own, the main area; otherwise the selected main window.  TASK is nil for
-one not yet created."
-  (when-let* ((like (or (roost--task-terminal-window task)
-                        (roost--selected-main-window))))
-    (roost--area-size (if (and (not (roost--task-terminal-window task))
-                               (roost--workspace-backend))
-                          (window-main-window)
-                        like)
-                      like)))
+own, the main area; otherwise the selected main window.  Less the task
+panel's columns, when it isn't docked yet and will dock beside the
+terminal.  TASK is nil for one not yet created."
+  (let ((shown (roost--task-terminal-window task)))
+    (when-let* ((like (or shown (roost--selected-main-window))))
+      (let* ((area (if (and (not shown) (roost--workspace-backend)) (window-main-window) like))
+             (size (roost--area-size area like)))
+        ;; Started wider, as from a draft, which has no panel beside it,
+        ;; the agent draws its first screen for that width, and tmux
+        ;; wraps its lines again as the panel docks.  The panel takes its
+        ;; columns from a window as wide as the main area, not from one
+        ;; beside another.
+        (if (and (not shown) roost-task-panel-mode (roost--side-frame-p)
+                 (not (roost--task-panel-window)) (roost--task-panel-fits-p nil)
+                 (= (window-total-width area) (window-total-width (window-main-window))))
+            `((width . ,(max 10 (- (alist-get 'width size) roost-task-panel-width)))
+              (height . ,(alist-get 'height size)))
+          size)))))
 
 (defun roost--request (host action parameters success &optional failure timeout)
   "Run ACTION with PARAMETERS on HOST, installing the versioned helper as needed.
