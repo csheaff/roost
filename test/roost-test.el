@@ -198,10 +198,11 @@ Skips the test without perspective.el on the load path."
 Batch Emacs makes no other frame on its own terminal, so FRAME is a
 terminal's, on a pty.  Skips the test where it can't be made."
   (let ((pty (make-symbol "pty")))
-    `(let* ((,pty (make-process :name "roost-test-pty" :command '("sleep" "600")
-                                :connection-type 'pty :noquery t))
+    `(let* ((,pty (ignore-errors
+                    (make-process :name "roost-test-pty" :command '("sleep" "600")
+                                  :connection-type 'pty :noquery t)))
             ;; Without a pty, not on the terminal the tests run in.
-            (,frame (and (process-tty-name ,pty)
+            (,frame (and ,pty (process-tty-name ,pty)
                          (ignore-errors
                            ;; No terminal initialization, which for xterm
                            ;; waits for replies.
@@ -212,7 +213,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
        (unwind-protect
            (progn (skip-unless ,frame) ,@body)
          (when (frame-live-p ,frame) (delete-frame ,frame t))
-         (delete-process ,pty)))))
+         (when ,pty (delete-process ,pty))))))
 
 (defun roost-test--task (&optional id status)
   (copy-tree `((id . ,(or id "0123456789abcdef")) (name . "fix auth") (status . ,(or status "ready"))
