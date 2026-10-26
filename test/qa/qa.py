@@ -1361,7 +1361,9 @@ def draft_fields(qa, repo):
         screen = qa.wait("the task", lambda s: {t["key"] for t in s["tasks"]} - before)
         name = next(t["name"] for t in screen["tasks"] if t["key"] not in before)
         qa.status(name, "ready", "idle")
-        qa.wait("its panel", lambda s: panel_text(qa, s).startswith(name))
+        # And Pi's first words, which over --remote come after.
+        qa.wait("its panel", lambda s: panel_text(qa, s).startswith(name)
+                and any("FAKE_AGENT_READY" in w["text"] for w in terminals(s)))
         worktree = task_worktree(qa, name)
         qa.step("A Pi task in the other project", expect=[
             ("its worktree is the ledger's", lambda s: qa.git(worktree, "log", "--format=%s", "-1") == "Start the ledger"),
