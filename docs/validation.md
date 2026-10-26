@@ -35,6 +35,29 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## Claude Code 2.1.310, relayed and in Rex — 2026-10-26
+
+- **Why.** Claude Code had moved on from 2.1.303, the version captured,
+  and Rex's Linux server reached testers, so Claude's status reports could
+  be read in a terminal that reads them itself.
+- **Relayed.** The manual-mode session of `make contract-live` with
+  `--program-status --skip-idle`, on an Ubuntu host over SSH, with Claude
+  Code 2.1.310 and Haiku: every check as expected, and its capture kept as
+  `claude-relayed-2.1.310.jsonl`, beside 2.1.303's. Claude's `SessionStart`
+  hook now comes before its first report, and it reports the command it
+  runs ("Running contract_check.py once in the foreground") just before
+  `PreToolUse`; Roost makes the same of both. The other Claude sessions
+  weren't run again, so their 2.1.303 captures stand.
+- **In Rex.** Rex 0.0.1793041098 (API revision 7) on a scratch server on
+  the same host, with Claude taken through the same steps: Rex got the
+  reports the relay got, in the same order. Each record names the process
+  that sent it, and none outlived Claude: on Ctrl-C twice or a SIGINT
+  mid-turn Claude cleared its record as it exited, and after a SIGKILL
+  mid-turn Rex dropped it once the process had gone. In
+  plain tmux 3.7c, Claude sent its probe and then no reports. Rex's data
+  stream still starts with a Ghostty snapshot, and `rex block stream`
+  isn't implemented, so Emacs still can't attach to a Rex terminal.
+
 ## A bug hunt — 2026-10-26
 
 - **Why.** Ways of running Roost the journeys had seldom or never met.
