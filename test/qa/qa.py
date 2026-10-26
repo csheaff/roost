@@ -1687,7 +1687,7 @@ def reconnect_away(qa, repo):
         qa.step("Back to the first task", expect=[
             ("it lists its terminal", lambda s: any(away in n for n in listed_terminals(qa))),
             ("the terminal is live", lambda s: qa.emacs.eval(
-                "(process-live-p (get-buffer-process %s))" % terminal_of(away)) == "t")])
+                "(and (process-live-p (get-buffer-process %s)) t)" % terminal_of(away)) == "t")])
     finally:
         qa.emacs.eval("(setq tmux-control-auto-reconnect nil)")
 

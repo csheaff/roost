@@ -1908,9 +1908,8 @@ without showing it: one you show it in is yours."
                      (not (equal (persp-current-name) (roost--perspective-name task))))
             ;; Not `persp-remove-buffer', which kills a buffer no other
             ;; perspective has.  This one makes the selected window's
-            ;; buffer current.
-            (save-current-buffer
-              (persp-forget-buffer buffer))))))))
+            ;; buffer current, until `with-selected-frame' puts it back.
+            (persp-forget-buffer buffer)))))))
 
 (defun roost--gather-task-terminals (&optional buffer)
   "Add the terminals of the current perspective's task to it.

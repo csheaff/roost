@@ -1845,16 +1845,20 @@ Skips the test without perspective.el on the load path."
                           (apply function args))))
               (with-current-buffer beside
                 (setq major-mode 'tmux-control-mode roost-test--tmux (list :socket "main" :session "roost-b")))
+              ;; In its own task's perspective, it stays.
               (roost--activate-workspace mine)
               (roost-test--reconnect terminal "roost-a")
-              (switch-to-buffer terminal)
               (done)
+              (should (memq terminal (persp-get-buffers)))
+              (switch-to-buffer terminal)
               (roost--activate-workspace other)
               (switch-to-buffer beside)
               (roost-test--reconnect terminal "roost-a")
               (should (memq terminal (persp-get-buffers)))
-              (with-current-buffer beside (done))
-              (should (eq (current-buffer) beside))
+              ;; From a buffer no window shows, as a timer may run.
+              (with-current-buffer terminal
+                (done)
+                (should (eq (current-buffer) terminal)))
               (should-not (memq terminal (persp-get-buffers)))
               (should (eq (window-buffer) beside))
               (should (buffer-live-p terminal))
