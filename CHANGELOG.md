@@ -4,6 +4,10 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- In Emacs in a terminal, a review note no longer ends in a `$`, Emacs's
+  sign that a line runs past the window, and a new task's draft says a
+  click changes a field only with the mouse on (`xterm-mouse-mode`).
+  Nothing to do when upgrading.
 - With a tab or perspective per task, the sidebar keeps marking your
   task while you write a review note. The box you write it in is a frame
   of its own, with no task's tab or perspective, so the sidebar marked
