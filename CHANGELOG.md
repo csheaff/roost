@@ -8,6 +8,7 @@ What each release changes, and what to do when upgrading. Newest first.
   will have beside the panel. Started from a draft, which has no panel
   beside it, it started that much wider, drew its first screen for that
   width, and tmux wrapped those lines again once the panel docked.
+  Nothing to do when upgrading.
 - In Emacs in a terminal, a review note no longer ends in a `$`, Emacs's
   sign that a line runs past the window, and a new task's draft says a
   click changes a field only with the mouse on (`xterm-mouse-mode`).
