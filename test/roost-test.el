@@ -7772,6 +7772,34 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
                                               (roost--quoting "README.md")))))
          (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
 
+(ert-deftest roost-text-frames-say-only-what-they-show ()
+  ;; In a text frame, as batch Emacs's is: a click changes a draft's
+  ;; field only with the mouse on, and a note's rule stops short of the
+  ;; column that shows a line runs past the window, which showed a $.
+  (roost-test--isolated
+   (should-not (display-graphic-p))
+   (with-temp-buffer
+     (roost-compose-mode)
+     ;; As drawn; batch Emacs draws no header line.
+     (let ((hint (cadr (assq :eval header-line-format))))
+       (should (string-search "C-c C-c create" (car header-line-format)))
+       (let ((xterm-mouse-mode nil))
+         (should-not (eval hint t)))
+       (let ((xterm-mouse-mode t))
+         (should (equal (eval hint t) " · click a field to change it")))))
+   (with-temp-buffer
+     (insert "+def due(note):\n")
+     ;; Rules are drawn in the note's colour, which batch Emacs has none of.
+     (let* ((overlay (cl-letf (((symbol-function 'face-foreground) (lambda (&rest _) "orange")))
+                       (roost--note-overlay (1- (point)) '(((id . "a") (text . "Name the due date."))))))
+            (text (overlay-get overlay 'after-string))
+            (pads (seq-filter (lambda (i) (get-text-property i 'display text)) (number-sequence 0 (1- (length text))))))
+       (should pads)
+       (dolist (i pads)
+         (pcase (get-text-property i 'display text)
+           (`(when ,condition . ,_) (should-not (eval condition t)))
+           (spec (ert-fail (list "Padding shown in every frame" spec)))))))))
+
 (ert-deftest roost-drafts-mark-the-files-they-quote ()
   (roost-test--isolated
    (let* ((default-directory "/tmp/")
