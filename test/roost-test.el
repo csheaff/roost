@@ -193,6 +193,27 @@ Skips the test without perspective.el on the load path."
           (unwind-protect (progn ,@body)
             (persp-mode -1)))))))
 
+(defmacro roost-test--with-another-frame (frame &rest body)
+  "Run BODY with FRAME bound to a new frame, the selected one still selected.
+Batch Emacs makes no other frame on its own terminal, so FRAME is a
+terminal's, on a pty.  Skips the test where it can't be made."
+  (let ((pty (make-symbol "pty")))
+    `(let* ((,pty (make-process :name "roost-test-pty" :command '("sleep" "600")
+                                :connection-type 'pty :noquery t))
+            ;; Without a pty, not on the terminal the tests run in.
+            (,frame (and (process-tty-name ,pty)
+                         (ignore-errors
+                           ;; No terminal initialization, which for xterm
+                           ;; waits for replies.
+                           (let ((term-file-prefix nil))
+                             (with-selected-frame (selected-frame)
+                               (make-frame `((window-system . nil) (tty . ,(process-tty-name ,pty))
+                                             (tty-type . "vt100")))))))))
+       (unwind-protect
+           (progn (skip-unless ,frame) ,@body)
+         (when (frame-live-p ,frame) (delete-frame ,frame t))
+         (delete-process ,pty)))))
+
 (defun roost-test--task (&optional id status)
   (copy-tree `((id . ,(or id "0123456789abcdef")) (name . "fix auth") (status . ,(or status "ready"))
     (worktree . "/home/user/work/fix auth") (branch . "codex/roost/fix-auth-123456")
@@ -1889,6 +1910,40 @@ Skips the test without perspective.el on the load path."
            (should-not (memq file (persp-get-buffers))))
        (dolist (buffer (cons file (cons notes scratches)))
          (when (get-buffer buffer) (kill-buffer buffer)))))))
+
+(ert-deftest roost-retiring-a-task-closes-its-perspective-in-every-frame ()
+  ;; Each frame has perspectives of its own, and Roost killed only the
+  ;; selected frame's.
+  (roost-test--with-perspectives
+   (roost-test--with-another-frame other
+    (let* ((task (roost--cache-task "dev" (roost-test--task "1111111111111111")))
+           (old (roost--perspective-name task t))
+           (renamed (roost--cache-task "dev" (append '((name . "fix login")) task)))
+           (mine (selected-frame))
+           (start (persp-current-name))
+           (file (generate-new-buffer "opened-in-the-other-frame.el")))
+      (unwind-protect
+          (progn
+            (with-selected-frame other
+              (roost--activate-workspace task)
+              (persp-switch start))
+            ;; Renamed while the other frame was in another perspective:
+            ;; there it keeps the name it had.
+            (roost--rename-workspace task renamed)
+            (with-selected-frame other
+              (persp-switch old)
+              (switch-to-buffer file))
+            (roost--activate-workspace renamed)
+            (should-not (equal (roost--perspective-name renamed) old))
+            (roost--retired-workspace renamed)
+            (should (eq (selected-frame) mine))
+            (should (equal (persp-names) (list start)))
+            (with-selected-frame other
+              (should (equal (persp-names) (list start)))
+              (should (equal (persp-current-name) start)))
+            (should (buffer-live-p file))
+            (should-not (gethash (roost--key renamed) roost--perspectives)))
+        (kill-buffer file))))))
 
 (ert-deftest roost-context-distinguishes-hosts-and-directory-boundaries ()
   (roost-test--isolated

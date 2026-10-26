@@ -6637,8 +6637,8 @@ later, saying so over what the merge said."
   "Remove TASK's workspace and panel, retaining other buffers.
 A window made to show the panel goes away; any other goes back to what
 it showed before.  In every frame, and you stay in yours: quitting a
-window in another frame, or closing its current tab, which restores a
-window configuration of that frame, selects it."
+window in another frame, or closing its current tab or perspective,
+which restores a window configuration of that frame, selects it."
   (let ((key (roost--key task))
         (selected (selected-frame)))
     (dolist (buffer (buffer-list))
@@ -6648,19 +6648,20 @@ window configuration of that frame, selects it."
         ;; rest too.
         (quit-windows-on buffer t)
         (when (buffer-live-p buffer) (kill-buffer buffer))))
-    (pcase (roost--workspace-backend)
-      ('perspective
-       (when (fboundp 'persp-kill)
-         (roost--kill-perspective (roost--perspective-name task)))
-       (remhash (roost--key task) roost--perspectives))
-      ('tab-bar
-       ;; Each frame has tabs of its own.
-       (dolist (frame (frame-list))
-         (unless (frame-parent frame)
-           (with-selected-frame frame
+    ;; Each frame has tabs of its own, or perspectives, which may have
+    ;; any name the task had.
+    (dolist (frame (frame-list))
+      (unless (frame-parent frame)
+        (with-selected-frame frame
+          (pcase (roost--workspace-backend)
+            ('perspective
+             (when (fboundp 'persp-kill)
+               (roost--kill-perspective (roost--perspective-name task))))
+            ('tab-bar
              (let ((name (roost--task-tab task)))
                (when (and name (cdr (roost--tabs)))
                  (tab-bar-close-tab-by-name name))))))))
+    (remhash key roost--perspectives)
     (unless (or (eq (selected-frame) selected) (not (frame-live-p selected)))
       (select-frame selected))))
 
