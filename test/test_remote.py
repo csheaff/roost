@@ -3269,6 +3269,23 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(roost.version_of("tmux 3.7c"), (3, 7, 0))
         self.assertEqual(roost.version_of("codex-cli 0.160.0"), (0, 160, 0))
 
+    def test_an_older_python_starts_nothing_and_says_so(self):
+        # As on Ubuntu 20.04, whose python3 is 3.8: the helper would run
+        # until it met what 3.8 lacks, and say only that.
+        with patch.object(roost.sys, "version_info", (3, 8, 10, "final", 0)), \
+                patch.object(roost.sys, "version", "3.8.10 (default, Nov 22 2023, 10:22:35)"):
+            reply = self.request("create", directory=str(self.repo), name="task", socket=self.socket,
+                                 command=[sys.executable, str(FAKE)])
+            self.assertEqual(reply, {"ok": False, "error": "Roost needs Python 3.9 or newer as python3 "
+                                                           "on this host, which has 3.8.10"})
+            self.assertFalse(self.state.exists())
+            self.assertEqual(self.git("branch", "--format=%(refname:short)"), "main")
+            doctor = self.request("doctor", commands={})
+        self.assertTrue(doctor["ok"], doctor)
+        python = {check["name"]: check for check in doctor["result"]}["Python"]
+        self.assertEqual((python["ok"], python["detail"], python["hint"]),
+                         (False, "3.8.10", "Install Python 3.9 or newer as python3"))
+
     def test_doctor_asks_for_a_claude_that_runs_the_hooks(self):
         # Claude Code 2.1.77 runs no hook from a settings file naming
         # StopFailure, which came in 2.1.78; see docs/validation.md.
