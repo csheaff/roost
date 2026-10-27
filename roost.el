@@ -1999,15 +1999,15 @@ Nil for a view of a terminal, such as its scrollback, too."
                   (session (tmux-control-buffer-session)))
         (list (tmux-control-buffer-host) (tmux-control-buffer-socket-name) session)))))
 
-(defun roost--still-there-p (window shown)
+(defun roost--still-there-p (window shown place)
   "Whether you are still where you were: in WINDOW, which showed SHOWN.
-Or in the same terminal, which tmux-control shows another way meanwhile:
-as it tiles a split terminal again, when the minibuffer gives back the
-lines it took, a window can show another pane's buffer, or another
-window the one you were in."
+Or in the same terminal, at PLACE as `roost--terminal-place' said of
+SHOWN then, which tmux-control shows another way meanwhile: as it tiles
+a split terminal again, when the minibuffer gives back the lines it
+took, a window can show another pane's buffer, or another window the
+one you were in."
   (or (and (eq (selected-window) window) (eq (window-buffer window) shown))
-      (when-let* ((place (roost--terminal-place shown)))
-        (equal (roost--terminal-place (window-buffer (selected-window))) place))))
+      (and place (equal (roost--terminal-place (window-buffer (selected-window))) place))))
 
 (defun roost--terminal-window-for (task)
   "The window to show TASK's terminal in, or nil for the selected one.
@@ -2252,6 +2252,7 @@ says once the terminal shows."
   (let* ((generation (cl-incf roost--open-generation))
          (window (if (window-minibuffer-p) (minibuffer-selected-window) (selected-window)))
          (shown (window-buffer window))
+         (place (roost--terminal-place shown))
          (name (roost--field task 'name))
          (opening (format "Roost: opening %s…" name))
          ;; A host slow to reply, as over SSH, looked like a click that
@@ -2264,7 +2265,7 @@ says once the terminal shows."
          ;; else, such as tmux-control's pager.
          (still-wanted (lambda ()
                          (and (= generation roost--open-generation)
-                              (or (roost--still-there-p window shown)
+                              (or (roost--still-there-p window shown place)
                                   (progn
                                     (message "Roost: didn't open %s, as you went to another window or buffer while its host replied"
                                              name)
@@ -5524,6 +5525,7 @@ says changed since: see `roost--since-looked'."
   (let* ((generation (cl-incf roost--open-generation))
          (window (if (window-minibuffer-p) (minibuffer-selected-window) (selected-window)))
          (shown (window-buffer window))
+         (place (roost--terminal-place shown))
          (open (lambda (&rest _)
                  (roost--when-out-of-minibuffer
                   (lambda ()
@@ -5531,7 +5533,7 @@ says changed since: see `roost--since-looked'."
                       ;; As it is now: renamed meanwhile, as from another
                       ;; Emacs, its workspace has the new name.
                       (let ((task (gethash (roost--key task) roost--tasks task)))
-                        (if (not (roost--still-there-p window shown))
+                        (if (not (roost--still-there-p window shown place))
                             (message "Roost: didn't open %s for %s, as you went to another window or buffer while its host replied"
                                      what (roost--field task 'name))
                           (funcall show task)))))))))

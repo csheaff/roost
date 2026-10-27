@@ -1751,7 +1751,15 @@ terminal's, on a pty.  Skips the test where it can't be made."
                 (roost-open-task (roost-test--task))
                 (switch-to-buffer elsewhere)
                 (funcall callback (roost-test--task))
-                (should-not displayed)))
+                (should-not displayed))
+              ;; Nor need the pane's buffer you were in outlast the tiling.
+              (setq displayed nil)
+              (switch-to-buffer (funcall pane " *tmux %4*" "roost-p-012345"))
+              (roost-open-task (roost-test--task))
+              (kill-buffer " *tmux %4*")
+              (switch-to-buffer second)
+              (funcall callback (roost-test--task))
+              (should (equal displayed "0123456789abcdef")))
           (mapc #'kill-buffer (list first second other scrollback))))))))
 
 (ert-deftest roost-open-says-so-while-its-host-replies ()
