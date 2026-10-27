@@ -3723,7 +3723,7 @@ def resolved_before(repo, ours, theirs):
     cache, before Git 2.38, which can't tell, and where the branch merged
     into has merge options, such as -Xours, which can resolve conflicts
     otherwise and which `git merge-tree` doesn't take."""
-    branch = git(repo, "symbolic-ref", "-q", "--short", "HEAD", check=False).stdout.strip()
+    branch = current_branch(repo)
     if not (merges_without_checkout()
             and git(repo, "config", "--bool", "rerere.autoUpdate", check=False).stdout.strip() == "true"
             and not (branch and git(repo, "config", "--get", "branch.%s.mergeOptions" % branch,
