@@ -4,6 +4,13 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Opening a task from a split terminal, as with a shell beside its agent,
+  opens it with vertico or another completion that shows in the
+  minibuffer. As the minibuffer closed, tmux-control tiled the terminal
+  again, a window then showed the other pane, and Roost said "didn't
+  open …, as you went to another window or buffer while its host
+  replied". Another pane of the same terminal counts as where you were.
+  Nothing to do when upgrading.
 - With `global-tab-line-mode`, the box you write a review note in has no
   tab line. It had one, taking a line of the box, with a tab for the
   Magit buffer below that a click would put in the box's place. Nothing
