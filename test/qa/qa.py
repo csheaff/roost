@@ -1419,7 +1419,9 @@ def find_file(qa, path):
     directory it offers: after one already on that host, TRAMP reads a
     second /ssh: name as a path there, and visits an empty file."""
     qa.keys("C-x C-f")
-    qa.keys("C-a C-k")
+    # All of it: with `visual-line-mode' in the minibuffer, as a global one
+    # puts there, C-k would kill only the last screen line of a long one.
+    qa.emacs.eval("(with-selected-window (active-minibuffer-window) (delete-minibuffer-contents))")
     qa.type(("/ssh:%s:" % qa.host if qa.host else "") + str(path) + "\r")
 
 

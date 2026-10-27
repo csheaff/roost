@@ -314,11 +314,13 @@ Return nil when no header line shows it."
   (seq-some
    (lambda (window)
      (let ((height (window-header-line-height window))
+           ;; Under a tab line, as `global-tab-line-mode' gives windows.
+           (top (window-tab-line-height window))
            (step (max 1 (/ (frame-char-width (window-frame window)) 2))))
        (when (> height 0)
          ;; Along the header line, to LABEL's middle.
          (cl-loop for x from 0 below (window-body-width window t) by step
-                  for posn = (posn-at-x-y x (/ height 2) window)
+                  for posn = (posn-at-x-y x (+ top (/ height 2)) window)
                   for string = (and (eq (posn-area posn) 'header-line) (posn-string posn))
                   for start = (and string (string-search label (car string)))
                   when (and start (>= (cdr string) (+ start (/ (length label) 2)))
@@ -345,8 +347,9 @@ Return nil when TEXT isn't on screen, or its window has no left margin."
               (line (with-current-buffer (window-buffer window) (line-number-at-pos (cdr found))))
               (posn (with-current-buffer (window-buffer window)
                       ;; Across the window from its left edge, to the margin
-                      ;; on that line, wherever the header line puts it.
-                      (cl-loop for dy in (list 1 (1+ (window-header-line-height window)))
+                      ;; on that line, wherever the tab and header lines put it.
+                      (cl-loop for dy in (list 1 (+ 1 (window-tab-line-height window)
+                                                    (window-header-line-height window)))
                                thereis (cl-loop for x from 0 below (* 4 (frame-char-width (window-frame window)))
                                                 for posn = (posn-at-x-y x (+ y dy) window t)
                                                 when (and (eq (posn-area posn) 'left-margin) (posn-point posn)

@@ -4805,7 +4805,8 @@ over room left for it, where Emacs shows them, or in a window below."
         (roost--note-box-float)
       (select-window (display-buffer buffer `((display-buffer-below-selected)
                                               (window-height . ,(+ roost-note-box-lines 2))
-                                              (dedicated . t)))))
+                                              (dedicated . t)
+                                              (window-parameters . ((tab-line-format . none)))))))
     (message "%s" (substitute-command-keys
                    "\\<roost-note-box-mode-map>\\[roost-note-box-save] saves the note, \\[roost-note-box-cancel] cancels it"))))
 
@@ -4965,6 +4966,9 @@ delete its frame with \\[delete-frame]."
     (set-face-background 'fringe (face-background 'default nil t) frame)
     (set-window-buffer root (plist-get box :buffer))
     (set-window-dedicated-p root t)
+    ;; Its header line says what it is: a `global-tab-line-mode' tab would
+    ;; take a line of its text, and offer the buffers of the window below.
+    (set-window-parameter root 'tab-line-format 'none)
     (setq roost--note-box (plist-put (plist-put box :frame frame)
                                      :room (+ (frame-pixel-height frame) 2 8)))
     ;; Room under the line, which then has to be in sight.

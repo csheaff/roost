@@ -4,6 +4,10 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- With `global-tab-line-mode`, the box you write a review note in has no
+  tab line. It had one, taking a line of the box, with a tab for the
+  Magit buffer below that a click would put in the box's place. Nothing
+  to do when upgrading.
 - With `merge.ff` set in your Git config, `m` squashes a task's work into
   one commit, as it does by default, and `u` brings a task up to date.
   With `false`, squashing into the branch the primary checkout has out
