@@ -4,6 +4,13 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- With Git's `rerere.autoUpdate`, `u` leaves a merge whose conflicts Git
+  resolved as you resolved them before under way in the task's worktree,
+  and offers to have its agent check them and commit it. It said
+  "Updating from main failed: Staged 'f' using previous resolution" and
+  aborted the merge. `m` says such a task conflicts, as it does without
+  rerere; it said a commit hook had refused the merge, or, squashing,
+  "Merge failed". Nothing to do when upgrading.
 - Opening a task from a split terminal, as with a shell beside its agent,
   opens it with vertico or another completion that shows in the
   minibuffer. As the minibuffer closed, tmux-control tiled the terminal

@@ -5719,6 +5719,7 @@ agent do it."
    (lambda (updated)
      (let* ((result (roost--field updated 'update))
             (conflicts (alist-get 'conflicts result))
+            (resolved (alist-get 'resolved result))
             (name (roost--field updated 'name))
             (branch (roost--field updated 'integrationBranch)))
        (roost--refresh-host (roost--field updated 'host) nil)
@@ -5726,9 +5727,23 @@ agent do it."
               (if (y-or-n-p (format "%s conflicts with %s in %s.  Ask its agent to resolve them? "
                                        name branch (string-join conflicts ", ")))
                   (roost-send updated
-                              (format "I merged %s into this branch and Git reports conflicts in: %s. Resolve the conflicts so the changes from both sides keep working, run the tests, and commit the merge."
-                                      branch (string-join conflicts ", ")))
+                              (format "I merged %s into this branch and Git reports conflicts in: %s.%s Resolve the conflicts so the changes from both sides keep working, run the tests, and commit the merge."
+                                      branch (string-join conflicts ", ")
+                                      (if resolved
+                                          (format " It resolved those in %s as they were resolved before (rerere); check them too."
+                                                  (string-join resolved ", "))
+                                        "")))
                 (message "The merge is in progress in %s's worktree; resolve it in Magit (r) and commit"
+                         name)))
+             ;; Git resolved them as you did before (rerere), and left the
+             ;; merge to commit.
+             (resolved
+              (if (y-or-n-p (format "%s conflicts with %s in %s, which Git resolved as you resolved them before.  Ask its agent to check them and commit the merge? "
+                                    name branch (string-join resolved ", ")))
+                  (roost-send updated
+                              (format "I merged %s into this branch. Git reports conflicts in: %s, and resolved them as they were resolved before (rerere), so the merge is staged but not committed. Check that those resolutions keep the changes from both sides working, run the tests, and commit the merge."
+                                      branch (string-join resolved ", ")))
+                (message "The merge is in progress in %s's worktree; check it in Magit (r) and commit"
                          name)))
              ((alist-get 'changed result)
               (message "%s now includes the latest %s" name branch))

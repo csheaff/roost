@@ -1497,6 +1497,50 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(self.request("merge", id=task["id"])["ok"])
         self.assertEqual((self.repo / "hello").read_text(), "main and task\n")
 
+    def test_conflicts_resolved_as_before_are_left_to_commit_and_still_refuse_a_merge(self):
+        # With rerere.autoUpdate, Git resolves a conflict as you resolved it
+        # before and stages it, but leaves the merge to commit.
+        self.git("config", "rerere.enabled", "true")
+        self.git("config", "rerere.autoUpdate", "true")
+        task = self.create()
+        wt = Path(task["worktree"])
+        (wt / "hello").write_text("task\n")
+        self.git("commit", "-qam", "task", cwd=wt)
+        (self.repo / "hello").write_text("main\n")
+        self.git("commit", "-qam", "main")
+        # The same conflict, merged and resolved once in the primary checkout.
+        before = self.git("rev-parse", "main")
+        roost.git(self.repo, "merge", "--no-edit", task["branch"], check=False)
+        (self.repo / "hello").write_text("both\n")
+        self.git("add", "hello")
+        self.git("commit", "-q", "--no-edit")
+        self.git("reset", "-q", "--hard", before)
+        # m still finds the conflict, whichever way it merges, and changes nothing.
+        for action in ("merge", "squash"):
+            with self.subTest(action=action):
+                self.cell(task, action, "conflicts with main in hello. Nothing was changed")
+        # Nor is a merge main's options resolve, which a hook then refuses,
+        # with a tag named main too.
+        self.git("config", "branch.main.mergeOptions", "-Xours")
+        hook = self.hook("pre-merge-commit", "exit 1")
+        for tagged in (False, True):
+            with self.subTest(tagged=tagged):
+                if tagged:
+                    self.git("tag", "main", before)
+                self.cell(task, "merge", "refused the merge, which is undone")
+        self.git("tag", "-d", "main")
+        hook.unlink()
+        self.git("config", "--unset", "branch.main.mergeOptions")
+        # u leaves the merge under way, resolved and staged, for its agent.
+        reply = self.request("update", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(reply["result"]["update"], dict(conflicts=[], changed=False, resolved=["hello"]))
+        self.assertEqual((wt / "hello").read_text(), "both\n")
+        self.assertEqual(self.request("list", full=True)["result"][0]["merging"], dict(conflicts=[]))
+        self.git("commit", "-q", "--no-edit", cwd=wt)
+        self.assertTrue(self.request("merge", id=task["id"])["ok"])
+        self.assertEqual((self.repo / "hello").read_text(), "both\n")
+
     def test_conflicts_name_files_as_they_are_named(self):
         # Not as Git quotes a name that isn't ASCII: "\303\251t\303\251 notes.txt".
         name = "\u00e9t\u00e9 notes.txt"
