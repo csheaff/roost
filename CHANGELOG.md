@@ -4,6 +4,28 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- With `merge.ff` set in your Git config, `m` squashes a task's work into
+  one commit, as it does by default, and `u` brings a task up to date.
+  With `false`, squashing into the branch the primary checkout has out
+  failed, saying "options '--squash' and '--no-ff.' cannot be used
+  together"; with `only`, squashing and `u` both failed once the task and
+  that branch had each moved on. Your setting still holds for your own
+  merges. Nothing to do when upgrading.
+- With `log.showSignature` on in your Git config, a squash merge's commit
+  message and the pull request `P` drafts hold only the task's commit
+  messages. Before each signed commit's, they held what Git said of its
+  signature, such as `Good "git" signature for you@example.com`, which
+  became the squashed commit's subject. Nothing to do when upgrading.
+- A file in conflict whose name isn't ASCII, such as `été.txt`, is named
+  as it is in the task panel, in what a merge that conflicts says, and in
+  the prompt `u` offers to send its agent, not as Git quotes it,
+  `"\303\251t\303\251.txt"`. Nothing to do when upgrading.
+- With `status.showUntrackedFiles` set to `no` in your Git config, the
+  task panel counts files not yet tracked in a task's worktree as
+  uncommitted, as retiring the task does; it said there was nothing to
+  commit, and `m` then asked to merge. A task whose start fails keeps
+  its worktree when the project's hooks left files there, as it does
+  without that setting. Nothing to do when upgrading.
 - With the task panel on, an agent starts at the width its terminal
   will have beside the panel. Started from a draft, which has no panel
   beside it, it started that much wider, drew its first screen for that

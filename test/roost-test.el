@@ -6840,6 +6840,32 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
                      '("second" "third"))))
     (should-not (roost--pr-commits `((worktree . ,dir))))))
 
+(ert-deftest roost-pr-commits-leave-out-signatures ()
+  "Git's word on each commit's signature isn't part of its message."
+  (skip-unless (executable-find "ssh-keygen"))
+  (roost-test--isolated
+   (let* ((dir (make-temp-file "roost-pr" t))
+          (default-directory (file-name-as-directory dir))
+          (key (expand-file-name "key" dir))
+          (git (lambda (&rest args)
+                 (apply #'call-process "git" nil nil nil "-c" "user.name=t" "-c" "user.email=t@t" args))))
+     (unwind-protect
+         (progn
+           (call-process "ssh-keygen" nil nil nil "-q" "-t" "ed25519" "-N" "" "-f" key)
+           (with-temp-file (expand-file-name "signers" dir)
+             (insert "t@t " (with-temp-buffer (insert-file-contents (concat key ".pub")) (buffer-string))))
+           (funcall git "init" "-q" "-b" "main")
+           (dolist (setting `(("gpg.format" "ssh") ("user.signingkey" ,key) ("log.showSignature" "true")
+                              ("gpg.ssh.allowedSignersFile" ,(expand-file-name "signers" dir))))
+             (apply git "config" setting))
+           (funcall git "commit" "-q" "--allow-empty" "-m" "start")
+           (let ((base (string-trim (shell-command-to-string "git rev-parse HEAD"))))
+             (funcall git "commit" "-q" "-S" "--allow-empty" "-m" "Signed work")
+             (should (string-match-p "signature" (shell-command-to-string "git log -1 --format=%s")))
+             (should (equal (roost--pr-commits `((worktree . ,dir) (baseCommit . ,base)))
+                            '("Signed work")))))
+       (delete-directory dir t)))))
+
 (ert-deftest roost-pr-commits-leave-out-updates-from-the-integration-branch ()
   (let* ((dir (make-temp-file "roost-pr" t))
          (default-directory (file-name-as-directory dir))

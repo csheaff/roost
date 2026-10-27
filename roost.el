@@ -5773,8 +5773,9 @@ the task started from."
 Merges, such as updates from the integration branch, and trailers such as
 Co-Authored-By are left out.  Nil when Git cannot say."
   (when-let* ((base (roost--fork-point task))
-              (output (roost--git-output task "log" "--reverse" "--no-merges" "--format=%B%x00"
-                                         (concat base "..HEAD"))))
+              ;; Without the lines log.showSignature adds before each.
+              (output (roost--git-output task "log" "--no-show-signature" "--reverse" "--no-merges"
+                                         "--format=%B%x00" (concat base "..HEAD"))))
     (delete "" (mapcar #'roost--without-trailers (split-string output "\0")))))
 
 (defun roost--without-trailers (message)
