@@ -1762,6 +1762,33 @@ terminal's, on a pty.  Skips the test where it can't be made."
               (should (equal displayed "0123456789abcdef")))
           (mapc #'kill-buffer (list first second other scrollback))))))))
 
+(ert-deftest roost-open-in-a-terminal-tiled-again-keeps-to-its-frame ()
+  ;; The same terminal in another frame isn't where you were.
+  (roost-test--isolated
+   (roost-test--with-tmux-buffers
+    (roost-test--with-another-frame other
+     (let* ((pane (lambda (name)
+                    (with-current-buffer (get-buffer-create name)
+                      (setq major-mode 'tmux-control-mode)
+                      (setq-local roost-test--tmux '(:socket "main" :session "roost-p-012345"))
+                      (current-buffer))))
+            (first (funcall pane " *tmux %0*"))
+            (second (funcall pane " *tmux %2*"))
+            callback displayed)
+       (cl-letf (((symbol-function 'roost--request)
+                  (lambda (_host _action _params success &optional _failure) (setq callback success)))
+                 ((symbol-function 'roost--display-task) (lambda (task) (setq displayed (roost--field task 'id))))
+                 ((symbol-function 'message) #'ignore))
+         (unwind-protect
+             (save-window-excursion
+               (switch-to-buffer first)
+               (roost-open-task (roost-test--task))
+               (with-selected-frame other
+                 (switch-to-buffer second)
+                 (funcall callback (roost-test--task)))
+               (should-not displayed))
+           (mapc #'kill-buffer (list first second)))))))))
+
 (ert-deftest roost-open-says-so-while-its-host-replies ()
   ;; A click on a task on a slow host showed nothing until it replied, and
   ;; looked like a click that did nothing.
