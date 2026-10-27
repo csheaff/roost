@@ -535,10 +535,12 @@ class Run:
             return None
         return name
 
-    def step(self, title, expect=(), streaming=False):
+    def step(self, title, expect=(), streaming=False, previewing=False):
         """Check the screen as it is now, against the rules and EXPECT.
         STREAMING says agents are printing, so a terminal can't be caught
-        matching tmux's capture of its pane, which is left unchecked."""
+        matching tmux's capture of its pane, which is left unchecked.
+        PREVIEWING says a question shows what each choice would, such as
+        another task's terminal."""
         self.settle()
         screen = self.screen()
         problems = ["Error: " + error for error in self.emacs.json("(json-encode (vconcat (qa-take-errors)))")]
@@ -582,7 +584,7 @@ class Run:
                 own = (frames.get(window.get("frame")) or None) if window.get("frame") in frames else task
                 if not own:
                     problems.append("%s, a terminal, is on screen with no task for its frame" % window["buffer"])
-                elif window["terminal"] != own["terminal"]:
+                elif window["terminal"] != own["terminal"] and not previewing:
                     problems.append("%s, another task's terminal, is beside %s's" % (window["buffer"], own["name"]))
             if window["mode"] == "roost-sidebar-list-mode" and window["total"] != screen["sidebar-width"]:
                 problems.append("The sidebar is %d columns wide, not %d" % (window["total"], screen["sidebar-width"]))
@@ -1597,7 +1599,8 @@ def panes(qa, repo):
         ("its panel beside it", lambda s: (qa.window(s, "roost-task-info-mode") or {}).get("text", "").startswith(second))])
     qa.keys("C-c C-s")
     qa.wait("the session prompt", lambda s: s["prompt"])
-    qa.step("Choosing a session")
+    # Showing the session chosen, as vertico chooses the first at once.
+    qa.step("Choosing a session", previewing=True)
     qa.type(session + "\r")
     qa.wait(first + " again", lambda s: (s.get("task") or {}).get("name") == first)
     qa.step("Back to the first task", expect=[

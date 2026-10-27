@@ -1714,6 +1714,81 @@ terminal's, on a pty.  Skips the test where it can't be made."
        (kill-buffer " *before*")
        (kill-buffer " *pager*")))))
 
+(ert-deftest roost-open-goes-ahead-in-a-terminal-tiled-again ()
+  ;; With a split terminal, the minibuffer you chose a task in gave back
+  ;; its lines as it closed, tmux-control tiled the terminal again, and the
+  ;; window showed another pane's buffer: Roost took it for you moving on.
+  (roost-test--isolated
+   (roost-test--with-tmux-buffers
+    (let* ((pane (lambda (name session)
+                   (with-current-buffer (get-buffer-create name)
+                     (setq major-mode 'tmux-control-mode)
+                     (setq-local roost-test--tmux (list :host nil :socket "main" :session session))
+                     (current-buffer))))
+           (first (funcall pane " *tmux %0*" "roost-p-012345"))
+           (second (funcall pane " *tmux %2*" "roost-p-012345"))
+           (other (funcall pane " *tmux other*" "roost-p-3f2a"))
+           (scrollback (with-current-buffer (get-buffer-create " *scrollback*")
+                         (setq-local roost-test--tmux '(:socket "main" :session "roost-p-012345"))
+                         (current-buffer)))
+           callback displayed)
+      (cl-letf (((symbol-function 'roost--request)
+                 (lambda (_host _action _params success &optional _failure) (setq callback success)))
+                ((symbol-function 'roost--display-task) (lambda (task) (setq displayed (roost--field task 'id))))
+                ((symbol-function 'message) #'ignore))
+        (unwind-protect
+            (save-window-excursion
+              (delete-other-windows)
+              (switch-to-buffer first)
+              (roost-open-task (roost-test--task))
+              (switch-to-buffer second)
+              (funcall callback (roost-test--task))
+              (should (equal displayed "0123456789abcdef"))
+              ;; Not another terminal, nor a view of the same one.
+              (dolist (elsewhere (list other scrollback))
+                (setq displayed nil)
+                (switch-to-buffer first)
+                (roost-open-task (roost-test--task))
+                (switch-to-buffer elsewhere)
+                (funcall callback (roost-test--task))
+                (should-not displayed))
+              ;; Nor need the pane's buffer you were in outlast the tiling.
+              (setq displayed nil)
+              (switch-to-buffer (funcall pane " *tmux %4*" "roost-p-012345"))
+              (roost-open-task (roost-test--task))
+              (kill-buffer " *tmux %4*")
+              (switch-to-buffer second)
+              (funcall callback (roost-test--task))
+              (should (equal displayed "0123456789abcdef")))
+          (mapc #'kill-buffer (list first second other scrollback))))))))
+
+(ert-deftest roost-open-in-a-terminal-tiled-again-keeps-to-its-frame ()
+  ;; The same terminal in another frame isn't where you were.
+  (roost-test--isolated
+   (roost-test--with-tmux-buffers
+    (roost-test--with-another-frame other
+     (let* ((pane (lambda (name)
+                    (with-current-buffer (get-buffer-create name)
+                      (setq major-mode 'tmux-control-mode)
+                      (setq-local roost-test--tmux '(:socket "main" :session "roost-p-012345"))
+                      (current-buffer))))
+            (first (funcall pane " *tmux %0*"))
+            (second (funcall pane " *tmux %2*"))
+            callback displayed)
+       (cl-letf (((symbol-function 'roost--request)
+                  (lambda (_host _action _params success &optional _failure) (setq callback success)))
+                 ((symbol-function 'roost--display-task) (lambda (task) (setq displayed (roost--field task 'id))))
+                 ((symbol-function 'message) #'ignore))
+         (unwind-protect
+             (save-window-excursion
+               (switch-to-buffer first)
+               (roost-open-task (roost-test--task))
+               (with-selected-frame other
+                 (switch-to-buffer second)
+                 (funcall callback (roost-test--task)))
+               (should-not displayed))
+           (mapc #'kill-buffer (list first second)))))))))
+
 (ert-deftest roost-open-says-so-while-its-host-replies ()
   ;; A click on a task on a slow host showed nothing until it replied, and
   ;; looked like a click that did nothing.
