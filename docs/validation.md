@@ -89,9 +89,12 @@ happened in a section below:
   following their output: 3 of 4 after five resizes, each falling further
   behind. In Roost, docking the task panel beside a busy agent resizes its
   terminal this way. With #214 every window kept following through the
-  same resizes, 15 checks of 15; the cause is left for tmux-control.
+  same resizes, 15 checks of 15. A window made shorter could still stop
+  following when output came before Emacs drew it, which
+  [tmux-control#216](https://github.com/csheaff/tmux-control/pull/216)
+  fixed.
 - **`make qa`** on Emacs 30.2 with #214: 325 steps, none with problems.
-  tmux-control 0.8.3 releases it; Roost works with 0.8.2 as before.
+  tmux-control 0.8.3 releases both; Roost works with 0.8.2 as before.
 
 ## Claude Code 2.1.310, relayed and in Rex — 2026-10-26
 
