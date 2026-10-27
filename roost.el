@@ -5727,8 +5727,12 @@ agent do it."
               (if (y-or-n-p (format "%s conflicts with %s in %s.  Ask its agent to resolve them? "
                                        name branch (string-join conflicts ", ")))
                   (roost-send updated
-                              (format "I merged %s into this branch and Git reports conflicts in: %s. Resolve the conflicts so the changes from both sides keep working, run the tests, and commit the merge."
-                                      branch (string-join conflicts ", ")))
+                              (format "I merged %s into this branch and Git reports conflicts in: %s.%s Resolve the conflicts so the changes from both sides keep working, run the tests, and commit the merge."
+                                      branch (string-join conflicts ", ")
+                                      (if resolved
+                                          (format " It resolved those in %s as they were resolved before (rerere); check them too."
+                                                  (string-join resolved ", "))
+                                        "")))
                 (message "The merge is in progress in %s's worktree; resolve it in Magit (r) and commit"
                          name)))
              ;; Git resolved them as you did before (rerere), and left the

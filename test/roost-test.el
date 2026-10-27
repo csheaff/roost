@@ -6314,7 +6314,16 @@ With FAILING, it prints it on stderr and exits with status 1."
        (should-not sent)
        (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
          (roost-update task))
-       (should (string-match-p "conflicts in: a.py, and resolved them as they were resolved before (rerere)" sent))))))
+       (should (string-match-p "conflicts in: a.py, and resolved them as they were resolved before (rerere)" sent))
+       ;; Beside conflicts left to resolve, the agent checks those too.
+       (cl-letf (((symbol-function 'roost--request)
+                  (lambda (_host _action _params success &rest _)
+                    (funcall success (append '((update (conflicts "b.py") (changed) (resolved "a.py"))
+                                               (integrationBranch . "main"))
+                                             (roost-test--task)))))
+                 ((symbol-function 'y-or-n-p) (lambda (_) t)))
+         (roost-update task))
+       (should (string-match-p "conflicts in: b.py\\. It resolved those in a.py as they were resolved before (rerere); check them too\\. Resolve" sent))))))
 
 (defmacro roost-test--with-send-buffers (&rest body)
   `(unwind-protect (progn ,@body)
