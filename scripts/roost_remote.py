@@ -3719,9 +3719,15 @@ def resolved_before(repo, ours, theirs):
     and no longer in conflict in the merge under way. Git keeps no record
     of which it did, so these are the files `git merge-tree` finds in
     conflict but the merge doesn't; a merge stopped for another reason,
-    such as a hook, has none. Empty without rerere's cache, or before Git
-    2.38, which can't tell."""
+    such as a hook, has none. Empty without rerere.autoUpdate and rerere's
+    cache, before Git 2.38, which can't tell, and where the branch merged
+    into has merge options, such as -Xours, which can resolve conflicts
+    otherwise and which `git merge-tree` doesn't take."""
+    branch = git(repo, "symbolic-ref", "-q", "--short", "HEAD", check=False).stdout.strip()
     if not (merges_without_checkout()
+            and git(repo, "config", "--bool", "rerere.autoUpdate", check=False).stdout.strip() == "true"
+            and not (branch and git(repo, "config", "--get", "branch.%s.mergeOptions" % branch,
+                                    check=False).stdout.strip())
             and Path(git(repo, "rev-parse", "--path-format=absolute", "--git-path", "rr-cache",
                          check=False).stdout.strip() or "/nonexistent").is_dir()):
         return []

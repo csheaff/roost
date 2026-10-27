@@ -1519,6 +1519,12 @@ class Lifecycle(unittest.TestCase):
         for action in ("merge", "squash"):
             with self.subTest(action=action):
                 self.cell(task, action, "conflicts with main in hello. Nothing was changed")
+        # Nor is a merge main's options resolve, which a hook then refuses.
+        self.git("config", "branch.main.mergeOptions", "-Xours")
+        hook = self.hook("pre-merge-commit", "exit 1")
+        self.cell(task, "merge", "refused the merge, which is undone")
+        hook.unlink()
+        self.git("config", "--unset", "branch.main.mergeOptions")
         # u leaves the merge under way, resolved and staged, for its agent.
         reply = self.request("update", id=task["id"])
         self.assertTrue(reply["ok"], reply)
