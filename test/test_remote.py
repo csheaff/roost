@@ -830,6 +830,10 @@ class Lifecycle(unittest.TestCase):
         (wt / "notes").write_text("only here\n")
         self.assertIn("Uncommitted or untracked", self.request("retire", id=task["id"])["error"])
         self.assertTrue((wt / "notes").exists())
+        # And the panel says so, as uncommitted changes.
+        listed = self.request("list", full=True)["result"][0]
+        self.assertTrue(listed["dirty"])
+        self.assertIn(dict(path="notes", untracked=True), listed["files"])
 
     def test_retire_counts_a_stash_in_a_submodule_and_names_one_git_cannot_read(self):
         self.add_submodule()
@@ -925,6 +929,27 @@ class Lifecycle(unittest.TestCase):
         self.assertFalse(wt.exists())
         self.assertNotIn(task["branch"], self.git("branch", "--list", task["branch"]))
         self.assertNotIn("remoteCleanup", reply["result"])
+
+    @unittest.skipUnless(shutil.which("ssh-keygen"), "needs ssh-keygen to sign commits")
+    def test_a_squash_merge_leaves_out_what_git_says_of_signatures(self):
+        key = self.root / "key"
+        roost.execute(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)])
+        (self.root / "signers").write_text("roost@example.invalid " + (self.root / "key.pub").read_text())
+        for setting, value in (("gpg.format", "ssh"), ("user.signingkey", str(key)), ("log.showSignature", "true"),
+                               ("gpg.ssh.allowedSignersFile", str(self.root / "signers"))):
+            self.git("config", setting, value)
+        for count in (1, 2):
+            with self.subTest(commits=count):
+                task = self.create(name="signed %d" % count)
+                wt = Path(task["worktree"])
+                for number in range(count):
+                    (wt / "hello").write_text("signed %d of %d\n" % (number, count))
+                    self.git("commit", "-qS", "-am", "Signed change %d" % number, cwd=wt)
+                self.assertIn("signature", self.git("log", "-1", "--format=%s", cwd=wt))
+                self.assertTrue(self.request("merge", id=task["id"], style="squash")["ok"])
+                self.assertEqual(self.git("log", "--no-show-signature", "-1", "--format=%B", "main"),
+                                 "Signed change 0" if count == 1 else
+                                 "Signed change 0\n\n* Signed change 0\n* Signed change 1")
 
     def test_a_squash_merge_without_checkout_keeps_a_single_commits_message(self):
         task = self.create()
@@ -1471,6 +1496,33 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(self.git("log", "-1", "--format=%s", cwd=wt), "Merge branch 'main' into " + task["branch"])
         self.assertTrue(self.request("merge", id=task["id"])["ok"])
         self.assertEqual((self.repo / "hello").read_text(), "main and task\n")
+
+    def test_conflicts_name_files_as_they_are_named(self):
+        # Not as Git quotes a name that isn't ASCII: "\303\251t\303\251 notes.txt".
+        name = "\u00e9t\u00e9 notes.txt"
+        (self.repo / name).write_text("base\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "Notes")
+        task = self.create()
+        wt = Path(task["worktree"])
+        (wt / name).write_text("task\n")
+        self.git("commit", "-qam", "task", cwd=wt)
+        (self.repo / name).write_text("main\n")
+        self.git("commit", "-qam", "main")
+        said = "conflicts with main in %s. Nothing was changed" % name
+        for style in (None, "squash"):
+            with self.subTest(style=style, here=True):
+                self.assertIn(said, self.request("merge", id=task["id"], style=style)["error"])
+        # Without the primary checkout, on another branch.
+        self.git("switch", "-q", "-c", "elsewhere")
+        for style in (None, "squash"):
+            with self.subTest(style=style, here=False):
+                self.assertIn(said, self.request("merge", id=task["id"], style=style)["error"])
+        self.git("switch", "-q", "main")
+        self.assertEqual(self.request("list", full=True)["result"][0]["conflicts"], [name])
+        reply = self.request("update", id=task["id"])
+        self.assertEqual(reply["result"]["update"]["conflicts"], [name])
+        self.assertEqual(self.request("list", full=True)["result"][0]["merging"], dict(conflicts=[name]))
 
     def test_a_full_listing_names_the_changed_files(self):
         task = self.create()
@@ -4973,6 +5025,33 @@ elif args[:2] == ["auth", "status"]:
         self.matrix(lambda: self.create(name="unrelated", base=unrelated), {"merge": aside, "squash": aside})
         self.assertEqual((self.repo / ".env").read_text(), "SECRET=mine\n")
 
+    def test_git_states_merge_ff_in_your_config(self):
+        # Your config's merge.ff is for your own merges. A squash makes no
+        # merge commit, which Git refuses with --no-ff, nor a fast-forward,
+        # which it refuses with --ff-only; and updating a task with commits
+        # of its own can't be a fast-forward.
+        def main_moved():
+            task = self.worked()
+            (self.repo / ("main-" + task["id"])).write_text("main\n")
+            self.git("add", ".")
+            self.git("commit", "-qm", "Main moved")
+            return task
+        for setting in ("false", "only"):
+            with self.subTest(setting=setting):
+                self.git("config", "merge.ff", setting)
+                self.matrix(main_moved, {"update": True, "merge": True, "squash": True})
+        self.git("config", "--unset", "merge.ff")
+        # Nor does a task brought up to date from main gain a merge commit
+        # where main's commits are all it lacks.
+        self.git("config", "merge.ff", "false")
+        task = self.create(name="fast-forward")
+        (self.repo / "moved").write_text("main\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "Main moved again")
+        self.assertTrue(self.request("update", id=task["id"])["ok"])
+        self.assertEqual(self.git("rev-parse", "HEAD", cwd=task["worktree"]), self.git("rev-parse", "main"))
+        self.git("config", "--unset", "merge.ff")
+
     def test_git_states_a_hook_that_refuses_a_merge(self):
         hooks = self.root / "hooks"
         hooks.mkdir()
@@ -5193,6 +5272,15 @@ elif args[:2] == ["auth", "status"]:
         self.assertEqual(task["status"], "failed")
         self.assertTrue((Path(task["worktree"]) / "made-by-hook").exists())
         self.cell(task, "discard", True)
+        # Even with status set not to show them, as Git's own removal of
+        # the worktree would then delete them.
+        self.git("config", "status.showUntrackedFiles", "no")
+        reply = self.request("create", directory=str(self.repo), name="hooked", socket=self.socket)
+        self.assertIn("its worktree is kept, as the hook left files there", reply["error"])
+        [task] = store.all()
+        self.assertTrue((Path(task["worktree"]) / "made-by-hook").exists())
+        self.cell(task, "discard", True)
+        self.git("config", "--unset", "status.showUntrackedFiles")
         # A checkout that fails, as a filter can, leaves no branch.
         self.git("config", "--unset", "core.hooksPath")
         (self.repo / ".gitattributes").write_text("*.bin filter=broken\n")

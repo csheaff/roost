@@ -1715,7 +1715,9 @@ def abandon(store, task):
     if task.get("windowId"):
         tmux(task["socket"], "kill-window", "-t", task["windowId"], check=False)
     # Never force-remove: a runner could already have written real work.
-    if not git(worktree, "status", "--porcelain", check=False).stdout:
+    # Git removes untracked files with it when your config's
+    # status.showUntrackedFiles hides them, so they count here.
+    if not git(worktree, "status", "--porcelain", "--untracked-files=normal", check=False).stdout:
         git(repo, "worktree", "remove", str(worktree), check=False)
         with contextlib.suppress(RoostError):
             delete_branch(repo, task["branch"], task["baseCommit"])
@@ -2623,14 +2625,17 @@ def add_git_stats(tasks):
         base = fork_point(worktree, task)
         task["sinceLooked"] = since_looked(task, worktree, base)
         stats = read_git(worktree, "diff", "--no-ext-diff", "--no-textconv", "--shortstat", base)
-        dirty = read_git(worktree, "status", "--porcelain", "-z")
+        # Untracked files too, as retiring counts them, whatever
+        # status.showUntrackedFiles says.
+        dirty = read_git(worktree, "status", "--porcelain", "-z", "--untracked-files=normal")
         task["diff"] = stats.stdout.strip()
         task["dirty"] = bool(dirty.stdout)
         task["files"], task["size"] = changed_files(worktree, base, status_paths(dirty.stdout))
         # A merge under way, as when an update conflicted, with its files in
         # conflict; null otherwise, so Emacs forgets one that has finished.
-        task["merging"] = (dict(conflicts=read_git(worktree, "diff", "--no-ext-diff", "--no-textconv", "--name-only",
-                                                   "--diff-filter=U").stdout.splitlines())
+        task["merging"] = (dict(conflicts=[path for path in read_git(worktree, "diff", "--no-ext-diff", "--no-textconv",
+                                                                     "--name-only", "--diff-filter=U", "-z")
+                                           .stdout.split("\0") if path])
                            if read_git(worktree, "rev-parse", "-q", "--verify", "MERGE_HEAD").returncode == 0
                            else None)
         integration = task.get("integrationBranch")
@@ -3332,13 +3337,14 @@ def merge_without_checkout(task, integration):
     tip = git(repo, "rev-parse", "refs/heads/" + task["branch"] + "^{commit}").stdout.strip()
     if git(repo, "merge-base", "--is-ancestor", tip, old, check=False).returncode == 0:
         return  # Already there.
-    result = git(repo, "merge-tree", "--write-tree", "--name-only", "--no-messages", old, tip, check=False)
-    lines = result.stdout.splitlines()
+    result = git(repo, "merge-tree", "--write-tree", "--name-only", "--no-messages", "-z", old, tip, check=False)
+    # The new tree, then each file in conflict, as named, not quoted.
+    lines = result.stdout.split("\0")
     if result.returncode == 1:
         conflicts = [line for line in lines[1:] if line]
         raise RoostError("%s conflicts with %s in %s. Nothing was changed; update the task from %s, then merge again"
                          % (task["name"], integration, ", ".join(conflicts) or "some files", integration))
-    if result.returncode or not lines:
+    if result.returncode or not lines[0]:
         raise RoostError("Merge failed; task retained: " + (result.stderr.strip() or result.stdout.strip()))
     # The message `git merge` would write, which names INTEGRATION unless
     # it is main or master (merge.suppressDest).
@@ -3351,8 +3357,10 @@ def merge_without_checkout(task, integration):
 def squash_message(task, old, tip):
     """The message for the task's work as one commit: its one commit's
     message, or the first one's subject and every subject as a list. The
-    task's updates from its integration branch are left out."""
-    log = git(task["repo"], "log", "--no-merges", "--reverse", "--format=%B%x00", old + ".." + tip).stdout
+    task's updates from its integration branch are left out, and so are
+    the lines log.showSignature would add about each commit's signature."""
+    log = git(task["repo"], "log", "--no-show-signature", "--no-merges", "--reverse", "--format=%B%x00",
+              old + ".." + tip).stdout
     messages = [message.strip() for message in log.split("\0") if message.strip()]
     if not messages:
         return "Add " + task["name"]
@@ -3439,7 +3447,10 @@ def squash_merge(task, integration, here):
     message = squash_message(task, old, tip)
     if here:
         untracked = untracked_here(repo)
-        result = git(repo, "merge", "--squash", tip, check=False)
+        # --ff, whatever your config's merge.ff says: Git refuses a squash
+        # with --no-ff, and one that isn't a fast-forward with --ff-only,
+        # though a squash makes no merge commit either way.
+        result = git(repo, "merge", "--squash", "--ff", tip, check=False)
         if result.returncode:
             conflicts = conflicted_files(repo)
             # A squash leaves no MERGE_HEAD to abort; this undoes it alike.
@@ -3463,13 +3474,13 @@ def squash_merge(task, integration, here):
     if (version_of(git(repo, "--version").stdout) or (0, 0)) < MERGE_TREE_GIT:
         raise RoostError("Check out %s in the primary repository %s before merging "
                          "(Git 2.38 merges without it)" % (integration, repo))
-    result = git(repo, "merge-tree", "--write-tree", "--name-only", "--no-messages", old, tip, check=False)
-    lines = result.stdout.splitlines()
+    result = git(repo, "merge-tree", "--write-tree", "--name-only", "--no-messages", "-z", old, tip, check=False)
+    lines = result.stdout.split("\0")
     if result.returncode == 1:
         conflicts = [line for line in lines[1:] if line]
         raise RoostError("%s conflicts with %s in %s. Nothing was changed; update the task from %s, then merge again"
                          % (task["name"], integration, ", ".join(conflicts) or "some files", integration))
-    if result.returncode or not lines:
+    if result.returncode or not lines[0]:
         raise RoostError("Merge failed; task retained: " + (result.stderr.strip() or result.stdout.strip()))
     if lines[0] == git(repo, "rev-parse", old + "^{tree}").stdout.strip():
         return tip  # The task's work was there already, as after a squash whose cleanup failed.
@@ -3690,7 +3701,10 @@ def pull_request(store, task, request):
 
 
 def conflicted_files(repo):
-    return git(repo, "diff", "--name-only", "--diff-filter=U", check=False).stdout.splitlines()
+    """The files in conflict in REPO's merge under way, as named: Git
+    quotes one that isn't ASCII otherwise, as "\\303\\251.txt"."""
+    return [path for path in git(repo, "diff", "--name-only", "--diff-filter=U", "-z", check=False).stdout.split("\0")
+            if path]
 
 
 def merge_said(result):
@@ -3789,8 +3803,11 @@ def update(store, task):
         raise RoostError(ignored_refusal("Updating from " + integration, overwritten, "the task's worktree", "update"))
     before = git(worktree, "rev-parse", "HEAD").stdout.strip()
     # The full name, which a tag of the same name would otherwise shadow,
-    # and the message a merge of the short one has.
-    result = git(worktree, "merge", "--no-edit", "-m", "Merge branch '%s' into %s" % (integration, task["branch"]),
+    # and the message a merge of the short one has. A fast-forward where it
+    # can be, as Git's default, whatever your config's merge.ff says: with
+    # --ff-only, a task with commits of its own could never be updated.
+    result = git(worktree, "merge", "--ff", "--no-edit", "-m",
+                 "Merge branch '%s' into %s" % (integration, task["branch"]),
                  "refs/heads/" + integration, check=False)
     conflicts = conflicted_files(worktree)
     if result.returncode and not conflicts:
