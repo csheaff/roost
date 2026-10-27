@@ -87,7 +87,7 @@ Magit is optional (review falls back to Dired).
   opened in it stay open. Set `roost-workspace` to choose. A task's
   perspective lists the tmux windows of its session you have visited; to
   list every one from the start, such as a shell you left open, set
-  `tmux-control-window-buffers` to `all` (tmux-control 0.9.0), and to tell
+  `tmux-control-window-buffers` to `all` (tmux-control 0.8.3), and to tell
   them apart by name, `tmux-control-window-buffer-names` to `tab`.
 - **Evil.** Roost's dashboard and panels start in Emacs state so their keys work
   (`roost-evil-state`); `j`/`k` move between tasks. Drafts start in insert
