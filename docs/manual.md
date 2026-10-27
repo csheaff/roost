@@ -1159,10 +1159,10 @@ again, and the diff shows what changed.
 
 | Agent | Captured | Scanned | How Roost hears it |
 | --- | --- | --- | --- |
-| Claude Code | 2.1.303, with and without relay | hook events, notifications, payload fields | hooks given with `--settings` |
+| Claude Code | 2.1.303, with and without relay; 2.1.310 relayed | hook events, notifications, payload fields | hooks given with `--settings` |
 | Codex | 0.163.0, with and without relay | hook events and payload fields | hooks given with `-c`, reviewed once in Codex |
 | Pi | 1.3.0 | extension events, context, options | an extension given with `--extension` |
-| OpenCode | none yet | events, settings | a plugin named in `OPENCODE_CONFIG_CONTENT` |
+| OpenCode | 1.19.4 | events, settings | a plugin named in `OPENCODE_CONFIG_CONTENT` |
 
 See [validation](validation.md) for the live runs with Claude Code, Codex and
 Pi on local and remote hosts, [the demo notes](demo.md) for how the screenshots
