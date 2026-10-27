@@ -35,6 +35,64 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## Emacs's CPU with agents streaming — 2026-10-26
+
+- **Why.** The draft #78 measured zmx and Ghostel at under half the Emacs
+  CPU of tmux-control and Eat, with four agents streaming. This measured
+  where Eat's share went.
+- **How.** Emacs 30.2, set up as #78 was: an Emacs of its own, with its own
+  init directory, server, state directory and tmux socket, a 1600×900
+  frame, Menlo 14, modus-vivendi and the default mode line; Roost at
+  4fcab6b and Eat 0.9.4. Fake agents ran `stream` from
+  `test/fake_claude.py`, paced to the clock, since #78's unpaced agent ran
+  147–169 lines a second when asked for 200, and its rate moved with the
+  machine's load. Each run streamed for 60 s first, so the buffers reached
+  tmux-control's history limit, and then took Emacs's CPU from `ps` over
+  30 s.
+- **Where the time went.** From macOS's `sample`, with four terminals shown
+  at 200 lines a second: Emacs's own redisplay took 69% of the main
+  thread's time, tmux-control's redraw after each chunk 16% (`recenter` in
+  Eat's scroll sync, and keeping the cursor in view), garbage collection
+  9%, Eat's parsing 2% and tmux-control's filter 1.5%. The largest single
+  part was paid once per redraw, whatever changed: on macOS, waiting for
+  the window's back buffer and copying the whole previous frame into it,
+  23%. Compiling made no difference: 42–44% at four × 50 lines a second
+  from source, byte-compiled or native. Emacs's own CPU profiler put 81%
+  in `redisplay_internal` and under 1% in the filter, which `sample` and
+  timing the filter both contradict, so on this build its split can't be
+  trusted.
+- **The change.**
+  [tmux-control#214](https://github.com/csheaff/tmux-control/pull/214)
+  redraws a terminal that keeps receiving output at most 30 times a
+  second, all terminals in the same redraw. The first output after a
+  quiet spell is drawn at once, and so is everything for half a second
+  after a key is typed into that terminal. Four terminals shown at 50 lines a
+  second each went from 42% to 30%; at 200 lines a second, from saturated
+  (75–100%) to 35–43%; ten streaming at 200 lines a second with one shown,
+  from 98% to 65%. An echo in a terminal streaming 200 lines a second took
+  1.9 ms (median) and 3.3 ms (p90), against 4.5 and 6.5 before.
+- **Against Ghostel.** With #78's latency probe running, which by itself
+  costs about 13% as it polls every 2 ms, Ghostel used 37% at four × 50
+  and 38% at four × 200; Eat now uses 29–30% and 35–37%. #78's Ghostel
+  runs had the unpaced agent, though Ghostel's cost hardly moved with the
+  rate, and no terminals out of sight.
+- **Out of sight.** Ten streaming with one shown still take 65%, nearly
+  all of it for terminals no window shows. Pausing tmux's output to those
+  (`refresh-client -A '%P:pause'`) brought that to about 12%, but a
+  terminal's buffer then lacks what it printed while hidden; tmux's
+  history keeps it, and tmux-control's scrollback reads it from there.
+  Turning their output off instead stops tmux reading the pane, and the
+  agent blocks on its next write. `tmux-control-pause-after` set to 1
+  changed nothing measurable.
+- **Found on the way.** On tmux-control 0.8.2, once Emacs was saturated at
+  200 lines a second, windows resized beside streaming terminals stopped
+  following their output: 3 of 4 after five resizes, each falling further
+  behind. In Roost, docking the task panel beside a busy agent resizes its
+  terminal this way. With #214 every window kept following through the
+  same resizes, 15 checks of 15; the cause is left for tmux-control.
+- **`make qa`** on Emacs 30.2 with #214: 325 steps, none with problems.
+  tmux-control 0.8.3 releases it; Roost works with 0.8.2 as before.
+
 ## Claude Code 2.1.310, relayed and in Rex — 2026-10-26
 
 - **Why.** Claude Code had moved on from 2.1.303, the version captured,

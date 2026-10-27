@@ -179,13 +179,19 @@ account, with no badge or verdict.
   file rather than in Magit.
 - **Ghostel in place of Eat.** [Ghostel](https://github.com/dakra/ghostel)
   runs Ghostty's terminal engine in Emacs as a native module, with the Kitty
-  keyboard and graphics protocols and synchronized output, and its author
-  measures it faster than vterm. With four agents streaming, it used less
-  than half the Emacs CPU Eat does (draft
-  [#78](https://github.com/csheaff/roost/pull/78)). tmux-control would draw
-  panes with it instead of Eat. First check that Ghostel can show output it
-  doesn't read from its own process. The module is a prebuilt download, one
-  more thing to install.
+  keyboard and graphics protocols and synchronized output. tmux-control
+  would draw panes with it instead of Eat. Speed is no longer the reason to
+  move for terminals you can see. With four agents streaming, Ghostel used
+  less than half the Emacs CPU Eat did (draft
+  [#78](https://github.com/csheaff/roost/pull/78)), but most of Eat's was
+  Emacs redrawing after every chunk. tmux-control 0.8.3 redraws a streaming
+  terminal at most 30 times a second, and Eat now uses about what Ghostel
+  did ([validation](validation.md), 2026-10-26). Terminals out of sight
+  still cost: ten streaming with one shown take 65% of a core. An option
+  for tmux to pause the output of terminals no window shows would bring
+  that to about 12%; Ghostel wasn't measured with hidden terminals. First
+  check that Ghostel can show output it doesn't read from its own process.
+  The module is a prebuilt download, one more thing to install.
 - **A second sign on the count, beside colour.** The mode line's
   `● Roost:2` and the sidebar's `2 waiting` tell an agent that asks from
   one that failed or finished by colour alone. For a protanope, ef-dream's
@@ -268,7 +274,10 @@ Larger, or undecided.
   [#79](https://github.com/csheaff/roost/issues/79); the draft
   [#78](https://github.com/csheaff/roost/pull/78) tried it on 2026-10-20:
   links, Shift+Enter and program status worked without patches, and remote
-  terminals shared one SSH connection, but zmx 0.8.1 isn't ready. Look again
+  terminals shared one SSH connection, but zmx 0.8.1 isn't ready. It used
+  less Emacs CPU too, but for terminals you can see tmux-control 0.8.3
+  closed that gap (see Ghostel, above), so speed is no longer the reason;
+  zmx's own readiness is what decides it. Look again
   once a zmx release keeps the whole scrollback when you reattach
   ([zmx#296](https://github.com/neurosnap/zmx/pull/296)) and shows a task
   started with nothing attached (fixed on zmx's main), and once an upgrade
