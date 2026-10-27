@@ -9725,6 +9725,8 @@ With INITIAL, the box must start out holding it."
     (roost-note)
     (with-current-buffer (plist-get roost--note-box :buffer)
       (should (derived-mode-p 'roost-note-box-mode))
+      ;; Its header names it; no `global-tab-line-mode' tab over it.
+      (should (eq (window-parameter (get-buffer-window (current-buffer) t) 'tab-line-format) 'none))
       (when initial (should (equal (buffer-string) initial)))
       (erase-buffer)
       (insert text)
