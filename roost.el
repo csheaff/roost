@@ -77,6 +77,7 @@
 (declare-function magit-diff-range "magit-diff" (rev-or-range &optional args files))
 (declare-function eieio-oset "eieio-core" (obj slot value))
 (declare-function magit-get-upstream-branch "magit-git" (&optional branch))
+(declare-function magit-diff-setup-buffer "magit-diff" (range typearg args files &optional type locked))
 (declare-function persp-switch "perspective" (name))
 (declare-function persp-kill "perspective" (name))
 (declare-function persp-forget-buffer "perspective" (buffer))
@@ -114,6 +115,9 @@
 (defvar magit-refresh-buffer-hook)
 (defvar magit-buffer-log-args)
 (defvar magit-insert-section--current)
+(defvar magit-display-buffer-function)
+(defvar magit-display-buffer-noselect)
+(defvar image-auto-resize)
 (defvar tmux-control-remote-tmux-socket-setup)
 (defvar tmux-control-ssh-options)
 (defvar tmux-control-session-activity)
@@ -1031,6 +1035,12 @@ must a reply with a newer look lose it for an older agent event."
         (roost--notify-attention host task status)))
     (when (and previous (not (equal previous status)))
       (roost--run-task-hook 'roost-task-status-functions task previous status))
+    ;; A view its agent built since Roost last saw the task.
+    (when-let* ((old)
+                (view (roost--field task 'view))
+                ((gethash key roost--tasks))
+                ((not (equal (alist-get 'id view) (alist-get 'id (roost--field old 'view))))))
+      (roost--view-arrived task))
     (when (gethash key roost--tasks)
       (roost--report-turn task))
     ;; Another pull request merged, as a second one on the task, is another
@@ -8041,6 +8051,8 @@ there are no tasks at all."
     ["Diff the task's changes" roost-diff :active (roost--menu-applies-p 'roost-diff)]
     ["Mark as looked at" roost-mark-looked :active (roost--menu-applies-p 'roost-mark-looked)]
     ["Bring up to date" roost-update :active (roost--menu-applies-p 'roost-update)]
+    ["Ask for a view…" roost-ask-view :active (roost--menu-applies-p 'roost-ask-view)]
+    ["Open its view" roost-open-view :active (roost--menu-applies-p 'roost-open-view)]
     "---"
     ["Pull request…" roost-pr :active (roost--menu-applies-p 'roost-pr)]
     ["Merge and retire…" roost-merge-retire :active (roost--menu-applies-p 'roost-merge-retire)]
@@ -8093,7 +8105,7 @@ With no task at all, none of the task commands do."
 ;; `roost--stop-inapt-p': older transient doesn't say which entry it asks about.
 (dolist (command '(roost-open-task roost-shell roost-files roost-send roost-task-info roost-review
                    roost-diff roost-mark-looked roost-update roost-pr roost-merge-retire roost-retire roost-forget
-                   roost-stop roost-resume roost-goto-note roost-rename))
+                   roost-stop roost-resume roost-goto-note roost-rename roost-ask-view roost-open-view))
   (defalias (intern (format "roost--%s-inapt-p" (string-remove-prefix "roost-" (symbol-name command))))
     (lambda () (roost--dispatch-inapt-p command))
     (format "Whether `%s' does not apply to the task of `roost-dispatch'." command)))
@@ -8117,7 +8129,8 @@ Unknown Git statistics count as making sense."
     (pcase command
       ('roost-shell (and worktree (not (member (roost--field task 'status) '("stopped" "crashed")))))
       ((or 'roost-files 'roost-review 'roost-diff 'roost-mark-looked 'roost-update) worktree)
-      ((or 'roost-send 'roost-stop) (roost--agent-running-p task))
+      ((or 'roost-send 'roost-stop 'roost-ask-view) (roost--agent-running-p task))
+      ('roost-open-view (and worktree (roost--field task 'view) t))
       ('roost-resume (and worktree (not (roost--agent-running-p task))))
       ('roost-pr (and worktree (or (roost--field task 'pr) (not (eql ahead 0)))))
       ;; Merged, the task's branch may be, but not work on another branch
@@ -8210,7 +8223,9 @@ terminal or worktree, or ask which task."
     ("D" "Diff" roost-diff :inapt-if roost--diff-inapt-p)
     ("v" "Mark looked at" roost-mark-looked :inapt-if roost--mark-looked-inapt-p)
     ("u" "Bring up to date" roost-update :inapt-if roost--update-inapt-p)
-    ("'" "Go to note" roost-goto-note :inapt-if roost--goto-note-inapt-p)]
+    ("'" "Go to note" roost-goto-note :inapt-if roost--goto-note-inapt-p)
+    ("V" "Ask for a view" roost-ask-view :inapt-if roost--ask-view-inapt-p)
+    ("o" "Open its view" roost-open-view :inapt-if roost--open-view-inapt-p)]
    ["Finish"
     ("P" "Pull request" roost-pr :inapt-if roost--pr-inapt-p)
     ("m" "Merge and retire" roost-merge-retire :inapt-if roost--merge-retire-inapt-p)
@@ -8250,6 +8265,8 @@ terminal or worktree, or ask which task."
   "X" #'roost-forget
   "u" #'roost-update
   "R" #'roost-rename
+  "V" #'roost-ask-view
+  "o" #'roost-open-view
   "I" #'roost-task-panel-mode
   ;; Commands beyond this task, as in the dashboard and sidebar.
   "n" #'roost-next-waiting
@@ -8803,6 +8820,8 @@ are told apart."
   "X" #'roost-forget
   "u" #'roost-update
   "R" #'roost-rename
+  "V" #'roost-ask-view
+  "o" #'roost-open-view
   "n" #'roost-next-waiting
   "/" #'roost-search
   "w" #'roost-workload
@@ -9838,9 +9857,11 @@ have seen that waits for nothing."
 (defun roost--side-frame-p ()
   "Whether Roost may add side windows to the selected frame.
 Child frames, minibuffer-only frames and unsplittable ones, such as
-Ediff's control frame, are left alone."
+Ediff's control frame, are left alone, as are the frames of views."
   (not (or (frame-parameter nil 'parent-frame)
            (frame-parameter nil 'unsplittable)
+           ;; A view an agent built is laid out whole.
+           (frame-parameter nil 'roost-view)
            (eq (frame-parameter nil 'minibuffer) 'only))))
 
 (defun roost--main-windows ()
@@ -10079,6 +10100,7 @@ Beside a terminal, that turns off `roost-task-panel-mode'."
         (delete-window panel))))
   (remove-hook 'window-configuration-change-hook #'roost--layout-changed)
   (remove-hook 'after-delete-frame-functions #'roost--frame-deleted)
+  (remove-hook 'delete-frame-functions #'roost--view-frame-deleted)
   (when (timerp roost--layout-timer) (cancel-timer roost--layout-timer))
   (remove-hook 'magit-post-refresh-hook #'roost--magit-refreshed)
   (roost--magit-teardown)
@@ -10090,6 +10112,393 @@ Beside a terminal, that turns off `roost-task-panel-mode'."
     (define-key transient-predicate-map (vector command) nil t))
   ;; Continue with the standard unloading.
   nil)
+
+;;;; Views an agent builds
+
+;; On request, a task's agent picks real files of its work for you to
+;; read, in the order to read them: lines of a file, a file's diff, an
+;; image, a document, and a short note of its own.  It sends them with
+;; `roost-view', a command its host's helper puts on its PATH, which
+;; checks them and keeps them in the task's record, and Roost lays them
+;; out in a frame of their own as it polls.  The agent sends data, never
+;; code, and Roost chooses the geometry.
+
+(defface roost-view-region '((t :inherit secondary-selection :extend t))
+  "The lines of a file that a view's agent points you to.")
+
+(defconst roost--view-request
+  "Show me how this works, in my editor: build a view with roost-view, a command on your PATH. Choose the fewest panes of real files that explain it, one to four, in the order I should read them, and add a short note on what to look for. Pipe the view, as JSON, to `roost-view -`; if it says what's wrong, fix that and run it again.
+
+{\"panes\": [{\"kind\": \"file\", \"path\": \"src/parse.py\", \"start\": 10, \"end\": 42},
+           {\"kind\": \"diff\", \"path\": \"src/parse.py\"}],
+ \"note\": \"What to look at first, and why.\"}
+
+A file pane shows lines start to end, marked; a diff pane, the file's changes since this task began. There are image panes too, for a PNG, JPEG, GIF, SVG or WebP image, and document panes, for a Markdown, Org or text file. Paths are relative to the top of the worktree. The note is at most 600 characters."
+  "The prompt `roost-ask-view' drafts: the request, and the view's format.
+Agents copy the example's shape, so it shows two panes, not every kind.")
+
+(defvar roost--views-opened (make-hash-table :test 'equal)
+  "The view of each task opened last, by task key, as its ID.")
+
+(defvar-local roost--view nil
+  "The view a view's note buffer is part of, as its host sent it.")
+
+;;;###autoload
+(defun roost-ask-view (&optional task)
+  "Draft a prompt asking TASK's agent for a view of how its work works.
+The draft holds the request and the format of the view, for you to edit
+and send; Roost never sends it by itself.  Once the agent has built the
+view, it opens if you are looking at TASK, as `roost-open-view' does."
+  (interactive)
+  (setq task (roost--choose task))
+  (roost--send-draft task roost--view-request))
+
+(defun roost--view-task (task)
+  "TASK, or the task whose view to open: the one at point, if it has one.
+Otherwise the task whose agent built the newest view not yet opened."
+  (let ((here (ignore-errors (roost--task-at-point))))
+    (or task
+        (and here (roost--field here 'view) here)
+        (car (sort (seq-filter (lambda (task)
+                                 (when-let* ((view (roost--field task 'view)))
+                                   (not (equal (alist-get 'id view)
+                                               (gethash (roost--key task) roost--views-opened)))))
+                               (roost-tasks))
+                   (lambda (one other)
+                     (string> (or (alist-get 'at (roost--field one 'view)) "")
+                              (or (alist-get 'at (roost--field other 'view)) "")))))
+        here
+        (roost--read-task "Open the view of: "))))
+
+;;;###autoload
+(defun roost-open-view (&optional task)
+  "Show the view TASK's agent built last, in a frame of its own.
+Its panes are the files the agent picked, from TASK's worktree: lines
+of a file, marked; a file's changes, in Magit if you have it; an image;
+a document.  Below them, its note.  \\<roost-view-pane-mode-map>\\[roost-view-close] in any of them
+deletes the frame, and kills the buffers it opened, but not yours."
+  (interactive)
+  (setq task (roost--view-task task))
+  (let ((view (or (roost--field task 'view)
+                  (user-error (substitute-command-keys
+                               (format "%s's agent has built no view; \\[roost-ask-view] asks it for one"
+                                       (roost--field task 'name))))))
+        (key (roost--key task)))
+    ;; A task's newer view takes the place of the one open.
+    (dolist (frame (frame-list))
+      (when (equal (frame-parameter frame 'roost-view) key)
+        (delete-frame frame)))
+    (add-hook 'delete-frame-functions #'roost--view-frame-deleted)
+    (let ((frame (roost--view-frame task)))
+      (puthash key (alist-get 'id view) roost--views-opened)
+      (select-frame-set-input-focus frame)
+      (roost--view-fill frame task view))))
+
+(defun roost--view-frame (task)
+  "A new frame for a view of TASK's work, over most of the screen."
+  (let* ((area (frame-monitor-workarea))
+         (width (floor (* 0.9 (nth 2 area))))
+         (height (floor (* 0.85 (nth 3 area)))))
+    (make-frame `((name . ,(format "Roost view: %s" (roost--field task 'name)))
+                  (roost-view . ,(roost--key task))
+                  ,@(when (display-graphic-p)
+                      `((width . (text-pixels . ,width))
+                        (height . (text-pixels . ,height))
+                        (left . ,(+ (nth 0 area) (/ (- (nth 2 area) width) 2)))
+                        (top . ,(+ (nth 1 area) (/ (- (nth 3 area) height) 4)))))))))
+
+(defun roost--view-layout (count)
+  "The layout of a view of COUNT panes.
+`full' for one; `columns' for two side by side; `main' for one on the
+left beside two stacked on the right; `grid' for four."
+  (pcase count
+    (1 'full)
+    (2 'columns)
+    (3 'main)
+    (_ 'grid)))
+
+(defun roost--view-split (window count)
+  "Split WINDOW for COUNT panes, as `roost--view-layout' lays them out.
+Return the windows in the order to read them, across, then down."
+  (pcase (roost--view-layout count)
+    ('full (list window))
+    ('columns (list window (split-window window nil 'right)))
+    ('main (let ((right (split-window window (- (floor (window-total-width window) 2.2)) 'right)))
+             (list window right (split-window right nil 'below))))
+    ('grid (let* ((right (split-window window nil 'right))
+                  (below (split-window window nil 'below)))
+             (list window right below (split-window right nil 'below))))))
+
+(defun roost--view-note-height (note width)
+  "Lines for NOTE, under its label, in a window WIDTH columns wide."
+  (min 10 (1+ (apply #'+ (mapcar (lambda (line)
+                                   (max 1 (ceiling (string-width line) (float (max 20 (- width 4))))))
+                                 (split-string note "\n"))))))
+
+(defun roost--view-fill (frame task view)
+  "Lay out VIEW of TASK's work in FRAME: its panes, and its note below."
+  (with-selected-frame frame
+    (let* ((window (frame-first-window frame))
+           (panes (alist-get 'panes view))
+           (note (alist-get 'note view))
+           (note-window (progn
+                          (delete-other-windows window)
+                          (when note
+                            (split-window window (- (1+ (roost--view-note-height
+                                                         note (window-total-width window))))
+                                          'below))))
+           (windows (roost--view-split window (length panes))))
+      (set-frame-parameter frame 'roost-view-buffers nil)
+      (cl-loop for pane in panes
+               for window in windows
+               for first = t then nil
+               do (roost--view-pane frame task pane window (and first (not note))))
+      (when note-window
+        (let ((buffer (generate-new-buffer (format "*roost view: %s*" (roost--task-label task)))))
+          (roost--view-keep frame buffer t)
+          (with-current-buffer buffer
+            (roost-view-note-mode)
+            (setq roost--buffer-task-key (roost--key task)
+                  roost--view view)
+            (roost--render-view-note)
+            (roost-view-pane-mode))
+          (set-window-buffer note-window buffer)
+          (set-window-dedicated-p note-window t)
+          (set-window-parameter note-window 'tab-line-format 'none)))
+      (select-window (car windows)))))
+
+(defun roost--view-keep (frame buffer made)
+  "Note that the view in FRAME uses BUFFER, which it MADE, or not."
+  (set-frame-parameter frame 'roost-view-buffers
+                       (cons (cons buffer made) (frame-parameter frame 'roost-view-buffers))))
+
+(defun roost--view-header (pane hint)
+  "The header line of PANE's window, ending with how to close the view if HINT."
+  (let-alist pane
+    (concat " " .path
+            (propertize (pcase .kind
+                          ("file" (if (= .start .end) (format "  line %d" .start)
+                                    (format "  lines %d–%d" .start .end)))
+                          ("diff" "  changes since the task began")
+                          (_ ""))
+                        'face 'roost-dim)
+            (when hint
+              (concat (propertize "  ·  " 'face 'roost-dim)
+                      (propertize "q" 'face 'roost-key)
+                      (propertize " closes this view" 'face 'roost-dim))))))
+
+(defun roost--view-pane (frame task pane window hint)
+  "Show PANE of the view of TASK's work in FRAME's WINDOW.
+Its header line names its file, and how to close the view if HINT.  A
+pane that can't be shown says why in its place."
+  (condition-case err
+      (let-alist pane
+        (pcase .kind
+          ((or "file" "document")
+           (let ((buffer (roost--view-file-buffer frame task .path)))
+             (set-window-buffer window buffer)
+             (if (equal .kind "file")
+                 (roost--view-mark window .start .end)
+               (set-window-start window (with-current-buffer buffer (point-min))))))
+          ("image" (set-window-buffer window (roost--view-image-buffer frame task .path)))
+          ("diff" (roost--view-diff frame task .path window))
+          (_ (error "Roost shows no %s pane" .kind))))
+    (error
+     (let ((buffer (generate-new-buffer (format "*roost view: %s*" (alist-get 'path pane)))))
+       (roost--view-keep frame buffer t)
+       (with-current-buffer buffer
+         (insert (format "Roost couldn't show %s: %s\n" (alist-get 'path pane) (error-message-string err)))
+         (setq buffer-read-only t))
+       (set-window-buffer window buffer))))
+  (set-window-parameter window 'header-line-format (roost--view-header pane hint))
+  (set-window-parameter window 'tab-line-format 'none)
+  ;; Its keys, such as q to close it, in its mode as shown.
+  (with-current-buffer (window-buffer window)
+    (roost-view-pane-mode)))
+
+(defun roost--view-file (task path)
+  "PATH of TASK's worktree, as Emacs reaches it, over TRAMP for another host.
+The agent's helper checked that it is there; a link put there since
+must not lead out."
+  (let* ((directory (roost--remote-directory task))
+         (file (expand-file-name path directory)))
+    (unless (string-prefix-p (file-name-as-directory (file-truename directory)) (file-truename file))
+      (user-error "%s is no longer in the task's worktree" path))
+    file))
+
+(defun roost--view-file-buffer (frame task path)
+  "A buffer of the view in FRAME on PATH of TASK's worktree.
+It is a clone of the file's own buffer, sharing its text, but read-only,
+and with marks of its own: the file's buffer is yours if you have one,
+or else the view's.  A file the view opens applies only the local
+variables that are safe."
+  (let* ((file (roost--view-file task path))
+         (existing (find-buffer-visiting file))
+         (base (or existing
+                   (let ((enable-local-variables :safe))
+                     (find-file-noselect file t)))))
+    (unless existing
+      (roost--view-keep frame base t))
+    (let ((clone (with-current-buffer base
+                   (clone-indirect-buffer (format "%s (view)" (buffer-name base)) nil t))))
+      (roost--view-keep frame clone t)
+      (with-current-buffer clone
+        (setq buffer-read-only t))
+      clone)))
+
+(defun roost--view-mark (window start end)
+  "Mark lines START to END of WINDOW's buffer, and bring them into view."
+  (with-current-buffer (window-buffer window)
+    (let (from top)
+      (save-excursion
+        (goto-char (point-min))
+        (forward-line (1- start))
+        (setq from (point))
+        (forward-line (1+ (- end start)))
+        (let ((overlay (make-overlay from (point))))
+          (overlay-put overlay 'face 'roost-view-region)
+          (overlay-put overlay 'roost-view t))
+        ;; A third of the room the lines leave above them, as for a
+        ;; short function that starts after its comment.
+        (goto-char from)
+        (forward-line (- (max 0 (/ (- (window-body-height window) (1+ (- end start))) 3))))
+        (setq top (point)))
+      ;; Outside `save-excursion', which would put back the point of
+      ;; the window you are in.
+      (set-window-point window from)
+      (set-window-start window top))))
+
+(defun roost--view-image-buffer (frame task path)
+  "A buffer of the view in FRAME with the image at PATH of TASK's worktree.
+The image is read as data, which a frame without images shows as text."
+  (let ((file (roost--view-file task path))
+        (buffer (generate-new-buffer (format "%s (view)" (file-name-nondirectory path)))))
+    (roost--view-keep frame buffer t)
+    (with-current-buffer buffer
+      (set-buffer-multibyte nil)
+      (insert-file-contents-literally file)
+      (setq default-directory (file-name-directory file))
+      (set-buffer-modified-p nil)
+      (if (display-images-p)
+          (let ((image-auto-resize 'fit-window))
+            (image-mode))
+        (setq buffer-read-only t)))
+    buffer))
+
+(defun roost--view-diff (frame task path window)
+  "Show in WINDOW, of the view in FRAME, PATH's changes since TASK began.
+In a Magit diff buffer of its own, if you have Magit; else in Diff mode."
+  (let ((default-directory (roost--remote-directory task))
+        (fork (roost--fork-point task)))
+    (if (and (require 'magit nil t) (fboundp 'magit-diff-setup-buffer))
+        (let ((before (buffer-list))
+              (magit-display-buffer-noselect t)
+              (magit-display-buffer-function (lambda (buffer) (set-window-buffer window buffer) window)))
+          ;; Locked, a buffer of its own, beside any of yours; Magit before
+          ;; 4.0 takes no diff type.
+          (apply #'magit-diff-setup-buffer fork nil nil (list path)
+                 (if (> (cdr (func-arity #'magit-diff-setup-buffer)) 5) '(committed t) '(t)))
+          (let ((buffer (window-buffer window)))
+            (roost--view-keep frame buffer (not (memq buffer before)))))
+      (let ((text (or (roost--git-output task "--no-optional-locks" "-c" "core.fsmonitor=false"
+                                         "diff" "--no-ext-diff" "--no-textconv" fork "--" path)
+                      (error "Git couldn't diff it")))
+            (buffer (generate-new-buffer (format "%s diff (view)" (file-name-nondirectory path)))))
+        (roost--view-keep frame buffer t)
+        (with-current-buffer buffer
+          (insert text)
+          (diff-mode)
+          (setq buffer-read-only t)
+          (goto-char (point-min)))
+        (set-window-buffer window buffer)))))
+
+(defvar-keymap roost-view-pane-mode-map
+  :doc "Keys in the windows of a view."
+  "q" #'roost-view-close)
+
+(define-minor-mode roost-view-pane-mode
+  "Keys for a view a task's agent built, in each of its buffers.
+\\{roost-view-pane-mode-map}"
+  :lighter nil)
+
+(defvar-keymap roost-view-note-mode-map
+  :doc "Keys in a view's note."
+  "q" #'roost-view-close)
+
+(define-derived-mode roost-view-note-mode special-mode "Roost View"
+  "The note of a view a task's agent built, below its panes.
+\\{roost-view-note-mode-map}"
+  (setq-local mode-line-format nil
+              truncate-lines nil
+              word-wrap t
+              cursor-in-non-selected-windows nil)
+  (add-hook 'after-change-major-mode-hook #'roost--quiet-display 90 t)
+  (roost--quiet-display))
+
+(defun roost--render-view-note ()
+  "Draw the note of this buffer's view, labelled as its agent's."
+  (let ((inhibit-read-only t)
+        (point (point)))
+    (erase-buffer)
+    (insert (propertize "The agent's account" 'face 'roost-dim)
+            (propertize "  ·  " 'face 'roost-dim)
+            (propertize "q" 'face 'roost-key)
+            (propertize " closes this view" 'face 'roost-dim)
+            "\n"
+            (propertize (or (alist-get 'note roost--view) "") 'face 'roost-prose))
+    (goto-char (min point (point-max)))))
+
+(defun roost-view-close ()
+  "Close this view: delete its frame, and kill the buffers it opened.
+Buffers that were yours stay, as does a file's buffer you changed in it."
+  (interactive)
+  (let ((frame (selected-frame)))
+    (if (frame-parameter frame 'roost-view)
+        (delete-frame frame)
+      (quit-window t))))
+
+(defun roost--view-frame-deleted (frame)
+  "Kill the buffers the view in FRAME opened, if it is a view's.
+For `delete-frame-functions', as when you delete its frame some other way."
+  (when (frame-parameter frame 'roost-view)
+    (with-demoted-errors "Roost: %S"
+      (roost--view-release frame))))
+
+(defun roost--view-release (frame)
+  "Kill the buffers the view in FRAME opened, newest first, as clones before
+their files, and turn its keys off in the rest.  Not those another view
+shows, those another frame's windows show, nor a file's you changed."
+  (let ((buffers (frame-parameter frame 'roost-view-buffers))
+        (elsewhere (mapcan (lambda (other)
+                             (mapcar #'car (copy-sequence (frame-parameter other 'roost-view-buffers))))
+                           (delq frame (frame-list)))))
+    (set-frame-parameter frame 'roost-view-buffers nil)
+    (pcase-dolist (`(,buffer . ,made) buffers)
+      (when (buffer-live-p buffer)
+        (if (and made
+                 (not (memq buffer elsewhere))
+                 (not (and (buffer-file-name buffer) (buffer-modified-p buffer)))
+                 (not (seq-some (lambda (window) (not (eq (window-frame window) frame)))
+                                (get-buffer-window-list buffer nil t))))
+            (kill-buffer buffer)
+          (unless (memq buffer elsewhere)
+            (with-current-buffer buffer (roost-view-pane-mode -1))))))))
+
+(defun roost--view-arrived (task)
+  "Open the view TASK's agent has just built, if you are looking at TASK.
+Otherwise say that it came, and how to open it."
+  (let ((key (roost--key task)))
+    ;; Not from a poll's process filter: the view takes a frame, and focus.
+    (run-at-time
+     0 nil
+     (lambda ()
+       (when-let* ((task (gethash key roost--tasks)))
+         (if (or (when-let* ((watched (roost--watched-task))) (equal (roost--key watched) key))
+                 (and (frame-focus-state) (equal (frame-parameter nil 'roost-view) key)))
+             (roost--when-out-of-minibuffer (lambda () (roost-open-view task)))
+           (message "%s" (substitute-command-keys
+                          (format "%s's agent built a view for you: \\[roost-open-view] opens it"
+                                  (roost--field task 'name))))))))))
 
 ;;;; Workload
 

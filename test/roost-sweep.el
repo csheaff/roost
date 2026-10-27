@@ -188,6 +188,15 @@ KIND is `committed', `uncommitted', `untracked' or `binary'."
                               '("docs" "scripts" "src" "test" "tools")))))
     ("with notes" (status . "ready") (live . t) (dirty . t) (diff . "1 file +4 −1 · uncommitted")
      (files . ,(roost-sweep--files '("ledger.py" . uncommitted))))
+    ;; Its agent built a view, as `roost-ask-view' asks.
+    ("with a view" (status . "ready") (live . t) (ahead . 1) (diff . "1 file +12 −3")
+     (files . ,(roost-sweep--files '("ledger.py" . committed)))
+     (view (id . "v1") (at . "2026-10-03T20:00:00+00:00")
+           (panes ((kind . "file") (path . "ledger.py") (start . 3) (end . 9))
+                  ((kind . "diff") (path . "ledger.py"))
+                  ((kind . "image") (path . "docs/flow.svg")))
+           (note . ,(concat "Start with the loop that adds each budget's rows; the diff shows the "
+                            "last row it used to leave out.\n\nThe chart is how the totals flow."))))
     ("unreachable host" (host . "gone") (status . "running") (live . t)))
   "Task states the views are drawn for: (NAME . FIELDS).
 FIELDS go over those of `roost-test--task', on host \"dev\" unless they
@@ -243,7 +252,9 @@ size of its changes, unless its state says otherwise."
       start-file-process call-process roost--notify
       ;; A task's terminal, the menu, other packages and the browser
       roost--display-task transient-setup magit-status magit-diff-working-tree magit-diff-dwim
-      find-file find-file-other-window dired browse-url popup-menu x-popup-menu)
+      find-file find-file-other-window dired browse-url popup-menu x-popup-menu
+      ;; A view's frame of its own
+      make-frame)
     "Functions that reach outside the view.
 Called, they are recorded and stop the command.")
 
@@ -405,6 +416,12 @@ among them."
     (dolist (file (seq-take files 2))
       (insert "\n\n" (roost--quoting file) ":3-4\n\ntotal = 0"))))
 
+(defun roost-sweep--view-setup (state)
+  "Make the current buffer the note of the view STATE's task's agent built.
+For a task with none, a view of no note."
+  (setq roost--buffer-task-key (roost-sweep--key state)
+        roost--view (roost--field (gethash roost--buffer-task-key roost--tasks) 'view)))
+
 (defvar roost-sweep--views
   '((panel :mode roost-task-info-mode :render roost--render-task-info :widths (40 100)
            :layouts (selected none other both) :setup roost-sweep--panel-setup)
@@ -420,7 +437,10 @@ among them."
               :keys (roost-workload))
     (draft :mode roost-compose-mode :render roost--compose-render :buffer "*roost new task*"
            :layouts (selected none other both) :setup roost-sweep--draft-setup
-           :keys (roost-compose-submit roost-compose-cancel roost-compose-set-project)))
+           :keys (roost-compose-submit roost-compose-cancel roost-compose-set-project))
+    (view :mode roost-view-note-mode :render roost--render-view-note :buffer "*roost view*"
+          :layouts (selected none other both) :setup roost-sweep--view-setup
+          :keys (roost-view-close)))
   "Roost's views, each (NAME . PLIST).
 :mode makes the buffer, :setup gives it what it shows for a state,
 :render draws it, :point finds the state's task in it, and :buffer names

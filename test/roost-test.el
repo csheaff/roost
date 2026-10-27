@@ -47,7 +47,8 @@
          (roost--requests nil) (roost-notify nil) (roost--current-task nil) (roost--next-unblocked nil)
          (roost--next-run nil)
          (roost--held-notices nil) (roost--notice-timer nil) (roost--resuming nil)
-         (roost--perspectives (make-hash-table :test 'equal)))
+         (roost--perspectives (make-hash-table :test 'equal))
+         (roost--views-opened (make-hash-table :test 'equal)))
      (set-frame-parameter nil 'roost-task nil)
      ;; Seeing an agent is recorded on its host too, and so is what of its
      ;; pull request or work waits on you; tests that check it say so.
@@ -10887,6 +10888,229 @@ it of the same ID's, or nil for the first."
          (puthash (roost--key (car (roost-tasks))) nil roost--turns-sent)
          (funcall (pop replies) (cons '(turn . "conflicts") (roost-test--task)))
          (should (equal (gethash (roost--key (car (roost-tasks))) roost--turns-sent 'none) nil)))))))
+
+;;;; Views an agent builds
+
+(defun roost-test--view-worktree ()
+  "A worktree for a view: a Git repository with a changed file, a document
+and an image.  Return its directory."
+  (let ((directory (file-name-as-directory (make-temp-file "roost-view" t))))
+    (with-temp-file (expand-file-name "a.py" directory)
+      (dotimes (n 30) (insert (format "line %d\n" (1+ n)))))
+    (with-temp-file (expand-file-name "notes.md" directory) (insert "# Notes\n"))
+    (with-temp-file (expand-file-name "pic.svg" directory)
+      (insert "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"4\"/>\n"))
+    (let ((default-directory directory))
+      (dolist (args '(("init" "-q" "-b" "main") ("add" ".")
+                      ("-c" "user.name=Roost" "-c" "user.email=roost@example.invalid" "-c" "commit.gpgsign=false"
+                       "commit" "-q" "-m" "base")))
+        (should (zerop (apply #'call-process "git" nil nil nil args)))))
+    (with-temp-file (expand-file-name "a.py" directory)
+      (insert "changed\n")
+      (dotimes (n 30) (insert (format "line %d\n" (1+ n)))))
+    directory))
+
+(defun roost-test--view-task (directory view)
+  "A local task whose worktree is DIRECTORY, with VIEW, cached."
+  (let ((default-directory directory))
+    (roost--cache-task nil (append `((worktree . ,(directory-file-name directory))
+                                     (baseCommit . ,(string-trim (shell-command-to-string "git rev-parse HEAD")))
+                                     (view . ,view))
+                                   (roost-test--task)))))
+
+(ert-deftest roost-view-layout-goes-by-the-number-of-panes ()
+  (should (equal (mapcar #'roost--view-layout '(1 2 3 4)) '(full columns main grid)))
+  (save-window-excursion
+    (delete-other-windows)
+    (pcase-dolist (`(,count . ,shape) '((1 . ((0 0)))
+                                        (2 . ((0 0) (1 0)))
+                                        (3 . ((0 0) (1 0) (1 1)))
+                                        (4 . ((0 0) (1 0) (0 1) (1 1)))))
+      (delete-other-windows)
+      (let* ((windows (roost--view-split (selected-window) count))
+             (lefts (sort (delete-dups (mapcar (lambda (window) (car (window-edges window))) windows)) #'<))
+             (tops (sort (delete-dups (mapcar (lambda (window) (cadr (window-edges window))) windows)) #'<)))
+        ;; Across, then down, as you read them.
+        (should (equal (mapcar (lambda (window)
+                                 (list (seq-position lefts (car (window-edges window)))
+                                       (seq-position tops (cadr (window-edges window)))))
+                               windows)
+                       shape))
+        (when (= count 3)
+          ;; The first, on its own on the left, has the most room.
+          (should (> (window-total-width (car windows)) (window-total-width (cadr windows))))
+          (should (> (window-total-height (car windows)) (window-total-height (cadr windows)))))))))
+
+(ert-deftest roost-view-shows-real-files-and-q-kills-only-what-it-opened ()
+  (roost-test--isolated
+   (let* ((directory (roost-test--view-worktree))
+          (yours (find-file-noselect (expand-file-name "notes.md" directory)))
+          (task (roost-test--view-task
+                 directory
+                 '((id . "v1") (at . "2026-10-27T12:00:00+00:00")
+                   (panes ((kind . "file") (path . "a.py") (start . 5) (end . 8))
+                          ((kind . "diff") (path . "a.py"))
+                          ((kind . "image") (path . "pic.svg"))
+                          ((kind . "document") (path . "notes.md")))
+                   (note . "Read a.py first: lines 5 to 8 hold the loop."))))
+          (frame (selected-frame))
+          (before (buffer-list)))
+     (unwind-protect
+         (save-window-excursion
+           (set-frame-parameter frame 'roost-view (roost--key task))
+           (cl-letf (((symbol-function 'require)
+                      (let ((require (symbol-function 'require)))
+                        ;; As without Magit: the diff is Git's, in Diff mode.
+                        (lambda (feature &rest args) (unless (eq feature 'magit) (apply require feature args))))))
+             (roost--view-fill frame task (roost--field task 'view)))
+           (let* ((windows (sort (window-list frame 'nomini)
+                                 ;; As you read them: across, then down.
+                                 (lambda (one other)
+                                   (let ((one (window-edges one)) (other (window-edges other)))
+                                     (or (< (cadr one) (cadr other))
+                                         (and (= (cadr one) (cadr other)) (< (car one) (car other))))))))
+                  (buffers (mapcar #'window-buffer windows))
+                  (file (nth 0 buffers)))
+             (should (= (length windows) 5))
+             ;; The note spans the bottom, under the four panes.
+             (should (= (window-total-width (nth 4 windows)) (frame-width frame)))
+             (should (> (cadr (window-edges (nth 4 windows))) (cadr (window-edges (nth 2 windows)))))
+             (with-current-buffer (nth 4 buffers)
+               (should (derived-mode-p 'roost-view-note-mode))
+               (should (string-prefix-p "The agent's account" (buffer-string)))
+               (should (string-search "lines 5 to 8 hold the loop" (buffer-string))))
+             ;; The file's own text, in a clone of its own, its lines marked
+             ;; and in view.
+             (should (equal (buffer-file-name (buffer-base-buffer file)) (expand-file-name "a.py" directory)))
+             (with-current-buffer file
+               (should buffer-read-only)
+               (let ((marked (seq-find (lambda (overlay) (overlay-get overlay 'roost-view))
+                                       (overlays-in (point-min) (point-max)))))
+                 (should (equal (buffer-substring-no-properties (overlay-start marked) (overlay-end marked))
+                                "line 4\nline 5\nline 6\nline 7\n"))
+                 (should (= (window-point (nth 0 windows)) (overlay-start marked)))
+                 (should (< 1 (window-start (nth 0 windows)) (overlay-start marked)))))
+             (should (string-search "lines 5–8" (window-parameter (nth 0 windows) 'header-line-format)))
+             (with-current-buffer (nth 1 buffers)
+               (should (derived-mode-p 'diff-mode))
+               (should (string-search "+changed" (buffer-string))))
+             (should (equal (buffer-base-buffer (nth 3 buffers)) yours))
+             ;; q closes it from each of its windows.
+             (dolist (buffer buffers)
+               (with-current-buffer buffer
+                 (should (eq (key-binding "q") 'roost-view-close))))
+             (cl-letf (((symbol-function 'delete-frame)
+                        (lambda (frame) (run-hook-with-args 'delete-frame-functions frame))))
+               (add-hook 'delete-frame-functions #'roost--view-frame-deleted)
+               (with-selected-window (nth 2 windows)
+                 (roost-view-close)))
+             (should (buffer-live-p yours))
+             (with-current-buffer yours (should-not roost-view-pane-mode))
+             (should-not (find-buffer-visiting (expand-file-name "a.py" directory)))
+             (should-not (seq-filter #'buffer-live-p (append (remq yours buffers)
+                                                             (seq-difference (buffer-list) before))))))
+       (remove-hook 'delete-frame-functions #'roost--view-frame-deleted)
+       (set-frame-parameter frame 'roost-view nil)
+       (set-frame-parameter frame 'roost-view-buffers nil)
+       (kill-buffer yours)
+       (delete-directory directory t)))))
+
+(ert-deftest roost-view-keeps-a-file-you-changed-in-it ()
+  (roost-test--isolated
+   (let* ((directory (roost-test--view-worktree))
+          (task (roost-test--view-task
+                 directory '((id . "v1") (panes ((kind . "file") (path . "a.py") (start . 1) (end . 2))))))
+          (frame (selected-frame)))
+     (unwind-protect
+         (save-window-excursion
+           (set-frame-parameter frame 'roost-view (roost--key task))
+           (roost--view-fill frame task (roost--field task 'view))
+           ;; Made writable in the view, and changed.
+           (with-current-buffer (window-buffer (frame-first-window frame))
+             (let ((inhibit-read-only t)) (insert "edit\n")))
+           (roost--view-release frame)
+           (let ((file (find-buffer-visiting (expand-file-name "a.py" directory))))
+             (should (buffer-modified-p file))
+             (with-current-buffer file (should-not roost-view-pane-mode))
+             (should-not (seq-filter (lambda (buffer) (eq (buffer-base-buffer buffer) file)) (buffer-list)))
+             (with-current-buffer file (set-buffer-modified-p nil))
+             (kill-buffer file)))
+       (set-frame-parameter frame 'roost-view nil)
+       (delete-directory directory t)))))
+
+(ert-deftest roost-view-refuses-a-file-a-link-now-leads-out-of ()
+  (roost-test--isolated
+   (let* ((directory (roost-test--view-worktree))
+          (outside (make-temp-file "roost-outside"))
+          (task (roost-test--view-task
+                 directory '((id . "v1") (panes ((kind . "file") (path . "out.py") (start . 1) (end . 1))))))
+          (frame (selected-frame)))
+     (make-symbolic-link outside (expand-file-name "out.py" directory))
+     (unwind-protect
+         (save-window-excursion
+           (set-frame-parameter frame 'roost-view (roost--key task))
+           (roost--view-fill frame task (roost--field task 'view))
+           (with-current-buffer (window-buffer (frame-first-window frame))
+             (should (string-match-p "\\`Roost couldn't show out.py: out.py is no longer in the task.s worktree"
+                                     (buffer-string))))
+           (should-not (find-buffer-visiting outside))
+           (roost--view-release frame))
+       (set-frame-parameter frame 'roost-view nil)
+       (delete-file outside)
+       (delete-directory directory t)))))
+
+(ert-deftest roost-view-opens-when-it-comes-if-you-look-at-its-task ()
+  (roost-test--isolated
+   (let ((view '((id . "v1") (at . "2026-10-27T12:00:00+00:00") (panes ((kind . "diff") (path . "a.py")))))
+         arrived opened said watched)
+     (cl-letf (((symbol-function 'roost--view-arrived) (lambda (task) (push (roost--field task 'name) arrived))))
+       ;; One there when Roost first sees the task is no news.
+       (roost--cache-task "dev" (append `((view . ,view)) (roost-test--task "1111111111111111")))
+       (roost--cache-task "dev" (roost-test--task))
+       (roost--cache-task "dev" (roost-test--task))
+       (should-not arrived)
+       (roost--cache-task "dev" (append `((view . ,view)) (roost-test--task)))
+       (roost--cache-task "dev" (append `((view . ,view)) (roost-test--task)))
+       (should (equal arrived '("fix auth")))
+       (roost--cache-task "dev" (append `((view . ,(cons '(id . "v2") view))) (roost-test--task)))
+       (should (equal arrived '("fix auth" "fix auth"))))
+     (cl-letf (((symbol-function 'run-at-time) (lambda (_time _repeat function) (funcall function)))
+               ((symbol-function 'roost--watched-task) (lambda () watched))
+               ((symbol-function 'roost-open-view) (lambda (task) (push task opened)))
+               ((symbol-function 'message) (lambda (format &rest args) (setq said (apply #'format format args)))))
+       (let ((task (gethash '("dev" "0123456789abcdef") roost--tasks)))
+         (roost--view-arrived task)
+         (should-not opened)
+         (should (string-match-p "\\`fix auth.s agent built a view for you: M-x roost-open-view opens it\\'" said))
+         (setq watched task)
+         (roost--view-arrived task)
+         (should (equal opened (list task)))
+         ;; Opened from anywhere, it is the view not yet opened.
+         (cl-letf (((symbol-function 'roost--task-at-point) #'ignore))
+           (should (equal (roost--view-task nil) task))
+           (puthash (roost--key task) "v2" roost--views-opened)
+           (should-not (equal (roost--view-task nil) task))
+           (puthash '("dev" "1111111111111111") "v1" roost--views-opened)
+           (cl-letf (((symbol-function 'roost--read-task) (lambda (&rest _) 'asked)))
+             (should (eq (roost--view-task nil) 'asked)))))))))
+
+(ert-deftest roost-ask-view-drafts-the-request-and-sends-nothing ()
+  (roost-test--isolated
+   (roost-test--with-send-buffers
+    (let ((task (roost--cache-task "dev" (roost-test--task))) sent)
+      (cl-letf (((symbol-function 'pop-to-buffer) #'set-buffer)
+                ((symbol-function 'roost--request) (lambda (&rest args) (push args sent))))
+        (roost-ask-view task)
+        (should (derived-mode-p 'roost-send-mode))
+        (should (string-search "build a view with roost-view" (buffer-string)))
+        ;; The format in the draft is one the helper takes.
+        (should (string-search "{\"panes\": [{\"kind\": \"file\", \"path\": \"src/parse.py\", \"start\": 10, \"end\": 42}"
+                               (buffer-string)))
+        (should (json-parse-string (substring (buffer-string) (string-search "{" (buffer-string))
+                                              (1+ (string-search "}\n\n" (buffer-string))))))
+        (should-not sent)
+        (should (roost--action-applies-p task 'roost-ask-view))
+        (should-not (roost--action-applies-p task 'roost-open-view)))))))
 
 (provide 'roost-test)
 

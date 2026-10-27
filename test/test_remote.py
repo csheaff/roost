@@ -3166,6 +3166,18 @@ class Lifecycle(unittest.TestCase):
         self.wait(task, "ready")
         self.assertEqual(marker.read_text().count("run"), 2)
 
+    def test_the_agent_shows_a_view_with_roost_view_on_its_path(self):
+        view = json.dumps(dict(panes=[dict(kind="file", path="hello", start=1, end=1)]))
+        marker = self.root / "roost-view said"
+        reply = self.request("create", directory=str(self.repo), name="view", socket=self.socket,
+                             setup="printf '%%s' %s | roost-view - > %s" % (shlex.quote(view), shlex.quote(str(marker))),
+                             command=[sys.executable, str(FAKE)])
+        task = self.wait(reply["result"], "ready")
+        self.assertEqual(task["view"]["panes"], [dict(kind="file", path="hello", start=1, end=1)])
+        self.assertIn("Sent the view to Roost", marker.read_text())
+        listed = self.request("list")["result"][0]
+        self.assertEqual(listed["view"], task["view"])
+
     def test_setup_can_copy_untracked_files_from_the_primary_checkout(self):
         (self.repo / ".env").write_text("SECRET=1\n")
         reply = self.request("create", directory=str(self.repo), name="env", socket=self.socket,
@@ -5801,6 +5813,163 @@ class History(unittest.TestCase):
         (self.folder / "2026-10-01.jsonl").write_text('{"at": 1\n' + json.dumps(dict(at=5.0, id="t0")) + "\n")
         (self.folder / "2026-10-02.jsonl").write_text(json.dumps(dict(at=9.0, id="t0")) + "\n")
         self.assertEqual(self.history.begun(), 5.0)
+
+
+class View(unittest.TestCase):
+    """What a task's agent sends with `roost-view`, as the agent runs it:
+    real files of the task's worktree, and nothing else."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="roost view ' $ ")
+        self.root = Path(self.temp.name)
+        self.repo = self.root / "work tree"
+        self.repo.mkdir()
+        roost.git(self.repo, "init", "-b", "main")
+        for key, value in (("user.name", "Roost Test"), ("user.email", "roost@example.invalid"),
+                           ("commit.gpgsign", "false")):
+            roost.git(self.repo, "config", key, value)
+        (self.repo / "src").mkdir()
+        (self.repo / "src/parse.py").write_text("".join("line %d\n" % n for n in range(1, 51)))
+        (self.repo / "src/same.py").write_text("unchanged\n")
+        (self.repo / "docs").mkdir()
+        (self.repo / "docs/flow.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"/>\n')
+        (self.repo / "docs/design.md").write_text("# Design\n")
+        (self.repo / "gone.py").write_text("soon gone\n")
+        roost.git(self.repo, "add", ".")
+        roost.git(self.repo, "commit", "-m", "base")
+        base = roost.git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        (self.repo / "src/parse.py").write_text("changed\n" + (self.repo / "src/parse.py").read_text())
+        (self.repo / "gone.py").unlink()
+        (self.repo / "src/new.py").write_text("new\n")
+        (self.root / "secret.txt").write_text("not the task's\n")
+        os.symlink("../secret.txt", self.repo / "out.txt")
+        os.symlink("src/parse.py", self.repo / "in.py")
+        self.state = self.root / "state"
+        self.store = roost.Store(str(self.state))
+        self.task = dict(id="0123456789abcdef", runId="run1", status="ready", repo=str(self.repo),
+                         worktree=str(self.repo), baseCommit=base, name="view")
+        self.store.save(self.task)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def run_view(self, data, *arguments, run="run1"):
+        """Run roost-view as the agent would, with DATA on standard input,
+        as JSON unless it is text. Return its exit code, output and errors."""
+        env = dict(os.environ, ROOST_TASK_ID=self.task["id"], ROOST_RUN_ID=run,
+                   ROOST_STATE_DIRECTORY=str(self.state), ROOST_HELPER=str(SOURCE), ROOST_PYTHON=sys.executable)
+        shim = roost.view_shim(self.store) / "roost-view"
+        result = subprocess.run([str(shim), *(arguments or ["-"])], cwd=self.repo, env=env, capture_output=True,
+                                input=data if isinstance(data, str) else json.dumps(data), text=True)
+        return result.returncode, result.stdout, result.stderr
+
+    def shown(self):
+        return self.store.read(self.task["id"]).get("view")
+
+    def refused(self, data, said, **options):
+        code, _, error = self.run_view(data, **options)
+        self.assertEqual(code, 1, error)
+        self.assertIn(said, error)
+        self.assertIsNone(self.shown(), data)
+
+    def test_each_kind_of_pane_and_a_note(self):
+        code, output, error = self.run_view(dict(
+            panes=[dict(kind="file", path="src/parse.py", start=10, end=99),
+                   dict(kind="diff", path=str(self.repo / "src/parse.py")),
+                   dict(kind="image", path="docs/flow.svg"),
+                   dict(kind="document", path="./docs/../docs/design.md")],
+            note="Read the parser first.\n\n\n\nThen\tthe\x1b[31m diff.\u202e"))
+        self.assertEqual(code, 0, error)
+        self.assertEqual(output, "Sent the view to Roost: 4 panes and a note. The user sees it in Emacs.\n")
+        view = self.shown()
+        self.assertEqual(view["panes"], [dict(kind="file", path="src/parse.py", start=10, end=51),
+                                         dict(kind="diff", path="src/parse.py"),
+                                         dict(kind="image", path="docs/flow.svg"),
+                                         dict(kind="document", path="docs/design.md")])
+        self.assertEqual(view["note"], "Read the parser first.\n\nThen the[31m diff.")
+        self.assertTrue(view["id"] and view["at"])
+        # A link in the worktree leads to its file; a deleted file has a diff.
+        self.assertEqual(self.run_view(dict(panes=[dict(kind="file", path="in.py", start=1, end=1),
+                                                   dict(kind="diff", path="gone.py")]))[0], 0)
+        self.assertEqual(self.shown()["panes"][0]["path"], "src/parse.py")
+        self.assertNotEqual(self.shown()["id"], view["id"])
+        # From a file, with no note.
+        (self.root / "view.json").write_text(json.dumps(dict(panes=[dict(kind="image", path="docs/flow.svg")])))
+        code, output, _ = self.run_view("", str(self.root / "view.json"))
+        self.assertEqual((code, output), (0, "Sent the view to Roost: 1 pane. The user sees it in Emacs.\n"))
+        self.assertNotIn("note", self.shown())
+
+    def test_only_files_in_the_worktree(self):
+        for path, said in (("../secret.txt", "is not in the task's worktree"),
+                           (str(self.root / "secret.txt"), "is not in the task's worktree"),
+                           ("/etc/passwd", "is not in the task's worktree"),
+                           ("out.txt", "is not in the task's worktree"),
+                           ("src/../../secret.txt", "is not in the task's worktree"),
+                           (".", "is not in the task's worktree"),
+                           (".git/config", "is Git's own"),
+                           ("src", "is not a file"),
+                           ("missing.py", "there is no missing.py"),
+                           ("src/\0parse.py", "no NUL"),
+                           ("", "needs a path"),
+                           (7, "needs a path")):
+            with self.subTest(path=path):
+                self.refused(dict(panes=[dict(kind="file", path=path, start=1, end=1)]), said)
+        os.mkfifo(self.repo / "pipe")
+        self.refused(dict(panes=[dict(kind="document", path="pipe")]), "is not a file")
+
+    def test_what_it_refuses_says_what_to_change(self):
+        file = dict(kind="file", path="src/parse.py", start=1, end=5)
+        for data, said in (("{not json", "isn't JSON"),
+                           ([file], "A view is a JSON object"),
+                           (dict(panes=[file], title="x"), 'and no "title"'),
+                           (dict(panes=[]), "needs panes"),
+                           (dict(panes=[file] * 5), "at most 4 panes, not 5"),
+                           (dict(panes=["src/parse.py"]), "Pane 1 is a JSON object"),
+                           (dict(panes=[dict(kind="code", path="src/parse.py")]), 'not "code"'),
+                           (dict(panes=[dict(file, label="Parser")]), 'has path, start, end, and no "label"'),
+                           (dict(panes=[dict(file, start="10")]), "needs start, a line number"),
+                           (dict(panes=[dict(file, end=True)]), "needs end, a line number"),
+                           (dict(panes=[dict(file, start=0)]), "needs start, a line number"),
+                           (dict(panes=[dict(file, start=9, end=3)]), "ends at line 3, before"),
+                           (dict(panes=[dict(file, start=52, end=60)]), "has 51 lines, so none from line 52"),
+                           (dict(panes=[dict(kind="image", path="src/parse.py")]), "an image pane shows"),
+                           (dict(panes=[dict(kind="document", path="src/parse.py")]), "show it as a file pane"),
+                           (dict(panes=[dict(kind="diff", path="src/same.py")]), "no changes since the task began"),
+                           (dict(panes=[dict(kind="diff", path="src/new.py")]), "Git doesn't track it yet"),
+                           (dict(panes=[file, dict(kind="diff", path="nowhere.py")]), "Pane 2: nowhere.py has no changes"),
+                           (dict(panes=[file], note=["a"]), "The note is text"),
+                           (dict(panes=[file], note="x" * 601), "The note is 601 characters")):
+            with self.subTest(data=data):
+                self.refused(data, said)
+
+    def test_too_large(self):
+        (self.repo / "big.py").write_text("x\n" * (roost.VIEW_FILE_LIMIT // 2 + 1))
+        self.refused(dict(panes=[dict(kind="file", path="big.py", start=1, end=2)]), "is over 5 MB")
+        self.refused(json.dumps(dict(panes=[], note=" " * (64 * 1024))), "over 64 KiB")
+        # A note of spaces and control characters around its words fits.
+        code, _, error = self.run_view(dict(panes=[dict(kind="diff", path="src/parse.py")],
+                                            note="\x00" * 700 + "fits" + " " * 700))
+        self.assertEqual(code, 0, error)
+        self.assertEqual(self.shown()["note"], "fits")
+
+    def test_only_the_tasks_running_agent(self):
+        file = dict(kind="file", path="src/parse.py", start=1, end=5)
+        self.refused(dict(panes=[file]), "restarted this task's agent", run="run0")
+        self.store.save(dict(self.task, status="stopped"))
+        self.refused(dict(panes=[file]), "The task is stopped")
+        env = {key: value for key, value in os.environ.items() if not key.startswith("ROOST_")}
+        result = subprocess.run([str(roost.view_shim(self.store) / "roost-view"), "-"], input="{}", env=env,
+                                capture_output=True, text=True)
+        self.assertEqual((result.returncode, result.stderr),
+                         (1, "roost-view: it works only for the agent of a Roost task\n"))
+
+    def test_help_says_the_format(self):
+        code, output, _ = self.run_view("", "--help")
+        self.assertEqual(code, 0)
+        self.assertIn('{"kind": "file", "path": "src/parse.py", "start": 10, "end": 42}', output)
+        code, _, error = self.run_view("", "a", "b")
+        self.assertEqual(code, 2)
+        self.assertIn("roost-view --help", error)
 
 
 class RemoteGit(unittest.TestCase):

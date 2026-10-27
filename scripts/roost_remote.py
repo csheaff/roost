@@ -4656,6 +4656,237 @@ def agent_path(inherited):
     return os.pathsep.join(entries + [entry for entry in fallbacks if entry not in entries])
 
 
+# A view: real files of a task's, which its agent picks for you to read
+# and Roost lays out in a frame of Emacs's own. The agent sends data, never
+# code: `roost-view`, on its PATH, hands it to the helper, which checks it
+# and keeps it in the task's record, where Emacs finds it as it polls.
+VIEW_FORMAT = """\
+roost-view shows the user a view of your work in Emacs: one to four panes of
+real files, which Roost lays out, and a short note in your own words.
+
+  roost-view FILE      read the view from FILE, as JSON
+  roost-view -         or from standard input
+  roost-view --help    show this
+
+  {"panes": [{"kind": "file", "path": "src/parse.py", "start": 10, "end": 42},
+             {"kind": "diff", "path": "src/parse.py"},
+             {"kind": "image", "path": "docs/flow.svg"},
+             {"kind": "document", "path": "docs/design.md"}],
+   "note": "What to look at first, and why."}
+
+Panes come in the order to read them; the first gets the most room.
+  file      the file, with lines start to end marked and in view
+  diff      the file's changes since the task began
+  image     a PNG, JPEG, GIF, SVG or WebP image
+  document  a Markdown, Org or plain text file, whole
+Paths are relative to the top of the task's worktree, and must be in it.
+The note is optional, and at most 600 characters.
+"""
+VIEW_INPUT_LIMIT = 64 * 1024
+VIEW_PANES = 4
+VIEW_NOTE_LIMIT = 600
+# Emacs asks before it opens a larger file.
+VIEW_FILE_LIMIT = 5 * 1024 * 1024
+VIEW_IMAGE_LIMIT = 10 * 1024 * 1024
+VIEW_IMAGES = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp")
+VIEW_DOCUMENTS = (".md", ".markdown", ".org", ".txt", ".rst")
+VIEW_FIELDS = {"file": ("path", "start", "end"), "diff": ("path",), "image": ("path",), "document": ("path",)}
+VIEW_SHIM = (
+    "#!/bin/sh\n"
+    "# Roost's command for a task's agent to show you a view of its work.\n"
+    "if [ -z \"$ROOST_HELPER\" ]; then\n"
+    "  echo 'roost-view: it works only for the agent of a Roost task' >&2\n"
+    "  exit 1\n"
+    "fi\n"
+    "exec \"$ROOST_PYTHON\" \"$ROOST_HELPER\" view \"$@\"\n"
+)
+
+
+def view_shim(store):
+    """The folder of `roost-view`, the command a task's agent shows you a
+    view with, made if need be: the runner puts it on the agent's PATH."""
+    folder = store.root / "bin"
+    path = folder / "roost-view"
+    if not path.exists() or path.read_text() != VIEW_SHIM:
+        atomic_text(path, VIEW_SHIM)
+    os.chmod(path, 0o700)
+    return folder
+
+
+def view_path(top, value, where, missing_ok=False):
+    """VALUE, a path a view names, as the path relative to TOP, the task's
+    worktree resolved, of the file it leads to there, followed by that
+    file's size, or None for one gone, if MISSING_OK. WHERE names the pane
+    for a message."""
+    if not isinstance(value, str) or not value.strip():
+        raise RoostError("%s needs a path, relative to the top of the task's worktree" % where)
+    if "\0" in value:
+        raise RoostError("%s: a path has no NUL character" % where)
+    path = os.path.realpath(os.path.join(top, value))
+    relative = within(path, top)
+    if relative in (None, "."):
+        raise RoostError("%s: %s is not in the task's worktree, %s" % (where, shown(value), shown(top)))
+    if ".git" in PurePosixPath(relative).parts:
+        raise RoostError("%s: %s is Git's own; show a file of the project" % (where, shown(value)))
+    try:
+        info = os.stat(path)
+    except FileNotFoundError:
+        if missing_ok:
+            return relative, None
+        raise RoostError("%s: there is no %s in the task's worktree" % (where, shown(value)))
+    if not stat.S_ISREG(info.st_mode):
+        raise RoostError("%s: %s is not a file" % (where, shown(value)))
+    return relative, info.st_size
+
+
+def view_note(value):
+    """VALUE, an agent's note, on lines of its own, without control
+    characters, bidi or invisible formatting, and with at most a blank line
+    between paragraphs."""
+    value = value.replace("\r\n", "\n").replace("\t", " ")
+    value = "".join(c for c in value if c == "\n" or unicodedata.category(c) not in ("Cc", "Cf"))
+    return re.sub(r"\n\s*\n\s*", "\n\n", "\n".join(line.rstrip() for line in value.split("\n"))).strip()
+
+
+def view_request(task, data):
+    """DATA, the view TASK's agent asks for, checked, as its record keeps
+    it: see VIEW_FORMAT. Each path leads to a file in the task's worktree.
+    Raise RoostError, saying what to change, for one Roost won't show."""
+    if not isinstance(data, dict):
+        raise RoostError('A view is a JSON object, as {"panes": [...], "note": "..."}')
+    unknown = sorted(set(data) - {"panes", "note"})
+    if unknown:
+        raise RoostError("A view has panes and a note, and no %s" % ", ".join(map(json.dumps, unknown)))
+    panes = data.get("panes")
+    if not isinstance(panes, list) or not panes:
+        raise RoostError("A view needs panes, a list of one to %d" % VIEW_PANES)
+    if len(panes) > VIEW_PANES:
+        raise RoostError("A view has at most %d panes, not %d: keep those that matter most"
+                         % (VIEW_PANES, len(panes)))
+    worktree = task["worktree"]
+    top = os.path.realpath(worktree)
+    base = None
+    checked = []
+    for number, pane in enumerate(panes, 1):
+        where = "Pane %d" % number
+        if not isinstance(pane, dict):
+            raise RoostError('%s is a JSON object, as {"kind": "file", "path": ...}' % where)
+        kind = pane.get("kind")
+        if kind not in VIEW_FIELDS:
+            raise RoostError("%s: its kind is file, diff, image or document, not %s" % (where, json.dumps(kind)))
+        unknown = sorted(set(pane) - {"kind", *VIEW_FIELDS[kind]})
+        if unknown:
+            raise RoostError("%s: a %s pane has %s, and no %s"
+                             % (where, kind, ", ".join(VIEW_FIELDS[kind]), ", ".join(map(json.dumps, unknown))))
+        path, size = view_path(top, pane.get("path"), where, missing_ok=kind == "diff")
+        entry = dict(kind=kind, path=path)
+        if kind == "file":
+            lines = {}
+            for name in ("start", "end"):
+                value = pane.get(name)
+                if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+                    raise RoostError("%s: a file pane needs %s, a line number from 1" % (where, name))
+                lines[name] = value
+            if lines["end"] < lines["start"]:
+                raise RoostError("%s: it ends at line %d, before it starts at %d" % (where, lines["end"], lines["start"]))
+            if size > VIEW_FILE_LIMIT:
+                raise RoostError("%s: %s is over %d MB; show a smaller file" % (where, path, VIEW_FILE_LIMIT >> 20))
+            with open(os.path.join(top, path), "rb") as file:
+                content = file.read()
+            count = content.count(b"\n") + (not content.endswith(b"\n"))
+            if lines["start"] > count:
+                raise RoostError("%s: %s has %d lines, so none from line %d" % (where, path, count, lines["start"]))
+            entry.update(start=lines["start"], end=min(lines["end"], count))
+        elif kind in ("image", "document"):
+            suffixes, limit = (VIEW_IMAGES, VIEW_IMAGE_LIMIT) if kind == "image" else (VIEW_DOCUMENTS, VIEW_FILE_LIMIT)
+            if PurePosixPath(path).suffix.lower() not in suffixes:
+                raise RoostError(("%s: an image pane shows a PNG, JPEG, GIF, SVG or WebP image, which %s is not"
+                                  if kind == "image" else
+                                  "%s: a document pane shows a Markdown, Org or text file, which %s is not; "
+                                  "show it as a file pane") % (where, path))
+            if size > limit:
+                raise RoostError("%s: %s is over %d MB" % (where, path, limit >> 20))
+        else:
+            if base is None:
+                base = fork_point(worktree, task)
+            changed = read_git(worktree, "diff", "--no-ext-diff", "--no-textconv", "--name-only", "-z",
+                               base, "--", path).stdout
+            if not changed.strip("\0"):
+                untracked = read_git(worktree, "ls-files", "--others", "--exclude-standard", "-z", "--", path).stdout
+                if untracked.strip("\0"):
+                    raise RoostError("%s: %s is new, and Git doesn't track it yet, so it has no diff; "
+                                     "show it as a file pane" % (where, path))
+                raise RoostError("%s: %s has no changes since the task began; show it as a file pane"
+                                 % (where, path))
+        checked.append(entry)
+    view = dict(id=uuid.uuid4().hex[:12], at=now(), panes=checked)
+    note = data.get("note")
+    if note is not None:
+        if not isinstance(note, str):
+            raise RoostError("The note is text")
+        note = view_note(note)
+        if len(note) > VIEW_NOTE_LIMIT:
+            raise RoostError("The note is %d characters; keep it to %d, and let the panes show the rest"
+                             % (len(note), VIEW_NOTE_LIMIT))
+        if note:
+            view["note"] = note
+    return view
+
+
+def show_view(store, task_id, run_id, data):
+    """Keep DATA, a view TASK_ID's agent asks for, checked, in the task's
+    record for Emacs to show; RUN_ID is the agent's. Return what is kept."""
+    with store.locked():
+        task = store.read(task_id)
+    if run_id is not None and run_id != task.get("runId"):
+        raise RoostError("Roost restarted this task's agent since this one started")
+    if task["status"] in ("stopped", "retired"):
+        raise RoostError("The task is %s" % task["status"])
+    # Git, which a diff pane asks, without the lock hooks wait on.
+    view = view_request(task, data)
+    with store.locked():
+        task = store.read(task_id)
+        task["view"] = view
+        store.save(task)
+    return view
+
+
+def view_command(arguments):
+    """`roost-view`, as the agent runs it, with ARGUMENTS: see VIEW_FORMAT."""
+    if arguments and arguments[0] in ("-h", "--help"):
+        print(VIEW_FORMAT, end="")
+        return 0
+    if len(arguments) > 1 or not arguments and sys.stdin.isatty():
+        print("roost-view: give it a file of JSON, or - for standard input; roost-view --help says more",
+              file=sys.stderr)
+        return 2
+    try:
+        source = arguments[0] if arguments else "-"
+        if source == "-":
+            raw = sys.stdin.buffer.read(VIEW_INPUT_LIMIT + 1)
+        else:
+            with open(source, "rb") as file:
+                raw = file.read(VIEW_INPUT_LIMIT + 1)
+        if len(raw) > VIEW_INPUT_LIMIT:
+            raise RoostError("The view is over %d KiB; it needs only paths, lines and a short note"
+                             % (VIEW_INPUT_LIMIT >> 10))
+        try:
+            data = json.loads(raw)
+        except ValueError as exc:
+            raise RoostError("The view isn't JSON: %s" % exc)
+        if not os.environ.get("ROOST_TASK_ID") or not os.environ.get("ROOST_STATE_DIRECTORY"):
+            raise RoostError("It works only for the agent of a Roost task, which has ROOST_TASK_ID")
+        view = show_view(Store(os.environ["ROOST_STATE_DIRECTORY"]), os.environ["ROOST_TASK_ID"],
+                         os.environ.get("ROOST_RUN_ID"), data)
+    except (RoostError, OSError) as exc:
+        print("roost-view: %s" % exc, file=sys.stderr)
+        return 1
+    count = len(view["panes"])
+    print("Sent the view to Roost: %d pane%s%s. The user sees it in Emacs."
+          % (count, "" if count == 1 else "s", " and a note" if "note" in view else ""))
+    return 0
+
+
 # The Program Status Protocol, OSC 7501, by which a program tells its
 # terminal whether it works, waits on you, or is done:
 # https://www.superlogical.com/rex/docs/build/program-status. Claude Code
@@ -5293,6 +5524,9 @@ def runner(root, task_id, run_id, resume_conversation=False):
     env["ROOST_HELPER"] = str(Path(__file__).resolve())
     env["ROOST_PYTHON"] = sys.executable
     env["PATH"] = agent_path(env.get("PATH", ""))
+    # Last, so that it shadows nothing of yours.
+    with contextlib.suppress(OSError):
+        env["PATH"] += os.pathsep + str(view_shim(store))
     # C-c and C-\ in the pane are for the agent, as a shell's foreground job
     # gets them; the runner waits on and records it.  A handler, unlike
     # SIG_IGN, is not inherited across exec.
@@ -5540,6 +5774,8 @@ def main():
             pass
     elif mode == "run":
         return runner(sys.argv[2], sys.argv[3], sys.argv[4], len(sys.argv) > 5)
+    elif mode == "view":
+        return view_command(sys.argv[2:])
     else:
         raise RoostError("Unknown mode")
     return 0
