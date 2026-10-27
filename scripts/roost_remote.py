@@ -3452,7 +3452,7 @@ def squash_merge(task, integration, here):
         # though a squash makes no merge commit either way.
         result = git(repo, "merge", "--squash", "--ff", tip, check=False)
         if result.returncode:
-            conflicts = conflicted_files(repo)
+            conflicts = conflicted_files(repo) or resolved_before(repo, "HEAD", tip)
             # A squash leaves no MERGE_HEAD to abort; this undoes it alike.
             git(repo, "reset", "-q", "--merge")
             if conflicts:
@@ -3590,6 +3590,12 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
             merging = git(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0
             if merging and conflicts:
                 git(repo, "merge", "--abort")
+            if not conflicts and merging:
+                # Resolved as you resolved them before, and staged: still
+                # conflicts, which `u` brings into the task, resolved alike.
+                conflicts = resolved_before(repo, "HEAD", "MERGE_HEAD")
+                if conflicts:
+                    git(repo, "merge", "--abort")
             if conflicts:
                 raise RoostError("%s conflicts with %s in %s. Nothing was changed; update the task from %s, then merge again"
                                  % (task["name"], task["integrationBranch"], ", ".join(conflicts),
@@ -3707,6 +3713,25 @@ def conflicted_files(repo):
             if path]
 
 
+def resolved_before(repo, ours, theirs):
+    """The files merging THEIRS into OURS in REPO conflicts in that Git
+    resolved as you resolved them before, with rerere.autoUpdate: staged,
+    and no longer in conflict in the merge under way. Git keeps no record
+    of which it did, so these are the files `git merge-tree` finds in
+    conflict but the merge doesn't; a merge stopped for another reason,
+    such as a hook, has none. Empty without rerere's cache, or before Git
+    2.38, which can't tell."""
+    if not (merges_without_checkout()
+            and Path(git(repo, "rev-parse", "--path-format=absolute", "--git-path", "rr-cache",
+                         check=False).stdout.strip() or "/nonexistent").is_dir()):
+        return []
+    result = read_git(repo, "merge-tree", "--write-tree", "--name-only", "--no-messages", "-z", ours, theirs)
+    if result.returncode != 1:
+        return []
+    left = set(conflicted_files(repo))
+    return [path for path in result.stdout.split("\0")[1:] if path and path not in left]
+
+
 def merge_said(result):
     """What a `git merge` that failed, RESULT, said, but its advice to
     commit the merge, as after a hook refused it: Roost undoes it instead."""
@@ -3810,12 +3835,18 @@ def update(store, task):
                  "Merge branch '%s' into %s" % (integration, task["branch"]),
                  "refs/heads/" + integration, check=False)
     conflicts = conflicted_files(worktree)
-    if result.returncode and not conflicts:
-        if git(worktree, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0:
+    merging = git(worktree, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0
+    # Conflicts Git resolved as you resolved them before, staged: the merge
+    # stays under way, as with conflicts, for its agent to check and commit.
+    resolved = resolved_before(worktree, "HEAD", "MERGE_HEAD") if result.returncode and merging else []
+    if result.returncode and not conflicts and not resolved:
+        if merging:
             git(worktree, "merge", "--abort")
         raise RoostError("Updating from %s failed: %s" % (integration, merge_said(result)))
     task["update"] = dict(conflicts=conflicts,
                           changed=before != git(worktree, "rev-parse", "HEAD").stdout.strip())
+    if resolved:
+        task["update"]["resolved"] = resolved
     return task
 
 

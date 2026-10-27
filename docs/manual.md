@@ -104,7 +104,12 @@ Magit is optional (review falls back to Dired).
   Emacs-state list so their keys work.
 - **Completion.** Prompts use `completing-read`, so Vertico, Ivy, Helm and the
   default UI all work. A new task's project picker offers the projects Roost
-  has used, then those `project.el` knows.
+  has used, then those `project.el` knows. With Orderless, `M-x` with much of
+  a long name typed, such as `roost-new-task-from-region`, is followed by a
+  second or more in which Emacs works out a shorter name to suggest ("You can
+  run the command … with M-x -task-from-r"), and terminals don't update until
+  you press a key; `(setq extended-command-suggest-shorter nil)` turns that
+  off.
 - **Remote review.** Use
   [tramp-rpc](https://github.com/ArthurHeymans/emacs-tramp-rpc) for remote
   hosts if you can. Magit reaches a remote task through TRAMP, where every Git
@@ -274,7 +279,10 @@ other tasks of the project that change the same files, committed or not,
 in one line ("ledger totals and report chart also change report.py"),
 which may conflict once one of them merges. `u` merges the integration branch into the task's
 own worktree. If that conflicts, Roost offers to have the task's agent resolve
-it, run the tests and commit. Then `m` merges the task into its integration
+it, run the tests and commit. With Git's `rerere.autoUpdate`, Git may resolve
+the conflicts as you resolved them before and stage them; the merge then stays
+under way, and Roost offers to have the agent check those resolutions and
+commit it. Then `m` merges the task into its integration
 branch and removes its worktree, branch and window. For work you don't
 want, `x` discards the task, first saying what that loses.
 
