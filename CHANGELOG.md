@@ -55,7 +55,7 @@ What each release changes, and what to do when upgrading. Newest first.
 - With perspective.el, a task's perspective lists every tmux window of its
   session from when you open the task, such as a shell you opened there,
   when `tmux-control-window-buffers` is `all`. A window you hadn't visited
-  was in no perspective's buffer list. This needs tmux-control 0.9.0: when
+  was in no perspective's buffer list. This needs tmux-control 0.8.3: when
   upgrading, update it and set the option to get this.
 - With perspective.el, retiring, merging, discarding or forgetting a task
   no longer kills the buffers you opened only in its perspective, such as

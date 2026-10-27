@@ -87,7 +87,7 @@ Magit is optional (review falls back to Dired).
   opened in it stay open. Set `roost-workspace` to choose. A task's
   perspective lists the tmux windows of its session you have visited; to
   list every one from the start, such as a shell you left open, set
-  `tmux-control-window-buffers` to `all` (tmux-control 0.9.0), and to tell
+  `tmux-control-window-buffers` to `all` (tmux-control 0.8.3), and to tell
   them apart by name, `tmux-control-window-buffer-names` to `tab`.
 - **Evil.** Roost's dashboard and panels start in Emacs state so their keys work
   (`roost-evil-state`); `j`/`k` move between tasks. Drafts start in insert
@@ -1159,10 +1159,10 @@ again, and the diff shows what changed.
 
 | Agent | Captured | Scanned | How Roost hears it |
 | --- | --- | --- | --- |
-| Claude Code | 2.1.303, with and without relay | hook events, notifications, payload fields | hooks given with `--settings` |
+| Claude Code | 2.1.303, with and without relay; 2.1.310 relayed | hook events, notifications, payload fields | hooks given with `--settings` |
 | Codex | 0.163.0, with and without relay | hook events and payload fields | hooks given with `-c`, reviewed once in Codex |
 | Pi | 1.3.0 | extension events, context, options | an extension given with `--extension` |
-| OpenCode | none yet | events, settings | a plugin named in `OPENCODE_CONFIG_CONTENT` |
+| OpenCode | 1.19.4 | events, settings | a plugin named in `OPENCODE_CONFIG_CONTENT` |
 
 See [validation](validation.md) for the live runs with Claude Code, Codex and
 Pi on local and remote hosts, [the demo notes](demo.md) for how the screenshots
