@@ -35,6 +35,46 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## Your own Git and Emacs settings — 2026-10-27
+
+- **Why.** Tests and QA run with no Git or Emacs settings of anyone's own,
+  and people bring theirs.
+- **Git.** The helper's lifecycle tests with a global Git config of
+  popular settings (`merge.ff`, `rerere`, `status.showUntrackedFiles`,
+  `diff.renames`, `log.decorate`, `format.pretty`, `submodule.recurse` and
+  more), then a stricter one (`merge.ff = only`, `color.ui = always`,
+  `diff.noprefix`), and Git commands of the helper's under single
+  settings. `merge.ff` broke squash merges and `u`, `log.showSignature`
+  put Git's word on signatures in squashed commit messages and pull
+  request drafts, and `status.showUntrackedFiles = no` hid new files from
+  the panel; conflicts in files whose names aren't ASCII came back quoted
+  (#168). The other failures were the tests' own Git commands. With
+  `rerere.autoUpdate`, a conflict rerere resolves makes `u` say "Updating
+  from main failed: Staged 'f' using previous resolution" and abort the
+  merge; whether to commit it or leave it in progress is open.
+- **SHA-256 repositories:** the lifecycle tests pass, but for those that
+  add a SHA-1 submodule, which Git refuses. **Python 3.14.8:** all pass.
+- **Emacs settings.** `make qa` with a `--load` file turning on global line
+  numbers, `hl-line`, `visual-line-mode`, the fill-column indicator,
+  `tab-line`, trailing-whitespace marks, `scroll-margin` and more: 305
+  steps, 6 with problems. The note box took a tab line (#170); terminals
+  drew the fill-column bar and coloured trailing spaces red
+  (tmux-control#219); the rest were QA's own helpers (#170). A `--load`
+  file runs after Roost made its sidebar, so global modes reach buffers
+  an init file's wouldn't; ending it with `roost--quiet-display` in each
+  buffer stands in for that.
+- **Packages.** `make qa` with company, diff-hl, which-key, minions,
+  yasnippet, vertico (in the minibuffer), orderless, marginalia, consult,
+  hl-todo, rainbow-delimiters and indent-bars: 323 steps, 8 with problems.
+  With vertico in the minibuffer and a split terminal, opening another
+  task always said "didn't open …, as you went to another window", as
+  tmux-control tiled the terminal again when the minibuffer closed
+  (#171). Pauses of 4–6 s after `M-x roost-new-task-…` were Emacs working
+  out a shorter name to suggest (`extended-command-suggest-shorter`), slow
+  with orderless. Once, in `walk_away`, `l` in the sidebar with a review
+  note half written said "didn't open"; that journey alone passed all
+  112 steps.
+
 ## Emacs's CPU with agents streaming — 2026-10-26
 
 - **Why.** The draft #78 measured zmx and Ghostel at under half the Emacs
