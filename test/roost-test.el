@@ -10948,7 +10948,7 @@ and an image.  Return its directory."
           (task (roost-test--view-task
                  directory
                  '((id . "v1") (at . "2026-10-27T12:00:00+00:00")
-                   (panes ((kind . "file") (path . "a.py") (start . 5) (end . 8))
+                   (panes ((kind . "file") (path . "a.py") (start . 5) (end . 8) (caption . "The loop"))
                           ((kind . "diff") (path . "a.py"))
                           ((kind . "image") (path . "pic.svg"))
                           ((kind . "document") (path . "notes.md")))
@@ -10990,7 +10990,11 @@ and an image.  Return its directory."
                                 "line 4\nline 5\nline 6\nline 7\n"))
                  (should (= (window-point (nth 0 windows)) (overlay-start marked)))
                  (should (< 1 (window-start (nth 0 windows)) (overlay-start marked)))))
-             (should (string-search "lines 5–8" (window-parameter (nth 0 windows) 'header-line-format)))
+             ;; Its step, file and lines, then the agent's caption, as the agent's.
+             (should (equal (substring-no-properties (window-parameter (nth 0 windows) 'header-line-format))
+                            " 1  a.py  lines 5–8  ·  agent: The loop"))
+             (should (string-prefix-p " 2  a.py  changes"
+                                      (substring-no-properties (window-parameter (nth 1 windows) 'header-line-format))))
              (with-current-buffer (nth 1 buffers)
                (should (derived-mode-p 'diff-mode))
                (should (string-search "+changed" (buffer-string))))
@@ -11013,6 +11017,56 @@ and an image.  Return its directory."
        (set-frame-parameter frame 'roost-view nil)
        (set-frame-parameter frame 'roost-view-buffers nil)
        (kill-buffer yours)
+       (delete-directory directory t)))))
+
+(ert-deftest roost-view-n-and-p-walk-its-panes-in-the-agents-order ()
+  (roost-test--isolated
+   (let* ((directory (roost-test--view-worktree))
+          (task (roost-test--view-task
+                 directory '((id . "v1")
+                             (panes ((kind . "document") (path . "notes.md"))
+                                    ((kind . "file") (path . "a.py") (start . 20) (end . 22))
+                                    ((kind . "diff") (path . "a.py")))
+                             (note . "Notes first, then the loop."))))
+          (frame (selected-frame)))
+     (unwind-protect
+         (save-window-excursion
+           (set-frame-parameter frame 'roost-view (roost--key task))
+           (cl-letf (((symbol-function 'require)
+                      (let ((require (symbol-function 'require)))
+                        (lambda (feature &rest args) (unless (eq feature 'magit) (apply require feature args))))))
+             (roost--view-fill frame task (roost--field task 'view)))
+           (let ((step (lambda () (window-parameter (selected-window) 'roost-view-step)))
+                 (note (seq-find (lambda (window) (not (window-parameter window 'roost-view-step)))
+                                 (window-list frame 'nomini))))
+             ;; From the note, n goes to the first pane, and p to the last.
+             (select-window note)
+             (with-current-buffer (window-buffer note)
+               (should (string-search "n and p step through it" (buffer-string))))
+             (roost-view-next)
+             (should (= (funcall step) 1))
+             (select-window note)
+             (roost-view-previous)
+             (should (= (funcall step) 3))
+             (roost-view-previous)
+             (should (= (funcall step) 2))
+             ;; Scrolled away, its lines come back as you step to it.
+             (let ((window (selected-window)))
+               (set-window-start window (point-min))
+               (set-window-point window (point-min))
+               (roost-view-next)
+               (roost-view-previous)
+               (should (eq (selected-window) window))
+               (should (= (line-number-at-pos (window-point window)) 20)))
+             (roost-view-previous)
+             (should (= (funcall step) 1))
+             (should-error (roost-view-previous) :type 'user-error)
+             (roost-view-next)
+             (roost-view-next)
+             (should-error (roost-view-next) :type 'user-error)
+             (should (= (funcall step) 3)))
+           (roost--view-release frame))
+       (set-frame-parameter frame 'roost-view nil)
        (delete-directory directory t)))))
 
 (ert-deftest roost-view-keeps-a-file-you-changed-in-it ()
@@ -11103,11 +11157,14 @@ and an image.  Return its directory."
         (roost-ask-view task)
         (should (derived-mode-p 'roost-send-mode))
         (should (string-search "build a view with roost-view" (buffer-string)))
-        ;; The format in the draft is one the helper takes.
-        (should (string-search "{\"panes\": [{\"kind\": \"file\", \"path\": \"src/parse.py\", \"start\": 10, \"end\": 42}"
-                               (buffer-string)))
-        (should (json-parse-string (substring (buffer-string) (string-search "{" (buffer-string))
-                                              (1+ (string-search "}\n\n" (buffer-string))))))
+        ;; Its example is JSON, of two panes each with a caption: agents
+        ;; copy the example's shape.
+        (let ((example (json-parse-string (substring (buffer-string) (string-search "{" (buffer-string))
+                                                     (1+ (string-search "}\n\n" (buffer-string))))
+                                          :object-type 'alist :array-type 'list)))
+          (should (equal (mapcar (lambda (pane) (alist-get 'kind pane)) (alist-get 'panes example))
+                         '("file" "diff")))
+          (should (seq-every-p (lambda (pane) (alist-get 'caption pane)) (alist-get 'panes example))))
         (should-not sent)
         (should (roost--action-applies-p task 'roost-ask-view))
         (should-not (roost--action-applies-p task 'roost-open-view)))))))

@@ -192,7 +192,8 @@ KIND is `committed', `uncommitted', `untracked' or `binary'."
     ("with a view" (status . "ready") (live . t) (ahead . 1) (diff . "1 file +12 −3")
      (files . ,(roost-sweep--files '("ledger.py" . committed)))
      (view (id . "v1") (at . "2026-10-03T20:00:00+00:00")
-           (panes ((kind . "file") (path . "ledger.py") (start . 3) (end . 9))
+           (panes ((kind . "file") (path . "ledger.py") (start . 3) (end . 9)
+                   (caption . "The loop that adds each budget's rows"))
                   ((kind . "diff") (path . "ledger.py"))
                   ((kind . "image") (path . "docs/flow.svg")))
            (note . ,(concat "Start with the loop that adds each budget's rows; the diff shows the "
@@ -440,7 +441,7 @@ For a task with none, a view of no note."
            :keys (roost-compose-submit roost-compose-cancel roost-compose-set-project))
     (view :mode roost-view-note-mode :render roost--render-view-note :buffer "*roost view*"
           :layouts (selected none other both) :setup roost-sweep--view-setup
-          :keys (roost-view-close)))
+          :keys (roost-view-next roost-view-previous roost-view-close)))
   "Roost's views, each (NAME . PLIST).
 :mode makes the buffer, :setup gives it what it shows for a state,
 :render draws it, :point finds the state's task in it, and :buffer names

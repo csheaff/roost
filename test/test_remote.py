@@ -5874,7 +5874,7 @@ class View(unittest.TestCase):
 
     def test_each_kind_of_pane_and_a_note(self):
         code, output, error = self.run_view(dict(
-            panes=[dict(kind="file", path="src/parse.py", start=10, end=99),
+            panes=[dict(kind="file", path="src/parse.py", start=10, end=51, caption="The\nloop  \u202e"),
                    dict(kind="diff", path=str(self.repo / "src/parse.py")),
                    dict(kind="image", path="docs/flow.svg"),
                    dict(kind="document", path="./docs/../docs/design.md")],
@@ -5882,7 +5882,7 @@ class View(unittest.TestCase):
         self.assertEqual(code, 0, error)
         self.assertEqual(output, "Sent the view to Roost: 4 panes and a note. The user sees it in Emacs.\n")
         view = self.shown()
-        self.assertEqual(view["panes"], [dict(kind="file", path="src/parse.py", start=10, end=51),
+        self.assertEqual(view["panes"], [dict(kind="file", path="src/parse.py", start=10, end=51, caption="The loop"),
                                          dict(kind="diff", path="src/parse.py"),
                                          dict(kind="image", path="docs/flow.svg"),
                                          dict(kind="document", path="docs/design.md")])
@@ -5926,12 +5926,15 @@ class View(unittest.TestCase):
                            (dict(panes=[file] * 5), "at most 4 panes, not 5"),
                            (dict(panes=["src/parse.py"]), "Pane 1 is a JSON object"),
                            (dict(panes=[dict(kind="code", path="src/parse.py")]), 'not "code"'),
-                           (dict(panes=[dict(file, label="Parser")]), 'has path, start, end, and no "label"'),
+                           (dict(panes=[dict(file, label="Parser")]), 'has path, start, end and a caption, and no "label"'),
                            (dict(panes=[dict(file, start="10")]), "needs start, a line number"),
                            (dict(panes=[dict(file, end=True)]), "needs end, a line number"),
                            (dict(panes=[dict(file, start=0)]), "needs start, a line number"),
                            (dict(panes=[dict(file, start=9, end=3)]), "ends at line 3, before"),
-                           (dict(panes=[dict(file, start=52, end=60)]), "has 51 lines, so none from line 52"),
+                           (dict(panes=[dict(file, start=52, end=60)]), "has 51 lines, so no line 52; read it again"),
+                           (dict(panes=[dict(file, start=40, end=99)]), "has 51 lines, so no line 99; read it again"),
+                           (dict(panes=[dict(file, caption=7)]), "Pane 1: its caption is text"),
+                           (dict(panes=[dict(file, caption="x" * 121)]), "its caption is 121 characters"),
                            (dict(panes=[dict(kind="image", path="src/parse.py")]), "an image pane shows"),
                            (dict(panes=[dict(kind="document", path="src/parse.py")]), "show it as a file pane"),
                            (dict(panes=[dict(kind="diff", path="src/same.py")]), "no changes since the task began"),
@@ -5966,7 +5969,10 @@ class View(unittest.TestCase):
     def test_help_says_the_format(self):
         code, output, _ = self.run_view("", "--help")
         self.assertEqual(code, 0)
-        self.assertIn('{"kind": "file", "path": "src/parse.py", "start": 10, "end": 42}', output)
+        # Its example is a view this worktree has the files for.
+        example = output[output.index("{"):output.index("}\n\n") + 1]
+        self.assertEqual(self.run_view(example)[0], 0)
+        self.assertEqual(self.shown()["panes"][0]["caption"], "Where a quote starts a string")
         code, _, error = self.run_view("", "a", "b")
         self.assertEqual(code, 2)
         self.assertIn("roost-view --help", error)

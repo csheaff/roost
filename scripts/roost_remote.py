@@ -4668,23 +4668,28 @@ real files, which Roost lays out, and a short note in your own words.
   roost-view -         or from standard input
   roost-view --help    show this
 
-  {"panes": [{"kind": "file", "path": "src/parse.py", "start": 10, "end": 42},
+  {"panes": [{"kind": "file", "path": "src/parse.py", "start": 10, "end": 42,
+              "caption": "Where a quote starts a string"},
              {"kind": "diff", "path": "src/parse.py"},
              {"kind": "image", "path": "docs/flow.svg"},
              {"kind": "document", "path": "docs/design.md"}],
    "note": "What to look at first, and why."}
 
-Panes come in the order to read them; the first gets the most room.
+Panes come in the order to read them, a walk the user steps through; the
+first gets the most room.
   file      the file, with lines start to end marked and in view
   diff      the file's changes since the task began
   image     a PNG, JPEG, GIF, SVG or WebP image
   document  a Markdown, Org or plain text file, whole
-Paths are relative to the top of the task's worktree, and must be in it.
-The note is optional, and at most 600 characters.
+Each pane may have a caption, one line of at most 120 characters on what it
+shows. Paths are relative to the top of the task's worktree, and must be in
+it; a file pane's lines must be in the file as it is now. The note is
+optional, and at most 600 characters.
 """
 VIEW_INPUT_LIMIT = 64 * 1024
 VIEW_PANES = 4
 VIEW_NOTE_LIMIT = 600
+VIEW_CAPTION_LIMIT = 120
 # Emacs asks before it opens a larger file.
 VIEW_FILE_LIMIT = 5 * 1024 * 1024
 VIEW_IMAGE_LIMIT = 10 * 1024 * 1024
@@ -4774,9 +4779,9 @@ def view_request(task, data):
         kind = pane.get("kind")
         if kind not in VIEW_FIELDS:
             raise RoostError("%s: its kind is file, diff, image or document, not %s" % (where, json.dumps(kind)))
-        unknown = sorted(set(pane) - {"kind", *VIEW_FIELDS[kind]})
+        unknown = sorted(set(pane) - {"kind", "caption", *VIEW_FIELDS[kind]})
         if unknown:
-            raise RoostError("%s: a %s pane has %s, and no %s"
+            raise RoostError("%s: a %s pane has %s and a caption, and no %s"
                              % (where, kind, ", ".join(VIEW_FIELDS[kind]), ", ".join(map(json.dumps, unknown))))
         path, size = view_path(top, pane.get("path"), where, missing_ok=kind == "diff")
         entry = dict(kind=kind, path=path)
@@ -4794,9 +4799,12 @@ def view_request(task, data):
             with open(os.path.join(top, path), "rb") as file:
                 content = file.read()
             count = content.count(b"\n") + (not content.endswith(b"\n"))
-            if lines["start"] > count:
-                raise RoostError("%s: %s has %d lines, so none from line %d" % (where, path, count, lines["start"]))
-            entry.update(start=lines["start"], end=min(lines["end"], count))
+            # Lines remembered from before an edit point past it, or at
+            # the wrong lines: the first is refused, as a sign of the second.
+            if lines["end"] > count:
+                raise RoostError("%s: %s has %d lines, so no line %d; read it again for the lines you mean"
+                                 % (where, path, count, lines["start"] if lines["start"] > count else lines["end"]))
+            entry.update(lines)
         elif kind in ("image", "document"):
             suffixes, limit = (VIEW_IMAGES, VIEW_IMAGE_LIMIT) if kind == "image" else (VIEW_DOCUMENTS, VIEW_FILE_LIMIT)
             if PurePosixPath(path).suffix.lower() not in suffixes:
@@ -4818,6 +4826,16 @@ def view_request(task, data):
                                      "show it as a file pane" % (where, path))
                 raise RoostError("%s: %s has no changes since the task began; show it as a file pane"
                                  % (where, path))
+        caption = pane.get("caption")
+        if caption is not None:
+            if not isinstance(caption, str):
+                raise RoostError("%s: its caption is text" % where)
+            caption = one_line(caption)
+            if caption and len(caption) > VIEW_CAPTION_LIMIT:
+                raise RoostError("%s: its caption is %d characters; keep it to %d, and to one line"
+                                 % (where, len(caption), VIEW_CAPTION_LIMIT))
+            if caption:
+                entry["caption"] = caption
         checked.append(entry)
     view = dict(id=uuid.uuid4().hex[:12], at=now(), panes=checked)
     note = data.get("note")

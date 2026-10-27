@@ -10129,11 +10129,12 @@ Beside a terminal, that turns off `roost-task-panel-mode'."
 (defconst roost--view-request
   "Show me how this works, in my editor: build a view with roost-view, a command on your PATH. Choose the fewest panes of real files that explain it, one to four, in the order I should read them, and add a short note on what to look for. Pipe the view, as JSON, to `roost-view -`; if it says what's wrong, fix that and run it again.
 
-{\"panes\": [{\"kind\": \"file\", \"path\": \"src/parse.py\", \"start\": 10, \"end\": 42},
-           {\"kind\": \"diff\", \"path\": \"src/parse.py\"}],
+{\"panes\": [{\"kind\": \"file\", \"path\": \"src/parse.py\", \"start\": 10, \"end\": 42,
+            \"caption\": \"Where a quote starts a string\"},
+           {\"kind\": \"diff\", \"path\": \"src/parse.py\", \"caption\": \"What this task changed in it\"}],
  \"note\": \"What to look at first, and why.\"}
 
-A file pane shows lines start to end, marked; a diff pane, the file's changes since this task began. There are image panes too, for a PNG, JPEG, GIF, SVG or WebP image, and document panes, for a Markdown, Org or text file. Paths are relative to the top of the worktree. The note is at most 600 characters."
+I step through the panes in your order, each with its caption, one line of at most 120 characters. A file pane shows lines start to end, marked, which must be in the file as it is now; a diff pane, the file's changes since this task began. There are image panes too, for a PNG, JPEG, GIF, SVG or WebP image, and document panes, for a Markdown, Org or text file. Paths are relative to the top of the worktree. The note is at most 600 characters."
   "The prompt `roost-ask-view' drafts: the request, and the view's format.
 Agents copy the example's shape, so it shows two panes, not every kind.")
 
@@ -10251,8 +10252,8 @@ Return the windows in the order to read them, across, then down."
       (set-frame-parameter frame 'roost-view-buffers nil)
       (cl-loop for pane in panes
                for window in windows
-               for first = t then nil
-               do (roost--view-pane frame task pane window (and first (not note))))
+               for step from 1
+               do (roost--view-pane frame task pane window step (length panes) (and (= step 1) (not note))))
       (when note-window
         (let ((buffer (generate-new-buffer (format "*roost view: %s*" (roost--task-label task)))))
           (roost--view-keep frame buffer t)
@@ -10272,25 +10273,36 @@ Return the windows in the order to read them, across, then down."
   (set-frame-parameter frame 'roost-view-buffers
                        (cons (cons buffer made) (frame-parameter frame 'roost-view-buffers))))
 
-(defun roost--view-header (pane hint)
-  "The header line of PANE's window, ending with how to close the view if HINT."
+(defun roost--view-keys ()
+  "How to walk and close a view, as its note's label or a header says."
+  (concat (propertize "n" 'face 'roost-key) (propertize " and " 'face 'roost-dim)
+          (propertize "p" 'face 'roost-key) (propertize " step through it  ·  " 'face 'roost-dim)
+          (propertize "q" 'face 'roost-key) (propertize " closes it" 'face 'roost-dim)))
+
+(defun roost--view-header (pane step count hint)
+  "The header line of PANE's window, the STEP of COUNT in the walk.
+It names the file and its lines, then the agent's caption, as the
+agent's; with HINT, how to walk and close the view."
   (let-alist pane
-    (concat " " .path
+    (concat " "
+            (when (> count 1) (propertize (format "%d  " step) 'face 'roost-heading))
+            .path
             (propertize (pcase .kind
                           ("file" (if (= .start .end) (format "  line %d" .start)
                                     (format "  lines %d–%d" .start .end)))
                           ("diff" "  changes since the task began")
                           (_ ""))
                         'face 'roost-dim)
+            (when .caption
+              (concat (propertize "  ·  agent: " 'face 'roost-dim)
+                      (propertize .caption 'face 'roost-prose)))
             (when hint
-              (concat (propertize "  ·  " 'face 'roost-dim)
-                      (propertize "q" 'face 'roost-key)
-                      (propertize " closes this view" 'face 'roost-dim))))))
+              (concat (propertize "  ·  " 'face 'roost-dim) (roost--view-keys))))))
 
-(defun roost--view-pane (frame task pane window hint)
-  "Show PANE of the view of TASK's work in FRAME's WINDOW.
-Its header line names its file, and how to close the view if HINT.  A
-pane that can't be shown says why in its place."
+(defun roost--view-pane (frame task pane window step count hint)
+  "Show PANE of the view of TASK's work in FRAME's WINDOW, STEP of COUNT.
+Its header line names its file, and how to walk and close the view if
+HINT.  A pane that can't be shown says why in its place."
   (condition-case err
       (let-alist pane
         (pcase .kind
@@ -10310,8 +10322,10 @@ pane that can't be shown says why in its place."
          (insert (format "Roost couldn't show %s: %s\n" (alist-get 'path pane) (error-message-string err)))
          (setq buffer-read-only t))
        (set-window-buffer window buffer))))
-  (set-window-parameter window 'header-line-format (roost--view-header pane hint))
+  (set-window-parameter window 'header-line-format (roost--view-header pane step count hint))
   (set-window-parameter window 'tab-line-format 'none)
+  (set-window-parameter window 'roost-view-pane pane)
+  (set-window-parameter window 'roost-view-step step)
   ;; Its keys, such as q to close it, in its mode as shown.
   (with-current-buffer (window-buffer window)
     (roost-view-pane-mode)))
@@ -10349,18 +10363,26 @@ variables that are safe."
 (defun roost--view-mark (window start end)
   "Mark lines START to END of WINDOW's buffer, and bring them into view."
   (with-current-buffer (window-buffer window)
+    (save-excursion
+      (goto-char (point-min))
+      (forward-line (1- start))
+      (let ((from (point)))
+        (forward-line (1+ (- end start)))
+        (let ((overlay (make-overlay from (point))))
+          (overlay-put overlay 'face 'roost-view-region)
+          (overlay-put overlay 'roost-view t)))))
+  (roost--view-bring window start end))
+
+(defun roost--view-bring (window start end)
+  "Bring lines START to END of WINDOW's buffer into view, with point at START."
+  (with-current-buffer (window-buffer window)
     (let (from top)
       (save-excursion
         (goto-char (point-min))
         (forward-line (1- start))
         (setq from (point))
-        (forward-line (1+ (- end start)))
-        (let ((overlay (make-overlay from (point))))
-          (overlay-put overlay 'face 'roost-view-region)
-          (overlay-put overlay 'roost-view t))
         ;; A third of the room the lines leave above them, as for a
         ;; short function that starts after its comment.
-        (goto-char from)
         (forward-line (- (max 0 (/ (- (window-body-height window) (1+ (- end start))) 3))))
         (setq top (point)))
       ;; Outside `save-excursion', which would put back the point of
@@ -10414,6 +10436,8 @@ In a Magit diff buffer of its own, if you have Magit; else in Diff mode."
 
 (defvar-keymap roost-view-pane-mode-map
   :doc "Keys in the windows of a view."
+  "n" #'roost-view-next
+  "p" #'roost-view-previous
   "q" #'roost-view-close)
 
 (define-minor-mode roost-view-pane-mode
@@ -10423,6 +10447,8 @@ In a Magit diff buffer of its own, if you have Magit; else in Diff mode."
 
 (defvar-keymap roost-view-note-mode-map
   :doc "Keys in a view's note."
+  "n" #'roost-view-next
+  "p" #'roost-view-previous
   "q" #'roost-view-close)
 
 (define-derived-mode roost-view-note-mode special-mode "Roost View"
@@ -10440,13 +10466,39 @@ In a Magit diff buffer of its own, if you have Magit; else in Diff mode."
   (let ((inhibit-read-only t)
         (point (point)))
     (erase-buffer)
-    (insert (propertize "The agent's account" 'face 'roost-dim)
-            (propertize "  ·  " 'face 'roost-dim)
-            (propertize "q" 'face 'roost-key)
-            (propertize " closes this view" 'face 'roost-dim)
+    (insert (propertize "The agent's account  ·  " 'face 'roost-dim)
+            (roost--view-keys)
             "\n"
             (propertize (or (alist-get 'note roost--view) "") 'face 'roost-prose))
     (goto-char (min point (point-max)))))
+
+(defun roost--view-step (count)
+  "Select the pane COUNT steps on from the selected window of a view.
+From its note, the first step is the first pane, and the last the last."
+  (let* ((windows (seq-sort-by (lambda (window) (window-parameter window 'roost-view-step)) #'<
+                               (seq-filter (lambda (window) (window-parameter window 'roost-view-step))
+                                           (window-list nil 'nomini))))
+         (here (window-parameter (selected-window) 'roost-view-step))
+         (step (if here (+ here count) (if (> count 0) count (+ (length windows) 1 count))))
+         (window (seq-find (lambda (window) (eql (window-parameter window 'roost-view-step) step)) windows)))
+    (cond ((null windows) (user-error "Not in a view an agent built"))
+          ((null window) (user-error (if (> count 0) "That is the last pane; q closes the view"
+                                       "That is the first pane")))
+          (t (select-window window)
+             (let-alist (window-parameter window 'roost-view-pane)
+               (when (equal .kind "file")
+                 (roost--view-bring window .start .end)))))))
+
+(defun roost-view-next ()
+  "Go to the next pane of this view, in the order its agent gave them.
+A file's lines come back into view."
+  (interactive)
+  (roost--view-step 1))
+
+(defun roost-view-previous ()
+  "Go to the previous pane of this view, in the order its agent gave them."
+  (interactive)
+  (roost--view-step -1))
 
 (defun roost-view-close ()
   "Close this view: delete its frame, and kill the buffers it opened.
