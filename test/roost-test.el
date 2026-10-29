@@ -2480,14 +2480,17 @@ terminal's, on a pty.  Skips the test where it can't be made."
        (unwind-protect
            (cl-letf (((symbol-function 'roost--request)
                       (lambda (host action params success &optional _failure)
-                        (setq asked (list host action (alist-get 'directory params)))
-                        (funcall success
+                        (if (equal action "jira-issues")
+                            ;; twg isn't installed.
+                            (funcall success nil)
+                          (setq asked (list host action (alist-get 'directory params)))
+                          (funcall success
                                  (vector '((number . 12) (title . "CSV import crashes")
                                            (body . "Quoted commas split fields.")
                                            (url . "https://github.com/o/r/issues/12")
                                            (labels . ["bug"]))
                                          '((number . 9) (title . "Docs") (body . "")
-                                           (url . "https://github.com/o/r/issues/9") (labels . []))))))
+                                           (url . "https://github.com/o/r/issues/9") (labels . [])))))))
                      ((symbol-function 'completing-read)
                       (lambda (_prompt table &rest _)
                         ;; Newest first, as gh lists them, whatever the completion UI.
@@ -2519,6 +2522,100 @@ terminal's, on a pty.  Skips the test where it can't be made."
                (roost-compose-set-issue)
                (should (string-match-p "Also handle tabs\\.\n\nCSV import crashes" (roost--compose-prompt)))))
          (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-compose-starts-from-a-jira-work-item ()
+  (roost-test--isolated
+   (let ((default-directory "/tmp/") created asked chose github jira)
+     (save-window-excursion
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--request)
+                      (lambda (host action params success &optional failure)
+                        (push (list host action params) asked)
+                        (pcase-let ((`(,ok . ,value) (if (equal action "jira-issues") jira github)))
+                          (funcall (if ok success failure) value))))
+                     ((symbol-function 'completing-read)
+                      (lambda (prompt table &rest _)
+                        (let ((choice (car (funcall table "" nil t))))
+                          (setq chose (list prompt choice
+                                            (funcall (plist-get completion-extra-properties :annotation-function)
+                                                     choice)))
+                          choice)))
+                     ((symbol-function 'roost--create-task)
+                      (lambda (directory name base prompt agent _success _failure &optional extra)
+                        (setq created (list directory name base prompt agent extra)))))
+             (roost--compose)
+             (with-current-buffer roost--compose-buffer
+               (setq roost--compose-fields (plist-put roost--compose-fields :directory "/ssh:dev:/repo/"))
+               ;; A repository not on GitHub, and your open work in Jira,
+               ;; listed here whichever host the project is on.
+               (setq github '(nil . "none of the git remotes point to a known GitHub host")
+                     jira '(t (issues ((key . "PROJ-7") (title . "Login loops") (body . "Run login twice.")
+                                       (url . "https://acme.atlassian.net/browse/PROJ-7")
+                                       (status . "In Progress") (labels "auth")))))
+               (roost-compose-set-issue)
+               (should (member (list nil "jira-issues" (list (cons 'jql roost-jira-query))) asked))
+               (should (equal chose '("Issue: " "PROJ-7 Login loops" "  In Progress, auth")))
+               (should (equal (roost--compose-prompt)
+                              "Login loops\n\nRun login twice.\n\nThis is Jira issue PROJ-7: https://acme.atlassian.net/browse/PROJ-7"))
+               (should (string-match-p "Issue    PROJ-7 Login loops  C-c C-t · the branch leads with its key"
+                                       (buffer-string)))
+               (should (string-match-p "Name     PROJ-7-login-loops" (buffer-string)))
+               (roost-compose-submit)
+               (should (equal (nth 5 created)
+                              '((issue (key . "PROJ-7") (title . "Login loops")
+                                       (url . "https://acme.atlassian.net/browse/PROJ-7")))))
+               (setq roost--compose-submitting nil)
+               ;; When twg can't list them, GitHub's still can, and the question says why.
+               (setq github '(t ((number . 12) (title . "CSV import crashes") (body . "") (url . "u") (labels)))
+                     jira '(nil . "Not signed in; run `twg login`\nmore"))
+               (roost-compose-set-issue)
+               (should (equal (car chose) "Issue (Jira: Not signed in; run `twg login`): "))
+               ;; Nothing to list says what each said.
+               (setq github '(t) jira '(t (issues)))
+               (should (equal (cadr (should-error (roost-compose-set-issue) :type 'user-error))
+                              (concat (roost--project-label "/ssh:dev:/repo/")
+                                      " has no open issues; no Jira work items match `roost-jira-query'")))
+               (setq github '(nil . "gh failed") jira '(nil . "twg failed"))
+               (should (equal (cadr (should-error (roost-compose-set-issue) :type 'user-error))
+                              "gh failed; Jira: twg failed"))
+               ;; Without twg, or with no query, it is as it was.
+               (setq jira '(t))
+               (should (equal (cadr (should-error (roost-compose-set-issue) :type 'user-error)) "gh failed"))
+               (let ((roost-jira-query nil))
+                 (setq asked nil)
+                 (should-error (roost-compose-set-issue) :type 'user-error)
+                 (should (equal (mapcar #'cadr asked) '("issues"))))))
+         (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-jira-tasks-show-the-work-item-and-link-it ()
+  (roost-test--isolated
+   (let* ((issue '((key . "PROJ-7") (title . "Login loops") (url . "https://acme.atlassian.net/browse/PROJ-7")))
+          (task (roost--cache-task "dev" (append (list (cons 'issue issue)) (roost-test--task)))))
+     (should (string-suffix-p "\n\nJira: [PROJ-7](https://acme.atlassian.net/browse/PROJ-7)\n"
+                              (roost--pr-initial-text task '("Stop the login loop"))))
+     (should-not (string-match-p "Closes" (roost--pr-initial-text task '("Stop the login loop"))))
+     ;; Named already, it isn't named again; another key doesn't count.
+     (should-not (string-match-p "Jira:" (roost--pr-initial-text task '("Stop the loop\n\nFor PROJ-7."))))
+     (should (string-match-p "Jira:" (roost--pr-initial-text task '("Stop the loop\n\nLike PROJ-70."))))
+     (should (string-match-p "Jira:" (roost--pr-initial-text task '("Stop the loop\n\nLike proj-7."))))
+     (with-temp-buffer
+       (setq roost--buffer-task-key (roost--key task))
+       (roost--render-task-info)
+       (should (string-match-p "^Issue\n  PROJ-7  Login loops$" (buffer-string)))
+       (goto-char (point-min))
+       (search-forward "PROJ-7")
+       (should (button-at (1- (point)))))
+     ;; Without an address, the key is named and opens nothing.
+     (setq task (roost--cache-task "dev" (append '((issue (key . "PROJ-7") (title . "Login loops")))
+                                                 (roost-test--task))))
+     (should (string-suffix-p "\n\nJira: PROJ-7\n" (roost--pr-initial-text task '("Stop the login loop"))))
+     (with-temp-buffer
+       (setq roost--buffer-task-key (roost--key task))
+       (roost--render-task-info)
+       (should (string-match-p "^Issue\n  PROJ-7  Login loops$" (buffer-string)))
+       (goto-char (point-min))
+       (search-forward "PROJ-7")
+       (should-not (button-at (1- (point))))))))
 
 (ert-deftest roost-issue-tasks-show-the-issue-and-close-it ()
   (roost-test--isolated

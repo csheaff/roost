@@ -152,6 +152,8 @@ KIND is `committed', `uncommitted', `untracked' or `binary'."
      (dirty) (diff . ""))
     ("from an issue" (status . "running") (live . t)
      (issue (number . 70) (url . "https://github.com/o/r/issues/70") (title . "Off-by-one scroll")))
+    ("from a Jira work item" (status . "ready") (live . t) (seen . "2026-10-03T20:00:00+00:00") (ahead . 1)
+     (issue (key . "PROJ-70") (url . "https://acme.atlassian.net/browse/PROJ-70") (title . "Off-by-one scroll")))
     ;; Its worktree on a branch made there, whose work its host won't merge.
     ("on another branch" (status . "ready") (live . t) (seen . "2026-10-03T20:00:00+00:00")
      (integrationBranch . "main") (worktreeBranch . "feat") (ahead . 1) (behind . 2) (conflicts)

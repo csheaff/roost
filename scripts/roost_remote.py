@@ -171,19 +171,27 @@ def remote_git(repo, *args, check=True, timeout=REMOTE_GIT_TIMEOUT):
 
 def gh(cwd, *args, timeout=60):
     """Run the GitHub CLI, finding it on the same PATH agents get."""
+    return tool("gh", cwd, args, timeout,
+                "The GitHub CLI (gh) is not installed on this host; install it and run `gh auth login`")
+
+
+def tool(name, cwd, args, timeout, missing):
+    """Run the command line tool NAME with ARGS in CWD, finding it on the
+    same PATH agents get, and return its output; MISSING says it isn't
+    installed."""
     path = agent_path(os.environ.get("PATH", ""))
-    executable = shutil.which("gh", path=path)
+    executable = shutil.which(name, path=path)
     if not executable:
-        raise RoostError("The GitHub CLI (gh) is not installed on this host; install it and run `gh auth login`")
+        raise RoostError(missing)
     try:
         result = subprocess.run([executable, *args], cwd=cwd, text=True, errors="replace", timeout=timeout,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 env=dict(os.environ, PATH=path), pass_fds=tuple(INHERITED))
     except subprocess.TimeoutExpired:
-        raise RoostError("gh timed out: " + shlex.join(args[:2]))
+        raise RoostError("%s timed out: %s" % (name, shlex.join(args[:2])))
     if result.returncode:
         raise RoostError(result.stderr.strip() or result.stdout.strip()
-                         or "Command failed: " + shlex.join(["gh", *args]))
+                         or "Command failed: " + shlex.join([name, *args]))
     return result.stdout
 
 
@@ -1670,6 +1678,8 @@ def create(store, request):
     if isinstance(issue, dict) and isinstance(issue.get("number"), int) and not isinstance(issue["number"], bool):
         task["issue"] = dict(number=issue["number"], title=text(issue.get("title")),
                              url=text(issue.get("url")))
+    elif isinstance(issue, dict) and isinstance(issue.get("key"), str) and JIRA_KEY.fullmatch(issue["key"]):
+        task["issue"] = dict(key=issue["key"], title=text(issue.get("title")), url=text(issue.get("url")))
     if setup:
         task["setupComplete"] = False
     # Its runner copies them, in its terminal, as that may take a while.
@@ -1748,6 +1758,165 @@ def issues(request):
                            labels=[label.get("name") for label in issue.get("labels") or []
                                    if isinstance(label, dict) and label.get("name")]))
     return result
+
+
+# A Jira work item's key: its project's, then its number, as in PROJ-123.
+JIRA_KEY = re.compile(r"[A-Z][A-Z0-9_]*-[1-9][0-9]*")
+
+
+def jira_issues(request):
+    """The Jira work items JQL finds, as twg, Atlassian's Teamwork Graph
+    CLI, on this host lists them for the account it signed in to, under
+    "issues"; None without twg."""
+    if not shutil.which("twg", path=agent_path(os.environ.get("PATH", ""))):
+        return None
+    jql = text(request.get("jql"))
+    # A project's directory-local query, too: none that twg could take for an option.
+    if not jql or jql.startswith("-"):
+        raise RoostError("roost-jira-query is no JQL to list Jira work items with: %r" % jql)
+    output = tool("twg", str(Path.home()),
+                  ("jira", "workitem", "query", "--jql", jql, "--limit", "100",
+                   "--fields", "summary,description,labels,status", "-o", "json"),
+                  30, "twg is not installed on this host")
+    try:
+        payload = json.loads(output)
+    except ValueError:
+        raise RoostError("twg didn't list Jira work items as JSON: " + output.strip()[:200])
+    # An envelope around the issues Jira's search returns, each with its fields.
+    listed = payload.get("data", payload) if isinstance(payload, dict) else payload
+    if isinstance(listed, dict):
+        listed = listed.get("issues", listed.get("items"))
+    result = []
+    for item in listed if isinstance(listed, list) else []:
+        if isinstance(item, dict) and isinstance(item.get("data"), dict):
+            item = item["data"]
+        key = text(item.get("key")) if isinstance(item, dict) else None
+        if not key or not JIRA_KEY.fullmatch(key):
+            continue
+        fields = item.get("fields") if isinstance(item.get("fields"), dict) else item
+        status, labels = fields.get("status"), fields.get("labels")
+        try:
+            body = adf_text(fields.get("description"))
+        except RecursionError:
+            body = ""
+        if len(body) > ISSUE_BODY_LIMIT:
+            body = body[:ISSUE_BODY_LIMIT].rstrip() + "\n…"
+        result.append(dict(key=key, title=text(fields.get("summary")) or "", body=body, url=jira_url(item, key),
+                           status=text(status.get("name") if isinstance(status, dict) else status),
+                           labels=[label for label in labels if isinstance(label, str) and label]
+                           if isinstance(labels, list) else []))
+    return dict(issues=result)
+
+
+def jira_url(item, key):
+    """Where Jira work item ITEM, whose key is KEY, opens in a browser.
+    Jira's own record has only its address in Jira's API, which through
+    Atlassian's gateway names no site."""
+    url = text(item.get("url"))
+    if url and "/browse/" in url:
+        return url
+    site = re.match(r"https://([^/@]+)/rest/api/", text(item.get("self")) or "")
+    if site and site.group(1) != "api.atlassian.com":
+        return "https://%s/browse/%s" % (site.group(1), key)
+    return url
+
+
+def adf_text(node):
+    """Jira's rich text, the Atlassian Document Format, as Markdown; text
+    that is already plain stays as it is. What has no text, such as an
+    image, is left out."""
+    if isinstance(node, str):
+        return node.strip()
+    return adf_blocks([node]) if isinstance(node, dict) else ""
+
+
+def adf_content(node):
+    """NODE's children that are nodes."""
+    content = node.get("content")
+    return [child for child in content if isinstance(child, dict)] if isinstance(content, list) else []
+
+
+def adf_attrs(node):
+    """NODE's attributes, such as a heading's level or a link's address."""
+    return node.get("attrs") if isinstance(node.get("attrs"), dict) else {}
+
+
+ADF_INLINE = ("text", "hardBreak", "mention", "emoji", "status", "date", "inlineCard")
+
+
+def adf_blocks(nodes):
+    """NODES, Atlassian Document Format blocks, as Markdown paragraphs."""
+    paragraphs = []
+    for node in nodes:
+        kind, attrs, inner = node.get("type"), adf_attrs(node), adf_content(node)
+        if kind in ADF_INLINE:
+            block = adf_inline([node])
+        elif kind == "paragraph":
+            block = adf_inline(inner)
+        elif kind == "heading":
+            level = attrs.get("level") if isinstance(attrs.get("level"), int) else 1
+            block = "#" * min(max(level, 1), 6) + " " + adf_inline(inner)
+        elif kind == "codeBlock":
+            block = "```%s\n%s\n```" % (text(attrs.get("language")) or "", adf_inline(inner))
+        elif kind in ("bulletList", "orderedList", "taskList", "decisionList"):
+            start = attrs.get("order") if isinstance(attrs.get("order"), int) else 1
+            items = []
+            for number, item in enumerate(inner, start):
+                if kind == "orderedList":
+                    marker = "%d. " % number
+                elif kind == "taskList":
+                    marker = "- [x] " if adf_attrs(item).get("state") == "DONE" else "- [ ] "
+                else:
+                    marker = "- "
+                # A list item holds blocks, a task or decision its text.
+                said = (adf_blocks(adf_content(item)) if item.get("type") == "listItem"
+                        else adf_inline(adf_content(item))).split("\n")
+                items.append("\n".join([marker + said[0]]
+                                       + [" " * len(marker) + line if line else "" for line in said[1:]]))
+            block = "\n".join(items)
+        elif kind == "blockquote":
+            block = "\n".join("> " + line if line else ">" for line in adf_blocks(inner).split("\n"))
+        elif kind == "rule":
+            block = "---"
+        elif kind == "table":
+            rows = [[adf_blocks(adf_content(cell)).replace("\n", " ").replace("|", "\\|") for cell in adf_content(row)]
+                    for row in inner]
+            if rows:
+                rows.insert(1, ["---"] * len(rows[0]))
+            block = "\n".join("| " + " | ".join(row) + " |" for row in rows)
+        elif kind in ("blockCard", "embedCard"):
+            block = text(attrs.get("url")) or ""
+        else:
+            # The document itself, a panel, an expand or a layout: what is in it.
+            block = adf_blocks(inner)
+        if block.strip():
+            paragraphs.append(block.strip("\n"))
+    return "\n\n".join(paragraphs)
+
+
+def adf_inline(nodes):
+    """NODES, Atlassian Document Format text and what goes in it, as Markdown."""
+    pieces = []
+    for node in nodes:
+        kind, attrs = node.get("type"), adf_attrs(node)
+        if kind == "text":
+            piece = text(node.get("text")) or ""
+            for mark in node.get("marks") if isinstance(node.get("marks"), list) else []:
+                href = isinstance(mark, dict) and text(adf_attrs(mark).get("href"))
+                if isinstance(mark, dict) and mark.get("type") == "code":
+                    piece = "`%s`" % piece
+                elif href:
+                    piece = "[%s](%s)" % (piece, href)
+            pieces.append(piece)
+        elif kind == "hardBreak":
+            pieces.append("\n")
+        elif kind == "inlineCard":
+            pieces.append(text(attrs.get("url")) or "")
+        elif kind in ("mention", "emoji", "status", "date"):
+            pieces.append(text(attrs.get("text")) or text(attrs.get("shortName")) or "")
+        else:
+            pieces.append(adf_inline(adf_content(node)))
+    return "".join(pieces)
 
 
 def processes():
@@ -5430,6 +5599,8 @@ def rpc(request):
             return {"ok": True, "result": doctor(store, request)}
         if action == "issues":
             return {"ok": True, "result": issues(request)}
+        if action == "jira-issues":
+            return {"ok": True, "result": jira_issues(request)}
         if action == "history":
             return {"ok": True, "result": history(store, request)}
         if action == "search":
