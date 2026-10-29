@@ -454,13 +454,244 @@ def pane_inventory(socket):
     return panes
 
 
+def task_inventory(task):
+    """The pane inventory TASK's agent is in: its tmux socket's, or hc's."""
+    if task.get("terminal") == "hc":
+        return hc_inventory(task)
+    return pane_inventory(task["socket"])
+
+
+def inventory_key(task):
+    """What tasks sharing one inventory have in common."""
+    return (task.get("terminal") or "tmux", task["socket"])
+
+
 def inventory_for(task):
     """The pane inventory for TASK's socket, or an error when tmux is unreadable."""
-    inventory = pane_inventory(task["socket"])
+    inventory = task_inventory(task)
     if inventory is None:
+        if task.get("terminal") == "hc":
+            raise RoostError("hc did not answer; check `HC_SESSION=%s hc ls` on the host" % task["socket"])
         raise RoostError("tmux did not answer on socket %r; check `tmux -L %s ls` on the host"
                          % (task["socket"], task["socket"]))
     return inventory
+
+
+def close_agent(task, check=True):
+    """End TASK's agent window, or its hc terminal and shell."""
+    if task.get("terminal") == "hc":
+        for pane in (task.get("paneId"), task.get("shellPaneId")):
+            if pane:
+                hc_close(task, pane, check=check and pane == task.get("paneId"))
+    else:
+        tmux(task["socket"], "kill-window", "-t", task["windowId"], check=check)
+
+
+# PROTOTYPE: a task's agent in a terminal of herdr-core (hc) instead of a
+# tmux window, shown in Emacs as a ghostel terminal running `hc attach`.
+# hc runs one program per terminal and keeps it when nobody is attached;
+# its labels say whose it is, as @roost_task_id does for a tmux pane. A
+# pane-shaped record stands for each terminal, so the rest of the helper
+# is unchanged: its pane and window ID are "hc:" and its address, such as
+# hc:t7. Roost's socket name is the hc session, as it is tmux's -L.
+#
+# hc answers the agent's OSC 7501 probe and keeps what it reports, with
+# or without a viewer, so the runner follows its terminal's status
+# events instead of relaying the terminal itself.
+
+HC_PREFIX = "hc:"
+
+
+def hc_program(task):
+    return (task.get("hc") or {}).get("program") or "hc"
+
+
+def hc_environment(task):
+    """The environment hc runs in for TASK: Roost's session, and never as
+    the terminal the runner is in, which would make it the parent of
+    whatever it starts."""
+    env = dict(os.environ, HC_SESSION=task["socket"])
+    for name in ("HC_TERMINAL_ID", "HC_SCOPE", "HC_TERMINAL_SOCKET"):
+        env.pop(name, None)
+    return env
+
+
+def hc_call(task, method, params=None, timeout=30):
+    """The result of METHOD with PARAMS from the core of TASK's session,
+    through `hc connect`, which finds that core and starts it if need be."""
+    request = json.dumps(dict(jsonrpc="2.0", id=1, method=method, params=params or {})) + "\n"
+    try:
+        result = subprocess.run([hc_program(task), "connect"], input=request, text=True, errors="replace",
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=hc_environment(task),
+                                pass_fds=tuple(INHERITED), timeout=timeout)
+    except FileNotFoundError:
+        raise RoostError("hc (herdr-core) is not installed on this host")
+    except subprocess.TimeoutExpired:
+        raise RoostError("hc timed out: " + method)
+    for line in result.stdout.splitlines():
+        with contextlib.suppress(ValueError):
+            reply = json.loads(line)
+            if isinstance(reply, dict) and reply.get("id") == 1:
+                if "error" in reply:
+                    raise RoostError("hc: " + str((reply["error"] or {}).get("message") or reply["error"]))
+                return reply.get("result")
+    raise RoostError("hc did not answer %s: %s" % (method, result.stderr.strip() or "no reply"))
+
+
+def hc_inventory(task):
+    """hc's terminals as tmux panes, keyed "hc:ADDRESS", for `owned_pane`;
+    None when hc could not answer."""
+    try:
+        listed = hc_call(task, "terminal.list", dict(all=True))
+    except RoostError:
+        return None
+    panes = {}
+    for terminal in (listed or {}).get("terminals") or []:
+        address, labels = terminal.get("address"), terminal.get("labels") or {}
+        if not address:
+            continue
+        pane = HC_PREFIX + address
+        panes[pane] = dict(window=pane, index=0, session=task["socket"], session_name=task.get("session"),
+                           # Held by its runner after the agent ended, as remain-on-exit does.
+                           dead=terminal.get("state") != "live" or "roost_exit" in labels,
+                           task=labels.get("roost_task_id", ""), role=labels.get("roost_role"),
+                           name=terminal.get("name"), pid=terminal.get("pid"))
+        if labels.get("roost_role") == "shell":
+            # A shell is the task's, but not its agent's window.
+            panes[pane]["window"] = HC_PREFIX + labels.get("roost_agent", "")
+    return panes
+
+
+def hc_name(task, suffix=""):
+    """A name hc accepts (1-32 of a-z 0-9 - _ .) that says which task it is."""
+    project = re.sub(r"[^a-z0-9_-]+", "-", Path(task["repo"]).name.lower()).strip("-")[:16] or "project"
+    return "roost-%s-%s%s" % (project, task["id"][:6].lower(), suffix)
+
+
+def hc_close(task, pane, check=True):
+    """End hc terminal PANE and remove its record."""
+    address = pane[len(HC_PREFIX):]
+    try:
+        hc_call(task, "terminal.kill", dict(terminal=address))
+    except RoostError as exc:
+        # Already finished, as a shell you exited is.
+        if check and "finished" not in str(exc):
+            raise
+    with contextlib.suppress(RoostError):
+        hc_call(task, "terminal.rm", dict(terminal=address))
+
+
+def hc_start(task, name, argv, labels, inventory):
+    """Start ARGV in TASK's worktree in a new hc terminal NAME, with no
+    parent to report to, and return its pane ID."""
+    for pane, other in inventory.items():
+        if other.get("name") == name and not other["dead"]:
+            # Names are unique among live terminals.
+            if other["task"] != task["id"]:
+                raise RoostError("An hc terminal named %s belongs to something else" % name)
+            hc_close(task, pane, check=False)
+    started = hc_call(task, "terminal.run", dict(argv=argv, cwd=task["worktree"], name=name, labels=labels,
+                                                 no_parent=True, no_notify=True))
+    return HC_PREFIX + started["address"]
+
+
+def hc_spawn(task, argv):
+    """Start TASK's runner in a terminal of its own, labelled with its task."""
+    inventory = hc_inventory(task)
+    if inventory is None:
+        raise RoostError("hc did not answer; check `HC_SESSION=%s hc ls` on the host" % task["socket"])
+    pane = hc_start(task, hc_name(task), argv, dict(roost_task_id=task["id"], roost_run_id=task["runId"]),
+                    inventory)
+    task.update(windowId=pane, paneId=pane, windowIndex=0, status="starting", updatedAt=now(), error=None)
+
+
+def use_terminal(task, request):
+    """Run TASK's agent under hc when Emacs asks for it, else in tmux."""
+    terminal = request.get("terminal")
+    if terminal == "hc":
+        options = request.get("hc") if isinstance(request.get("hc"), dict) else {}
+        program = (text(options.get("program"))
+                   or shutil.which("hc", path=agent_path(os.environ.get("PATH", ""))) or "hc")
+        task.update(terminal="hc", hc=dict(program=program))
+    elif terminal == "tmux":
+        task.pop("terminal", None)
+        task.pop("hc", None)
+
+
+def hc_shell(store, task, inventory):
+    """TASK's shell, an hc terminal of its own beside the agent's: hc has
+    no panes to split."""
+    pane = inventory.get(task.get("shellPaneId"))
+    if pane and pane["task"] != task["id"]:
+        raise RoostError("Task's shell ownership changed; look at it with `hc ls`")
+    if not pane or pane["dead"]:
+        check_worktree(store, task, branch=False)
+        if not Path(task["worktree"]).is_dir():
+            raise RoostError("Task worktree is gone")
+        if pane:
+            hc_close(task, task["shellPaneId"], check=False)
+        shell_program = os.environ.get("SHELL") or "/bin/sh"
+        task["shellPaneId"] = hc_start(task, hc_name(task, "-sh"), [shell_program, "-l"],
+                                       dict(roost_task_id=task["id"], roost_role="shell",
+                                            roost_agent=task["paneId"][len(HC_PREFIX):]),
+                                       inventory)
+    store.save(task)
+    return task
+
+
+def hc_follow_status(task, report):
+    """Hand each status report of the runner's hc terminal to REPORT, from
+    hc's events, as `relay` would from the terminal itself; a function
+    to call once the agent has ended. Following again whenever the core
+    goes away, as an update or restart of hc's makes it, while the agent
+    runs on: its status would otherwise stop where it was."""
+    ended = threading.Event()
+    current = [None]
+
+    def follow():
+        while not ended.is_set():
+            current[0] = subprocess.Popen([hc_program(task), "events", "--json", "--terminal",
+                                           os.environ["HC_TERMINAL_ID"]],
+                                          stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                          stderr=subprocess.DEVNULL, text=True, errors="replace",
+                                          env=hc_environment(task))
+            read_status(current[0])
+            current[0].wait()
+            ended.wait(0.5)
+
+    def end():
+        ended.set()
+        if current[0]:
+            current[0].terminate()
+
+    def read_status(process):
+        for line in process.stdout:
+            with contextlib.suppress(ValueError, AttributeError, IndexError):
+                message = json.loads(line)
+                event = message.get("params") or {}
+                if "terminals" in message:
+                    # The snapshot hc starts with, should the agent have
+                    # said something before hc heard from us.
+                    status = message["terminals"][0].get("status")
+                else:
+                    status = (event.get("data") or {}).get("status") if event.get("type") == "status" else None
+                if isinstance(status, dict) and status.get("state") in PROGRAM_STATUS_STATES:
+                    report(dict(status))
+
+    threading.Thread(target=follow, daemon=True).start()
+    return end
+
+
+def hc_hold(task, code):
+    """Keep the terminal after the agent ended, showing how, as tmux's
+    remain-on-exit keeps a pane: labelled, until Roost closes it."""
+    with contextlib.suppress(RoostError, OSError):
+        hc_call(task, "terminal.label", dict(terminal=os.environ["HC_TERMINAL_ID"],
+                                             labels=dict(roost_exit=str(code))))
+    sys.stdout.write("\r\n[The agent exited with status %d]\r\n" % code)
+    sys.stdout.flush()
+    while True:
+        signal.pause()
 
 
 def owned_pane(task, inventory):
@@ -1489,6 +1720,11 @@ def spawn(store, task, resume=False, size=()):
     argv = [sys.executable, script, "run", str(store.root), task["id"], task["runId"]]
     if resume:
         argv.append("resume")
+    if task.get("terminal") == "hc":
+        hc_spawn(task, argv)
+        task["helper"] = script
+        store.save(task)
+        return
     # The runner waits on the registry lock, held here, until its stable pane
     # ID is saved, so the agent starts only after this is done. tmux reads
     # the name and the directory as formats, where # starts one.
@@ -1677,6 +1913,7 @@ def create(store, request):
         task["copyComplete"] = False
     if request.get("programStatus") is True:
         task["programStatus"] = True
+    use_terminal(task, request)
     existed, there = ref_exists(repo, branch), worktree.exists()
     try:
         git(repo, "-c", "branch.autoSetupMerge=false", "worktree", "add", "-b", branch,
@@ -1713,7 +1950,7 @@ def abandon(store, task):
     registry lock."""
     worktree, repo = Path(task["worktree"]), task["repo"]
     if task.get("windowId"):
-        tmux(task["socket"], "kill-window", "-t", task["windowId"], check=False)
+        close_agent(task, check=False)
     # Never force-remove: a runner could already have written real work.
     # Git removes untracked files with it when your config's
     # status.showUntrackedFiles hides them, so they count here.
@@ -1826,10 +2063,10 @@ def list_tasks(store, request):
     inventories = {}
     table = None  # The process table, read only when a request may have been approved.
     for task in tasks:
-        socket = task["socket"]
-        if socket not in inventories:
-            inventories[socket] = pane_inventory(socket)
-        inventory = inventories[socket]
+        key = inventory_key(task)
+        if key not in inventories:
+            inventories[key] = task_inventory(task)
+        inventory = inventories[key]
         if inventory is None:
             # tmux could not answer: keep the last observed status rather than
             # declaring every agent on this socket crashed.
@@ -2657,7 +2894,7 @@ def stop(store, task, inventory=None):
     """Kill the task's window if Roost still owns it. Work is kept."""
     inventory = inventory if inventory is not None else inventory_for(task)
     if owned_pane(task, inventory):
-        tmux(task["socket"], "kill-window", "-t", task["windowId"])
+        close_agent(task)
     # Stopping says nothing new: an agent you had seen stays seen.
     was_seen = seen_since_last_event(task)
     # A pane ID owned by something else means ours is gone (for example after a
@@ -2671,7 +2908,7 @@ def stop(store, task, inventory=None):
     return task
 
 
-def resume(store, task, program_status=None, size=()):
+def resume(store, task, program_status=None, size=(), request=None):
     inventory = inventory_for(task)
     pane = owned_pane(task, inventory)
     if pane and not pane["dead"]:
@@ -2681,7 +2918,7 @@ def resume(store, task, program_status=None, size=()):
     if not Path(task["worktree"]).is_dir():
         raise RoostError("Task worktree is gone; forget the task to remove it from Roost")
     if pane:
-        tmux(task["socket"], "kill-window", "-t", task["windowId"])
+        close_agent(task)
     # A task begun in a shared session, as before each had its own, moves to
     # its own on resume.
     task["session"] = session_name(task["repo"], task["id"])
@@ -2689,6 +2926,8 @@ def resume(store, task, program_status=None, size=()):
     # Whether its runner relays the agent's terminal, as Emacs says now.
     if isinstance(program_status, bool):
         task["programStatus"] = program_status
+    if request is not None:
+        use_terminal(task, request)
     spawn(store, task, resume=True, size=size)
     return task
 
@@ -2835,7 +3074,7 @@ def rename(store, task, name):
     store.save(task)
     # Not saved, but Emacs takes the reply for what the task is now.
     task["live"] = bool(pane and not pane["dead"])
-    if pane:
+    if pane and task.get("terminal") != "hc":
         # A name may start with -, which tmux would take for an option.
         tmux(task["socket"], "rename-window", "-t", pane["window"], "--", name.replace("#", "##"),
              check=False)
@@ -2869,6 +3108,11 @@ def send(task, text, force=False):
         raise RoostError("Open the task to finish startup or answer its permission prompt")
     if not isinstance(text, str) or not text.strip():
         raise RoostError("Empty prompt")
+    if task.get("terminal") == "hc":
+        # Pasted as the program asked, then Enter, once nobody has typed
+        # for a few seconds. hc refuses an agent that says it waits on you.
+        hc_call(task, "terminal.send", dict(terminal=task["paneId"][len(HC_PREFIX):], text=text, force=force))
+        return task
     buffer = "roost-" + uuid.uuid4().hex
     tmux(task["socket"], "load-buffer", "-b", buffer, "-", input=text)
     try:
@@ -2972,6 +3216,8 @@ def shell(store, task):
     inventory = inventory_for(task)
     if not owned_pane(task, inventory):
         raise RoostError("Task's tmux window is gone; resume the task before opening its shell")
+    if task.get("terminal") == "hc":
+        return hc_shell(store, task, inventory)
     pane = inventory.get(task.get("shellPaneId"))
     if pane and (pane["task"] != task["id"] or pane["window"] != task["windowId"]):
         raise RoostError("Task's shell ownership changed; inspect the window in tmux")
@@ -3915,12 +4161,12 @@ def discard(store, task, expect=None, dry_run=False, teardown=None):
 def forget(store, task):
     """Drop Roost's record without touching Git, closing an ended task's window.
     The escape hatch for tasks Roost can no longer retire."""
-    inventory = pane_inventory(task["socket"])
+    inventory = task_inventory(task)
     pane = owned_pane(task, inventory) if inventory else None
     if pane and not pane["dead"]:
         raise RoostError("The agent is running; stop the task before forgetting it")
     if pane:
-        tmux(task["socket"], "kill-window", "-t", task["windowId"], check=False)
+        close_agent(task, check=False)
     left = []
     if Path(task["worktree"]).exists():
         left.append("worktree " + task["worktree"])
@@ -5327,7 +5573,16 @@ def runner(root, task_id, run_id, resume_conversation=False):
                 if current.get("runId") == run_id:
                     current["setupComplete"] = True
                     store.save(current)
-        if task.get("programStatus") and os.isatty(0):
+        if task.get("terminal") == "hc" and os.environ.get("HC_TERMINAL_ID"):
+            # hc keeps what the agent reports to its terminal: no relay.
+            report, finish = program_status_recorder(store, task_id, run_id)
+            stop_following = hc_follow_status(task, report)
+            try:
+                code = subprocess.call(argv, cwd=task["worktree"], env=agent_env)
+            finally:
+                stop_following()
+                finish()
+        elif task.get("programStatus") and os.isatty(0):
             report, finish = program_status_recorder(store, task_id, run_id)
             try:
                 code = relay(argv, task["worktree"], agent_env, report)
@@ -5347,6 +5602,8 @@ def runner(root, task_id, run_id, resume_conversation=False):
                 current.update(status="exited" if code == 0 else "failed", updatedAt=now(),
                                exitCode=code, error=error)
                 store.save(current)
+    if task.get("terminal") == "hc" and os.environ.get("HC_TERMINAL_ID"):
+        hc_hold(task, code)
     return code
 
 
@@ -5387,7 +5644,7 @@ def outgoing(result):
 
 TASK_ACTIONS = {
     "resume": lambda store, task, request: resume(store, task, request.get("programStatus"),
-                                                        size_options(request)),
+                                                        size_options(request), request),
     "stop": lambda store, task, request: stop(store, task),
     "send": lambda store, task, request: send(task, request["text"], request.get("force") is True),
     "shell": lambda store, task, request: shell(store, task),

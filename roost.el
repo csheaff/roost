@@ -326,6 +326,24 @@ for Claude Code when you press Esc or decline one, which hooks don't
 report.  New tasks, and tasks you resume, follow this."
   :type 'boolean)
 
+(defcustom roost-terminal 'tmux
+  "PROTOTYPE: what holds a new task's agent and shows it.
+`tmux' runs it in a tmux window shown by tmux-control.  `hc' runs it in
+a terminal of herdr-core (hc), shown in a ghostel terminal running `hc
+attach'; it needs hc on the task's host and ghostel here.  hc keeps
+what the agent reports of its status, so `roost-program-status' has
+nothing to add.  New tasks, and tasks you resume, follow this."
+  :type '(choice (const :tag "tmux and tmux-control" tmux)
+                 (const :tag "herdr-core and ghostel (prototype)" hc)))
+
+(defcustom roost-hc-program "hc"
+  "PROTOTYPE: hc on this machine, for `roost-terminal' `hc'."
+  :type 'string)
+
+(defcustom roost-hc-remote-program "hc"
+  "PROTOTYPE: hc on remote hosts, for `roost-terminal' `hc'."
+  :type 'string)
+
 (defcustom roost-notes-file (locate-user-emacs-file "roost/notes.json")
   "Local file keeping review notes not yet sent to an agent.
 See `roost-note'."
@@ -483,6 +501,11 @@ watching from the start of each session.")
   "Incremented by each navigation, so slower earlier replies are ignored.")
 (defvar-local roost--buffer-task-key nil
   "Task key a task panel buffer belongs to.")
+
+(defvar-local roost--hc-terminal nil
+  "In a ghostel terminal attached to an hc terminal of a task: (KEY . PANE).
+PANE is the task's agent's, or its shell's, such as hc:t7.")
+(put 'roost--hc-terminal 'permanent-local t)
 
 ;;;; Task records and hosts
 
@@ -1508,6 +1531,9 @@ nobody is looking."
     (with-current-buffer (window-buffer (selected-window))
       (cond ((derived-mode-p 'roost-task-info-mode)
              (and roost--buffer-task-key (gethash roost--buffer-task-key roost--tasks)))
+            (roost--hc-terminal
+             (let ((task (gethash (car roost--hc-terminal) roost--tasks)))
+               (and task (equal (cdr roost--hc-terminal) (roost--field task 'paneId)) task)))
             ((and (fboundp 'tmux-control-active-pane) (tmux-control-active-pane))
              (seq-find (lambda (task) (roost--terminal-shows-p task (list (roost--field task 'paneId))))
                        (roost-tasks)))))))
@@ -1606,6 +1632,7 @@ nobody is looking."
       (or
        (when-let* ((id (ignore-errors (roost--org-linked-id))))
          (seq-find (lambda (task) (equal (roost--field task 'id) id)) tasks))
+       (and roost--hc-terminal (gethash (car roost--hc-terminal) roost--tasks))
        (when (and (fboundp 'tmux-control-active-pane) (tmux-control-active-pane))
          (seq-find (lambda (task)
                      (roost--terminal-shows-p task (list (roost--field task 'paneId)
@@ -1965,6 +1992,11 @@ That is the selected frame's current perspective."
 
 (defun roost--task-terminal-window (task)
   "The window of the selected frame showing TASK's terminal, or nil."
+  (if (and task (equal (roost--field task 'terminal) "hc"))
+      (seq-find (lambda (window)
+                  (equal (buffer-local-value 'roost--hc-terminal (window-buffer window))
+                         (cons (roost--key task) (roost--field task 'paneId))))
+                (window-list))
   (when (and task (fboundp 'tmux-control-window-id))
     (seq-find (lambda (window)
                 (with-current-buffer (window-buffer window)
@@ -1974,13 +2006,15 @@ That is the selected frame's current perspective."
                        (equal (tmux-control-buffer-socket-name) (roost--field task 'socket))
                        (equal (tmux-control-buffer-session) (roost--field task 'session))
                        (equal (tmux-control-window-id) (roost--field task 'windowId)))))
-              (window-list))))
+              (window-list)))))
 
 (defun roost--terminal-task (buffer)
   "The task whose terminal BUFFER is, or nil.
 A session shared by tasks from before each had its own is no one's, and
 a view of a terminal, such as its scrollback, is no terminal."
   (with-current-buffer buffer
+    (if roost--hc-terminal
+        (gethash (car roost--hc-terminal) roost--tasks)
     (when (and (derived-mode-p 'tmux-control-mode)
                (fboundp 'tmux-control-buffer-session) (tmux-control-buffer-session))
       (let ((tasks (seq-filter (lambda (task)
@@ -1988,7 +2022,7 @@ a view of a terminal, such as its scrollback, is no terminal."
                                       (equal (roost--field task 'socket) (tmux-control-buffer-socket-name))
                                       (equal (roost--field task 'session) (tmux-control-buffer-session))))
                                (roost-tasks))))
-        (and tasks (null (cdr tasks)) (car tasks))))))
+        (and tasks (null (cdr tasks)) (car tasks)))))))
 
 (defun roost--terminal-place (buffer)
   "The host, socket and tmux session of terminal BUFFER, or nil.
@@ -2026,6 +2060,12 @@ not another task's: they keep their grid."
 
 (defun roost--display-task (task &optional target-pane)
   "Display TASK after ownership validation, selecting TARGET-PANE if supplied."
+  (if (equal (roost--field task 'terminal) "hc")
+      (roost--display-hc-task task target-pane)
+    (roost--display-tmux-task task target-pane)))
+
+(defun roost--display-tmux-task (task &optional target-pane)
+  "Display TASK's tmux window, selecting TARGET-PANE if supplied."
   (require 'tmux-control)
   (add-hook 'tmux-control-switch-session-functions #'roost--switch-session)
   (add-hook 'after-change-major-mode-hook #'roost--keep-terminal-in-its-workspace 90)
@@ -2056,6 +2096,159 @@ not another task's: they keep their grid."
   (roost--mark-in-sidebar)
   (when (roost--task-panel-window)
     (roost--refresh-host (roost--field task 'host) nil)))
+
+;;;; Prototype: herdr-core and ghostel
+
+;; With `roost-terminal' `hc', a task's agent runs in a terminal of
+;; herdr-core (hc) on its host, and Emacs shows it as an ordinary
+;; ghostel terminal running `hc attach ADDRESS', through ssh for a remote
+;; host.  Nothing in Emacs speaks hc's protocol: closing the terminal
+;; detaches, and opening the task attaches again.
+
+(declare-function ghostel-exec "ghostel" (buffer program &optional args identity))
+(declare-function ghostel-semi-char-mode "ghostel" ())
+(defvar ghostel--process)
+(defvar ghostel-buffer-name-function)
+
+(defun roost--hc-request (host)
+  "The request fields that choose HOST's terminal for a task, by `roost-terminal'."
+  (if (eq roost-terminal 'hc)
+      `((terminal . "hc")
+        (hc . ((program . ,(if host roost-hc-remote-program
+                             (or (executable-find roost-hc-program) roost-hc-program))))))
+    '((terminal . "tmux"))))
+
+(defun roost--hc-attach-command (task pane)
+  "The local argv attaching to TASK's hc terminal PANE, through ssh if remote.
+In Roost's session, and as no terminal of hc's own, whose child it would
+make the viewer."
+  (let* ((program (or (alist-get 'program (roost--field task 'hc)) "hc"))
+         (command (list "env" "-u" "HC_TERMINAL_ID" "-u" "HC_SCOPE"
+                        (concat "HC_SESSION=" (roost--field task 'socket))
+                        ;; With the scrollback above the screen, so that a
+                        ;; terminal opened again reads as it did.
+                        program "attach" "--history" "10000"
+                        (string-remove-prefix "hc:" pane)))
+         (host (roost--field task 'host)))
+    (if (not host)
+        command
+      (append (list "ssh" "-t")
+              (or (bound-and-true-p tmux-control-ssh-options) '("-o" "ConnectTimeout=8"))
+              (roost--ssh-share-options)
+              (list "--" host (mapconcat #'shell-quote-argument command " "))))))
+
+(defun roost--hc-buffers (task &optional pane)
+  "Ghostel terminals attached to TASK's hc terminals, or to PANE only."
+  (seq-filter (lambda (buffer)
+                (when-let* ((terminal (buffer-local-value 'roost--hc-terminal buffer)))
+                  (and (equal (car terminal) (roost--key task))
+                       (or (null pane) (equal (cdr terminal) pane)))))
+              (buffer-list)))
+
+(defun roost--hc-buffer (task pane window &optional label)
+  "A live ghostel terminal attached to TASK's hc terminal PANE, shown in WINDOW.
+LABEL names what it shows, the agent by default."
+  (or (seq-find (lambda (buffer)
+                  (process-live-p (buffer-local-value 'ghostel--process buffer)))
+                (roost--hc-buffers task pane))
+      (let* ((name (format "*roost %s: %s*" (or label "agent") (roost--field task 'name)))
+             (buffer (or (seq-find (lambda (buffer) (equal (buffer-name buffer) name))
+                                   (roost--hc-buffers task pane))
+                         (generate-new-buffer name))))
+        ;; Shown first: ghostel sizes the terminal to its window.
+        (set-window-buffer window buffer)
+        (roost--hc-attach buffer task pane)
+        buffer)))
+
+(defvar-local roost--hc-attached nil
+  "When this ghostel buffer last ran `hc attach', as a `float-time'.")
+
+(defun roost--hc-attach (buffer task pane)
+  "Run `hc attach' in ghostel BUFFER for TASK's hc terminal PANE."
+  (let ((argv (roost--hc-attach-command task pane))
+        ;; ssh, and hc, run here, not over TRAMP.
+        (default-directory (if (roost--field task 'host)
+                               (expand-file-name "~/")
+                             (roost--remote-directory task))))
+    (with-current-buffer buffer
+      (let ((ghostel-buffer-name-function nil))
+        (ghostel-exec buffer (car argv) (cdr argv)))
+      (setq roost--hc-terminal (cons (roost--key task) pane))
+      (setq-local roost--hc-attached (float-time))
+      ;; Kept when `hc attach' ends, which it does when hc's core
+      ;; restarts, for an update, while the terminal runs on.
+      (setq-local ghostel-kill-buffer-on-exit nil)
+      (add-hook 'ghostel-exit-functions #'roost--hc-viewer-ended nil t)
+      (ghostel-semi-char-mode))))
+
+(defun roost--hc-viewer-ended (buffer _event)
+  "Attach BUFFER again if its task's agent terminal is still there, else close it.
+An attach that ended within seconds of starting is not tried again."
+  (let ((terminal (buffer-local-value 'roost--hc-terminal buffer))
+        (lasted (- (float-time) (or (buffer-local-value 'roost--hc-attached buffer) 0))))
+    (run-at-time
+     1 nil
+     (lambda ()
+       (let ((task (and terminal (gethash (car terminal) roost--tasks)))
+             (close (lambda ()
+                      (when (buffer-live-p buffer)
+                        (let ((kill-buffer-query-functions nil))
+                          (kill-buffer buffer))))))
+         (if (not (and task (> lasted 3) (equal (cdr terminal) (roost--field task 'paneId))))
+             (funcall close)
+           (roost--request (roost--field task 'host) "inspect" `((id . ,(roost--field task 'id)))
+                           (lambda (updated)
+                             (if (and (buffer-live-p buffer)
+                                      (equal (roost--field updated 'paneId) (cdr terminal))
+                                      (not (process-live-p (buffer-local-value 'ghostel--process buffer))))
+                                 ;; Roost's record, which says the host: the
+                                 ;; reply doesn't, and t2 is another
+                                 ;; terminal on each host.
+                                 (roost--hc-attach buffer task (cdr terminal))
+                               (funcall close)))
+                           (lambda (_) (funcall close)))))))))
+
+(defun roost--display-hc-task (task &optional pane)
+  "Display TASK's agent, or its hc terminal PANE, in a ghostel terminal."
+  (unless (require 'ghostel nil t)
+    (user-error "Roost's hc terminals need ghostel; install it from MELPA"))
+  (roost--leave-side-window)
+  (roost--activate-workspace task)
+  (roost--leave-side-window)
+  (when-let* ((window (roost--terminal-window-for task)))
+    (select-window window))
+  (let* ((shell (and pane (equal pane (roost--field task 'shellPaneId))))
+         (buffer (roost--hc-buffer task (if shell pane (roost--field task 'paneId))
+                                   (selected-window) (and shell "shell"))))
+    (switch-to-buffer buffer nil t)
+    ;; At the live end: ghostel follows the output only in a window
+    ;; already there, and a terminal shown again keeps where it was.
+    (goto-char (point-max))
+    (recenter -1))
+  (roost--mark-seen (or (gethash (roost--key task) roost--tasks) task))
+  (roost--watch-layout)
+  (roost--sync-side-windows)
+  (roost--mark-in-sidebar)
+  (when (roost--task-panel-window)
+    (roost--refresh-host (roost--field task 'host) nil)))
+
+(defun roost--display-hc-shell (task)
+  "Show TASK's shell terminal beside its agent's."
+  (roost--display-hc-task task)
+  (let* ((agent (selected-window))
+         (pane (roost--field task 'shellPaneId))
+         (window (or (seq-find (lambda (window)
+                                 (equal (buffer-local-value 'roost--hc-terminal (window-buffer window))
+                                        (cons (roost--key task) pane)))
+                               (window-list))
+                     ;; Where the shell was, before its terminal closed.
+                     (seq-find (lambda (window)
+                                 (and (not (eq window agent))
+                                      (eq (window-buffer window) (window-buffer agent))))
+                               (window-list))
+                     (split-window-right))))
+    (select-window window)
+    (switch-to-buffer (roost--hc-buffer task pane window "shell") nil t)))
 
 (defun roost--mark-in-sidebar ()
   "Draw the sidebar again, so that it marks the task opened now.
@@ -2474,6 +2667,7 @@ EXTRA is an alist of further request fields, such as the GitHub issue."
            ,(cons 'setup setup)
            ,(cons 'branchPrefix roost-branch-prefix)
            ,(cons 'programStatus (if roost-program-status t :false))
+           ,@(roost--hc-request host)
            ,(cons 'size (roost--terminal-size))
            ,(cons 'socket (or roost-socket-name
                               (bound-and-true-p tmux-control-default-socket-name)
@@ -3349,6 +3543,9 @@ Roost gave each task one outlives the task."
         (socket (roost--field task 'socket))
         (session (roost--field task 'session))
         (id (roost--field task 'id)))
+    (if (equal (roost--field task 'terminal) "hc")
+        ;; Their `hc attach' ends with the terminal.
+        (roost--hc-buffers task)
     (when-let* (((fboundp 'tmux-control-disconnect))
                 ((fboundp 'tmux-control-buffer-session))
                 ((stringp session))
@@ -3365,14 +3562,15 @@ Roost gave each task one outlives the task."
       (when-let* ((connection (seq-find #'get-buffer-process terminals)))
         (with-current-buffer connection
           (tmux-control-disconnect)))
-      terminals)))
+      terminals))))
 
 (defun roost--restore-terminal (task terminals)
   "Reconnect TERMINALS, released for an action on TASK the host refused.
 Only where one is still shown, and once the host confirms that TASK's
 window is still there: reconnecting to an ended session would start an
 empty one.  Opening the task reconnects the rest."
-  (when (and terminals (fboundp 'tmux-control-reconnect))
+  (when (and terminals (fboundp 'tmux-control-reconnect)
+             (not (equal (roost--field task 'terminal) "hc")))
     (roost--request (roost--field task 'host) "inspect" (list (cons 'id (roost--field task 'id)))
                     (lambda (_)
                       (when-let* ((window (seq-find (lambda (window)
@@ -3467,6 +3665,7 @@ resume those too."
 (defun roost--resume-parameters (task)
   "What a request to resume TASK says besides which task."
   `((programStatus . ,(if roost-program-status t :false))
+    ,@(roost--hc-request (roost--field task 'host))
     (size . ,(roost--terminal-size task))))
 
 (defun roost--crashed-with (task)
@@ -5635,7 +5834,11 @@ questions you left open in the minibuffer, as `roost-open-task' does."
                 (lambda (updated)
                   (roost--when-out-of-minibuffer
                    (lambda ()
-                     (when (= generation roost--open-generation)
+                     (when (and (= generation roost--open-generation)
+                                (equal (roost--field updated 'terminal) "hc"))
+                       (roost--display-hc-shell updated))
+                     (when (and (= generation roost--open-generation)
+                                (not (equal (roost--field updated 'terminal) "hc")))
                        (roost--display-task updated (roost--field updated 'shellPaneId))
                        (with-current-buffer (window-buffer (selected-window))
                          (unless (tmux-control-tiled-p) (tmux-control-tile))
@@ -10664,6 +10867,8 @@ to `mode-line-format'."
   "COMMAND in a task's terminal, and nil elsewhere.
 A key filter, so that the key keeps its own meaning in other buffers,
 the terminals of other tmux sessions included."
+  (if roost--hc-terminal
+      (and (gethash (car roost--hc-terminal) roost--tasks) command)
   (and (derived-mode-p 'tmux-control-mode)
        (fboundp 'tmux-control-buffer-session)
        (let ((host (tmux-control-buffer-host))
@@ -10674,7 +10879,7 @@ the terminals of other tmux sessions included."
                           (equal (roost--field task 'host) host)
                           (equal (roost--field task 'socket) socket)))
                    (roost-tasks)))
-       command))
+       command)))
 
 (defvar-keymap roost-watch-mode-map
   :doc "Roost's keys while it watches.

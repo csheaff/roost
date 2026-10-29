@@ -7229,6 +7229,10 @@ class Subprocesses(unittest.TestCase):
                     found.add("line %d: runs a shell, %s" % (line, node.value))
             elif isinstance(node, ast.Attribute) and ast.unparse(node) == "sys.executable":
                 pass
+            elif isinstance(node, ast.Call) and ast.unparse(node) == "hc_program(task)":
+                # PROTOTYPE: herdr-core, which Emacs names for the task
+                # (roost-hc-program), as it names the agent's program.
+                pass
             elif isinstance(node, ast.Call) and ast.unparse(node.func) == "shutil.which":
                 # A program found by name on PATH, as gh or an agent's is.
                 if node.args and isinstance(node.args[0], ast.Constant):
