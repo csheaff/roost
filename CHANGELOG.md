@@ -4,6 +4,14 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- When an agent exits, its pane says below its last output to resume the
+  task to go back to its conversation, for as long as the pane is shown.
+  The echo area said so once, and the pane showed only tmux's "Pane is
+  dead". `s` refuses while the agent runs in the task's shell or another
+  window of its tmux session, as when you started it again from a shell
+  there: Roost can't follow that one, and resuming started a second agent
+  on the same conversation. Exit it there, then press `s`. Nothing to do
+  when upgrading.
 - With Git's `rerere.autoUpdate`, `u` leaves a merge whose conflicts Git
   resolved as you resolved them before under way in the task's worktree,
   and offers to have its agent check them and commit it. It said
