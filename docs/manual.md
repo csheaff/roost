@@ -7,7 +7,7 @@ day of work, every command and option, and how Roost works.
 - [Install](#install), and [fitting your setup](#fitting-your-setup)
 - [A day with Roost](#a-day-with-roost), and [what a task says](#what-a-task-says)
 - [Commands](#commands)
-- [Configuration](#configuration)
+- [Configuration](#configuration), and [where a task's skills come from](#where-a-tasks-skills-come-from)
 - [How it works](#how-it-works), and [security](#security)
 - [Development](#development)
 
@@ -575,8 +575,10 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
   files that match one and that Git ignores, from the primary checkout into
   each new task's worktree, as Claude Code and Conductor do, so one file
   serves all three. A file Git tracks, or one it shows as untracked, isn't
-  copied. Git must ignore it on the task's branch too, or an agent's `git
-  add .` could commit it: when a task starts from a branch whose
+  copied, so a new skill you haven't committed doesn't reach a task
+  ([skills](#where-a-tasks-skills-come-from)). Git must ignore a copied
+  file on the task's branch too, or an agent's `git add .` could commit
+  it: when a task starts from a branch whose
   `.gitignore` doesn't have `.env`, or before you commit the line that adds
   it, the task stops and says so. Git reads the patterns as it reads a
   `.gitignore`, so one without a slash matches at any depth: `.env` also
@@ -716,6 +718,28 @@ closed a minute after the last request), so polls skip the handshake; set
 `roost-ssh-share-connections` to nil to leave that to your ssh configuration.
 Unreachable hosts are retried with backoff and keep their last known tasks,
 marked unreachable.
+
+### Where a task's skills come from
+
+Roost does nothing with skills. The agent in a task finds its own, in the
+task's worktree and in your home directory on the task's host.
+
+- **The project's.** Skills committed under the project's skill folder,
+  `.claude/skills/` for Claude Code, come with every worktree. One you have
+  made in the primary checkout and not committed doesn't, as
+  `.worktreeinclude` copies only files Git ignores: Claude Code 2.1.312,
+  started in a task, lists the committed skills and not the new one. Commit
+  it, or have Git ignore it (in `.gitignore`, or in `.git/info/exclude` to
+  keep it to yourself) and list it in `.worktreeinclude`, as
+  `.claude/skills/review/`.
+- **Your own.** Skills and plugins in your home directory reach every task
+  on that host: for Claude Code, those in `~/.claude/skills/` and the
+  plugins you install. Other agents read folders of their own, which their
+  docs name.
+- **On another host.** Roost copies only its helper to a remote host, so a
+  task there has that host's skills and plugins, not this machine's.
+  Install the ones you want on that host yourself, from a dotfiles
+  repository or the same plugin marketplace.
 
 ## How it works
 

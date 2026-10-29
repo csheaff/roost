@@ -236,6 +236,20 @@ Larger, or undecided.
   Roost is still open. Tracked in
   [#146](https://github.com/csheaff/roost/issues/146): work on it branches
   off `coder-integration`, not main.
+- **Chosen plugins on a task's host.** A skill reaches a task on another
+  host only once you install it there
+  ([the manual](manual.md#where-a-tasks-skills-come-from)). Roost could copy
+  a plugin folder you name to each host, under its content hash as it does
+  the helper, and start Claude with `--plugin-dir`, which loads a plugin for
+  that session only and leaves `~/.claude` alone; other agents' adapters
+  would pass their equivalent, or nothing. To find out first: whether
+  resuming a task keeps the plugin, how its skills are named
+  (`plugin:skill`), and what happens when the same plugin is also installed
+  on the host. It is a new option and a copy at each start, so it has to do
+  better than installing the plugin on the host yourself. From
+  [#177](https://github.com/csheaff/roost/issues/177); Orca has a skill
+  manager that installs skills into each agent's folders, one host at a
+  time.
 - **A snapshot at each prompt.** A commit of the worktree under a private
   ref as each prompt is sent, uncommitted work included, would give a diff
   of one turn, and "since you last looked" could start from one. It takes
