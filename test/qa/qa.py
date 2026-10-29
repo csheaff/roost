@@ -953,7 +953,7 @@ def review(qa, repo):
                      "away, which is why roost-doctor suggests tramp-rpc")
         return
     qa.keys("C-c r c")
-    qa.type("ask sh -c \"echo 'TODAY = None' >> notes.py\"")
+    qa.type("ask sh -c \"echo 'TODAY = None' >> notes.py && echo 'Due dates.' >> README.md\"")
     qa.keys("C-c C-c")
     screen = qa.wait("the review task", lambda s: any(t["name"].startswith("ask-sh-c-echo") for t in s["tasks"]))
     name = next(t["name"] for t in screen["tasks"] if t["name"].startswith("ask-sh-c-echo"))
@@ -988,6 +988,25 @@ def review(qa, repo):
     qa.wait("the agent to get it", lambda s: any(
         w["mode"].startswith("tmux-control") and "DUE_TODAY" in w["text"] for w in s["windows"]), timeout=20)
     qa.step("The agent has the note")
+    # Each file's diff from the panel has a buffer of its own.
+    open_task(qa, name)
+    diffs = lambda s: [w for w in s["windows"] if w["mode"] == "magit-diff-mode"]
+    open_diffs = ("(length (seq-filter (lambda (buffer) (eq (buffer-local-value 'major-mode buffer) "
+                  "'magit-diff-mode)) (buffer-list)))")
+    qa.wait("its changed files", lambda s: "README.md" in panel_text(qa, s))
+    qa.click("notes.py")
+    qa.wait("the diff of notes.py", lambda s: any("+TODAY = None" in w["text"] for w in diffs(s)))
+    qa.click("README.md")
+    qa.wait("the diff of README.md", lambda s: any("+Due dates." in w["text"] for w in diffs(s)))
+    qa.step("A file's diff from the panel, then another's", expect=[
+        ("in the window the first had", lambda s: len(diffs(s)) == 1),
+        ("the first still open", lambda s: qa.emacs.eval(open_diffs) == "2"),
+        ("beside the terminal", lambda s: terminals(s)),
+        ("and the panel", lambda s: "README.md" in panel_text(qa, s))])
+    qa.keys("q")
+    qa.wait("the first diff", lambda s: any("+TODAY = None" in w["text"] for w in diffs(s)))
+    qa.step("q goes back to the first", expect=[
+        ("in the same window", lambda s: len(diffs(s)) == 1)])
 
 
 @journey("Review notes, changed, cancelled, removed and discarded")
