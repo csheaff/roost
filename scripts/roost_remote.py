@@ -175,10 +175,10 @@ def gh(cwd, *args, timeout=60):
                 "The GitHub CLI (gh) is not installed on this host; install it and run `gh auth login`")
 
 
-def tool(name, cwd, args, timeout, missing):
+def tool(name, cwd, args, timeout, missing, said=lambda result: None):
     """Run the command line tool NAME with ARGS in CWD, finding it on the
     same PATH agents get, and return its output; MISSING says it isn't
-    installed."""
+    installed. SAID reads what it said as it failed, when not plainly."""
     path = agent_path(os.environ.get("PATH", ""))
     executable = shutil.which(name, path=path)
     if not executable:
@@ -190,7 +190,7 @@ def tool(name, cwd, args, timeout, missing):
     except subprocess.TimeoutExpired:
         raise RoostError("%s timed out: %s" % (name, shlex.join(args[:2])))
     if result.returncode:
-        raise RoostError(result.stderr.strip() or result.stdout.strip()
+        raise RoostError(said(result) or result.stderr.strip() or result.stdout.strip()
                          or "Command failed: " + shlex.join([name, *args]))
     return result.stdout
 
@@ -1774,13 +1774,12 @@ def jira_issues(request):
     # A project's directory-local query, too: none that twg could take for an option.
     if not jql or jql.startswith("-"):
         raise RoostError("roost-jira-query is no JQL to list Jira work items with: %r" % jql)
-    try:
-        output = tool("twg", str(Path.home()),
-                      ("jira", "workitem", "query", "--jql", jql, "--limit", "100",
-                       "--fields", "summary,description,labels,status", "-o", "json"),
-                      30, "twg is not installed on this host")
-    except RoostError as exc:
-        raise RoostError(twg_error(str(exc)))
+    # Run where it sees an agent, as from an Emacs one started, twg prints
+    # a summary and leaves the JSON in a file, but for --output-summary none.
+    output = tool("twg", str(Path.home()),
+                  ("jira", "workitem", "query", "--jql", jql, "--limit", "100",
+                   "--fields", "summary,description,labels,status", "-o", "json", "--output-summary", "none"),
+                  30, "twg is not installed on this host", said=lambda result: twg_error(result.stdout))
     try:
         payload = json.loads(output)
     except ValueError:
@@ -1813,19 +1812,14 @@ def jira_issues(request):
     return dict(issues=result)
 
 
-def twg_error(said):
-    """What twg SAID as it failed: the message of an error it gave as JSON,
-    as tools for agents do, or else SAID as it is."""
+def twg_error(output):
+    """What twg says to do about the error it gave in OUTPUT, as
+    {"ok": false, "error": {"summary": ...}}, or None."""
     try:
-        error = json.loads(said)
-    except ValueError:
-        return said
-    for _ in range(3):
-        if isinstance(error, dict) and not isinstance(error.get("message"), str):
-            error = error.get("error", error.get("errors"))
-        if isinstance(error, list) and error:
-            error = error[0]
-    return error["message"] if isinstance(error, dict) and text(error.get("message")) else said
+        error = json.loads(output).get("error")
+    except (ValueError, AttributeError):
+        return None
+    return (text(error.get("summary")) or text(error.get("message"))) if isinstance(error, dict) else None
 
 
 def jira_url(item, key):

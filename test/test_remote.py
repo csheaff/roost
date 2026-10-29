@@ -3687,7 +3687,10 @@ directory = os.path.dirname(os.path.abspath(__file__))
 with open(os.path.join(directory, "log"), "a") as log:
     log.write(json.dumps(sys.argv[1:]) + "\\n")
 sys.stdout.write(open(os.path.join(directory, "reply")).read())
-sys.exit(int(open(os.path.join(directory, "status")).read()))
+status = int(open(os.path.join(directory, "status")).read())
+if status:
+    sys.stderr.write("Error: as twg says it to people\\n")
+sys.exit(status)
 """)
         script.chmod(0o755)
         # agent_path also searches ~/.local/bin, where twg installs itself.
@@ -3710,10 +3713,11 @@ sys.exit(int(open(os.path.join(directory, "status")).read()))
             dict(type="mediaSingle", content=[dict(type="media", attrs=dict(id="1"))])])
         long = dict(type="doc", content=[dict(type="paragraph", content=[dict(type="text", text="x" * 7000)])])
         directory = self.fake_twg(dict(apiVersion="1", command="jira workitem query", meta={}, data=dict(issues=[
+            # As twg 1.4.2 lists them, each work item's fields beside its key.
             dict(key="PROJ-7", self="https://api.atlassian.com/ex/jira/cloud/rest/api/3/issue/1",
-                 url="https://acme.atlassian.net/browse/PROJ-7",
-                 fields=dict(summary="Login loops", description=description, labels=["auth"],
-                             status=dict(name="In Progress"))),
+                 url="https://acme.atlassian.net/browse/PROJ-7", summary="Login loops", description=description,
+                 labels=["auth"], status=dict(name="In Progress", statusCategory=dict(key="indeterminate"))),
+            # As Jira's own API does, under fields.
             dict(key="PROJ-9", self="https://acme.atlassian.net/rest/api/3/issue/2",
                  fields=dict(summary="Docs", description=None, labels=None, status=None)),
             dict(key="proj-8; rm -rf ~", fields=dict(summary="Not a key")),
@@ -3735,15 +3739,22 @@ sys.exit(int(open(os.path.join(directory, "status")).read()))
         called = json.loads((directory / "log").read_text().splitlines()[-1])
         self.assertEqual(called[:5], ["jira", "workitem", "query", "--jql",
                                       "assignee = currentUser() ORDER BY updated DESC"])
+        # JSON on its output however it is run, as from an agent's environment.
+        self.assertEqual(called[-4:], ["-o", "json", "--output-summary", "none"])
         # A query twg could take for an option of its own goes no further.
         self.assertIn("no JQL", self.request("jira-issues", jql="--output-file=/tmp/x")["error"])
         self.assertEqual(len((directory / "log").read_text().splitlines()), 1)
         # What twg says when it can't is the error; without it, there is nothing to list.
-        self.fake_twg("Not signed in; run `twg login`\n", status=1)
-        self.assertEqual(self.request("jira-issues", jql="x"),
-                         dict(ok=False, error="Not signed in; run `twg login`"))
-        self.fake_twg(dict(ok=False, error=dict(code="AUTH", message="Session expired; run `twg login`")), status=1)
-        self.assertEqual(self.request("jira-issues", jql="x")["error"], "Session expired; run `twg login`")
+        self.fake_twg(dict(ok=False, error=dict(
+            code="AUTH_REQUIRED", message="authentication required. No valid credentials found.",
+            summary="You're not signed in. Run `twg login --force` to authenticate with your Atlassian account.")),
+            status=77)
+        self.assertEqual(self.request("jira-issues", jql="x"), dict(ok=False, error=(
+            "You're not signed in. Run `twg login --force` to authenticate with your Atlassian account.")))
+        self.fake_twg(dict(ok=False, error=dict(code="X", message="No default site")), status=1)
+        self.assertEqual(self.request("jira-issues", jql="x")["error"], "No default site")
+        self.fake_twg("", status=1)
+        self.assertEqual(self.request("jira-issues", jql="x")["error"], "Error: as twg says it to people")
         self.fake_twg("Update available\n")
         self.assertIn("didn't list Jira work items as JSON", self.request("jira-issues", jql="x")["error"])
         # A reply in another shape isn't taken for no work items.
