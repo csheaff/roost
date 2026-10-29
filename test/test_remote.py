@@ -577,6 +577,9 @@ class Lifecycle(unittest.TestCase):
             self.assertEqual(roost.agent_elsewhere(task, {k: v for k, v in inventory.items() if k != "%0"},
                                                    None, [task]),
                              "window 1 of this task")
+            # In the pane that has its old pane ID, too, as after tmux restarted.
+            self.assertEqual(roost.agent_elsewhere(task, {"%0": pane(0, "$1", pid=20)}, None, [task]),
+                             "window 0 of this task")
             # In a session a project's tasks shared, it may be another's,
             # running or stopped.
             shared = dict(inventory, **{"%3": pane(2, "$1", "t2", pid=40)})

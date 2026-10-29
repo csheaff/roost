@@ -2712,9 +2712,11 @@ def agent_elsewhere(task, inventory, own, tasks):
     counts, so a command of your own that runs it by another name doesn't,
     and only a pane's own process or one its shell started, not the
     sessions a script there starts. TASKS are all the host's tasks."""
+    # Without OWN, the task's pane ID may be another pane's, as after
+    # tmux restarted.
     panes = [(pane_id, pane) for pane_id, pane in inventory.items()
-             if pane_id != task.get("paneId")
-             and (pane["session"] == own["session"] if own else pane["session_name"] == task.get("session"))]
+             if (pane_id != task.get("paneId") and pane["session"] == own["session"] if own
+                 else pane["session_name"] == task.get("session"))]
     # A session a project's tasks shared, before each had its own, holds
     # the others' agents, and perhaps yours: as their panes say, or, for
     # one stopped, its record.
