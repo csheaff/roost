@@ -550,25 +550,35 @@ class Lifecycle(unittest.TestCase):
         pane = lambda index, session, task="", dead=False, pid=None: dict(
             window="@%d" % index, index=index, session=session, session_name="roost-" + session[1:],
             dead=dead, task=task, pid=pid)
-        task = dict(id="t1", agent="claude", paneId="%0", session="roost-1")
+        task = dict(id="t1", agent="claude", paneId="%0", socket="s", session="roost-1")
         inventory = {"%0": pane(0, "$1", "t1", dead=True), "%1": pane(1, "$1", pid=20),
                      "%2": pane(0, "$2", pid=30)}
         table = {20: (1, "-zsh"), 21: (20, "claude --resume 1234"), 30: (1, "claude")}
-        # Sessions a script you run there starts aren't the task's.
-        scripted = {20: (1, "-zsh"), 21: (20, "make contract-live"), 22: (21, "claude -p hello")}
-        with patch.object(roost, "processes", return_value=scripted):
-            self.assertIsNone(roost.agent_elsewhere(task, inventory, inventory["%0"]))
+        # Sessions a script you run there starts aren't the task's, from a
+        # shell or as the window's own command.
+        for scripted in ({20: (1, "-zsh"), 21: (20, "make contract-live"), 22: (21, "claude -p hello")},
+                         {20: (1, "python3 smoke.py"), 21: (20, "claude -p hello")}):
+            with self.subTest(scripted=scripted[20]), patch.object(roost, "processes", return_value=scripted):
+                self.assertIsNone(roost.agent_elsewhere(task, inventory, inventory["%0"], [task]))
         with patch.object(roost, "processes", return_value=table):
-            self.assertEqual(roost.agent_elsewhere(task, inventory, inventory["%0"]), "window 1 of this task")
-            # Followed by its session's name once its own window is gone.
-            self.assertEqual(roost.agent_elsewhere(task, {k: v for k, v in inventory.items() if k != "%0"}, None),
+            self.assertEqual(roost.agent_elsewhere(task, inventory, inventory["%0"], [task]),
                              "window 1 of this task")
-            # In a session a project's tasks shared, it may be another's.
+            # Followed by its session's name once its own window is gone.
+            self.assertEqual(roost.agent_elsewhere(task, {k: v for k, v in inventory.items() if k != "%0"},
+                                                   None, [task]),
+                             "window 1 of this task")
+            # In a session a project's tasks shared, it may be another's,
+            # running or stopped.
             shared = dict(inventory, **{"%3": pane(2, "$1", "t2", pid=40)})
-            self.assertIsNone(roost.agent_elsewhere(task, shared, inventory["%0"]))
-            self.assertIsNone(roost.agent_elsewhere(dict(task, agent="codex"), inventory, inventory["%0"]))
+            self.assertIsNone(roost.agent_elsewhere(task, shared, inventory["%0"], [task]))
+            stopped = dict(task, id="t2", paneId="%9")
+            self.assertIsNone(roost.agent_elsewhere(task, inventory, inventory["%0"], [task, stopped]))
+            self.assertEqual(roost.agent_elsewhere(task, inventory, inventory["%0"],
+                                                   [task, dict(stopped, socket="other")]),
+                             "window 1 of this task")
+            self.assertIsNone(roost.agent_elsewhere(dict(task, agent="codex"), inventory, inventory["%0"], [task]))
         with patch.object(roost, "processes") as processes:
-            self.assertIsNone(roost.agent_elsewhere(task, {"%0": inventory["%0"]}, inventory["%0"]))
+            self.assertIsNone(roost.agent_elsewhere(task, {"%0": inventory["%0"]}, inventory["%0"], [task]))
             processes.assert_not_called()
 
     def test_claudes_idle_reminder_is_no_news_for_an_agent_already_waiting(self):
