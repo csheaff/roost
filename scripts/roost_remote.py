@@ -2677,12 +2677,30 @@ SCRIPT_RUNNERS = ("node", "bun", "deno")
 SHELLS = ("sh", "bash", "zsh", "fish", "dash", "ksh", "mksh", "tcsh", "csh", "nu", "xonsh", "elvish", "pwsh")
 
 
+def command_program(line):
+    """The program command LINE, as ps shows it, runs, as (NAME, REST).
+    ps joins the arguments with spaces, so a path with spaces in it, as in
+    /opt/Agent Tools/bin/claude, is taken as far as it names a file."""
+    line = line.strip()
+    start = 0
+    while line.startswith("/"):
+        cut = line.find(" ", start)
+        prefix = line if cut < 0 else line[:cut]
+        if os.path.isfile(prefix):
+            return os.path.basename(prefix), line[len(prefix):].lstrip()
+        if cut < 0 or not os.path.isdir(os.path.dirname(prefix)):
+            break
+        start = cut + 1
+    word, _, rest = line.partition(" ")
+    return os.path.basename(word), rest.lstrip()
+
+
 def runs_program(line, program):
     """Whether command LINE, as ps shows it, runs PROGRAM, itself or as a script."""
-    words = line.split(None, 2)
-    if len(words) > 1 and os.path.basename(words[0]) in SCRIPT_RUNNERS:
-        words = words[1:]
-    return bool(words) and os.path.basename(words[0]) == program
+    name, rest = command_program(line)
+    if name in SCRIPT_RUNNERS and rest:
+        name, rest = command_program(rest)
+    return name == program
 
 
 def agent_elsewhere(task, inventory, own, tasks):
@@ -2712,7 +2730,7 @@ def agent_elsewhere(task, inventory, own, tasks):
     table = processes()
     for pane_id, pane in live:
         line = table.get(pane["pid"], (None, ""))[1]
-        shell = bool(line) and os.path.basename(line.split()[0]).lstrip("-") in SHELLS
+        shell = command_program(line)[0].lstrip("-") in SHELLS
         if runs_program(line, program) or shell and any(
                 runs_program(child, program) for parent, child in table.values() if parent == pane["pid"]):
             return ("the task's shell" if pane_id == task.get("shellPaneId")

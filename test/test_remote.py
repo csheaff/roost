@@ -547,6 +547,16 @@ class Lifecycle(unittest.TestCase):
                            ("claude-monitor", False), ("node", False), ("python3 fake_claude.py", False)):
             with self.subTest(line=line):
                 self.assertIs(roost.runs_program(line, "claude"), runs)
+        # ps joins a program's path and arguments with spaces alike.
+        tools = self.root / "Agent Tools" / "bin"
+        tools.mkdir(parents=True)
+        (tools / "claude").write_text("")
+        (tools / "cli.js").write_text("")
+        for line, runs in (("%s/claude --resume 1234" % tools, True), ("node %s/cli.js claude" % tools, False),
+                           ("node %s/claude" % tools, True), ("/bin/cat %s/claude" % tools, False),
+                           ("/no such/claude", False)):
+            with self.subTest(line=line):
+                self.assertIs(roost.runs_program(line, "claude"), runs)
         pane = lambda index, session, task="", dead=False, pid=None: dict(
             window="@%d" % index, index=index, session=session, session_name="roost-" + session[1:],
             dead=dead, task=task, pid=pid)
