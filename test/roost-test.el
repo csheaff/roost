@@ -10765,20 +10765,33 @@ With INITIAL, the box must start out holding it."
                                               (buffer-list)))
                           #'string<)))
           (funcall diff "a.txt")
-          (with-current-buffer (magit-get-mode-buffer 'magit-diff-mode '("HEAD" "--" "a.txt"))
+          (should (equal (shown) '("a.txt")))
+          (with-current-buffer (window-buffer (selected-window))
             (roost-test--goto-line-text "new line"))
-          ;; Another file's diff leaves the first where it was.
+          ;; Another file's diff leaves the first open, behind it.
           (funcall diff "b.txt")
           (should (equal (shown) '("a.txt" "b.txt")))
+          (should (= (seq-count (lambda (window)
+                                  (eq (buffer-local-value 'major-mode (window-buffer window)) 'magit-diff-mode))
+                                (window-list))
+                     1))
           ;; The same file's goes back to its buffer.
           (funcall diff "a.txt")
           (should (equal (shown) '("a.txt" "b.txt")))
+          ;; Once the fork point moves, the file's old buffer goes.
+          (setq task (roost--cache-task nil (append `((baseCommit . ,(string-trim (shell-command-to-string
+                                                                                  "git rev-parse HEAD"))))
+                                                    task)))
+          (funcall diff "a.txt")
+          (should (equal (shown) '("a.txt" "b.txt")))
           ;; With Magit's lock off, as for its own diff of a file, one
-          ;; buffer takes each in turn.
+          ;; buffer takes each in turn.  b.txt's from before the fork point
+          ;; moved goes too.
           (let ((magit-diff-buffer-file-locked nil))
             (funcall diff "a.txt")
-            (funcall diff "b.txt"))
-          (should (equal (shown) '("a.txt" "b.txt" "b.txt"))))))))
+            (should (equal (shown) '("a.txt" "a.txt" "b.txt")))
+            (funcall diff "b.txt")
+            (should (equal (shown) '("a.txt" "b.txt")))))))))
 
 ;;;; Workload
 
