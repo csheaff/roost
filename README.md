@@ -26,8 +26,8 @@ and a task's panel its keys work alone.
 
 1. **Start where the work is.** `C-c r c` on an Org heading drafts a task,
    with the heading and its notes as the prompt; a selected region, a
-   GitHub issue or a Jira work item works the same way. `C-c C-c` makes the worktree and branch
-   and starts the agent.
+   GitHub issue or a Jira work item works the same way. `C-c C-c` makes the
+   worktree and branch and starts the agent.
 
    ![An Org file of plans beside the draft that C-c r c made from its heading, Export the notes as a Markdown checklist: the project notes on this machine, the agent claude, starting from main and merging into main, the task named export, and the heading and its notes as the prompt](docs/images/roost-new-task.png)
 

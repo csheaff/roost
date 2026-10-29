@@ -3742,8 +3742,15 @@ sys.exit(int(open(os.path.join(directory, "status")).read()))
         self.fake_twg("Not signed in; run `twg login`\n", status=1)
         self.assertEqual(self.request("jira-issues", jql="x"),
                          dict(ok=False, error="Not signed in; run `twg login`"))
+        self.fake_twg(dict(ok=False, error=dict(code="AUTH", message="Session expired; run `twg login`")), status=1)
+        self.assertEqual(self.request("jira-issues", jql="x")["error"], "Session expired; run `twg login`")
         self.fake_twg("Update available\n")
         self.assertIn("didn't list Jira work items as JSON", self.request("jira-issues", jql="x")["error"])
+        # A reply in another shape isn't taken for no work items.
+        self.fake_twg(dict(apiVersion="1", data=dict(file="/tmp/payload.json")))
+        self.assertIn("lists no Jira work items", self.request("jira-issues", jql="x")["error"])
+        self.fake_twg(dict(data=dict(issues=[])))
+        self.assertEqual(self.request("jira-issues", jql="x"), dict(ok=True, result=dict(issues=[])))
         (directory / "twg").unlink()
         self.assertEqual(self.request("jira-issues", jql="x"), dict(ok=True, result=None))
         # A task records the work item by its key, and only a key.

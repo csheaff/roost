@@ -3338,7 +3338,9 @@ branch leads with the key of the one you choose."
                                  (_ "Issue: "))
                                (roost--in-order choices) nil t)
                               choices)))
-           (previous (plist-get roost--compose-fields :issue))
+           ;; The prompt the last issue gave, text and all, which the
+           ;; task's record leaves out.
+           (previous (plist-get roost--compose-fields :issue-prompt))
            (prompt (roost--compose-prompt)))
       (setq roost--compose-fields (plist-put roost--compose-fields :issue
                                              (when issue
@@ -3347,15 +3349,16 @@ branch leads with the key of the one you choose."
       ;; An untouched prompt follows the issue; a written one gains it below.
       (when issue
         (let ((inhibit-read-only t)
-              (untouched (or (string-empty-p prompt)
-                             (and previous (equal prompt (string-trim (roost--issue-prompt previous)))))))
+              (untouched (or (string-empty-p prompt) (equal prompt previous)))
+              (text (roost--issue-prompt issue)))
+          (setq roost--compose-fields (plist-put roost--compose-fields :issue-prompt (string-trim text)))
           (save-excursion
             (if untouched
                 (delete-region roost--compose-body (point-max))
               (goto-char (point-max))
               (insert "\n\n"))
             (goto-char (point-max))
-            (insert (roost--issue-prompt issue)))))
+            (insert text))))
       (roost--compose-render))))
 
 (defun roost-compose-cancel ()

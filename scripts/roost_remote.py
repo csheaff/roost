@@ -1774,10 +1774,13 @@ def jira_issues(request):
     # A project's directory-local query, too: none that twg could take for an option.
     if not jql or jql.startswith("-"):
         raise RoostError("roost-jira-query is no JQL to list Jira work items with: %r" % jql)
-    output = tool("twg", str(Path.home()),
-                  ("jira", "workitem", "query", "--jql", jql, "--limit", "100",
-                   "--fields", "summary,description,labels,status", "-o", "json"),
-                  30, "twg is not installed on this host")
+    try:
+        output = tool("twg", str(Path.home()),
+                      ("jira", "workitem", "query", "--jql", jql, "--limit", "100",
+                       "--fields", "summary,description,labels,status", "-o", "json"),
+                      30, "twg is not installed on this host")
+    except RoostError as exc:
+        raise RoostError(twg_error(str(exc)))
     try:
         payload = json.loads(output)
     except ValueError:
@@ -1786,8 +1789,10 @@ def jira_issues(request):
     listed = payload.get("data", payload) if isinstance(payload, dict) else payload
     if isinstance(listed, dict):
         listed = listed.get("issues", listed.get("items"))
+    if not isinstance(listed, list):
+        raise RoostError("twg's reply lists no Jira work items: " + output.strip()[:200])
     result = []
-    for item in listed if isinstance(listed, list) else []:
+    for item in listed:
         if isinstance(item, dict) and isinstance(item.get("data"), dict):
             item = item["data"]
         key = text(item.get("key")) if isinstance(item, dict) else None
@@ -1806,6 +1811,21 @@ def jira_issues(request):
                            labels=[label for label in labels if isinstance(label, str) and label]
                            if isinstance(labels, list) else []))
     return dict(issues=result)
+
+
+def twg_error(said):
+    """What twg SAID as it failed: the message of an error it gave as JSON,
+    as tools for agents do, or else SAID as it is."""
+    try:
+        error = json.loads(said)
+    except ValueError:
+        return said
+    for _ in range(3):
+        if isinstance(error, dict) and not isinstance(error.get("message"), str):
+            error = error.get("error", error.get("errors"))
+        if isinstance(error, list) and error:
+            error = error[0]
+    return error["message"] if isinstance(error, dict) and text(error.get("message")) else said
 
 
 def jira_url(item, key):

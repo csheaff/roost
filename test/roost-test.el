@@ -2525,7 +2525,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
 
 (ert-deftest roost-compose-starts-from-a-jira-work-item ()
   (roost-test--isolated
-   (let ((default-directory "/tmp/") created asked chose github jira)
+   (let ((default-directory "/tmp/") created asked chose pick github jira)
      (save-window-excursion
        (unwind-protect
            (cl-letf (((symbol-function 'roost--request)
@@ -2535,7 +2535,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
                           (funcall (if ok success failure) value))))
                      ((symbol-function 'completing-read)
                       (lambda (prompt table &rest _)
-                        (let ((choice (car (funcall table "" nil t))))
+                        (let ((choice (or pick (car (funcall table "" nil t)))))
                           (setq chose (list prompt choice
                                             (funcall (plist-get completion-extra-properties :annotation-function)
                                                      choice)))
@@ -2560,6 +2560,16 @@ terminal's, on a pty.  Skips the test where it can't be made."
                (should (string-match-p "Issue    PROJ-7 Login loops  C-c C-t · the branch leads with its key"
                                        (buffer-string)))
                (should (string-match-p "Name     PROJ-7-login-loops" (buffer-string)))
+               ;; Another issue in its place takes the prompt it gave, text and all.
+               (setq github '(t ((number . 12) (title . "CSV import crashes") (body . "Quoted commas.")
+                                 (url . "u") (labels)))
+                     pick "#12 CSV import crashes")
+               (roost-compose-set-issue)
+               (should (equal (roost--compose-prompt)
+                              "CSV import crashes\n\nQuoted commas.\n\nThis is GitHub issue #12: u"))
+               (setq pick "PROJ-7 Login loops")
+               (roost-compose-set-issue)
+               (setq pick nil)
                (roost-compose-submit)
                (should (equal (nth 5 created)
                               '((issue (key . "PROJ-7") (title . "Login loops")
