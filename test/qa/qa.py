@@ -89,19 +89,29 @@ def lisp(value):
 class Emacs:
     """The Emacs under test, through emacsclient."""
 
-    def __init__(self, server):
+    def __init__(self, server, reply):
         self.server = server
+        # Where Emacs writes what an expression returns, as qa.el's
+        # qa-reply says why.
+        self.reply = reply
 
     def eval(self, expression, timeout=60):
+        self.reply.unlink(missing_ok=True)
         try:
-            reply = subprocess.run(["emacsclient", "--socket-name", self.server, "--eval", expression],
+            reply = subprocess.run(["emacsclient", "--socket-name", self.server, "--eval",
+                                    "(qa-reply %s %s)" % (lisp(str(self.reply)), expression)],
                                    capture_output=True, text=True, timeout=timeout)
         except subprocess.TimeoutExpired:
             # Its command loop is busy, or waits for something.
             raise Stuck("Emacs didn't answer in %ds" % timeout) from None
+        said = reply.stderr.strip() or reply.stdout.strip()
+        if reply.returncode and said == "*ERROR*: Quit":
+            # As qa.el quits a question that opened within it.
+            raise Stuck("Emacs quit %s" % expression[:80])
         if reply.returncode:
-            raise RuntimeError("emacsclient: %s" % (reply.stderr.strip() or reply.stdout.strip()))
-        return reply.stdout.strip()
+            raise RuntimeError("emacsclient: %s" % said)
+        # Nothing when Emacs exited, as asked.
+        return self.reply.read_text(encoding="utf-8").strip() if self.reply.exists() else ""
 
     def json(self, expression, timeout=60):
         """The JSON in the string EXPRESSION returns."""
@@ -177,7 +187,7 @@ class Run:
             self.env["QA_REMOTE_HOME"] = str(self.remote_home)
             self.host = "qa-remote"
             self.tmux_env = dict(self.env, TMUX_TMPDIR=str(self.remote_home / ".tmux-sock"))
-        self.emacs = Emacs(self.name)
+        self.emacs = Emacs(self.name, self.work / "reply")
         self.process = None
         self.steps = []
         self.journey = None
@@ -953,7 +963,7 @@ def review(qa, repo):
                      "away, which is why roost-doctor suggests tramp-rpc")
         return
     qa.keys("C-c r c")
-    qa.type("ask sh -c \"echo 'TODAY = None' >> notes.py\"")
+    qa.type("ask sh -c \"echo 'TODAY = None' >> notes.py && echo 'Due dates.' >> README.md\"")
     qa.keys("C-c C-c")
     screen = qa.wait("the review task", lambda s: any(t["name"].startswith("ask-sh-c-echo") for t in s["tasks"]))
     name = next(t["name"] for t in screen["tasks"] if t["name"].startswith("ask-sh-c-echo"))
@@ -988,6 +998,25 @@ def review(qa, repo):
     qa.wait("the agent to get it", lambda s: any(
         w["mode"].startswith("tmux-control") and "DUE_TODAY" in w["text"] for w in s["windows"]), timeout=20)
     qa.step("The agent has the note")
+    # Each file's diff from the panel has a buffer of its own.
+    open_task(qa, name)
+    diffs = lambda s: [w for w in s["windows"] if w["mode"] == "magit-diff-mode"]
+    open_diffs = ("(length (seq-filter (lambda (buffer) (eq (buffer-local-value 'major-mode buffer) "
+                  "'magit-diff-mode)) (buffer-list)))")
+    qa.wait("its changed files", lambda s: "README.md" in panel_text(qa, s))
+    qa.click("notes.py")
+    qa.wait("the diff of notes.py", lambda s: any("+TODAY = None" in w["text"] for w in diffs(s)))
+    qa.click("README.md")
+    qa.wait("the diff of README.md", lambda s: any("+Due dates." in w["text"] for w in diffs(s)))
+    qa.step("A file's diff from the panel, then another's", expect=[
+        ("in the window the first had", lambda s: len(diffs(s)) == 1),
+        ("the first still open", lambda s: qa.emacs.eval(open_diffs) == "2"),
+        ("beside the terminal", lambda s: terminals(s)),
+        ("and the panel", lambda s: "README.md" in panel_text(qa, s))])
+    qa.keys("q")
+    qa.wait("the first diff", lambda s: any("+TODAY = None" in w["text"] for w in diffs(s)))
+    qa.step("q goes back to the first", expect=[
+        ("in the same window", lambda s: len(diffs(s)) == 1)])
 
 
 @journey("Review notes, changed, cancelled, removed and discarded")
@@ -3572,10 +3601,13 @@ def main():
                            for line in qa.processes()]
                 try:
                     screen = qa.screen()
+                    # Such as a question quit as it opened within a request.
+                    errors = ["Error: " + error
+                              for error in qa.emacs.json("(json-encode (vconcat (qa-take-errors)))")]
                 except Stuck:
-                    screen = dict(windows=[])
+                    screen, errors = dict(windows=[]), []
                 qa.steps.append(dict(journey=qa.journey, title="Stopped",
-                                     problems=[str(stuck)] + running, shot=None, screen=screen))
+                                     problems=[str(stuck)] + errors + running, shot=None, screen=screen))
                 print("  ✗ Stopped: %s" % stuck)
     finally:
         try:

@@ -14,6 +14,12 @@ What each release changes, and what to do when upgrading. Newest first.
   as `dev` rather than `me@dev`, shows in full, as its home isn't known;
   Roost took it to be named after your local login. Nothing to do when
   upgrading.
+- A file's diff, opened from the task panel, has a buffer of its own, as
+  Magit's diff of the file you visit has: another file's diff shows in its
+  window and leaves it open behind, and opening it again goes back to it.
+  One diff buffer took each file in turn. Nothing to do when upgrading;
+  with `magit-diff-buffer-file-locked` set to nil, one buffer still takes
+  each.
 - `C-c C-t` in a new task draft lists your open Jira work items beside
   the project's GitHub issues, when twg, Atlassian's Teamwork Graph CLI,
   is installed and signed in on this machine. One's summary and

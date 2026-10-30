@@ -35,6 +35,26 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## Skills in a task's worktree — 2026-10-29
+
+- **Why.** Whether a task has a skill made in the primary checkout and not
+  committed (#177).
+- **Claude Code 2.1.312.** A scratch repository with one committed skill
+  and one untracked one under `.claude/skills/`, and a worktree of it
+  outside the checkout, as Roost makes them. `claude -p` in the primary
+  checkout listed both in its `init` event; in the worktree, only the
+  committed one, beside the skills of `~/.claude/skills/` and the plugins.
+  With the untracked one copied into the worktree, it listed both. Git
+  ignores a skill listed in `.git/info/exclude` in each worktree too, so
+  that and `.worktreeinclude` keep one of your own out of the project's
+  history.
+- **Codex 0.163.0 and Pi 1.3.0.** The same with the skills under
+  `.agents/skills/`: `codex debug prompt-input` and Pi's RPC
+  `get_commands` (with `--approve`) listed both in the primary checkout,
+  and only the committed one in the worktree. OpenCode wasn't installed;
+  its docs say it searches upward from where it starts until the
+  worktree's root, as Codex and Pi do.
+
 ## Jira work items through twg — 2026-10-29
 
 - **twg 1.4.2, signed in to no Jira site.** `twg help describe "jira
