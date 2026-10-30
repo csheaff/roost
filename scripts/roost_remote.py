@@ -2854,11 +2854,83 @@ def stop(store, task, inventory=None):
     return task
 
 
+# What runs an agent written as a script, which ps shows before it.
+SCRIPT_RUNNERS = ("node", "bun", "deno")
+# What a pane runs that you start an agent from by typing its name.
+SHELLS = ("sh", "bash", "zsh", "fish", "dash", "ksh", "mksh", "tcsh", "csh", "nu", "xonsh", "elvish", "pwsh")
+
+
+def command_program(line):
+    """The program command LINE, as ps shows it, runs, as (NAME, REST).
+    ps joins the arguments with spaces, so a path with spaces in it, as in
+    /opt/Agent Tools/bin/claude, is taken as far as it names a file."""
+    line = line.strip()
+    start = 0
+    while line.startswith("/"):
+        cut = line.find(" ", start)
+        prefix = line if cut < 0 else line[:cut]
+        if os.path.isfile(prefix):
+            return os.path.basename(prefix), line[len(prefix):].lstrip()
+        if cut < 0 or not os.path.isdir(os.path.dirname(prefix)):
+            break
+        start = cut + 1
+    word, _, rest = line.partition(" ")
+    return os.path.basename(word), rest.lstrip()
+
+
+def runs_program(line, program):
+    """Whether command LINE, as ps shows it, runs PROGRAM, itself or as a script."""
+    name, rest = command_program(line)
+    if name in SCRIPT_RUNNERS and rest:
+        name, rest = command_program(rest)
+    return name == program
+
+
+def agent_elsewhere(task, inventory, own, tasks):
+    """Where TASK's agent runs in the task's tmux session but not in its
+    own pane OWN, as when you start it again from a shell there after it
+    exited: "the task's shell", "window N of this task", or None. Started
+    that way it has none of Roost's hooks, and resuming would start a
+    second agent on its conversation. Only the program its adapter names
+    counts, so a command of your own that runs it by another name doesn't,
+    and only a pane's own process or one its shell started, not the
+    sessions a script there starts. TASKS are all the host's tasks."""
+    # Without OWN, the task's pane ID may be another pane's, as after
+    # tmux restarted.
+    panes = [(pane_id, pane) for pane_id, pane in inventory.items()
+             if (pane_id != task.get("paneId") and pane["session"] == own["session"] if own
+                 else pane["session_name"] == task.get("session"))]
+    # A session a project's tasks shared, before each had its own, holds
+    # the others' agents, and perhaps yours: as their panes say, or, for
+    # one stopped, its record.
+    if (any(pane["task"] not in ("", task["id"]) for _, pane in panes)
+            or any(other["id"] != task["id"] and other.get("socket") == task["socket"]
+                   and other.get("session") == task.get("session") for other in tasks)):
+        return None
+    live = sorted(((pane_id, pane) for pane_id, pane in panes if not pane["dead"] and pane["pid"]),
+                  key=lambda item: item[1]["index"])
+    if not live:
+        return None
+    program = os.path.basename(agent_for(task).default_command[0])
+    table = processes()
+    for pane_id, pane in live:
+        line = table.get(pane["pid"], (None, ""))[1]
+        shell = command_program(line)[0].lstrip("-") in SHELLS
+        if runs_program(line, program) or shell and any(
+                runs_program(child, program) for parent, child in table.values() if parent == pane["pid"]):
+            return ("the task's shell" if pane_id == task.get("shellPaneId")
+                    else "window %d of this task" % pane["index"])
+    return None
+
+
 def resume(store, task, program_status=None, size=()):
     inventory = inventory_for(task)
     pane = owned_pane(task, inventory)
     if pane and not pane["dead"]:
         raise RoostError("The agent is still running; open the existing task")
+    elsewhere = agent_elsewhere(task, inventory, pane, store.all())
+    if elsewhere:
+        raise RoostError("The agent is running outside Roost in %s; exit it there, then resume" % elsewhere)
     # First, as it says where a worktree that was moved went.
     check_worktree(store, task, branch=False)
     if not Path(task["worktree"]).is_dir():
@@ -5524,12 +5596,20 @@ def runner(root, task_id, run_id, resume_conversation=False):
         # which would hide the first line of this when it is all there is.
         print("\nRoost: " + error, file=sys.stderr)
     finally:
+        ended = None
         with store.locked(), contextlib.suppress(RoostError):
             current = store.read(task_id)
             if current.get("runId") == run_id and current["status"] not in ("stopped", "retired"):
                 current.update(status="exited" if code == 0 else "failed", updatedAt=now(),
                                exitCode=code, error=error)
                 store.save(current)
+                ended = current
+        # On the dead pane for as long as it is shown, where starting the
+        # agent again from a shell would leave Roost's hooks out.
+        if ended and not error:
+            again = "go back to this conversation" if ended.get("agentSession") else "start it again"
+            with contextlib.suppress(OSError):
+                print("\nRoost: the agent exited. Resume the task to %s." % again, flush=True)
     return code
 
 

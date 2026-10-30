@@ -541,6 +541,59 @@ class Lifecycle(unittest.TestCase):
                                                        table((12, (11, running)))))
         self.assertFalse(roost.approved_command_running(task, dict(pid=None), table((12, (11, shell)))))
 
+    def test_only_the_agents_own_program_counts_as_it_running_elsewhere(self):
+        for line, runs in (("claude --resume 1234", True), ("/Users/me/.local/bin/claude", True),
+                           ("node /opt/homebrew/bin/claude --resume 1234", True), ("vim claude", False),
+                           ("claude-monitor", False), ("node", False), ("python3 fake_claude.py", False)):
+            with self.subTest(line=line):
+                self.assertIs(roost.runs_program(line, "claude"), runs)
+        # ps joins a program's path and arguments with spaces alike.
+        tools = self.root / "Agent Tools" / "bin"
+        tools.mkdir(parents=True)
+        (tools / "claude").write_text("")
+        (tools / "cli.js").write_text("")
+        for line, runs in (("%s/claude --resume 1234" % tools, True), ("node %s/cli.js claude" % tools, False),
+                           ("node %s/claude" % tools, True), ("/bin/cat %s/claude" % tools, False),
+                           ("/no such/claude", False)):
+            with self.subTest(line=line):
+                self.assertIs(roost.runs_program(line, "claude"), runs)
+        pane = lambda index, session, task="", dead=False, pid=None: dict(
+            window="@%d" % index, index=index, session=session, session_name="roost-" + session[1:],
+            dead=dead, task=task, pid=pid)
+        task = dict(id="t1", agent="claude", paneId="%0", socket="s", session="roost-1")
+        inventory = {"%0": pane(0, "$1", "t1", dead=True), "%1": pane(1, "$1", pid=20),
+                     "%2": pane(0, "$2", pid=30)}
+        table = {20: (1, "-zsh"), 21: (20, "claude --resume 1234"), 30: (1, "claude")}
+        # Sessions a script you run there starts aren't the task's, from a
+        # shell or as the window's own command.
+        for scripted in ({20: (1, "-zsh"), 21: (20, "make contract-live"), 22: (21, "claude -p hello")},
+                         {20: (1, "python3 smoke.py"), 21: (20, "claude -p hello")}):
+            with self.subTest(scripted=scripted[20]), patch.object(roost, "processes", return_value=scripted):
+                self.assertIsNone(roost.agent_elsewhere(task, inventory, inventory["%0"], [task]))
+        with patch.object(roost, "processes", return_value=table):
+            self.assertEqual(roost.agent_elsewhere(task, inventory, inventory["%0"], [task]),
+                             "window 1 of this task")
+            # Followed by its session's name once its own window is gone.
+            self.assertEqual(roost.agent_elsewhere(task, {k: v for k, v in inventory.items() if k != "%0"},
+                                                   None, [task]),
+                             "window 1 of this task")
+            # In the pane that has its old pane ID, too, as after tmux restarted.
+            self.assertEqual(roost.agent_elsewhere(task, {"%0": pane(0, "$1", pid=20)}, None, [task]),
+                             "window 0 of this task")
+            # In a session a project's tasks shared, it may be another's,
+            # running or stopped.
+            shared = dict(inventory, **{"%3": pane(2, "$1", "t2", pid=40)})
+            self.assertIsNone(roost.agent_elsewhere(task, shared, inventory["%0"], [task]))
+            stopped = dict(task, id="t2", paneId="%9")
+            self.assertIsNone(roost.agent_elsewhere(task, inventory, inventory["%0"], [task, stopped]))
+            self.assertEqual(roost.agent_elsewhere(task, inventory, inventory["%0"],
+                                                   [task, dict(stopped, socket="other")]),
+                             "window 1 of this task")
+            self.assertIsNone(roost.agent_elsewhere(dict(task, agent="codex"), inventory, inventory["%0"], [task]))
+        with patch.object(roost, "processes") as processes:
+            self.assertIsNone(roost.agent_elsewhere(task, {"%0": inventory["%0"]}, inventory["%0"], [task]))
+            processes.assert_not_called()
+
     def test_claudes_idle_reminder_is_no_news_for_an_agent_already_waiting(self):
         # A minute after each turn Claude sends idle_prompt; taken as a new
         # event, it made an agent you had seen count as waiting again.
@@ -2002,6 +2055,55 @@ class Lifecycle(unittest.TestCase):
         self.assertIn(shell, roost.pane_inventory(self.socket))
         roost.tmux(self.socket, "set-option", "-p", "-t", task["paneId"], "@roost_task_id", "other")
         self.assertFalse(self.request("shell", id=task["id"])["ok"])
+
+    def test_an_exited_agent_says_on_its_pane_how_to_go_back(self):
+        task = self.create()
+        self.request("send", id=task["id"], text="exit")
+        self.wait(task, "exited")
+        self.wait_for_pane_exit(task)
+        self.assertIn("Roost: the agent exited. Resume the task to go back to this conversation.",
+                      roost.tmux(self.socket, "capture-pane", "-p", "-t", task["paneId"]).stdout)
+
+    def test_resume_waits_for_an_agent_you_started_outside_roost(self):
+        # A program by the agent's name, as when you type claude --resume.
+        bin_dir = Path(tempfile.mkdtemp(prefix="roostbin", dir="/tmp"))
+        self.addCleanup(shutil.rmtree, bin_dir, True)
+        (bin_dir / "claude").symlink_to(shutil.which("sleep"))
+        claude = str(bin_dir / "claude")
+
+        def started():
+            deadline = time.monotonic() + 8
+            while time.monotonic() < deadline:
+                if any(line.startswith(claude) for _, line in roost.processes().values()):
+                    return
+                time.sleep(0.05)
+            self.fail("%s didn't start" % claude)
+
+        task = self.create()
+        self.request("send", id=task["id"], text="exit")
+        self.wait(task, "exited")
+        self.wait_for_pane_exit(task)
+        shell = self.request("shell", id=task["id"])["result"]["shellPaneId"]
+        roost.tmux(self.socket, "send-keys", "-t", shell, claude + " 30", "Enter")
+        started()
+        reply = self.request("resume", id=task["id"])
+        self.assertFalse(reply["ok"])
+        self.assertIn("outside Roost in the task's shell", reply["error"])
+        roost.tmux(self.socket, "kill-pane", "-t", shell)
+        session = roost.Store(str(self.state)).read(task["id"])["session"]
+        index = roost.tmux(self.socket, "new-window", "-d", "-P", "-F", "#{window_index}",
+                           "-t", session + ":", claude + " 30").stdout.strip()
+        started()
+        reply = self.request("resume", id=task["id"])
+        self.assertFalse(reply["ok"])
+        self.assertIn("outside Roost in window %s of this task" % index, reply["error"])
+        # Nor did the refusal touch the agent's window.
+        self.assertTrue(roost.pane_inventory(self.socket)[task["paneId"]]["dead"])
+        roost.tmux(self.socket, "kill-window", "-t", "%s:%s" % (session, index))
+        # One in another session isn't this task's.
+        roost.tmux(self.socket, "new-session", "-d", "-s", "elsewhere", claude + " 30")
+        self.assertTrue(self.request("resume", id=task["id"])["ok"])
+        self.wait(task, "ready")
 
     def test_agent_adapter_preserves_legacy_conversations_and_rejects_unknown_agents(self):
         task = self.create()

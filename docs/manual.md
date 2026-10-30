@@ -326,7 +326,7 @@ when the task waits for nothing.
 | `ready` | Until you've seen its reply | Its turn is over and it waits for your next prompt. Not "reviewed" or "done" |
 | `interrupted` | Until you've seen it | You stopped its turn, with Esc or by declining a request |
 | `error` | Until you've seen it | A turn ended on an API error, such as a usage limit; `RET` opens it to try again |
-| `failed`, `exited` | Until you've seen it | The agent's CLI failed, or it exited; `RET` shows its last output |
+| `failed`, `exited` | Until you've seen it | The agent's CLI failed, or it exited; `RET` shows its last output, and `s` resumes its conversation. An agent you start again from a shell sends Roost nothing, so `s` waits until it has exited |
 | `crashed` | Until you've seen it | Its tmux pane went, as when the host or its tmux server restarted; `RET` or `s` resumes its conversation, and asks once to resume every other agent that crashed on that host. Those stopped, exited or failed stay as they are |
 | `conflicts` | Once you've seen its reply | Merging its commits into the branch it merges into would conflict; `u` brings that branch in |
 | `to merge` | Once you've seen its reply | Its pull request passed its checks and review, and GitHub finds no conflicts; `P` opens it |
@@ -496,7 +496,7 @@ counted once you stop and resume it (`K`, then `s`).
 | `x` | `roost-retire` | Finish with a task: retire it when its work is merged or it has none, otherwise offer to discard it (`roost-discard`), first saying what would be lost; to lose commits or files you type its name |
 | `X` | `roost-forget` | Drop the task from Roost, leaving its worktree and branch as they are |
 | `K` | `roost-stop` | Stop the agent's window; keep all work |
-| `s` | `roost-resume` | Restart a stopped or crashed task in its recorded conversation; when other agents crashed on its host too, as after it restarted, ask whether to resume those as well |
+| `s` | `roost-resume` | Restart a stopped, exited or crashed task in its recorded conversation; when other agents crashed on its host too, as after it restarted, ask whether to resume those as well. Refuses while the agent runs in the task's shell or another window of its tmux session, which Roost didn't start |
 | `w` | `roost-workload` | How long agents worked and waited on you, each day of the past week ([below](#how-many-agents-you-keep-up-with)) |
 | `g` | `roost-refresh` | Refresh status and Git statistics |
 
