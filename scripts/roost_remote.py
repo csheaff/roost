@@ -1673,39 +1673,45 @@ def undo_creation(store, task):
     if not (isinstance(repo, str) and isinstance(worktree, str) and Path(repo).is_dir()):
         return
     worktree = Path(worktree)
-    if worktree_lock(repo, worktree.resolve()) is None:
-        # Git finished making it, or never began: what its checkout and
-        # hook left, which a failed creation keeps if it holds anything.
-        with store.locked():
-            abandon(store, task)
-        return
-    # Git locks a worktree as it makes it, and was stopped partway: it
-    # holds Git's checkout and nothing else, as no agent ever ran there.
-    if os.path.lexists(worktree):
-        git(repo, "worktree", "remove", "--force", "--force", str(worktree), check=False)
-    else:
-        unregister_gone(repo, worktree.resolve())
-    with contextlib.suppress(RoostError):
-        delete_branch(repo, task["branch"], task["baseCommit"])
+    if worktree_lock(repo, worktree.resolve()) is not None:
+        # Git locks a worktree as it makes it, and was stopped partway: it
+        # holds Git's checkout and nothing else, as no agent ever ran there.
+        if os.path.lexists(worktree):
+            git(repo, "worktree", "remove", "--force", "--force", str(worktree), check=False)
+        else:
+            unregister_gone(repo, worktree.resolve())
+        if not os.path.lexists(worktree):
+            with contextlib.suppress(RoostError):
+                delete_branch(repo, task["branch"], task["baseCommit"])
+            return
+    # Git finished making it, or never began, or it couldn't be removed:
+    # a failed creation's, kept as a task to look at if anything is there.
+    with store.locked():
+        abandon(store, task)
+
+
+def creation_notes(store):
+    """The notes of creations under way or cut short, as `noting_creation` writes them."""
+    with contextlib.suppress(OSError):
+        return sorted((store.root / "creating").glob("*.json"))
+    return []
 
 
 def settle_creations(store):
     """Undo each creation cut short, leaving those under way."""
-    with contextlib.suppress(OSError):
-        for path in sorted((store.root / "creating").glob("*.json")):
-            with contextlib.suppress(OSError, RoostError):
-                settle_creation(store, path)
+    for path in creation_notes(store):
+        with contextlib.suppress(OSError, RoostError):
+            settle_creation(store, path)
 
 
 def made_for(store, create_id):
     """The task an earlier request with CREATE_ID made, or None. One still
     being made is waited for, and one cut short undone first, so that this
     request makes it anew."""
-    with contextlib.suppress(OSError):
-        for path in sorted((store.root / "creating").glob("*.json")):
-            with contextlib.suppress(OSError, ValueError):
-                if json.loads(path.read_text()).get("createId") == create_id:
-                    settle_creation(store, path, wait=True)
+    for path in creation_notes(store):
+        with contextlib.suppress(OSError, ValueError):
+            if json.loads(path.read_text()).get("createId") == create_id:
+                settle_creation(store, path, wait=True)
     with store.locked():
         return next((task for task in store.all() if task.get("createId") == create_id), None)
 

@@ -2679,9 +2679,10 @@ Nil too on another host, where reading it would hold up the draft."
   "Non-nil while the drafted task is being created.")
 
 (defvar-local roost--compose-asked nil
-  "The host and the ID the draft last asked to create its task with, as a list.
-The ID is the same each time, so the host makes the task once, however
-often you ask: it answers again with the task it made.")
+  "The project directory and the ID the draft last asked to create its task with.
+A list.  The ID is the same each time for the same project, so its host
+makes the task once, however often you ask: it answers again with the
+task it made.")
 
 (defvar-keymap roost-compose-mode-map
   :doc "Keys for drafting a new Roost task."
@@ -3461,11 +3462,12 @@ branch leads with the key of the one you choose."
       (user-error "Write a prompt, or name the task (%s)" (substitute-command-keys "\\[roost-compose-set-name]")))
     (when roost--compose-submitting
       (user-error "Already creating %s" name))
-    (let ((host (roost--directory-host (plist-get fields :directory))))
-      ;; Asked again on the same host, as after no reply came, the host
+    (let* ((directory (plist-get fields :directory))
+           (host (roost--directory-host directory)))
+      ;; Asked again in the same project, as after no reply came, the host
       ;; answers with the task it made, if it did.
-      (unless (equal (car roost--compose-asked) host)
-        (setq roost--compose-asked (list host (format "%08x%08x" (random (ash 1 32)) (random (ash 1 32))))))
+      (unless (equal (car roost--compose-asked) directory)
+        (setq roost--compose-asked (list directory (roost--random-id))))
       (setq roost--compose-submitting t
             header-line-format (format " Creating %s…" name))
       (roost--create-task (plist-get fields :directory) name (plist-get fields :base) prompt
@@ -3481,9 +3483,10 @@ branch leads with the key of the one you choose."
                                                                'roost-compose-submit))
                                   ;; It may yet be made: then a poll lists it.
                                   (setq header-line-format
-                                        (format " No reply from %s after %dm; the task opens here if it was made · %s asks again"
+                                        (format " No reply from %s after %s; the task opens here if it was made · %s asks again"
                                                 (roost--host-label host)
-                                                (/ (+ roost-request-timeout roost--create-seconds) 60)
+                                                (let ((seconds (+ roost-request-timeout roost--create-seconds)))
+                                                  (if (< seconds 60) (format "%ds" seconds) (format "%dm" (/ seconds 60))))
                                                 (substitute-command-keys "\\[roost-compose-submit]")))
                                   (message "Roost: no reply from %s about %s yet; it opens if it was made"
                                            (roost--host-label host) name)))))
@@ -3507,7 +3510,7 @@ made the task anyway."
   (when-let* ((buffer (get-buffer roost--compose-buffer))
               ((not (buffer-local-value 'roost--compose-submitting buffer)))
               (asked (buffer-local-value 'roost--compose-asked buffer))
-              ((equal (car asked) host))
+              ((equal (roost--directory-host (car asked)) host))
               (made (seq-find (lambda (task) (equal (roost--field task 'createId) (cadr asked))) tasks))
               (task (gethash (list host (roost--field made 'id)) roost--tasks)))
     (let ((fields (buffer-local-value 'roost--compose-fields buffer)))
@@ -4871,8 +4874,8 @@ both staged and unstaged.  The result indexes `roost--note-positions'."
   (seq-mapcat (lambda (overlay) (overlay-get overlay 'roost-notes))
               (overlays-in (line-end-position) (1+ (line-end-position)))))
 
-(defun roost--note-id ()
-  "A new review note's identifier."
+(defun roost--random-id ()
+  "A new identifier of 16 hex digits, as for a review note."
   (format "%08x%08x" (random (ash 1 32)) (random (ash 1 32))))
 
 ;;;###autoload
@@ -4930,7 +4933,7 @@ while you wrote, gets no note."
         (t
          (setq roost--notes
                (append (roost--notes)
-                       (list (append `((id . ,(roost--note-id))
+                       (list (append `((id . ,(roost--random-id))
                                        (host . ,(roost--field task 'host))
                                        (task . ,(roost--field task 'id)))
                                      ;; PLACE may be a note that has gone since:

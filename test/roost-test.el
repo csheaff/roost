@@ -6210,7 +6210,19 @@ With FAILING, it prints it on stderr and exits with status 1."
                (setq listed (list made))
                (roost--refresh-host "dev" t)
                (should-not (get-buffer roost--compose-buffer))
-               (should (equal (mapcar (lambda (task) (roost--field task 'id)) opened) '("2222222222222222")))))
+               (should (equal (mapcar (lambda (task) (roost--field task 'id)) opened) '("2222222222222222"))))
+             ;; Another project, on the same host, is another task.
+             (roost--compose)
+             (with-current-buffer roost--compose-buffer
+               (setq roost--compose-fields (plist-put roost--compose-fields :directory "/ssh:dev:/repo/"))
+               (goto-char (point-max))
+               (insert "Fix the lexer")
+               (roost-compose-submit)
+               (funcall (nth 3 (car asked)) (propertize "No reply after 660s" 'roost-no-reply t))
+               (setq id (alist-get 'createId (nth 2 (car asked))))
+               (setq roost--compose-fields (plist-put roost--compose-fields :directory "/ssh:dev:/other/"))
+               (roost-compose-submit)
+               (should-not (equal (alist-get 'createId (nth 2 (car asked))) id))))
          (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
 
 (ert-deftest roost-unreachable-hosts-are-named-rather-than-taken-as-empty ()
