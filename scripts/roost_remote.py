@@ -1828,6 +1828,10 @@ def create(store, request):
         finally:
             # Not tmux's, whose server would hold it for as long as it runs.
             INHERITED.remove(note)
+        # `git worktree add` leaves them out. Its runner checks them out, in
+        # its terminal, as that fetches.
+        if (worktree / ".gitmodules").is_file():
+            task["submodulesComplete"] = False
         with store.locked():
             try:
                 store.save(task)
@@ -5672,6 +5676,67 @@ def copy_included(repo, worktree):
             os.chmod(directory, mode)
 
 
+# Older Git runs a command a branch's .gitmodules names for a submodule.
+SUBMODULE_GIT = (2, 24, 1)
+
+
+def check_out_submodules(worktree, env, every=None, decided=lambda every: None):
+    """Check out the submodules of WORKTREE, a new task's, at the commits
+    its branch records, nested ones too, with `git submodule update` in
+    ENV, in the terminal, where Git shows what it fetches and SSH can ask
+    for a passphrase. Of those .gitmodules names, only the ones the
+    repository has initialized, as `git submodule deinit` undoes, or, with
+    EVERY, all of them, and never one it has turned off: its config is the
+    primary checkout's too, which `--init` alone would change,
+    initializing each again. EVERY None decides it, true where the
+    repository has initialized none of them, and passes it to DECIDED
+    before Git initializes any, which would change it for the next try.
+    Raise RoostError naming those that failed. With Git older than
+    SUBMODULE_GIT, leave them, as before Roost checked them out, and say
+    so."""
+    worktree = Path(worktree)
+    version = version_of(git(worktree, "--version").stdout) or (0, 0)
+    if version < SUBMODULE_GIT:
+        print("Roost: left the submodules out; Roost checks them out with Git %d.%d.%d or newer, and this host "
+              "has %s" % (SUBMODULE_GIT + (".".join(map(str, version)),)), file=sys.stderr, flush=True)
+        return
+    linked = {}
+    for entry in git_fields(worktree, "ls-files", "--stage", "-z"):
+        mode, _, path = entry.partition("\t")
+        if mode.startswith("160000 "):
+            linked[path] = mode.split()[1]
+
+    def names(*args):
+        """The submodules' names in the config `git config ARGS` reads,
+        with the value of each, after any it overrides."""
+        found = {}
+        for entry in git_fields(worktree, "config", "-z", *args, succeed=(0, 1)):
+            key, _, value = entry.partition("\n")
+            found[key[len("submodule."):key.rindex(".")]] = value
+        return found
+    # A name may hold dots, and a path in .gitmodules be no submodule.
+    paths = {path: name for name, path in names("-f", ".gitmodules", "--get-regexp", r"^submodule\..*\.path$").items()
+             if path in linked}
+    off = {name for name, value in names("--bool", "--get-regexp", r"^submodule\..*\.active$").items()
+           if value == "false"}
+    initialized = names("--get-regexp", r"^submodule\..*\.url$")
+    if every is None:
+        every = not any(name in initialized for name in paths.values())
+        decided(every)
+    failed = []
+    for path in [path for path, name in paths.items()
+                 if name not in off and (every or name in initialized)]:
+        # As itself, not a pattern that could name others.
+        if subprocess.run(["git", "-C", str(worktree), "submodule", "update", "--init", "--recursive", "--",
+                           ":(literal)" + path], env=env).returncode:
+            head = git(worktree / path, "rev-parse", "-q", "--verify", "HEAD",
+                       check=False).stdout.strip() if (worktree / path / ".git").exists() else None
+            failed.append(("a submodule in %s" if head == linked[path] else "the submodule %s") % shown(path))
+    if failed:
+        raise RoostError("Could not check out %s; resuming the task tries again"
+                         % (", ".join(failed[:-1]) + " and " + failed[-1] if failed[1:] else failed[0]))
+
+
 def runner(root, task_id, run_id, resume_conversation=False):
     store = Store(root)
     with store.locked():
@@ -5705,6 +5770,19 @@ def runner(root, task_id, run_id, resume_conversation=False):
             # What the agent alone needs in its environment, as to load an observer.
             agent_env = dict(env, **(agent.environment(store, task, env) if hasattr(agent, "environment") else {}))
         # Before setup, which may use them, and until it has all of them.
+        if task.get("submodulesComplete") is False:
+            def decided(every):
+                with store.locked():
+                    current = store.read(task_id)
+                    if current.get("runId") == run_id:
+                        current["allSubmodules"] = every
+                        store.save(current)
+            check_out_submodules(task["worktree"], env, task.get("allSubmodules"), decided)
+            with store.locked():
+                current = store.read(task_id)
+                if current.get("runId") == run_id:
+                    current["submodulesComplete"] = True
+                    store.save(current)
         if task.get("copyComplete") is False:
             copy_included(task["repo"], task["worktree"])
             with store.locked():

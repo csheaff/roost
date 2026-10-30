@@ -11,6 +11,16 @@ What each release changes, and what to do when upgrading. Newest first.
   task rather than starting a second one with the same name. A creation
   cut short no longer leaves a worktree and branch that no task records:
   the next poll removes them. Nothing to do when upgrading.
+- A new task checks out its submodules, nested ones too, at the commits
+  its branch records, in its terminal before the setup command, with Git
+  2.24.1 or newer:
+  `git worktree add` left their folders empty. It checks out the ones the
+  primary checkout has initialized, or all of them where it has
+  initialized none, and never one whose `submodule.NAME.active` is false.
+  If one can't be fetched, the task stops before its agent starts and says
+  which; `s` tries again. Nothing to do when upgrading: a setup command
+  that ran `git submodule update --init --recursive` for this can go, and
+  finds nothing left to do if it stays.
 - In a new task's draft, "Other directory…" on `C-c C-p` is second, under
   the project used last, rather than last, where a long list put it off
   screen. It asks for a host, of those Roost knows or another from

@@ -620,12 +620,30 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
   still missing and starts it. A directory you list is copied file by file
   for each task: `node_modules` takes that time and space every time,
   where `npm ci` as the setup command may take less.
+- Submodules: `git worktree add` leaves their folders empty, so Roost checks
+  out a new task's submodules, nested ones too, at the commits its branch
+  records (`git submodule update --init --recursive`, with Git 2.24.1 or
+  newer, which won't run a command a branch's `.gitmodules` names), in the
+  task's terminal, where SSH can ask for a passphrase, before the copy and
+  the setup command. It checks out the ones the primary checkout has
+  initialized, so `git submodule deinit` there leaves one out, or all of
+  them where it has initialized none; `git config submodule.NAME.active
+  false` leaves one out either way. Roost doesn't initialize the others, as
+  `--init` alone would, in the config the primary checkout shares. If one
+  can't be checked out, the task stops before its agent starts and says
+  which; `s` tries again and starts it. Each task fetches them into clones
+  of its own. To change one in a task, commit on a branch in it and push
+  that, then commit the submodule in the task: merging and retiring refuse
+  while a submodule holds commits its remote lacks. After a merge, `git
+  submodule update` in the primary checkout checks out what the task
+  recorded.
 - `roost-setup-command`: a shell command run once in a new worktree before the
   agent starts, such as `npm ci`. Set it in `.dir-locals.el` per project:
   `((nil . ((roost-setup-command . "npm ci"))))`. Emacs reads a remote
   project's `.dir-locals.el` only with `enable-remote-dir-locals` on. It runs
-  once Roost has copied what `.worktreeinclude` lists, and finds the primary
-  checkout in `$ROOST_REPO`, for anything else it needs from there.
+  once Roost has checked out the submodules and copied what
+  `.worktreeinclude` lists, and finds the primary checkout in `$ROOST_REPO`,
+  for anything else it needs from there.
 - `roost-teardown-command`: a shell command run in a task's worktree just before
   Roost removes it, when you merge, retire or discard the task, set the same
   way. It cleans up what a tool keeps for the worktree elsewhere, such as
@@ -822,8 +840,8 @@ move aside.
 Branches are deleted only if they still point at the commit Roost verified.
 Removing a worktree deletes the repositories of its submodules, which may
 hold the only copy of commits made in them. Retiring removes one only when
-they hold nothing their remotes lack, as when an agent checked them out to
-build; otherwise it says which submodule holds what, for you to push.
+they hold nothing their remotes lack, as when Roost checked them out for the
+task; otherwise it says which submodule holds what, for you to push.
 Discarding counts those commits among what it would lose.
 
 Things to know:
