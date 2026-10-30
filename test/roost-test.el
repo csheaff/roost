@@ -10779,9 +10779,8 @@ With INITIAL, the box must start out holding it."
           (funcall diff "a.txt")
           (should (equal (shown) '("a.txt" "b.txt")))
           ;; Once the fork point moves, the file's old buffer goes.
-          (setq task (roost--cache-task nil (append `((baseCommit . ,(string-trim (shell-command-to-string
-                                                                                  "git rev-parse HEAD"))))
-                                                    task)))
+          (let ((head (car (process-lines "git" "rev-parse" "HEAD"))))
+            (setq task (roost--cache-task nil (append `((baseCommit . ,head)) task))))
           (funcall diff "a.txt")
           (should (equal (shown) '("a.txt" "b.txt")))
           ;; With Magit's lock off, as for its own diff of a file, one
