@@ -171,19 +171,27 @@ def remote_git(repo, *args, check=True, timeout=REMOTE_GIT_TIMEOUT):
 
 def gh(cwd, *args, timeout=60):
     """Run the GitHub CLI, finding it on the same PATH agents get."""
+    return tool("gh", cwd, args, timeout,
+                "The GitHub CLI (gh) is not installed on this host; install it and run `gh auth login`")
+
+
+def tool(name, cwd, args, timeout, missing, said=lambda result: None):
+    """Run the command line tool NAME with ARGS in CWD, finding it on the
+    same PATH agents get, and return its output; MISSING says it isn't
+    installed. SAID reads what it said as it failed, when not plainly."""
     path = agent_path(os.environ.get("PATH", ""))
-    executable = shutil.which("gh", path=path)
+    executable = shutil.which(name, path=path)
     if not executable:
-        raise RoostError("The GitHub CLI (gh) is not installed on this host; install it and run `gh auth login`")
+        raise RoostError(missing)
     try:
         result = subprocess.run([executable, *args], cwd=cwd, text=True, errors="replace", timeout=timeout,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 env=dict(os.environ, PATH=path), pass_fds=tuple(INHERITED))
     except subprocess.TimeoutExpired:
-        raise RoostError("gh timed out: " + shlex.join(args[:2]))
+        raise RoostError("%s timed out: %s" % (name, shlex.join(args[:2])))
     if result.returncode:
-        raise RoostError(result.stderr.strip() or result.stdout.strip()
-                         or "Command failed: " + shlex.join(["gh", *args]))
+        raise RoostError(said(result) or result.stderr.strip() or result.stdout.strip()
+                         or "Command failed: " + shlex.join([name, *args]))
     return result.stdout
 
 
@@ -1670,6 +1678,8 @@ def create(store, request):
     if isinstance(issue, dict) and isinstance(issue.get("number"), int) and not isinstance(issue["number"], bool):
         task["issue"] = dict(number=issue["number"], title=text(issue.get("title")),
                              url=text(issue.get("url")))
+    elif isinstance(issue, dict) and isinstance(issue.get("key"), str) and JIRA_KEY.fullmatch(issue["key"]):
+        task["issue"] = dict(key=issue["key"], title=text(issue.get("title")), url=text(issue.get("url")))
     if setup:
         task["setupComplete"] = False
     # Its runner copies them, in its terminal, as that may take a while.
@@ -1748,6 +1758,194 @@ def issues(request):
                            labels=[label.get("name") for label in issue.get("labels") or []
                                    if isinstance(label, dict) and label.get("name")]))
     return result
+
+
+# A Jira work item's key: its project's, then its number, as in PROJ-123.
+JIRA_KEY = re.compile(r"[A-Z][A-Z0-9_]*-[1-9][0-9]*")
+
+
+def jira_issues(request):
+    """The Jira work items JQL finds, as twg, Atlassian's Teamwork Graph
+    CLI, on this host lists them for the account it signed in to, under
+    "issues"; None without twg."""
+    if not shutil.which("twg", path=agent_path(os.environ.get("PATH", ""))):
+        return None
+    jql = text(request.get("jql"))
+    # A project's directory-local query, too: none that twg could take for an option.
+    if not jql or jql.startswith("-"):
+        raise RoostError("roost-jira-query is no JQL to list Jira work items with: %r" % jql)
+    # Run where it sees an agent, as from an Emacs one started, twg prints
+    # a summary and leaves the JSON in a file, but for --output-summary none.
+    output = tool("twg", str(Path.home()),
+                  ("jira", "workitem", "query", "--jql", jql, "--limit", "100",
+                   "--fields", "summary,description,labels,status", "-o", "json", "--output-summary", "none"),
+                  30, "twg is not installed on this host", said=lambda result: twg_error(result.stdout))
+    try:
+        payload = json.loads(output)
+    except ValueError:
+        raise RoostError("twg didn't list Jira work items as JSON: " + output.strip()[:200])
+    # An envelope around the issues Jira's search returns, each with its fields.
+    listed = payload.get("data", payload) if isinstance(payload, dict) else payload
+    if isinstance(listed, dict):
+        listed = listed.get("issues", listed.get("items"))
+    if not isinstance(listed, list):
+        raise RoostError("twg's reply lists no Jira work items: " + output.strip()[:200])
+    result = []
+    for item in listed:
+        if isinstance(item, dict) and isinstance(item.get("data"), dict):
+            item = item["data"]
+        key = text(item.get("key")) if isinstance(item, dict) else None
+        if not key or not JIRA_KEY.fullmatch(key):
+            continue
+        fields = item.get("fields") if isinstance(item.get("fields"), dict) else item
+        status, labels = fields.get("status"), fields.get("labels")
+        try:
+            body = adf_text(fields.get("description"))
+        except RecursionError:
+            body = ""
+        if len(body) > ISSUE_BODY_LIMIT:
+            body = body[:ISSUE_BODY_LIMIT].rstrip() + "\n…"
+        result.append(dict(key=key, title=text(fields.get("summary")) or "", body=body, url=jira_url(item, key),
+                           status=text(status.get("name") if isinstance(status, dict) else status),
+                           labels=[label for label in labels if isinstance(label, str) and label]
+                           if isinstance(labels, list) else []))
+    return dict(issues=result)
+
+
+def twg_error(output):
+    """What twg says to do about the error it gave in OUTPUT, as
+    {"ok": false, "error": {"summary": ...}}, or None."""
+    try:
+        error = json.loads(output).get("error")
+    except (ValueError, AttributeError):
+        return None
+    return (text(error.get("summary")) or text(error.get("message"))) if isinstance(error, dict) else None
+
+
+def jira_url(item, key):
+    """Where Jira work item ITEM, whose key is KEY, opens in a browser.
+    Jira's own record has only its address in Jira's API, which through
+    Atlassian's gateway names no site."""
+    url = text(item.get("url"))
+    if url and "/browse/" in url:
+        return url
+    site = re.match(r"https://([^/@]+)/rest/api/", text(item.get("self")) or "")
+    if site and site.group(1) != "api.atlassian.com":
+        return "https://%s/browse/%s" % (site.group(1), key)
+    return url
+
+
+def adf_text(node):
+    """Jira's rich text, the Atlassian Document Format, as Markdown; text
+    that is already plain stays as it is. What has no text, such as an
+    image, is left out."""
+    if isinstance(node, str):
+        return node.strip()
+    return adf_blocks([node]) if isinstance(node, dict) else ""
+
+
+def adf_content(node):
+    """NODE's children that are nodes."""
+    content = node.get("content")
+    return [child for child in content if isinstance(child, dict)] if isinstance(content, list) else []
+
+
+def adf_attrs(node):
+    """NODE's attributes, such as a heading's level or a link's address."""
+    return node.get("attrs") if isinstance(node.get("attrs"), dict) else {}
+
+
+ADF_INLINE = ("text", "hardBreak", "mention", "emoji", "status", "date", "inlineCard")
+
+
+def adf_blocks(nodes):
+    """NODES, Atlassian Document Format blocks, as Markdown paragraphs."""
+    paragraphs = []
+    for node in nodes:
+        kind, attrs, inner = node.get("type"), adf_attrs(node), adf_content(node)
+        if kind in ADF_INLINE:
+            block = adf_inline([node])
+        elif kind == "paragraph":
+            block = adf_inline(inner)
+        elif kind == "heading":
+            level = attrs.get("level") if isinstance(attrs.get("level"), int) else 1
+            block = "#" * min(max(level, 1), 6) + " " + adf_inline(inner)
+        elif kind == "codeBlock":
+            block = "```%s\n%s\n```" % (text(attrs.get("language")) or "", adf_inline(inner))
+        elif kind in ("bulletList", "orderedList", "taskList", "decisionList"):
+            start = attrs.get("order") if isinstance(attrs.get("order"), int) else 1
+            items = []
+            for number, item in enumerate(inner, start):
+                if kind == "orderedList":
+                    marker = "%d. " % number
+                elif kind == "taskList":
+                    marker = "- [x] " if adf_attrs(item).get("state") == "DONE" else "- [ ] "
+                else:
+                    marker = "- "
+                # A list item holds blocks, a task or decision its text.
+                said = (adf_blocks(adf_content(item)) if item.get("type") == "listItem"
+                        else adf_inline(adf_content(item))).split("\n")
+                items.append("\n".join([marker + said[0]]
+                                       + [" " * len(marker) + line if line else "" for line in said[1:]]))
+            block = "\n".join(items)
+        elif kind == "blockquote":
+            block = "\n".join("> " + line if line else ">" for line in adf_blocks(inner).split("\n"))
+        elif kind == "rule":
+            block = "---"
+        elif kind == "table":
+            rows = [[adf_blocks(adf_content(cell)).replace("\n", " ").replace("|", "\\|") for cell in adf_content(row)]
+                    for row in inner]
+            if rows:
+                rows.insert(1, ["---"] * len(rows[0]))
+            block = "\n".join("| " + " | ".join(row) + " |" for row in rows)
+        elif kind in ("blockCard", "embedCard"):
+            block = text(attrs.get("url")) or ""
+        else:
+            # The document itself, a panel, an expand or a layout: what is in it.
+            block = adf_blocks(inner)
+        if block.strip():
+            paragraphs.append(block.strip("\n"))
+    return "\n\n".join(paragraphs)
+
+
+def adf_date(timestamp):
+    """An Atlassian Document Format date's day, as Jira shows it, in UTC.
+    Its TIMESTAMP is Unix time in milliseconds, as a string, though
+    Atlassian's own example gives seconds; a number too small to be
+    milliseconds since 1973 is taken as seconds."""
+    try:
+        moment = int(timestamp)
+        return datetime.datetime.fromtimestamp(moment / 1000 if moment >= 10 ** 11 else moment,
+                                               datetime.timezone.utc).date().isoformat()
+    except (TypeError, ValueError, OverflowError, OSError):
+        return ""
+
+
+def adf_inline(nodes):
+    """NODES, Atlassian Document Format text and what goes in it, as Markdown."""
+    pieces = []
+    for node in nodes:
+        kind, attrs = node.get("type"), adf_attrs(node)
+        if kind == "text":
+            piece = text(node.get("text")) or ""
+            for mark in node.get("marks") if isinstance(node.get("marks"), list) else []:
+                href = isinstance(mark, dict) and text(adf_attrs(mark).get("href"))
+                if isinstance(mark, dict) and mark.get("type") == "code":
+                    piece = "`%s`" % piece
+                elif href:
+                    piece = "[%s](%s)" % (piece, href)
+            pieces.append(piece)
+        elif kind == "hardBreak":
+            pieces.append("\n")
+        elif kind == "inlineCard":
+            pieces.append(text(attrs.get("url")) or "")
+        elif kind == "date":
+            pieces.append(adf_date(attrs.get("timestamp")))
+        elif kind in ("mention", "emoji", "status"):
+            pieces.append(text(attrs.get("text")) or text(attrs.get("shortName")) or "")
+        else:
+            pieces.append(adf_inline(adf_content(node)))
+    return "".join(pieces)
 
 
 def processes():
@@ -2671,11 +2869,83 @@ def stop(store, task, inventory=None):
     return task
 
 
+# What runs an agent written as a script, which ps shows before it.
+SCRIPT_RUNNERS = ("node", "bun", "deno")
+# What a pane runs that you start an agent from by typing its name.
+SHELLS = ("sh", "bash", "zsh", "fish", "dash", "ksh", "mksh", "tcsh", "csh", "nu", "xonsh", "elvish", "pwsh")
+
+
+def command_program(line):
+    """The program command LINE, as ps shows it, runs, as (NAME, REST).
+    ps joins the arguments with spaces, so a path with spaces in it, as in
+    /opt/Agent Tools/bin/claude, is taken as far as it names a file."""
+    line = line.strip()
+    start = 0
+    while line.startswith("/"):
+        cut = line.find(" ", start)
+        prefix = line if cut < 0 else line[:cut]
+        if os.path.isfile(prefix):
+            return os.path.basename(prefix), line[len(prefix):].lstrip()
+        if cut < 0 or not os.path.isdir(os.path.dirname(prefix)):
+            break
+        start = cut + 1
+    word, _, rest = line.partition(" ")
+    return os.path.basename(word), rest.lstrip()
+
+
+def runs_program(line, program):
+    """Whether command LINE, as ps shows it, runs PROGRAM, itself or as a script."""
+    name, rest = command_program(line)
+    if name in SCRIPT_RUNNERS and rest:
+        name, rest = command_program(rest)
+    return name == program
+
+
+def agent_elsewhere(task, inventory, own, tasks):
+    """Where TASK's agent runs in the task's tmux session but not in its
+    own pane OWN, as when you start it again from a shell there after it
+    exited: "the task's shell", "window N of this task", or None. Started
+    that way it has none of Roost's hooks, and resuming would start a
+    second agent on its conversation. Only the program its adapter names
+    counts, so a command of your own that runs it by another name doesn't,
+    and only a pane's own process or one its shell started, not the
+    sessions a script there starts. TASKS are all the host's tasks."""
+    # Without OWN, the task's pane ID may be another pane's, as after
+    # tmux restarted.
+    panes = [(pane_id, pane) for pane_id, pane in inventory.items()
+             if (pane_id != task.get("paneId") and pane["session"] == own["session"] if own
+                 else pane["session_name"] == task.get("session"))]
+    # A session a project's tasks shared, before each had its own, holds
+    # the others' agents, and perhaps yours: as their panes say, or, for
+    # one stopped, its record.
+    if (any(pane["task"] not in ("", task["id"]) for _, pane in panes)
+            or any(other["id"] != task["id"] and other.get("socket") == task["socket"]
+                   and other.get("session") == task.get("session") for other in tasks)):
+        return None
+    live = sorted(((pane_id, pane) for pane_id, pane in panes if not pane["dead"] and pane["pid"]),
+                  key=lambda item: item[1]["index"])
+    if not live:
+        return None
+    program = os.path.basename(agent_for(task).default_command[0])
+    table = processes()
+    for pane_id, pane in live:
+        line = table.get(pane["pid"], (None, ""))[1]
+        shell = command_program(line)[0].lstrip("-") in SHELLS
+        if runs_program(line, program) or shell and any(
+                runs_program(child, program) for parent, child in table.values() if parent == pane["pid"]):
+            return ("the task's shell" if pane_id == task.get("shellPaneId")
+                    else "window %d of this task" % pane["index"])
+    return None
+
+
 def resume(store, task, program_status=None, size=()):
     inventory = inventory_for(task)
     pane = owned_pane(task, inventory)
     if pane and not pane["dead"]:
         raise RoostError("The agent is still running; open the existing task")
+    elsewhere = agent_elsewhere(task, inventory, pane, store.all())
+    if elsewhere:
+        raise RoostError("The agent is running outside Roost in %s; exit it there, then resume" % elsewhere)
     # First, as it says where a worktree that was moved went.
     check_worktree(store, task, branch=False)
     if not Path(task["worktree"]).is_dir():
@@ -5341,12 +5611,20 @@ def runner(root, task_id, run_id, resume_conversation=False):
         # which would hide the first line of this when it is all there is.
         print("\nRoost: " + error, file=sys.stderr)
     finally:
+        ended = None
         with store.locked(), contextlib.suppress(RoostError):
             current = store.read(task_id)
             if current.get("runId") == run_id and current["status"] not in ("stopped", "retired"):
                 current.update(status="exited" if code == 0 else "failed", updatedAt=now(),
                                exitCode=code, error=error)
                 store.save(current)
+                ended = current
+        # On the dead pane for as long as it is shown, where starting the
+        # agent again from a shell would leave Roost's hooks out.
+        if ended and not error:
+            again = "go back to this conversation" if ended.get("agentSession") else "start it again"
+            with contextlib.suppress(OSError):
+                print("\nRoost: the agent exited. Resume the task to %s." % again, flush=True)
     return code
 
 
@@ -5430,6 +5708,8 @@ def rpc(request):
             return {"ok": True, "result": doctor(store, request)}
         if action == "issues":
             return {"ok": True, "result": issues(request)}
+        if action == "jira-issues":
+            return {"ok": True, "result": jira_issues(request)}
         if action == "history":
             return {"ok": True, "result": history(store, request)}
         if action == "search":

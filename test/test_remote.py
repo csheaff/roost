@@ -541,6 +541,59 @@ class Lifecycle(unittest.TestCase):
                                                        table((12, (11, running)))))
         self.assertFalse(roost.approved_command_running(task, dict(pid=None), table((12, (11, shell)))))
 
+    def test_only_the_agents_own_program_counts_as_it_running_elsewhere(self):
+        for line, runs in (("claude --resume 1234", True), ("/Users/me/.local/bin/claude", True),
+                           ("node /opt/homebrew/bin/claude --resume 1234", True), ("vim claude", False),
+                           ("claude-monitor", False), ("node", False), ("python3 fake_claude.py", False)):
+            with self.subTest(line=line):
+                self.assertIs(roost.runs_program(line, "claude"), runs)
+        # ps joins a program's path and arguments with spaces alike.
+        tools = self.root / "Agent Tools" / "bin"
+        tools.mkdir(parents=True)
+        (tools / "claude").write_text("")
+        (tools / "cli.js").write_text("")
+        for line, runs in (("%s/claude --resume 1234" % tools, True), ("node %s/cli.js claude" % tools, False),
+                           ("node %s/claude" % tools, True), ("/bin/cat %s/claude" % tools, False),
+                           ("/no such/claude", False)):
+            with self.subTest(line=line):
+                self.assertIs(roost.runs_program(line, "claude"), runs)
+        pane = lambda index, session, task="", dead=False, pid=None: dict(
+            window="@%d" % index, index=index, session=session, session_name="roost-" + session[1:],
+            dead=dead, task=task, pid=pid)
+        task = dict(id="t1", agent="claude", paneId="%0", socket="s", session="roost-1")
+        inventory = {"%0": pane(0, "$1", "t1", dead=True), "%1": pane(1, "$1", pid=20),
+                     "%2": pane(0, "$2", pid=30)}
+        table = {20: (1, "-zsh"), 21: (20, "claude --resume 1234"), 30: (1, "claude")}
+        # Sessions a script you run there starts aren't the task's, from a
+        # shell or as the window's own command.
+        for scripted in ({20: (1, "-zsh"), 21: (20, "make contract-live"), 22: (21, "claude -p hello")},
+                         {20: (1, "python3 smoke.py"), 21: (20, "claude -p hello")}):
+            with self.subTest(scripted=scripted[20]), patch.object(roost, "processes", return_value=scripted):
+                self.assertIsNone(roost.agent_elsewhere(task, inventory, inventory["%0"], [task]))
+        with patch.object(roost, "processes", return_value=table):
+            self.assertEqual(roost.agent_elsewhere(task, inventory, inventory["%0"], [task]),
+                             "window 1 of this task")
+            # Followed by its session's name once its own window is gone.
+            self.assertEqual(roost.agent_elsewhere(task, {k: v for k, v in inventory.items() if k != "%0"},
+                                                   None, [task]),
+                             "window 1 of this task")
+            # In the pane that has its old pane ID, too, as after tmux restarted.
+            self.assertEqual(roost.agent_elsewhere(task, {"%0": pane(0, "$1", pid=20)}, None, [task]),
+                             "window 0 of this task")
+            # In a session a project's tasks shared, it may be another's,
+            # running or stopped.
+            shared = dict(inventory, **{"%3": pane(2, "$1", "t2", pid=40)})
+            self.assertIsNone(roost.agent_elsewhere(task, shared, inventory["%0"], [task]))
+            stopped = dict(task, id="t2", paneId="%9")
+            self.assertIsNone(roost.agent_elsewhere(task, inventory, inventory["%0"], [task, stopped]))
+            self.assertEqual(roost.agent_elsewhere(task, inventory, inventory["%0"],
+                                                   [task, dict(stopped, socket="other")]),
+                             "window 1 of this task")
+            self.assertIsNone(roost.agent_elsewhere(dict(task, agent="codex"), inventory, inventory["%0"], [task]))
+        with patch.object(roost, "processes") as processes:
+            self.assertIsNone(roost.agent_elsewhere(task, {"%0": inventory["%0"]}, inventory["%0"], [task]))
+            processes.assert_not_called()
+
     def test_claudes_idle_reminder_is_no_news_for_an_agent_already_waiting(self):
         # A minute after each turn Claude sends idle_prompt; taken as a new
         # event, it made an agent you had seen count as waiting again.
@@ -2002,6 +2055,55 @@ class Lifecycle(unittest.TestCase):
         self.assertIn(shell, roost.pane_inventory(self.socket))
         roost.tmux(self.socket, "set-option", "-p", "-t", task["paneId"], "@roost_task_id", "other")
         self.assertFalse(self.request("shell", id=task["id"])["ok"])
+
+    def test_an_exited_agent_says_on_its_pane_how_to_go_back(self):
+        task = self.create()
+        self.request("send", id=task["id"], text="exit")
+        self.wait(task, "exited")
+        self.wait_for_pane_exit(task)
+        self.assertIn("Roost: the agent exited. Resume the task to go back to this conversation.",
+                      roost.tmux(self.socket, "capture-pane", "-p", "-t", task["paneId"]).stdout)
+
+    def test_resume_waits_for_an_agent_you_started_outside_roost(self):
+        # A program by the agent's name, as when you type claude --resume.
+        bin_dir = Path(tempfile.mkdtemp(prefix="roostbin", dir="/tmp"))
+        self.addCleanup(shutil.rmtree, bin_dir, True)
+        (bin_dir / "claude").symlink_to(shutil.which("sleep"))
+        claude = str(bin_dir / "claude")
+
+        def started():
+            deadline = time.monotonic() + 8
+            while time.monotonic() < deadline:
+                if any(line.startswith(claude) for _, line in roost.processes().values()):
+                    return
+                time.sleep(0.05)
+            self.fail("%s didn't start" % claude)
+
+        task = self.create()
+        self.request("send", id=task["id"], text="exit")
+        self.wait(task, "exited")
+        self.wait_for_pane_exit(task)
+        shell = self.request("shell", id=task["id"])["result"]["shellPaneId"]
+        roost.tmux(self.socket, "send-keys", "-t", shell, claude + " 30", "Enter")
+        started()
+        reply = self.request("resume", id=task["id"])
+        self.assertFalse(reply["ok"])
+        self.assertIn("outside Roost in the task's shell", reply["error"])
+        roost.tmux(self.socket, "kill-pane", "-t", shell)
+        session = roost.Store(str(self.state)).read(task["id"])["session"]
+        index = roost.tmux(self.socket, "new-window", "-d", "-P", "-F", "#{window_index}",
+                           "-t", session + ":", claude + " 30").stdout.strip()
+        started()
+        reply = self.request("resume", id=task["id"])
+        self.assertFalse(reply["ok"])
+        self.assertIn("outside Roost in window %s of this task" % index, reply["error"])
+        # Nor did the refusal touch the agent's window.
+        self.assertTrue(roost.pane_inventory(self.socket)[task["paneId"]]["dead"])
+        roost.tmux(self.socket, "kill-window", "-t", "%s:%s" % (session, index))
+        # One in another session isn't this task's.
+        roost.tmux(self.socket, "new-session", "-d", "-s", "elsewhere", claude + " 30")
+        self.assertTrue(self.request("resume", id=task["id"])["ok"])
+        self.wait(task, "ready")
 
     def test_agent_adapter_preserves_legacy_conversations_and_rejects_unknown_agents(self):
         task = self.create()
@@ -3673,6 +3775,132 @@ elif args[:2] == ["auth", "status"]:
         task = self.create(issue=dict(number=12, title="CSV import crashes", url=first["url"], body="ignored"))
         self.assertEqual(task["issue"], dict(number=12, title="CSV import crashes", url=first["url"]))
         self.assertNotIn("issue", self.create(name="plain", issue=dict(number="12")))
+
+    def fake_twg(self, reply, status=0):
+        """A fake twg, alone on the PATH agents get, that prints REPLY and
+        exits with STATUS, recording its arguments."""
+        directory = self.root / "twg"
+        directory.mkdir(exist_ok=True)
+        (directory / "reply").write_text(reply if isinstance(reply, str) else json.dumps(reply))
+        (directory / "status").write_text(str(status))
+        script = directory / "twg"
+        script.write_text("#!%s\n" % sys.executable + """import json, os, sys
+directory = os.path.dirname(os.path.abspath(__file__))
+with open(os.path.join(directory, "log"), "a") as log:
+    log.write(json.dumps(sys.argv[1:]) + "\\n")
+sys.stdout.write(open(os.path.join(directory, "reply")).read())
+status = int(open(os.path.join(directory, "status")).read())
+if status:
+    sys.stderr.write("Error: as twg says it to people\\n")
+sys.exit(status)
+""")
+        script.chmod(0o755)
+        # agent_path also searches ~/.local/bin, where twg installs itself.
+        patcher = patch.object(roost, "agent_path", lambda inherited: str(directory))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return directory
+
+    def test_jira_issues_lists_work_items_through_twg_and_create_records_the_chosen_one(self):
+        description = dict(type="doc", version=1, content=[
+            dict(type="paragraph", content=[dict(type="text", text="Run "),
+                                            dict(type="text", text="login", marks=[dict(type="code")]),
+                                            dict(type="text", text=" twice; see "),
+                                            dict(type="text", text="the log", marks=[
+                                                dict(type="link", attrs=dict(href="https://example.com/log"))])]),
+            dict(type="bulletList", content=[dict(type="listItem", content=[
+                dict(type="paragraph", content=[dict(type="text", text="first")]),
+                dict(type="orderedList", content=[dict(type="listItem", content=[
+                    dict(type="paragraph", content=[dict(type="text", text="nested")])])])])]),
+            dict(type="mediaSingle", content=[dict(type="media", attrs=dict(id="1"))])])
+        long = dict(type="doc", content=[dict(type="paragraph", content=[dict(type="text", text="x" * 7000)])])
+        directory = self.fake_twg(dict(apiVersion="1", command="jira workitem query", meta={}, data=dict(issues=[
+            # As twg 1.4.2 lists them, each work item's fields beside its key.
+            dict(key="PROJ-7", self="https://api.atlassian.com/ex/jira/cloud/rest/api/3/issue/1",
+                 url="https://acme.atlassian.net/browse/PROJ-7", summary="Login loops", description=description,
+                 labels=["auth"], status=dict(name="In Progress", statusCategory=dict(key="indeterminate"))),
+            # As Jira's own API does, under fields.
+            dict(key="PROJ-9", self="https://acme.atlassian.net/rest/api/3/issue/2",
+                 fields=dict(summary="Docs", description=None, labels=None, status=None)),
+            dict(key="proj-8; rm -rf ~", fields=dict(summary="Not a key")),
+            dict(key="PROJ-10", fields=dict(summary="Long", description=long))],
+            pageInfo=dict(hasNextPage=False))))
+        reply = self.request("jira-issues", jql="assignee = currentUser() ORDER BY updated DESC")
+        self.assertTrue(reply["ok"], reply)
+        first, second, third = reply["result"]["issues"]
+        self.assertEqual(first, dict(key="PROJ-7", title="Login loops", url="https://acme.atlassian.net/browse/PROJ-7",
+                                     body="Run `login` twice; see [the log](https://example.com/log)\n\n"
+                                          "- first\n\n  1. nested",
+                                     status="In Progress", labels=["auth"]))
+        # Jira's own address for one gives its site.
+        self.assertEqual((second["url"], second["body"], second["status"], second["labels"]),
+                         ("https://acme.atlassian.net/browse/PROJ-9", "", None, []))
+        self.assertIsNone(third["url"])
+        self.assertTrue(third["body"].endswith("…"))
+        self.assertLess(len(third["body"]), 6100)
+        called = json.loads((directory / "log").read_text().splitlines()[-1])
+        self.assertEqual(called[:5], ["jira", "workitem", "query", "--jql",
+                                      "assignee = currentUser() ORDER BY updated DESC"])
+        # JSON on its output however it is run, as from an agent's environment.
+        self.assertEqual(called[-4:], ["-o", "json", "--output-summary", "none"])
+        # A query twg could take for an option of its own goes no further.
+        self.assertIn("no JQL", self.request("jira-issues", jql="--output-file=/tmp/x")["error"])
+        self.assertEqual(len((directory / "log").read_text().splitlines()), 1)
+        # What twg says when it can't is the error; without it, there is nothing to list.
+        self.fake_twg(dict(ok=False, error=dict(
+            code="AUTH_REQUIRED", message="authentication required. No valid credentials found.",
+            summary="You're not signed in. Run `twg login --force` to authenticate with your Atlassian account.")),
+            status=77)
+        self.assertEqual(self.request("jira-issues", jql="x"), dict(ok=False, error=(
+            "You're not signed in. Run `twg login --force` to authenticate with your Atlassian account.")))
+        self.fake_twg(dict(ok=False, error=dict(code="X", message="No default site")), status=1)
+        self.assertEqual(self.request("jira-issues", jql="x")["error"], "No default site")
+        self.fake_twg("", status=1)
+        self.assertEqual(self.request("jira-issues", jql="x")["error"], "Error: as twg says it to people")
+        self.fake_twg("Update available\n")
+        self.assertIn("didn't list Jira work items as JSON", self.request("jira-issues", jql="x")["error"])
+        # A reply in another shape isn't taken for no work items.
+        self.fake_twg(dict(apiVersion="1", data=dict(file="/tmp/payload.json")))
+        self.assertIn("lists no Jira work items", self.request("jira-issues", jql="x")["error"])
+        self.fake_twg(dict(data=dict(issues=[])))
+        self.assertEqual(self.request("jira-issues", jql="x"), dict(ok=True, result=dict(issues=[])))
+        (directory / "twg").unlink()
+        self.assertEqual(self.request("jira-issues", jql="x"), dict(ok=True, result=None))
+        # A task records the work item by its key, and only a key.
+        task = self.create(issue=dict(key="PROJ-7", title="Login loops", url=first["url"], body="ignored"))
+        self.assertEqual(task["issue"], dict(key="PROJ-7", title="Login loops", url=first["url"]))
+        self.assertNotIn("issue", self.create(name="odd", issue=dict(key="PROJ-7; rm -rf ~")))
+
+    def test_adf_text_reads_jira_rich_text_as_markdown(self):
+        def para(*pieces):
+            return dict(type="paragraph", content=[dict(type="text", text=piece) if isinstance(piece, str) else piece
+                                                   for piece in pieces])
+        document = dict(type="doc", content=[
+            dict(type="heading", attrs=dict(level=2), content=[dict(type="text", text="Steps")]),
+            para("Ask ", dict(type="mention", attrs=dict(id="a", text="@Ana")), dict(type="hardBreak"), "then"),
+            # Its date in milliseconds, as Jira writes one, in seconds, as Atlassian's example has it, and neither.
+            para("Due ", dict(type="date", attrs=dict(timestamp="1767225600000")), ", not ",
+                 dict(type="date", attrs=dict(timestamp="1582152559")), dict(type="date", attrs=dict(timestamp="soon"))),
+            dict(type="codeBlock", attrs=dict(language="python"), content=[dict(type="text", text="print(1)")]),
+            dict(type="panel", content=[para("Inside a panel")]),
+            dict(type="table", content=[
+                dict(type="tableRow", content=[dict(type="tableHeader", content=[para("A")]),
+                                               dict(type="tableHeader", content=[para("B | C")])]),
+                dict(type="tableRow", content=[dict(type="tableCell", content=[para("1")]),
+                                               dict(type="tableCell", content=[])])]),
+            dict(type="taskList", content=[dict(type="taskItem", attrs=dict(state="DONE"),
+                                                content=[dict(type="text", text="done")]),
+                                           dict(type="taskItem", attrs=dict(state="TODO"),
+                                                content=[dict(type="text", text="to do")])]),
+            dict(type="blockquote", content=[para("one"), para("two")]),
+            dict(type="someday", content=[para("What a new kind holds")]),
+            dict(type="rule"), "not a node"])
+        self.assertEqual(roost.adf_text(document), "\n\n".join([
+            "## Steps", "Ask @Ana\nthen", "Due 2026-01-01, not 2020-02-19", "```python\nprint(1)\n```", "Inside a panel",
+            "| A | B \\| C |\n| --- | --- |\n| 1 |  |", "- [x] done\n- [ ] to do", "> one\n>\n> two",
+            "What a new kind holds", "---"]))
+        self.assertEqual(roost.adf_text("  Already *Markdown*\n"), "Already *Markdown*")
+        self.assertEqual((roost.adf_text(None), roost.adf_text(7)), ("", ""))
 
     def test_pr_reports_a_missing_gh(self):
         self.github()

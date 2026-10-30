@@ -42,6 +42,7 @@ FAKE = HERE.parent / "fake_claude.py"
 FAKE_AGENT = HERE.parent / "fake_agent.py"
 FAKE_SSH = HERE / "fake_ssh.py"
 FAKE_GH = HERE / "fake_gh.py"
+FAKE_TWG = HERE / "fake_twg.py"
 
 FRAME = (172, 40)
 PANEL = 44  # roost-task-panel-width
@@ -136,13 +137,18 @@ class Run:
         # GitHub, as journeys set it: test/qa/fake_gh.py, first on PATH as gh.
         self.github = self.work / "github"
         self.github.mkdir()
+        # And Jira: test/qa/fake_twg.py, as twg.
+        self.jira = self.work / "jira"
+        self.jira.mkdir()
         tools = self.work / "tools"
         tools.mkdir()
-        (tools / "gh").write_text('#!/bin/sh\nexec %s %s "$@"\n'
-                                  % (shlex.quote(sys.executable), shlex.quote(str(FAKE_GH))))
-        (tools / "gh").chmod(0o755)
+        for name, fake in (("gh", FAKE_GH), ("twg", FAKE_TWG)):
+            (tools / name).write_text('#!/bin/sh\nexec %s %s "$@"\n'
+                                      % (shlex.quote(sys.executable), shlex.quote(str(fake))))
+            (tools / name).chmod(0o755)
         self.env["PATH"] = "%s:%s" % (tools, self.env.get("PATH", ""))
         self.env["QA_GITHUB"] = str(self.github)
+        self.env["QA_JIRA"] = str(self.jira)
         self.notes = set()
         # Commands run in an Emacs since restarted.
         self.ran = set()
@@ -1311,7 +1317,8 @@ def drafts(qa, repo):
 @journey("A draft's project, agent and issue, changed")
 def draft_fields(qa, repo):
     """C-c C-p, C-c C-a and C-c C-t change a new task's draft before it
-    starts: another project, Pi rather than Claude Code, and one of the
+    starts: another project, Pi rather than Claude Code, and one of your
+    Jira work items, whose key leads the task's name, then one of the
     project's GitHub issues, whose title and text become the prompt.  The
     task's panel names the issue, its pull request draft closes it, and
     C-c C-k there leaves the pull request unmade."""
@@ -1327,6 +1334,11 @@ def draft_fields(qa, repo):
     issue = dict(number=7, title="Entries lose their order", body="Adding an entry puts it first.",
                  labels=[dict(name="bug")], url="https://github.com/qa/ledger/issues/7")
     github(qa, issues=[issue])
+    (qa.jira / "issues.json").write_text(json.dumps([dict(
+        key="PROJ-3", url="https://qa.atlassian.net/browse/PROJ-3",
+        fields=dict(summary="Totals round half a cent down", labels=["money"], status=dict(name="To Do"),
+                    description=dict(type="doc", version=1, content=[dict(type="paragraph", content=[
+                        dict(type="text", text="Half a cent rounds down, not up.")])])))]))
     qa.emacs.eval("(setq qa-agents (cons roost-default-agent roost-agent-commands)"
                   " roost-agent-commands (cons (list \"pi\" %s %s \"pi\") roost-agent-commands))"
                   % (lisp(sys.executable), lisp(str(FAKE_AGENT))))
@@ -1353,6 +1365,19 @@ def draft_fields(qa, repo):
         qa.wait("which agent", lambda s: (s["prompt"] or "").startswith("Agent"))
         qa.type("pi\r")
         qa.wait("the agent", lambda s: re.search(r"Agent +pi\b", draft(s)))
+        qa.keys("C-c C-t")
+        qa.wait("which issue", lambda s: (s["prompt"] or "").startswith("Issue"))
+        qa.type("PROJ-3 Totals round half a cent down\r")
+        qa.wait("the work item", lambda s: re.search(r"Issue +PROJ-3 ", draft(s)))
+        qa.step("A draft from a Jira work item", expect=[
+            ("its key and summary, and what its key is for",
+             lambda s: re.search(r"Issue +PROJ-3 Totals round half a cent down\s+C-c C-t · the branch leads with its key",
+                                 draft(s))),
+            ("a name that starts with its key", lambda s: re.search(r"Name +PROJ-3-totals-round-half", draft(s))),
+            ("its summary and description as the prompt",
+             lambda s: "Totals round half a cent down\n\nHalf a cent rounds down, not up.\n\n"
+             "This is Jira issue PROJ-3: https://qa.atlassian.net/browse/PROJ-3" in draft(s))])
+        # GitHub's issue in its place, the prompt with it.
         qa.keys("C-c C-t")
         qa.wait("which issue", lambda s: (s["prompt"] or "").startswith("Issue"))
         qa.type("#7 Entries lose their order\r")
@@ -1413,6 +1438,7 @@ def draft_fields(qa, repo):
     finally:
         qa.emacs.eval("(setq roost-agent-commands (cdr qa-agents))")
         github(qa, issues=[])
+        (qa.jira / "issues.json").unlink(missing_ok=True)
 
 
 def names_changing(text, name, how, path):

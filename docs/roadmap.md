@@ -270,8 +270,7 @@ Larger, or undecided.
   keeps each task's terminal in a small daemon of its own and redraws it
   from Ghostty's engine when you attach. Emacs would show a task as a plain
   Ghostel terminal running `zmx attach`, through `ssh -t` for a remote host,
-  with no Eat and no tmux-control. Tracked in
-  [#79](https://github.com/csheaff/roost/issues/79); the draft
+  with no Eat and no tmux-control. The draft
   [#78](https://github.com/csheaff/roost/pull/78) tried it on 2026-10-20:
   links, Shift+Enter and program status worked without patches, and remote
   terminals shared one SSH connection, but zmx 0.8.1 isn't ready. It used
@@ -283,6 +282,23 @@ Larger, or undecided.
   started with nothing attached (fixed on zmx's main), and once an upgrade
   leaves running sessions reachable, or at least fails fast: today `kill`
   and `attach` hang against a daemon of another version.
+- **herdr-core in place of tmux.** [herdr-core](https://github.com/herdrdev/herdr-core)
+  (`hc`), split out of herdr on 2026-10-16, keeps each task's terminal in
+  a background process with a documented API, answers the agent's status
+  probe (OSC 7501) itself and keeps what it reports. Emacs would show a
+  task as a Ghostel terminal running `hc attach`, through `ssh -t` for a
+  remote host, with no tmux-control or Eat. The draft
+  [#180](https://github.com/csheaff/roost/pull/180) tried it on 2026-10-29,
+  on a Mac and on a Linux host over SSH: status came through with no relay
+  and nothing attached, links and the whole scrollback survived a
+  reattach, a dropped connection came back on its own, and an update left
+  running agents alone. Not taken up: herdr-core is at 0.1.14 with a
+  preview API, and no feature needs it. The relay covers status under
+  tmux, and Ghostel can come to tmux-control (see Ghostel, above). It
+  also starts every terminal at 200×120, so the agent's first redraw
+  leaves copies in the scrollback, and on Linux it turns on systemd
+  lingering for you without asking. Look again once it has a stable
+  release, or when Roost needs something only it gives.
 - **Claude Code's own background sessions.** Claude Code now runs sessions
   in the background itself (seen in 2.1.302): `claude --bg` starts one,
   `claude agents` lists them, and `attach`, `logs` and `respawn` act on
@@ -426,7 +442,7 @@ in changelogs.
 | Project | What it is | Worth a look |
 | --- | --- | --- |
 | [Orca](https://www.onorca.dev/) ([changelog](https://www.onorca.dev/changelog)) | Desktop app: a worktree per task, SSH hosts, a phone app | Usage meters, automations, several attempts per prompt, native chat |
-| [herdr](https://herdr.dev) | Terminal workspace that keeps agents' terminals in a background server; SSH machines | [Agent CLI and socket API](https://herdr.dev/docs/agent-automation/), [session restore](https://herdr.dev/docs/session-state/) |
+| [herdr](https://herdr.dev) | Terminal workspace that keeps agents' terminals in a background server; SSH machines. Split in October 2026 into [herdr-core](https://github.com/herdrdev/herdr-core), the server, and a desktop app | [Agent CLI and socket API](https://herdr.dev/docs/agent-automation/), [session restore](https://herdr.dev/docs/session-state/) |
 | [Rex](https://www.superlogical.com/rex/docs) | Terminal and multiplexer from Superlogical, on Ghostty's engine; macOS beta | [Server API](https://www.superlogical.com/rex/docs/automate/server-api), [events](https://www.superlogical.com/rex/docs/reference/events), [Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status) |
 | [Conductor](https://www.conductor.build/docs/) | macOS app: a worktree per task | [Scripts and ports](https://www.conductor.build/docs/reference/scripts), [checkpoints](https://conductor.build/docs/reference/checkpoints), [todos](https://conductor.build/docs/reference/todos) |
 | [Superset](https://github.com/superset-sh/superset) | Desktop editor for many agents | Workspace scripts, ports per worktree, MCP server, automations |
