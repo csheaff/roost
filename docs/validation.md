@@ -55,6 +55,23 @@ happened in a section below:
   its docs say it searches upward from where it starts until the
   worktree's root, as Codex and Pi do.
 
+## Jira work items through twg — 2026-10-29
+
+- **twg 1.4.2, signed in to no Jira site.** `twg help describe "jira
+  workitem query"` gives the work items under `data.issues`, each one's
+  fields beside its key (`summary`, `status.name`, `url`), not under
+  `fields` as Jira's own API has them; the helper reads both. Run where
+  `AI_AGENT`, `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT` or `CODEX_SANDBOX` is
+  set, as from an Emacs an agent started, twg ignored `-o json`, printed a
+  summary and left the JSON in a temporary file; `--output-summary none`
+  keeps it on its output, so the helper passes that. Unsigned, it exited
+  77 with `{"ok": false, "error": {..., "summary": "You're not signed in.
+  Run `twg login --force` …"}}` on its output and the same in words on
+  its errors, and Roost said that summary.
+- **Not seen:** a real work item. Whether a description comes as Atlassian
+  Document Format or as Markdown, the helper turns either into the
+  prompt's text, but no Jira site was at hand to show which.
+
 ## Your own Git and Emacs settings — 2026-10-27
 
 - **Why.** Tests and QA run with no Git or Emacs settings of anyone's own,

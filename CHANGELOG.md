@@ -4,6 +4,27 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A file's diff, opened from the task panel, has a buffer of its own, as
+  Magit's diff of the file you visit has: another file's diff shows in its
+  window and leaves it open behind, and opening it again goes back to it.
+  One diff buffer took each file in turn. Nothing to do when upgrading;
+  with `magit-diff-buffer-file-locked` set to nil, one buffer still takes
+  each.
+- `C-c C-t` in a new task draft lists your open Jira work items beside
+  the project's GitHub issues, when twg, Atlassian's Teamwork Graph CLI,
+  is installed and signed in on this machine. One's summary and
+  description become the prompt, and the task's branch starts with its
+  key, by which Jira's GitHub or Bitbucket integration links the branch
+  and its pull request. `roost-jira-query` picks which work items to list.
+  Nothing to do when upgrading; without twg, nothing changes.
+- When an agent exits, its pane says below its last output to resume the
+  task to go back to its conversation, for as long as the pane is shown.
+  The echo area said so once, and the pane showed only tmux's "Pane is
+  dead". `s` refuses while the agent runs in the task's shell or another
+  window of its tmux session, as when you started it again from a shell
+  there: Roost can't follow that one, and resuming started a second agent
+  on the same conversation. Exit it there, then press `s`. Nothing to do
+  when upgrading.
 - With Git's `rerere.autoUpdate`, `u` leaves a merge whose conflicts Git
   resolved as you resolved them before under way in the task's worktree,
   and offers to have its agent check them and commit it. It said

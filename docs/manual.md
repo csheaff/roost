@@ -176,6 +176,16 @@ starts the agent in tmux, and opens its terminal.
 - Press `C-c C-t` in the draft to pick one of the project's open GitHub issues.
   Its title and text become the prompt, and the task's pull request will close
   it.
+- With [twg](https://developer.atlassian.com/cloud/twg-cli/), Atlassian's
+  Teamwork Graph CLI, installed and signed in on this machine (`twg login`,
+  then `twg setup default-site`), `C-c C-t` lists your open Jira work items
+  too, by their keys, with their status and labels. One's summary and
+  description become the prompt, and the task's name, and so its branch,
+  starts with its key, as in `PROJ-123-fix-login`. Jira's own GitHub or
+  Bitbucket integration, where your site has it, links the branch and its
+  pull request to the work item by that key, and the pull request draft
+  links back to it. Roost doesn't change the work item. `roost-jira-query`
+  says which work items to list.
 
 A draft that quotes a file, as one from code, a file, a diagnostic, an error
 or a match does, names the project's tasks that already change it, below its
@@ -234,7 +244,9 @@ prompt, three lines there, the files it changed, those not yet committed
 first, and what a merge would rest on (below). Once you have sent the agent more, your latest prompt shows
 under the task's, a reminder of where you left off that the terminal may
 have scrolled away. A click or `RET` on a file
-opens its diff in Magit, where `;` writes a note for the agent (more under
+opens its diff in Magit, in a buffer of its own, as Magit's diff of the file
+you visit has, so another file's diff, in the same window, leaves it open behind (`magit-diff-buffer-file-locked`
+set to nil keeps one buffer for all). There `;` writes a note for the agent (more under
 Review in Magit, below). The terminal shows the agent's replies, so the panel leaves them out
 while the terminal is on screen; `i` shows the same panel in the main area,
 with the latest reply after the changes (a click or `RET` opens a link in it). `?` in the panel
@@ -316,7 +328,7 @@ when the task waits for nothing.
 | `ready` | Until you've seen its reply | Its turn is over and it waits for your next prompt. Not "reviewed" or "done" |
 | `interrupted` | Until you've seen it | You stopped its turn, with Esc or by declining a request |
 | `error` | Until you've seen it | A turn ended on an API error, such as a usage limit; `RET` opens it to try again |
-| `failed`, `exited` | Until you've seen it | The agent's CLI failed, or it exited; `RET` shows its last output |
+| `failed`, `exited` | Until you've seen it | The agent's CLI failed, or it exited; `RET` shows its last output, and `s` resumes its conversation. An agent you start again from a shell sends Roost nothing, so `s` waits until it has exited |
 | `crashed` | Until you've seen it | Its tmux pane went, as when the host or its tmux server restarted; `RET` or `s` resumes its conversation, and asks once to resume every other agent that crashed on that host. Those stopped, exited or failed stay as they are |
 | `conflicts` | Once you've seen its reply | Merging its commits into the branch it merges into would conflict; `u` brings that branch in |
 | `to merge` | Once you've seen its reply | Its pull request passed its checks and review, and GitHub finds no conflicts; `P` opens it |
@@ -486,7 +498,7 @@ counted once you stop and resume it (`K`, then `s`).
 | `x` | `roost-retire` | Finish with a task: retire it when its work is merged or it has none, otherwise offer to discard it (`roost-discard`), first saying what would be lost; to lose commits or files you type its name |
 | `X` | `roost-forget` | Drop the task from Roost, leaving its worktree and branch as they are |
 | `K` | `roost-stop` | Stop the agent's window; keep all work |
-| `s` | `roost-resume` | Restart a stopped or crashed task in its recorded conversation; when other agents crashed on its host too, as after it restarted, ask whether to resume those as well |
+| `s` | `roost-resume` | Restart a stopped, exited or crashed task in its recorded conversation; when other agents crashed on its host too, as after it restarted, ask whether to resume those as well. Refuses while the agent runs in the task's shell or another window of its tmux session, which Roost didn't start |
 | `w` | `roost-workload` | How long agents worked and waited on you, each day of the past week ([below](#how-many-agents-you-keep-up-with)) |
 | `g` | `roost-refresh` | Refresh status and Git statistics |
 
@@ -545,8 +557,9 @@ task's terminal when you open that task again.
 
 In the new task draft: `C-c C-c` creates, `C-c C-k` cancels, and `C-c C-p`,
 `C-c C-a`, `C-c C-b` and `C-c C-n` change the project, agent, starting ref and
-name. `C-c C-t` starts from a GitHub issue (with `gh` on the project's host). An
-empty name is derived from the prompt; `R` renames the task later.
+name. `C-c C-t` starts from a GitHub issue (with `gh` on the project's host)
+or a Jira work item (with `twg` on this machine). An empty name is derived
+from the prompt; `R` renames the task later.
 
 A task's integration branch is the one `m` merges it into, `u` updates it
 from, `P` opens its pull request against, and `↑`/`↓` count from. It is the
@@ -633,6 +646,11 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
 - `roost-magit-status-sections` (t): whether Magit's status of a task's
   worktree names the task and folds in its agent's latest reply.
 - `roost-branch-prefix`: topic branches are `PREFIX<name>-<id>`; default `roost/`.
+- `roost-jira-query`: the JQL for the Jira work items `C-c C-t` lists, by
+  default your open ones,
+  `assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC`;
+  nil lists none. Set it directory-locally for a project's own backlog, as
+  `project = PROJ AND statusCategory != Done ORDER BY rank`.
 - `roost-state-directory`: where each host keeps task records, the helper and
   worktrees; default `~/.local/share/roost`.
 - `roost-socket-name`: the tmux socket (default tmux-control's). Each task has a
@@ -860,6 +878,8 @@ Things to know:
   `.git` read-only, so it asks before committing.
 - A GitHub issue's text goes to the agent as written, and anyone can open an
   issue on a public repository. Read it in the draft before pressing `C-c C-c`.
+  So does a Jira work item's, which anyone who can file one in your site
+  wrote.
 - Where you last looked at a task is a commit: its `HEAD` when nothing is
   uncommitted, or else one the helper makes of everything in the worktree,
   staged in a copy of its index, so your index, staging and branches stay
@@ -937,9 +957,10 @@ The network:
   and TRAMP over it for a remote task's worktree; `git` on a host, to
   fetch and push a task's branch for its pull request, to delete that
   branch once it is merged, and in `roost-doctor` to try a push with
-  `--dry-run`; and `gh` on a host, for issues, pull requests, their checks
-  and comments. It sends nothing anywhere else: no telemetry and no update
-  checks. Agents reach their own services as they would without Roost.
+  `--dry-run`; `gh` on a host, for issues, pull requests, their checks
+  and comments; and `twg` on this machine, when it is installed, for the
+  Jira work items a draft can start from, as you press `C-c C-t`. It sends
+  nothing anywhere else: no telemetry and no update checks. Agents reach their own services as they would without Roost.
 - Roost listens on no socket of its own. Hooks report by running the
   helper, which writes the task's record. The sockets involved are tmux's
   server and, with `roost-ssh-share-connections` on, ssh's shared
@@ -1082,7 +1103,8 @@ region's, or a change to your buffer.
 configuration with its own server, state directory and tmux socket, and
 `test/fake_claude.py` for Claude Code, so Git, tmux and the host helper are
 real and no model is called. `test/qa/fake_gh.py` stands in for `gh`, with
-what each journey has GitHub say. The run has a home directory of its own, so your
+what each journey has GitHub say, and `test/qa/fake_twg.py` for `twg`, with
+what it has Jira say. The run has a home directory of its own, so your
 tmux, shell and Git configuration don't change it, and the fake agent writes
 its transcripts there, as Claude Code would in yours, for search. Its journeys start a task from the menu, answer
 it in its terminal, go through the tasks waiting with `n` and back, fold and unfold a long prompt with the mouse, resize the
@@ -1096,7 +1118,7 @@ typing its name and from its row's menu, send a prompt, bring a
 task up to date, restart Emacs with agents at work, search the
 conversations, work in a second frame, start a task from an Org heading,
 draft one from a compilation error, a file and a URL, change a draft's
-project, agent and GitHub issue, quote a region or a Flymake warning from
+project, agent and issue, from Jira or GitHub, quote a region or a Flymake warning from
 a task's file, keep a tab per task, two of the same name among them, forget a task, fork
 one's commits, follow a pull request from GitHub's checks and review to
 its merge, resume an agent that exited, see a host it can't reach,

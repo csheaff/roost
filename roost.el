@@ -59,6 +59,7 @@
 (declare-function tmux-control-window-id "tmux-control" ())
 (declare-function magit-status "magit-status" (&optional directory cache))
 (declare-function magit-diff-working-tree "magit-diff" (&optional rev args files))
+(declare-function magit-diff-setup-buffer "magit-diff" (range typearg args files &optional type locked))
 (declare-function magit-diff-dwim "magit-diff" (&optional args files))
 (declare-function magit-diff-arguments "magit-diff" (&optional mode))
 (declare-function magit-diff-type "magit-diff" (&optional section))
@@ -109,6 +110,9 @@
 
 (defvar tmux-control-default-socket-name)
 (defvar magit-root-section)
+(defvar magit-diff-buffer-file-locked)
+(defvar magit-buffer-diff-files)
+(defvar magit-buffer-diff-range)
 (defvar magit-status-headers-hook)
 (defvar magit-status-sections-hook)
 (defvar magit-refresh-buffer-hook)
@@ -214,6 +218,17 @@ to leave connection sharing to your ssh configuration."
 The entry gets a ROOST_TASK property holding the task's id, and Roost
 commands run on the entry, or on its agenda line, act on that task."
   :type 'boolean)
+
+(defcustom roost-jira-query
+  "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC"
+  "JQL for the Jira work items a draft can start from, or nil for none.
+With twg, Atlassian's Teamwork Graph CLI, installed and signed in on
+this machine, `roost-compose-set-issue' lists them beside the project's
+GitHub issues.  The default is your open work.  May be set
+directory-locally, as to a project's own backlog:
+project = PROJ AND statusCategory != Done ORDER BY rank."
+  :type '(choice (const :tag "No Jira work items" nil) string)
+  :safe #'string-or-null-p)
 
 (defcustom roost-sidebar-width 30
   "Width in columns of the task sidebar; see `roost-sidebar-mode'."
@@ -756,13 +771,26 @@ is the seconds it may take, if not `roost-request-timeout'."
 For interactive commands that need the answer before prompting.  Signal
 a `user-error' with the host's message on failure, or after TIMEOUT
 seconds (default 60)."
-  (let (done result failure)
-    (roost--request host action parameters
-                    (lambda (value) (setq result value done t))
-                    (lambda (err) (setq failure err done t)))
-    (with-timeout ((or timeout 60) (user-error "Roost: %s on %s timed out" action (roost--host-label host)))
-      (while (not done) (accept-process-output nil 0.05)))
-    (if failure (user-error "%s" failure) result)))
+  (pcase-let ((`(,ok . ,value) (car (roost--requests-wait (list (list host action parameters)) timeout))))
+    (if ok value (user-error "%s" value))))
+
+(defun roost--requests-wait (requests &optional timeout)
+  "Run REQUESTS at once and return how each went, in order.
+Each of REQUESTS is (HOST ACTION PARAMETERS), and each outcome is (t .
+RESULT) or (nil . ERROR).  For interactive commands that need the
+answers before prompting.  Signal a `user-error' after TIMEOUT seconds
+\(default 60)."
+  (let ((outcomes (make-vector (length requests) nil)))
+    (seq-do-indexed (pcase-lambda (`(,host ,action ,parameters) index)
+                      (roost--request host action parameters
+                                      (lambda (value) (aset outcomes index (cons t value)))
+                                      (lambda (err) (aset outcomes index (cons nil err)))))
+                    requests)
+    (with-timeout ((or timeout 60)
+                   (pcase-let ((`(,host ,action) (nth (seq-position outcomes nil) requests)))
+                     (user-error "Roost: %s on %s timed out" action (roost--host-label host))))
+      (while (memq nil (append outcomes nil)) (accept-process-output nil 0.05)))
+    (append outcomes nil)))
 
 ;; The agent starts before Emacs attaches, and tmux would give it 80 by 24.
 (defun roost--area-size (area like)
@@ -2457,7 +2485,7 @@ a word, within 40 characters."
 (defun roost--create-task (directory name base prompt agent &optional on-success on-failure extra)
   "Create an AGENT task NAME in DIRECTORY from BASE with PROMPT.
 Call ON-SUCCESS with the task before it opens, or ON-FAILURE with an error.
-EXTRA is an alist of further request fields, such as the GitHub issue."
+EXTRA is an alist of further request fields, such as the issue."
   (setq agent (or agent roost-default-agent))
   (unless (member agent roost--agents)
     (user-error "Unsupported Roost agent: %s" agent))
@@ -2937,10 +2965,12 @@ When that window is a tiled terminal's pane, use another, or a new one."
 
 (defun roost--compose-name ()
   "The draft's explicit name, or one derived from its prompt.
-A task started from a GitHub issue leads with the issue's number."
+A task started from an issue leads with its number, or a Jira work
+item's key, which Jira finds the branch by."
   (or (plist-get roost--compose-fields :name)
       (let ((derived (roost--name-from-prompt (roost--compose-prompt)))
-            (issue (alist-get 'number (plist-get roost--compose-fields :issue))))
+            (issue (when-let* ((issue (plist-get roost--compose-fields :issue)))
+                     (or (alist-get 'key issue) (alist-get 'number issue)))))
         (if (and issue (not (string-empty-p derived)))
             (format "%s-%s" issue derived)
           derived))))
@@ -2997,11 +3027,14 @@ A task started from a GitHub issue leads with the issue's number."
                                           ("" "no branch to merge into")
                                           (into (concat "merges into " into))))))
         (roost--compose-field "Issue" (if-let* ((issue (plist-get fields :issue)))
-                                          (format "#%s %s" (alist-get 'number issue)
+                                          (format "%s %s" (roost--issue-label issue)
                                                   (or (alist-get 'title issue) ""))
                                         "none")
                               #'roost-compose-set-issue
-                              (when (plist-get fields :issue) "the pull request will close it"))
+                              (when-let* ((issue (plist-get fields :issue)))
+                                (if (alist-get 'key issue)
+                                    "the branch leads with its key"
+                                  "the pull request will close it")))
         (roost--compose-field "Name" (cond (name)
                                           ((string-empty-p derived) "from the prompt")
                                           (t derived))
@@ -3239,61 +3272,97 @@ A branch is also the one the task merges into."
           (plist-put roost--compose-fields :name (unless (string-empty-p name) name)))
     (roost--compose-render)))
 
+(defun roost--issue-label (issue)
+  "What names ISSUE: #12 for GitHub's, its key for a Jira work item."
+  (or (alist-get 'key issue) (format "#%s" (alist-get 'number issue))))
+
 (defun roost--issue-prompt (issue)
-  "Prompt text for GitHub ISSUE: its title, its text, then where it is."
-  (let ((body (string-trim (or (alist-get 'body issue) ""))))
+  "Prompt text for ISSUE, GitHub's or Jira's: title, text, then where it is."
+  (let ((body (string-trim (or (alist-get 'body issue) "")))
+        (url (alist-get 'url issue)))
     (concat (alist-get 'title issue) "\n\n"
             (if (string-empty-p body) "" (concat body "\n\n"))
-            (format "This is GitHub issue #%s: %s" (alist-get 'number issue)
-                    (alist-get 'url issue)))))
+            (if-let* ((key (alist-get 'key issue)))
+                (format "This is Jira issue %s%s" key (if url (concat ": " url) "."))
+              (format "This is GitHub issue #%s: %s" (alist-get 'number issue) url)))))
 
 (defun roost-compose-set-issue ()
-  "Start the draft from one of the project's open GitHub issues.
+  "Start the draft from one of the project's open issues.
 The issue's title and text become the prompt, unless one is already
-written, and the task's pull request will close the issue.  Issues are
-listed with gh on the project's host."
+written.  GitHub's are listed with gh on the project's host, and the
+task's pull request will close the one you choose.  With twg,
+Atlassian's Teamwork Graph CLI, signed in on this machine, the Jira
+work items `roost-jira-query' finds are listed too, and the task's
+branch leads with the key of the one you choose."
   (interactive)
   (let* ((directory (or (plist-get roost--compose-fields :directory)
                         (user-error "Choose a project first (%s)"
                                     (substitute-command-keys "\\[roost-compose-set-project]"))))
          (host (roost--directory-host directory))
-         (issues (progn (message "Roost: listing open issues on %s…" (roost--host-label host))
-                        (roost--request-wait host "issues"
-                                             (list (cons 'directory (file-local-name directory))))))
+         (jql (roost--project-value directory 'roost-jira-query))
+         (outcomes (progn (message "Roost: listing open issues on %s…" (roost--host-label host))
+                          (roost--requests-wait
+                           (cons (list host "issues" (list (cons 'directory (file-local-name directory))))
+                                 ;; twg's sign-in is yours, here, wherever the project is.
+                                 (when jql (list (list nil "jira-issues" (list (cons 'jql jql)))))))))
+         (github (car outcomes))
+         ;; nil when twg isn't installed.
+         (jira (cadr outcomes))
+         (issues (append (and (car github) (cdr github))
+                         (and (car jira) (alist-get 'issues (cdr jira)))
+                         nil))
          (none "No issue")
          (choices (mapcar (lambda (issue)
-                            (cons (format "#%s %s" (alist-get 'number issue) (alist-get 'title issue))
+                            (cons (format "%s %s" (roost--issue-label issue) (alist-get 'title issue))
                                   issue))
                           issues))
          (choices (if (plist-get roost--compose-fields :issue) (cons (cons none nil) choices) choices))
          (completion-extra-properties
           (list :annotation-function
                 (lambda (choice)
-                  (when-let* ((labels (alist-get 'labels (cdr (assoc choice choices))))
-                              ((> (length labels) 0)))
-                    (concat "  " (propertize (string-join (append labels nil) ", ")
-                                             'face 'roost-dim)))))))
+                  (when-let* ((issue (cdr (assoc choice choices)))
+                              (words (append (ensure-list (alist-get 'status issue))
+                                             (alist-get 'labels issue) nil)))
+                    (concat "  " (propertize (string-join words ", ") 'face 'roost-dim)))))))
     (unless issues
-      (user-error "%s has no open issues" (roost--project-label directory)))
-    (let* ((issue (cdr (assoc (completing-read "Issue: " (roost--in-order choices) nil t) choices)))
-           (previous (plist-get roost--compose-fields :issue))
+      (user-error "%s" (string-join
+                        (delq nil (list (if (car github)
+                                            (format "%s has no open issues" (roost--project-label directory))
+                                          (cdr github))
+                                        (pcase jira
+                                          (`(nil . ,err) (concat "Jira: " err))
+                                          (`(t . ,(pred identity))
+                                           "no Jira work items match `roost-jira-query'"))))
+                        "; ")))
+    (let* ((issue (cdr (assoc (completing-read
+                               (pcase jira
+                                 (`(nil . ,err)
+                                  (format "Issue (Jira: %s): "
+                                          (truncate-string-to-width (car (split-string err "\n")) 60 nil nil "…")))
+                                 (_ "Issue: "))
+                               (roost--in-order choices) nil t)
+                              choices)))
+           ;; The prompt the last issue gave, text and all, which the
+           ;; task's record leaves out.
+           (previous (plist-get roost--compose-fields :issue-prompt))
            (prompt (roost--compose-prompt)))
       (setq roost--compose-fields (plist-put roost--compose-fields :issue
                                              (when issue
-                                               (delq nil (list (assq 'number issue) (assq 'title issue)
-                                                               (assq 'url issue))))))
+                                               (delq nil (list (assq 'number issue) (assq 'key issue)
+                                                               (assq 'title issue) (assq 'url issue))))))
       ;; An untouched prompt follows the issue; a written one gains it below.
       (when issue
         (let ((inhibit-read-only t)
-              (untouched (or (string-empty-p prompt)
-                             (and previous (equal prompt (string-trim (roost--issue-prompt previous)))))))
+              (untouched (or (string-empty-p prompt) (equal prompt previous)))
+              (text (roost--issue-prompt issue)))
+          (setq roost--compose-fields (plist-put roost--compose-fields :issue-prompt (string-trim text)))
           (save-excursion
             (if untouched
                 (delete-region roost--compose-body (point-max))
               (goto-char (point-max))
               (insert "\n\n"))
             (goto-char (point-max))
-            (insert (roost--issue-prompt issue)))))
+            (insert text))))
       (roost--compose-render))))
 
 (defun roost-compose-cancel ()
@@ -5839,7 +5908,7 @@ COMMITS are the task's commit messages, oldest first.  The first commit
 gives the title and body, and later ones, often review fixes, are listed
 by subject.  Without commits the title is the task name, and without a
 message body the prompt stands in.  A task started from a GitHub issue
-closes it."
+closes it, and one from a Jira work item links to it."
   (let* ((subjects (mapcar (lambda (message) (car (split-string message "\n"))) commits))
          (title (or (car subjects) (roost--readable-name (roost--field task 'name))))
          (first-body (and commits (string-trim (substring (car commits) (length (car subjects))))))
@@ -5848,7 +5917,9 @@ closes it."
                                  (when-let* ((prompt (roost--prompt-text task))) (string-trim prompt)))
                                (when (cdr subjects)
                                  (mapconcat (lambda (subject) (concat "- " subject)) (cdr subjects) "\n")))))
-         (issue (alist-get 'number (roost--field task 'issue))))
+         (issue (alist-get 'number (roost--field task 'issue)))
+         (key (alist-get 'key (roost--field task 'issue)))
+         (url (alist-get 'url (roost--field task 'issue))))
     ;; Let GitHub close the task's issue when this merges, unless the text
     ;; already says to with one of GitHub's words: the prompt names the
     ;; issue without one.
@@ -5857,6 +5928,11 @@ closes it."
                                                     issue)
                                             (string-join body "\n")))))
       (setq body (append body (list (format "Closes #%s" issue)))))
+    ;; Jira finds the pull request by the key its branch leads with, and
+    ;; this way back is for the people reviewing it.
+    (when (and key (not (let ((case-fold-search nil))
+                          (string-match-p (format "\\b%s\\b" (regexp-quote key)) (string-join body "\n")))))
+      (setq body (append body (list (if url (format "Jira: [%s](%s)" key url) (concat "Jira: " key))))))
     (concat title "\n\n" (string-join body "\n\n") (if body "\n" ""))))
 
 (defun roost--pr-header (task)
@@ -6280,15 +6356,17 @@ KEY is a function that formats a key, as in `roost--next-step'."
     ""))
 
 (defun roost--insert-issue (task)
-  "Insert TASK's \"Issue\" section when it was started from a GitHub issue."
+  "Insert TASK's \"Issue\" section when it was started from an issue."
   (when-let* ((issue (roost--field task 'issue))
-              (number (alist-get 'number issue)))
+              ((or (alist-get 'number issue) (alist-get 'key issue))))
     (roost--insert-heading "Issue")
     (insert "  ")
-    (insert-text-button (format "#%s" number)
-                        'follow-link t 'face 'roost-field
-                        'help-echo (alist-get 'url issue)
-                        'action (lambda (_) (browse-url (alist-get 'url issue))))
+    (if-let* ((url (alist-get 'url issue)))
+        (insert-text-button (roost--issue-label issue)
+                            'follow-link t 'face 'roost-field
+                            'help-echo url
+                            'action (lambda (_) (browse-url url)))
+      (insert (propertize (roost--issue-label issue) 'face 'roost-field)))
     (insert (format "  %s\n" (or (alist-get 'title issue) "")))))
 
 (defun roost--evidence-p (task)
@@ -7826,16 +7904,39 @@ Claude Code makes them for its EnterWorktree tool and isolated subagents."
                             'face (if (or (> ahead 0) (alist-get 'dirty entry)) 'roost-status-permission 'roost-dim))
                 "\n")))))
 
+(defvar-local roost--file-diff nil
+  "Whether this Magit buffer is a file's diff that `roost--diff-file' made.")
+(put 'roost--file-diff 'permanent-local t)
+
 (defun roost--diff-file (task file)
   "Show how TASK has changed FILE, an entry of its `files'.
-An untracked file, with nothing to compare, is opened instead."
+Each file has a buffer of its own, as Magit's diff of the file you visit
+has while `magit-diff-buffer-file-locked' is on, so another file's diff
+leaves this one open, behind it in the window a diff already has.  An
+untracked file, with nothing to compare, is opened instead."
   (roost--in-task-frame
    task (lambda ()
           (let ((default-directory (roost--remote-directory task))
-                (path (alist-get 'path file)))
+                (path (alist-get 'path file))
+                (rev (or (roost--fork-point task) "HEAD")))
             (if (and (not (alist-get 'untracked file)) (require 'magit nil t))
-                (progn (roost--magit-setup)
-                       (magit-diff-working-tree (roost--fork-point task) nil (list path)))
+                (let ((display-buffer-overriding-action
+                       '(display-buffer-reuse-mode-window (mode . magit-diff-mode))))
+                  (roost--magit-setup)
+                  ;; Since the fork point moved, as when the task was
+                  ;; updated, the file's old buffer shows changes that
+                  ;; aren't the task's.
+                  (dolist (buffer (buffer-list))
+                    (with-current-buffer buffer
+                      (when (and roost--file-diff
+                                 (equal magit-buffer-diff-files (list path))
+                                 (not (equal magit-buffer-diff-range rev))
+                                 (roost--task-in-directory default-directory (list task)))
+                        (kill-buffer buffer))))
+                  ;; What `magit-diff-working-tree' does, locked.
+                  (with-current-buffer (magit-diff-setup-buffer rev nil nil (list path) 'committed
+                                                                magit-diff-buffer-file-locked)
+                    (setq roost--file-diff t)))
               (find-file (expand-file-name path)))))))
 
 (defun roost--fontify-changes (changes)
@@ -9031,7 +9132,7 @@ says only that the host is unreachable."
            (concat
             "  \\<roost-dashboard-mode-map>\\[roost-new-task]  Start a task: choose a project (local, or remote over TRAMP), an agent, and a prompt.\n"
             "     Run \\<global-map>\\[roost-new-task] on an Org heading or with a region selected to start from it;\n"
-            "     in the draft, \\<roost-compose-mode-map>\\[roost-compose-set-issue] picks a GitHub issue.\n"
+            "     in the draft, \\<roost-compose-mode-map>\\[roost-compose-set-issue] picks an issue from GitHub or Jira.\n"
             "  \\<roost-dashboard-mode-map>\\[roost-dispatch]  Every command.\n"
             "  \\[roost-doctor]  Check this machine and each host.\n"))
           (format "\n  Watching %s.\n"
