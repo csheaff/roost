@@ -385,6 +385,13 @@ Larger, or undecided.
 - **A bare repository with worktrees**, a common layout, can't start
   tasks: Roost takes the primary checkout for the repository, and a bare
   one has none.
+- **Submodules fetched again for each task**: Git clones a linked
+  worktree's submodules under `.git/worktrees/TASK/modules/`, apart from
+  the primary checkout's, so each task fetches them anew. `--reference`
+  to the primary checkout's clones would save that time and room, as long
+  as removing the worktree can't harm them. And a submodule only the
+  task's branch has is left out while the primary checkout has others
+  initialized, as Roost can't tell it from one you deinitialized.
 
 ## Not planned
 

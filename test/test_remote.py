@@ -704,15 +704,188 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual((self.repo / "hello").read_text(), "changed\n")
         self.assertFalse(wt.exists())
 
-    def add_submodule(self):
-        """Commit a submodule lib to the primary checkout, cloned from a
-        library of its own, which is its remote."""
-        library = self.root / "library"
+    def allow_local_submodules(self):
+        """Let Git clone a submodule from a folder, as the tests' are, which
+        it refuses since 2.38.1 unless told to: in the runners too, which
+        tmux starts with the environment it started with."""
+        count = int(os.environ.get("GIT_CONFIG_COUNT") or 0)
+        patcher = patch.dict(os.environ, {"GIT_CONFIG_COUNT": str(count + 1),
+                                          "GIT_CONFIG_KEY_%d" % count: "protocol.file.allow",
+                                          "GIT_CONFIG_VALUE_%d" % count: "always"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def library(self, name, *submodules):
+        """A repository NAME, with a commit, and SUBMODULES, folders of
+        others, added as submodules of the same names, then a commit after
+        those, so that its tip is not the commit a superproject records."""
+        library = self.root / name
         roost.git(self.root, "init", "-q", "-b", "main", str(library))
-        roost.git(library, "-c", "user.name=T", "-c", "user.email=t@example.invalid",
-                  "commit", "-q", "--allow-empty", "-m", "library")
-        self.git("-c", "protocol.file.allow=always", "submodule", "add", "-q", str(library), "lib")
-        self.git("commit", "-qm", "library")
+        commit = lambda message: roost.git(library, "-c", "user.name=T", "-c", "user.email=t@example.invalid",
+                                           "commit", "-q", "--allow-empty", "-m", message)
+        commit(name)
+        for submodule in submodules:
+            roost.git(library, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(submodule),
+                      submodule.name)
+            commit("Add " + submodule.name)
+        return library
+
+    def add_submodule(self, library=None, path="lib"):
+        """Commit a submodule PATH to the primary checkout, cloned from
+        LIBRARY, or a library of its own, which is its remote."""
+        self.allow_local_submodules()
+        library = library or self.library("library")
+        self.git("-c", "protocol.file.allow=always", "submodule", "add", "-q", str(library), path)
+        self.git("commit", "-qm", "Add " + path)
+
+    def recorded(self, top, path):
+        """The commit TOP records for its submodule PATH, and the one checked out there."""
+        return self.git("rev-parse", "HEAD:" + path, cwd=top), self.git("rev-parse", "HEAD", cwd=top / path)
+
+    def test_a_new_task_checks_out_its_submodules_nested_ones_too(self):
+        inner = self.library("inner")
+        library = self.library("library", inner)
+        self.add_submodule(library)
+        # Their tips move on, past what the task's branch records.
+        for repository in (inner, library):
+            roost.git(repository, "-c", "user.name=T", "-c", "user.email=t@example.invalid",
+                      "commit", "-q", "--allow-empty", "-m", "later")
+        config = self.git("config", "--get-regexp", "^submodule")
+        task = self.create()
+        wt = Path(task["worktree"])
+        for top, path in ((wt, "lib"), (wt / "lib", "inner")):
+            recorded, checked_out = self.recorded(top, path)
+            self.assertEqual(checked_out, recorded, path)
+        self.assertIs(roost.Store(str(self.state)).read(task["id"])["submodulesComplete"], True)
+        self.assertEqual(self.git("status", "--porcelain", cwd=wt), "")
+        # The primary checkout's are as they were.
+        self.assertEqual(self.git("config", "--get-regexp", "^submodule"), config)
+        # A nested one that can't be fetched stops the next, and says where.
+        inner.rename(inner.with_name("inner gone"))
+        reply = self.request("create", directory=str(self.repo), name="nested", socket=self.socket,
+                             command=[sys.executable, str(FAKE)])
+        failed = self.wait(reply["result"], "failed")
+        self.assertEqual(failed["error"], "Could not check out a submodule in lib; resuming the task tries again")
+        inner.with_name("inner gone").rename(inner)
+        self.wait_for_pane_exit(failed)
+        self.assertTrue(self.request("resume", id=failed["id"])["ok"])
+        self.wait(failed, "ready")
+        self.assertEqual(*self.recorded(Path(failed["worktree"]) / "lib", "inner"))
+        # Retiring takes them with it, as they hold nothing new.
+        for done in (task, failed):
+            reply = self.request("retire", id=done["id"])
+            self.assertTrue(reply["ok"], reply)
+            self.assertFalse(Path(done["worktree"]).exists())
+
+    def test_a_submodule_that_cannot_be_fetched_stops_the_task_and_resuming_checks_it_out(self):
+        self.add_submodule()
+        library = self.root / "library"
+        library.rename(self.root / "moved")
+        reply = self.request("create", directory=str(self.repo), name="fetch", socket=self.socket,
+                             setup="touch setup-ran", command=[sys.executable, str(FAKE)])
+        task = self.wait(reply["result"], "failed")
+        self.assertEqual(task["error"], "Could not check out the submodule lib; resuming the task tries again")
+        self.assertIs(task["submodulesComplete"], False)
+        wt = Path(task["worktree"])
+        # Not the setup, which may need it.
+        self.assertFalse((wt / "setup-ran").exists())
+        self.wait_for_pane_exit(task)
+        # On its screen, after what Git said, which names where it looked.
+        screen = roost.tmux(self.socket, "capture-pane", "-p", "-J", "-S", "-", "-t", task["paneId"]).stdout
+        self.assertIn(str(library), screen)
+        self.assertIn("Roost: Could not check out the submodule lib", screen)
+        (self.root / "moved").rename(library)
+        self.assertTrue(self.request("resume", id=task["id"])["ok"])
+        self.assertIs(self.wait(task, "ready")["submodulesComplete"], True)
+        self.assertEqual(*self.recorded(wt, "lib"))
+        self.assertTrue((wt / "setup-ran").exists())
+        # Once only.
+        self.request("stop", id=task["id"])
+        library.rename(self.root / "moved")
+        self.assertTrue(self.request("resume", id=task["id"])["ok"])
+        self.wait(task, "ready")
+
+    def test_a_new_task_leaves_out_the_submodules_the_repository_has_not_initialized(self):
+        self.add_submodule()
+        self.add_submodule(self.library("big"), "big")
+        # One the index has, and .gitmodules doesn't name.
+        self.git("update-index", "--add", "--cacheinfo", "160000,%s,orphan" % self.git("rev-parse", "HEAD"))
+        self.git("commit", "-qm", "Orphan")
+        # Taken out of the primary checkout, as to save room.
+        self.git("submodule", "deinit", "-q", "big")
+        task = self.create()
+        wt = Path(task["worktree"])
+        self.assertEqual(*self.recorded(wt, "lib"))
+        self.assertEqual(list((wt / "big").iterdir()), [])
+        self.assertEqual(list((wt / "orphan").iterdir()), [])
+        # Still left out there, where `--init` would have put it back.
+        self.assertEqual(self.git("config", "--get-regexp", "^submodule").splitlines(),
+                         ["submodule.lib.url " + str(self.root / "library"), "submodule.lib.active true"])
+        # Turned off too, the one it has initialized: none.
+        self.git("config", "submodule.lib.active", "false")
+        task = self.create(name="off")
+        wt = Path(task["worktree"])
+        self.assertEqual((list((wt / "lib").iterdir()), list((wt / "big").iterdir())), ([], []))
+        self.assertNotIn("submodule.big", self.git("config", "--get-regexp", "^submodule"))
+        # Where it has initialized none, each, but one turned off.
+        self.git("submodule", "deinit", "-q", "lib")
+        self.git("config", "submodule.lib.active", "false")
+        task = self.create(name="none")
+        wt = Path(task["worktree"])
+        self.assertEqual(*self.recorded(wt, "big"))
+        self.assertEqual(list((wt / "lib").iterdir()), [])
+        self.assertEqual(self.git("config", "submodule.lib.active"), "false")
+
+    def test_a_task_cut_short_checks_out_what_it_chose_at_first(self):
+        # Where the repository has initialized none, as in a plain clone.
+        self.add_submodule()
+        self.add_submodule(self.library("big"), "big")
+        self.git("submodule", "deinit", "-q", "--all")
+        (self.root / "big").rename(self.root / "moved")
+        reply = self.request("create", directory=str(self.repo), name="cut", socket=self.socket,
+                             command=[sys.executable, str(FAKE)])
+        task = self.wait(reply["result"], "failed")
+        self.assertIs(task["allSubmodules"], True)
+        # As if stopped before Git initialized big: lib's, initialized,
+        # would otherwise leave big out.
+        self.git("config", "--remove-section", "submodule.big")
+        self.wait_for_pane_exit(task)
+        (self.root / "moved").rename(self.root / "big")
+        self.assertTrue(self.request("resume", id=task["id"])["ok"])
+        self.wait(task, "ready")
+        for path in ("lib", "big"):
+            self.assertEqual(*self.recorded(Path(task["worktree"]), path))
+
+    def test_git_that_would_run_a_command_gitmodules_names_leaves_submodules_out(self):
+        self.add_submodule()
+        worktree = self.root / "worktree"
+        self.git("worktree", "add", "-q", "--detach", str(worktree))
+        with patch.object(roost, "version_of", return_value=(2, 24, 0)):
+            roost.check_out_submodules(worktree, os.environ)
+        self.assertEqual(list((worktree / "lib").iterdir()), [])
+        roost.check_out_submodules(worktree, os.environ)
+        self.assertEqual(*self.recorded(worktree, "lib"))
+
+    def test_submodules_with_hostile_names_check_out_and_run_nothing(self):
+        marks = Path(tempfile.mkdtemp(prefix="roostmarks", dir="/tmp"))
+        self.addCleanup(shutil.rmtree, marks, True)
+        path = "x $(touch %s) it's #[1]" % (marks / "path")
+        self.add_submodule(path=path)
+        # One it names, read as a pattern, which the repository turned off.
+        other = path.replace("[1]", "1")
+        self.add_submodule(self.library("other"), other)
+        self.git("config", "submodule.%s.active" % other, "false")
+        task = self.create()
+        self.assertEqual(*self.recorded(Path(task["worktree"]), path))
+        self.assertEqual(list((Path(task["worktree"]) / other).iterdir()), [])
+        # A command .gitmodules names, which Git refuses to run.
+        self.git("config", "-f", ".gitmodules", "submodule.%s.update" % path, "!touch " + str(marks / "update"))
+        self.git("commit", "-qam", "Update by a command")
+        reply = self.request("create", directory=str(self.repo), name="update", socket=self.socket,
+                             command=[sys.executable, str(FAKE)])
+        failed = self.wait(reply["result"], "failed")
+        self.assertEqual(failed["error"], "Could not check out the submodule %s; resuming the task tries again" % path)
+        self.assertEqual(list(marks.iterdir()), [])
 
     def check_out_submodules(self, worktree):
         self.git("-c", "protocol.file.allow=always", "submodule", "update", "-q", "--init", cwd=worktree)
@@ -801,8 +974,7 @@ class Lifecycle(unittest.TestCase):
         roost.git(library, "config", "-f", ".gitmodules", "submodule.inner.ignore", "dirty")
         roost.git(library, "add", ".gitmodules")
         roost.git(library, "-c", "user.name=T", "-c", "user.email=t@example.invalid", "commit", "-qm", "inner")
-        self.git("-c", "protocol.file.allow=always", "submodule", "add", "-q", str(library), "lib")
-        self.git("commit", "-qm", "library")
+        self.add_submodule(library)
         task = self.create()
         wt = Path(task["worktree"])
         self.git("-c", "protocol.file.allow=always", "submodule", "update", "-q", "--init", "--recursive", cwd=wt)
@@ -7376,14 +7548,18 @@ class ProgramStatus(unittest.TestCase):
 class Subprocesses(unittest.TestCase):
     """The helper starts programs from lists of arguments, never a shell,
     but for the project's own setup and teardown commands, which you would
-    type in one. Read from its source, so a path no test takes is checked
-    too."""
+    type in one, and `git submodule update`, which runs one the
+    repository's config names for a submodule, as it would by hand. Read
+    from its source, so a path no test takes is checked too."""
 
     # What subprocess runs from a command it is given.
     RUNS = ("run", "Popen", "call", "check_call", "check_output")
     SHELLS = ("sh", "bash", "zsh", "dash", "ksh", "fish", "csh", "tcsh")
     # The project's own commands, run in a login shell: (function, variable).
     OWN_COMMANDS = (("run_teardown", "command"), ("runner", "setup"))
+    # Git's, that run a shell command the repository's config names, as
+    # submodule.<name>.update: (function, Git command).
+    OWN_GIT_COMMANDS = (("check_out_submodules", "submodule"),)
 
     def problems(self, source):
         """Where SOURCE might run a shell or a string, as "line N: what"."""
@@ -7569,6 +7745,11 @@ class Subprocesses(unittest.TestCase):
                     found.add("line %d: passes keywords this test can't read, %s" % (call.lineno, ast.unparse(call)))
                 command = call.args[0] if call.args else next((k.value for k in call.keywords if k.arg == "args"), None)
                 check(command, scope_of(call), call.lineno)
+        # Named anywhere, as an argument to a function that runs Git is.
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Constant) and node.value in {name for _, name in self.OWN_GIT_COMMANDS}
+                    and (getattr(scope_of(node), "name", None), node.value) not in self.OWN_GIT_COMMANDS):
+                found.add("line %d: runs git %s, which can run a shell" % (node.lineno, node.value))
         return sorted(found, key=lambda problem: int(problem.split()[1].rstrip(":")))
 
     def test_only_the_projects_own_commands_run_in_a_shell(self):
@@ -7617,6 +7798,9 @@ class Subprocesses(unittest.TestCase):
             "def f():\n    argv = []\n    argv.extend(['/bin/sh', '-c', command])\n    subprocess.run(argv)": "changes argv",
             "import subprocess as sp\nsp.run(['/bin/sh', '-c', command])": "imports subprocess as sp",
             "from os import system\nsystem(command)": "imports from os",
+            # Git's own way to run one, but where it is meant to.
+            "def retire(worktree):\n    git(worktree, 'submodule', 'foreach', 'make clean')": "runs git submodule",
+            "def f(worktree):\n    execute(['git', '-C', worktree, 'submodule', 'update'])": "runs git submodule",
         }
         for source, problem in cases.items():
             with self.subTest(source=source):
@@ -7628,6 +7812,8 @@ class Subprocesses(unittest.TestCase):
                        "for argv in (['git', '--version'], ['tmux', '-V']):\n    subprocess.run(argv)",
                        # A program found on PATH, and Python itself.
                        "def gh(*args):\n    executable = shutil.which('gh')\n    subprocess.run([executable, *args])",
+                       "def check_out_submodules(worktree, env):\n"
+                       "    subprocess.run(['git', '-C', worktree, 'submodule', 'update'], env=env)",
                        "subprocess.run([sys.executable, '-I', helper])",
                        "from os import path\nimport os\nsubprocess.run(['git', '-C', path.join(a, b)])",
                        # Another function of the same name, elsewhere, is another function.
