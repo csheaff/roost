@@ -48,6 +48,12 @@ happened in a section below:
   ignores a skill listed in `.git/info/exclude` in each worktree too, so
   that and `.worktreeinclude` keep one of your own out of the project's
   history.
+- **Codex 0.163.0 and Pi 1.3.0.** The same with the skills under
+  `.agents/skills/`: `codex debug prompt-input` and Pi's RPC
+  `get_commands` (with `--approve`) listed both in the primary checkout,
+  and only the committed one in the worktree. OpenCode wasn't installed;
+  its docs say it searches upward from where it starts until the
+  worktree's root, as Codex and Pi do.
 
 ## Your own Git and Emacs settings — 2026-10-27
 

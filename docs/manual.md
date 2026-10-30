@@ -722,20 +722,28 @@ marked unreachable.
 ### Where a task's skills come from
 
 Roost does nothing with skills. The agent in a task finds its own, in the
-task's worktree and in your home directory on the task's host.
+task's worktree and in your home directory on the task's host, in the
+folders its docs name (as they did in October 2026):
 
-- **The project's.** Skills committed under the project's skill folder,
-  `.claude/skills/` for Claude Code, come with every worktree. One you have
-  made in the primary checkout and not committed doesn't, as
-  `.worktreeinclude` copies only files Git ignores: Claude Code 2.1.312,
-  started in a task, lists the committed skills and not the new one. Commit
-  it, or have Git ignore it (in `.gitignore`, or in `.git/info/exclude` to
-  keep it to yourself) and list it in `.worktreeinclude`, as
-  `.claude/skills/review/`.
+| Agent | In the project | In your home directory |
+|---|---|---|
+| Claude Code | `.claude/skills/` | `~/.claude/skills/`, and the plugins you install |
+| Codex | `.agents/skills/` | `~/.agents/skills/` |
+| Pi | `.pi/skills/`, `.agents/skills/` | `~/.pi/agent/skills/`, `~/.agents/skills/` |
+| OpenCode | `.opencode/skills/`, `.agents/skills/`, `.claude/skills/` | `~/.config/opencode/skills/`, `~/.agents/skills/`, `~/.claude/skills/` |
+
+So a skill in `.agents/skills/` reaches Codex, Pi and OpenCode, and one in
+`.claude/skills/` Claude Code and OpenCode.
+
+- **The project's.** Skills committed under a project folder come with
+  every worktree. One you have made in the primary checkout and not
+  committed doesn't, as `.worktreeinclude` copies only files Git ignores:
+  started in a task, Claude Code 2.1.312, Codex 0.163.0 and Pi 1.3.0 list
+  the committed skills and not the new one. Commit it, or have Git ignore
+  it (in `.gitignore`, or in `.git/info/exclude` to keep it to yourself)
+  and list it in `.worktreeinclude`, as `.agents/skills/review/`.
 - **Your own.** Skills and plugins in your home directory reach every task
-  on that host: for Claude Code, those in `~/.claude/skills/` and the
-  plugins you install. Other agents read folders of their own, which their
-  docs name.
+  on that host.
 - **On another host.** Roost copies only its helper to a remote host, so a
   task there has that host's skills and plugins, not this machine's.
   Install the ones you want on that host yourself, from a dotfiles
