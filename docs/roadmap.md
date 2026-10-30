@@ -192,6 +192,18 @@ account, with no badge or verdict.
   that to about 12%; Ghostel wasn't measured with hidden terminals. First
   check that Ghostel can show output it doesn't read from its own process.
   The module is a prebuilt download, one more thing to install.
+- **Images in a task's terminal.** Pi shows the images its tools read in a
+  terminal that draws Kitty or iTerm2 images, and a line of text in their
+  place otherwise; under tmux it assumes neither unless `PI_IMAGE_PROTOCOL`
+  names one. tmux 3.6a's control mode already hands tmux-control all three
+  kinds byte for byte, and Ghostel draws a Kitty image it is fed with no
+  process of its own ([validation](validation.md), 2026-10-30), so images
+  would come with Ghostel in place of Eat (above). Eat draws only Sixel,
+  and only once tmux-control gives it the cell size `eat-mode` does.
+  Either way an image goes when tmux-control redraws a screen from tmux's
+  text, as after a resize. tmux's main branch takes Kitty graphics from a
+  program in a pane (2026-10-16) and draws them on a terminal that shows
+  them (2026-10-29), in no release yet: 3.8 is the latest.
 - **A second sign on the count, beside colour.** The mode line's
   `● Roost:2` and the sidebar's `2 waiting` tell an agent that asks from
   one that failed or finished by colour alone. For a protanope, ef-dream's
@@ -271,15 +283,13 @@ Larger, or undecided.
   testers since late October. Its server API covers what the helper asks
   of tmux: start a terminal running a command in a folder, type into it,
   close it, and push events for its exit code and its program status (OSC
-  7501, which tmux blocks; see
-  [tmux#5713](https://github.com/tmux/tmux/issues/5713)). Its IDs are never
+  7501, which tmux blocks for now; see Known gaps). Its IDs are never
   reused, so a stale ID can't reach another terminal. Missing: a documented
   way for Emacs to attach to a terminal and stream it, as tmux-control does
   with control mode. Rex's stream starts with a snapshot in Ghostty's own
   format, and `rex block stream` isn't implemented: asked for in the beta
   on 2026-10-21, and still so on 2026-10-26 ([validation](validation.md)).
-  Look again once Emacs can attach, or once tmux turns down OSC 7501 for
-  good.
+  Look again once Emacs can attach.
 - **zmx and Ghostel in place of tmux.** [zmx](https://github.com/neurosnap/zmx)
   keeps each task's terminal in a small daemon of its own and redraws it
   from Ghostty's engine when you attach. Emacs would show a task as a plain
@@ -308,8 +318,9 @@ Larger, or undecided.
   reattach, a dropped connection came back on its own, and an update left
   running agents alone. Not taken up: herdr-core is at 0.1.14 with a
   preview API, and no feature needs it. The relay covers status under
-  tmux, and Ghostel can come to tmux-control (see Ghostel, above). It
-  also starts every terminal at 200×120, so the agent's first redraw
+  tmux, which has agreed to keep that status itself (see Known gaps), and
+  Ghostel can come to tmux-control (see Ghostel, above). It also starts
+  every terminal at 200×120, so the agent's first redraw
   leaves copies in the scrollback, and on Linux it turns on systemd
   lingering for you without asking. Look again once it has a stable
   release, or when Roost needs something only it gives.
@@ -337,6 +348,12 @@ Larger, or undecided.
   0.163.0 and Pi 1.1.0 and later report through the terminal instead,
   which closes this for all three. It could become the default once it has
   had some weeks of daily use and its protocol, still changing, settles.
+  tmux could make the relay unnecessary: on 2026-10-30 its maintainer
+  agreed to keep each pane's latest report, readable as the formats
+  `program_state`, `program_name` and `program_message`, and asked for a
+  pull request ([tmux#5713](https://github.com/tmux/tmux/issues/5713)). On
+  a tmux with it, Roost could read status from tmux; an older tmux would
+  keep the relay.
 - Codex reports only whether it works, waits on you or idles, and works
   between turns too, while its servers start or a command it left running
   runs. So its hooks say when a turn starts and ends, and with
