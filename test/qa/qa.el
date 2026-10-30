@@ -5,8 +5,9 @@
 ;; qa.py starts a GUI Emacs of its own and drives it through emacsclient
 ;; with these functions.  Input goes in as events, as from the keyboard
 ;; and mouse, so it runs through the command loop, keymaps and redisplay;
-;; what is on screen comes back as JSON.  Errors are collected wherever
-;; they happen: in commands, timers, process filters and hooks.
+;; what is on screen comes back as JSON, in a file (`qa-reply').  Errors
+;; are collected wherever they happen: in commands, timers, process
+;; filters and hooks.
 
 ;;; Code:
 
@@ -223,6 +224,27 @@ view stubbed out, so it doesn't count here."
   "Every error since the last call, oldest first, and forget them."
   (prog1 (reverse (append (qa--messages-errors) qa--errors))
     (setq qa--errors nil)))
+
+(defun qa-reply (file value)
+  "Write VALUE to FILE as emacsclient would print it, and return t.
+qa.py reads its replies there.  Emacs's server sends a long reply in
+pieces, and while it waits to send the next, it runs what other
+processes said, such as a host's reply that has Roost ask a question:
+emacsclient, and qa.py, would then wait until it was answered."
+  (with-temp-buffer
+    (let ((standard-output (current-buffer)))
+      (pp value))
+    (let ((coding-system-for-write 'utf-8-unix))
+      (write-region nil nil file nil 'quiet)))
+  t)
+
+(defun qa--in-request-p ()
+  "Whether this runs within a request of qa.py's, through emacsclient."
+  (catch 'in
+    (mapbacktrace (lambda (_evald function _args _flags)
+                    (when (eq function 'server-process-filter)
+                      (throw 'in t))))
+    nil))
 
 ;;;; Input
 
@@ -913,8 +935,15 @@ A window parameter of that name takes the buffer's place, as in redisplay."
 A minibuffer's buffer is used again for the next question at its depth.")
 
 (defun qa--question-asked ()
-  "Number the question the minibuffer asks now, for `qa--questions'."
-  (setq qa--question (cl-incf qa--questions-asked)))
+  "Number the question the minibuffer asks now, for `qa--questions'.
+One asked within a request of qa.py's is a problem, and quit: the
+request would wait for its answer, and qa.py with it."
+  (setq qa--question (cl-incf qa--questions-asked))
+  (when (qa--in-request-p)
+    (push (format "A question opened within a request of qa.py's, which would wait for its answer: %s"
+                  (substring-no-properties (minibuffer-prompt)))
+          qa--errors)
+    (run-at-time 0 nil #'abort-recursive-edit)))
 
 (add-hook 'minibuffer-setup-hook #'qa--question-asked)
 

@@ -89,19 +89,29 @@ def lisp(value):
 class Emacs:
     """The Emacs under test, through emacsclient."""
 
-    def __init__(self, server):
+    def __init__(self, server, reply):
         self.server = server
+        # Where Emacs writes what an expression returns, as qa.el's
+        # qa-reply says why.
+        self.reply = reply
 
     def eval(self, expression, timeout=60):
+        self.reply.unlink(missing_ok=True)
         try:
-            reply = subprocess.run(["emacsclient", "--socket-name", self.server, "--eval", expression],
+            reply = subprocess.run(["emacsclient", "--socket-name", self.server, "--eval",
+                                    "(qa-reply %s %s)" % (lisp(str(self.reply)), expression)],
                                    capture_output=True, text=True, timeout=timeout)
         except subprocess.TimeoutExpired:
             # Its command loop is busy, or waits for something.
             raise Stuck("Emacs didn't answer in %ds" % timeout) from None
+        said = reply.stderr.strip() or reply.stdout.strip()
+        if reply.returncode and said == "*ERROR*: Quit":
+            # As qa.el quits a question that opened within it.
+            raise Stuck("Emacs quit %s" % expression[:80])
         if reply.returncode:
-            raise RuntimeError("emacsclient: %s" % (reply.stderr.strip() or reply.stdout.strip()))
-        return reply.stdout.strip()
+            raise RuntimeError("emacsclient: %s" % said)
+        # Nothing when Emacs exited, as asked.
+        return self.reply.read_text(encoding="utf-8").strip() if self.reply.exists() else ""
 
     def json(self, expression, timeout=60):
         """The JSON in the string EXPRESSION returns."""
@@ -177,7 +187,7 @@ class Run:
             self.env["QA_REMOTE_HOME"] = str(self.remote_home)
             self.host = "qa-remote"
             self.tmux_env = dict(self.env, TMUX_TMPDIR=str(self.remote_home / ".tmux-sock"))
-        self.emacs = Emacs(self.name)
+        self.emacs = Emacs(self.name, self.work / "reply")
         self.process = None
         self.steps = []
         self.journey = None
@@ -3583,10 +3593,13 @@ def main():
                            for line in qa.processes()]
                 try:
                     screen = qa.screen()
+                    # Such as a question quit as it opened within a request.
+                    errors = ["Error: " + error
+                              for error in qa.emacs.json("(json-encode (vconcat (qa-take-errors)))")]
                 except Stuck:
-                    screen = dict(windows=[])
+                    screen, errors = dict(windows=[]), []
                 qa.steps.append(dict(journey=qa.journey, title="Stopped",
-                                     problems=[str(stuck)] + running, shot=None, screen=screen))
+                                     problems=[str(stuck)] + errors + running, shot=None, screen=screen))
                 print("  ✗ Stopped: %s" % stuck)
     finally:
         try:
