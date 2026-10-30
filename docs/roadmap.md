@@ -195,14 +195,15 @@ account, with no badge or verdict.
 - **Images in a task's terminal.** Pi shows the images its tools read in a
   terminal that draws Kitty or iTerm2 images, and a line of text in their
   place otherwise; under tmux it assumes neither unless `PI_IMAGE_PROTOCOL`
-  names one. tmux's main branch now takes Kitty graphics from a program in
-  a pane (2026-10-16) and draws them on a terminal that shows them
-  (2026-10-29), in no release yet: 3.8 is the latest. Eat draws only Sixel
-  images, so this would come after Ghostel in place of Eat (above), or
-  tmux-control would draw them itself, as it does links. To find out
-  first: whether an image reaches a control-mode client such as
-  tmux-control, and whether Ghostel draws one from output it is fed
-  rather than reads itself.
+  names one. tmux 3.6a's control mode already hands tmux-control all three
+  kinds byte for byte, and Ghostel draws a Kitty image it is fed with no
+  process of its own ([validation](validation.md), 2026-10-30), so images
+  would come with Ghostel in place of Eat (above). Eat draws only Sixel,
+  and only once tmux-control gives it the cell size `eat-mode` does.
+  Either way an image goes when tmux-control redraws a screen from tmux's
+  text, as after a resize. tmux's main branch takes Kitty graphics from a
+  program in a pane (2026-10-16) and draws them on a terminal that shows
+  them (2026-10-29), in no release yet: 3.8 is the latest.
 - **A second sign on the count, beside colour.** The mode line's
   `● Roost:2` and the sidebar's `2 waiting` tell an agent that asks from
   one that failed or finished by colour alone. For a protanope, ef-dream's

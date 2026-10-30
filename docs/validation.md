@@ -35,6 +35,28 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## Images in a task's terminal — 2026-10-30
+
+- **Why.** Whether an image a program draws can reach a terminal Roost
+  shows (the roadmap's "Images in a task's terminal").
+- **tmux 3.6a, control mode.** A pane printed a 160×96 PNG as a Kitty
+  image, an iTerm2 inline image and Sixel. A control-mode client got each
+  byte for byte in `%output`. tmux answers DA1 with Sixel (`?1;2;4`) and
+  leaves a Kitty query unanswered, so a program that asks before it sends
+  Kitty images sends none.
+- **Eat 0.9.4 through tmux-control (ca11160).** The Sixel image came out
+  one coloured cell per pixel, wider than the screen: a terminal made with
+  `eat-term-make` keeps Eat's `background` format and 1×1 cells until
+  `eat-mode` sets them, and tmux-control doesn't use `eat-mode`. With the
+  settings `eat-mode` makes (XPM at the font's cell size) it drew the
+  image, which went when the frame was resized and tmux-control redrew the
+  screen from tmux's text.
+- **Ghostel 0.60.0, fed.** A terminal from `ghostel--init-buffer` with no
+  process, given the Kitty image through `ghostel--write-vt` and drawn
+  with `ghostel--redraw`, showed it as seven overlays, one per row.
+- **Not tried.** tmux's main branch, which now keeps Kitty images itself,
+  and Pi end to end with `PI_IMAGE_PROTOCOL=kitty`.
+
 ## Skills in a task's worktree — 2026-10-29
 
 - **Why.** Whether a task has a skill made in the primary checkout and not
