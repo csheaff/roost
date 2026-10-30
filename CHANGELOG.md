@@ -4,6 +4,13 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Creating a task waits up to eleven minutes for its worktree, rather than
+  a minute, as a repository with gigabytes of Git LFS files takes that
+  long to check out. With no reply by then, the draft says so and opens
+  the task once its host lists it, and `C-c C-c` asks again for the same
+  task rather than starting a second one with the same name. A creation
+  cut short no longer leaves a worktree and branch that no task records:
+  the next poll removes them. Nothing to do when upgrading.
 - In a new task's draft, "Other directory…" on `C-c C-p` is second, under
   the project used last, rather than last, where a long list put it off
   screen. It asks for a host, of those Roost knows or another from

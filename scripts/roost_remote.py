@@ -1608,9 +1608,118 @@ def integration_for(store, repo, directory, base, current):
     return current
 
 
+# What Emacs names one task you asked for with, the same each time a draft
+# asks again, so that a request it gave up waiting for isn't made twice.
+CREATE_ID = re.compile(r"[a-f0-9]{16,32}")
+
+
+@contextlib.contextmanager
+def noting_creation(store, task):
+    """Note TASK, which is being made, in a file of the state directory's
+    creating folder until done, locked by this request and by Git as it
+    checks the worktree out, which goes on after a request Emacs gave up
+    on. A creation cut short, as when Emacs stopped waiting and killed the
+    helper here and Git with it, leaves its note unlocked, and
+    `settle_creation` undoes it. Yield the note's descriptor."""
+    folder = store.root / "creating"
+    folder.mkdir(mode=0o700, exist_ok=True)
+    path = folder / (task["id"] + ".json")
+    # Locked before it is found, which it is once in place.
+    fd, temporary = tempfile.mkstemp(prefix=".roost-", dir=folder)
+    try:
+        with os.fdopen(fd, "w") as note:
+            fcntl.flock(note, fcntl.LOCK_EX)
+            note.write(json.dumps(task, ensure_ascii=False) + "\n")
+            note.flush()
+            os.replace(temporary, path)
+            try:
+                yield note.fileno()
+            finally:
+                path.unlink(missing_ok=True)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def settle_creation(store, path, wait=False):
+    """Undo the creation noted at PATH if it was cut short: unless it got as
+    far as saving its task, its worktree and branch go, as Git left them
+    partway through the checkout, or as `abandon` leaves a task whose
+    creation failed. With WAIT, wait for one still under way; without,
+    leave it be."""
+    try:
+        note = path.open()
+    except FileNotFoundError:
+        return
+    with note:
+        try:
+            fcntl.flock(note, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
+        except BlockingIOError:
+            return
+        # Done meanwhile, which removes the note under its lock.
+        if not path.exists():
+            return
+        with contextlib.suppress(ValueError):
+            planned = json.loads(note.read())
+            if isinstance(planned, dict) and store.recorded(planned.get("id")) is None:
+                undo_creation(store, planned)
+        path.unlink(missing_ok=True)
+
+
+def undo_creation(store, task):
+    """Remove the worktree and branch of TASK, whose creation was cut short
+    before its record was saved, so nothing else knows of them."""
+    repo, worktree = task.get("repo"), task.get("worktree")
+    if not (isinstance(repo, str) and isinstance(worktree, str) and Path(repo).is_dir()):
+        return
+    worktree = Path(worktree)
+    if worktree_lock(repo, worktree.resolve()) is None:
+        # Git finished making it, or never began: what its checkout and
+        # hook left, which a failed creation keeps if it holds anything.
+        with store.locked():
+            abandon(store, task)
+        return
+    # Git locks a worktree as it makes it, and was stopped partway: it
+    # holds Git's checkout and nothing else, as no agent ever ran there.
+    if os.path.lexists(worktree):
+        git(repo, "worktree", "remove", "--force", "--force", str(worktree), check=False)
+    else:
+        unregister_gone(repo, worktree.resolve())
+    with contextlib.suppress(RoostError):
+        delete_branch(repo, task["branch"], task["baseCommit"])
+
+
+def settle_creations(store):
+    """Undo each creation cut short, leaving those under way."""
+    with contextlib.suppress(OSError):
+        for path in sorted((store.root / "creating").glob("*.json")):
+            with contextlib.suppress(OSError, RoostError):
+                settle_creation(store, path)
+
+
+def made_for(store, create_id):
+    """The task an earlier request with CREATE_ID made, or None. One still
+    being made is waited for, and one cut short undone first, so that this
+    request makes it anew."""
+    with contextlib.suppress(OSError):
+        for path in sorted((store.root / "creating").glob("*.json")):
+            with contextlib.suppress(OSError, ValueError):
+                if json.loads(path.read_text()).get("createId") == create_id:
+                    settle_creation(store, path, wait=True)
+    with store.locked():
+        return next((task for task in store.all() if task.get("createId") == create_id), None)
+
+
 def create(store, request):
     """Create a worktree and agent window. Preparation and `git worktree add`
     run without the registry lock; only the tmux spawn is serialized."""
+    create_id = request.get("createId")
+    if create_id is not None and not (isinstance(create_id, str) and CREATE_ID.fullmatch(create_id)):
+        raise RoostError("Invalid creation ID")
+    if create_id:
+        made = made_for(store, create_id)
+        if made:
+            return made
     directory = str(Path(request["directory"]).expanduser().resolve())
     checkout = git(directory, "rev-parse", "--show-toplevel").stdout.strip()
     # Git lists the main worktree first. Creating from an existing task must
@@ -1674,6 +1783,8 @@ def create(store, request):
                 session=session_name(repo, task_id),
                 agent=agent_name, command=command, setup=setup, prompt=prompt,
                 status="starting", startedAt=now(), updatedAt=now(), claudeSession=None)
+    if create_id:
+        task["createId"] = create_id
     issue = request.get("issue")
     if isinstance(issue, dict) and isinstance(issue.get("number"), int) and not isinstance(issue["number"], bool):
         task["issue"] = dict(number=issue["number"], title=text(issue.get("title")),
@@ -1688,31 +1799,36 @@ def create(store, request):
     if request.get("programStatus") is True:
         task["programStatus"] = True
     existed, there = ref_exists(repo, branch), worktree.exists()
-    try:
-        git(repo, "-c", "branch.autoSetupMerge=false", "worktree", "add", "-b", branch,
-            str(worktree), commit)
-    except RoostError as exc:
-        said = "\n".join(line for line in str(exc).splitlines() if not line.startswith("Preparing worktree"))
-        if there or not worktree.exists():
-            # A checkout that failed, as a filter can, leaves the new branch.
-            if not existed:
-                with contextlib.suppress(RoostError):
-                    delete_branch(repo, branch, commit)
-            raise RoostError(said)
-        # Git made the worktree, then its post-checkout hook failed.
-        with store.locked():
-            store.save(task)
-            abandon(store, task)
-        raise RoostError("The repository's post-checkout hook failed in the task's new worktree, so the task "
-                         "didn't start%s: %s" % ("; its worktree is kept, as the hook left files there"
-                                                 if worktree.exists() else "", said))
-    with store.locked():
+    with noting_creation(store, task) as note:
+        INHERITED.append(note)
         try:
-            store.save(task)
-            spawn(store, task, size=size_options(request))
-        except Exception:
-            abandon(store, task)
-            raise
+            git(repo, "-c", "branch.autoSetupMerge=false", "worktree", "add", "-b", branch,
+                str(worktree), commit)
+        except RoostError as exc:
+            said = "\n".join(line for line in str(exc).splitlines() if not line.startswith("Preparing worktree"))
+            if there or not worktree.exists():
+                # A checkout that failed, as a filter can, leaves the new branch.
+                if not existed:
+                    with contextlib.suppress(RoostError):
+                        delete_branch(repo, branch, commit)
+                raise RoostError(said)
+            # Git made the worktree, then its post-checkout hook failed.
+            with store.locked():
+                store.save(task)
+                abandon(store, task)
+            raise RoostError("The repository's post-checkout hook failed in the task's new worktree, so the task "
+                             "didn't start%s: %s" % ("; its worktree is kept, as the hook left files there"
+                                                     if worktree.exists() else "", said))
+        finally:
+            # Not tmux's, whose server would hold it for as long as it runs.
+            INHERITED.remove(note)
+        with store.locked():
+            try:
+                store.save(task)
+                spawn(store, task, size=size_options(request))
+            except Exception:
+                abandon(store, task)
+                raise
     return task
 
 
@@ -1722,6 +1838,8 @@ def abandon(store, task):
     may have; then it stays, failed, for you to look at. Under the
     registry lock."""
     worktree, repo = Path(task["worktree"]), task["repo"]
+    # Asked for again, it is made anew.
+    task.pop("createId", None)
     if task.get("windowId"):
         tmux(task["socket"], "kill-window", "-t", task["windowId"], check=False)
     # Never force-remove: a runner could already have written real work.
@@ -5739,6 +5857,9 @@ def rpc(request):
             return {"ok": True, "result": outgoing(task)}
         if action == "look":
             return {"ok": True, "result": outgoing(look(store, request["id"], tracked=request.get("tracked") is True))}
+        if action == "list":
+            # Without the registry lock: undoing one removes its worktree.
+            settle_creations(store)
         prepared = None
         if action == "send" and request.get("look") is True:
             # Where the work stands as you send your notes, before the agent
