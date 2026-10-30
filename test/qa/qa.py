@@ -1378,9 +1378,17 @@ def draft_fields(qa, repo):
         qa.keys("C-c C-p")
         qa.wait("which project", lambda s: (s["prompt"] or "").startswith("Project: "))
         qa.type("Other directory…\r")
+        if qa.host:
+            # This machine and qa-remote, starting on the draft's.
+            qa.wait("which host", lambda s: (s["prompt"] or "").startswith("Host: "))
+            qa.keys("RET")
         qa.wait("which directory", lambda s: (s["prompt"] or "").startswith("Project checkout"))
-        qa.keys("C-a C-k")
-        qa.type(("/ssh:%s:" % qa.host if qa.host else "") + str(ledger) + "/\r")
+        # Beside the notes, the project used last there, as the ledger is.
+        qa.step("Another directory, on the draft's host", expect=[
+            ("on its host", lambda s: s["prompt"] == "Project checkout on %s: " % qa.host_label),
+            ("in the folder above the project used last there",
+             lambda s: s["minibuffer"] == ("/ssh:%s:" % qa.host if qa.host else "") + str(qa.work) + "/")])
+        qa.type("ledger/\r")
         qa.wait("the project", lambda s: re.search(r"Project .*/ledger\b", draft(s)))
         qa.keys("C-c C-a")
         qa.wait("which agent", lambda s: (s["prompt"] or "").startswith("Agent"))

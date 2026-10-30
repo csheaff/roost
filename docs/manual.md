@@ -561,6 +561,14 @@ name. `C-c C-t` starts from a GitHub issue (with `gh` on the project's host)
 or a Jira work item (with `twg` on this machine). An empty name is derived
 from the prompt; `R` renames the task later.
 
+`C-c C-p` lists the projects Roost has used, the last first, then those
+`project.el` knows. "Other directory…", second in the list, asks for a host,
+of those Roost knows or another from `~/.ssh/config`, starting on the draft's,
+and then for a folder there, starting above the project used last on that
+host, or at its home. With only one host known, it asks for the folder. The
+folder is reached with TRAMP's method for the host, such as tramp-rpc's when
+`tramp-default-method` is `"rpc"`, and typing a whole TRAMP path works too.
+
 A task's integration branch is the one `m` merges it into, `u` updates it
 from, `P` opens its pull request against, and `↑`/`↓` count from. It is the
 branch the task starts from, and the draft says so next to the starting ref

@@ -4,6 +4,16 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- In a new task's draft, "Other directory…" on `C-c C-p` is second, under
+  the project used last, rather than last, where a long list put it off
+  screen. It asks for a host, of those Roost knows or another from
+  `~/.ssh/config`, unless only one is known, and then for a folder there,
+  starting above the project used last on that host, or at its home: no
+  TRAMP prefix to type. Paths in your home show with `~` when your home
+  isn't named after your login. A path on a host named without its user,
+  as `dev` rather than `me@dev`, shows in full, as its home isn't known;
+  Roost took it to be named after your local login. Nothing to do when
+  upgrading.
 - A file's diff, opened from the task panel, has a buffer of its own, as
   Magit's diff of the file you visit has: another file's diff shows in its
   window and leaves it open behind, and opening it again goes back to it.

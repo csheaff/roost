@@ -5993,14 +5993,15 @@ With FAILING, it prints it on stderr and exits with status 1."
                                     (roost-test--task "1111111111111111" "permission")))
    (roost--cache-task "dev" (append '((repo . "/home/user/ledger") (startedAt . "2") (name . "totals"))
                                     (roost-test--task "2222222222222222" "running")))
-   (roost--cache-task nil (append '((repo . "/Users/user/site") (name . "docs") (agent . "codex"))
+   (roost--cache-task nil (append `((repo . ,(expand-file-name "~/site")) (name . "docs") (agent . "codex"))
                                   (roost-test--task "3333333333333333" "ready")))
    (with-temp-buffer
      (roost-dashboard-mode)
      (roost--render-dashboard)
      (let ((text (buffer-string)))
        (should (string-prefix-p "1 permission · 1 ready · 1 running\n" text))
-       (should (string-match-p "^dev · ledger  ~/ledger$" text))
+       ;; A host named without its user, whose home isn't known.
+       (should (string-match-p "^dev · ledger  /home/user/ledger$" text))
        (should (string-match-p "^local · site  ~/site$" text))
        (should (string-match-p "  ● fix auth  permission  [0-9a-z]+ +claude    2 files \\+10 −3 · uncommitted · ↑1 ↓4  Fix the parser\\. Then add tests\\." text))
        ;; Creation order within a project; projects sorted by host.
@@ -6131,9 +6132,8 @@ With FAILING, it prints it on stderr and exits with status 1."
 (ert-deftest roost-review-fixes-for-paths-layout-and-drafts ()
   (roost-test--isolated
    ;; Only the owner's home is abbreviated.
-   (should (equal (roost--abbreviate-path "/home/user/app") "~/app"))
-   (should (equal (roost--abbreviate-path "/home/alice/app") "/home/alice/app"))
    (should (equal (roost--abbreviate-path "/home/alice/app" "alice@dev") "~/app"))
+   (should (equal (roost--abbreviate-path "/home/bob/app" "alice@dev") "/home/bob/app"))
    ;; Without any changes, dropping the agent column adds no blank column.
    (let ((tasks (list (append '((agent . "codex")) (roost-test--task "1111111111111111"))
                       (roost-test--task "2222222222222222"))))
@@ -6278,7 +6278,8 @@ With FAILING, it prints it on stderr and exits with status 1."
                  (should-not (string-match-p "Merge and retire" text))
                  (should (string-match-p "^\\? opens the menu · g refreshes · q closes$" text))
                  (should (string-match-p "Branch       codex/roost/fix-auth-123456, from main, merges into main" text))
-                 (should (string-match-p "Worktree     ~/work/fix auth" text))
+                 ;; In full, on a host named without its user.
+                 (should (string-match-p "Worktree     /home/user/work/fix auth" text))
                  ;; Line counts keep their colors inside the indented section.
                  (goto-char (point-min))
                  (search-forward "+2")
@@ -9478,20 +9479,132 @@ answered with `answer'."
        (delete-directory repo t)
        (delete-directory plain t)))))
 
+;; Your home, as `expand-file-name' reads it from HOME, not named after
+;; your login, as on a Mac whose account was renamed.
+(defmacro roost-test--at-home (home &rest body)
+  "Run BODY with HOME as your home directory."
+  (declare (indent 1))
+  `(let ((process-environment (cons (concat "HOME=" ,home) process-environment))
+         (user-login-name "claysheaff"))
+     ,@body))
+
 (ert-deftest roost-pickers-keep-their-order ()
   ;; Vertico sorts candidates by length unless told not to, which put
-  ;; "Other directory…" above the projects you used last.
-  (let (shown sort)
-    (cl-letf (((symbol-function 'completing-read)
-               (lambda (_prompt table &rest _)
-                 (setq shown (funcall table "" nil t)
-                       sort (alist-get 'display-sort-function (cdr (funcall table "" nil 'metadata))))
-                 (car shown))))
-      (should (equal (roost--choose-from "Project: " '(("dev · ~/work/ledger" . "/ssh:dev:/work/ledger/")
-                                                       ("Other directory…" . other)))
-                     "/ssh:dev:/work/ledger/"))
-      (should (equal shown '("dev · ~/work/ledger" "Other directory…")))
-      (should (eq sort 'identity)))))
+  ;; "Other directory…" above the projects you used last.  Last, it was
+  ;; off screen with more projects than the list shows: it is second,
+  ;; under the project used last, which RET still takes.
+  (roost-test--isolated
+   (roost-test--at-home "/Users/csheaff"
+     (with-temp-buffer
+       (let (shown sort)
+         (cl-letf (((symbol-function 'roost--project-choices)
+                    (lambda () '("/Users/csheaff/code/roost/" "/ssh:dev:/home/ubuntu/work/ledger/"
+                                 "/Users/csheaff/code/site/")))
+                   ((symbol-function 'roost--compose-render) #'ignore)
+                   ((symbol-function 'completing-read)
+                    (lambda (_prompt table &rest _)
+                      (setq shown (funcall table "" nil t)
+                            sort (alist-get 'display-sort-function (cdr (funcall table "" nil 'metadata))))
+                      (car shown))))
+           (roost-compose-set-project)
+           (should (equal shown '("local · ~/code/roost" "Other directory…"
+                                  "dev · /home/ubuntu/work/ledger" "local · ~/code/site")))
+           (should (eq sort 'identity))
+           (should (equal (plist-get roost--compose-fields :directory) "/Users/csheaff/code/roost/"))
+           ;; With no projects, it is the only one.
+           (cl-letf (((symbol-function 'roost--project-choices) #'ignore)
+                     ((symbol-function 'roost--read-project-directory) #'ignore))
+             (roost-compose-set-project))
+           (should (equal shown '("Other directory…")))))))))
+
+(ert-deftest roost-another-directory-is-read-on-a-host-you-choose ()
+  ;; After "Other directory…", a host, then a folder there, beside the
+  ;; project used last on it: no TRAMP prefix to type, and the method
+  ;; is TRAMP's for the host, here tramp-rpc's.
+  (let ((home (file-name-as-directory (file-truename (make-temp-file "roost-home" t)))))
+    (unwind-protect
+        (roost-test--isolated
+         (make-directory (expand-file-name ".ssh" home))
+         (with-temp-file (expand-file-name ".ssh/config" home)
+           (insert "Host gpu gpu-2 *.internal\n  HostName 10.0.0.2\n  User me\n"
+                   "host=box # the spare\nMatch host x\nHost !old *\n  ServerAliveInterval 30\n"
+                   "Host \"lab\" 'lab-2' \"two words\" \"\"\n"))
+         (roost-test--at-home home
+           (with-temp-buffer
+             (let ((tramp-default-method "rpc") (tramp-default-method-alist nil)
+                   (roost-hosts '(nil "dev"))
+                   asked answers read)
+               (cl-letf (((symbol-function 'completing-read)
+                          (lambda (prompt collection &optional _predicate _require _initial _history default
+                                          &rest _)
+                            (push (list prompt (all-completions "" collection) default) asked)
+                            (or (cdr (assoc prompt answers)) default)))
+                         ((symbol-function 'read-directory-name)
+                          (lambda (prompt directory &rest _) (setq read (list prompt directory)) directory)))
+                 ;; Without a project, on the first host, at its home.
+                 (should (equal (roost--read-project-directory) "~/"))
+                 (should (equal asked '(("Host: " ("local" "dev" "Another SSH host…") "local"))))
+                 (should (equal read '("Project checkout on local: " "~/")))
+                 ;; On the draft's host, above the project used last there.
+                 (setq roost--remembered-projects (list (concat home "code/roost/")
+                                                        "/ssh:dev:/home/ubuntu/code/app/"
+                                                        "/ssh:dev:/srv/old/")
+                       roost--compose-fields '(:directory "/ssh:dev:/srv/old/")
+                       asked nil)
+                 (should (equal (roost--read-project-directory) "/rpc:dev:/home/ubuntu/code/"))
+                 (should (equal (nth 2 (car asked)) "dev"))
+                 (should (equal (car read) "Project checkout on dev: "))
+                 (setq answers '(("Host: " . "local")))
+                 (should (equal (roost--read-project-directory) (concat home "code/")))
+                 ;; With no project on a host, at its home there.
+                 (setq roost--remembered-projects (list (concat home "code/roost/")) answers '(("Host: " . "dev")))
+                 (should (equal (roost--read-project-directory) "/rpc:dev:~/"))
+                 ;; Another SSH host, from ~/.ssh/config, at its home.
+                 (setq answers '(("Host: " . "Another SSH host…") ("SSH host: " . "me@gpu"))
+                       asked nil)
+                 (should (equal (roost--read-project-directory) "/rpc:me@gpu:~/"))
+                 (should (equal (car asked) '("SSH host: " ("gpu" "gpu-2" "box" "lab" "lab-2") nil)))
+                 (should (equal (car read) "Project checkout on me@gpu: "))
+                 ;; None given asks no more; a TRAMP path, or an option to
+                 ;; ssh, is refused.
+                 (setq read nil answers '(("Host: " . "Another SSH host…") ("SSH host: " . " ")))
+                 (should-not (roost--read-project-directory))
+                 (should-not read)
+                 (dolist (typed '("/ssh:gpu:" "gpu:22" "-oProxyCommand=x" "my gpu" "me@" "@gpu" "a@b@gpu"))
+                   (setq answers `(("Host: " . "Another SSH host…") ("SSH host: " . ,typed)))
+                   (should-error (roost--read-project-directory) :type 'user-error))
+                 (should-not read)
+                 ;; With one host known, it asks no host.
+                 (setq asked nil)
+                 (let ((roost-hosts '("dev")))
+                   (should (equal (roost--read-project-directory) "/rpc:dev:~/"))
+                   (should-not asked))
+                 (let ((roost-hosts '(nil)))
+                   (should (equal (roost--read-project-directory) (concat home "code/")))
+                   (should-not asked)))
+               ;; A menu clicked away from chooses no host, not this one.
+               (let ((last-nonmenu-event (list 'mouse-1 (list (selected-window) 1 '(0 . 0) 0))))
+                 (cl-letf (((symbol-function 'display-popup-menus-p) (lambda (&rest _) t))
+                           ((symbol-function 'x-popup-menu) #'ignore)
+                           ((symbol-function 'read-directory-name)
+                            (lambda (&rest _) (ert-fail "read a folder"))))
+                   (should-not (roost--read-project-directory))))))))
+      (delete-directory home t))))
+
+(ert-deftest roost-paths-abbreviate-your-home-whatever-your-login ()
+  ;; Your home was found by your login name, which needn't name it.
+  (roost-test--isolated
+   (roost-test--at-home "/Users/csheaff"
+     (should (equal (roost--abbreviate-path "/Users/csheaff/code/roost") "~/code/roost"))
+     (should (equal (roost--abbreviate-path "/Users/csheaff") "~"))
+     (should (equal (roost--abbreviate-path "/Users/csheaffer/app") "/Users/csheaffer/app"))
+     (should (equal (roost--abbreviate-path "/Users/claysheaff/app") "/Users/claysheaff/app"))
+     (should (equal (roost--project-label "/Users/csheaff/code/roost/") "local · ~/code/roost"))
+     ;; A host's is that of the user it is named with; without one, it
+     ;; isn't known, and the path is shown in full.
+     (should (equal (roost--project-label "/ssh:me@dev:/home/me/app/") "me@dev · ~/app"))
+     (should (equal (roost--project-label "/ssh:dev:/home/claysheaff/app/") "dev · /home/claysheaff/app"))
+     (should (equal (roost--project-label "/ssh:dev:/Users/csheaff/app/") "dev · /Users/csheaff/app")))))
 
 (ert-deftest roost-an-interrupted-turn-says-so ()
   (roost-test--isolated

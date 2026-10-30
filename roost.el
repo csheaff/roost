@@ -2426,12 +2426,16 @@ offered as it is, since checking it would open a connection."
 
 (defun roost--abbreviate-path (path &optional host)
   "PATH with its owner's home directory shown as ~.
-The owner is HOST's SSH user, or the local user."
-  (let ((user (if (and host (string-match "\\`\\([^@]+\\)@" host))
-                  (match-string 1 host)
-                user-login-name)))
-    (replace-regexp-in-string
-     (concat "\\`/\\(?:home\\|Users\\)/" (regexp-quote user) "\\(/\\|\\'\\)") "~\\1" path)))
+Locally that is your home directory.  On HOST it is /home/USER or
+/Users/USER for the USER its name gives, as in me@dev; without one,
+PATH is shown in full, as its home isn't known without a connection."
+  (let ((home (cond ((not host)
+                     (regexp-quote (directory-file-name (expand-file-name "~"))))
+                    ((string-match "\\`\\([^@]+\\)@" host)
+                     (concat "/\\(?:home\\|Users\\)/" (regexp-quote (match-string 1 host)))))))
+    (if home
+        (replace-regexp-in-string (concat "\\`" home "\\(/\\|\\'\\)") "~\\1" path)
+      path)))
 
 (defun roost--project-label (directory)
   "Short label such as \"claylien · ~/code/app\" for project DIRECTORY."
@@ -3182,18 +3186,71 @@ A mouse click shows a menu at the pointer; the keyboard uses the minibuffer."
       (x-popup-menu last-nonmenu-event (list prompt (cons "" choices)))
     (cdr (assoc (completing-read prompt (roost--in-order choices) nil t nil nil default) choices))))
 
+(defun roost--ssh-config-hosts ()
+  "The hosts ~/.ssh/config names, leaving out patterns.
+A name may be quoted, as ssh allows, and one with a space is left out."
+  (with-temp-buffer
+    (ignore-errors (insert-file-contents "~/.ssh/config"))
+    (let ((case-fold-search t) hosts)
+      (while (re-search-forward "^[ \t]*Host\\(?:[ \t]*=[ \t]*\\|[ \t]+\\)\\([^#\n]*\\)" nil t)
+        (let ((names (match-string 1)) (start 0))
+          (while (string-match "\"\\([^\"]*\\)\"?\\|'\\([^']*\\)'?\\|[^ \t\"']+" names start)
+            (let ((host (or (match-string 1 names) (match-string 2 names) (match-string 0 names))))
+              (setq start (match-end 0))
+              (unless (string-match-p "\\`\\'\\|[*?![:space:]]" host) (push host hosts))))))
+      (delete-dups (nreverse hosts)))))
+
+(defun roost--read-ssh-host ()
+  "Read an SSH destination, completing from ~/.ssh/config.
+Return (HOST), or nil when none was given."
+  (let ((host (string-trim (completing-read "SSH host: " (roost--ssh-config-hosts)))))
+    (cond ((string-empty-p host) nil)
+          ;; Not a TRAMP path, nor an option to ssh.
+          ((or (string-match-p "\\`-\\|[/:#|[:space:]]" host)
+               (not (string-match-p "\\`\\(?:[^@]+@\\)?[^@]+\\'" host)))
+           (user-error "Name an SSH host, such as dev or me@dev, or an alias from ~/.ssh/config"))
+          (t (list host)))))
+
+(defun roost--read-project-directory ()
+  "Read a project checkout on a host you choose, or return nil.
+The hosts are those Roost knows, starting on the draft's, then any other
+SSH host; with only one known, it is that one.  The folder prompt starts
+above the project used last on the host, or at its home."
+  (let* ((hosts (roost--hosts))
+         (current (when-let* ((directory (plist-get roost--compose-fields :directory)))
+                    (ignore-errors (roost--directory-host directory))))
+         ;; In a list, so that nil, from a menu clicked away from, is no host.
+         (host (if (cdr hosts)
+                   (roost--choose-from "Host: "
+                                       (append (mapcar (lambda (host) (list (roost--host-label host) host))
+                                                       hosts)
+                                               (list (cons "Another SSH host…" 'another)))
+                                       (roost--host-label (if (member current hosts) current (car hosts))))
+                 (list (car hosts)))))
+    (when (eq host 'another)
+      (setq host (roost--read-ssh-host)))
+    (when host
+      (let* ((host (car host))
+             (last (car (roost--host-projects host))))
+        (read-directory-name (format "Project checkout on %s: " (roost--host-label host))
+                             (roost--host-directory host (if last (file-name-directory last) "~"))
+                             nil t)))))
+
 (defun roost-compose-set-project ()
   "Choose the draft's project from known checkouts, or any directory.
-The checkouts are those Roost has used, then those project.el knows."
+The checkouts are those Roost has used, then those project.el knows.
+\"Other directory…\" asks for a host, unless only one is known, and
+then for a folder there, starting above the project used last on it."
   (interactive)
-  (let* ((other "Other directory…")
-         (choices (append (mapcar (lambda (dir) (cons (roost--project-label dir) dir))
-                                  (roost--project-choices))
-                          (list (cons other 'other))))
+  (let* ((projects (mapcar (lambda (dir) (cons (roost--project-label dir) dir))
+                           (roost--project-choices)))
+         ;; Under the project used last, which RET still takes, and on
+         ;; screen however many projects there are.
+         (choices (append (seq-take projects 1) (list (cons "Other directory…" 'other))
+                          (seq-drop projects 1)))
          (choice (roost--choose-from "Project: " choices)))
     (when (eq choice 'other)
-      (setq choice (read-directory-name "Project checkout (local or TRAMP): "
-                                        (plist-get roost--compose-fields :directory) nil t)))
+      (setq choice (roost--read-project-directory)))
     (when choice
       (let* ((directory (file-name-as-directory (expand-file-name choice)))
              (base (plist-get roost--compose-fields :base)))
