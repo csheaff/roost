@@ -9527,7 +9527,8 @@ answered with `answer'."
          (make-directory (expand-file-name ".ssh" home))
          (with-temp-file (expand-file-name ".ssh/config" home)
            (insert "Host gpu gpu-2 *.internal\n  HostName 10.0.0.2\n  User me\n"
-                   "host=box # the spare\nMatch host x\nHost !old *\n  ServerAliveInterval 30\n"))
+                   "host=box # the spare\nMatch host x\nHost !old *\n  ServerAliveInterval 30\n"
+                   "Host \"lab\" 'lab-2' \"two words\" \"\"\n"))
          (roost-test--at-home home
            (with-temp-buffer
              (let ((tramp-default-method "rpc") (tramp-default-method-alist nil)
@@ -9562,7 +9563,7 @@ answered with `answer'."
                  (setq answers '(("Host: " . "Another SSH host…") ("SSH host: " . "me@gpu"))
                        asked nil)
                  (should (equal (roost--read-project-directory) "/rpc:me@gpu:~/"))
-                 (should (equal (car asked) '("SSH host: " ("gpu" "gpu-2" "box") nil)))
+                 (should (equal (car asked) '("SSH host: " ("gpu" "gpu-2" "box" "lab" "lab-2") nil)))
                  (should (equal (car read) "Project checkout on me@gpu: "))
                  ;; None given asks no more; a TRAMP path, or an option to
                  ;; ssh, is refused.

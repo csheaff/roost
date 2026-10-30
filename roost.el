@@ -3187,13 +3187,17 @@ A mouse click shows a menu at the pointer; the keyboard uses the minibuffer."
     (cdr (assoc (completing-read prompt (roost--in-order choices) nil t nil nil default) choices))))
 
 (defun roost--ssh-config-hosts ()
-  "The hosts ~/.ssh/config names, leaving out patterns."
+  "The hosts ~/.ssh/config names, leaving out patterns.
+A name may be quoted, as ssh allows, and one with a space is left out."
   (with-temp-buffer
     (ignore-errors (insert-file-contents "~/.ssh/config"))
     (let ((case-fold-search t) hosts)
       (while (re-search-forward "^[ \t]*Host\\(?:[ \t]*=[ \t]*\\|[ \t]+\\)\\([^#\n]*\\)" nil t)
-        (dolist (host (split-string (match-string 1)))
-          (unless (string-match-p "[*?!]" host) (push host hosts))))
+        (let ((names (match-string 1)) (start 0))
+          (while (string-match "\"\\([^\"]*\\)\"?\\|'\\([^']*\\)'?\\|[^ \t\"']+" names start)
+            (let ((host (or (match-string 1 names) (match-string 2 names) (match-string 0 names))))
+              (setq start (match-end 0))
+              (unless (string-match-p "\\`\\'\\|[*?![:space:]]" host) (push host hosts))))))
       (delete-dups (nreverse hosts)))))
 
 (defun roost--read-ssh-host ()
