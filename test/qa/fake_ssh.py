@@ -107,11 +107,9 @@ def main():
     time.sleep(2 * LATENCY)
     if terminal or not command:
         return with_terminal(command)
-    # In a session of its own, as on a host, where a command goes on after
-    # the ssh that ran it is killed, as when Emacs stops waiting for it.
     child = subprocess.Popen(["/bin/sh", "-c", command] if command else ["/bin/sh"],
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                             cwd=HOME, env=ENV, start_new_session=True)
+                             cwd=HOME, env=ENV)
 
     def close_input():
         try:

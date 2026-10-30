@@ -3360,9 +3360,11 @@ def include(qa, repo):
 def slow_create(qa, repo):
     """Checking out a task's worktree takes longer than Emacs waits, as in
     a repository with gigabytes of Git LFS files. The draft says no reply
-    came and keeps what you wrote. On a host over SSH the task is made
-    anyway, and opens; here, where Emacs stops it, nothing half-made is
-    left, and C-c C-c asks again, with one task made."""
+    came and keeps what you wrote. Stopped there, as Emacs stops it here
+    and fake_ssh.py's far end, nothing half-made is left, and C-c C-c asks
+    again, with one task made. (A host over SSH goes on and makes it,
+    which the draft then opens: roost-test.el and test_remote.py check
+    that.)"""
     hooks = qa.work / "slow-hooks"
     hooks.mkdir(exist_ok=True)
     hook = hooks / "post-checkout"
@@ -3385,15 +3387,12 @@ def slow_create(qa, repo):
              lambda s: "the task opens here if it was made · C-c C-c asks again" in draft(s)["header"]),
             ("it keeps what you wrote", lambda s: "Make the slow one" in draft(s).get("text", ""))])
         qa.emacs.eval("(progn (setq roost-request-timeout 60 roost--create-seconds 600) t)")
-        if qa.host:
-            qa.wait("the task", lambda s: {t["name"] for t in s["tasks"]} - before, timeout=30)
-        else:
-            qa.wait("the half-made worktree to go", lambda s: (branches(), worktrees()) == known, timeout=30)
-            qa.step("Nothing half-made is left", expect=[
-                ("no branch or worktree for it", lambda s: (branches(), worktrees()) == known)])
-            hook.write_text("#!/bin/sh\n")
-            qa.keys("C-c C-c")
-            qa.wait("the task", lambda s: {t["name"] for t in s["tasks"]} - before, timeout=30)
+        qa.wait("the half-made worktree to go", lambda s: (branches(), worktrees()) == known, timeout=30)
+        qa.step("Nothing half-made is left", expect=[
+            ("no branch or worktree for it", lambda s: (branches(), worktrees()) == known)])
+        hook.write_text("#!/bin/sh\n")
+        qa.keys("C-c C-c")
+        qa.wait("the task", lambda s: {t["name"] for t in s["tasks"]} - before, timeout=30)
         made = lambda s: {t["name"] for t in s["tasks"]} - before
         qa.wait("its terminal", lambda s: (s.get("task") or {}).get("name") in made(s) and selected_terminal(s))
         qa.step("The task opens", expect=[
