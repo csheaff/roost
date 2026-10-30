@@ -3776,6 +3776,132 @@ elif args[:2] == ["auth", "status"]:
         self.assertEqual(task["issue"], dict(number=12, title="CSV import crashes", url=first["url"]))
         self.assertNotIn("issue", self.create(name="plain", issue=dict(number="12")))
 
+    def fake_twg(self, reply, status=0):
+        """A fake twg, alone on the PATH agents get, that prints REPLY and
+        exits with STATUS, recording its arguments."""
+        directory = self.root / "twg"
+        directory.mkdir(exist_ok=True)
+        (directory / "reply").write_text(reply if isinstance(reply, str) else json.dumps(reply))
+        (directory / "status").write_text(str(status))
+        script = directory / "twg"
+        script.write_text("#!%s\n" % sys.executable + """import json, os, sys
+directory = os.path.dirname(os.path.abspath(__file__))
+with open(os.path.join(directory, "log"), "a") as log:
+    log.write(json.dumps(sys.argv[1:]) + "\\n")
+sys.stdout.write(open(os.path.join(directory, "reply")).read())
+status = int(open(os.path.join(directory, "status")).read())
+if status:
+    sys.stderr.write("Error: as twg says it to people\\n")
+sys.exit(status)
+""")
+        script.chmod(0o755)
+        # agent_path also searches ~/.local/bin, where twg installs itself.
+        patcher = patch.object(roost, "agent_path", lambda inherited: str(directory))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return directory
+
+    def test_jira_issues_lists_work_items_through_twg_and_create_records_the_chosen_one(self):
+        description = dict(type="doc", version=1, content=[
+            dict(type="paragraph", content=[dict(type="text", text="Run "),
+                                            dict(type="text", text="login", marks=[dict(type="code")]),
+                                            dict(type="text", text=" twice; see "),
+                                            dict(type="text", text="the log", marks=[
+                                                dict(type="link", attrs=dict(href="https://example.com/log"))])]),
+            dict(type="bulletList", content=[dict(type="listItem", content=[
+                dict(type="paragraph", content=[dict(type="text", text="first")]),
+                dict(type="orderedList", content=[dict(type="listItem", content=[
+                    dict(type="paragraph", content=[dict(type="text", text="nested")])])])])]),
+            dict(type="mediaSingle", content=[dict(type="media", attrs=dict(id="1"))])])
+        long = dict(type="doc", content=[dict(type="paragraph", content=[dict(type="text", text="x" * 7000)])])
+        directory = self.fake_twg(dict(apiVersion="1", command="jira workitem query", meta={}, data=dict(issues=[
+            # As twg 1.4.2 lists them, each work item's fields beside its key.
+            dict(key="PROJ-7", self="https://api.atlassian.com/ex/jira/cloud/rest/api/3/issue/1",
+                 url="https://acme.atlassian.net/browse/PROJ-7", summary="Login loops", description=description,
+                 labels=["auth"], status=dict(name="In Progress", statusCategory=dict(key="indeterminate"))),
+            # As Jira's own API does, under fields.
+            dict(key="PROJ-9", self="https://acme.atlassian.net/rest/api/3/issue/2",
+                 fields=dict(summary="Docs", description=None, labels=None, status=None)),
+            dict(key="proj-8; rm -rf ~", fields=dict(summary="Not a key")),
+            dict(key="PROJ-10", fields=dict(summary="Long", description=long))],
+            pageInfo=dict(hasNextPage=False))))
+        reply = self.request("jira-issues", jql="assignee = currentUser() ORDER BY updated DESC")
+        self.assertTrue(reply["ok"], reply)
+        first, second, third = reply["result"]["issues"]
+        self.assertEqual(first, dict(key="PROJ-7", title="Login loops", url="https://acme.atlassian.net/browse/PROJ-7",
+                                     body="Run `login` twice; see [the log](https://example.com/log)\n\n"
+                                          "- first\n\n  1. nested",
+                                     status="In Progress", labels=["auth"]))
+        # Jira's own address for one gives its site.
+        self.assertEqual((second["url"], second["body"], second["status"], second["labels"]),
+                         ("https://acme.atlassian.net/browse/PROJ-9", "", None, []))
+        self.assertIsNone(third["url"])
+        self.assertTrue(third["body"].endswith("…"))
+        self.assertLess(len(third["body"]), 6100)
+        called = json.loads((directory / "log").read_text().splitlines()[-1])
+        self.assertEqual(called[:5], ["jira", "workitem", "query", "--jql",
+                                      "assignee = currentUser() ORDER BY updated DESC"])
+        # JSON on its output however it is run, as from an agent's environment.
+        self.assertEqual(called[-4:], ["-o", "json", "--output-summary", "none"])
+        # A query twg could take for an option of its own goes no further.
+        self.assertIn("no JQL", self.request("jira-issues", jql="--output-file=/tmp/x")["error"])
+        self.assertEqual(len((directory / "log").read_text().splitlines()), 1)
+        # What twg says when it can't is the error; without it, there is nothing to list.
+        self.fake_twg(dict(ok=False, error=dict(
+            code="AUTH_REQUIRED", message="authentication required. No valid credentials found.",
+            summary="You're not signed in. Run `twg login --force` to authenticate with your Atlassian account.")),
+            status=77)
+        self.assertEqual(self.request("jira-issues", jql="x"), dict(ok=False, error=(
+            "You're not signed in. Run `twg login --force` to authenticate with your Atlassian account.")))
+        self.fake_twg(dict(ok=False, error=dict(code="X", message="No default site")), status=1)
+        self.assertEqual(self.request("jira-issues", jql="x")["error"], "No default site")
+        self.fake_twg("", status=1)
+        self.assertEqual(self.request("jira-issues", jql="x")["error"], "Error: as twg says it to people")
+        self.fake_twg("Update available\n")
+        self.assertIn("didn't list Jira work items as JSON", self.request("jira-issues", jql="x")["error"])
+        # A reply in another shape isn't taken for no work items.
+        self.fake_twg(dict(apiVersion="1", data=dict(file="/tmp/payload.json")))
+        self.assertIn("lists no Jira work items", self.request("jira-issues", jql="x")["error"])
+        self.fake_twg(dict(data=dict(issues=[])))
+        self.assertEqual(self.request("jira-issues", jql="x"), dict(ok=True, result=dict(issues=[])))
+        (directory / "twg").unlink()
+        self.assertEqual(self.request("jira-issues", jql="x"), dict(ok=True, result=None))
+        # A task records the work item by its key, and only a key.
+        task = self.create(issue=dict(key="PROJ-7", title="Login loops", url=first["url"], body="ignored"))
+        self.assertEqual(task["issue"], dict(key="PROJ-7", title="Login loops", url=first["url"]))
+        self.assertNotIn("issue", self.create(name="odd", issue=dict(key="PROJ-7; rm -rf ~")))
+
+    def test_adf_text_reads_jira_rich_text_as_markdown(self):
+        def para(*pieces):
+            return dict(type="paragraph", content=[dict(type="text", text=piece) if isinstance(piece, str) else piece
+                                                   for piece in pieces])
+        document = dict(type="doc", content=[
+            dict(type="heading", attrs=dict(level=2), content=[dict(type="text", text="Steps")]),
+            para("Ask ", dict(type="mention", attrs=dict(id="a", text="@Ana")), dict(type="hardBreak"), "then"),
+            # Its date in milliseconds, as Jira writes one, in seconds, as Atlassian's example has it, and neither.
+            para("Due ", dict(type="date", attrs=dict(timestamp="1767225600000")), ", not ",
+                 dict(type="date", attrs=dict(timestamp="1582152559")), dict(type="date", attrs=dict(timestamp="soon"))),
+            dict(type="codeBlock", attrs=dict(language="python"), content=[dict(type="text", text="print(1)")]),
+            dict(type="panel", content=[para("Inside a panel")]),
+            dict(type="table", content=[
+                dict(type="tableRow", content=[dict(type="tableHeader", content=[para("A")]),
+                                               dict(type="tableHeader", content=[para("B | C")])]),
+                dict(type="tableRow", content=[dict(type="tableCell", content=[para("1")]),
+                                               dict(type="tableCell", content=[])])]),
+            dict(type="taskList", content=[dict(type="taskItem", attrs=dict(state="DONE"),
+                                                content=[dict(type="text", text="done")]),
+                                           dict(type="taskItem", attrs=dict(state="TODO"),
+                                                content=[dict(type="text", text="to do")])]),
+            dict(type="blockquote", content=[para("one"), para("two")]),
+            dict(type="someday", content=[para("What a new kind holds")]),
+            dict(type="rule"), "not a node"])
+        self.assertEqual(roost.adf_text(document), "\n\n".join([
+            "## Steps", "Ask @Ana\nthen", "Due 2026-01-01, not 2020-02-19", "```python\nprint(1)\n```", "Inside a panel",
+            "| A | B \\| C |\n| --- | --- |\n| 1 |  |", "- [x] done\n- [ ] to do", "> one\n>\n> two",
+            "What a new kind holds", "---"]))
+        self.assertEqual(roost.adf_text("  Already *Markdown*\n"), "Already *Markdown*")
+        self.assertEqual((roost.adf_text(None), roost.adf_text(7)), ("", ""))
+
     def test_pr_reports_a_missing_gh(self):
         self.github()
         task = self.create()
