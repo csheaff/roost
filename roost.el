@@ -7939,7 +7939,6 @@ untracked file, with nothing to compare, is opened instead."
                     (setq roost--file-diff t)))
               (find-file (expand-file-name path)))))))
 
-
 (defun roost--fontify-changes (changes)
   "Highlight the line counts and pending work in CHANGES."
   (let ((text (copy-sequence changes)))
