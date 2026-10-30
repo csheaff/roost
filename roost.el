@@ -3482,7 +3482,9 @@ branch leads with the key of the one you choose."
                                     (progn (message "Roost could not create the task: %s" err)
                                            (roost--draft-error "Could not create the task" err
                                                                'roost-compose-submit))
-                                  ;; It may yet be made: then a poll lists it.
+                                  ;; It may yet be made: then a poll of its host lists it.
+                                  (roost--remember-host host)
+                                  (roost-watch-mode 1)
                                   (setq header-line-format
                                         (format " No reply from %s after %s; the task opens here if it was made · %s asks again"
                                                 (roost--host-label host)
@@ -3512,6 +3514,9 @@ made the task anyway."
               ((not (buffer-local-value 'roost--compose-submitting buffer)))
               (asked (buffer-local-value 'roost--compose-asked buffer))
               ((equal (roost--directory-host (car asked)) host))
+              ;; Not once you have turned the draft to another project.
+              ((equal (plist-get (buffer-local-value 'roost--compose-fields buffer) :directory)
+                      (car asked)))
               (made (seq-find (lambda (task) (equal (roost--field task 'createId) (cadr asked))) tasks))
               (task (gethash (list host (roost--field made 'id)) roost--tasks)))
     (let ((fields (buffer-local-value 'roost--compose-fields buffer)))

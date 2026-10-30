@@ -5808,6 +5808,25 @@ sys.exit(status)
         self.assertEqual(len(roost.Store(str(self.state)).all()), 1)
         self.assertEqual(len(self.task_branches()), 1)
 
+    def test_asking_again_waits_for_one_still_preparing(self):
+        create_id = "56" * 8
+        folder = self.state / "creating"
+        folder.mkdir(parents=True)
+        # The first request, before it has noted anything.
+        with (folder / (create_id + ".lock")).open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            again = self.creating(name="prepared", createId=create_id)
+            time.sleep(1)
+            self.assertIsNone(again.poll())
+            self.assertEqual(list(folder.glob("*.json")), [])
+            made = roost.make_task(roost.Store(str(self.state)),
+                                   dict(directory=str(self.repo), name="prepared", socket=self.socket,
+                                        command=[sys.executable, str(FAKE)]), create_id)
+        reply = self.reply(again)
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(reply["result"]["id"], made["id"])
+        self.assertEqual(self.task_branches(), [made["branch"]])
+
     def test_a_creation_cut_short_leaves_nothing_behind(self):
         # A checkout that takes a while, as Git LFS's does, stopped partway.
         for number in range(6):
@@ -5832,12 +5851,13 @@ sys.exit(status)
         self.assertFalse(Path(planned["worktree"]).exists())
         self.assertEqual(self.task_branches(), [])
         self.assertEqual(len(roost.worktree_branches(self.repo)), 1)
-        self.assertEqual(list((self.state / "creating").glob("*")), [])
+        self.assertEqual(list((self.state / "creating").glob("*.json")), [])
         # Asked for again, it is made anew.
         self.git("config", "filter.slow.smudge", "cat")
         task = self.create(name="cut short", createId="12" * 8)
         self.assertNotEqual(task["id"], planned["id"])
         self.assertEqual(self.task_branches(), [task["branch"]])
+        self.assertEqual(list((self.state / "creating").glob("*")), [])
 
     def test_a_creation_cut_short_after_its_checkout_is_undone_as_a_failed_one(self):
         store = roost.Store(str(self.state))
@@ -5850,6 +5870,8 @@ sys.exit(status)
         roost.git(self.repo, "worktree", "add", "-q", "-b", "roost/kept-000000", str(self.root / "kept"), "HEAD")
         roost.git(self.repo, "worktree", "add", "-q", "-b", "roost/clean-000000", str(self.root / "clean"), "HEAD")
         (self.root / "kept" / "made-by-hook").write_text("made\n")
+        # Locked by its post-checkout hook, not by Git as it made it.
+        roost.git(self.repo, "worktree", "lock", "--reason", "hook's own", str(self.root / "kept"))
         kept = dict(planned, id="1" * 16, worktree=str(self.root / "kept"), branch="roost/kept-000000")
         clean = dict(planned, id="2" * 16, worktree=str(self.root / "clean"), branch="roost/clean-000000")
         for note in (kept, clean):

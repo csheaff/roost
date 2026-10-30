@@ -1673,7 +1673,7 @@ def undo_creation(store, task):
     if not (isinstance(repo, str) and isinstance(worktree, str) and Path(repo).is_dir()):
         return
     worktree = Path(worktree)
-    if worktree_lock(repo, worktree.resolve()) is not None:
+    if initializing(repo, worktree.resolve()):
         # Git locks a worktree as it makes it, and was stopped partway: it
         # holds Git's checkout and nothing else, as no agent ever ran there.
         if os.path.lexists(worktree):
@@ -1690,6 +1690,18 @@ def undo_creation(store, task):
         abandon(store, task)
 
 
+def initializing(repo, worktree):
+    """Whether Git is making WORKTREE, one of REPO's, or was stopped partway:
+    Git locks it as "initializing" until its checkout is done, and the lock
+    file says so whatever Git's version lists. A lock its post-checkout
+    hook took, or yours, isn't that."""
+    for gitdir, path in linked_worktrees(repo):
+        if Path(path).resolve() == worktree:
+            with contextlib.suppress(OSError, UnicodeDecodeError):
+                return (gitdir / "locked").read_text().strip() == "initializing"
+    return False
+
+
 def creation_notes(store):
     """The notes of creations under way or cut short, as `noting_creation` writes them."""
     with contextlib.suppress(OSError):
@@ -1702,6 +1714,22 @@ def settle_creations(store):
     for path in creation_notes(store):
         with contextlib.suppress(OSError, RoostError):
             settle_creation(store, path)
+
+
+@contextlib.contextmanager
+def asking_for(store, create_id):
+    """Hold CREATE_ID's lock while this request looks for the task asked for
+    with it, and makes it, so that another with the same ID waits, even
+    while this one is still preparing, rather than making a second."""
+    folder = store.root / "creating"
+    folder.mkdir(mode=0o700, exist_ok=True)
+    path = folder / (create_id + ".lock")
+    with path.open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+        # Made, or found: a later request finds its record, whichever lock
+        # file it takes. One that failed keeps it for those waiting on it.
+        path.unlink(missing_ok=True)
 
 
 def made_for(store, create_id):
@@ -1717,15 +1745,20 @@ def made_for(store, create_id):
 
 
 def create(store, request):
+    """The task asked for: made now, or, for a creation ID asked with
+    before, the one made then."""
+    create_id = request.get("createId")
+    if create_id is None:
+        return make_task(store, request, None)
+    if not (isinstance(create_id, str) and CREATE_ID.fullmatch(create_id)):
+        raise RoostError("Invalid creation ID")
+    with asking_for(store, create_id):
+        return made_for(store, create_id) or make_task(store, request, create_id)
+
+
+def make_task(store, request, create_id):
     """Create a worktree and agent window. Preparation and `git worktree add`
     run without the registry lock; only the tmux spawn is serialized."""
-    create_id = request.get("createId")
-    if create_id is not None and not (isinstance(create_id, str) and CREATE_ID.fullmatch(create_id)):
-        raise RoostError("Invalid creation ID")
-    if create_id:
-        made = made_for(store, create_id)
-        if made:
-            return made
     directory = str(Path(request["directory"]).expanduser().resolve())
     checkout = git(directory, "rev-parse", "--show-toplevel").stdout.strip()
     # Git lists the main worktree first. Creating from an existing task must

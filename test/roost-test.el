@@ -6164,7 +6164,7 @@ With FAILING, it prints it on stderr and exits with status 1."
   ;; Making a worktree can take longer than Emacs waits, as in a repository
   ;; with gigabytes of Git LFS files, and the host makes the task anyway.
   (roost-test--isolated
-   (let ((default-directory "/tmp/") (roost-hosts '("dev")) asked listed opened id)
+   (let ((default-directory "/tmp/") (roost-hosts '("dev")) asked listed opened id watched remembered)
      (save-window-excursion
        (unwind-protect
            (cl-letf (((symbol-function 'roost--request)
@@ -6173,10 +6173,10 @@ With FAILING, it prints it on stderr and exits with status 1."
                             (funcall success listed)
                           (push (list host action params failure timeout) asked))))
                      ((symbol-function 'roost-open-task) (lambda (task &rest _) (push task opened)))
-                     ((symbol-function 'roost-watch-mode) #'ignore)
+                     ((symbol-function 'roost-watch-mode) (lambda (arg) (push arg watched)))
                      ((symbol-function 'roost--redraw) #'ignore)
                      ((symbol-function 'roost--terminal-size) #'ignore)
-                     ((symbol-function 'roost--remember-host) #'ignore)
+                     ((symbol-function 'roost--remember-host) (lambda (host) (push host remembered)))
                      ((symbol-function 'roost--remember-project) #'ignore))
              (roost--compose)
              (with-current-buffer roost--compose-buffer
@@ -6195,6 +6195,9 @@ With FAILING, it prints it on stderr and exits with status 1."
                (roost--refresh-host "dev" t)
                (should (get-buffer roost--compose-buffer))
                (funcall (nth 3 (car asked)) (propertize "No reply after 660s" 'roost-no-reply t))
+               ;; Polls go on, of a host new to Roost too, to find it.
+               (should (equal watched '(1)))
+               (should (equal remembered '("dev")))
                (with-current-buffer roost--compose-buffer
                  (should (equal header-line-format
                                 " No reply from dev after 11m; the task opens here if it was made · C-c C-c asks again"))
@@ -6212,6 +6215,7 @@ With FAILING, it prints it on stderr and exits with status 1."
                (should-not (get-buffer roost--compose-buffer))
                (should (equal (mapcar (lambda (task) (roost--field task 'id)) opened) '("2222222222222222"))))
              ;; Another project, on the same host, is another task.
+             (setq opened nil)
              (roost--compose)
              (with-current-buffer roost--compose-buffer
                (setq roost--compose-fields (plist-put roost--compose-fields :directory "/ssh:dev:/repo/"))
@@ -6220,7 +6224,13 @@ With FAILING, it prints it on stderr and exits with status 1."
                (roost-compose-submit)
                (funcall (nth 3 (car asked)) (propertize "No reply after 660s" 'roost-no-reply t))
                (setq id (alist-get 'createId (nth 2 (car asked))))
-               (setq roost--compose-fields (plist-put roost--compose-fields :directory "/ssh:dev:/other/"))
+               (setq roost--compose-fields (plist-put roost--compose-fields :directory "/ssh:dev:/other/")))
+             ;; The task the draft no longer asks for leaves it as you turned it.
+             (setq listed (list (append `((createId . ,id) (repo . "/repo")) (roost-test--task "3333333333333333"))))
+             (roost--refresh-host "dev" t)
+             (should (get-buffer roost--compose-buffer))
+             (should-not opened)
+             (with-current-buffer roost--compose-buffer
                (roost-compose-submit)
                (should-not (equal (alist-get 'createId (nth 2 (car asked))) id))))
          (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
