@@ -5859,6 +5859,36 @@ sys.exit(status)
         self.assertEqual(self.task_branches(), [task["branch"]])
         self.assertEqual(list((self.state / "creating").glob("*")), [])
 
+    def test_a_creation_whose_git_goes_on_is_undone_once_git_is_done(self):
+        # The helper stopped, as on a host over SSH, while Git checks out.
+        for number in range(4):
+            (self.repo / ("file%d.bin" % number)).write_text("%d\n" % number)
+        (self.repo / ".gitattributes").write_text("*.bin filter=slow\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "Slow to check out")
+        self.git("config", "filter.slow.smudge", "sleep 1; cat")
+        self.git("config", "filter.slow.clean", "cat")
+        process = self.creating(name="git goes on", createId="78" * 8)
+        note = self.wait_for_note()
+        planned = json.loads(note.read_text())
+        deadline = time.monotonic() + 8
+        while not (Path(planned["worktree"]) / "file0.bin").exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        os.kill(process.pid, signal.SIGKILL)
+        process.wait()
+        # Git holds the note's lock: a poll leaves it be.
+        self.assertEqual(self.request("list")["result"], [])
+        self.assertTrue(note.exists())
+        self.assertTrue(Path(planned["worktree"]).exists())
+        deadline = time.monotonic() + 15
+        while note.exists() and time.monotonic() < deadline:
+            self.request("list")
+            time.sleep(0.2)
+        self.assertFalse(note.exists())
+        self.assertFalse(Path(planned["worktree"]).exists())
+        self.assertEqual(self.task_branches(), [])
+        self.assertEqual(len(roost.worktree_branches(self.repo)), 1)
+
     def test_a_creation_cut_short_after_its_checkout_is_undone_as_a_failed_one(self):
         store = roost.Store(str(self.state))
         task = self.create(name="made")
