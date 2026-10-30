@@ -5556,17 +5556,20 @@ def copy_included(repo, worktree):
 SUBMODULE_GIT = (2, 24, 1)
 
 
-def check_out_submodules(worktree, env):
+def check_out_submodules(worktree, env, every=None, decided=lambda every: None):
     """Check out the submodules of WORKTREE, a new task's, at the commits
     its branch records, nested ones too, with `git submodule update` in
     ENV, in the terminal, where Git shows what it fetches and SSH can ask
     for a passphrase. Of those .gitmodules names, only the ones the
-    repository has initialized, as `git submodule deinit` undoes, or all
-    of them where it has initialized none, and never one it has turned
-    off: its config is the primary checkout's too, which `--init` alone
-    would change, initializing each again. Raise RoostError naming those
-    that failed. With Git older than SUBMODULE_GIT, leave them, as
-    before Roost checked them out, and say so."""
+    repository has initialized, as `git submodule deinit` undoes, or, with
+    EVERY, all of them, and never one it has turned off: its config is the
+    primary checkout's too, which `--init` alone would change,
+    initializing each again. EVERY None decides it, true where the
+    repository has initialized none of them, and passes it to DECIDED
+    before Git initializes any, which would change it for the next try.
+    Raise RoostError naming those that failed. With Git older than
+    SUBMODULE_GIT, leave them, as before Roost checked them out, and say
+    so."""
     worktree = Path(worktree)
     version = version_of(git(worktree, "--version").stdout) or (0, 0)
     if version < SUBMODULE_GIT:
@@ -5593,9 +5596,12 @@ def check_out_submodules(worktree, env):
     off = {name for name, value in names("--bool", "--get-regexp", r"^submodule\..*\.active$").items()
            if value == "false"}
     initialized = names("--get-regexp", r"^submodule\..*\.url$")
-    wanted = [path for path, name in paths.items() if name not in off]
+    if every is None:
+        every = not any(name in initialized for name in paths.values())
+        decided(every)
     failed = []
-    for path in [path for path in wanted if paths[path] in initialized] or wanted:
+    for path in [path for path, name in paths.items()
+                 if name not in off and (every or name in initialized)]:
         # As itself, not a pattern that could name others.
         if subprocess.run(["git", "-C", str(worktree), "submodule", "update", "--init", "--recursive", "--",
                            ":(literal)" + path], env=env).returncode:
@@ -5641,7 +5647,13 @@ def runner(root, task_id, run_id, resume_conversation=False):
             agent_env = dict(env, **(agent.environment(store, task, env) if hasattr(agent, "environment") else {}))
         # Before setup, which may use them, and until it has all of them.
         if task.get("submodulesComplete") is False:
-            check_out_submodules(task["worktree"], env)
+            def decided(every):
+                with store.locked():
+                    current = store.read(task_id)
+                    if current.get("runId") == run_id:
+                        current["allSubmodules"] = every
+                        store.save(current)
+            check_out_submodules(task["worktree"], env, task.get("allSubmodules"), decided)
             with store.locked():
                 current = store.read(task_id)
                 if current.get("runId") == run_id:

@@ -821,6 +821,12 @@ class Lifecycle(unittest.TestCase):
         # Still left out there, where `--init` would have put it back.
         self.assertEqual(self.git("config", "--get-regexp", "^submodule").splitlines(),
                          ["submodule.lib.url " + str(self.root / "library"), "submodule.lib.active true"])
+        # Turned off too, the one it has initialized: none.
+        self.git("config", "submodule.lib.active", "false")
+        task = self.create(name="off")
+        wt = Path(task["worktree"])
+        self.assertEqual((list((wt / "lib").iterdir()), list((wt / "big").iterdir())), ([], []))
+        self.assertNotIn("submodule.big", self.git("config", "--get-regexp", "^submodule"))
         # Where it has initialized none, each, but one turned off.
         self.git("submodule", "deinit", "-q", "lib")
         self.git("config", "submodule.lib.active", "false")
@@ -829,6 +835,26 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(*self.recorded(wt, "big"))
         self.assertEqual(list((wt / "lib").iterdir()), [])
         self.assertEqual(self.git("config", "submodule.lib.active"), "false")
+
+    def test_a_task_cut_short_checks_out_what_it_chose_at_first(self):
+        # Where the repository has initialized none, as in a plain clone.
+        self.add_submodule()
+        self.add_submodule(self.library("big"), "big")
+        self.git("submodule", "deinit", "-q", "--all")
+        (self.root / "big").rename(self.root / "moved")
+        reply = self.request("create", directory=str(self.repo), name="cut", socket=self.socket,
+                             command=[sys.executable, str(FAKE)])
+        task = self.wait(reply["result"], "failed")
+        self.assertIs(task["allSubmodules"], True)
+        # As if stopped before Git initialized big: lib's, initialized,
+        # would otherwise leave big out.
+        self.git("config", "--remove-section", "submodule.big")
+        self.wait_for_pane_exit(task)
+        (self.root / "moved").rename(self.root / "big")
+        self.assertTrue(self.request("resume", id=task["id"])["ok"])
+        self.wait(task, "ready")
+        for path in ("lib", "big"):
+            self.assertEqual(*self.recorded(Path(task["worktree"]), path))
 
     def test_git_that_would_run_a_command_gitmodules_names_leaves_submodules_out(self):
         self.add_submodule()
