@@ -1908,6 +1908,19 @@ def adf_blocks(nodes):
     return "\n\n".join(paragraphs)
 
 
+def adf_date(timestamp):
+    """An Atlassian Document Format date's day, as Jira shows it, in UTC.
+    Its TIMESTAMP is Unix time in milliseconds, as a string, though
+    Atlassian's own example gives seconds; a number too small to be
+    milliseconds since 1973 is taken as seconds."""
+    try:
+        moment = int(timestamp)
+        return datetime.datetime.fromtimestamp(moment / 1000 if moment >= 10 ** 11 else moment,
+                                               datetime.timezone.utc).date().isoformat()
+    except (TypeError, ValueError, OverflowError, OSError):
+        return ""
+
+
 def adf_inline(nodes):
     """NODES, Atlassian Document Format text and what goes in it, as Markdown."""
     pieces = []
@@ -1926,7 +1939,9 @@ def adf_inline(nodes):
             pieces.append("\n")
         elif kind == "inlineCard":
             pieces.append(text(attrs.get("url")) or "")
-        elif kind in ("mention", "emoji", "status", "date"):
+        elif kind == "date":
+            pieces.append(adf_date(attrs.get("timestamp")))
+        elif kind in ("mention", "emoji", "status"):
             pieces.append(text(attrs.get("text")) or text(attrs.get("shortName")) or "")
         else:
             pieces.append(adf_inline(adf_content(node)))

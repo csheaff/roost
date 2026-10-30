@@ -3878,6 +3878,9 @@ sys.exit(status)
         document = dict(type="doc", content=[
             dict(type="heading", attrs=dict(level=2), content=[dict(type="text", text="Steps")]),
             para("Ask ", dict(type="mention", attrs=dict(id="a", text="@Ana")), dict(type="hardBreak"), "then"),
+            # Its date in milliseconds, as Jira writes one, in seconds, as Atlassian's example has it, and neither.
+            para("Due ", dict(type="date", attrs=dict(timestamp="1767225600000")), ", not ",
+                 dict(type="date", attrs=dict(timestamp="1582152559")), dict(type="date", attrs=dict(timestamp="soon"))),
             dict(type="codeBlock", attrs=dict(language="python"), content=[dict(type="text", text="print(1)")]),
             dict(type="panel", content=[para("Inside a panel")]),
             dict(type="table", content=[
@@ -3893,7 +3896,7 @@ sys.exit(status)
             dict(type="someday", content=[para("What a new kind holds")]),
             dict(type="rule"), "not a node"])
         self.assertEqual(roost.adf_text(document), "\n\n".join([
-            "## Steps", "Ask @Ana\nthen", "```python\nprint(1)\n```", "Inside a panel",
+            "## Steps", "Ask @Ana\nthen", "Due 2026-01-01, not 2020-02-19", "```python\nprint(1)\n```", "Inside a panel",
             "| A | B \\| C |\n| --- | --- |\n| 1 |  |", "- [x] done\n- [ ] to do", "> one\n>\n> two",
             "What a new kind holds", "---"]))
         self.assertEqual(roost.adf_text("  Already *Markdown*\n"), "Already *Markdown*")
