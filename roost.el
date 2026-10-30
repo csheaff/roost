@@ -59,6 +59,7 @@
 (declare-function tmux-control-window-id "tmux-control" ())
 (declare-function magit-status "magit-status" (&optional directory cache))
 (declare-function magit-diff-working-tree "magit-diff" (&optional rev args files))
+(declare-function magit-diff-setup-buffer "magit-diff" (range typearg args files &optional type locked))
 (declare-function magit-diff-dwim "magit-diff" (&optional args files))
 (declare-function magit-diff-arguments "magit-diff" (&optional mode))
 (declare-function magit-diff-type "magit-diff" (&optional section))
@@ -109,6 +110,9 @@
 
 (defvar tmux-control-default-socket-name)
 (defvar magit-root-section)
+(defvar magit-diff-buffer-file-locked)
+(defvar magit-buffer-diff-files)
+(defvar magit-buffer-diff-range)
 (defvar magit-status-headers-hook)
 (defvar magit-status-sections-hook)
 (defvar magit-refresh-buffer-hook)
@@ -7900,16 +7904,39 @@ Claude Code makes them for its EnterWorktree tool and isolated subagents."
                             'face (if (or (> ahead 0) (alist-get 'dirty entry)) 'roost-status-permission 'roost-dim))
                 "\n")))))
 
+(defvar-local roost--file-diff nil
+  "Whether this Magit buffer is a file's diff that `roost--diff-file' made.")
+(put 'roost--file-diff 'permanent-local t)
+
 (defun roost--diff-file (task file)
   "Show how TASK has changed FILE, an entry of its `files'.
-An untracked file, with nothing to compare, is opened instead."
+Each file has a buffer of its own, as Magit's diff of the file you visit
+has while `magit-diff-buffer-file-locked' is on, so another file's diff
+leaves this one open, behind it in the window a diff already has.  An
+untracked file, with nothing to compare, is opened instead."
   (roost--in-task-frame
    task (lambda ()
           (let ((default-directory (roost--remote-directory task))
-                (path (alist-get 'path file)))
+                (path (alist-get 'path file))
+                (rev (or (roost--fork-point task) "HEAD")))
             (if (and (not (alist-get 'untracked file)) (require 'magit nil t))
-                (progn (roost--magit-setup)
-                       (magit-diff-working-tree (roost--fork-point task) nil (list path)))
+                (let ((display-buffer-overriding-action
+                       '(display-buffer-reuse-mode-window (mode . magit-diff-mode))))
+                  (roost--magit-setup)
+                  ;; Since the fork point moved, as when the task was
+                  ;; updated, the file's old buffer shows changes that
+                  ;; aren't the task's.
+                  (dolist (buffer (buffer-list))
+                    (with-current-buffer buffer
+                      (when (and roost--file-diff
+                                 (equal magit-buffer-diff-files (list path))
+                                 (not (equal magit-buffer-diff-range rev))
+                                 (roost--task-in-directory default-directory (list task)))
+                        (kill-buffer buffer))))
+                  ;; What `magit-diff-working-tree' does, locked.
+                  (with-current-buffer (magit-diff-setup-buffer rev nil nil (list path) 'committed
+                                                                magit-diff-buffer-file-locked)
+                    (setq roost--file-diff t)))
               (find-file (expand-file-name path)))))))
 
 (defun roost--fontify-changes (changes)

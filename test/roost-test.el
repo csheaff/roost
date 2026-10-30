@@ -10748,6 +10748,50 @@ With INITIAL, the box must start out holding it."
       (dolist (number (number-sequence 1 10))
         (roost-test--goto-line-text (format "line %d" number))))))
 
+(ert-deftest roost-each-files-diff-has-a-buffer-of-its-own ()
+  (roost-test--with-magit-task
+    (roost-test--write-lines "b.txt" (number-sequence 1 10))
+    (call-process "git" nil nil nil "add" "b.txt")
+    (call-process "git" nil nil nil "commit" "-qm" "Add b")
+    (roost-test--write-lines "a.txt" (number-sequence 1 10) "new line\n")
+    (roost-test--write-lines "b.txt" (number-sequence 1 10) "new b line\n")
+    (cl-letf (((symbol-function 'roost--activate-workspace) #'ignore))
+      (let ((diff (lambda (path) (save-current-buffer (roost--diff-file task `((path . ,path)))))))
+        (cl-flet ((shown ()
+                    (sort (mapcar (lambda (buffer)
+                                    (car (buffer-local-value 'magit-buffer-diff-files buffer)))
+                                  (seq-filter (lambda (buffer)
+                                                (eq (buffer-local-value 'major-mode buffer) 'magit-diff-mode))
+                                              (buffer-list)))
+                          #'string<)))
+          (funcall diff "a.txt")
+          (should (equal (shown) '("a.txt")))
+          (with-current-buffer (window-buffer (selected-window))
+            (roost-test--goto-line-text "new line"))
+          ;; Another file's diff leaves the first open, behind it.
+          (funcall diff "b.txt")
+          (should (equal (shown) '("a.txt" "b.txt")))
+          (should (= (seq-count (lambda (window)
+                                  (eq (buffer-local-value 'major-mode (window-buffer window)) 'magit-diff-mode))
+                                (window-list))
+                     1))
+          ;; The same file's goes back to its buffer.
+          (funcall diff "a.txt")
+          (should (equal (shown) '("a.txt" "b.txt")))
+          ;; Once the fork point moves, the file's old buffer goes.
+          (let ((head (car (process-lines "git" "rev-parse" "HEAD"))))
+            (setq task (roost--cache-task nil (append `((baseCommit . ,head)) task))))
+          (funcall diff "a.txt")
+          (should (equal (shown) '("a.txt" "b.txt")))
+          ;; With Magit's lock off, as for its own diff of a file, one
+          ;; buffer takes each in turn.  b.txt's from before the fork point
+          ;; moved goes too.
+          (let ((magit-diff-buffer-file-locked nil))
+            (funcall diff "a.txt")
+            (should (equal (shown) '("a.txt" "a.txt" "b.txt")))
+            (funcall diff "b.txt")
+            (should (equal (shown) '("a.txt" "b.txt")))))))))
+
 ;;;; Workload
 
 (defun roost-test--history (since now changes &rest tasks)

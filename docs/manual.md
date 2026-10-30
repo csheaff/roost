@@ -244,7 +244,9 @@ prompt, three lines there, the files it changed, those not yet committed
 first, and what a merge would rest on (below). Once you have sent the agent more, your latest prompt shows
 under the task's, a reminder of where you left off that the terminal may
 have scrolled away. A click or `RET` on a file
-opens its diff in Magit, where `;` writes a note for the agent (more under
+opens its diff in Magit, in a buffer of its own, as Magit's diff of the file
+you visit has, so another file's diff, in the same window, leaves it open behind (`magit-diff-buffer-file-locked`
+set to nil keeps one buffer for all). There `;` writes a note for the agent (more under
 Review in Magit, below). The terminal shows the agent's replies, so the panel leaves them out
 while the terminal is on screen; `i` shows the same panel in the main area,
 with the latest reply after the changes (a click or `RET` opens a link in it). `?` in the panel
