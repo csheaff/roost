@@ -3351,24 +3351,26 @@ A branch is also the one the task merges into."
     (roost--compose-render)))
 
 (defun roost--issue-label (issue)
-  "What names ISSUE: #12 for GitHub's, its key for a Jira work item."
+  "What names ISSUE: #12 for GitHub's or GitLab's, its key for a Jira work item."
   (or (alist-get 'key issue) (format "#%s" (alist-get 'number issue))))
 
 (defun roost--issue-prompt (issue)
-  "Prompt text for ISSUE, GitHub's or Jira's: title, text, then where it is."
+  "Prompt text for ISSUE, GitHub's, GitLab's or Jira's.
+Its title, its text, then where it is."
   (let ((body (string-trim (or (alist-get 'body issue) "")))
         (url (alist-get 'url issue)))
     (concat (alist-get 'title issue) "\n\n"
             (if (string-empty-p body) "" (concat body "\n\n"))
             (if-let* ((key (alist-get 'key issue)))
                 (format "This is Jira issue %s%s" key (if url (concat ": " url) "."))
-              (format "This is GitHub issue #%s: %s" (alist-get 'number issue) url)))))
+              (format "This is %s issue #%s: %s" (roost--forge-name issue) (alist-get 'number issue) url)))))
 
 (defun roost-compose-set-issue ()
   "Start the draft from one of the project's open issues.
 The issue's title and text become the prompt, unless one is already
-written.  GitHub's are listed with gh on the project's host, and the
-task's pull request will close the one you choose.  With twg,
+written.  GitHub's or GitLab's, as the project's origin is on, are
+listed with gh or glab on the project's host, and the task's pull
+request will close the one you choose.  With twg,
 Atlassian's Teamwork Graph CLI, signed in on this machine, the Jira
 work items `roost-jira-query' finds are listed too, and the task's
 branch leads with the key of the one you choose."
@@ -3383,10 +3385,10 @@ branch leads with the key of the one you choose."
                            (cons (list host "issues" (list (cons 'directory (file-local-name directory))))
                                  ;; twg's sign-in is yours, here, wherever the project is.
                                  (when jql (list (list nil "jira-issues" (list (cons 'jql jql)))))))))
-         (github (car outcomes))
+         (forge (car outcomes))
          ;; nil when twg isn't installed.
          (jira (cadr outcomes))
-         (issues (append (and (car github) (cdr github))
+         (issues (append (and (car forge) (cdr forge))
                          (and (car jira) (alist-get 'issues (cdr jira)))
                          nil))
          (none "No issue")
@@ -3404,9 +3406,9 @@ branch leads with the key of the one you choose."
                     (concat "  " (propertize (string-join words ", ") 'face 'roost-dim)))))))
     (unless issues
       (user-error "%s" (string-join
-                        (delq nil (list (if (car github)
+                        (delq nil (list (if (car forge)
                                             (format "%s has no open issues" (roost--project-label directory))
-                                          (cdr github))
+                                          (cdr forge))
                                         (pcase jira
                                           (`(nil . ,err) (concat "Jira: " err))
                                           (`(t . ,(pred identity))
@@ -6167,12 +6169,21 @@ unknown once that branch has moved."
         ,@(assq-delete-all 'unpushed (copy-sequence task)))
     task))
 
+(defun roost--forge-name (record)
+  "The forge RECORD, a pull request or an issue, is on: \"GitLab\" or \"GitHub\".
+Records from older hosts are all GitHub's."
+  (if (equal (alist-get 'forge record) "gitlab") "GitLab" "GitHub"))
+
+(defun roost--pr-number (pr)
+  "PR by number, as its forge writes it: \"#12\" on GitHub, \"!12\" on GitLab."
+  (format "%s%s" (if (equal (alist-get 'forge pr) "gitlab") "!" "#") (alist-get 'number pr)))
+
 (defun roost--pr-name (task)
   "TASK's pull request, as `roost--pr-view' has it, by number, as \"#12\".
 The branch its worktree is on follows, as \"#12 from feat\", for that
 branch's."
   (let ((pr (roost--field (roost--pr-view task) 'pr)))
-    (concat (format "#%s" (alist-get 'number pr))
+    (concat (roost--pr-number pr)
             (when-let* ((branch (alist-get 'branch pr))) (concat " from " branch)))))
 
 (defun roost--worktree-merged-p (task)
@@ -6367,7 +6378,9 @@ would not push to, nor open, what to do on GitHub, or with that branch."
      (verdict
       (concat (roost--pr-reason task verdict) ": "
               (pcase verdict
-                ("to merge" (if branch "merge it on GitHub" (concat (funcall key "P") " opens it to merge")))
+                ("to merge" (if branch
+                                (concat "merge it on " (roost--forge-name (roost--field task 'pr)))
+                              (concat (funcall key "P") " opens it to merge")))
                 ("comments" (concat tell " to answer them" open))
                 (_ (concat tell open)))))
      ((and (numberp unpushed) (> unpushed 0))
@@ -6517,8 +6530,7 @@ on, and hovering, whose pull request this is."
              (counts (and open (roost--pr-checks task)))
              (review (and open (alist-get 'review (roost--field task 'prStatus))))
              (parts (delq nil
-                          (list (propertize (format "#%s" (alist-get 'number pr))
-                                            'face (roost--pr-face state))
+                          (list (propertize (roost--pr-number pr) 'face (roost--pr-face state))
                                 (when counts
                                   (cond ((> (nth 1 counts) 0) (propertize "✗" 'face 'roost-status-failed))
                                         ((> (nth 2 counts) 0) (propertize "…" 'face 'roost-dim))
@@ -6577,7 +6589,9 @@ there are no CI results, which looks unlike checks that passed.  As
     (roost--insert-heading "Checks")
     (cond
      ((not state) (roost--insert-indented "No CI results: no pull request" 'roost-dim))
-     ((not status) (roost--insert-indented (format "Not heard from GitHub about %s yet" number) 'roost-dim))
+     ((not status) (roost--insert-indented (format "Not heard from %s about %s yet"
+                                                   (roost--forge-name (roost--field task 'pr)) number)
+                                           'roost-dim))
      ((not counts) (roost--insert-indented (format "No CI results on %s" number) 'roost-dim))
      (t
       (pcase-let* ((`(,passing ,failing ,pending) counts)
@@ -6704,7 +6718,7 @@ is headed so, and the task's own, if any, named below it."
            (own (alist-get 'number (roost--field task 'pr))))
       (roost--insert-heading "Pull request" (when branch (concat "from " branch)))
       (insert "  ")
-      (insert-text-button (format "#%s" (alist-get 'number pr))
+      (insert-text-button (roost--pr-number pr)
                           'follow-link t 'face 'roost-field
                           'help-echo (alist-get 'url pr)
                           'action (lambda (_) (browse-url (alist-get 'url pr))))
@@ -6727,18 +6741,20 @@ is headed so, and the task's own, if any, named below it."
       (when (eq state 'merged)
         (roost--insert-indented
          (cond ((not (if branch (roost--worktree-merged-p task) (roost--landed task)))
-                "Merged on GitHub, but not the commits since.")
+                (format "Merged on %s, but not the commits since." (roost--forge-name pr)))
                (branch
                 (substitute-command-keys
-                 (format "Merged on GitHub. \\<roost-task-info-mode-map>\\[roost-retire] discards this task, keeping %s."
-                         branch)))
+                 (format "Merged on %s. \\<roost-task-info-mode-map>\\[roost-retire] discards this task, keeping %s."
+                         (roost--forge-name pr) branch)))
                (t
                 (substitute-command-keys
-                 "Merged on GitHub. \\<roost-task-info-mode-map>\\[roost-retire] retires this task, removing its worktree and branch.")))
+                 (format "Merged on %s. \\<roost-task-info-mode-map>\\[roost-retire] retires this task, removing its worktree and branch."
+                         (roost--forge-name pr)))))
          'roost-dim))
       ;; Which the views follow again once the worktree is back on its branch.
       (when (and branch own)
-        (roost--insert-indented (format "The task's branch %s has #%s." (roost--field task 'branch) own)
+        (roost--insert-indented (format "The task's branch %s has %s." (roost--field task 'branch)
+                                        (roost--pr-number (roost--field task 'pr)))
                                 'roost-dim)))))
 
 ;;;###autoload
@@ -9342,7 +9358,7 @@ says only that the host is unreachable."
            (concat
             "  \\<roost-dashboard-mode-map>\\[roost-new-task]  Start a task: choose a project (local, or remote over TRAMP), an agent, and a prompt.\n"
             "     Run \\<global-map>\\[roost-new-task] on an Org heading or with a region selected to start from it;\n"
-            "     in the draft, \\<roost-compose-mode-map>\\[roost-compose-set-issue] picks an issue from GitHub or Jira.\n"
+            "     in the draft, \\<roost-compose-mode-map>\\[roost-compose-set-issue] picks an issue from GitHub, GitLab or Jira.\n"
             "  \\<roost-dashboard-mode-map>\\[roost-dispatch]  Every command.\n"
             "  \\[roost-doctor]  Check this machine and each host.\n"))
           (format "\n  Watching %s.\n"

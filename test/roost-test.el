@@ -7322,6 +7322,32 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
                  (should (string-match-p "Merged on GitHub\\. x retires this task" (buffer-string))))
              (kill-buffer))))))))
 
+(ert-deftest roost-a-gitlab-merge-request-reads-as-gitlab-writes-it ()
+  ;; By number as !12, and GitLab by name, where GitHub's says #12 and GitHub.
+  (roost-test--isolated
+   (let* ((pr '(pr . ((number . 12) (url . "https://gitlab.com/g/r/-/merge_requests/12") (forge . "gitlab"))))
+          (task (roost--cache-task "dev" (append (list pr '(repo . "/home/user/ledger")) (roost-test--task)))))
+     (should (equal (roost--pr-name task) "!12"))
+     (should (equal (roost--forge-name (cdr pr)) "GitLab"))
+     (should (equal (roost--forge-name '((number . 12))) "GitHub"))
+     (should (equal (roost--issue-prompt '((number . 3) (title . "Crash") (url . "u") (forge . "gitlab")))
+                    "Crash\n\nThis is GitLab issue #3: u"))
+     (cl-letf (((symbol-function 'roost--refresh-host) #'ignore))
+       (save-window-excursion
+         (roost-task-info task)
+         (with-current-buffer "*roost: fix auth*"
+           (unwind-protect
+               (progn
+                 (should (string-match-p "^Checks\nNot heard from GitLab about !12 yet$" (buffer-string)))
+                 (should (string-match-p "^Pull request\n  !12  https://gitlab.com/g/r/-/merge_requests/12\n"
+                                         (buffer-string)))
+                 (puthash '("dev" "0123456789abcdef")
+                          (append (list pr '(host . "dev") '(prStatus . ((state . "MERGED")))) (roost-test--task))
+                          roost--tasks)
+                 (roost--render-task-info)
+                 (should (string-match-p "Merged on GitLab\\. x retires this task" (buffer-string))))
+             (kill-buffer))))))))
+
 (ert-deftest roost-a-reply-read-before-the-latest-event-keeps-it ()
   ;; A poll that took a while, read before the agent's turn ended, put the
   ;; task back to running after a newer reply had it ready.

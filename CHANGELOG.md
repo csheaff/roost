@@ -4,6 +4,18 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Roost shows a GitLab merge request as it shows a GitHub pull request:
+  numbered `!12`, with its pipeline's jobs as its checks and its
+  unresolved threads, and a task whose merge request waits on you says
+  `to merge`, `ci failed`, `comments` or `conflicts`. `P` opens one,
+  retiring a task whose merge request GitLab squashed works, and `C-c C-t`
+  lists the project's open GitLab issues. Roost asks GitLab, with `glab`,
+  when the host of the project's `origin` says so by name, as gitlab.com
+  does; for a server whose name doesn't, run `git config roost.forge
+  gitlab` in the project. `P` asks before it pushes, so on a forge that
+  is neither, it says so and pushes nothing, rather than pushing and then
+  failing. To upgrade, install `glab` and run `glab auth login` on each
+  host with projects on GitLab; nothing to do for GitHub.
 - A task whose worktree is on another branch that is pushed, as when its
   agent made one to follow a team's naming and opened a pull request from
   it, shows that pull request while the worktree stays there: in the task

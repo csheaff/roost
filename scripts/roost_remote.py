@@ -33,6 +33,7 @@ import threading
 import time
 import tty
 import unicodedata
+import urllib.parse
 import uuid
 
 
@@ -163,8 +164,8 @@ def remote_git(repo, *args, check=True, timeout=REMOTE_GIT_TIMEOUT):
                    or "Command failed: " + shlex.join(["git", *args]))
         if any(failure in message for failure in CREDENTIAL_FAILURES):
             message += ("\nRoost pushes with the Git credentials on this host (%s): run "
-                        "`gh auth setup-git` there for HTTPS, or add an SSH key that GitHub accepts."
-                        % socket.gethostname())
+                        "`gh auth setup-git` (GitHub) or `glab auth login` (GitLab) there for HTTPS, "
+                        "or add an SSH key that the remote accepts." % socket.gethostname())
         raise RoostError(message)
     return result
 
@@ -173,6 +174,12 @@ def gh(cwd, *args, timeout=60):
     """Run the GitHub CLI, finding it on the same PATH agents get."""
     return tool("gh", cwd, args, timeout,
                 "The GitHub CLI (gh) is not installed on this host; install it and run `gh auth login`")
+
+
+def glab(cwd, *args, timeout=60):
+    """Run the GitLab CLI, finding it on the same PATH agents get."""
+    return tool("glab", cwd, args, timeout,
+                "The GitLab CLI (glab) is not installed on this host; install it and run `glab auth login`")
 
 
 def tool(name, cwd, args, timeout, missing, said=lambda result: None):
@@ -1903,21 +1910,21 @@ ISSUE_BODY_LIMIT = 6000
 
 
 def issues(request):
-    """Open GitHub issues for the repository holding DIRECTORY, newest first,
-    as gh on this host sees them."""
+    """Open issues of the repository holding DIRECTORY, newest first, on
+    the forge its origin is on, as gh or glab on this host sees them."""
     directory = str(Path(text(request.get("directory")) or ".").expanduser())
     checkout = git(directory, "rev-parse", "--show-toplevel").stdout.strip()
-    listed = json.loads(gh(checkout, "issue", "list", "--state", "open", "--limit", "100",
-                           "--json", "number,title,body,labels,url", timeout=30) or "[]")
+    forge = forge_for(checkout)
     result = []
-    for issue in listed:
+    for issue in forge.issues(checkout):
         body = text(issue.get("body")) or ""
         if len(body) > ISSUE_BODY_LIMIT:
             body = body[:ISSUE_BODY_LIMIT].rstrip() + "\n…"
         result.append(dict(number=issue["number"], title=text(issue.get("title")) or "", body=body,
                            url=text(issue.get("url")),
                            labels=[label.get("name") for label in issue.get("labels") or []
-                                   if isinstance(label, dict) and label.get("name")]))
+                                   if isinstance(label, dict) and label.get("name")],
+                           **forge.mark))
     return result
 
 
@@ -2372,15 +2379,285 @@ def open_thread(thread):
     nodes = opening.get("nodes") if isinstance(opening, dict) else None
     first = nodes[0] if isinstance(nodes, list) and nodes and isinstance(nodes[0], dict) else {}
     author = first.get("author")
-    body = first.get("bodyText")
-    text = next((line.strip() for line in (body if isinstance(body, str) else "").splitlines() if line.strip()), "")
-    entry = dict(path=thread["path"], author=author.get("login") if isinstance(author, dict) else None,
-                 text=text[:THREAD_TEXT_LIMIT])
-    if thread.get("diffSide") == "RIGHT" and isinstance(thread.get("line"), int):
-        entry["line"] = thread["line"]
-    if thread.get("isOutdated"):
+    return thread_entry(thread["path"], thread.get("line") if thread.get("diffSide") == "RIGHT" else None,
+                        author.get("login") if isinstance(author, dict) else None, first.get("bodyText"),
+                        bool(thread.get("isOutdated")))
+
+
+def thread_entry(path, line, author, body, outdated=False):
+    """An unresolved review thread as the task panel shows it: its file
+    PATH, its LINE there when it has one, who started it, with the first
+    line of BODY, what they wrote, and whether it is OUTDATED."""
+    said = next((part.strip() for part in (body if isinstance(body, str) else "").splitlines() if part.strip()), "")
+    entry = dict(path=path, author=author if isinstance(author, str) else None, text=said[:THREAD_TEXT_LIMIT])
+    if isinstance(line, int):
+        entry["line"] = line
+    if outdated:
         entry["outdated"] = True
     return entry
+
+
+def remote_location(url):
+    """The host and path of the remote at URL, as ("gitlab.com",
+    "group/project") for git@gitlab.com:group/project.git, or (None, None)
+    for a folder here. An HTTP URL's host keeps its port; an SSH URL's is
+    the SSH server's, not the web server's."""
+    if "://" in url:
+        parts = urllib.parse.urlsplit(url)
+        try:
+            host, port = parts.hostname, parts.port
+        except ValueError:
+            return None, None
+        if port and parts.scheme in ("http", "https"):
+            host = "%s:%d" % (host, port)
+        path = parts.path
+    else:
+        # As git@host:group/project.git: a colon after a slash is a path's.
+        match = re.fullmatch(r"(?:[^@/]*@)?([^:/]+):(.*)", url, re.DOTALL)
+        host, path = match.groups() if match else (None, "")
+    if not host:
+        return None, None
+    path = path.strip("/")
+    return host.lower(), (path[:-len(".git")] if path.endswith(".git") else path) or None
+
+
+def forge_for(repo):
+    """The forge REPO's origin is on, which Roost pushes task branches to
+    and asks about their pull requests: GitLab when its host's name says
+    so, as gitlab.com and gitlab.example.com do, or `git config roost.forge
+    gitlab` does, for a server whose name doesn't; GitHub otherwise, as gh
+    finds out, knowing the hosts you signed in to."""
+    url = read_git(repo, "remote", "get-url", "origin").stdout.strip()
+    host, project = remote_location(url) if url else (None, None)
+    said = read_git(repo, "config", "--get", "roost.forge").stdout.strip().lower()
+    named = bool(host) and any(label.startswith("gitlab") for label in host.split(":")[0].split("."))
+    if said == "gitlab" or (named and said != "github"):
+        return GitLabForge(host, project)
+    return GitHubForge(host)
+
+
+class GitHubForge:
+    """GitHub, through gh, which finds the repository from a checkout's
+    remotes, on the hosts you signed in to."""
+
+    name = "GitHub"
+    # What Roost adds to what it records of a pull request here: nothing,
+    # as records from older helpers are all GitHub's.
+    mark = {}
+
+    def __init__(self, host):
+        self.host = host
+
+    def pull_requests(self, repo, branch, timeout):
+        """REPO's latest pull requests from BRANCH, as `gh pr list` has them."""
+        return json.loads(gh(repo if Path(repo).is_dir() else None,
+                             "pr", "list", "--head", branch, "--state", "all", "--limit", "10",
+                             "--json", PULL_REQUEST_FIELDS, timeout=timeout))
+
+    def open_pull_request(self, worktree, branch):
+        """BRANCH's open pull request, as a record, or None."""
+        try:
+            existing = json.loads(gh(worktree, "pr", "list", "--head", branch, "--state", "open",
+                                     "--json", "number,url"))
+        except RoostError as error:
+            if "none of the git remotes" not in str(error):
+                raise
+            raise RoostError("origin is on %s, which gh doesn't know as GitHub. Roost opens pull requests on "
+                             "GitHub and GitLab; for a GitLab server, run `git config roost.forge gitlab` in %s"
+                             % (self.host or "no host", worktree))
+        return dict(number=existing[0]["number"], url=existing[0]["url"]) if existing else None
+
+    def create(self, worktree, base, branch, title, body, draft):
+        """Open a pull request of BRANCH into BASE, and return its record."""
+        argv = ["pr", "create", "--base", base, "--head", branch, "--title", title, "--body", body]
+        if draft:
+            argv.append("--draft")
+        url = gh(worktree, *argv).strip().splitlines()[-1]
+        match = re.search(r"/pull/(\d+)", url)
+        if not match:
+            raise RoostError("Unexpected output from gh pr create: " + url)
+        return dict(number=int(match.group(1)), url=url)
+
+    def issues(self, checkout):
+        """CHECKOUT's open issues, newest first, as `gh issue list` has them."""
+        return json.loads(gh(checkout, "issue", "list", "--state", "open", "--limit", "100",
+                             "--json", "number,title,body,labels,url", timeout=30) or "[]")
+
+
+# A branch's latest merge requests, with what `gh pr list` and
+# PULL_REQUEST_REVIEWS say of a pull request: their pipeline's jobs, those
+# retried left out, and their discussions, the last 100, with where each is,
+# how it starts and when its last note came.
+GITLAB_PULL_REQUESTS = """query($path: ID!, $branch: String!) { project(fullPath: $path) {
+  mergeRequests(sourceBranches: [$branch], first: 10, sort: CREATED_DESC) { nodes {
+    iid webUrl state draft diffHeadSha targetBranch conflicts detailedMergeStatus
+    approvalsLeft approvedBy { nodes { username } }
+    reviewers { nodes { username mergeRequestInteraction { reviewState } } }
+    headPipeline { jobs(first: 100, retried: false) {
+      nodes { name status allowFailure startedAt finishedAt stage { name } } } }
+    resolvableDiscussionsCount resolvedDiscussionsCount
+    discussions(last: 100) { pageInfo { hasPreviousPage } nodes { resolvable resolved
+      last: notes(last: 1) { nodes { createdAt } }
+      first: notes(first: 1) { nodes { author { username } body position { filePath newLine } } } } } } } } }"""
+GITLAB_OPEN = """query($path: ID!, $branch: String!) { project(fullPath: $path) {
+  mergeRequests(sourceBranches: [$branch], state: opened, first: 1) { nodes { iid webUrl } } } }"""
+GITLAB_CREATE = """mutation($path: ID!, $source: String!, $target: String!, $title: String!, $description: String) {
+  mergeRequestCreate(input: {projectPath: $path, sourceBranch: $source, targetBranch: $target,
+                             title: $title, description: $description}) {
+    mergeRequest { iid webUrl } errors } }"""
+GITLAB_ISSUES = """query($path: ID!) { project(fullPath: $path) {
+  issues(state: opened, first: 100, sort: CREATED_DESC) {
+    nodes { iid title description webUrl labels { nodes { title } } } } } }"""
+GITLAB_STATES = {"opened": "OPEN", "merged": "MERGED", "closed": "CLOSED", "locked": "CLOSED"}
+# GitLab's word for whether a merge request conflicts, while it works it out.
+GITLAB_UNCHECKED = (None, "UNCHECKED", "CHECKING", "PREPARING", "APPROVALS_SYNCING")
+
+
+class GitLabForge:
+    """GitLab, through glab's GraphQL requests, for PROJECT at HOST, as
+    origin's URL names them. Its merge requests come as gh has pull
+    requests, their pipeline's jobs as checks and their resolvable
+    discussions as review threads: Roost calls them pull requests too."""
+
+    name = "GitLab"
+    mark = {"forge": "gitlab"}
+
+    def __init__(self, host, project):
+        self.host = host
+        self.project = project
+
+    def ask(self, query, timeout=60, **variables):
+        """The data of GitLab's answer to QUERY, with VARIABLES. Each value
+        goes as a string, as given: glab expands no placeholder in one
+        passed so."""
+        if not (self.host and self.project):
+            raise RoostError("origin names no GitLab project to ask about")
+        argv = ["api", "graphql", "--hostname", self.host, "-f", "query=" + query, "-f", "path=" + self.project]
+        for name, value in variables.items():
+            argv += ["-f", "%s=%s" % (name, value)]
+        try:
+            answer = json.loads(glab(None, *argv, timeout=timeout))
+        except ValueError:
+            raise RoostError("Unexpected output from glab api graphql")
+        data = answer.get("data") if isinstance(answer, dict) else None
+        if not isinstance(data, dict):
+            raise RoostError("Unexpected answer from GitLab at %s: %s" % (self.host, answer))
+        return data
+
+    def found(self, query, timeout=60, **variables):
+        """The project in GitLab's answer to QUERY, which asks for it."""
+        project = self.ask(query, timeout, **variables).get("project")
+        if not isinstance(project, dict):
+            raise RoostError("glab finds no project %s on %s" % (self.project, self.host))
+        return project
+
+    def pull_requests(self, repo, branch, timeout):
+        """The project's latest merge requests from BRANCH, as gh lists pull requests."""
+        listed = self.found(GITLAB_PULL_REQUESTS, timeout, branch=branch)["mergeRequests"]["nodes"]
+        return [self.pull_request(found) for found in listed if isinstance(found, dict)]
+
+    def pull_request(self, found):
+        """FOUND, one of GITLAB_PULL_REQUESTS's merge requests, as `gh pr
+        list` has a pull request, with what `pull_request_reviews` would
+        add to its status as reviewState."""
+        iid = found.get("iid")
+        reviewers = [reviewer for reviewer in (found.get("reviewers") or {}).get("nodes") or []
+                     if isinstance(reviewer, dict)]
+        said = [(reviewer.get("mergeRequestInteraction") or {}).get("reviewState") for reviewer in reviewers]
+        merge_status = found.get("detailedMergeStatus")
+        if "REQUESTED_CHANGES" in said or merge_status == "REQUESTED_CHANGES":
+            review = "CHANGES_REQUESTED"
+        elif isinstance(found.get("approvalsLeft"), int) and found["approvalsLeft"] > 0:
+            review = "REVIEW_REQUIRED"
+        elif (found.get("approvedBy") or {}).get("nodes"):
+            review = "APPROVED"
+        else:
+            review = None
+        reviewed = dict(
+            mergeable=("CONFLICTING" if found.get("conflicts") is True or merge_status == "CONFLICT"
+                       else "UNKNOWN" if merge_status in GITLAB_UNCHECKED else "MERGEABLE"),
+            # Those yet to review it: GitLab keeps every reviewer, with how far they got.
+            requested=[reviewer["username"] for reviewer, state in zip(reviewers, said)
+                       if state in ("UNREVIEWED", "REVIEW_STARTED") and isinstance(reviewer.get("username"), str)],
+            **self.threads(found))
+        jobs = ((found.get("headPipeline") or {}).get("jobs") or {}).get("nodes") or []
+        return dict(number=int(iid) if isinstance(iid, str) and iid.isdigit() else None, url=found.get("webUrl"),
+                    state=GITLAB_STATES.get(found.get("state")), isDraft=found.get("draft") is True,
+                    reviewDecision=review, statusCheckRollup=[self.check(job) for job in jobs if isinstance(job, dict)],
+                    headRefOid=found.get("diffHeadSha"), baseRefName=found.get("targetBranch"),
+                    reviewState=reviewed, **self.mark)
+
+    @staticmethod
+    def check(job):
+        """JOB, one of a pipeline's, as a check run of gh's statusCheckRollup.
+        One allowed to fail passes when it does, as its pipeline does; so
+        does a manual one allowed to, never run. One not allowed waits."""
+        allowed = job.get("allowFailure") is True
+        conclusion = {"SUCCESS": "SUCCESS", "SKIPPED": "SKIPPED", "CANCELED": "CANCELLED",
+                      "FAILED": "NEUTRAL" if allowed else "FAILURE",
+                      "MANUAL": "NEUTRAL" if allowed else None}.get(job.get("status"))
+        return dict(name=job.get("name"), workflowName=(job.get("stage") or {}).get("name"),
+                    status="COMPLETED" if conclusion else "IN_PROGRESS", conclusion=conclusion,
+                    startedAt=job.get("startedAt"), completedAt=job.get("finishedAt"))
+
+    @staticmethod
+    def threads(found):
+        """What `review_state` says of FOUND's review threads, from its
+        unresolved discussions: how many, as GitLab counts them, and when
+        it listed them all, when the first came to wait and those on a
+        file, as the task panel shows them."""
+        discussions = found.get("discussions") or {}
+        unresolved = [discussion for discussion in discussions.get("nodes") or []
+                      if isinstance(discussion, dict) and discussion.get("resolvable") and not discussion.get("resolved")]
+        counts = (found.get("resolvableDiscussionsCount"), found.get("resolvedDiscussionsCount"))
+        state = dict(threads=counts[0] - counts[1]) if all(isinstance(count, int) for count in counts) else {}
+        if (discussions.get("pageInfo") or {}).get("hasPreviousPage"):
+            return state
+
+        def note(discussion, which):
+            nodes = (discussion.get(which) or {}).get("nodes")
+            return nodes[0] if isinstance(nodes, list) and nodes and isinstance(nodes[0], dict) else {}
+
+        times = [note(discussion, "last").get("createdAt") for discussion in unresolved]
+        state.setdefault("threads", len(unresolved))
+        state["threadAt"] = min(times, key=parse_time) if times and all(parse_time(t) for t in times) else None
+        listed = []
+        for discussion in unresolved:
+            first = note(discussion, "first")
+            position = first.get("position") or {}
+            if isinstance(position.get("filePath"), str):
+                listed.append(thread_entry(position["filePath"], position.get("newLine"),
+                                           (first.get("author") or {}).get("username"), first.get("body")))
+        listed.sort(key=lambda thread: (thread["path"], thread.get("line") or 0))
+        if listed:
+            state["openThreads"] = listed[:THREADS_LISTED]
+        return state
+
+    def open_pull_request(self, worktree, branch):
+        """BRANCH's open merge request, as a record, or None."""
+        listed = self.found(GITLAB_OPEN, branch=branch)["mergeRequests"]["nodes"]
+        return dict(number=int(listed[0]["iid"]), url=listed[0]["webUrl"], **self.mark) if listed else None
+
+    def create(self, worktree, base, branch, title, body, draft):
+        """Open a merge request of BRANCH into BASE, and return its record.
+        GitLab takes one whose title starts Draft: as a draft."""
+        created = self.ask(GITLAB_CREATE, source=branch, target=base, title=("Draft: " if draft else "") + title,
+                           description=body).get("mergeRequestCreate") or {}
+        if created.get("errors"):
+            raise RoostError("GitLab refused the merge request: " + "; ".join(map(str, created["errors"])))
+        made = created.get("mergeRequest") or {}
+        if not (isinstance(made.get("iid"), str) and made["iid"].isdigit()):
+            raise RoostError("Unexpected answer from GitLab to a new merge request: %s" % created)
+        return dict(number=int(made["iid"]), url=made.get("webUrl"), **self.mark)
+
+    def issues(self, checkout):
+        """The project's open issues, newest first, as gh lists them."""
+        listed = self.found(GITLAB_ISSUES, timeout=30)["issues"]["nodes"]
+        return [dict(number=int(issue["iid"]), title=issue.get("title"), body=issue.get("description"),
+                     url=issue.get("webUrl"),
+                     labels=[dict(name=label.get("title")) for label in (issue.get("labels") or {}).get("nodes") or []
+                             if isinstance(label, dict)])
+                for issue in listed if isinstance(issue, dict) and str(issue.get("iid")).isdigit()]
 
 
 def unpushed(task, head, tip, branch=None):
@@ -2458,8 +2735,8 @@ def pushed(task, branch=None):
 
 
 def task_pull_requests(task, tip, timeout=15, branch=None):
-    """The task's pull requests, newest first, or None when gh cannot say
-    within TIMEOUT seconds. They are those from its branch whose head is a
+    """The task's pull requests, newest first, or None when its forge can't
+    say within TIMEOUT seconds. They are those from its branch whose head is a
     commit of its own, made since it started and still on its branch at
     TIP, of a task that made commits: a task retired earlier, or someone
     else's fork, may have had a branch of the same name. The recorded one
@@ -2467,9 +2744,7 @@ def task_pull_requests(task, tip, timeout=15, branch=None):
     instead, at TIP, as after its agent made one there: its pull requests
     are those whose head is a commit made there or on the task's branch."""
     try:
-        listed = json.loads(gh(task["repo"] if Path(task["repo"]).is_dir() else None,
-                               "pr", "list", "--head", branch or task["branch"], "--state", "all", "--limit", "10",
-                               "--json", PULL_REQUEST_FIELDS, timeout=timeout))
+        listed = forge_for(task["repo"]).pull_requests(task["repo"], branch or task["branch"], timeout)
     except (RoostError, ValueError, OSError):
         return None
     if not isinstance(listed, list):
@@ -2522,7 +2797,7 @@ def pull_request_status(pr, reviews, checked):
                   checks=checks, head=pr.get("headRefOid"), base=pr.get("baseRefName"))
     status.update((key, value) for key, value in names.items() if value)
     if pr.get("state") == "OPEN":
-        status.update(reviews.get(pr.get("url"), {}), failedAt=failed, checkedAt=checked)
+        status.update(pr.get("reviewState") or reviews.get(pr.get("url"), {}), failedAt=failed, checkedAt=checked)
     return status
 
 
@@ -2576,7 +2851,8 @@ def check_pull_requests(store, tasks):
         if branch:
             if prs is not None:
                 task["worktreePr"] = pr and dict(pull_request_status(pr, reviews, checked), branch=branch,
-                                                 number=pr["number"], url=pr.get("url"), tip=tip)
+                                                 number=pr["number"], url=pr.get("url"), tip=tip,
+                                                 **({"forge": pr["forge"]} if pr.get("forge") else {}))
                 if pr and pr.get("state") == "OPEN":
                     task["worktreePr"]["unpushed"] = unpushed(task, pr.get("headRefOid"), tip, branch)
             continue
@@ -2586,6 +2862,8 @@ def check_pull_requests(store, tasks):
         if pr.get("state") == "OPEN":
             task["unpushed"] = unpushed(task, pr.get("headRefOid"), tip)
         record = dict(number=pr["number"], url=pr.get("url"), state=pr.get("state"), head=pr.get("headRefOid"))
+        if pr.get("forge"):
+            record["forge"] = pr["forge"]
         # Where it merges, for views that ask GitHub nothing.
         if pr.get("baseRefName"):
             record["base"] = pr["baseRefName"]
@@ -4149,8 +4427,9 @@ def push_pull_request(store, task):
 
 
 def pull_request(store, task, request):
-    """Push the task branch and open a pull request. Runs without the registry
-    lock, because pushing and talking to GitHub are slow."""
+    """Push the task branch and open a pull request on the forge its origin
+    is on. Runs without the registry lock, because pushing and talking to
+    the forge are slow."""
     integration = task.get("integrationBranch")
     if not integration:
         raise RoostError("The task has no integration branch (it was created from a detached HEAD) to open a pull request against")
@@ -4165,20 +4444,15 @@ def pull_request(store, task, request):
     if git(worktree, "rev-list", "--count", "--no-merges", fork_point(worktree, task) + "..HEAD").stdout.strip() == "0":
         raise RoostError("The task branch has no commits beyond where it started; there is nothing to propose")
     branch = task["branch"]
+    forge = forge_for(task["repo"])
+    # Asked first, so a forge that can't be asked leaves the branch unpushed.
+    existing = forge.open_pull_request(worktree, branch)
     remote_git(worktree, "push", "-u", "origin", branch)
-    existing = json.loads(gh(worktree, "pr", "list", "--head", branch, "--state", "open",
-                             "--json", "number,url"))
     if existing:
-        return dict(number=existing[0]["number"], url=existing[0]["url"])
-    argv = ["pr", "create", "--base", integration, "--head", branch, "--title", title,
-            "--body", request.get("body") if isinstance(request.get("body"), str) else ""]
-    if request.get("draft") is True:
-        argv.append("--draft")
-    url = gh(worktree, *argv).strip().splitlines()[-1]
-    match = re.search(r"/pull/(\d+)", url)
-    if not match:
-        raise RoostError("Unexpected output from gh pr create: " + url)
-    return dict(number=int(match.group(1)), url=url)
+        return existing
+    return forge.create(worktree, integration, branch, title,
+                        request.get("body") if isinstance(request.get("body"), str) else "",
+                        request.get("draft") is True)
 
 
 def conflicted_files(repo):
@@ -4726,7 +5000,26 @@ def doctor(store, request):
             check("GitHub CLI", False, "not signed in",
                   "Optional: run `gh auth login` on this host to open pull requests", executable,
                   optional=True)
-    for repo in dict.fromkeys(p for p in request.get("projects") or [] if isinstance(p, str)):
+    projects = list(dict.fromkeys(p for p in request.get("projects") or [] if isinstance(p, str)))
+    # For projects on GitLab: the servers glab must have signed in to.
+    hosts = dict.fromkeys(forge.host for forge in map(forge_for, projects)
+                          if isinstance(forge, GitLabForge) and forge.host)
+    executable = shutil.which("glab", path=path)
+    if hosts and not executable:
+        check("GitLab CLI", False, "not found",
+              "Optional: install glab (https://gitlab.com/gitlab-org/cli) to open merge requests",
+              optional=True)
+    for host in hosts if executable else ():
+        code, out = run([executable, "auth", "status", "--hostname", host])
+        account = re.search(r"Logged in to \S+ as (\S+)", out)
+        if code == 0:
+            check("GitLab CLI · " + host, True, "signed in as " + account.group(1) if account else "signed in",
+                  None, executable, optional=True)
+        else:
+            check("GitLab CLI · " + host, False, "not signed in",
+                  "Optional: run `glab auth login --hostname %s` on this host to open merge requests" % host,
+                  executable, optional=True)
+    for repo in projects:
         push_check(check, repo)
     return checks
 
