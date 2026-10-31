@@ -5098,8 +5098,16 @@ print(json.dumps(dict(data=data)))
         (self.glab_dir / "list.json").write_text(json.dumps([merge_request]))
         status = self.request("list", full=True)["result"][0]["prStatus"]
         self.assertEqual((status["review"], status["mergeable"]), ("APPROVED", "UNKNOWN"))
+        # More jobs than were asked for: the pipeline's status stands for the rest.
+        for pipeline, counts, named in (("FAILED", dict(passing=1, failing=1, pending=0), "failingChecks"),
+                                        ("RUNNING", dict(passing=1, failing=0, pending=1), "pendingChecks")):
+            merge_request.update(headPipeline=dict(status=pipeline, jobs=dict(
+                pageInfo=dict(hasNextPage=True), nodes=[self.job("lint", "SUCCESS")])))
+            (self.glab_dir / "list.json").write_text(json.dumps([merge_request]))
+            status = self.request("list", full=True)["result"][0]["prStatus"]
+            self.assertEqual((status["checks"], status[named]), (counts, ["pipeline"]))
         # Merged, it is asked nothing more of its review.
-        (self.glab_dir / "list.json").write_text(json.dumps([dict(merge_request, state="merged")]))
+        (self.glab_dir / "list.json").write_text(json.dumps([dict(merge_request, state="merged", headPipeline=None)]))
         status = self.request("list", full=True)["result"][0]["prStatus"]
         self.assertEqual(set(status), {"state", "draft", "review", "checks", "head", "base"})
         self.assertEqual(status["state"], "MERGED")

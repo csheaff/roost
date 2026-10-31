@@ -2495,7 +2495,7 @@ GITLAB_PULL_REQUESTS = """query($path: ID!, $branch: String!) { project(fullPath
     iid webUrl state draft diffHeadSha targetBranch conflicts detailedMergeStatus
     approvalsLeft approvedBy { nodes { username } }
     reviewers { nodes { username mergeRequestInteraction { reviewState } } }
-    headPipeline { jobs(first: 100, retried: false) {
+    headPipeline { status jobs(first: 100, retried: false) { pageInfo { hasNextPage }
       nodes { name status allowFailure startedAt finishedAt stage { name } } } }
     resolvableDiscussionsCount resolvedDiscussionsCount
     discussions(last: 100) { pageInfo { hasPreviousPage } nodes { resolvable resolved
@@ -2582,10 +2582,16 @@ class GitLabForge:
             requested=[reviewer["username"] for reviewer, state in zip(reviewers, said)
                        if state in ("UNREVIEWED", "REVIEW_STARTED") and isinstance(reviewer.get("username"), str)],
             **self.threads(found))
-        jobs = ((found.get("headPipeline") or {}).get("jobs") or {}).get("nodes") or []
+        pipeline = found.get("headPipeline") or {}
+        jobs = pipeline.get("jobs") or {}
+        checks = [self.check(job) for job in jobs.get("nodes") or [] if isinstance(job, dict)]
+        if (jobs.get("pageInfo") or {}).get("hasNextPage"):
+            # More jobs than were asked for: the pipeline's own status stands
+            # for the rest, failed if one that may not fail did.
+            checks.append(self.check(dict(name="pipeline", status=pipeline.get("status"))))
         return dict(number=int(iid) if isinstance(iid, str) and iid.isdigit() else None, url=found.get("webUrl"),
                     state=GITLAB_STATES.get(found.get("state")), isDraft=found.get("draft") is True,
-                    reviewDecision=review, statusCheckRollup=[self.check(job) for job in jobs if isinstance(job, dict)],
+                    reviewDecision=review, statusCheckRollup=checks,
                     headRefOid=found.get("diffHeadSha"), baseRefName=found.get("targetBranch"),
                     reviewState=reviewed, **self.mark)
 
