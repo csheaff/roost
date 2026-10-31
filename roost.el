@@ -936,8 +936,8 @@ TASK."
         (t (message "%s: %s" title body))))
 
 (defconst roost--measured-fields
-  '(diff dirty files size ahead behind update worktreeMissing worktreeBranch prStatus unpushed gitStamp agentWork
-    merging landed conflicts pr sinceLooked)
+  '(diff dirty files size ahead behind update worktreeMissing worktreeBranch worktreeHead worktreePr prStatus
+    unpushed gitStamp agentWork merging landed conflicts pr sinceLooked)
   "A task's fields its host measures for each reply, such as Git statistics.
 They are as new as the reply, whatever its `updatedAt': its pull
 request too, which the host records as it finds one on GitHub.")
@@ -1007,8 +1007,8 @@ must a reply with a newer look lose it for an older agent event."
     ;; Quiet polls skip Git and the latest reply; keep the last full refresh's.
     ;; Not what GitHub said of a pull request since recorded otherwise, as
     ;; by another Emacs: closed, or another in its place.
-    (dolist (field '(diff dirty files size ahead behind worktreeMissing worktreeBranch prStatus unpushed lastMessage
-                            gitStamp agentWork merging landed conflicts sinceLooked))
+    (dolist (field '(diff dirty files size ahead behind worktreeMissing worktreeBranch worktreeHead worktreePr
+                            prStatus unpushed lastMessage gitStamp agentWork merging landed conflicts sinceLooked))
       (unless (or (assoc field task)
                   (and (eq field 'prStatus)
                        (not (equal (roost--field task 'pr) (roost--field old 'pr)))))
@@ -6082,6 +6082,46 @@ The text is kept if creation fails."
            (setq roost--pr-sending nil)
            (roost--draft-error "Could not create" err 'roost-pr-submit)))))))
 
+(defun roost--worktree-pr (task)
+  "The pull request from the branch TASK's worktree is on, when not the task's.
+As after its agent made a branch there to follow a team's naming,
+pushed it and opened one from it: as GitHub was last asked, while the
+worktree is still on that branch.  Nil otherwise."
+  (when-let* ((pr (roost--field task 'worktreePr))
+              ((consp pr))
+              (branch (roost--other-branch task))
+              ((equal (alist-get 'branch pr) branch)))
+    pr))
+
+(defun roost--pr-view (task)
+  "TASK as the views of its pull request take it.
+While its worktree is on another branch with a pull request, that one
+stands in for the task's own, which acts on the task's branch: the
+work is there.  The commits it lacks are as GitHub was last asked,
+unknown once that branch has moved."
+  (if-let* ((pr (roost--worktree-pr task)))
+      `((pr . ,pr) (prStatus . ,pr)
+        ,@(when (equal (alist-get 'state pr) "OPEN")
+            `((unpushed . ,(and (equal (alist-get 'tip pr) (roost--field task 'worktreeHead))
+                                (alist-get 'unpushed pr)))))
+        ,@(assq-delete-all 'unpushed (copy-sequence task)))
+    task))
+
+(defun roost--pr-name (task)
+  "TASK's pull request, as `roost--pr-view' has it, by number, as \"#12\".
+The branch its worktree is on follows, as \"#12 from feat\", for that
+branch's."
+  (let ((pr (roost--field (roost--pr-view task) 'pr)))
+    (concat (format "#%s" (alist-get 'number pr))
+            (when-let* ((branch (alist-get 'branch pr))) (concat " from " branch)))))
+
+(defun roost--worktree-merged-p (task)
+  "Whether a pull request merged all of the branch TASK's worktree is on.
+As GitHub was last asked, and the worktree last measured."
+  (when-let* ((pr (roost--worktree-pr task)))
+    (and (equal (alist-get 'state pr) "MERGED")
+         (equal (alist-get 'head pr) (roost--field task 'worktreeHead)))))
+
 (defun roost--pr-state (task)
   "TASK's pull request state: `open', `draft', `merged', `closed', or nil.
 Without a status from GitHub yet, it is as its host recorded, or open."
@@ -6129,8 +6169,10 @@ That is when its agent neither works nor asks, and GitHub was asked
 `roost--pr-settle' seconds or more after the agent's last event, so it
 knew of every push the agent made.  Its head is the one TASK's host
 records, which another Emacs's lookup may have moved on, as the commits
-the pull request lacks are counted from it.  Nil otherwise."
-  (when-let* ((status (roost--field task 'prStatus))
+the pull request lacks are counted from it.  Nil otherwise.  As
+`roost--pr-view' has it."
+  (when-let* ((task (roost--pr-view task))
+              (status (roost--field task 'prStatus))
               ((equal (alist-get 'state status) "OPEN"))
               ((equal (alist-get 'head status) (alist-get 'head (roost--field task 'pr))))
               ((not (member (roost--status-name task) '("starting" "running" "background" "permission"))))
@@ -6147,8 +6189,11 @@ passed, no review is still asked for, none requested changes, and GitHub
 finds no conflicts.  Only as `roost--pr-status' has it, and while the
 pull request has every commit of the task's, with none left uncommitted
 nor in its agent's own worktrees.  PATIENT leaves a failure or thread to
-the agent for `roost--pr-grace' seconds after it came."
-  (when-let* ((status (roost--pr-status task))
+the agent for `roost--pr-grace' seconds after it came.  As
+`roost--pr-view' has it: the pull request from the branch its worktree
+is on, while there is one."
+  (when-let* ((task (roost--pr-view task))
+              (status (roost--pr-status task))
               ((eql (roost--field task 'unpushed) 0))
               ((not (roost--field task 'dirty)))
               ((not (roost--field task 'merging)))
@@ -6221,8 +6266,9 @@ GitHub's GraphQL API names Copilot's reviewer by its bot's login."
 
 (defun roost--pr-reason (task verdict)
   "Why TASK's pull request waits on you for VERDICT, from `roost--pr-verdict'."
-  (let* ((status (roost--field task 'prStatus))
-         (number (format "#%s" (alist-get 'number (roost--field task 'pr))))
+  (let* ((task (roost--pr-view task))
+         (status (roost--field task 'prStatus))
+         (number (roost--pr-name task))
          (count (lambda (n what) (format "%d %s%s" n what (if (= n 1) "" "s")))))
     (pcase verdict
       ("ci failed"
@@ -6235,9 +6281,14 @@ GitHub's GraphQL API names Copilot's reviewer by its bot's login."
 
 (defun roost--pr-next-step (task key)
   "What to do next with TASK's open pull request, naming keys with KEY.
-KEY is a function that formats a key, as in `roost--next-step'."
-  (let* ((status (roost--pr-status task))
-         (number (format "#%s" (alist-get 'number (roost--field task 'pr))))
+KEY is a function that formats a key, as in `roost--next-step'.
+For the pull request from the branch its worktree is on, which `P'
+would not push to, nor open, what to do on GitHub, or with that branch."
+  (let* ((task (roost--pr-view task))
+         (status (roost--pr-status task))
+         (number (roost--pr-name task))
+         (branch (alist-get 'branch (roost--field task 'pr)))
+         (open (unless branch (concat ", " (funcall key "P") " opens it")))
          (unpushed (and status (roost--field task 'unpushed)))
          (verdict (roost--pr-verdict task))
          (tell (if (roost--agent-running-p task)
@@ -6255,15 +6306,18 @@ KEY is a function that formats a key, as in `roost--next-step'."
      (verdict
       (concat (roost--pr-reason task verdict) ": "
               (pcase verdict
-                ("to merge" (concat (funcall key "P") " opens it to merge"))
-                ("comments" (concat tell " to answer them, " (funcall key "P") " opens it"))
-                (_ (concat tell ", " (funcall key "P") " opens it")))))
+                ("to merge" (if branch "merge it on GitHub" (concat (funcall key "P") " opens it to merge")))
+                ("comments" (concat tell " to answer them" open))
+                (_ (concat tell open)))))
      ((and (numberp unpushed) (> unpushed 0))
-      (format "%s pushes %d new commit%s to %s" (funcall key "P") unpushed (if (= unpushed 1) "" "s") number))
+      (if branch
+          (format "%s lacks %d new commit%s: push %s to add them" number unpushed (if (= unpushed 1) "" "s") branch)
+        (format "%s pushes %d new commit%s to %s" (funcall key "P") unpushed (if (= unpushed 1) "" "s") number)))
      ((and status (equal (alist-get 'mergeable status) "CONFLICTING"))
-      (format "%s conflicts with the branch it merges into: %s, %s opens it" number tell (funcall key "P")))
+      (format "%s conflicts with the branch it merges into: %s%s" number tell (or open "")))
      ((and status (eql unpushed 0) waits)
       (format "%s waits for %s" number (string-join waits " and ")))
+     (branch (roost--other-branch-step task key))
      (t (concat (funcall key "P") " pushes new commits to its pull request")))))
 
 (defun roost--conflicts (task)
@@ -6271,7 +6325,9 @@ KEY is a function that formats a key, as in `roost--next-step'."
 For an open pull request, t when GitHub said so, as `roost--pr-status'
 has it, while the pull request has every commit of the task's.
 Otherwise the files in which merging its committed work would conflict,
-as its host last measured them, unless that work is merged."
+as its host last measured them, unless that work is merged.  As
+`roost--pr-view' has it."
+  (setq task (roost--pr-view task))
   (if (memq (roost--pr-state task) '(open draft))
       (when-let* ((status (roost--pr-status task))
                   ((eql (roost--field task 'unpushed) 0)))
@@ -6311,8 +6367,7 @@ last did: a notification about it is news."
            (format "Conflicts with %s in %s" (or (roost--field task 'integrationBranch) "its branch")
                    (roost--file-list conflicts)))
           (conflicts
-           (format "#%s conflicts with the branch it merges into"
-                   (alist-get 'number (roost--field task 'pr)))))))
+           (format "%s conflicts with the branch it merges into" (roost--pr-name task))))))
 
 (defun roost--turn-reason (task turn)
   "Why TASK's pull request or work waits on you for TURN, as `roost--turn' has it."
@@ -6383,7 +6438,7 @@ one's `roost--unmerged-files'."
 (defun roost--conflict-next-step (task key)
   "What to do about TASK's conflicts with the branch it merges into.
 KEY is a function that formats a key, as in `roost--next-step'."
-  (if (memq (roost--pr-state task) '(open draft))
+  (if (memq (roost--pr-state (roost--pr-view task)) '(open draft))
       (roost--pr-next-step task key)
     (let ((integration (or (roost--field task 'integrationBranch) "its branch")))
       (format "Conflicts with %s in %s: %s merges %s into it, to resolve them there"
@@ -6391,8 +6446,11 @@ KEY is a function that formats a key, as in `roost--next-step'."
               (funcall key "u") integration))))
 
 (defun roost--pr-marker (task)
-  "Compact pull request marker for TASK's dashboard row, such as \"#12 ✓\"."
-  (if-let* ((pr (roost--field task 'pr))
+  "Compact pull request marker for TASK's dashboard row, such as \"#12 ✓\".
+As `roost--pr-view' has it: the row says which branch the worktree is
+on, and hovering, whose pull request this is."
+  (if-let* ((task (roost--pr-view task))
+            (pr (roost--field task 'pr))
             (state (roost--pr-state task)))
       (let* ((open (memq state '(open draft)))
              (counts (and open (roost--pr-checks task)))
@@ -6410,7 +6468,10 @@ KEY is a function that formats a key, as in `roost--next-step'."
                                 ;; Once merged, the commit counts no longer mean work to finish.
                                 (unless open
                                   (propertize (symbol-name state) 'face (roost--pr-face state)))))))
-        (string-join parts " "))
+        (if-let* ((branch (alist-get 'branch pr)))
+            (propertize (string-join parts " ") 'help-echo (format "%s, the branch the worktree is on"
+                                                                   (roost--pr-name task)))
+          (string-join parts " ")))
     ""))
 
 (defun roost--insert-issue (task)
@@ -6430,7 +6491,7 @@ KEY is a function that formats a key, as in `roost--next-step'."
 (defun roost--evidence-p (task)
   "Whether TASK's panel says what a merge of it would rest on.
 That is while it has work to merge, or a pull request open."
-  (let ((state (roost--pr-state task)))
+  (let ((state (roost--pr-state (roost--pr-view task))))
     (or (and (memq state '(open draft)) t)
         (and (not (eq state 'merged))
              (not (roost--merged-p task))
@@ -6444,10 +6505,12 @@ That is while it has work to merge, or a pull request open."
   "Insert, in TASK's panel, what the checks of its pull request say.
 Each failing and pending check by name, as GitHub last said, and how
 many passed.  Without a pull request, or with one that has no checks,
-there are no CI results, which looks unlike checks that passed."
-  (let* ((state (roost--pr-state task))
+there are no CI results, which looks unlike checks that passed.  As
+`roost--pr-view' has it."
+  (let* ((task (roost--pr-view task))
+         (state (roost--pr-state task))
          (status (roost--field task 'prStatus))
-         (number (format "#%s" (alist-get 'number (roost--field task 'pr))))
+         (number (roost--pr-name task))
          (counts (roost--pr-checks task))
          (mark (lambda (mark face text) (concat (propertize mark 'face face) " " text))))
     (roost--insert-heading "Checks")
@@ -6497,8 +6560,9 @@ there are no CI results, which looks unlike checks that passed."
   "Insert the unresolved review threads of TASK's open pull request.
 Copilot's too, as GitHub last said, each with its file and line as a
 button that visits them, and who started it with what, within WIDTH
-columns."
-  (when-let* (((memq (roost--pr-state task) '(open draft)))
+columns.  As `roost--pr-view' has it."
+  (when-let* ((task (roost--pr-view task))
+              ((memq (roost--pr-state task) '(open draft)))
               (status (roost--field task 'prStatus))
               (count (alist-get 'threads status))
               ((natnump count))
@@ -6511,7 +6575,7 @@ columns."
         (roost--insert-indented
          (if listed
              (format "and %d more" (- count (length listed)))
-           (format "%d on #%s" count (alist-get 'number (roost--field task 'pr))))
+           (format "%d on %s" count (roost--pr-name task)))
          'roost-dim)))))
 
 (defun roost--insert-review-thread (task thread width)
@@ -6566,13 +6630,18 @@ file's changes, as its button in the file list shows them."
                 (forward-line (1- line))))))))
 
 (defun roost--insert-pull-request (task)
-  "Insert TASK's \"Pull request\" section when it has a pull request."
-  (when-let* ((pr (roost--field task 'pr))
-              (state (roost--pr-state task)))
-    (let* ((status (roost--field task 'prStatus))
+  "Insert TASK's \"Pull request\" section when it has a pull request.
+As `roost--pr-view' has it: the one from the branch its worktree is on
+is headed so, and the task's own, if any, named below it."
+  (when-let* ((view (roost--pr-view task))
+              (pr (roost--field view 'pr))
+              (state (roost--pr-state view)))
+    (let* ((status (roost--field view 'prStatus))
            (review (alist-get 'review status))
-           (reviewers (mapcar #'roost--reviewer-name (alist-get 'requested status))))
-      (roost--insert-heading "Pull request")
+           (reviewers (mapcar #'roost--reviewer-name (alist-get 'requested status)))
+           (branch (alist-get 'branch pr))
+           (own (alist-get 'number (roost--field task 'pr))))
+      (roost--insert-heading "Pull request" (when branch (concat "from " branch)))
       (insert "  ")
       (insert-text-button (format "#%s" (alist-get 'number pr))
                           'follow-link t 'face 'roost-field
@@ -6596,11 +6665,20 @@ file's changes, as its button in the file list shows them."
         " · "))
       (when (eq state 'merged)
         (roost--insert-indented
-         (if (roost--landed task)
-             (substitute-command-keys
-              "Merged on GitHub. \\<roost-task-info-mode-map>\\[roost-retire] retires this task, removing its worktree and branch.")
-           "Merged on GitHub, but not the commits since.")
-         'roost-dim)))))
+         (cond ((not (if branch (roost--worktree-merged-p task) (roost--landed task)))
+                "Merged on GitHub, but not the commits since.")
+               (branch
+                (substitute-command-keys
+                 (format "Merged on GitHub. \\<roost-task-info-mode-map>\\[roost-retire] discards this task, keeping %s."
+                         branch)))
+               (t
+                (substitute-command-keys
+                 "Merged on GitHub. \\<roost-task-info-mode-map>\\[roost-retire] retires this task, removing its worktree and branch.")))
+         'roost-dim))
+      ;; Which the views follow again once the worktree is back on its branch.
+      (when (and branch own)
+        (roost--insert-indented (format "The task's branch %s has #%s." (roost--field task 'branch) own)
+                                'roost-dim)))))
 
 ;;;###autoload
 (defun roost-stop (&optional task)
@@ -6654,17 +6732,29 @@ task's branch.  Nil too from a helper too old to say."
 (defun roost--other-branch-ways (task key)
   "How to finish TASK, whose worktree is on another branch, naming keys with KEY.
 KEY is a function that formats a key, as in `roost--next-step'.
-Discarding keeps that branch, and merging needs the task's back."
+Discarding keeps that branch, and merging needs the task's back, unless
+a pull request from there merged it all."
   (let ((branch (roost--other-branch task))
         (own (roost--field task 'branch))
         (ahead (roost--field task 'ahead)))
     (concat (funcall key "x") " discards the task"
             (unless (equal branch "HEAD") (format ", keeping %s" branch))
-            (when (and (numberp ahead) (> ahead 0) (roost--action-applies-p task 'roost-merge-retire))
+            (when (and (numberp ahead) (> ahead 0) (roost--action-applies-p task 'roost-merge-retire)
+                       (not (roost--worktree-merged-p task)))
               (concat "; to merge its work with " (funcall key "m") " or " (funcall key "P") ", "
                       (if (equal branch "HEAD")
                           (format "bring its commits onto %s and check that out there" own)
                         (format "check out %s there and merge %s into it" own branch)))))))
+
+(defun roost--other-branch-step (task key)
+  "What to do next with TASK, whose worktree is on another branch.
+KEY is a function that formats a key, as in `roost--next-step'.  Its
+host won't merge or retire it there."
+  (concat (if (roost--worktree-merged-p task)
+              (format "%s is merged: " (roost--pr-name task))
+            (format "Its worktree is on %s, not the task's branch: "
+                    (roost--branch-label (roost--other-branch task))))
+          (roost--other-branch-ways task key)))
 
 (defun roost--unmerged-work-p (task)
   "Whether TASK, as last seen, holds work that retiring it would refuse to lose.
@@ -8338,11 +8428,12 @@ where RET would pick the agent's default answer, so no key is named."
       (concat "Its agent left work in a worktree of its own: merge it into this task in Magit, or remove it"
               ;; The panel lists those worktrees, with buttons, below this line.
               (when menu (concat "; " (funcall key "i") " shows it"))))
-     ;; Its host won't merge or retire it there.
+     ;; Its host won't merge or retire it there, but a pull request from
+     ;; there is the one to follow.
      ((roost--other-branch task)
-      (concat (format "Its worktree is on %s, not the task's branch: "
-                      (roost--branch-label (roost--other-branch task)))
-              (roost--other-branch-ways task key)))
+      (if (equal (alist-get 'state (roost--worktree-pr task)) "OPEN")
+          (roost--pr-next-step task key)
+        (roost--other-branch-step task key)))
      ;; As for one you haven't looked at since its agent finished.
      ((roost--landed task) (funcall retire))
      ((consp (roost--conflicts task)) (roost--conflict-next-step task key))

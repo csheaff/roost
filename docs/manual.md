@@ -445,7 +445,8 @@ changes, not roost/fix-parser's". While the next step is about something
 else, as for a stopped agent, that line says which branch the worktree is
 on and how to finish the task itself. Its details say so too, the dashboard's changes start
 with `on feat` (`detached` for a detached HEAD), and the task doesn't say
-`merged` or `conflicts`, which go by its own branch. To finish it:
+`merged`, which goes by its own branch, nor `conflicts` but of a pull
+request from `feat`, below. To finish it:
 
 - To merge the work with `m` or `P`, check out the task's branch in the
   worktree and merge `feat` into it.
@@ -453,7 +454,24 @@ with `on feat` (`detached` for a detached HEAD), and the task doesn't say
   and `feat` keeps its commits. It first says what that loses, as files not
   committed, or commits made on a detached HEAD.
 
-Roost finds a pull request opened from the task's branch, not from `feat`.
+Once `feat` is pushed, Roost also looks up pull requests from it, as when
+the agent made it to follow a team's naming and opened one, and shows the
+one found while the worktree stays on `feat`: in the task panel, under
+"Pull request from feat", with its checks and open review threads, in the
+dashboard, and in the task's status, `to merge`, `ci failed`, `comments` or
+`conflicts`, which notifies as the task's own would. It counts only one
+whose head is a commit made on `feat` or the task's branch, and still on
+`feat`, so a retired task's or a fork's branch of the same name doesn't. A
+commit since GitHub was last asked holds back `to merge` until it is asked
+again. The next step names `e` for the agent, or says to merge it on
+GitHub: `P` still acts on the task's branch, so it neither pushes to that
+pull request nor opens it; its number in the panel opens it. Roost doesn't
+record it, so the task's own pull request, `m`, retiring and
+`roost-task-merged-functions` stay the task branch's. Once it merged all of
+`feat`, the next step says so, and that `x` discards the task, keeping
+`feat`, which then loses no commits; the task doesn't say `merged`, which
+means its own branch is. When the worktree goes back to the task's branch,
+or on to a third, the task's own pull request shows again at once.
 
 ### How many agents you keep up with
 
@@ -513,8 +531,9 @@ Also available: `roost-send-region` (adds the selection, with its file and
 lines, to the prompt you are drafting). Roost watches its hosts once you open the dashboard or sidebar or start
 a task: every 3 seconds while Emacs is in front, every 15 otherwise.
 Every two minutes, and whenever you open the dashboard or refresh it with `g`, it also
-asks GitHub about the pull requests of tasks whose branch was pushed, with one
-`gh api graphql` query per repository for review threads and where they are.
+asks GitHub about the pull requests of tasks whose branch was pushed, or the
+branch their worktree is on, with one `gh api graphql` query per repository
+for review threads and where they are.
 `roost-watch-mode` turns that off and on.
 
 In Magit on a task's worktree, Roost adds a few keys, and a Roost menu:

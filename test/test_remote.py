@@ -3698,11 +3698,14 @@ if os.path.exists(os.path.join(directory, "slow")):
     import time
     time.sleep(float(open(os.path.join(directory, "slow")).read()))
 if args[:2] == ["pr", "list"]:
-    # Filtered by --state as GitHub would; a canned entry without one is open.
+    # Filtered by --state as GitHub would; a canned entry without one is
+    # open. By --head too, for an entry naming its headRefName.
     path = os.path.join(directory, "list.json")
     listed = json.load(open(path)) if os.path.exists(path) else []
     state = args[args.index("--state") + 1].upper() if "--state" in args else "OPEN"
-    print(json.dumps([pr for pr in listed if state == "ALL" or pr.get("state", "OPEN") == state]))
+    head = args[args.index("--head") + 1] if "--head" in args else None
+    print(json.dumps([pr for pr in listed if (state == "ALL" or pr.get("state", "OPEN") == state)
+                      and pr.get("headRefName", head) == head]))
 elif args[:2] == ["api", "graphql"]:
     # Each pull request the query asks for, as reviews.json has it by number.
     import re
@@ -4648,6 +4651,141 @@ sys.exit(status)
         listed = self.request("list", full=True)["result"][0]
         self.assertEqual((listed["pr"]["mergedHead"], listed["landed"]), (tip, True))
         self.assertEqual(roost.merged_pull_request_head(roost.Store(str(self.state)).read(task["id"])), tip)
+
+    def test_a_worktree_on_another_branch_shows_that_branchs_pull_request(self):
+        # Its agent made a branch to follow a team's naming, pushed it and
+        # opened a pull request from it, which Roost never showed.
+        self.github()
+        task = self.create()
+        wt = Path(task["worktree"])
+        store = roost.Store(str(self.state))
+        self.commit_in(task)
+        self.git("switch", "-q", "-c", "PROJ-1-fix", cwd=wt)
+        # Not pushed yet: GitHub is not asked.
+        listed = self.request("list", full=True)["result"][0]
+        self.assertEqual((listed["worktreeBranch"], listed["worktreePr"]), ("PROJ-1-fix", None))
+        self.assertEqual(self.gh_calls(), [])
+        there = self.commit_in(task, "there")
+        self.assertEqual(listed["worktreeHead"], self.git("rev-parse", "HEAD~", cwd=wt))
+        self.git("push", "-q", "-u", "origin", "PROJ-1-fix", cwd=wt)
+        url = "https://github.com/octo/repo/pull/%d"
+        failing = dict(__typename="CheckRun", name="test", status="COMPLETED", conclusion="FAILURE",
+                       completedAt="2026-10-30T09:00:00Z")
+        (self.gh_dir / "list.json").write_text(json.dumps([
+            dict(number=12, url=url % 12, headRefName="PROJ-1-fix", state="OPEN", headRefOid=there,
+                 baseRefName="main", statusCheckRollup=[failing])]))
+        (self.gh_dir / "reviews.json").write_text(json.dumps({"12": dict(
+            mergeable="MERGEABLE", reviewRequests=dict(nodes=[]),
+            reviewThreads=dict(totalCount=1, nodes=[self.thread(False, "2026-10-30T09:01:00Z")]))}))
+        listed = self.request("list", full=True)["result"][0]
+        shown = listed["worktreePr"]
+        self.assertLessEqual(listed["updatedAt"], shown.pop("checkedAt"))
+        self.assertEqual(shown, dict(
+            branch="PROJ-1-fix", number=12, url=url % 12, state="OPEN", draft=False, review=None, head=there,
+            base="main", tip=there, checks=dict(passing=0, failing=1, pending=0), failingChecks=["test"],
+            failedAt="2026-10-30T09:00:00Z", mergeable="MERGEABLE", requested=[], threads=1,
+            threadAt="2026-10-30T09:01:00Z", unpushed=0))
+        self.assertEqual(listed["worktreeHead"], there)
+        # One lookup, from the worktree's branch; the task's isn't pushed.
+        self.assertEqual([call[:4] for call in self.gh_calls() if call[:2] == ["pr", "list"]],
+                         [["pr", "list", "--head", "PROJ-1-fix"]])
+        # Shown, not recorded: the task's own pull request, its merge and
+        # retiring stay its branch's.
+        self.assertNotIn("pr", listed)
+        self.assertNotIn("prStatus", listed)
+        self.assertNotIn("pr", store.read(task["id"]))
+        self.assertNotIn("worktreePr", store.read(task["id"]))
+        # Background polls ask GitHub only when told to, and leave it out.
+        calls = len(self.gh_calls())
+        self.assertNotIn("worktreePr", self.request("list")["result"][0])
+        self.assertEqual(len(self.gh_calls()), calls)
+        # Committed since: measuring says where the branch is, asking GitHub
+        # nothing; the next lookup counts what the pull request lacks.
+        later = self.commit_in(task, "later")
+        measured = self.request("list", full=[task["id"]])["result"][0]
+        self.assertEqual((measured["worktreeHead"], "worktreePr" in measured), (later, False))
+        self.assertEqual(len(self.gh_calls()), calls)
+        shown = self.request("list", full=True)["result"][0]["worktreePr"]
+        self.assertEqual((shown["tip"], shown["unpushed"]), (later, 1))
+        # Merged on GitHub at the branch's tip: shown merged, and the task,
+        # whose own branch is not what merged, is not landed.
+        (self.gh_dir / "list.json").write_text(json.dumps([
+            dict(number=12, url=url % 12, headRefName="PROJ-1-fix", state="MERGED", headRefOid=later,
+                 baseRefName="main")]))
+        listed = self.request("list", pullRequests=True)["result"][0]
+        self.assertEqual((listed["worktreePr"]["state"], listed["worktreePr"]["head"]), ("MERGED", later))
+        self.assertNotIn("unpushed", listed["worktreePr"])
+        self.assertIs(listed["landed"], False)
+        self.assertNotIn("pr", store.read(task["id"]))
+        # Without gh, what Emacs has stands.
+        (self.gh_dir / "gh").unlink()
+        with patch.object(roost, "agent_path", lambda inherited: str(self.gh_dir)):
+            self.assertNotIn("worktreePr", self.request("list", full=True)["result"][0])
+
+    def test_a_pull_request_from_a_branch_of_the_same_name_is_not_the_worktrees(self):
+        # A task retired earlier, or someone else's fork, with a branch of
+        # the name its agent chose.
+        self.github()
+        task = self.create()
+        base = task["baseCommit"]
+        wt = Path(task["worktree"])
+        self.git("switch", "-q", "-c", "feat", cwd=wt)
+        there = self.commit_in(task)
+        self.git("push", "-q", "-u", "origin", "feat", cwd=wt)
+        url = "https://github.com/octo/repo/pull/%d"
+        others = [dict(number=2, url=url % 2, headRefName="feat", state="MERGED", headRefOid=base),
+                  dict(number=5, url=url % 5, headRefName="feat", state="OPEN", headRefOid="f" * 40),
+                  # And one from the task's branch, which isn't pushed.
+                  dict(number=6, url=url % 6, headRefName=task["branch"], state="OPEN", headRefOid=there)]
+        (self.gh_dir / "list.json").write_text(json.dumps(others))
+        listed = self.request("list", full=True)["result"][0]
+        self.assertIsNone(listed["worktreePr"])
+        self.assertNotIn("pr", listed)
+        (self.gh_dir / "list.json").write_text(json.dumps(
+            others + [dict(number=9, url=url % 9, headRefName="feat", state="OPEN", headRefOid=there)]))
+        self.assertEqual(self.request("list", full=True)["result"][0]["worktreePr"]["number"], 9)
+
+    def test_a_worktree_back_on_the_tasks_branch_forgets_the_other_branchs_pull_request(self):
+        self.github()
+        task = self.create()
+        wt = Path(task["worktree"])
+        tip = self.commit_in(task)
+        self.push(task)
+        self.git("switch", "-q", "-c", "feat", cwd=wt)
+        there = self.commit_in(task, "there")
+        self.git("push", "-q", "-u", "origin", "feat", cwd=wt)
+        url = "https://github.com/octo/repo/pull/%d"
+        (self.gh_dir / "list.json").write_text(json.dumps([
+            dict(number=4, url=url % 4, headRefName=task["branch"], state="OPEN", headRefOid=tip),
+            dict(number=9, url=url % 9, headRefName="feat", state="OPEN", headRefOid=there)]))
+        # Each branch's own, the task's recorded as before.
+        listed = self.request("list", full=True)["result"][0]
+        self.assertEqual((listed["pr"]["number"], listed["worktreePr"]["number"]), (4, 9))
+        self.assertEqual(roost.Store(str(self.state)).read(task["id"])["pr"]["number"], 4)
+        # Its commits, counted on the task's branch, which the worktree
+        # is not on, are unknown.
+        self.assertIsNone(listed["unpushed"])
+        # Back on its branch: the next lookup says it has none, and asks
+        # about feat no more.
+        self.git("switch", "-q", task["branch"], cwd=wt)
+        calls = len(self.gh_calls())
+        listed = self.request("list", full=True)["result"][0]
+        self.assertEqual((listed["worktreeBranch"], listed["worktreeHead"], listed["worktreePr"]),
+                         (None, None, None))
+        self.assertEqual((listed["pr"]["number"], listed["unpushed"]), (4, 0))
+        self.assertEqual([call[:4] for call in self.gh_calls()[calls:] if call[:2] == ["pr", "list"]],
+                         [["pr", "list", "--head", task["branch"]]])
+        # Nor on a detached HEAD, which no pull request comes from, nor on
+        # its integration branch, which they go to.
+        self.git("switch", "-q", "--detach", cwd=wt)
+        listed = self.request("list", full=True)["result"][0]
+        self.assertEqual((listed["worktreeBranch"], listed["worktreePr"]), ("HEAD", None))
+        self.git("switch", "-q", "--detach")
+        self.git("switch", "-q", "main", cwd=wt)
+        calls = len(self.gh_calls())
+        listed = self.request("list", full=True)["result"][0]
+        self.assertEqual((listed["worktreeBranch"], listed["worktreePr"]), ("main", None))
+        self.assertNotIn(["pr", "list", "--head", "main"], [call[:4] for call in self.gh_calls()[calls:]])
 
     def test_without_a_reflog_a_task_brought_up_to_date_is_not_merged(self):
         self.git("config", "core.logAllRefUpdates", "false")

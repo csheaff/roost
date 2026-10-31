@@ -7422,6 +7422,132 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
    (should (string-prefix-p "Draft #12 passed its checks and review"
                             (roost--next-step (roost--cache-task "dev" (roost-test--turn-task '(draft . t))))))))
 
+;; As an agent makes a branch to follow a team's naming, pushes it and
+;; opens a pull request from it.
+(defun roost-test--worktree-pr-task (&rest status)
+  "A task like `roost-test--turn-task', its worktree on branch PROJ-1-fix.
+That branch's open pull request #12 passed everything, as GitHub said a
+minute after.  STATUS, fields of its `worktreePr', go over those; a
+field (FIELD . :none) is left out."
+  (let ((fields (append status
+                        `((branch . "PROJ-1-fix") (number . 12) (url . "https://github.com/o/r/pull/12")
+                          (state . "OPEN") (head . "b2") (tip . "b2") (unpushed . 0)
+                          (checks . ((passing . 3) (failing . 0) (pending . 0))) (mergeable . "MERGEABLE")
+                          (requested) (threads . 0) (checkedAt . "2026-10-03T20:01:00+00:00")))))
+    (append `((worktreePr . ,(seq-remove (lambda (field) (eq (cdr field) :none))
+                                         (seq-uniq fields (lambda (a b) (eq (car a) (car b)))))))
+            '((worktreeBranch . "PROJ-1-fix") (worktreeHead . "b2") (integrationBranch . "main") (live . t)
+              (ahead . 1) (dirty) (diff . "1 file changed, 12 insertions(+), 3 deletions(-)")
+              (seen . "2026-10-03T20:00:00+00:00"))
+            (roost-test--task))))
+
+(ert-deftest roost-a-pull-request-from-the-worktrees-branch-is-followed ()
+  ;; Roost found a task's pull requests only from its own branch, so one
+  ;; from a branch its agent made showed nothing: no checks, no review, no
+  ;; status waiting on you.
+  (roost-test--isolated
+   (let* ((own "codex/roost/fix-auth-123456")
+          (task (roost--cache-task "dev" (roost-test--worktree-pr-task)))
+          (step (lambda (&rest fields)
+                  (substring-no-properties
+                   (roost--next-step (roost--cache-task "dev" (apply #'roost-test--worktree-pr-task fields))))))
+          (panel (lambda (task)
+                   (with-temp-buffer
+                     (roost-task-info-mode)
+                     (setq roost--buffer-task-key (roost--key (roost--cache-task "dev" task)))
+                     (cl-letf (((symbol-function 'roost--task-info-width) (lambda () 80)))
+                       (roost--render-task-info))
+                     (buffer-string)))))
+     ;; Its status, named from that branch; P, which acts on the task's
+     ;; branch, would not open it.
+     (should (equal (roost--display-status task) "to merge"))
+     (should (equal (funcall step) "#12 from PROJ-1-fix passed its checks and review: merge it on GitHub"))
+     (should (equal (funcall step '(failing . 1) '(checks . ((passing . 2) (failing . 1) (pending . 0))))
+                    "A check failed on #12 from PROJ-1-fix: e tells its agent"))
+     (should (equal (funcall step '(threads . 2))
+                    "#12 from PROJ-1-fix has 2 unresolved review threads: e tells its agent to answer them"))
+     (should (equal (funcall step '(mergeable . "CONFLICTING"))
+                    "#12 from PROJ-1-fix conflicts with the branch it merges into: e tells its agent"))
+     (should (equal (funcall step '(unpushed . 2)) "#12 from PROJ-1-fix lacks 2 new commits: push PROJ-1-fix to add them"))
+     (should (equal (funcall step '(checks . ((passing . 1) (failing . 0) (pending . 2))))
+                    "#12 from PROJ-1-fix waits for 2 checks"))
+     ;; Committed since GitHub was asked: what it lacks is unknown, so
+     ;; nothing waits on you yet.
+     (let ((moved (roost--cache-task "dev" (cons '(worktreeHead . "c3") (roost-test--worktree-pr-task)))))
+       (should (equal (roost--display-status moved) "ready"))
+       (should (string-prefix-p "Its worktree is on PROJ-1-fix, not the task's branch: x discards the task"
+                                (substring-no-properties (roost--next-step moved)))))
+     ;; Its dashboard marker, with whose it is on hover, beside the branch.
+     (let ((marker (roost--pr-marker task)))
+       (should (equal (substring-no-properties marker) "#12 ✓"))
+       (should (equal (get-text-property 0 'help-echo marker) "#12 from PROJ-1-fix, the branch the worktree is on")))
+     (should (equal (roost--changes task t) "on PROJ-1-fix · 1 file +12 −3 · ↑1"))
+     ;; The panel heads it so, with its checks, and names the task's own.
+     (let ((text (funcall panel (roost-test--worktree-pr-task
+                                 '(checks . ((passing . 2) (failing . 1) (pending . 0))) '(failingChecks "lint")))))
+       (should (string-match-p "^Checks\n✗ lint failed\n✓ 2 passed$" text))
+       (should (string-match-p "^Pull request  from PROJ-1-fix\n  #12  https://github.com/o/r/pull/12\nOpen$" text))
+       (should-not (string-search "The task's branch" text)))
+     (let ((text (funcall panel (append '((pr . ((number . 4) (url . "https://github.com/o/r/pull/4") (state . "OPEN"))))
+                                        (roost-test--worktree-pr-task)))))
+       (should (string-search (format "Open\nThe task's branch %s has #4.\n" own) text))
+       (should-not (string-search "#4  " text)))
+     ;; m and P keep to the task's branch: m says why it won't merge, and
+     ;; C-u P opens the task's own pull request.
+     (should-error (roost-merge-retire task) :type 'user-error)
+     (let (opened)
+       (cl-letf (((symbol-function 'browse-url) (lambda (url &rest _) (setq opened url))))
+         (roost-pr (roost--cache-task "dev" (append '((pr . ((number . 4) (url . "https://github.com/o/r/pull/4"))))
+                                                    (roost-test--worktree-pr-task)))
+                   t))
+       (should (equal opened "https://github.com/o/r/pull/4")))
+     ;; Merged on GitHub with all of the branch: x discards the task,
+     ;; keeping the branch, losing nothing; no merge of the task's is told.
+     (let* ((merged (roost--cache-task "dev" (roost-test--worktree-pr-task
+                                              '(state . "MERGED") '(unpushed . :none) '(checkedAt . :none))))
+            (text (funcall panel merged))
+            ran)
+       (should (equal (substring-no-properties (roost--next-step merged))
+                      "#12 from PROJ-1-fix is merged: x discards the task, keeping PROJ-1-fix"))
+       (should (string-search "Merged on GitHub. x discards this task, keeping PROJ-1-fix." text))
+       (should (string-search "These are PROJ-1-fix's changes, not" text))
+       (should (equal (roost--display-status merged) "ready"))
+       (should (equal (substring-no-properties (roost--pr-marker merged)) "#12 merged"))
+       (should-not (roost--pr-merges merged))
+       (let ((roost-task-merged-functions (list (lambda (&rest _) (setq ran t)))))
+         (roost--cache-task "dev" (roost-test--worktree-pr-task '(state . "MERGED") '(unpushed . :none))))
+       (should-not ran))
+     ;; Merged before commits since, those are still to merge.
+     (should (string-search "to merge its work with m or P"
+                            (funcall step '(state . "MERGED") '(head . "a1") '(unpushed . :none))))
+     ;; Back on the task's branch, or on to a third, it is the task's own
+     ;; pull request that shows, or none, at once.
+     (dolist (branch '(nil "third"))
+       (let ((moved (roost--cache-task "dev" (cons `(worktreeBranch . ,branch) (roost-test--worktree-pr-task)))))
+         (should-not (roost--worktree-pr moved))
+         (should-not (roost--turn moved))
+         (should (equal (roost--pr-marker moved) ""))))
+     ;; A quiet poll keeps it, as it keeps Git statistics; a lookup that
+     ;; found none forgets it.
+     (roost--cache-task "dev" (roost-test--worktree-pr-task))
+     (roost--apply-snapshot "dev" (list (roost-test--task nil "ready")))
+     (should (roost--worktree-pr (car (roost-tasks))))
+     (roost--cache-task "dev" (append '((worktreePr)) (roost-test--task nil "ready")))
+     (should-not (roost--worktree-pr (car (roost-tasks)))))))
+
+(ert-deftest roost-a-pull-request-from-the-worktrees-branch-notifies ()
+  (roost-test--isolated
+   (roost-test--held-notices
+    (let ((roost-notify t) notices)
+      (cl-letf (((symbol-function 'roost--notify) (lambda (title body &rest _) (push (list title body) notices)))
+                ((symbol-function 'roost--watched-task) #'ignore))
+        (roost--cache-task "dev" (roost-test--worktree-pr-task '(checks . ((passing . 2) (failing . 0) (pending . 1)))))
+        (roost-test--a-minute-on)
+        (should-not notices)
+        (roost--cache-task "dev" (roost-test--worktree-pr-task))
+        (roost-test--a-minute-on)
+        (should (equal notices '(("fix auth — to merge" "dev · #12 from PROJ-1-fix passed its checks and review")))))))))
+
 ;; Not the files of `roost-sweep--files', which needs no Roost of its own.
 (defun roost-test--conflicted (&rest fields)
   "An idle task whose work conflicts with main, with FIELDS over its own."

@@ -47,7 +47,7 @@ ENDED = ("stopped", "exited", "failed", "crashed")
 # Computed per request and never persisted in a task record.
 TRANSIENT = ("live", "diff", "dirty", "files", "size", "ahead", "behind", "update", "worktreeMissing",
              "prStatus", "unpushed", "lastMessage", "gitStamp", "agentWork", "merging", "landed", "conflicts",
-             "sinceLooked", "teardownFailure", "teardownOutput")
+             "sinceLooked", "teardownFailure", "teardownOutput", "worktreePr", "worktreeHead")
 LAST_MESSAGE_TAIL = 256 * 1024
 LAST_MESSAGE_LIMIT = 2000
 INTERRUPT_TAIL = 64 * 1024
@@ -2226,14 +2226,16 @@ def open_thread(thread):
     return entry
 
 
-def unpushed(task, head, tip):
+def unpushed(task, head, tip, branch=None):
     """How many of its branch's commits, at TIP, the task's pull request,
     at HEAD, lacks, or None when one isn't before the other here, as when
     a commit made on GitHub is not fetched, or when the task's worktree is
     on another branch, whose commits the count would miss. Zero when the
-    pull request has them all, commits made on GitHub too."""
+    pull request has them all, commits made on GitHub too. BRANCH, when
+    given, is the branch the worktree is on instead, with a pull request
+    of its own."""
     current = read_git(task["worktree"], "symbolic-ref", "-q", "HEAD")
-    if current.returncode or current.stdout.strip() != "refs/heads/" + task["branch"]:
+    if current.returncode or current.stdout.strip() != "refs/heads/" + (branch or task["branch"]):
         return None
     if head == tip:
         return 0
@@ -2263,10 +2265,10 @@ def other_branch(task, worktree):
     return ref.removeprefix("refs/heads/") or None
 
 
-def branch_tip(task):
-    """The commit at the tip of the task's branch, or None when it is gone."""
+def branch_tip(task, branch=None):
+    """The commit at the tip of the task's branch, or of BRANCH, or None when it is gone."""
     result = read_git(task["repo"], "rev-parse", "--verify", "--quiet",
-                      "refs/heads/" + task["branch"] + "^{commit}")
+                      "refs/heads/" + (branch or task["branch"]) + "^{commit}")
     return result.stdout.strip() if result.returncode == 0 else None
 
 
@@ -2289,31 +2291,33 @@ def recorded_merge_at(task, tip):
     return bool(tip) and (pr.get("mergedHead") == tip or (pr.get("state") == "MERGED" and pr.get("head") == tip))
 
 
-def pushed(task):
-    """Whether the task's branch was pushed, so GitHub may have a pull
-    request for it that its agent opened."""
-    branch = task["branch"]
+def pushed(task, branch=None):
+    """Whether the task's branch, or BRANCH, was pushed, so GitHub may have
+    a pull request for it that its agent opened."""
+    branch = branch or task["branch"]
     return bool(read_git(task["repo"], "config", "--get", "branch.%s.remote" % branch).stdout.strip()
                 or read_git(task["repo"], "rev-parse", "--verify", "--quiet",
                             "refs/remotes/origin/" + branch).returncode == 0)
 
 
-def task_pull_requests(task, tip, timeout=15):
+def task_pull_requests(task, tip, timeout=15, branch=None):
     """The task's pull requests, newest first, or None when gh cannot say
     within TIMEOUT seconds. They are those from its branch whose head is a
     commit of its own, made since it started and still on its branch at
     TIP, of a task that made commits: a task retired earlier, or someone
     else's fork, may have had a branch of the same name. The recorded one
-    counts too."""
+    counts too. BRANCH, when given, is the branch its worktree is on
+    instead, at TIP, as after its agent made one there: its pull requests
+    are those whose head is a commit made there or on the task's branch."""
     try:
         listed = json.loads(gh(task["repo"] if Path(task["repo"]).is_dir() else None,
-                               "pr", "list", "--head", task["branch"], "--state", "all", "--limit", "10",
+                               "pr", "list", "--head", branch or task["branch"], "--state", "all", "--limit", "10",
                                "--json", PULL_REQUEST_FIELDS, timeout=timeout))
     except (RoostError, ValueError, OSError):
         return None
     if not isinstance(listed, list):
         return None
-    number = recorded_pull_request(task).get("number")
+    number = None if branch else recorded_pull_request(task).get("number")
     base = task.get("baseCommit")
     made = None
 
@@ -2328,6 +2332,9 @@ def task_pull_requests(task, tip, timeout=15):
         # Not one an update brought in from its integration branch.
         if made is None:
             made = own_commits(task)
+            if branch and made is not True:
+                there = own_commits(task, branch)
+                made = True if there is True else made | there
         return made is True or head in made
 
     return sorted((pr for pr in listed if isinstance(pr, dict) and isinstance(pr.get("number"), int) and ours(pr)),
@@ -2341,22 +2348,57 @@ def shown_pull_request(prs, tip):
             or (prs[0] if prs else None))
 
 
+def pull_request_status(pr, reviews, checked):
+    """What the task's views show of PR, one of `task_pull_requests`: its
+    state, review and checks, and for an open one, what REVIEWS, from
+    `pull_request_reviews`, say of it, as GitHub said by CHECKED."""
+    try:
+        checks = summarize_checks(pr.get("statusCheckRollup"))
+        failed = first_failure(pr.get("statusCheckRollup"))
+        # By name, for the task panel, of those that don't pass.
+        names = dict(failingChecks=check_names(pr.get("statusCheckRollup"), "failing"),
+                     pendingChecks=check_names(pr.get("statusCheckRollup"), "pending"))
+    except (AttributeError, TypeError):
+        checks = failed = None
+        names = {}
+    status = dict(state=pr.get("state"), draft=bool(pr.get("isDraft")), review=pr.get("reviewDecision") or None,
+                  checks=checks, head=pr.get("headRefOid"), base=pr.get("baseRefName"))
+    status.update((key, value) for key, value in names.items() if value)
+    if pr.get("state") == "OPEN":
+        status.update(reviews.get(pr.get("url"), {}), failedAt=failed, checkedAt=checked)
+    return status
+
+
 def check_pull_requests(store, tasks):
     """Ask GitHub about the pull requests of TASKS with one recorded or a
     pushed branch, several at once, and add each one's state, review and
     checks, and for an open one, its review threads, and how many of the
     branch's commits it lacks. Record the one each shows when it changed, as
-    when its agent opened one or it was merged. All within
-    PULL_REQUEST_DEADLINE seconds, well inside Emacs's wait for the reply:
-    a task GitHub hasn't answered for by then keeps what it had. Runs
-    without the registry lock; returns the tasks asked about."""
+    when its agent opened one or it was merged. A task whose worktree is on
+    a pushed branch of another name, as when its agent made one to follow a
+    team's naming, also has that branch's shown as worktreePr, with the
+    same, but not recorded: the task's own, its merge and retiring stay its
+    branch's. All within PULL_REQUEST_DEADLINE seconds, well inside Emacs's
+    wait for the reply: a task GitHub hasn't answered for by then keeps
+    what it had. Runs without the registry lock; returns the tasks asked
+    about."""
     asked = []
     for task in tasks:
         if task.get("removing"):
             continue
         tip = branch_tip(task)
         if tip and (recorded_pull_request(task) or pushed(task)):
-            asked.append((task, tip))
+            asked.append((task, tip, None))
+        worktree = Path(task["worktree"])
+        other = other_branch(task, worktree) if worktree.is_dir() else None
+        # Not its integration branch, which pull requests go to.
+        other_tip = (branch_tip(task, other) if other not in (None, "HEAD", task.get("integrationBranch"))
+                     else None)
+        if other_tip and pushed(task, other):
+            asked.append((task, other_tip, other))
+        else:
+            # Null, so Emacs forgets one the worktree was on.
+            task["worktreePr"] = None
     if not asked:
         return []
     # What GitHub says is as new as this, at least, for Emacs to tell
@@ -2364,32 +2406,27 @@ def check_pull_requests(store, tasks):
     checked = now()
     deadline = time.monotonic() + PULL_REQUEST_DEADLINE
 
-    def ask(pair):
+    def ask(entry):
+        task, tip, branch = entry
         left = deadline - time.monotonic()
-        return task_pull_requests(*pair, timeout=left) if left >= 1 else None
+        return task_pull_requests(task, tip, timeout=left, branch=branch) if left >= 1 else None
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(asked))) as pool:
         answers = list(pool.map(ask, asked))
-    shown = [shown_pull_request(prs or [], tip) for (_, tip), prs in zip(asked, answers)]
+    shown = [shown_pull_request(prs or [], tip) for (_, tip, _), prs in zip(asked, answers)]
     reviews = pull_request_reviews([pr for pr in shown if pr and pr.get("state") == "OPEN"], deadline)
-    for (task, tip), prs, pr in zip(asked, answers, shown):
+    for (task, tip, branch), prs, pr in zip(asked, answers, shown):
+        if branch:
+            if prs is not None:
+                task["worktreePr"] = pr and dict(pull_request_status(pr, reviews, checked), branch=branch,
+                                                 number=pr["number"], url=pr.get("url"), tip=tip)
+                if pr and pr.get("state") == "OPEN":
+                    task["worktreePr"]["unpushed"] = unpushed(task, pr.get("headRefOid"), tip, branch)
+            continue
         if not pr:
             continue
-        try:
-            checks = summarize_checks(pr.get("statusCheckRollup"))
-            failed = first_failure(pr.get("statusCheckRollup"))
-            # By name, for the task panel, of those that don't pass.
-            names = dict(failingChecks=check_names(pr.get("statusCheckRollup"), "failing"),
-                         pendingChecks=check_names(pr.get("statusCheckRollup"), "pending"))
-        except (AttributeError, TypeError):
-            checks = failed = None
-            names = {}
-        task["prStatus"] = dict(state=pr.get("state"), draft=bool(pr.get("isDraft")),
-                                review=pr.get("reviewDecision") or None, checks=checks, head=pr.get("headRefOid"),
-                                base=pr.get("baseRefName"))
-        task["prStatus"].update((key, value) for key, value in names.items() if value)
+        task["prStatus"] = pull_request_status(pr, reviews, checked)
         if pr.get("state") == "OPEN":
-            task["prStatus"].update(reviews.get(pr.get("url"), {}), failedAt=failed, checkedAt=checked)
             task["unpushed"] = unpushed(task, pr.get("headRefOid"), tip)
         record = dict(number=pr["number"], url=pr.get("url"), state=pr.get("state"), head=pr.get("headRefOid"))
         # Where it merges, for views that ask GitHub nothing.
@@ -2425,7 +2462,8 @@ def check_pull_requests(store, tasks):
             task.pop("unpushed", None)
             continue
         task["pr"] = record
-    return [task for task, _ in asked]
+    ids = {id(task) for task, _, _ in asked}
+    return [task for task in tasks if id(task) in ids]
 
 
 def landed(task, tip):
@@ -2441,13 +2479,14 @@ def landed(task, tip):
     return bool(integration) and is_ancestor(task["repo"], tip, "refs/heads/" + integration) and committed_on(task)
 
 
-def own_commits(task):
-    """The commits made on the task's branch, as its reflog has them, merge
-    commits among them, rather than brought in from its integration branch,
-    as when an update fast-forwards a task that had none; True, meaning it
-    can't tell, if Git keeps no reflog. A rebase's makes count unless its
-    integration branch has it."""
-    log = read_git(task["repo"], "log", "--walk-reflogs", "--format=%H %gs", "refs/heads/" + task["branch"], "--")
+def own_commits(task, branch=None):
+    """The commits made on the task's branch, or on BRANCH, as its reflog
+    has them, merge commits among them, rather than brought in from its
+    integration branch, as when an update fast-forwards a task that had
+    none; True, meaning it can't tell, if Git keeps no reflog. A rebase's
+    makes count unless its integration branch has it."""
+    log = read_git(task["repo"], "log", "--walk-reflogs", "--format=%H %gs",
+                   "refs/heads/" + (branch or task["branch"]), "--")
     if log.returncode or not log.stdout.strip():
         return True
     made, rebased = set(), set()
@@ -2824,6 +2863,11 @@ def add_git_stats(tasks):
         task["worktreeBranch"] = None if task["worktreeMissing"] else other_branch(task, worktree)
         if task["worktreeMissing"]:
             continue
+        # Where that branch is, for Emacs to tell whether its pull request,
+        # as GitHub was last asked, has every commit there.
+        task["worktreeHead"] = None
+        if task["worktreeBranch"]:
+            task["worktreeHead"] = read_git(worktree, "rev-parse", "--verify", "--quiet", "HEAD").stdout.strip() or None
         base = fork_point(worktree, task)
         task["sinceLooked"] = since_looked(task, worktree, base)
         stats = read_git(worktree, "diff", "--no-ext-diff", "--no-textconv", "--shortstat", base)
@@ -5854,14 +5898,16 @@ def rpc(request):
             checked = check_pull_requests(store, result) if full is True or request.get("pullRequests") else []
             add_git_stats(measured)
             for task in checked:
-                # Merged since, or with its pull request open, it is
-                # measured whole, or its cleanliness would be older than the
-                # news that it can be retired, or merged: an edit not yet
-                # staged moves no Git stamp. One whose pull request closed
-                # is too, as GitHub no longer says whether it conflicts.
+                # Merged since, or with its pull request open, or its
+                # worktree's branch's, it is measured whole, or its
+                # cleanliness would be older than the news that it can be
+                # retired, or merged: an edit not yet staged moves no Git
+                # stamp. One whose pull request closed is too, as GitHub no
+                # longer says whether it conflicts.
                 if "landed" not in task:
                     state = (task.get("prStatus") or {}).get("state")
-                    if (landed(task, branch_tip(task)) or state == "OPEN"
+                    there = (task.get("worktreePr") or {}).get("state")
+                    if (landed(task, branch_tip(task)) or "OPEN" in (state, there)
                             or (task["id"] in was_open and state not in (None, "OPEN"))):
                         add_git_stats([task])
                     else:

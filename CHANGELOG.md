@@ -4,6 +4,17 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A task whose worktree is on another branch that is pushed, as when its
+  agent made one to follow a team's naming and opened a pull request from
+  it, shows that pull request while the worktree stays there: in the task
+  panel, headed with the branch's name, with its checks and review
+  threads, in the dashboard, and in the task's status, `to merge`, `ci
+  failed`, `comments` or `conflicts`, which notifies as the task's own
+  pull request would. Roost showed none, as it looked only for pull
+  requests from the task's own branch. `m`, `P`, `u` and retiring still
+  act on the task's branch: once that pull request merged, the panel says
+  so and that `x` discards the task, keeping the branch. Nothing to do
+  when upgrading.
 - A new task checks out its submodules, nested ones too, at the commits
   its branch records, in its terminal before the setup command, with Git
   2.24.1 or newer:
