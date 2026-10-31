@@ -4708,14 +4708,20 @@ sys.exit(status)
         shown = self.request("list", full=True)["result"][0]["worktreePr"]
         self.assertEqual((shown["tip"], shown["unpushed"]), (later, 1))
         # Merged on GitHub at the branch's tip: shown merged, and the task,
-        # whose own branch is not what merged, is not landed.
+        # whose own branch is not what merged, is not landed. Measured with
+        # it, or an edit not yet staged, which moves no Git stamp, would go
+        # unseen while the next step says to discard the task.
         (self.gh_dir / "list.json").write_text(json.dumps([
             dict(number=12, url=url % 12, headRefName="PROJ-1-fix", state="MERGED", headRefOid=later,
                  baseRefName="main")]))
+        (wt / "later").write_text("edited\n")
         listed = self.request("list", pullRequests=True)["result"][0]
         self.assertEqual((listed["worktreePr"]["state"], listed["worktreePr"]["head"]), ("MERGED", later))
         self.assertNotIn("unpushed", listed["worktreePr"])
         self.assertIs(listed["landed"], False)
+        self.assertIs(listed["dirty"], True)
+        self.assertEqual(listed["worktreeHead"], later)
+        self.git("checkout", "--", "later", cwd=wt)
         self.assertNotIn("pr", store.read(task["id"]))
         # Without gh, what Emacs has stands.
         (self.gh_dir / "gh").unlink()

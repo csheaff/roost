@@ -6058,16 +6058,16 @@ def rpc(request):
             checked = check_pull_requests(store, result) if full is True or request.get("pullRequests") else []
             add_git_stats(measured)
             for task in checked:
-                # Merged since, or with its pull request open, or its
-                # worktree's branch's, it is measured whole, or its
-                # cleanliness would be older than the news that it can be
-                # retired, or merged: an edit not yet staged moves no Git
-                # stamp. One whose pull request closed is too, as GitHub no
-                # longer says whether it conflicts.
+                # Merged since, or with its pull request open, it is
+                # measured whole, or its cleanliness would be older than the
+                # news that it can be retired, or merged: an edit not yet
+                # staged moves no Git stamp. One whose pull request closed
+                # is too, as GitHub no longer says whether it conflicts, and
+                # one whose worktree's branch has a pull request, open or
+                # not, which says what to do with the task next.
                 if "landed" not in task:
                     state = (task.get("prStatus") or {}).get("state")
-                    there = (task.get("worktreePr") or {}).get("state")
-                    if (landed(task, branch_tip(task)) or "OPEN" in (state, there)
+                    if (landed(task, branch_tip(task)) or state == "OPEN" or task.get("worktreePr")
                             or (task["id"] in was_open and state not in (None, "OPEN"))):
                         add_git_stats([task])
                     else:
