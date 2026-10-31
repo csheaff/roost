@@ -70,9 +70,9 @@ and in `config.el`: `(roost-watch-mode 1)`, and for SSH hosts
 
 Then run **`M-x roost-doctor`**. It checks Emacs's side and, on each host, SSH,
 Python, Git, tmux and each agent CLI's version and sign-in, with a fix for
-anything missing. For pull requests it also checks the GitHub CLI and whether
-Git on the host can push each project you've used there (a dry run that sends
-nothing). `C-u M-x roost-doctor` checks a host before you add it.
+anything missing. For pull requests it also checks the GitHub CLI, the GitLab
+CLI for projects on GitLab, and whether Git on the host can push each project
+you've used there (a dry run that sends nothing). `C-u M-x roost-doctor` checks a host before you add it.
 
 Magit is optional (review falls back to Dired).
 
@@ -173,7 +173,8 @@ starts the agent in tmux, and opens its terminal.
   A file is named from the top of its checkout, and the task goes to that
   project. A diagnostic is quoted with its file, line and message, then the
   code it is on. The same commands work with `M-x`.
-- Press `C-c C-t` in the draft to pick one of the project's open GitHub issues.
+- Press `C-c C-t` in the draft to pick one of the project's open GitHub or
+  GitLab issues.
   Its title and text become the prompt, and the task's pull request will close
   it.
 - With [twg](https://developer.atlassian.com/cloud/twg-cli/), Atlassian's
@@ -286,7 +287,7 @@ you've seen what its agent last said, the task says `conflicts` and counts
 as waiting: `n` visits it. Roost checks whenever the task's branch or the
 integration branch moves, with `git merge-tree` on the task's host (Git
 2.38 or newer; older Git doesn't check). For a task with an open pull
-request, GitHub says whether it conflicts instead. The panel also names
+request, GitHub or GitLab says whether it conflicts instead. The panel also names
 other tasks of the project that change the same files, committed or not,
 in one line ("ledger totals and report chart also change report.py"),
 which may conflict once one of them merges. `u` merges the integration branch into the task's
@@ -298,14 +299,27 @@ commit it. Then `m` merges the task into its integration
 branch and removes its worktree, branch and window. For work you don't
 want, `x` discards the task, first saying what that loses.
 
-**Or open a pull request.** To finish on GitHub instead, `P` drafts one: the first
+**Or open a pull request.** To finish on GitHub or GitLab instead, `P` drafts one: the first
 line is the title and the rest the body, prefilled from the agent's commit
 message. `C-c C-c` pushes the branch and creates it (`C-u C-c C-c` as a draft).
 The dashboard then shows `#12` with its checks and review, as it does for a pull
 request the agent opened itself from the task's branch. Send review feedback
 to the agent with `e`; when it has committed, `P` pushes the new commits and
 opens the pull request. Once it is merged, `x` retires the task and deletes the
-branch. Needs `gh` on the task's host, and Git credentials there that can push.
+branch. Needs `gh` on the task's host, or `glab` for a project on GitLab, and
+Git credentials there that can push.
+
+**On GitLab.** Roost asks GitLab, through `glab`, when the host of the
+project's `origin` says so by name, as `gitlab.com` and `gitlab.example.com`
+do. For a GitLab server whose name doesn't, run `git config roost.forge
+gitlab` in the project (`github` the other way). Roost calls GitLab's merge
+requests pull requests too, and numbers them as GitLab does, `!12`. Their
+pipeline's jobs are the checks: one allowed to fail passes when it does, as
+the pipeline does, and a manual job not allowed to fail waits. Their
+unresolved threads are the review threads, and reviewers who haven't
+reviewed yet are the reviews still asked for. On any other forge, Roost
+knows nothing of pull requests, and `P` says so before pushing: merge with
+`m`, or push and open one there yourself.
 
 What each task's row, panel and notification say is in
 [What a task says](#what-a-task-says).
@@ -331,13 +345,13 @@ when the task waits for nothing.
 | `failed`, `exited` | Until you've seen it | The agent's CLI failed, or it exited; `RET` shows its last output, and `s` resumes its conversation. An agent you start again from a shell sends Roost nothing, so `s` waits until it has exited |
 | `crashed` | Until you've seen it | Its tmux pane went, as when the host or its tmux server restarted; `RET` or `s` resumes its conversation, and asks once to resume every other agent that crashed on that host. Those stopped, exited or failed stay as they are |
 | `conflicts` | Once you've seen its reply | Merging its commits into the branch it merges into would conflict; `u` brings that branch in |
-| `to merge` | Once you've seen its reply | Its pull request passed its checks and review, and GitHub finds no conflicts; `P` opens it |
+| `to merge` | Once you've seen its reply | Its pull request passed its checks and review, and GitHub or GitLab finds no conflicts; `P` opens it |
 | `ci failed` | Once you've seen its reply | A check of its pull request failed |
 | `comments` | Once you've seen its reply | A review thread on its pull request is unresolved, Copilot's too |
 | `running` | No | The agent works on a prompt |
 | `background` | No | Claude's background work, or Pi's queued messages, remain |
 | `stopped` | No | Stopped with `K`; `s` resumes its conversation |
-| `merged` | No | Its work is merged, on GitHub or into its branch; `x` retires it |
+| `merged` | No | Its work is merged, on GitHub or GitLab or into its branch; `x` retires it |
 | `offline` | No | Its host doesn't answer; the row is as it was last known |
 | `seen` | No | You've seen an agent that waits for nothing, or it has done nothing since it started or you resumed it. The sidebar leaves it without a word; its panel, the menu and search say `seen` too |
 
@@ -367,7 +381,7 @@ which you can change with `roost-large-change`.
 Under the files, the task panel lists
 what you can judge a change by, the easiest to check first. `Checks` names
 each check of the task's pull request that failed or is still pending, as
-GitHub last said, and counts those that passed. Without a pull request, or
+GitHub or GitLab last said, and counts those that passed. Without a pull request, or
 for one with no checks, it says `No CI results`, which looks unlike checks
 that passed; for a pull request without the task's newest commits, a commit
 amended since, or its uncommitted changes, it says the checks didn't run on
@@ -410,7 +424,7 @@ the task counts as waiting: `n` visits it, the mode line counts it, and the
 sidebar and dashboard say why:
 
 - `to merge`: every check passed, no review is asked for or unresolved, and
-  GitHub finds no conflicts. `P` opens it.
+  GitHub or GitLab finds no conflicts. `P` opens it.
 - `ci failed`: a check failed.
 - `comments`: a review thread is unresolved, Copilot's too, even one the agent
   answered and left open.
@@ -420,13 +434,13 @@ its own pull request takes it up by then, and shows as working. The status
 lasts until the pull request changes or the agent starts again, whether or not
 you've seen it. Before that, the task panel says what the pull request waits
 for, such as its checks or Copilot's review. Roost only says when it's your
-turn: `e` tells the agent what to fix. It goes by what GitHub said after the
+turn: `e` tells the agent what to fix. It goes by what GitHub or GitLab said after the
 agent's last push, while the branch has no commits the pull request lacks and
 nothing is left uncommitted or in the agent's own worktrees.
 
 ### Work that is merged
 
-A task whose work is merged, on GitHub or into the branch it
+A task whose work is merged, on GitHub or GitLab or into the branch it
 merges into, says `merged` in the dashboard and sidebar once you've seen its
 agent's last reply, so you can tell which tasks to retire without opening them.
 Nothing is lost by retiring it with `x`: nothing is left uncommitted, and its
@@ -533,7 +547,8 @@ a task: every 3 seconds while Emacs is in front, every 15 otherwise.
 Every two minutes, and whenever you open the dashboard or refresh it with `g`, it also
 asks GitHub about the pull requests of tasks whose branch was pushed, or the
 branch their worktree is on, with one `gh api graphql` query per repository
-for review threads and where they are.
+for review threads and where they are, or GitLab, with one `glab api graphql`
+query per branch.
 `roost-watch-mode` turns that off and on.
 
 In Magit on a task's worktree, Roost adds a few keys, and a Roost menu:
@@ -576,8 +591,8 @@ task's terminal when you open that task again.
 
 In the new task draft: `C-c C-c` creates, `C-c C-k` cancels, and `C-c C-p`,
 `C-c C-a`, `C-c C-b` and `C-c C-n` change the project, agent, starting ref and
-name. `C-c C-t` starts from a GitHub issue (with `gh` on the project's host)
-or a Jira work item (with `twg` on this machine). An empty name is derived
+name. `C-c C-t` starts from a GitHub or GitLab issue (with `gh` or `glab` on
+the project's host) or a Jira work item (with `twg` on this machine). An empty name is derived
 from the prompt; `R` renames the task later.
 
 Emacs waits up to eleven minutes for a new task's worktree, which a
@@ -755,8 +770,8 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
   and, as Roost lets the task go, `retired`, `discarded` or `forgotten`.
   They run for changes this Emacs sees, not when Roost first sees a task.
   Each merged function is called with the task and the branch its work went
-  into, when `m` merges it or when Roost sees GitHub merge its pull request.
-  Roost asks GitHub every two minutes, about the branch's latest commit, so
+  into, when `m` merges it or when Roost sees GitHub or GitLab merge its pull
+  request. Roost asks every two minutes, about the branch's latest commit, so
   a pull request merged and followed by new commits before then goes
   unreported.
   The task is an alist; `alist-get` reads its `name`, `id`, `host` (nil on
@@ -1156,8 +1171,9 @@ region's, or a change to your buffer.
 configuration with its own server, state directory and tmux socket, and
 `test/fake_claude.py` for Claude Code, so Git, tmux and the host helper are
 real and no model is called. `test/qa/fake_gh.py` stands in for `gh`, with
-what each journey has GitHub say, and `test/qa/fake_twg.py` for `twg`, with
-what it has Jira say. The run has a home directory of its own, so your
+what each journey has GitHub say, `test/qa/fake_glab.py` for `glab`, with
+what it has GitLab say, and `test/qa/fake_twg.py` for `twg`, with what it
+has Jira say. The run has a home directory of its own, so your
 tmux, shell and Git configuration don't change it, and the fake agent writes
 its transcripts there, as Claude Code would in yours, for search. Its journeys start a task from the menu, answer
 it in its terminal, go through the tasks waiting with `n` and back, fold and unfold a long prompt with the mouse, resize the

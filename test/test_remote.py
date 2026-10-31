@@ -3697,7 +3697,11 @@ def canned(name, default=None):
 if os.path.exists(os.path.join(directory, "slow")):
     import time
     time.sleep(float(open(os.path.join(directory, "slow")).read()))
-if args[:2] == ["pr", "list"]:
+if args[:2] == ["pr", "list"] and os.path.exists(os.path.join(directory, "unknown-host")):
+    sys.stderr.write("none of the git remotes configured for this repository point to a known GitHub host. "
+                     "To tell gh about a new GitHub host, please use `gh auth login`\\n")
+    sys.exit(1)
+elif args[:2] == ["pr", "list"]:
     # Filtered by --state as GitHub would; a canned entry without one is
     # open. By --head too, for an entry naming its headRefName.
     path = os.path.join(directory, "list.json")
@@ -4901,6 +4905,308 @@ sys.exit(status)
         self.assertEqual(checks["GitHub CLI"]["detail"], "not found")
         self.assertTrue(checks["GitHub CLI"]["optional"])
         self.assertIn("install gh", checks["GitHub CLI"]["hint"])
+
+    def test_pr_on_a_remote_gh_does_not_know_says_so_and_pushes_nothing(self):
+        self.github()
+        task = self.create()
+        self.commit_in(task)
+        self.git("remote", "set-url", "origin", "https://codeberg.org/someone/repo.git")
+        self.git("config", "remote.origin.pushurl", str(self.origin))
+        (self.gh_dir / "unknown-host").write_text("")
+        reply = self.request("pr", id=task["id"], title="Elsewhere")
+        self.assertIn("origin is on codeberg.org", reply["error"])
+        self.assertIn("git config roost.forge gitlab", reply["error"])
+        self.assertEqual(self.git("branch", "--list", task["branch"], cwd=self.origin), "")
+
+    GITLAB_URL = "https://gitlab.example.invalid/group/sub/project"
+
+    def gitlab(self):
+        """An origin that names a project on a GitLab server, pushed to a
+        local bare repository, and a fake glab first on PATH, recording its
+        arguments. It answers from merge requests, issues and a new merge
+        request canned as GitLab's GraphQL API gives them."""
+        self.origin = self.root / "origin.git"
+        self.git("init", "--bare", "-b", "main", str(self.origin))
+        self.git("remote", "add", "origin", self.GITLAB_URL + ".git")
+        self.git("config", "remote.origin.pushurl", str(self.origin))
+        self.git("push", "-q", "origin", "main")
+        self.glab_dir = self.root / "glab"
+        self.glab_dir.mkdir()
+        script = self.glab_dir / "glab"
+        script.write_text("#!%s\n" % sys.executable + """import json, os, sys
+directory = os.path.dirname(os.path.abspath(__file__))
+args = sys.argv[1:]
+with open(os.path.join(directory, "log"), "a") as log:
+    log.write(json.dumps(args) + "\\n")
+def canned(name, default):
+    path = os.path.join(directory, name)
+    return json.load(open(path)) if os.path.exists(path) else default
+if args[:2] == ["auth", "status"]:
+    if os.path.exists(os.path.join(directory, "signed-out")):
+        sys.stderr.write("No token found for gitlab.example.invalid\\n")
+        sys.exit(1)
+    sys.stderr.write("gitlab.example.invalid\\n  Logged in to gitlab.example.invalid as tanuki\\n")
+    sys.exit(0)
+fields = dict(args[i + 1].split("=", 1) for i in range(len(args) - 1) if args[i] == "-f")
+query = fields["query"]
+if "mergeRequestCreate" in query:
+    data = dict(mergeRequestCreate=canned("create.json", dict(
+        mergeRequest=dict(iid="4", webUrl=%r + "/-/merge_requests/4"), errors=[])))
+elif os.path.exists(os.path.join(directory, "missing")):
+    data = dict(project=None)
+elif "issues(" in query:
+    data = dict(project=dict(issues=dict(nodes=canned("issues.json", []))))
+else:
+    listed = [mr for mr in canned("list.json", []) if mr.get("sourceBranch") == fields["branch"]
+              and ("state: opened" not in query or mr.get("state") == "opened")]
+    data = dict(project=dict(mergeRequests=dict(nodes=listed)))
+print(json.dumps(dict(data=data)))
+""" % self.GITLAB_URL)
+        script.chmod(0o755)
+        patcher = patch.dict(os.environ, PATH=str(self.glab_dir) + os.pathsep + os.environ["PATH"])
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def glab_calls(self):
+        log = self.glab_dir / "log"
+        return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+    @staticmethod
+    def variables(call):
+        """What a glab api graphql CALL sends as GraphQL variables."""
+        return dict(call[i + 1].split("=", 1) for i in range(len(call) - 1)
+                    if call[i] == "-f" and not call[i + 1].startswith("query="))
+
+    def test_pr_opens_a_merge_request_on_gitlab(self):
+        self.gitlab()
+        task = self.create()
+        tip = self.commit_in(task)
+        # A title and text that look like glab's placeholders, and an option.
+        title, body = "-f :repo :branch $(touch pwned)", "Fixes :fullpath.\n"
+        reply = self.request("pr", id=task["id"], title=title, body=body, draft=True)
+        self.assertTrue(reply["ok"], reply)
+        pr = dict(number=4, url=self.GITLAB_URL + "/-/merge_requests/4", forge="gitlab")
+        self.assertEqual(reply["result"]["pr"], pr)
+        self.assertEqual(roost.Store(str(self.state)).read(task["id"])["pr"], pr)
+        self.assertEqual(self.git("rev-parse", "refs/heads/" + task["branch"], cwd=self.origin), tip)
+        calls = self.glab_calls()
+        self.assertEqual([call[:4] for call in calls], [["api", "graphql", "--hostname", "gitlab.example.invalid"]] * 2)
+        # Whether one is open is asked before pushing; then it opens one.
+        self.assertEqual([self.variables(call) for call in calls], [
+            dict(path="group/sub/project", branch=task["branch"]),
+            dict(path="group/sub/project", source=task["branch"], target="main", title="Draft: " + title,
+                 description=body)])
+        # One open already is returned, not duplicated.
+        store = roost.Store(str(self.state))
+        record = store.read(task["id"])
+        del record["pr"]
+        store.save(record)
+        (self.glab_dir / "list.json").write_text(json.dumps([
+            dict(iid="3", webUrl=self.GITLAB_URL + "/-/merge_requests/3", state="opened", sourceBranch=task["branch"])]))
+        again = self.request("pr", id=task["id"], title="Again")
+        self.assertEqual(again["result"]["pr"], dict(number=3, url=self.GITLAB_URL + "/-/merge_requests/3",
+                                                     forge="gitlab"))
+        self.assertFalse(any("mergeRequestCreate" in call[5] for call in self.glab_calls()[len(calls):]))
+        # GitLab's refusal, and a project glab can't find, say so.
+        record = store.read(task["id"])
+        del record["pr"]
+        store.save(record)
+        (self.glab_dir / "list.json").unlink()
+        (self.glab_dir / "create.json").write_text(json.dumps(dict(mergeRequest=None, errors=["Target branch is gone"])))
+        self.assertIn("GitLab refused the merge request: Target branch is gone",
+                      self.request("pr", id=task["id"], title="Refused")["error"])
+        (self.glab_dir / "missing").write_text("")
+        self.assertIn("glab finds no project group/sub/project on gitlab.example.invalid",
+                      self.request("pr", id=task["id"], title="Nowhere")["error"])
+
+    def test_pr_reports_a_missing_glab_before_pushing(self):
+        self.gitlab()
+        task = self.create()
+        self.commit_in(task)
+        (self.glab_dir / "glab").unlink()
+        with patch.object(roost, "agent_path", lambda inherited: str(self.glab_dir)):
+            reply = self.request("pr", id=task["id"], title="No glab")
+        self.assertIn("GitLab CLI (glab) is not installed", reply["error"])
+        self.assertEqual(self.git("branch", "--list", task["branch"], cwd=self.origin), "")
+
+    @staticmethod
+    def job(name, status, allow=False, finished=None):
+        return dict(name=name, status=status, allowFailure=allow, startedAt=None, finishedAt=finished,
+                    stage=dict(name="test"))
+
+    @staticmethod
+    def discussion(resolved, first, last, path=None, line=None, resolvable=True):
+        """A merge request's discussion as GitLab's GraphQL API gives it:
+        who started it, and where, and when its last note came."""
+        author, body = first
+        return dict(resolvable=resolvable, resolved=resolved, last=dict(nodes=[dict(createdAt=last)]),
+                    first=dict(nodes=[dict(author=dict(username=author), body=body,
+                                           position=path and dict(filePath=path, newLine=line))]))
+
+    def test_list_shows_a_merge_requests_pipeline_review_and_threads(self):
+        self.gitlab()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        url = self.GITLAB_URL + "/-/merge_requests/4"
+        merge_request = dict(
+            iid="4", webUrl=url, state="opened", draft=True, diffHeadSha=tip, sourceBranch=task["branch"],
+            targetBranch="main", conflicts=False, detailedMergeStatus="NOT_APPROVED",
+            approvalsLeft=1, approvedBy=dict(nodes=[]),
+            reviewers=dict(nodes=[dict(username="tanuki", mergeRequestInteraction=dict(reviewState="UNREVIEWED")),
+                                  dict(username="fox", mergeRequestInteraction=dict(reviewState="REVIEWED"))]),
+            headPipeline=dict(jobs=dict(nodes=[
+                self.job("lint", "SUCCESS"), self.job("unit", "FAILED", finished="2026-10-31T10:05:00Z"),
+                self.job("flaky", "FAILED", allow=True), self.job("deploy", "MANUAL", allow=True),
+                self.job("approve", "MANUAL"), self.job("e2e", "RUNNING"),
+                self.job("old", "CANCELED", finished="2026-10-31T10:07:00Z")])),
+            resolvableDiscussionsCount=3, resolvedDiscussionsCount=1,
+            discussions=dict(pageInfo=dict(hasPreviousPage=False), nodes=[
+                self.discussion(True, ("fox", "Done"), "2026-10-31T09:00:00Z", "a.py", 1),
+                self.discussion(False, ("fox", "\nRename this\nplease"), "2026-10-31T10:30:00Z", "b.py", 7),
+                self.discussion(False, ("tanuki", "Why?"), "2026-10-31T10:20:00Z"),
+                self.discussion(False, ("bot", "added 1 commit"), "2026-10-31T10:00:00Z", resolvable=False)]))
+        (self.glab_dir / "list.json").write_text(json.dumps([merge_request]))
+        listed = self.request("list", full=True)["result"][0]
+        status = listed["prStatus"]
+        status.pop("checkedAt")
+        self.assertEqual(status, dict(
+            state="OPEN", draft=True, review="REVIEW_REQUIRED", head=tip, base="main",
+            checks=dict(passing=3, failing=2, pending=2), failingChecks=["unit", "old"],
+            pendingChecks=["approve", "e2e"], failedAt="2026-10-31T10:05:00Z",
+            mergeable="MERGEABLE", requested=["tanuki"], threads=2, threadAt="2026-10-31T10:20:00Z",
+            openThreads=[dict(path="b.py", line=7, author="fox", text="Rename this")]))
+        self.assertEqual(listed["unpushed"], 0)
+        self.assertEqual(self.variables(self.glab_calls()[-1]), dict(path="group/sub/project", branch=task["branch"]))
+        store = roost.Store(str(self.state))
+        self.assertEqual(store.read(task["id"])["pr"], dict(number=4, url=url, state="OPEN", head=tip, base="main",
+                                                            forge="gitlab"))
+        # Changes asked for, conflicts, and more discussions than were asked for.
+        merge_request.update(
+            detailedMergeStatus="CONFLICT", conflicts=True, approvalsLeft=0, approvedBy=dict(nodes=[dict(username="fox")]),
+            reviewers=dict(nodes=[dict(username="fox", mergeRequestInteraction=dict(reviewState="REQUESTED_CHANGES"))]),
+            discussions=dict(pageInfo=dict(hasPreviousPage=True), nodes=[]), headPipeline=None)
+        (self.glab_dir / "list.json").write_text(json.dumps([merge_request]))
+        status = self.request("list", full=True)["result"][0]["prStatus"]
+        self.assertEqual({key: status.get(key) for key in ("review", "mergeable", "requested", "threads", "checks")},
+                         dict(review="CHANGES_REQUESTED", mergeable="CONFLICTING", requested=[], threads=2,
+                              checks=dict(passing=0, failing=0, pending=0)))
+        self.assertNotIn("threadAt", status)
+        self.assertNotIn("openThreads", status)
+        # Approved, while GitLab works out whether it conflicts.
+        merge_request.update(detailedMergeStatus="CHECKING", conflicts=False, reviewers=dict(nodes=[]))
+        (self.glab_dir / "list.json").write_text(json.dumps([merge_request]))
+        status = self.request("list", full=True)["result"][0]["prStatus"]
+        self.assertEqual((status["review"], status["mergeable"]), ("APPROVED", "UNKNOWN"))
+        # A pipeline GitLab requires, missing or skipped, waits.
+        for pipeline in (None, dict(status="SKIPPED", jobs=dict(nodes=[self.job("lint", "SKIPPED")])),
+                         dict(status="RUNNING", jobs=dict(nodes=[self.job("lint", "RUNNING")]))):
+            merge_request.update(detailedMergeStatus="CI_MUST_PASS", headPipeline=pipeline)
+            (self.glab_dir / "list.json").write_text(json.dumps([merge_request]))
+            status = self.request("list", full=True)["result"][0]["prStatus"]
+            self.assertEqual(status["checks"]["pending"], 1, pipeline)
+            self.assertEqual(status["pendingChecks"], ["lint"] if pipeline and pipeline["status"] == "RUNNING"
+                             else ["pipeline"])
+        merge_request.update(detailedMergeStatus="CHECKING")
+        # More jobs than were asked for: the pipeline's status stands for the rest.
+        for pipeline, counts, named in (("FAILED", dict(passing=1, failing=1, pending=0), "failingChecks"),
+                                        ("RUNNING", dict(passing=1, failing=0, pending=1), "pendingChecks")):
+            merge_request.update(headPipeline=dict(status=pipeline, jobs=dict(
+                pageInfo=dict(hasNextPage=True), nodes=[self.job("lint", "SUCCESS")])))
+            (self.glab_dir / "list.json").write_text(json.dumps([merge_request]))
+            status = self.request("list", full=True)["result"][0]["prStatus"]
+            self.assertEqual((status["checks"], status[named]), (counts, ["pipeline"]))
+        # Merged, it is asked nothing more of its review.
+        (self.glab_dir / "list.json").write_text(json.dumps([dict(merge_request, state="merged", headPipeline=None)]))
+        status = self.request("list", full=True)["result"][0]["prStatus"]
+        self.assertEqual(set(status), {"state", "draft", "review", "checks", "head", "base"})
+        self.assertEqual(status["state"], "MERGED")
+
+    def test_retire_accepts_a_merge_request_gitlab_squashed(self):
+        self.gitlab()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        self.git("merge", "--squash", task["branch"])
+        self.git("commit", "-qm", "Squash (!4)")
+        listed = self.glab_dir / "list.json"
+        listed.write_text(json.dumps([dict(iid="4", webUrl=self.GITLAB_URL + "/-/merge_requests/4", state="opened",
+                                           diffHeadSha=tip, sourceBranch=task["branch"])]))
+        self.assertIn("unmerged commits", self.request("retire", id=task["id"])["error"])
+        listed.write_text(json.dumps([dict(iid="4", webUrl=self.GITLAB_URL + "/-/merge_requests/4", state="merged",
+                                           diffHeadSha=tip, sourceBranch=task["branch"])]))
+        reply = self.request("retire", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(self.git("branch", "--list", task["branch"]), "")
+
+    def test_issues_lists_a_gitlab_projects_open_issues(self):
+        self.gitlab()
+        (self.glab_dir / "issues.json").write_text(json.dumps([
+            dict(iid="12", title="CSV import crashes", description="x" * 7000, webUrl=self.GITLAB_URL + "/-/work_items/12",
+                 labels=dict(nodes=[dict(title="bug"), dict(title="import")])),
+            dict(iid="9", title="Docs", description=None, webUrl=self.GITLAB_URL + "/-/issues/9", labels=dict(nodes=[]))]))
+        reply = self.request("issues", directory=str(self.repo))
+        self.assertTrue(reply["ok"], reply)
+        first, second = reply["result"]
+        self.assertEqual((first["number"], first["labels"], first["forge"], len(first["body"])),
+                         (12, ["bug", "import"], "gitlab", roost.ISSUE_BODY_LIMIT + 2))
+        self.assertEqual(second, dict(number=9, title="Docs", body="", url=self.GITLAB_URL + "/-/issues/9",
+                                      labels=[], forge="gitlab"))
+        self.assertEqual(self.variables(self.glab_calls()[-1]), dict(path="group/sub/project"))
+
+    def test_doctor_checks_glab_for_projects_on_gitlab(self):
+        self.gitlab()
+        name = "GitLab CLI · gitlab.example.invalid"
+        checks = {check["name"]: check for check in self.request("doctor", projects=[str(self.repo)])["result"]}
+        self.assertTrue(checks[name]["ok"], checks[name])
+        self.assertIn("tanuki", checks[name]["detail"])
+        self.assertTrue(checks[name]["optional"])
+        (self.glab_dir / "signed-out").write_text("")
+        checks = {check["name"]: check for check in self.request("doctor", projects=[str(self.repo)])["result"]}
+        self.assertFalse(checks[name]["ok"])
+        self.assertIn("glab auth login --hostname gitlab.example.invalid", checks[name]["hint"])
+        # Without a project on GitLab, glab isn't asked about.
+        self.assertFalse([check for check in self.request("doctor")["result"] if check["name"].startswith("GitLab")])
+        (self.glab_dir / "glab").unlink()
+        with patch.object(roost, "agent_path", lambda inherited: str(self.glab_dir)):
+            checks = {check["name"]: check for check in self.request("doctor", projects=[str(self.repo)])["result"]}
+        self.assertEqual((checks["GitLab CLI"]["ok"], checks["GitLab CLI"]["detail"]), (False, "not found"))
+        self.assertIn("install glab", checks["GitLab CLI"]["hint"])
+
+    def test_the_forge_is_the_one_origin_is_on(self):
+        for url, location in (
+                ("git@gitlab.com:group/project.git", ("gitlab.com", "group/project")),
+                ("https://GitLab.example.com:8443/a/b/c.git/", ("gitlab.example.com:8443", "a/b/c")),
+                ("ssh://git@gitlab.example.com:2222/a/b.git", ("gitlab.example.com", "a/b")),
+                ("https://github.com/octo/repo", ("github.com", "octo/repo")),
+                ("https://gitlab.com", ("gitlab.com", None)),
+                ("/srv/git/repo.git", (None, None)),
+                ("file:///srv/git/repo.git", (None, None)),
+                ("../repo", (None, None))):
+            with self.subTest(url=url):
+                self.assertEqual(roost.remote_location(url), location)
+
+        def forge(url, said=None):
+            self.git("remote", "set-url", "origin", url)
+            if said:
+                self.git("config", "roost.forge", said)
+            else:
+                roost.git(self.repo, "config", "--unset-all", "roost.forge", check=False)
+            roost.forge_for.cache_clear()
+            found = roost.forge_for(str(self.repo))
+            return found.name, found.host, getattr(found, "project", None)
+
+        self.git("remote", "add", "origin", "https://github.com/octo/repo.git")
+        self.assertEqual(forge("https://github.com/octo/repo.git"), ("GitHub", "github.com", None))
+        self.assertEqual(forge("git@gitlab.com:group/project.git"), ("GitLab", "gitlab.com", "group/project"))
+        self.assertEqual(forge("https://gitlab-ce.example.com/a/b"), ("GitLab", "gitlab-ce.example.com", "a/b"))
+        # A server whose name doesn't say, and one whose name misleads.
+        self.assertEqual(forge("https://git.example.com/a/b", "gitlab"), ("GitLab", "git.example.com", "a/b"))
+        self.assertEqual(forge("https://gitlab.example.com/a/b", "GitHub"), ("GitHub", "gitlab.example.com", None))
+        self.assertEqual(forge("https://git.example.com/mygitlab/b"), ("GitHub", "git.example.com", None))
+        self.git("remote", "remove", "origin")
+        roost.forge_for.cache_clear()
+        self.assertEqual(roost.forge_for(str(self.repo)).name, "GitHub")
 
     def test_search_finds_a_retired_tasks_conversation_under_its_project(self):
         task = self.create(name="fix parser")

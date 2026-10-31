@@ -43,6 +43,7 @@ FAKE_AGENT = HERE.parent / "fake_agent.py"
 FAKE_SSH = HERE / "fake_ssh.py"
 FAKE_GH = HERE / "fake_gh.py"
 FAKE_TWG = HERE / "fake_twg.py"
+FAKE_GLAB = HERE / "fake_glab.py"
 
 FRAME = (172, 40)
 PANEL = 44  # roost-task-panel-width
@@ -150,15 +151,19 @@ class Run:
         # And Jira: test/qa/fake_twg.py, as twg.
         self.jira = self.work / "jira"
         self.jira.mkdir()
+        # And GitLab: test/qa/fake_glab.py, as glab.
+        self.gitlab = self.work / "gitlab"
+        self.gitlab.mkdir()
         tools = self.work / "tools"
         tools.mkdir()
-        for name, fake in (("gh", FAKE_GH), ("twg", FAKE_TWG)):
+        for name, fake in (("gh", FAKE_GH), ("twg", FAKE_TWG), ("glab", FAKE_GLAB)):
             (tools / name).write_text('#!/bin/sh\nexec %s %s "$@"\n'
                                       % (shlex.quote(sys.executable), shlex.quote(str(fake))))
             (tools / name).chmod(0o755)
         self.env["PATH"] = "%s:%s" % (tools, self.env.get("PATH", ""))
         self.env["QA_GITHUB"] = str(self.github)
         self.env["QA_JIRA"] = str(self.jira)
+        self.env["QA_GITLAB"] = str(self.gitlab)
         self.notes = set()
         # Commands run in an Emacs since restarted.
         self.ran = set()
@@ -3338,6 +3343,59 @@ def pull_request(qa, repo):
         ("the sidebar says merged", lambda s: sidebar_row(qa, s, name).endswith("merged"))])
 
 
+@journey("A merge request on GitLab")
+def merge_request(qa, repo):
+    """With the project's origin on GitLab, P opens a merge request, !4,
+    and the task says when it waits on you as for GitHub: a job that
+    failed, by name, then merged on GitLab."""
+    origin(qa, repo)
+    pushed_to = qa.git(repo, "remote", "get-url", "origin")
+    qa.git(repo, "remote", "set-url", "origin", "https://gitlab.qa.invalid/qa/notes.git")
+    qa.git(repo, "config", "remote.origin.pushurl", pushed_to)
+    try:
+        name = new_task(qa, "ask printf 'Owners\\n' > OWNERS.md && git add OWNERS.md && git commit -qm 'Add owners'")
+        answer_yes(qa, name)
+        # GitLab's word counts once asked half a minute after the agent's last event.
+        settled = time.monotonic() + 31
+        qa.wait("its commit", lambda s: "Committed" in panel_text(qa, s))
+        qa.keys("C-c r P")
+        qa.wait("the pull request's draft", lambda s: (qa.window(s, "roost-pr-mode") or {}).get("selected"))
+        qa.keys("C-c C-c")
+        qa.wait("its merge request", lambda s: "!4" in panel_text(qa, s))
+        branch = qa.git(repo, "branch", "--list", "--format=%(refname:short)", "roost/%s-*" % name)
+        tip = qa.git(repo, "rev-parse", branch)
+        long_ago = "2026-01-01T00:00:00Z"
+
+        def says(state, jobs):
+            job = lambda name, status: dict(name=name, status=status, allowFailure=False, finishedAt=long_ago,
+                                            stage=dict(name="test"))
+            (qa.gitlab / "list.json").write_text(json.dumps([dict(
+                iid="4", webUrl="https://gitlab.qa.invalid/qa/notes/-/merge_requests/4", state=state,
+                diffHeadSha=tip, sourceBranch=branch, targetBranch="main", conflicts=False,
+                detailedMergeStatus="MERGEABLE", approvalsLeft=0, approvedBy=dict(nodes=[]), reviewers=dict(nodes=[]),
+                resolvableDiscussionsCount=0, resolvedDiscussionsCount=0,
+                discussions=dict(pageInfo=dict(hasPreviousPage=False), nodes=[]),
+                headPipeline=dict(jobs=dict(nodes=[job(*named) for named in jobs])))]))
+            qa.keys("C-c r g")
+
+        time.sleep(max(0, settled - time.monotonic()))
+        says("opened", [("unit", "FAILED"), ("lint", "SUCCESS")])
+        qa.status(name, "ci failed")
+        qa.step("A job failed", expect=[
+            ("the sidebar says ci failed", lambda s: sidebar_row(qa, s, name).endswith("ci failed")),
+            ("the panel says so of !4",
+             lambda s: "A check failed on !4: e tells its agent, P opens it" in panel_text(qa, s)),
+            ("and names the job", lambda s: "Checks\n  ✗ unit failed\n  ✓ 1 passed\n" in panel_text(qa, s))])
+        says("merged", [("unit", "SUCCESS"), ("lint", "SUCCESS")])
+        qa.status(name, "merged")
+        qa.step("Merged on GitLab", expect=[
+            ("the sidebar says merged", lambda s: sidebar_row(qa, s, name).endswith("merged")),
+            ("the panel says where", lambda s: "Merged on GitLab" in panel_text(qa, s))])
+    finally:
+        qa.git(repo, "remote", "set-url", "origin", pushed_to)
+        qa.git(repo, "config", "--unset", "remote.origin.pushurl")
+
+
 @journey("An agent that exits")
 def exits(qa, repo):
     """An agent that exits on its own shows as such, and s resumes its conversation."""
@@ -3628,7 +3686,8 @@ JOURNEYS = [sweep, answer, next_waiting, fold, resize, merge, review, notes, sin
             search, workload, question_left,
             walk_away,
             frames, draft_frames, org, drafts, draft_fields, overlap, region, tabs,
-            forget, rename, fork, other_branch, switched_branch, merged, large, pull_request, exits, include, slow_create,
+            forget, rename, fork, other_branch, switched_branch, merged, large, pull_request, merge_request, exits,
+            include, slow_create,
             unreachable,
             doctor, scrollback,
             fleet, dropped, forget_host,
