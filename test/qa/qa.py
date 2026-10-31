@@ -3356,6 +3356,54 @@ def include(qa, repo):
             path.unlink(missing_ok=True)
 
 
+@journey("A task slower to make than Emacs waits")
+def slow_create(qa, repo):
+    """Checking out a task's worktree takes longer than Emacs waits, as in
+    a repository with gigabytes of Git LFS files. The draft says no reply
+    came and keeps what you wrote. Stopped there, as Emacs stops it here
+    and fake_ssh.py's far end, nothing half-made is left, and C-c C-c asks
+    again, with one task made. (A host over SSH goes on and makes it,
+    which the draft then opens: roost-test.el and test_remote.py check
+    that.)"""
+    hooks = qa.work / "slow-hooks"
+    hooks.mkdir(exist_ok=True)
+    hook = hooks / "post-checkout"
+    hook.write_text("#!/bin/sh\nsleep 8\n")
+    hook.chmod(0o755)
+    before = {t["name"] for t in qa.screen()["tasks"]}
+    branches = lambda: set(qa.git(repo, "for-each-ref", "--format=%(refname)", "refs/heads/").split())
+    worktrees = lambda: qa.git(repo, "worktree", "list", "--porcelain").count("\nworktree ")
+    known = branches(), worktrees()
+    qa.git(repo, "config", "core.hooksPath", str(hooks))
+    qa.emacs.eval("(progn (setq roost-request-timeout 3 roost--create-seconds 0) t)")
+    try:
+        qa.keys("C-c r c")
+        qa.type("Make the slow one")
+        qa.keys("C-c C-c")
+        draft = lambda s: qa.window(s, "roost-compose-mode") or {}
+        qa.wait("word that no reply came", lambda s: draft(s).get("header", "").startswith(" No reply from"))
+        qa.step("No reply in time", expect=[
+            ("the draft says so, and that the task opens if it was made",
+             lambda s: "the task opens here if it was made · C-c C-c asks again" in draft(s)["header"]),
+            ("it keeps what you wrote", lambda s: "Make the slow one" in draft(s).get("text", ""))])
+        qa.emacs.eval("(progn (setq roost-request-timeout 60 roost--create-seconds 600) t)")
+        qa.wait("the half-made worktree to go", lambda s: (branches(), worktrees()) == known, timeout=30)
+        qa.step("Nothing half-made is left", expect=[
+            ("no branch or worktree for it", lambda s: (branches(), worktrees()) == known)])
+        hook.write_text("#!/bin/sh\n")
+        qa.keys("C-c C-c")
+        qa.wait("the task", lambda s: {t["name"] for t in s["tasks"]} - before, timeout=30)
+        made = lambda s: {t["name"] for t in s["tasks"]} - before
+        qa.wait("its terminal", lambda s: (s.get("task") or {}).get("name") in made(s) and selected_terminal(s))
+        qa.step("The task opens", expect=[
+            ("one task made", lambda s: len(made(s)) == 1),
+            ("its terminal", lambda s: (s.get("task") or {}).get("name") in made(s) and selected_terminal(s)),
+            ("the draft gone", lambda s: not qa.window(s, "roost-compose-mode"))])
+    finally:
+        qa.emacs.eval("(progn (setq roost-request-timeout 60 roost--create-seconds 600) t)")
+        qa.git(repo, "config", "--unset", "core.hooksPath")
+
+
 @journey("A host Roost can't reach")
 def unreachable(qa, repo):
     """A host that doesn't answer is named, in the sidebar and the dashboard, within their windows."""
@@ -3540,7 +3588,8 @@ JOURNEYS = [sweep, answer, next_waiting, fold, resize, merge, review, notes, sin
             search, workload, question_left,
             walk_away,
             frames, draft_frames, org, drafts, draft_fields, overlap, region, tabs,
-            forget, rename, fork, other_branch, switched_branch, merged, large, pull_request, exits, include, unreachable,
+            forget, rename, fork, other_branch, switched_branch, merged, large, pull_request, exits, include, slow_create,
+            unreachable,
             doctor, scrollback,
             fleet, dropped, forget_host,
             # Last: it crashes every agent so far.

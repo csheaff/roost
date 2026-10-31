@@ -181,6 +181,11 @@ the worktree anyway."
   "Seconds a host lets a teardown command run, as TEARDOWN_SECONDS says.
 Emacs waits this much longer for a request that runs one.")
 
+(defconst roost--create-seconds 600
+  "Seconds longer than `roost-request-timeout' Emacs waits for a task to be made.
+Checking out a worktree takes that long in a large repository, such as
+one whose Git LFS files run to gigabytes.")
+
 (defcustom roost-branch-prefix "roost/"
   "Prefix for task topic branches, which are named PREFIX<task>-<id>.
 Existing tasks keep their branch."
@@ -736,8 +741,11 @@ is the seconds it may take, if not `roost-request-timeout'."
                                                              "Host operation failed"))))
                                        (list failure
                                              (cond (timed-out
-                                                    (format "No reply after %ss; the operation may still finish on the host, so refresh before retrying"
-                                                            (or timeout roost-request-timeout)))
+                                                    ;; Marked, for a caller that can wait on.
+                                                    (propertize
+                                                     (format "No reply after %ss; the operation may still finish on the host, so refresh before retrying"
+                                                             (or timeout roost-request-timeout))
+                                                     'roost-no-reply t))
                                                    ((string-empty-p stderr) "Host operation failed")
                                                    ;; Its end, where a traceback says what
                                                    ;; failed: the sidebar shows it all.
@@ -1360,6 +1368,7 @@ those tasks."
                               (member host (roost--hosts)))
                      (let ((before (roost--task-states host)))
                        (roost--apply-snapshot host tasks request)
+                       (with-demoted-errors "Roost: %S" (roost--compose-listed host tasks))
                        ;; Quiet polls leave out Git statistics.  An agent that reported
                        ;; something, such as finishing an edit, may have changed files,
                        ;; and a commit moves the task's Git stamp: measure those tasks
@@ -2514,21 +2523,26 @@ EXTRA is an alist of further request fields, such as the issue."
            . ,extra)
      (lambda (task)
        (cl-incf (gethash host roost--revisions 0))
-       (roost--remember-host host)
-       (when (roost--field task 'repo)
-         (roost--remember-project (roost--project-directory (cons (cons 'host host) task))))
-       (setq task (roost--cache-task host task))
-       (when on-success (funcall on-success task))
-       (roost-watch-mode 1)
-       (roost--redraw)
-       (roost-open-task task)
-       (message "Roost created %s on %s from %s; it merges into %s"
-                name (roost--host-label host)
-                (roost--field task 'baseRef) (roost--field task 'integrationBranch)))
+       (roost--task-made host task name on-success))
      (lambda (err)
        (message "Roost could not create %s: %s" name err)
-       (when on-failure (funcall on-failure err))))
+       (when on-failure (funcall on-failure err)))
+     (+ roost-request-timeout roost--create-seconds))
     (message "Roost: creating %s…" name)))
+
+(defun roost--task-made (host task name &optional on-success)
+  "Cache and open TASK, which HOST made as NAME, first calling ON-SUCCESS with it."
+  (roost--remember-host host)
+  (when (roost--field task 'repo)
+    (roost--remember-project (roost--project-directory (cons (cons 'host host) task))))
+  (setq task (roost--cache-task host task))
+  (when on-success (funcall on-success task))
+  (roost-watch-mode 1)
+  (roost--redraw)
+  (roost-open-task task)
+  (message "Roost created %s on %s from %s; it merges into %s"
+           name (roost--host-label host)
+           (roost--field task 'baseRef) (roost--field task 'integrationBranch)))
 
 ;;;###autoload
 (defun roost-new-task (&optional directory name base prompt agent)
@@ -2664,6 +2678,12 @@ Nil too on another host, where reading it would hold up the draft."
   (cdr roost--compose-checkout-branch))
 (defvar-local roost--compose-submitting nil
   "Non-nil while the drafted task is being created.")
+
+(defvar-local roost--compose-asked nil
+  "The project directory and the ID the draft last asked to create its task with.
+A list.  The ID is the same each time for the same project, so its host
+makes the task once, however often you ask: it answers again with the
+task it made.")
 
 (defvar-keymap roost-compose-mode-map
   :doc "Keys for drafting a new Roost task."
@@ -3443,25 +3463,65 @@ branch leads with the key of the one you choose."
       (user-error "Write a prompt, or name the task (%s)" (substitute-command-keys "\\[roost-compose-set-name]")))
     (when roost--compose-submitting
       (user-error "Already creating %s" name))
-    (setq roost--compose-submitting t
-          header-line-format (format " Creating %s…" name))
-    (roost--create-task (plist-get fields :directory) name (plist-get fields :base) prompt
-                        (plist-get fields :agent)
-                        (lambda (task)
-                          (when-let* ((marker (plist-get fields :org)))
-                            (roost--org-link marker task))
-                          (when (buffer-live-p buffer)
-                            (quit-windows-on buffer t)
-                            (when (buffer-live-p buffer) (kill-buffer buffer))))
-                        (lambda (err)
-                          (when (buffer-live-p buffer)
-                            (with-current-buffer buffer
-                              (setq roost--compose-submitting nil)
-                              (message "Roost could not create the task: %s" err)
-                              (roost--draft-error "Could not create the task" err
-                                                  'roost-compose-submit))))
-                        (when-let* ((issue (plist-get fields :issue)))
-                          (list (cons 'issue issue))))))
+    (let* ((directory (plist-get fields :directory))
+           (host (roost--directory-host directory)))
+      ;; Asked again in the same project, as after no reply came, the host
+      ;; answers with the task it made, if it did.
+      (unless (equal (car roost--compose-asked) directory)
+        (setq roost--compose-asked (list directory (roost--random-id))))
+      (setq roost--compose-submitting t
+            header-line-format (format " Creating %s…" name))
+      (roost--create-task (plist-get fields :directory) name (plist-get fields :base) prompt
+                          (plist-get fields :agent)
+                          (lambda (task) (roost--compose-made buffer fields task))
+                          (lambda (err)
+                            (when (buffer-live-p buffer)
+                              (with-current-buffer buffer
+                                (setq roost--compose-submitting nil)
+                                (if (not (get-text-property 0 'roost-no-reply err))
+                                    (progn (message "Roost could not create the task: %s" err)
+                                           (roost--draft-error "Could not create the task" err
+                                                               'roost-compose-submit))
+                                  ;; It may yet be made: then a poll of its host lists it.
+                                  (roost--remember-host host)
+                                  (roost-watch-mode 1)
+                                  (setq header-line-format
+                                        (format " No reply from %s after %s; the task opens here if it was made · %s asks again"
+                                                (roost--host-label host)
+                                                (let ((seconds (+ roost-request-timeout roost--create-seconds)))
+                                                  (if (< seconds 60) (format "%ds" seconds) (format "%dm" (/ seconds 60))))
+                                                (substitute-command-keys "\\[roost-compose-submit]")))
+                                  (message "Roost: no reply from %s about %s yet; it opens if it was made"
+                                           (roost--host-label host) name)))))
+                          `((createId . ,(cadr roost--compose-asked))
+                            ,@(when-let* ((issue (plist-get fields :issue)))
+                                (list (cons 'issue issue))))))))
+
+(defun roost--compose-made (buffer fields task)
+  "Close BUFFER, the draft with FIELDS that TASK was made from.
+An Org entry it was drafted from links to TASK."
+  (when-let* ((marker (plist-get fields :org)))
+    (roost--org-link marker task))
+  (when (buffer-live-p buffer)
+    (quit-windows-on buffer t)
+    (when (buffer-live-p buffer) (kill-buffer buffer))))
+
+(defun roost--compose-listed (host tasks)
+  "Open the drafted task if TASKS, which HOST listed, hold it.
+That is once the draft's request got no reply in time, and the host
+made the task anyway."
+  (when-let* ((buffer (get-buffer roost--compose-buffer))
+              ((not (buffer-local-value 'roost--compose-submitting buffer)))
+              (asked (buffer-local-value 'roost--compose-asked buffer))
+              ((equal (roost--directory-host (car asked)) host))
+              ;; Not once you have turned the draft to another project.
+              ((equal (plist-get (buffer-local-value 'roost--compose-fields buffer) :directory)
+                      (car asked)))
+              (made (seq-find (lambda (task) (equal (roost--field task 'createId) (cadr asked))) tasks))
+              (task (gethash (list host (roost--field made 'id)) roost--tasks)))
+    (let ((fields (buffer-local-value 'roost--compose-fields buffer)))
+      (roost--task-made host task (roost--field task 'name)
+                        (lambda (task) (roost--compose-made buffer fields task))))))
 
 ;;;; Task commands
 
@@ -4820,8 +4880,8 @@ both staged and unstaged.  The result indexes `roost--note-positions'."
   (seq-mapcat (lambda (overlay) (overlay-get overlay 'roost-notes))
               (overlays-in (line-end-position) (1+ (line-end-position)))))
 
-(defun roost--note-id ()
-  "A new review note's identifier."
+(defun roost--random-id ()
+  "A new identifier of 16 hex digits, as for a review note."
   (format "%08x%08x" (random (ash 1 32)) (random (ash 1 32))))
 
 ;;;###autoload
@@ -4879,7 +4939,7 @@ while you wrote, gets no note."
         (t
          (setq roost--notes
                (append (roost--notes)
-                       (list (append `((id . ,(roost--note-id))
+                       (list (append `((id . ,(roost--random-id))
                                        (host . ,(roost--field task 'host))
                                        (task . ,(roost--field task 'id)))
                                      ;; PLACE may be a note that has gone since:

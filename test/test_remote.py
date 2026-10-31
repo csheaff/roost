@@ -5739,6 +5739,201 @@ sys.exit(status)
         self.assertEqual(self.git("branch", "--list", "roost/*"), "")
         self.assertEqual(store.all(), [])
 
+    def creating(self, **args):
+        """A create request running as Emacs runs one, in a process group
+        of its own, which Emacs kills when it stops waiting."""
+        request = dict(root=str(self.state), action="create", directory=str(self.repo), socket=self.socket,
+                       command=[sys.executable, str(FAKE)], **args)
+        process = subprocess.Popen([sys.executable, str(SOURCE), "rpc"], stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, start_new_session=True)
+        process.stdin.write(json.dumps(request).encode())
+        process.stdin.close()
+
+        def stop():
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+            process.stdout.close()
+        self.addCleanup(stop)
+        return process
+
+    def reply(self, process):
+        """What PROCESS, a request from `creating`, replied, within 30 seconds."""
+        process.wait(timeout=30)
+        return json.loads(process.stdout.read())
+
+    def task_branches(self):
+        return self.git("for-each-ref", "--format=%(refname:short)", "refs/heads/roost/").split()
+
+    def wait_for_note(self):
+        """The note of the creation under way, once there."""
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            notes = list((self.state / "creating").glob("*.json"))
+            if notes:
+                return notes[0]
+            time.sleep(0.05)
+        self.fail("no creation is noted")
+
+    def test_asking_again_for_a_task_returns_the_one_made(self):
+        task = self.create(name="once", createId="ab" * 8)
+        again = self.request("create", directory=str(self.repo), name="twice", socket=self.socket,
+                             command=[sys.executable, str(FAKE)], createId="ab" * 8)
+        self.assertTrue(again["ok"], again)
+        self.assertEqual(again["result"]["id"], task["id"])
+        self.assertEqual(again["result"]["name"], "once")
+        self.assertEqual([record["id"] for record in roost.Store(str(self.state)).all()], [task["id"]])
+        self.assertEqual(self.task_branches(), [task["branch"]])
+        self.assertEqual(list((self.state / "creating").glob("*")), [])
+        # Another draft's is its own.
+        other = self.create(name="once", createId="cd" * 8)
+        self.assertNotEqual(other["id"], task["id"])
+        reply = self.request("create", directory=str(self.repo), name="odd", socket=self.socket, createId="../x")
+        self.assertEqual(reply["error"], "Invalid creation ID")
+
+    def test_asking_again_waits_for_the_task_still_being_made(self):
+        hooks = self.root / "hooks"
+        hooks.mkdir()
+        (hooks / "post-checkout").write_text("#!/bin/sh\nsleep 2\n")
+        (hooks / "post-checkout").chmod(0o755)
+        self.git("config", "core.hooksPath", str(hooks))
+        first = self.creating(name="slow", createId="ef" * 8)
+        self.wait_for_note()
+        # A process of its own, as what the first one made can't hold it up for good.
+        again = self.reply(self.creating(name="slow", createId="ef" * 8))
+        self.assertTrue(again["ok"], again)
+        made = self.reply(first)
+        self.assertTrue(made["ok"], made)
+        self.assertEqual(again["result"]["id"], made["result"]["id"])
+        self.assertEqual(len(roost.Store(str(self.state)).all()), 1)
+        self.assertEqual(len(self.task_branches()), 1)
+
+    def test_asking_again_waits_for_one_still_preparing(self):
+        create_id = "56" * 8
+        folder = self.state / "creating"
+        folder.mkdir(parents=True)
+        # The first request, before it has noted anything.
+        with (folder / (create_id + ".lock")).open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            again = self.creating(name="prepared", createId=create_id)
+            time.sleep(1)
+            self.assertIsNone(again.poll())
+            self.assertEqual(list(folder.glob("*.json")), [])
+            made = roost.make_task(roost.Store(str(self.state)),
+                                   dict(directory=str(self.repo), name="prepared", socket=self.socket,
+                                        command=[sys.executable, str(FAKE)]), create_id)
+        reply = self.reply(again)
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(reply["result"]["id"], made["id"])
+        self.assertEqual(self.task_branches(), [made["branch"]])
+
+    def test_a_creation_cut_short_leaves_nothing_behind(self):
+        # A checkout that takes a while, as Git LFS's does, stopped partway.
+        for number in range(6):
+            (self.repo / ("file%d.bin" % number)).write_text("%d\n" % number)
+        (self.repo / ".gitattributes").write_text("*.bin filter=slow\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "Slow to check out")
+        self.git("config", "filter.slow.smudge", "sleep 1; cat")
+        self.git("config", "filter.slow.clean", "cat")
+        process = self.creating(name="cut short", createId="12" * 8)
+        note = self.wait_for_note()
+        planned = json.loads(note.read_text())
+        deadline = time.monotonic() + 8
+        while not (Path(planned["worktree"]) / "file0.bin").exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+        self.assertTrue(Path(planned["worktree"]).exists())
+        self.assertEqual(self.task_branches(), [planned["branch"]])
+        listed = self.request("list")
+        self.assertEqual(listed["result"], [])
+        self.assertFalse(Path(planned["worktree"]).exists())
+        self.assertEqual(self.task_branches(), [])
+        self.assertEqual(len(roost.worktree_branches(self.repo)), 1)
+        self.assertEqual(list((self.state / "creating").glob("*.json")), [])
+        # Asked for again, it is made anew.
+        self.git("config", "filter.slow.smudge", "cat")
+        task = self.create(name="cut short", createId="12" * 8)
+        self.assertNotEqual(task["id"], planned["id"])
+        self.assertEqual(self.task_branches(), [task["branch"]])
+        self.assertEqual(list((self.state / "creating").glob("*")), [])
+
+    def test_a_creation_whose_git_goes_on_is_undone_once_git_is_done(self):
+        # The helper stopped, as on a host over SSH, while Git checks out.
+        for number in range(4):
+            (self.repo / ("file%d.bin" % number)).write_text("%d\n" % number)
+        (self.repo / ".gitattributes").write_text("*.bin filter=slow\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "Slow to check out")
+        self.git("config", "filter.slow.smudge", "sleep 1; cat")
+        self.git("config", "filter.slow.clean", "cat")
+        process = self.creating(name="git goes on", createId="78" * 8)
+        note = self.wait_for_note()
+        planned = json.loads(note.read_text())
+        deadline = time.monotonic() + 8
+        while not (Path(planned["worktree"]) / "file0.bin").exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        os.kill(process.pid, signal.SIGKILL)
+        process.wait()
+        # Git holds the note's lock: a poll leaves it be.
+        self.assertEqual(self.request("list")["result"], [])
+        self.assertTrue(note.exists())
+        self.assertTrue(Path(planned["worktree"]).exists())
+        deadline = time.monotonic() + 15
+        while note.exists() and time.monotonic() < deadline:
+            self.request("list")
+            time.sleep(0.2)
+        self.assertFalse(note.exists())
+        self.assertFalse(Path(planned["worktree"]).exists())
+        self.assertEqual(self.task_branches(), [])
+        self.assertEqual(len(roost.worktree_branches(self.repo)), 1)
+
+    def test_a_creation_cut_short_after_its_checkout_is_undone_as_a_failed_one(self):
+        store = roost.Store(str(self.state))
+        task = self.create(name="made")
+        # As if the helper had stopped once Git was done, before saving the
+        # task, whose note is written before it has a window.
+        planned = {key: value for key, value in store.read(task["id"]).items()
+                   if key not in ("windowId", "paneId", "windowIndex", "runId")}
+        folder = self.state / "creating"
+        roost.git(self.repo, "worktree", "add", "-q", "-b", "roost/kept-000000", str(self.root / "kept"), "HEAD")
+        roost.git(self.repo, "worktree", "add", "-q", "-b", "roost/clean-000000", str(self.root / "clean"), "HEAD")
+        (self.root / "kept" / "made-by-hook").write_text("made\n")
+        # Locked by its post-checkout hook, not by Git as it made it.
+        roost.git(self.repo, "worktree", "lock", "--reason", "hook's own", str(self.root / "kept"))
+        kept = dict(planned, id="1" * 16, worktree=str(self.root / "kept"), branch="roost/kept-000000")
+        clean = dict(planned, id="2" * 16, worktree=str(self.root / "clean"), branch="roost/clean-000000")
+        for note in (kept, clean):
+            roost.atomic_json(folder / (note["id"] + ".json"), note)
+        # One that got as far as its record keeps it.
+        roost.atomic_json(folder / (task["id"] + ".json"), store.read(task["id"]))
+        listed = {record["id"]: record for record in self.request("list")["result"]}
+        self.assertEqual(sorted(listed), sorted([task["id"], kept["id"]]))
+        self.assertTrue(listed[task["id"]]["live"])
+        self.assertEqual(listed[kept["id"]]["status"], "failed")
+        self.assertNotIn("createId", listed[kept["id"]])
+        self.assertTrue((self.root / "kept" / "made-by-hook").exists())
+        self.assertFalse((self.root / "clean").exists())
+        self.assertNotIn("roost/clean-000000", self.task_branches())
+        self.assertEqual(list(folder.glob("*")), [])
+
+    def test_a_failed_creation_is_made_anew_when_asked_for_again(self):
+        hooks = self.root / "hooks"
+        hooks.mkdir()
+        hook = hooks / "post-checkout"
+        hook.write_text("#!/bin/sh\necho made > made-by-hook\nexit 1\n")
+        hook.chmod(0o755)
+        self.git("config", "core.hooksPath", str(hooks))
+        reply = self.request("create", directory=str(self.repo), name="hooked", socket=self.socket,
+                             createId="34" * 8)
+        self.assertIn("its worktree is kept", reply["error"])
+        [failed] = roost.Store(str(self.state)).all()
+        self.assertNotIn("createId", failed)
+        self.git("config", "--unset", "core.hooksPath")
+        task = self.create(name="hooked", createId="34" * 8)
+        self.assertNotEqual(task["id"], failed["id"])
+
     def test_git_states_the_integration_branch_rewritten_under_a_task(self):
         def rewritten():
             dropped = "dropped-" + uuid.uuid4().hex[:6]
