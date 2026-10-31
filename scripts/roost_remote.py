@@ -2589,6 +2589,11 @@ class GitLabForge:
             # More jobs than were asked for: the pipeline's own status stands
             # for the rest, failed if one that may not fail did.
             checks.append(self.check(dict(name="pipeline", status=pipeline.get("status"))))
+        if merge_status in ("CI_MUST_PASS", "CI_STILL_RUNNING") and all(
+                check_state(check) == "passing" for check in checks):
+            # GitLab waits for a pipeline no job says hasn't passed, as one
+            # missing or skipped.
+            checks.append(self.check(dict(name="pipeline")))
         return dict(number=int(iid) if isinstance(iid, str) and iid.isdigit() else None, url=found.get("webUrl"),
                     state=GITLAB_STATES.get(found.get("state")), isDraft=found.get("draft") is True,
                     reviewDecision=review, statusCheckRollup=checks,

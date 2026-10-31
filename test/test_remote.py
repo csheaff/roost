@@ -5098,6 +5098,16 @@ print(json.dumps(dict(data=data)))
         (self.glab_dir / "list.json").write_text(json.dumps([merge_request]))
         status = self.request("list", full=True)["result"][0]["prStatus"]
         self.assertEqual((status["review"], status["mergeable"]), ("APPROVED", "UNKNOWN"))
+        # A pipeline GitLab requires, missing or skipped, waits.
+        for pipeline in (None, dict(status="SKIPPED", jobs=dict(nodes=[self.job("lint", "SKIPPED")])),
+                         dict(status="RUNNING", jobs=dict(nodes=[self.job("lint", "RUNNING")]))):
+            merge_request.update(detailedMergeStatus="CI_MUST_PASS", headPipeline=pipeline)
+            (self.glab_dir / "list.json").write_text(json.dumps([merge_request]))
+            status = self.request("list", full=True)["result"][0]["prStatus"]
+            self.assertEqual(status["checks"]["pending"], 1, pipeline)
+            self.assertEqual(status["pendingChecks"], ["lint"] if pipeline and pipeline["status"] == "RUNNING"
+                             else ["pipeline"])
+        merge_request.update(detailedMergeStatus="CHECKING")
         # More jobs than were asked for: the pipeline's status stands for the rest.
         for pipeline, counts, named in (("FAILED", dict(passing=1, failing=1, pending=0), "failingChecks"),
                                         ("RUNNING", dict(passing=1, failing=0, pending=1), "pendingChecks")):
