@@ -6295,13 +6295,14 @@ has it.  Its host notes it, for `roost-workload'."
 Only Emacs asks GitHub, and judges what it says: the host's history
 notes it beside what the agent did.  Not until the host has measured
 the task, and GitHub has said how its open pull request is, or a turn
-it had would seem to end."
+it had would seem to end: the one `roost--pr-view' has."
   (let ((key (roost--key task))
-        (turn (roost--turn task)))
+        (turn (roost--turn task))
+        (view (roost--pr-view task)))
     (cond ((equal turn (roost--field task 'turn)) (remhash key roost--turns-sent))
           ((equal turn (gethash key roost--turns-sent 'none)))
           ((and (assq 'landed task)
-                (or (not (memq (roost--pr-state task) '(open draft))) (roost--field task 'prStatus)))
+                (or (not (memq (roost--pr-state view) '(open draft))) (roost--field view 'prStatus)))
            (puthash key turn roost--turns-sent)
            (let ((sent (lambda ()
                          (when (equal (gethash key roost--turns-sent 'none) turn)

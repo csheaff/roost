@@ -11327,7 +11327,13 @@ it of the same ID's, or nil for the first."
        ;; An open pull request waits for what GitHub says.
        (setq sent nil fail nil)
        (roost--cache-task "dev" `((landed) (pr (number . 12)) ,@(roost-test--task "1111111111111111")))
-       (should-not sent)))))
+       (should-not sent)
+       ;; Not the task's own, though, while the worktree's branch has the
+       ;; one that waits, as when its own branch is gone, which GitHub is
+       ;; asked nothing about.
+       (roost--cache-task "dev" `((id . "2222222222222222") (landed) (pr (number . 4) (state . "OPEN"))
+                                  ,@(roost-test--worktree-pr-task)))
+       (should (equal sent '(("dev" "turn" "to merge"))))))))
 
 (ert-deftest roost-a-turn-another-emacs-changed-is-told-again ()
   ;; Its host takes the last word, as from another Emacs, or a reply out of
