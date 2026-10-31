@@ -15,6 +15,13 @@ What each release changes, and what to do when upgrading. Newest first.
   act on the task's branch: once that pull request merged, the panel says
   so and that `x` discards the task, keeping the branch. Nothing to do
   when upgrading.
+- Creating a task waits up to eleven minutes for its worktree, rather than
+  a minute, as a repository with gigabytes of Git LFS files takes that
+  long to check out. With no reply by then, the draft says so and opens
+  the task once its host lists it, and `C-c C-c` asks again for the same
+  task rather than starting a second one with the same name. A creation
+  cut short no longer leaves a worktree and branch that no task records:
+  the next poll removes them. Nothing to do when upgrading.
 - A new task checks out its submodules, nested ones too, at the commits
   its branch records, in its terminal before the setup command, with Git
   2.24.1 or newer:

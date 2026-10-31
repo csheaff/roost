@@ -580,6 +580,14 @@ name. `C-c C-t` starts from a GitHub issue (with `gh` on the project's host)
 or a Jira work item (with `twg` on this machine). An empty name is derived
 from the prompt; `R` renames the task later.
 
+Emacs waits up to eleven minutes for a new task's worktree, which a
+repository with gigabytes of Git LFS files can take that long to check
+out. With no reply by then, the draft stays and says so, and the task opens
+if the host made it. `C-c C-c` there asks again for the same task: the host
+answers with the one it made, or makes it, never a second. A creation cut
+short, as when Emacs stops one on this machine, leaves no worktree or
+branch behind.
+
 `C-c C-p` lists the projects Roost has used, the last first, then those
 `project.el` knows. "Other directory…", second in the list, asks for a host,
 of those Roost knows or another from `~/.ssh/config`, starting on the draft's,

@@ -1837,7 +1837,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
                ((symbol-function 'roost-watch-mode) #'ignore)
                ((symbol-function 'roost-open-task) (lambda (task &rest _) (setq opened task)))
                ((symbol-function 'roost--request)
-                (lambda (_host _action _params success &optional _failure) (funcall success (roost-test--task)))))
+                (lambda (_host _action _params success &rest _) (funcall success (roost-test--task)))))
        (roost-new-task "/ssh:dev:/repo/" "fix")
        (should (equal (roost--field opened 'host) "dev"))
        (setq opened nil)
@@ -1852,7 +1852,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
                ((symbol-function 'roost-watch-mode) #'ignore)
                ((symbol-function 'roost-open-task) #'ignore)
                ((symbol-function 'roost--request)
-                (lambda (_host action params success &optional _failure)
+                (lambda (_host action params success &rest _)
                   (push (cons action (alist-get 'programStatus params)) requests)
                   (funcall success (roost-test--task)))))
        (roost-new-task "/ssh:dev:/repo/" "plain")
@@ -2512,9 +2512,9 @@ terminal's, on a pty.  Skips the test where it can't be made."
                                        (buffer-string)))
                (should (string-match-p "Name     12-csv-import-crashes" (buffer-string)))
                (roost-compose-submit)
-               (should (equal (nth 5 created)
-                              '((issue (number . 12) (title . "CSV import crashes")
-                                       (url . "https://github.com/o/r/issues/12")))))
+               (should (equal (assq 'issue (nth 5 created))
+                              '(issue (number . 12) (title . "CSV import crashes")
+                                      (url . "https://github.com/o/r/issues/12"))))
                ;; A written prompt keeps its text and gains the issue below.
                (goto-char (point-max))
                (insert "\nAlso handle tabs.")
@@ -2571,9 +2571,9 @@ terminal's, on a pty.  Skips the test where it can't be made."
                (roost-compose-set-issue)
                (setq pick nil)
                (roost-compose-submit)
-               (should (equal (nth 5 created)
-                              '((issue (key . "PROJ-7") (title . "Login loops")
-                                       (url . "https://acme.atlassian.net/browse/PROJ-7")))))
+               (should (equal (assq 'issue (nth 5 created))
+                              '(issue (key . "PROJ-7") (title . "Login loops")
+                                      (url . "https://acme.atlassian.net/browse/PROJ-7"))))
                (setq roost--compose-submitting nil)
                ;; When twg can't list them, GitHub's still can, and the question says why.
                (setq github '(t ((number . 12) (title . "CSV import crashes") (body . "") (url . "u") (labels)))
@@ -6158,6 +6158,81 @@ With FAILING, it prints it on stderr and exits with status 1."
                (roost-compose-submit)
                (should-error (roost-compose-submit) :type 'user-error)
                (should (= (length created) 1))))
+         (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-a-draft-given-no-reply-opens-its-task-once-the-host-lists-it ()
+  ;; Making a worktree can take longer than Emacs waits, as in a repository
+  ;; with gigabytes of Git LFS files, and the host makes the task anyway.
+  (roost-test--isolated
+   (let ((default-directory "/tmp/") (roost-hosts '("dev")) asked listed opened id watched remembered)
+     (save-window-excursion
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--request)
+                      (lambda (host action params success failure &optional timeout)
+                        (if (equal action "list")
+                            (funcall success listed)
+                          (push (list host action params failure timeout) asked))))
+                     ((symbol-function 'roost-open-task) (lambda (task &rest _) (push task opened)))
+                     ((symbol-function 'roost-watch-mode) (lambda (arg) (push arg watched)))
+                     ((symbol-function 'roost--redraw) #'ignore)
+                     ((symbol-function 'roost--terminal-size) #'ignore)
+                     ((symbol-function 'roost--remember-host) (lambda (host) (push host remembered)))
+                     ((symbol-function 'roost--remember-project) #'ignore))
+             (roost--compose)
+             (with-current-buffer roost--compose-buffer
+               (setq roost--compose-fields (plist-put roost--compose-fields :directory "/ssh:dev:/repo/"))
+               (goto-char (point-max))
+               (insert "Fix the parser")
+               (roost-compose-submit))
+             (pcase-let ((`(,host ,action ,params ,_ ,timeout) (car asked)))
+               (should (equal (list host action) '("dev" "create")))
+               (should (= timeout (+ roost-request-timeout roost--create-seconds)))
+               (setq id (alist-get 'createId params))
+               (should (string-match-p "\\`[0-9a-f]\\{16\\}\\'" id)))
+             (let ((made (append `((createId . ,id) (repo . "/repo")) (roost-test--task "2222222222222222"))))
+               ;; While the draft still waits for its reply, which opens the task.
+               (setq listed (list made))
+               (roost--refresh-host "dev" t)
+               (should (get-buffer roost--compose-buffer))
+               (funcall (nth 3 (car asked)) (propertize "No reply after 660s" 'roost-no-reply t))
+               ;; Polls go on, of a host new to Roost too, to find it.
+               (should (equal watched '(1)))
+               (should (equal remembered '("dev")))
+               (with-current-buffer roost--compose-buffer
+                 (should (equal header-line-format
+                                " No reply from dev after 11m; the task opens here if it was made · C-c C-c asks again"))
+                 ;; Asked again, the host answers with the task it made.
+                 (roost-compose-submit)
+                 (should (equal (alist-get 'createId (nth 2 (car asked))) id))
+                 (funcall (nth 3 (car asked)) (propertize "No reply after 660s" 'roost-no-reply t)))
+               ;; A poll without it leaves the draft.
+               (setq listed (list (roost-test--task "1111111111111111")))
+               (roost--refresh-host "dev" t)
+               (should (get-buffer roost--compose-buffer))
+               (should-not opened)
+               (setq listed (list made))
+               (roost--refresh-host "dev" t)
+               (should-not (get-buffer roost--compose-buffer))
+               (should (equal (mapcar (lambda (task) (roost--field task 'id)) opened) '("2222222222222222"))))
+             ;; Another project, on the same host, is another task.
+             (setq opened nil)
+             (roost--compose)
+             (with-current-buffer roost--compose-buffer
+               (setq roost--compose-fields (plist-put roost--compose-fields :directory "/ssh:dev:/repo/"))
+               (goto-char (point-max))
+               (insert "Fix the lexer")
+               (roost-compose-submit)
+               (funcall (nth 3 (car asked)) (propertize "No reply after 660s" 'roost-no-reply t))
+               (setq id (alist-get 'createId (nth 2 (car asked))))
+               (setq roost--compose-fields (plist-put roost--compose-fields :directory "/ssh:dev:/other/")))
+             ;; The task the draft no longer asks for leaves it as you turned it.
+             (setq listed (list (append `((createId . ,id) (repo . "/repo")) (roost-test--task "3333333333333333"))))
+             (roost--refresh-host "dev" t)
+             (should (get-buffer roost--compose-buffer))
+             (should-not opened)
+             (with-current-buffer roost--compose-buffer
+               (roost-compose-submit)
+               (should-not (equal (alist-get 'createId (nth 2 (car asked))) id))))
          (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
 
 (ert-deftest roost-unreachable-hosts-are-named-rather-than-taken-as-empty ()
