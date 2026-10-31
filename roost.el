@@ -8896,7 +8896,7 @@ Windows showing the panel keep their scroll position, and the mark stays."
         (let ((evidence (roost--evidence-p task)))
           ;; Without a pull request, no results stand beside the agent's
           ;; reply, which the terminal shows rather than the panel.
-          (when (and evidence (or (roost--pr-state task) (not beside)))
+          (when (and evidence (or (roost--pr-state (roost--pr-view task)) (not beside)))
             (roost--insert-checks task)
             (roost--insert-review-threads task width))
           (when-let* (((not beside))

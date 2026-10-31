@@ -7451,11 +7451,12 @@ field (FIELD . :none) is left out."
           (step (lambda (&rest fields)
                   (substring-no-properties
                    (roost--next-step (roost--cache-task "dev" (apply #'roost-test--worktree-pr-task fields))))))
-          (panel (lambda (task)
+          (panel (lambda (task &optional beside)
                    (with-temp-buffer
                      (roost-task-info-mode)
                      (setq roost--buffer-task-key (roost--key (roost--cache-task "dev" task)))
-                     (cl-letf (((symbol-function 'roost--task-info-width) (lambda () 80)))
+                     (cl-letf (((symbol-function 'roost--task-info-width) (lambda () 80))
+                               ((symbol-function 'roost--panel-beside-terminal-p) (lambda (&rest _) beside)))
                        (roost--render-task-info))
                      (buffer-string)))))
      ;; Its status, named from that branch; P, which acts on the task's
@@ -7488,6 +7489,8 @@ field (FIELD . :none) is left out."
        (should (string-match-p "^Checks\n✗ lint failed\n✓ 2 passed$" text))
        (should (string-match-p "^Pull request  from PROJ-1-fix\n  #12  https://github.com/o/r/pull/12\nOpen$" text))
        (should-not (string-search "The task's branch" text)))
+     ;; Beside its terminal too, where checks show only with a pull request.
+     (should (string-match-p "^Checks\n✓ 3 passed$" (funcall panel (roost-test--worktree-pr-task) t)))
      (let ((text (funcall panel (append '((pr . ((number . 4) (url . "https://github.com/o/r/pull/4") (state . "OPEN"))))
                                         (roost-test--worktree-pr-task)))))
        (should (string-search (format "Open\nThe task's branch %s has #4.\n" own) text))
