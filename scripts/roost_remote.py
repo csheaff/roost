@@ -2421,12 +2421,14 @@ def remote_location(url):
     return host.lower(), (path[:-len(".git")] if path.endswith(".git") else path) or None
 
 
+@functools.lru_cache(maxsize=None)
 def forge_for(repo):
     """The forge REPO's origin is on, which Roost pushes task branches to
     and asks about their pull requests: GitLab when its host's name says
     so, as gitlab.com and gitlab.example.com do, or `git config roost.forge
     gitlab` does, for a server whose name doesn't; GitHub otherwise, as gh
-    finds out, knowing the hosts you signed in to."""
+    finds out, knowing the hosts you signed in to. Asked once a request,
+    for all its tasks: `rpc` forgets it."""
     url = read_git(repo, "remote", "get-url", "origin").stdout.strip()
     host, project = remote_location(url) if url else (None, None)
     said = read_git(repo, "config", "--get", "roost.forge").stdout.strip().lower()
@@ -2636,7 +2638,12 @@ class GitLabForge:
     def open_pull_request(self, worktree, branch):
         """BRANCH's open merge request, as a record, or None."""
         listed = self.found(GITLAB_OPEN, branch=branch)["mergeRequests"]["nodes"]
-        return dict(number=int(listed[0]["iid"]), url=listed[0]["webUrl"], **self.mark) if listed else None
+        if not listed:
+            return None
+        found = self.pull_request(listed[0]) if isinstance(listed[0], dict) else {}
+        if not isinstance(found.get("number"), int):
+            raise RoostError("Unexpected answer from GitLab about open merge requests: %s" % listed[0])
+        return dict(number=found["number"], url=found["url"], **self.mark)
 
     def create(self, worktree, base, branch, title, body, draft):
         """Open a merge request of BRANCH into BASE, and return its record.
@@ -6265,6 +6272,7 @@ PYTHON_FLOOR = (3, 9)
 def rpc(request):
     # What Git's config said is for one request, each a process of its own but in tests.
     gits_own_fsmonitor.cache_clear()
+    forge_for.cache_clear()
     # An older Python runs the helper until it meets what it lacks, partway
     # through an action, and says only that, as "'PosixPath' object has no
     # attribute 'is_relative_to'". The doctor says which Python it is.

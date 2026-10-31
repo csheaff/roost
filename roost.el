@@ -6095,12 +6095,12 @@ only open it."
          task "pr" nil
          (lambda (updated)
            (let ((pushed (or (alist-get 'pushed updated) 0))
-                 (number (alist-get 'number pr))
+                 (number (roost--pr-number pr))
                  ;; As the task is now: you may have looked during the push.
                  (since (if-let* ((text (roost--since-looked-text updated))) (concat "; " text) "")))
              (if (zerop pushed)
-                 (message "Roost: #%s is up to date%s" number since)
-               (message "Roost: Pushed %d commit%s to #%s%s"
+                 (message "Roost: %s is up to date%s" number since)
+               (message "Roost: Pushed %d commit%s to %s%s"
                         pushed (if (= pushed 1) "" "s") number since)))
            (browse-url url))))
     (roost--pr-draft task)))
@@ -6134,8 +6134,8 @@ The text is kept if creation fails."
        (when (buffer-live-p buffer)
          (quit-windows-on buffer t)
          (when (buffer-live-p buffer) (kill-buffer buffer)))
-       (message "Roost: opened pull request #%s %s"
-                (alist-get 'number (roost--field updated 'pr))
+       (message "Roost: opened pull request %s %s"
+                (roost--pr-number (roost--field updated 'pr))
                 (alist-get 'url (roost--field updated 'pr))))
      (lambda (err)
        (message "Roost could not create the pull request: %s" err)

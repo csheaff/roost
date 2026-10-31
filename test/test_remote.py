@@ -5174,6 +5174,7 @@ print(json.dumps(dict(data=data)))
                 self.git("config", "roost.forge", said)
             else:
                 roost.git(self.repo, "config", "--unset-all", "roost.forge", check=False)
+            roost.forge_for.cache_clear()
             found = roost.forge_for(str(self.repo))
             return found.name, found.host, getattr(found, "project", None)
 
@@ -5186,6 +5187,7 @@ print(json.dumps(dict(data=data)))
         self.assertEqual(forge("https://gitlab.example.com/a/b", "GitHub"), ("GitHub", "gitlab.example.com", None))
         self.assertEqual(forge("https://git.example.com/mygitlab/b"), ("GitHub", "git.example.com", None))
         self.git("remote", "remove", "origin")
+        roost.forge_for.cache_clear()
         self.assertEqual(roost.forge_for(str(self.repo)).name, "GitHub")
 
     def test_search_finds_a_retired_tasks_conversation_under_its_project(self):
