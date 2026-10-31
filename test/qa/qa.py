@@ -2628,10 +2628,7 @@ def walk_away(qa, repo):
         # Committed and pushed, with a pull request a review thread is open on.
         worktree = task_worktree(qa, other)
         qa.git(worktree, "commit", "-qam", "Tally the notes")
-        origin = qa.work / "origin.git"
-        if not origin.exists():
-            qa.git(qa.work, "init", "-q", "--bare", "-b", "main", str(origin))
-            qa.git(repo, "remote", "add", "origin", str(origin))
+        origin(qa, repo)
         branch = qa.git(worktree, "rev-parse", "--abbrev-ref", "HEAD")
         qa.git(worktree, "push", "-q", "origin", branch)
         thread = dict(isResolved=False, path="notes.py", line=1, diffSide="RIGHT",
@@ -3076,13 +3073,17 @@ def other_branch(qa, repo):
 
 @journey("A worktree switched to another branch")
 def switched_branch(qa, repo):
-    """A task whose agent made branches in its worktree and committed there
-    says which branch the work is on, and x offers to discard the task,
-    keeping that branch, rather than to merge it with m, which refuses."""
+    """A task whose agent made branches in its worktree, committed there
+    and pushed, says which branch the work is on, and shows the pull
+    request from that branch, its checks and its status, though P and m
+    act on the task's branch. x offers to discard the task, keeping that
+    branch, rather than to merge it with m, which refuses."""
+    origin(qa, repo)
     # Its own names: a journey taken again in the same repository.
     feat = "feat-" + uuid.uuid4().hex[:4]
     name = new_task(qa, "ask sh -c \"git switch -q -c integ-%s && git switch -q -c %s"
-                        " && printf 'x\\n' > FEAT.md && git add FEAT.md && git commit -qm 'On feat'\"" % (feat, feat))
+                        " && printf 'x\\n' > FEAT.md && git add FEAT.md && git commit -qm 'On feat'"
+                        " && git push -q origin %s\"" % (feat, feat, feat))
     answer_yes(qa, name)
     qa.wait("the branch", lambda s: "worktree is on " + feat in panel_text(qa, s))
     qa.step("On another branch", expect=[
@@ -3094,6 +3095,40 @@ def switched_branch(qa, repo):
                              panel_text(qa, s))
          and "The worktree is on" not in panel_text(qa, s)),
         ("its row doesn't say merged", lambda s: not sidebar_row(qa, s, name).endswith("merged"))])
+    # GitHub's word counts once asked half a minute after the agent's last
+    # event, its push and the end of its turn, which come before this.
+    settled = time.monotonic() + 31
+    # Its agent opened a pull request from that branch, whose check failed.
+    url = "https://github.com/qa/notes/pull/23"
+    tip = qa.git(repo, "rev-parse", feat)
+    failed = dict(__typename="CheckRun", name="test", status="COMPLETED", conclusion="FAILURE",
+                  completedAt="2026-01-01T00:00:00Z")
+    github(qa, list=[dict(number=23, url=url, headRefName=feat, state="OPEN", headRefOid=tip,
+                          statusCheckRollup=[failed])],
+           reviews={"23": dict(mergeable="MERGEABLE", reviewRequests=dict(nodes=[]),
+                               reviewThreads=dict(totalCount=0, nodes=[]))})
+    qa.keys("C-c r g")
+    qa.wait("its pull request", lambda s: "#23" in panel_text(qa, s))
+    qa.step("Its branch's pull request", expect=[
+        ("the panel shows it, from that branch",
+         lambda s: ("Pull request  from %s\n  #23  %s\n" % (feat, url)) in panel_text(qa, s)),
+        ("and its checks", lambda s: "Checks\n  ✗ test failed\n" in panel_text(qa, s))])
+    time.sleep(max(0, settled - time.monotonic()))
+    qa.keys("C-c r g")
+    qa.status(name, "ci failed")
+    qa.step("Its check failed", expect=[
+        ("the sidebar says ci failed", lambda s: sidebar_row(qa, s, name).endswith("ci failed")),
+        ("the panel says e tells its agent, and not P, which acts on the task's branch",
+         lambda s: ("A check failed on #23 from %s: e tells its agent\n" % feat) in panel_text(qa, s))])
+    github(qa, list=[dict(number=23, url=url, headRefName=feat, state="MERGED", headRefOid=tip)])
+    qa.keys("C-c r g")
+    qa.wait("its merge", lambda s: "is merged" in panel_text(qa, s))
+    qa.step("Its branch's pull request merged", expect=[
+        ("the panel says x discards the task, keeping that branch",
+         lambda s: "#23 from %s is merged: x discards the task, keeping %s\n" % (feat, feat) in panel_text(qa, s)),
+        ("not m or P", lambda s: "to merge its work" not in panel_text(qa, s)),
+        ("its row doesn't say merged, as the task's branch isn't",
+         lambda s: not sidebar_row(qa, s, name).endswith("merged"))])
     qa.keys("C-c r x")
     qa.wait("the question", lambda s: s["prompt"])
     qa.step("Retiring offers to discard it", expect=[
@@ -3185,6 +3220,14 @@ def sidebar_row(qa, screen, name):
                  if line.strip().startswith(name[:12])), "")
 
 
+def origin(qa, repo):
+    """Give REPO a remote, origin, to push to, as GitHub."""
+    path = qa.work / "origin.git"
+    if not path.exists():
+        qa.git(qa.work, "init", "-q", "--bare", "-b", "main", str(path))
+        qa.git(repo, "remote", "add", "origin", str(path))
+
+
 @journey("A pull request that waits on you")
 def pull_request(qa, repo):
     """Once its agent is done, a pull request whose checks and review are
@@ -3193,10 +3236,7 @@ def pull_request(qa, repo):
     panel names the checks and lists the open review threads, a click on
     one visiting its line; without a pull request, beside the terminal,
     it leaves checks out."""
-    origin = qa.work / "origin.git"
-    if not origin.exists():
-        qa.git(qa.work, "init", "-q", "--bare", "-b", "main", str(origin))
-        qa.git(repo, "remote", "add", "origin", str(origin))
+    origin(qa, repo)
     # Named apart from the tasks of other journeys, which `new_task' needs.
     name = new_task(qa, "ask printf 'Due dates\\n' > DUE.md && git add DUE.md && git commit -qm 'Add due dates'")
     answer_yes(qa, name)

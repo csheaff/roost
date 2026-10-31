@@ -25,10 +25,13 @@ def main(args):
     with open(os.path.join(DIRECTORY, "log"), "a") as log:
         log.write(json.dumps(args) + "\n")
     if args[:2] == ["pr", "list"]:
-        # Filtered by --state as GitHub would; an entry without one is open.
+        # Filtered by --state as GitHub would; an entry without one is
+        # open. By --head too, for an entry naming its headRefName.
         state = args[args.index("--state") + 1].upper() if "--state" in args else "OPEN"
+        head = args[args.index("--head") + 1] if "--head" in args else None
         print(json.dumps([pr for pr in canned("list.json", [])
-                          if state == "ALL" or pr.get("state", "OPEN") == state]))
+                          if (state == "ALL" or pr.get("state", "OPEN") == state)
+                          and pr.get("headRefName", head) == head]))
     elif args[:2] == ["api", "graphql"]:
         query = next(arg for arg in args if arg.startswith("query="))
         reviews = canned("reviews.json", {})
