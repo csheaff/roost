@@ -2562,13 +2562,13 @@ class Lifecycle(unittest.TestCase):
                          ["propose_task", "read_task", "message_task"])
         self.assertEqual(replies[3]["result"]["content"][0]["text"], "You haven't started any tasks.")
 
-    def offer(self, task, *messages, elicits=True):
-        """Run TASK's MCP server on MESSAGES, after a client's handshake,
-        and return its replies by their IDs, and what TASK's record said
-        whenever the server asked the user something."""
+    def offer(self, task, *messages, elicits=True, client="claude-code"):
+        """Run TASK's MCP server on MESSAGES, after the handshake of a
+        CLIENT, Claude Code's by default, and return its replies by their
+        IDs, and what TASK's record said whenever it asked the user something."""
         capabilities = dict(elicitation=elicits if isinstance(elicits, dict) else {}) if elicits else {}
         lines = [dict(id="hello", method="initialize", params=dict(
-            protocolVersion="2025-06-18", capabilities=capabilities)),
+            protocolVersion="2025-06-18", capabilities=capabilities, clientInfo=dict(name=client, version="1"))),
                  dict(method="notifications/initialized")] + list(messages)
         reader = io.StringIO("".join(json.dumps(dict(line, jsonrpc="2.0")) + "\n" for line in lines))
         store, replies, asking = roost.Store(str(self.state)), {}, []
@@ -2590,11 +2590,11 @@ class Lifecycle(unittest.TestCase):
         return dict(id=ident, method="tools/call",
                     params=dict(name="propose_task", arguments=dict(title=title, brief=brief)))
 
-    def started(self, parent, answer=None, **proposed):
+    def started(self, parent, answer=None, client="claude-code", **proposed):
         """The task PARENT's agent offered as PROPOSED, started with the
-        fields of the form ANSWER gives."""
+        fields of the form ANSWER gives, in CLIENT."""
         replies, _ = self.offer(parent, self.propose(**proposed), dict(id="roost-1", result=dict(
-            action="accept", content=dict(dict(start="new"), **(answer or {})))))
+            action="accept", content=dict(dict(start="new"), **(answer or {})))), client=client)
         said = replies["call"]["result"]
         self.assertNotIn("isError", said, said)
         return next(t for t in self.request("list")["result"]
@@ -2645,6 +2645,22 @@ class Lifecycle(unittest.TestCase):
                 self.assertEqual(self.started(parent, answer, brief=brief)["prompt"], brief)
         changed = self.started(parent, dict(brief="First paragraph.��Only the docs."), brief=brief)
         self.assertEqual(changed["prompt"], "First paragraph.\n\nOnly the docs.")
+        # Another client's text, as Pi's editor gives it, is as you wrote it.
+        literal = "Treat � in parser.py as a character of its own."
+        self.assertEqual(self.started(parent, dict(brief=literal), client="pi", brief=brief)["prompt"], literal)
+
+    def test_a_task_that_merges_into_no_branch_offers_none(self):
+        # Started with the primary checkout on no branch, it has none to
+        # give the task it would offer, wherever that checkout is now.
+        self.git("checkout", "-q", "--detach")
+        parent = self.create(name="parent")
+        self.git("checkout", "-q", "main")
+        self.assertFalse(roost.Store(str(self.state)).read(parent["id"]).get("integrationBranch"))
+        replies, asking = self.offer(parent, self.propose())
+        said = replies["call"]["result"]
+        self.assertTrue(said["isError"])
+        self.assertIn("merges into no branch", said["content"][0]["text"])
+        self.assertEqual(asking, [])
 
     def test_an_offer_that_cant_start_is_refused_before_you_are_asked(self):
         parent = self.create(name="parent")
@@ -8244,7 +8260,8 @@ class ProgramStatus(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)
             store = roost.Store(str(root / "state"))
-            store.save(dict(id="0" * 16, agent="pi", status="running", runId="run", name="parent"))
+            store.save(dict(id="0" * 16, agent="pi", status="running", runId="run", name="parent",
+                            integrationBranch="main", integrationRef="refs/heads/main"))
             roost.PiAgent().launch(store, dict(id="0" * 16, command=["pi"], prompt=None), False)
             extension = next(store.root.glob("pi-observer-*.mjs"))
             driver = root / "driver.mjs"

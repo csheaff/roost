@@ -3820,6 +3820,8 @@ class McpServer:
         self.store, self.task_id = store, task_id
         self.reader, self.writer = reader or sys.stdin, writer or sys.stdout
         self.elicits = False
+        # The agent by its client's name, as Claude Code's form needs undoing.
+        self.client = None
         self.asked = 0
         self.pending = collections.deque()
 
@@ -3870,6 +3872,8 @@ class McpServer:
             # by name, or, as before the protocol named kinds, by none.
             elicitation = capabilities.get("elicitation")
             self.elicits = isinstance(elicitation, dict) and (not elicitation or "form" in elicitation)
+            info = params.get("clientInfo") if isinstance(params.get("clientInfo"), dict) else {}
+            self.client = text(info.get("name"))
             return dict(protocolVersion=asked if asked in MCP_VERSIONS else MCP_VERSIONS[0],
                         capabilities=dict(tools={}), serverInfo=dict(name="roost", version="1"),
                         instructions=MCP_INSTRUCTIONS)
@@ -3967,6 +3971,11 @@ def propose_task(server, title, brief, ident):
     if len(brief.encode()) > PROMPT_ARGUMENT_LIMIT:
         raise RoostError("The brief is %d KB, and a task can start with at most %d KB; shorten it"
                          % (-(-len(brief.encode()) // 1024), PROMPT_ARGUMENT_LIMIT // 1024))
+    with server.store.locked():
+        if not offered_base(server.store.read(server.task_id)):
+            raise RoostError("This task merges into no branch, as it started with the primary checkout on "
+                             "none, so a task it offered would have no branch to start from or merge into; "
+                             "mention the work instead")
     # The brief whole, to read and change: the message shows a few lines.
     schema = dict(type="object", required=["start"], properties=dict(
         start=dict(type="string", title="Where", enum=["new", "here"], default="new",
@@ -3978,7 +3987,7 @@ def propose_task(server, title, brief, ident):
     start = content.get("start") if isinstance(content, dict) else None
     if start not in ("new", "here"):
         return "The user didn't start it. Don't offer it again unless they ask."
-    started = answered_brief(brief, content.get("brief"))
+    started = answered_brief(brief, content.get("brief"), server.client == "claude-code")
     if start == "here":
         return ("The user chose to have you do it here, in this conversation. Go ahead"
                 + (", as the brief they changed says:\n\n" + started if started != brief else "."))
@@ -3991,13 +4000,18 @@ def propose_task(server, title, brief, ident):
                ", with the brief as the user changed it" if started != brief else ""))
 
 
-def answered_brief(brief, said):
-    """BRIEF as you left it in the form, SAID. Claude Code sends each line
-    break in a field back as U+FFFD, so one you left alone is BRIEF, and
-    one you changed has them back; one you emptied is BRIEF too."""
-    if not isinstance(said, str) or not said.strip() or said in (brief, brief.replace("\n", "�")):
+def answered_brief(brief, said, breaks_lost=False):
+    """BRIEF as you left it in the form, SAID, or as written if you emptied
+    it. Claude Code (BREAKS_LOST) sends each line break in a field back as
+    U+FFFD, so one you left alone is BRIEF, and one you changed has them
+    back; another client's text is as you wrote it."""
+    if not isinstance(said, str) or not said.strip():
         return brief
-    return said.replace("�", "\n").strip()
+    if breaks_lost:
+        if said == brief.replace("\n", "�"):
+            return brief
+        said = said.replace("�", "\n")
+    return brief if said == brief else said.strip()
 
 
 def offered_request(parent, title, brief):
@@ -4007,16 +4021,21 @@ def offered_request(parent, title, brief):
     branch = parent.get("branch") or ""
     size = tmux(parent["socket"], "display-message", "-p", "-t", parent.get("paneId") or "",
                 "#{pane_width}\t#{pane_height}", check=False).stdout.split()
-    # An older helper's record names only the branch.
-    integration = parent.get("integrationRef") or (
-        "refs/heads/" + parent["integrationBranch"] if text(parent.get("integrationBranch")) else None)
-    request = dict(directory=parent["repo"], name=title, prompt=brief, parent=parent["id"], base=integration,
+    request = dict(directory=parent["repo"], name=title, prompt=brief, parent=parent["id"], base=offered_base(parent),
                    agent=parent.get("agent"), command=parent.get("command"), setup=parent.get("setup"),
                    socket=parent.get("socket"), programStatus=parent.get("programStatus") is True,
                    branchPrefix=branch[:branch.rindex("/") + 1] if "/" in branch else None,
                    size=dict(width=int(size[0]), height=int(size[1]))
                    if len(size) == 2 and all(n.isdigit() for n in size) else None)
     return {key: value for key, value in request.items() if value is not None}
+
+
+def offered_base(parent):
+    """Where a task PARENT's agent offered starts: the branch PARENT merges
+    into, by its full name, or None for one that merges into none. An older
+    helper's record names only the branch."""
+    return parent.get("integrationRef") or (
+        "refs/heads/" + parent["integrationBranch"] if text(parent.get("integrationBranch")) else None)
 
 
 def started_by(store, task_id, wanted=None):

@@ -237,7 +237,8 @@ it is chosen already, or have it done here, in this conversation. Its task
 waits on you meanwhile, as for a permission request (`Offers a task: Fix add
 in calc.py`). A task you start this way is in the same project, with the
 same agent and command, as the task it came from, starts from the branch
-that task merges into, and has the brief as its prompt. The dashboard and
+that task merges into, and has the brief as its prompt. A task started with
+the primary checkout on no branch merges into none, and offers no task. The dashboard and
 sidebar show it under the task it came from, and each task's panel names the
 other. The agent that offered it can read how the task is doing, with its
 latest reply, and send it a message, which arrives as its next prompt,
