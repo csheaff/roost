@@ -60,8 +60,9 @@ is for its own prompts and settings.
 ## Automated checks
 
 CI runs with a read-only token, and its actions are pinned to commit SHAs.
-Dependabot keeps those actions current, OpenSSF Scorecard scores the
-repository each week, and GitHub's secret scanning blocks a push that
-holds a secret it recognises. `main` takes changes only through pull
+Dependabot keeps those actions current, CodeQL checks the helper and the
+workflows on every pull request, OpenSSF Scorecard scores the repository
+each week, and GitHub's secret scanning blocks a push that holds a secret
+it recognises. `main` takes changes only through pull
 requests that pass CI with every review thread resolved, and can't be
 force-pushed or deleted.
