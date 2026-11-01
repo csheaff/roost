@@ -1124,13 +1124,17 @@ export default function (pi) {
     write({ method: "notifications/initialized" });
     write({ id: "call", method: "tools/call", params: { name, arguments: params } });
   });
+  // A tool Pi refuses, as one another extension named already, leaves the
+  // rest of this extension, which reports status, as it is.
   for (const tool of ROOST_TOOLS) {
-    pi.registerTool({ ...tool, label: tool.name, async execute(_id, params, signal, _onUpdate, ctx) {
-      const result = await roostCall(tool.name, params, signal, ctx);
-      const said = result.content.map(part => part.text).join("\n");
-      if (result.isError) throw new Error(said);
-      return { content: [{ type: "text", text: said }], details: undefined };
-    } });
+    try {
+      pi.registerTool({ ...tool, label: tool.name, async execute(_id, params, signal, _onUpdate, ctx) {
+        const result = await roostCall(tool.name, params, signal, ctx);
+        const said = result.content.map(part => part.text).join("\n");
+        if (result.isError) throw new Error(said);
+        return { content: [{ type: "text", text: said }], details: undefined };
+      } });
+    } catch {}
   }
 }
 '''
@@ -3785,7 +3789,7 @@ MCP_TOOLS = {
 STATUS_SAID = {"starting": "starting", "running": "working", "background": "working in the background",
                "permission": "waiting for the user to answer it", "ready": "waiting for a prompt",
                "stopped": "stopped", "exited": "exited", "failed": "stopped on an error",
-               "crashed": "crashed", "retired": "finished"}
+               "crashed": "crashed"}
 
 
 class McpCancelled(Exception):
@@ -4005,12 +4009,13 @@ def started_by(store, task_id, wanted=None):
     """The tasks TASK_ID's agent started, or the one of them WANTED names by
     its ID or the start of it."""
     tasks = [task for task in store.all() if task.get("parent") == task_id]
-    if wanted is None:
+    # An empty one, as an agent may give for an argument it leaves out.
+    wanted = (text(wanted) or "").strip()
+    if not wanted:
         return tasks
-    wanted = text(wanted)
-    found = [task for task in tasks if wanted and len(wanted) >= 4 and task["id"].startswith(wanted)]
+    found = [task for task in tasks if len(wanted) >= 4 and task["id"].startswith(wanted)]
     if len(found) != 1:
-        raise RoostError("No task you started has the ID %r" % wanted)
+        raise RoostError("No task you started has the ID %r; one merged, retired or discarded is gone" % wanted)
     return found
 
 
@@ -4022,7 +4027,7 @@ def read_tasks(store, task_id, wanted=None):
     for task in tasks:
         line = "%s, ID %s, on branch %s: %s." % (task.get("name"), task["id"], task.get("branch"),
                                                   STATUS_SAID.get(task.get("status"), task.get("status")))
-        reply = last_message(task) if task.get("status") != "retired" else None
+        reply = last_message(task)
         said.append(line + ("\nIts latest reply:\n" + reply if reply else ""))
     return "\n\n".join(said)
 
@@ -4030,6 +4035,8 @@ def read_tasks(store, task_id, wanted=None):
 def message_task(store, task_id, wanted, message):
     if not text(message):
         raise RoostError("The message is empty")
+    if not (text(wanted) or "").strip():
+        raise RoostError("Name the task to send it to by its ID")
     with store.locked():
         task = started_by(store, task_id, wanted)[0]
         if task.get("status") != "ready":

@@ -2704,7 +2704,10 @@ class Lifecycle(unittest.TestCase):
                                                  params=dict(name=name, arguments=arguments)))
             return replies[name]["result"]
 
-        self.assertIn("Document calc, ID %s" % child["id"], call("read_task")["content"][0]["text"])
+        # All of them, also for an ID left empty, as an agent may send it.
+        for arguments in ({}, dict(task="")):
+            self.assertIn("Document calc, ID %s" % child["id"], call("read_task", **arguments)["content"][0]["text"])
+        self.assertTrue(call("message_task", task="", message="Also the tests")["isError"])
         for name, arguments in (("read_task", dict(task=other["id"])),
                                 ("message_task", dict(task=other["id"], message="Stop that"))):
             with self.subTest(name=name):
@@ -8253,6 +8256,17 @@ class ProgramStatus(unittest.TestCase):
             said = json.loads(subprocess.run(["node", str(driver)], env=env, check=True, timeout=30,
                                              capture_output=True, text=True).stdout)
             self.assertEqual(said["names"], ["propose_task", "read_task", "message_task"])
+            # A tool Pi refuses leaves the rest of the extension loaded.
+            refusing = root / "refusing.mjs"
+            refusing.write_text(
+                "const { default: observe } = await import(%s);\n"
+                "const handlers = {};\n"
+                "observe({ on: (name, handler) => { handlers[name] = handler; },\n"
+                "          registerTool: () => { throw new Error('taken'); } });\n"
+                "console.log(JSON.stringify(Object.keys(handlers).includes('agent_end')));\n"
+                % json.dumps(extension.as_uri()))
+            self.assertEqual(subprocess.run(["node", str(refusing)], env=env, check=True, timeout=30,
+                                            capture_output=True, text=True).stdout.strip(), "true")
             self.assertEqual(said["asked"], [["Start a task: Docs\n\nWrite them.",
                                               ["As a new task, in its own worktree", "Here, in this conversation",
                                                "Neither"]]])
