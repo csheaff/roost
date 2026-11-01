@@ -244,12 +244,13 @@ Larger, or undecided.
   quicker to judge. In ParallelPilot's trial, the developer saw and could
   change the planner's split before any agent started
   ([ParallelPilot](https://arxiv.org/html/2609.33113v1)), so a split here
-  would wait for your yes too. A first step, on branch
-  `worktree-proposed-tasks`, follows the Claude app's sessions that an
-  agent offers: one task at a time, which you start or have done where
-  it was offered, shown under the task it came from. Open: a finished
-  task's report reaching the agent that offered it unasked, as the app's
-  do, and Codex and OpenCode tried live.
+  would wait for your yes too. A first step, on the integration branch
+  `agent-offered-tasks`, follows the Claude app's sessions that an agent
+  offers: one task at a time, which you start or have done where it was
+  offered, shown under the task it came from. It waits for daily use
+  before it merges. Open: a finished task's report reaching the agent
+  that offered it unasked, as the app's do; a message that can't land in
+  a menu or in what you are typing; and Codex and OpenCode tried live.
 - **A map of the agent's work** beside its terminal: the files it reads and
   edits over time, drawn with Emacs 32's canvas images. Prototype on branch
   `work-map`.
