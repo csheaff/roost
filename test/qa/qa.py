@@ -3051,8 +3051,8 @@ def offer(qa, repo):
     qa.status(parent, "permission")
     qa.step("The agent offers a task", expect=[
         ("the sidebar shows it waiting", lambda s: "permission" in qa.window(s, "roost-sidebar-list-mode")["text"])])
-    qa.keys("C-c r n")
-    qa.wait("its terminal", lambda s: (s.get("task") or {}).get("name") == parent and selected_terminal(s))
+    # By name: n goes first to what other journeys left waiting longer.
+    open_task(qa, parent)
     qa.step("Its terminal asks", expect=[
         ("the agent asks where to start it",
          lambda s: "ASKS Start a task: Document the notes" in selected_terminal(s)["text"]),
