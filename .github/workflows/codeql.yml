@@ -1,0 +1,48 @@
+# CodeQL: GitHub's static analysis, here of the host helper and the rest of
+# Roost's Python (command injection, path traversal and the like) and of
+# these workflows. CodeQL can't read Emacs Lisp. The tests are left out:
+# they run only on a developer's machine and in CI. Results go to the
+# Security tab's code scanning, and a pull request's checks show what it
+# adds. Free for public repositories. Actions are pinned to commit SHAs,
+# with the tag in a comment; Dependabot keeps them current.
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '41 4 * * 1'   # weekly, Monday 04:41 UTC, for CodeQL's new queries
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read           # checkout (job-level permissions replace the
+                               # workflow default, so name it explicitly)
+      security-events: write   # upload the results
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [actions, python]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          config: |
+            paths-ignore:
+              - test
+      - name: Analyze
+        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          category: /language:${{ matrix.language }}
