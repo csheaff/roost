@@ -169,6 +169,22 @@ account, with no badge or verdict.
   [agents that start tasks](#exploring) add the most to review without
   making any of it quicker to judge, so it fits where attempts are cheap to
   compare, as with Ediff (above).
+- **A fork that goes on with the conversation.** `C-u c` forks a task's
+  commits, and its agent starts a new conversation. Its agent could go on
+  from a copy of the task's conversation instead, as Claude Code's
+  `--resume ID --fork-session`, `codex fork` and Pi's and OpenCode's
+  `--fork` make one, in a worktree with the task's uncommitted changes too.
+  That fits one case: a long investigation that ends at two plausible
+  fixes, each worth trying with all the agent has learned, which a brief
+  for a new task would lose. A separate job is better as a new task with
+  a short brief, and like several attempts at one prompt (above), a fork
+  makes more to review. A prototype is on branch
+  `claude/fork-conversation` (2026-10-31). With Claude Code 2.1.312, a
+  fork finds a conversation recorded in another folder, and its hooks
+  report the fork's own session. Told nothing, the forked agent first
+  looked in the task's worktree too; a sentence before your prompt, saying
+  it now works in a new one, kept it to its own. From agent-shell's
+  `agent-shell-fork` and agent-deck's forking.
 - **Better task names.** Names come from a prompt's first words, and `R`
   renames a task. Claude Code titles its sessions itself, in an `ai-title`
   line of the transcript (or the name its `/rename` gave), which `R` could
