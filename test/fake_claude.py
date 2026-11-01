@@ -16,7 +16,9 @@ if sys.argv[1:] == ["--version"]:
     print("2.1.303 (Claude Code)")
     sys.exit()
 settings = json.loads(Path(sys.argv[sys.argv.index("--settings") + 1]).read_text())
-session = sys.argv[sys.argv.index("--resume") + 1] if "--resume" in sys.argv else str(uuid.uuid4())
+resumed = sys.argv[sys.argv.index("--resume") + 1] if "--resume" in sys.argv else None
+# A fork goes on from a copy of the conversation, under an ID of its own.
+session = resumed if resumed and "--fork-session" not in sys.argv else str(uuid.uuid4())
 
 
 # Asked for, as make qa does with a home of its own: a transcript where
@@ -32,6 +34,10 @@ if os.environ.get("FAKE_CLAUDE_TRANSCRIPTS"):
     TRANSCRIPT = (Path.home() / ".claude" / "projects" / helper.claude_project_folder(os.getcwd())
                   / (session + ".jsonl"))
     TRANSCRIPT.parent.mkdir(parents=True, exist_ok=True)
+    # Found in any project's folder, as Claude Code finds the one it forks.
+    for forked in (Path.home() / ".claude" / "projects").glob("*/%s.jsonl" % resumed) if resumed not in (None, session) else ():
+        TRANSCRIPT.write_text(forked.read_text())
+        break
 
 
 def record(role, text):

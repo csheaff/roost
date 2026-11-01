@@ -2540,9 +2540,13 @@ EXTRA is an alist of further request fields, such as the issue."
   (roost-watch-mode 1)
   (roost--redraw)
   (roost-open-task task)
-  (message "Roost created %s on %s from %s; it merges into %s"
+  (message "Roost created %s on %s from %s%s; it merges into %s"
            name (roost--host-label host)
-           (roost--field task 'baseRef) (roost--field task 'integrationBranch)))
+           (roost--field task 'baseRef)
+           (if-let* ((forked (roost--field task 'forkedFrom)))
+               (format ", going on with %s's conversation" (alist-get 'name forked))
+             "")
+           (roost--field task 'integrationBranch)))
 
 ;;;###autoload
 (defun roost-new-task (&optional directory name base prompt agent)
@@ -2551,7 +2555,9 @@ Interactively, open a buffer to choose the project, agent and starting
 point and to write the prompt; \\<roost-compose-mode-map>\\[roost-compose-submit] creates the task.
 An active region, or the Org entry at point, starts the prompt; code is
 quoted with its file and lines.  With a prefix argument, the defaults
-fork the current task's committed HEAD.
+fork the current task: its commits, and, once its agent has a
+conversation, that conversation and the task's uncommitted changes,
+which \\<roost-compose-mode-map>\\[roost-compose-set-conversation] in the draft trades for a new conversation.
 
 Called with DIRECTORY, create an AGENT task NAME there directly, from
 BASE with optional PROMPT.  DIRECTORY may be a TRAMP path.  Nil BASE uses
@@ -2651,7 +2657,9 @@ DIRECTORY's checkout, or a project Roost knows it is in."
 (defconst roost--compose-buffer "*roost new task*")
 
 (defvar-local roost--compose-fields nil
-  "Plist of the draft task: :directory :agent :base :integration :name :source.")
+  "Plist of the draft task: :directory :agent :base :integration :name :source.
+A fork also has :source-id and :source-agent, its task's, and
+:conversation, whether it goes on with that task's conversation.")
 (defvar-local roost--compose-body nil
   "Marker at the start of the prompt text.")
 (defvar-local roost--compose-timer nil)
@@ -2693,7 +2701,8 @@ task it made.")
   "C-c C-a" #'roost-compose-set-agent
   "C-c C-b" #'roost-compose-set-base
   "C-c C-n" #'roost-compose-set-name
-  "C-c C-t" #'roost-compose-set-issue)
+  "C-c C-t" #'roost-compose-set-issue
+  "C-c C-f" #'roost-compose-set-conversation)
 
 (define-derived-mode roost-compose-mode text-mode "Roost New Task"
   "Draft a coding agent task.  Write the prompt below the line.
@@ -2933,12 +2942,19 @@ what is at point, and DIRECTORY is its project in place of where you are."
       (setq roost--compose-checkout-branch nil)
       ;; An untouched draft follows the current context; a written one is kept.
       (when (or fresh fork (string-empty-p (roost--compose-prompt)))
-        (setq roost--compose-fields
-              (list :directory directory
-                    :agent roost-default-agent
-                    :base (when fork "HEAD")
-                    :integration (when fork (roost--compose-integration directory "HEAD"))
-                    :source (when fork (roost--field task 'name)))))
+        (let ((agent (when fork (or (roost--field task 'agent) "claude")))
+              (talked (when fork (or (roost--field task 'agentSession) (roost--field task 'claudeSession)))))
+          (setq roost--compose-fields
+                (list :directory directory
+                      ;; A fork goes on with the task's conversation, when
+                      ;; it has one, and so with its agent.
+                      :agent (if talked agent roost-default-agent)
+                      :base (when fork "HEAD")
+                      :integration (when fork (roost--compose-integration directory "HEAD"))
+                      :source (when fork (roost--field task 'name))
+                      :source-id (when fork (roost--field task 'id))
+                      :source-agent agent
+                      :conversation (and talked t)))))
       (roost--compose-render)
       (goto-char (point-max))
       (if (not (and seed (string-empty-p (roost--compose-prompt))))
@@ -3046,11 +3062,25 @@ item's key, which Jira finds the branch by."
                               #'roost-compose-set-base
                               ;; Not "the project's current branch" twice over.
                               (when (or base branch)
-                                (concat (when (plist-get fields :source) "fork: includes its commits; ")
+                                (concat (when (plist-get fields :source)
+                                          (if (roost--compose-continues)
+                                              "fork: includes its commits and uncommitted changes; "
+                                            "fork: includes its commits; "))
                                         (pcase (and base (plist-get fields :integration))
                                           ('nil (concat "merges into " current))
                                           ("" "no branch to merge into")
                                           (into (concat "merges into " into))))))
+        (when-let* ((source (plist-get fields :source)))
+          (roost--compose-field "Context" (if (roost--compose-continues)
+                                              (format "%s's conversation" source)
+                                            "a new conversation")
+                                #'roost-compose-set-conversation
+                                (cond ((roost--compose-continues) "its agent hears it now works in a new worktree")
+                                      ((and (plist-get fields :conversation)
+                                            (not (equal (plist-get fields :agent)
+                                                        (plist-get fields :source-agent))))
+                                       (format "%s can't continue %s's"
+                                               (plist-get fields :agent) (plist-get fields :source-agent))))))
         (roost--compose-field "Issue" (if-let* ((issue (plist-get fields :issue)))
                                           (format "%s %s" (roost--issue-label issue)
                                                   (or (alist-get 'title issue) ""))
@@ -3292,6 +3322,40 @@ then for a folder there, starting above the project used last on it."
     (setq roost--compose-fields (plist-put roost--compose-fields :agent agent))
     (roost--compose-render)))
 
+(defun roost--compose-continues ()
+  "The ID of the task whose conversation the draft goes on with, or nil.
+That is a fork's, unless you chose a new conversation or another agent."
+  (let ((fields roost--compose-fields))
+    (and (plist-get fields :source)
+         (plist-get fields :conversation)
+         (equal (plist-get fields :agent) (plist-get fields :source-agent))
+         (plist-get fields :source-id))))
+
+(defun roost-compose-set-conversation ()
+  "Choose whether a fork goes on with its task's conversation or starts a new one.
+Going on, its agent starts from a copy of the task's conversation, in a
+worktree with the task's uncommitted changes as well as its commits, and
+the task's own conversation goes on as before."
+  (interactive)
+  (let ((fields roost--compose-fields))
+    (unless (plist-get fields :source)
+      (user-error "Only a fork of a task goes on with its conversation: %s on the task drafts one"
+                  (substitute-command-keys "\\[universal-argument] \\[roost-new-task]")))
+    (cond ((roost--compose-continues)
+           (setq roost--compose-fields (plist-put fields :conversation nil)))
+          ((not (when-let* ((task (gethash (list (roost--directory-host (plist-get fields :directory))
+                                                 (plist-get fields :source-id))
+                                           roost--tasks)))
+                  (or (roost--field task 'agentSession) (roost--field task 'claudeSession))))
+           (user-error "%s's agent hasn't started a conversation yet" (plist-get fields :source)))
+          (t
+           ;; Its agent's conversation, so that agent.
+           (setq roost--compose-fields
+                 (thread-first fields
+                               (plist-put :conversation t)
+                               (plist-put :agent (plist-get fields :source-agent))))))
+    (roost--compose-render)))
+
 (defun roost--compose-integration (directory ref)
   "The branch a task in DIRECTORY started at REF merges into.
 As the helper decides it, or nil for the primary checkout's."
@@ -3496,6 +3560,8 @@ branch leads with the key of the one you choose."
                                   (message "Roost: no reply from %s about %s yet; it opens if it was made"
                                            (roost--host-label host) name)))))
                           `((createId . ,(cadr roost--compose-asked))
+                            ,@(when-let* ((source (roost--compose-continues)))
+                                (list (cons 'forkFrom source)))
                             ,@(when-let* ((issue (plist-get fields :issue)))
                                 (list (cons 'issue issue))))))))
 

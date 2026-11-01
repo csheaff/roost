@@ -21,8 +21,10 @@ if agent == "opencode":
     assert "--" not in args
     config = json.loads(os.environ["OPENCODE_CONFIG_CONTENT"])
     assert "RoostObserver" in Path(urllib.parse.unquote(urllib.parse.urlparse(config["plugin"][-1]).path)).read_text()
-    session = args[args.index("--session") + 1] if "--session" in args else "ses_" + uuid.uuid4().hex
-    prompts = [arg.removeprefix("--prompt=") for arg in args if arg.startswith("--prompt=")]
+    # A fork is a new session.
+    session = (args[args.index("--session") + 1] if "--session" in args and "--fork" not in args
+               else "ses_" + uuid.uuid4().hex)
+    prompts =[arg.removeprefix("--prompt=") for arg in args if arg.startswith("--prompt=")]
 
     def report(event, sid=session, **fields):
         subprocess.run([os.environ["ROOST_PYTHON"], os.environ["ROOST_HELPER"], "hook-env"],

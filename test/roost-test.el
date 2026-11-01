@@ -2238,6 +2238,66 @@ terminal's, on a pty.  Skips the test where it can't be made."
                                        (buffer-string)))))
          (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
 
+(ert-deftest roost-a-fork-goes-on-with-its-tasks-conversation ()
+  (roost-test--isolated
+   (roost--cache-task "dev" (append '((repo . "/home/user/repo") (integrationBranch . "release")
+                                      (agent . "codex") (agentSession . "s1"))
+                                    (roost-test--task)))
+   (setq roost--current-task '("dev" "0123456789abcdef"))
+   (let ((default-directory "/tmp/") created)
+     (save-window-excursion
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--git-in)
+                      (lambda (_directory &rest args)
+                        (pcase args
+                          (`("rev-parse" "--symbolic-full-name" "HEAD") "refs/heads/codex/roost/fix-auth-123456\n")
+                          (`("worktree" "list" "--porcelain") "worktree /home/user/repo\n"))))
+                     ((symbol-function 'roost--create-task)
+                      (lambda (directory name base prompt agent _success _failure &optional extra)
+                        (setq created (list directory name base prompt agent extra)))))
+             (roost--compose t)
+             (with-current-buffer roost--compose-buffer
+               ;; With its task's agent, whatever the default.
+               (should (equal (plist-get roost--compose-fields :agent) "codex"))
+               (should (string-match-p "^Context  fix auth's conversation  C-c C-f · its agent hears it now works in a new worktree$"
+                                       (buffer-string)))
+               (should (string-match-p "fork: includes its commits and uncommitted changes; merges into release"
+                                       (buffer-string)))
+               ;; The prompt is yours alone, and names the task.
+               (should (equal (roost--compose-prompt) ""))
+               (insert "Try a cache instead.")
+               (should (equal (roost--compose-name) "try-cache-instead"))
+               (roost-compose-submit)
+               (should (equal (alist-get 'forkFrom (nth 5 created)) "0123456789abcdef"))
+               (should (equal (nth 4 created) "codex"))
+               (should (equal (nth 3 created) "Try a cache instead."))
+               ;; A new conversation makes a fork of its commits alone.
+               (setq roost--compose-submitting nil)
+               (roost-compose-set-conversation)
+               (should (string-match-p "^Context  a new conversation  C-c C-f$" (buffer-string)))
+               (should (string-match-p "fork: includes its commits; merges" (buffer-string)))
+               (roost-compose-submit)
+               (should-not (assq 'forkFrom (nth 5 created)))
+               ;; Another agent can't go on with it, and choosing it again
+               ;; takes its agent back.
+               (setq roost--compose-submitting nil)
+               (roost-compose-set-conversation)
+               (should (roost--compose-continues))
+               (cl-letf (((symbol-function 'roost--choose-from) (lambda (&rest _) "claude")))
+                 (roost-compose-set-agent))
+               (should (string-match-p "^Context  a new conversation  C-c C-f · claude can't continue codex's$"
+                                       (buffer-string)))
+               (should-not (roost--compose-continues))
+               (roost-compose-set-conversation)
+               (should (equal (plist-get roost--compose-fields :agent) "codex"))
+               (should (roost--compose-continues))
+               ;; A task whose agent has no conversation yet has none to give.
+               (roost-compose-set-conversation)
+               (setf (alist-get 'agentSession (gethash '("dev" "0123456789abcdef") roost--tasks)) nil)
+               (should-error (roost-compose-set-conversation) :type 'user-error)
+               (should-not (roost--compose-continues))))
+         (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
+
 (ert-deftest roost-compose-says-which-branch-a-start-merges-into ()
   (roost-test--isolated
    (roost--cache-task "dev" (append '((repo . "/repo") (integrationBranch . "release")) (roost-test--task)))

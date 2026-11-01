@@ -4,6 +4,15 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A fork of a task, `C-u c`, goes on with the task's conversation: its
+  agent starts from a copy of it, in a worktree with the task's
+  uncommitted changes as well as its commits, and the task's own
+  conversation goes on as before. Your prompt is the fork's first
+  message, after a sentence Roost puts before it, telling the agent it
+  works in a new worktree. The draft's Context line says so, and `C-c C-f` there starts a
+  new conversation instead, as a fork did before. Claude, Codex, Pi and
+  OpenCode can each fork their own conversations; choosing another agent
+  in the draft starts a new one. Nothing to do when upgrading.
 - Roost shows a GitLab merge request as it shows a GitHub pull request:
   numbered `!12`, with its pipeline's jobs as its checks and its
   unresolved threads, and a task whose merge request waits on you says

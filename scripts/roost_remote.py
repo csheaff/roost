@@ -781,10 +781,13 @@ class ClaudeAgent:
                                   "--add-dir=" + str(attachments)]
         session = task.get("agentSession") or task.get("claudeSession")
         if resume_conversation and session:
-            argv += ["--resume", session]
-        elif text(task.get("prompt")):
+            return argv + ["--resume", session]
+        if task.get("forkSession"):
+            # A copy of another task's conversation, under a new session ID.
+            argv += ["--resume", task["forkSession"], "--fork-session"]
+        if first_message(task):
             # Otherwise a prompt starting with -, such as a list, is an option.
-            argv += ["--", task["prompt"]]
+            argv += ["--", first_message(task)]
         return argv
 
     def observe(self, payload, current=None):
@@ -966,10 +969,14 @@ class CodexAgent:
             handler = '{ hooks = [{ type = "command", command = ' + json.dumps(command) + ', timeout = 3 }] }'
             argv += ["-c", "hooks." + event + "=[" + handler + "]"]
         session = task.get("agentSession")
+        prompt = [first_message(task)] if first_message(task) else []
         if resume_conversation and session:
             argv += ["resume", session]
-        elif text(task.get("prompt")):
-            argv += ["--", task["prompt"]]
+        elif task.get("forkSession"):
+            # A copy of another task's conversation; its ID, then the prompt.
+            argv += ["fork", "--", task["forkSession"]] + prompt
+        elif prompt:
+            argv += ["--"] + prompt
         return argv
 
     def concerns(self, task, payload):
@@ -1087,11 +1094,14 @@ class PiAgent:
         sessions.mkdir(mode=0o700, parents=True, exist_ok=True)
         argv = task["command"] + ["--extension", str(extension), "--session-dir", str(sessions)]
         if resume_conversation and task.get("agentSession"):
-            argv += ["--session", task["agentSession"]]
-        elif text(task.get("prompt")):
+            return argv + ["--session", task["agentSession"]]
+        if task.get("forkSession"):
+            # A copy of another task's session file, made in this task's folder.
+            argv += ["--fork", task["forkSession"]]
+        if first_message(task):
             # Pi has no -- separator. A leading newline keeps -flags and
             # @file-looking prompts literal instead of interpreting them as CLI input.
-            argv.append("\n" + task["prompt"])
+            argv.append("\n" + first_message(task))
         return argv
 
     def observe(self, payload, current=None):
@@ -1375,10 +1385,13 @@ class OpenCodeAgent:
         self.plugin(store)
         argv = list(task["command"])
         if resume_conversation and task.get("agentSession"):
-            argv += ["--session", task["agentSession"]]
-        elif text(task.get("prompt")):
+            return argv + ["--session", task["agentSession"]]
+        if task.get("forkSession"):
+            # A copy of another task's session.
+            argv += ["--session", task["forkSession"], "--fork"]
+        if first_message(task):
             # Joined to its flag, a prompt starting with - stays a prompt.
-            argv.append("--prompt=" + task["prompt"])
+            argv.append("--prompt=" + first_message(task))
         return argv
 
     def environment(self, store, task, env):
@@ -1763,6 +1776,56 @@ def create(store, request):
         return made_for(store, create_id) or make_task(store, request, create_id)
 
 
+def conversation_to_fork(store, task_id, agent_name, repo):
+    """The task TASK_ID of REPO, whose agent's conversation a new AGENT_NAME
+    task is to continue; None for a task that starts one of its own."""
+    if task_id is None:
+        return None
+    source = store.read(task_id)
+    # Not while its worktree goes, which would leave the fork part of it.
+    require_not_removing(store, source, "fork")
+    if source.get("repo") != repo:
+        raise RoostError("%s is a task of another repository" % source.get("name"))
+    if (source.get("agent") or "claude") != agent_name:
+        raise RoostError("%s's conversation is %s's, which %s can't continue"
+                         % (source["name"], source.get("agent") or "claude", agent_name))
+    if not (source.get("agentSession") or source.get("claudeSession")):
+        raise RoostError("%s's agent hasn't started a conversation yet, so there's none to continue"
+                         % source["name"])
+    if not (isinstance(source.get("worktree"), str) and Path(source["worktree"]).is_dir()):
+        raise RoostError("%s's worktree is gone, and with it the work its conversation is about"
+                         % source["name"])
+    return source
+
+
+# What a fork's agent hears first, before your prompt: its conversation
+# names the source task's worktree, which it would otherwise look in too.
+FORK_NOTE = ("This conversation now goes on in a fork of %s: a new worktree, the current directory, "
+             "with the same work, its uncommitted changes too. The worktree you were in is %s's; "
+             "leave it alone.")
+
+
+def first_message(task):
+    """What TASK's agent starts with: your prompt, after the note a fork's
+    agent needs; None for neither."""
+    prompt = text(task.get("prompt"))
+    forked = task.get("forkedFrom") if task.get("forkSession") else None
+    if not isinstance(forked, dict):
+        return prompt
+    note = FORK_NOTE % (forked.get("name"), forked.get("name"))
+    return note + "\n\n" + prompt if prompt else note
+
+
+def carry_uncommitted(worktree, commit):
+    """Leave in WORKTREE, as it is there, what COMMIT, a snapshot of another
+    worktree on the same HEAD, holds beyond that HEAD: changed files
+    unstaged, and new ones untracked, as WORKTREE's index stays at HEAD."""
+    # Not into submodules, as your submodule.recurse would have it: the
+    # runner checks them out later.
+    git(worktree, "-c", "submodule.recurse=false", "read-tree", "-u", "--reset", commit)
+    git(worktree, "-c", "submodule.recurse=false", "reset", "--quiet")
+
+
 def make_task(store, request, create_id):
     """Create a worktree and agent window. Preparation and `git worktree add`
     run without the registry lock; only the tmux spawn is serialized."""
@@ -1786,9 +1849,20 @@ def make_task(store, request, create_id):
     command = request.get("command", agent.default_command)
     agent.validate(command)
     current = current_branch(repo)
+    # A task whose conversation the new one continues starts where that
+    # task's work stands, its uncommitted changes too.
+    source = conversation_to_fork(store, request.get("forkFrom"), agent_name, repo)
+    if source:
+        if text(request.get("base")) not in (None, "HEAD"):
+            raise RoostError("A task that continues %s's conversation starts where its work stands, "
+                             "not at %s" % (source["name"], request["base"]))
+        directory = source["worktree"]
+        carried, head = snapshot(directory)
+        if not head:
+            raise RoostError("Couldn't read where %s's work stands" % source["name"])
     # Independent tasks start at the primary checkout. HEAD only forks the
     # source worktree when explicitly requested, rather than accidentally.
-    explicit_base = text(request.get("base"))
+    explicit_base = "HEAD" if source else text(request.get("base"))
     base = explicit_base or current or "HEAD"
     # The primary checkout's branch by its full name, which a tag of the
     # same name would otherwise shadow.
@@ -1801,7 +1875,9 @@ def make_task(store, request, create_id):
             raise RoostError("%s has no commits yet, and a task branches from one; commit something first "
                              "(git commit --allow-empty -m 'Start' will do)" % repo)
         raise RoostError("No branch, tag or commit named %r to start from" % base)
-    commit = resolved.stdout.strip()
+    # The fork's, as the source's work stood when it was kept, should its
+    # agent commit meanwhile.
+    commit = head if source else resolved.stdout.strip()
     integration = (integration_for(store, repo, directory, explicit_base, current) if explicit_base
                    else current)
     task_id = uuid.uuid4().hex[:16]
@@ -1844,6 +1920,11 @@ def make_task(store, request, create_id):
         task["copyComplete"] = False
     if request.get("programStatus") is True:
         task["programStatus"] = True
+    if source:
+        # Its agent starts from a copy of this conversation, which goes on
+        # in the source task as before.
+        task["forkSession"] = source.get("agentSession") or source.get("claudeSession")
+        task["forkedFrom"] = dict(id=source["id"], name=source["name"])
     existed, there = ref_exists(repo, branch), worktree.exists()
     with noting_creation(store, task) as note:
         INHERITED.append(note)
@@ -1872,6 +1953,15 @@ def make_task(store, request, create_id):
         # its terminal, as that fetches.
         if (worktree / ".gitmodules").is_file():
             task["submodulesComplete"] = False
+        if source and carried != commit:
+            try:
+                carry_uncommitted(worktree, carried)
+            except RoostError as exc:
+                with store.locked():
+                    store.save(task)
+                    abandon(store, task)
+                raise RoostError("Couldn't bring %s's uncommitted changes to the new task: %s"
+                                 % (source["name"], exc))
         with store.locked():
             try:
                 store.save(task)
