@@ -635,9 +635,11 @@ def claude_hook_settings(store, task):
                 # A worktree the agent makes for itself starts from the
                 # task's work, not from the default branch.
                 "worktree": {"baseRef": "head"},
-                # Roost's own tools: an offer asks you itself, and the others
-                # reach only the tasks you started from it.
-                "permissions": {"allow": ["mcp__roost__" + name for name in MCP_TOOLS]}}
+                # Roost's own tools that need no asking: an offer asks you
+                # itself, and reading changes nothing. A message types into
+                # another agent's terminal, so it goes by your permission
+                # mode, as any tool you haven't allowed does.
+                "permissions": {"allow": ["mcp__roost__propose_task", "mcp__roost__read_task"]}}
     path = store.tasks_dir / (task["id"] + ".settings")
     atomic_json(path, settings)
     return str(path)
@@ -1082,14 +1084,22 @@ export default function (pi) {
     const child = spawn(process.env.ROOST_PYTHON, [process.env.ROOST_HELPER, "mcp",
       process.env.ROOST_STATE_DIRECTORY, process.env.ROOST_TASK_ID], { stdio: ["pipe", "pipe", "ignore"] });
     const write = message => child.stdin.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\n");
+    // Its choice is a list to pick from; what it shows to read, as the
+    // brief, goes above it, and back as it was.
     const answer = async question => {
-      const [key, field] = Object.entries(question.params.requestedSchema.properties)[0];
+      const fields = Object.entries(question.params.requestedSchema.properties);
+      const [key, field] = fields.find(([, f]) => f.enum);
+      const shown = fields.filter(([, f]) => !f.enum && typeof f.default === "string");
       const labels = field.enumNames || field.enum;
       let chosen;
-      try { chosen = await ctx.ui.select(question.params.message, [...labels, "Neither"]); } catch {}
+      try {
+        chosen = await ctx.ui.select([question.params.message, ...shown.map(([, f]) => f.default)].join("\n\n"),
+          [...labels, "Neither"]);
+      } catch {}
       const at = labels.indexOf(chosen);
       write({ id: question.id, result: chosen === undefined ? { action: "cancel" }
-        : at < 0 ? { action: "decline" } : { action: "accept", content: { [key]: field.enum[at] } } });
+        : at < 0 ? { action: "decline" }
+        : { action: "accept", content: { [key]: field.enum[at], ...Object.fromEntries(shown.map(([k, f]) => [k, f.default])) } } });
     };
     let buffer = "";
     child.stdout.setEncoding("utf8");
@@ -1897,7 +1907,9 @@ def make_task(store, request, create_id):
                                                              PROMPT_ARGUMENT_LIMIT // 1024))
     setup = text(request.get("setup"))
     task = dict(id=task_id, name=name, task=prompt or name, repo=repo,
-                worktree=str(worktree), branch=branch, baseRef=base, baseCommit=commit,
+                # Shown by its short name, as a branch asked for in full is.
+                worktree=str(worktree), branch=branch, baseCommit=commit,
+                baseRef=base[len("refs/heads/"):] if base.startswith("refs/heads/") else base,
                 integrationBranch=integration, socket=socket,
                 # Its full name, which also tells this record from an older helper's.
                 integrationRef="refs/heads/" + integration if integration else None,
@@ -3739,12 +3751,14 @@ MCP_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 MCP_TOOL_SECONDS = 24 * 3600
 MCP_INSTRUCTIONS = (
     "Roost runs you in a task of your own: a Git worktree and branch that the user reviews and merges. "
-    "When you come across work outside what you were asked to do, such as a bug in code you read, a "
-    "follow-up worth doing, or docs or tests that are out of date, don't only mention it or ask whether "
-    "to fix it: offer it with propose_task, with a brief another agent could start from, before you end "
-    "your turn. Roost asks the user whether to start it as a new task or to have you do it here, and "
-    "tells you which. A piece of what you were asked to do stays here, without an offer. read_task "
-    "shows how the tasks you started are doing, and message_task sends one a message.")
+    "When you come across work outside what you were asked to do that is worth a task of its own, such "
+    "as a bug in code you read, a follow-up worth doing, or docs or tests that are out of date, don't "
+    "only mention it or ask whether to fix it: offer it with propose_task, with a brief another agent "
+    "could start from, before you end your turn. Offer real work, not a one-line tweak or a guess, at "
+    "most one in a turn, and never one the user turned down. A piece of what you were asked to do stays "
+    "here, without an offer. Roost asks the user whether to start it as a new task or to have you do it "
+    "here, and tells you which. read_task shows how the tasks you started are doing, and message_task "
+    "sends one a message.")
 MCP_TOOLS = {
     "propose_task": dict(
         description=(
@@ -3767,7 +3781,6 @@ MCP_TOOLS = {
             task=dict(type="string", description="The task's ID, as propose_task gave it"),
             message=dict(type="string")))),
 }
-OFFER_BRIEF_SHOWN = 600
 # What a task's status says to an agent reading it.
 STATUS_SAID = {"starting": "starting", "running": "working", "background": "working in the background",
                "permission": "waiting for the user to answer it", "ready": "waiting for a prompt",
@@ -3777,6 +3790,14 @@ STATUS_SAID = {"starting": "starting", "running": "working", "background": "work
 
 class McpCancelled(Exception):
     pass
+
+
+class McpError(Exception):
+    """A request the server can't answer, with JSON-RPC's CODE for why."""
+
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
 
 
 class McpServer:
@@ -3816,8 +3837,8 @@ class McpServer:
         params = message.get("params") if isinstance(message.get("params"), dict) else {}
         try:
             result = self.answer(method, params, ident)
-        except RoostError as exc:
-            self.write(dict(id=ident, error=dict(code=-32602, message=str(exc))))
+        except McpError as exc:
+            self.write(dict(id=ident, error=dict(code=exc.code, message=str(exc))))
         except McpCancelled:
             return
         except (EOFError, BrokenPipeError):
@@ -3832,16 +3853,20 @@ class McpServer:
         if method == "initialize":
             asked = params.get("protocolVersion")
             capabilities = params.get("capabilities") if isinstance(params.get("capabilities"), dict) else {}
-            # Asking you needs a client that shows a form, which says so.
-            self.elicits = isinstance(capabilities.get("elicitation"), dict)
+            # Asking you needs a client that shows a form, which says so:
+            # by name, or, as before the protocol named kinds, by none.
+            elicitation = capabilities.get("elicitation")
+            self.elicits = isinstance(elicitation, dict) and (not elicitation or "form" in elicitation)
             return dict(protocolVersion=asked if asked in MCP_VERSIONS else MCP_VERSIONS[0],
                         capabilities=dict(tools={}), serverInfo=dict(name="roost", version="1"),
                         instructions=MCP_INSTRUCTIONS)
         if method == "ping":
             return {}
         if method == "tools/list":
-            return dict(tools=[dict(definition, name=name) for name, definition in MCP_TOOLS.items()
-                               if name != "propose_task" or self.elicits])
+            # Without a way to ask you, an agent can offer no task, and
+            # so has started none to read or send to.
+            return dict(tools=[dict(definition, name=name) for name, definition in MCP_TOOLS.items()]
+                        if self.elicits else [])
         if method == "tools/call":
             arguments = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
             try:
@@ -3849,10 +3874,14 @@ class McpServer:
             except RoostError as exc:
                 return dict(content=[dict(type="text", text=str(exc))], isError=True)
             return dict(content=[dict(type="text", text=said)])
-        raise RoostError("Unknown method: " + method)
+        # Such as a newer protocol's first request, after which the client
+        # starts again with an older one.
+        raise McpError(-32601, "Unknown method: " + method)
 
     def call(self, name, arguments, ident):
-        if name == "propose_task" and self.elicits:
+        if not self.elicits:
+            raise RoostError("Unknown tool: %s" % name)
+        if name == "propose_task":
             return propose_task(self, arguments.get("title"), arguments.get("brief"), ident)
         if name == "read_task":
             return read_tasks(self.store, self.task_id, arguments.get("task"))
@@ -3916,34 +3945,54 @@ def propose_task(server, title, brief, ident):
     title, brief = (text(title) or "").strip(), (text(brief) or "").strip()
     if not title or not brief:
         raise RoostError("Give the task a title and a brief")
-    shown = brief if len(brief) <= OFFER_BRIEF_SHOWN else brief[:OFFER_BRIEF_SHOWN].rstrip() + "…"
-    schema = dict(type="object", required=["start"], properties=dict(start=dict(
-        type="string", title="Where", enum=["new", "here"],
-        enumNames=["As a new task, in its own worktree", "Here, in this conversation"])))
+    # Refused before you are asked, rather than once you have said yes.
+    task_name(title)
+    if len(brief.encode()) > PROMPT_ARGUMENT_LIMIT:
+        raise RoostError("The brief is %d KB, and a task can start with at most %d KB; shorten it"
+                         % (-(-len(brief.encode()) // 1024), PROMPT_ARGUMENT_LIMIT // 1024))
+    # The brief whole, to read and change: the message shows a few lines.
+    schema = dict(type="object", required=["start"], properties=dict(
+        start=dict(type="string", title="Where", enum=["new", "here"], default="new",
+                   enumNames=["As a new task, in its own worktree", "Here, in this conversation"]),
+        brief=dict(type="string", title="Brief", default=brief)))
     with offering(server.store, server.task_id, title):
-        answer = server.elicit("Start a task: %s\n\n%s" % (title, shown), schema, ident)
+        answer = server.elicit("Start a task: %s" % title, schema, ident)
     content = answer.get("content") if answer.get("action") == "accept" else None
     start = content.get("start") if isinstance(content, dict) else None
     if start == "here":
         return "The user chose to have you do it here, in this conversation. Go ahead."
     if start != "new":
         return "The user didn't start it. Don't offer it again unless they ask."
+    started = answered_brief(brief, content.get("brief"))
     with server.store.locked():
         parent = server.store.read(server.task_id)
-    task = make_task(server.store, offered_request(parent, title, brief), None)
-    return ("Started task %s, ID %s, on branch %s in a worktree of its own. Its agent works on its own; "
+    task = make_task(server.store, offered_request(parent, title, started), None)
+    return ("Started task %s, ID %s, on branch %s in a worktree of its own%s. Its agent works on its own; "
             "read_task shows how it is doing, and message_task sends it a message."
-            % (task["name"], task["id"], task["branch"]))
+            % (task["name"], task["id"], task["branch"],
+               ", with the brief as the user changed it" if started != brief else ""))
+
+
+def answered_brief(brief, said):
+    """BRIEF as you left it in the form, SAID. Claude Code sends each line
+    break in a field back as U+FFFD, so one you left alone is BRIEF, and
+    one you changed has them back; one you emptied is BRIEF too."""
+    if not isinstance(said, str) or not said.strip() or said in (brief, brief.replace("\n", "�")):
+        return brief
+    return said.replace("�", "\n").strip()
 
 
 def offered_request(parent, title, brief):
     """The request that makes the task PARENT's agent offered as TITLE: in
     PARENT's project and terminal server, by the same agent and command,
-    starting where a task you start there would."""
+    starting from the branch PARENT merges into, by its full name."""
     branch = parent.get("branch") or ""
     size = tmux(parent["socket"], "display-message", "-p", "-t", parent.get("paneId") or "",
                 "#{pane_width}\t#{pane_height}", check=False).stdout.split()
-    request = dict(directory=parent["repo"], name=title, prompt=brief, parent=parent["id"],
+    # An older helper's record names only the branch.
+    integration = parent.get("integrationRef") or (
+        "refs/heads/" + parent["integrationBranch"] if text(parent.get("integrationBranch")) else None)
+    request = dict(directory=parent["repo"], name=title, prompt=brief, parent=parent["id"], base=integration,
                    agent=parent.get("agent"), command=parent.get("command"), setup=parent.get("setup"),
                    socket=parent.get("socket"), programStatus=parent.get("programStatus") is True,
                    branchPrefix=branch[:branch.rindex("/") + 1] if "/" in branch else None,

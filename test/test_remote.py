@@ -221,6 +221,21 @@ class Lifecycle(unittest.TestCase):
         shell = self.request("shell", id=task["id"])["result"]["shellPaneId"]
         self.assertEqual(tmux_says(shell, "#{pane_current_path}"), worktree)
 
+        # Offered by its agent, under a name and with a brief the agent
+        # chose, then sent a message, through the helper's MCP server.
+        title, brief = hostile("offer"), hostile("brief") + "\n" + hostile("brief-second")
+        child = reply_to(self.started(task, title=title, brief=brief), brief)
+        self.assertEqual((child["name"], child["prompt"], child["integrationBranch"]), (title, brief, branch))
+        self.assertTrue(child["branch"].startswith(prefix), child["branch"])
+        self.assertEqual(tmux_says(child["windowId"], "#{window_name}"), title)
+        said = hostile("message")
+        replies, _ = self.offer(task, dict(id="m", method="tools/call", params=dict(
+            name="message_task", arguments=dict(task=child["id"], message=said))))
+        self.assertNotIn("isError", replies["m"]["result"], replies["m"])
+        reply_to(child, said)
+        told = self.request("discard", id=child["id"], dryRun=True)["result"]["discard"]
+        self.assertTrue(self.request("discard", id=child["id"], expect=told["commit"])["ok"])
+
         # Merged into its branch, as is a second task, squashed, once it is
         # brought up to date.
         second = self.create(directory=str(repo), name=hostile("squash"))
@@ -2517,20 +2532,43 @@ class Lifecycle(unittest.TestCase):
         config = json.loads(next(arg for arg in argv if arg.startswith("--mcp-config="))[len("--mcp-config="):])
         self.assertEqual(config["mcpServers"]["roost"]["command"], sys.executable)
         self.assertEqual(config["mcpServers"]["roost"]["args"], server)
-        # Its tools ask nothing of their own: an offer asks you itself.
+        # An offer asks you itself, and reading changes nothing; a message
+        # types into another agent's terminal, so it goes by your
+        # permission mode.
         settings = json.loads(Path(argv[argv.index("--settings") + 1]).read_text())
-        self.assertEqual(settings["permissions"]["allow"],
-                         ["mcp__roost__propose_task", "mcp__roost__read_task", "mcp__roost__message_task"])
+        self.assertEqual(settings["permissions"]["allow"], ["mcp__roost__propose_task", "mcp__roost__read_task"])
         argv = roost.CodexAgent().launch(store, dict(task, command=["codex"]), False)
         self.assertIn("mcp_servers.roost.args=" + json.dumps(server), argv)
         self.assertIn("mcp_servers.roost.command=" + json.dumps(sys.executable), argv)
+
+    def test_the_mcp_server_runs_as_the_agent_starts_it(self):
+        # As a process of its own, over its standard input and output,
+        # answering a newer protocol's first request as one it doesn't know,
+        # and ending with its input.
+        task = self.create(name="parent")
+        lines = [dict(id="new", method="server/discover"),
+                 dict(id=1, method="initialize",
+                      params=dict(protocolVersion="2025-11-25", capabilities=dict(elicitation=dict(form={})))),
+                 dict(method="notifications/initialized"), dict(id=2, method="tools/list"),
+                 dict(id=3, method="tools/call", params=dict(name="read_task", arguments={}))]
+        ran = subprocess.run([sys.executable, str(SOURCE), "mcp", str(self.state), task["id"]], timeout=30,
+                             input="".join(json.dumps(dict(line, jsonrpc="2.0")) + "\n" for line in lines),
+                             capture_output=True, text=True)
+        self.assertEqual((ran.returncode, ran.stderr), (0, ""))
+        replies = {reply["id"]: reply for reply in map(json.loads, ran.stdout.splitlines())}
+        self.assertEqual(replies["new"]["error"]["code"], -32601)
+        self.assertEqual(replies[1]["result"]["protocolVersion"], "2025-11-25")
+        self.assertEqual([tool["name"] for tool in replies[2]["result"]["tools"]],
+                         ["propose_task", "read_task", "message_task"])
+        self.assertEqual(replies[3]["result"]["content"][0]["text"], "You haven't started any tasks.")
 
     def offer(self, task, *messages, elicits=True):
         """Run TASK's MCP server on MESSAGES, after a client's handshake,
         and return its replies by their IDs, and what TASK's record said
         whenever the server asked the user something."""
+        capabilities = dict(elicitation=elicits if isinstance(elicits, dict) else {}) if elicits else {}
         lines = [dict(id="hello", method="initialize", params=dict(
-            protocolVersion="2025-06-18", capabilities=dict(elicitation={}) if elicits else {})),
+            protocolVersion="2025-06-18", capabilities=capabilities)),
                  dict(method="notifications/initialized")] + list(messages)
         reader = io.StringIO("".join(json.dumps(dict(line, jsonrpc="2.0")) + "\n" for line in lines))
         store, replies, asking = roost.Store(str(self.state)), {}, []
@@ -2552,6 +2590,16 @@ class Lifecycle(unittest.TestCase):
         return dict(id=ident, method="tools/call",
                     params=dict(name="propose_task", arguments=dict(title=title, brief=brief)))
 
+    def started(self, parent, answer=None, **proposed):
+        """The task PARENT's agent offered as PROPOSED, started with the
+        fields of the form ANSWER gives."""
+        replies, _ = self.offer(parent, self.propose(**proposed), dict(id="roost-1", result=dict(
+            action="accept", content=dict(dict(start="new"), **(answer or {})))))
+        said = replies["call"]["result"]
+        self.assertNotIn("isError", said, said)
+        return next(t for t in self.request("list")["result"]
+                    if t.get("parent") == parent["id"] and t["id"] in said["content"][0]["text"])
+
     def test_an_offer_you_take_starts_a_task_under_its_parent(self):
         parent = self.create(name="parent")
         replies, asking = self.offer(
@@ -2559,18 +2607,65 @@ class Lifecycle(unittest.TestCase):
         # It waits on you while it asks, and goes on as before after.
         self.assertEqual([(t["status"], t["request"]) for t in asking],
                          [("permission", "Offers a task: Document calc")])
-        self.assertIn("Write the README's section on calc.", replies["roost-1"]["params"]["message"])
+        # The brief whole, to read and change, and a new task chosen already.
+        question = replies["roost-1"]["params"]
+        self.assertEqual(question["message"], "Start a task: Document calc")
+        fields = question["requestedSchema"]["properties"]
+        self.assertEqual((fields["start"]["default"], fields["brief"]["default"]),
+                         ("new", "Write the README's section on calc."))
         self.assertEqual(roost.Store(str(self.state)).read(parent["id"])["status"], "ready")
         self.assertNotIn("request", roost.Store(str(self.state)).read(parent["id"]))
         said = replies["call"]["result"]["content"][0]["text"]
         child = next(t for t in self.request("list")["result"] if t["id"] != parent["id"])
         self.assertIn(child["id"], said)
+        self.assertNotIn("changed", said)
         self.assertEqual((child["parent"], child["name"], child["prompt"], child["command"], child["repo"]),
                          (parent["id"], "Document calc", "Write the README's section on calc.",
                           parent["command"], parent["repo"]))
         self.assertNotEqual(child["worktree"], parent["worktree"])
         self.assertTrue(child["branch"].startswith("roost/"))
         self.wait(child, "ready")
+
+    def test_an_offer_starts_from_the_branch_its_parent_merges_into(self):
+        # Wherever the primary checkout has gone since.
+        self.git("branch", "develop")
+        parent = self.create(name="parent", base="develop")
+        self.git("switch", "-q", "-c", "elsewhere")
+        child = self.started(parent)
+        self.assertEqual((child["baseRef"], child["integrationBranch"]), ("develop", "develop"))
+        self.assertEqual(child["baseCommit"], self.git("rev-parse", "develop"))
+
+    def test_the_brief_you_change_in_the_form_is_the_one_that_starts(self):
+        parent = self.create(name="parent")
+        brief = "First paragraph.\n\nSecond paragraph."
+        # Left alone, sent back or not, with line breaks as Claude Code
+        # sends them back, or emptied.
+        for answer in ({}, dict(brief=brief), dict(brief=brief.replace("\n", "�")), dict(brief="  ")):
+            with self.subTest(answer=answer):
+                self.assertEqual(self.started(parent, answer, brief=brief)["prompt"], brief)
+        changed = self.started(parent, dict(brief="First paragraph.��Only the docs."), brief=brief)
+        self.assertEqual(changed["prompt"], "First paragraph.\n\nOnly the docs.")
+
+    def test_an_offer_that_cant_start_is_refused_before_you_are_asked(self):
+        parent = self.create(name="parent")
+        for title, brief in (("two\nlines", "Write it."), ("Docs", "x" * (roost.PROMPT_ARGUMENT_LIMIT + 1)),
+                             ("Docs", "  "), ("...", "Write it.")):
+            with self.subTest(title=title, brief=brief[:20]):
+                replies, asking = self.offer(parent, self.propose(title=title, brief=brief))
+                self.assertTrue(replies["call"]["result"]["isError"])
+                self.assertEqual(asking, [])
+        self.assertEqual(roost.Store(str(self.state)).read(parent["id"])["status"], "ready")
+
+    def test_an_offer_that_fails_to_start_says_why_and_leaves_its_task_as_it_was(self):
+        parent = self.create(name="parent")
+        with patch.object(roost, "make_task", side_effect=roost.RoostError("No room for a worktree")):
+            replies, _ = self.offer(
+                parent, self.propose(), dict(id="roost-1", result=dict(action="accept", content=dict(start="new"))))
+        self.assertEqual(replies["call"]["result"],
+                         dict(content=[dict(type="text", text="No room for a worktree")], isError=True))
+        record = roost.Store(str(self.state)).read(parent["id"])
+        self.assertEqual(record["status"], "ready")
+        self.assertNotIn("request", record)
 
     def test_an_offer_done_here_declined_or_cancelled_starts_nothing(self):
         parent = self.create(name="parent")
@@ -2587,19 +2682,21 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(roost.Store(str(self.state)).read(parent["id"])["status"], "ready")
         self.assertEqual([t["id"] for t in self.request("list")["result"]], [parent["id"]])
 
-    def test_an_agent_that_cant_show_a_form_has_nothing_to_offer_with(self):
+    def test_an_agent_that_cant_show_a_form_gets_no_tools(self):
+        # It could offer no task, so it has started none to read or send to:
+        # one that asks nothing, or only opens a link.
         parent = self.create(name="parent")
-        replies, _ = self.offer(parent, dict(id="list", method="tools/list"), self.propose(), elicits=False)
-        self.assertEqual([tool["name"] for tool in replies["list"]["result"]["tools"]],
-                         ["read_task", "message_task"])
-        self.assertTrue(replies["call"]["result"]["isError"])
+        for elicits in (False, dict(url={})):
+            with self.subTest(elicits=elicits):
+                replies, _ = self.offer(parent, dict(id="list", method="tools/list"), self.propose(),
+                                        elicits=elicits)
+                self.assertEqual(replies["list"]["result"]["tools"], [])
+                self.assertTrue(replies["call"]["result"]["isError"])
 
     def test_an_agent_reads_and_messages_only_the_tasks_it_started(self):
         parent = self.create(name="parent")
         other = self.create(name="other")
-        replies, _ = self.offer(
-            parent, self.propose(), dict(id="roost-1", result=dict(action="accept", content=dict(start="new"))))
-        child = next(t for t in self.request("list")["result"] if t.get("parent") == parent["id"])
+        child = self.started(parent)
         self.wait(child, "ready")
 
         def call(name, **arguments):
@@ -2624,6 +2721,29 @@ class Lifecycle(unittest.TestCase):
         while "Also the tests" not in (roost.Store(str(self.state)).read(child["id"]).get("lastReply") or ""):
             self.assertLess(time.monotonic(), deadline, "the message never reached the task")
             time.sleep(.04)
+
+    def test_an_offer_is_answered_in_the_agents_terminal(self):
+        # As Claude Code does it: the agent runs the helper from its
+        # --mcp-config, and you answer in its terminal.
+        def type_in(task, text):
+            roost.tmux(self.socket, "send-keys", "-t", task["paneId"], "-l", text)
+            roost.tmux(self.socket, "send-keys", "-t", task["paneId"], "Enter")
+
+        parent = self.create(name="parent", prompt="offer Document calc")
+        self.assertEqual(self.wait(parent, "permission")["request"], "Offers a task: Document calc")
+        type_in(parent, "new")
+        record = self.wait(parent, "ready", "Stop")
+        child = next(t for t in self.request("list")["result"] if t.get("parent") == parent["id"])
+        self.assertIn("Started task Document calc, ID %s" % child["id"], record["lastReply"])
+        self.assertEqual(self.wait(child, "ready")["prompt"], "Brief for Document calc")
+        # Done here, or turned down: no task.
+        for answer, said in (("here", "do it here"), ("no", "didn't start it")):
+            with self.subTest(answer=answer):
+                self.assertTrue(self.request("send", id=parent["id"], text="offer Tidy calc")["ok"])
+                self.wait(parent, "permission")
+                type_in(parent, answer)
+                self.assertIn(said, self.wait(parent, "ready", "Stop")["lastReply"])
+        self.assertEqual(len(self.request("list")["result"]), 2)
 
     def test_adapter_launch_failure_marks_the_task_failed(self):
         task = self.create()

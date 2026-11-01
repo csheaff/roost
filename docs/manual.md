@@ -231,20 +231,24 @@ other machines and the next session.
 
 **Take the tasks an agent offers.** An agent that comes across work outside
 its task, such as a bug in code it read, can offer it as a task of its own.
-It asks in its terminal, with the task's name and the start of the brief it
-wrote: start it as a new task, in its own worktree, or have it done here, in
-this conversation. Its task waits on you meanwhile, as for a permission
-request (`Offers a task: Fix add in calc.py`). A task you start this way is
-like one you start with `c`: the same project, agent and command, from the
-same starting point, with the agent's brief as its prompt. The dashboard and
+It asks in its terminal, with the task's name and the whole brief it wrote,
+which you can change there: start it as a new task, in its own worktree, as
+it is chosen already, or have it done here, in this conversation. Its task
+waits on you meanwhile, as for a permission request (`Offers a task: Fix add
+in calc.py`). A task you start this way is in the same project, with the
+same agent and command, as the task it came from, starts from the branch
+that task merges into, and has the brief as its prompt. The dashboard and
 sidebar show it under the task it came from, and each task's panel names the
 other. The agent that offered it can read how the task is doing, with its
 latest reply, and send it a message, which arrives as its next prompt,
-marked as from that task, and only while it waits for one. Roost gives the
-agent these tools as an MCP server of the helper's (Pi's through its
-extension), so an agent that can't show an MCP server's form can't offer a
-task. How often an agent offers rests on the model: Roost's instructions to
-it say when.
+marked as from that task, and only while it waits for one. Roost types it
+into that task's terminal, so Claude Code treats each message as a tool you
+haven't allowed: it asks you, or in auto mode its classifier decides.
+Roost gives the agent these tools as an MCP server of the helper's (Pi's
+through its extension), so an agent that can't show an MCP server's form
+gets none of them. How often an agent offers rests on the model: Roost's
+instructions to it say when, and that it should offer only real work, at
+most once a turn.
 
 **Keep them in view.** `b` in the dashboard, or `M-x roost-sidebar-mode`, keeps a
 compact task list at the left of every frame, through perspective and tab
@@ -1025,10 +1029,13 @@ What runs where:
   report, and never approve or decline. The runner and hooks run the
   helper's file with the same Python, without `-I`.
 - Each agent runs the helper as an MCP server, its program and arguments
-  separate, with no shell. It starts a task only once you answer its
-  question in the agent's terminal, and reads and messages only the tasks
-  its agent started that way. Claude Code's settings for the task allow
-  its three tools without asking, as the offer asks you itself.
+  separate, with no shell. Through it, an agent starts a task only once you
+  answer its question in the agent's terminal, and reads and messages only
+  the tasks it started that way. Claude Code's settings for the task allow
+  offering and reading without asking, as an offer asks you itself. A
+  message, which Roost types into the other agent's terminal while that
+  agent waits for a prompt, goes by your permission mode, as any tool you
+  haven't allowed does.
 - Claude Code and OpenCode may read one folder outside the task's
   worktree without asking: the task's attachments, under the state
   directory, given to Claude Code as `--add-dir` and to OpenCode as a rule

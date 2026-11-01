@@ -3042,6 +3042,44 @@ def fork(qa, repo):
                                               "roost/%s-*" % fork_name)))])
 
 
+@journey("A task an agent offers")
+def offer(qa, repo):
+    """An agent offers a task of its own and asks in its terminal; started
+    from there, it sits under the task that offered it, and each panel
+    names the other."""
+    parent = new_task(qa, "offer Document the notes")
+    qa.status(parent, "permission")
+    qa.step("The agent offers a task", expect=[
+        ("the sidebar shows it waiting", lambda s: "permission" in qa.window(s, "roost-sidebar-list-mode")["text"])])
+    qa.keys("C-c r n")
+    qa.wait("its terminal", lambda s: (s.get("task") or {}).get("name") == parent and selected_terminal(s))
+    qa.step("Its terminal asks", expect=[
+        ("the agent asks where to start it",
+         lambda s: "ASKS Start a task: Document the notes" in selected_terminal(s)["text"]),
+        ("the panel says to answer in the terminal", lambda s: "Answer it in its terminal" in panel_text(qa, s))])
+    before = {t["key"] for t in qa.screen()["tasks"]}
+    qa.type("new\r")
+    qa.wait("the task it offered", lambda s: {t["key"] for t in s["tasks"]} - before)
+    qa.status(parent, "ready", "idle")
+
+    def under_parent(screen):
+        lines = qa.window(screen, "roost-sidebar-list-mode")["text"].split("\n")
+        row = next((i for i, line in enumerate(lines) if line.startswith(" " + parent[:12])), None)
+        return row is not None and row + 1 < len(lines) and lines[row + 1].startswith("   Document")
+
+    qa.wait("its row", under_parent)
+    qa.step("Started, under the task that offered it", expect=[
+        ("the sidebar shows it indented under that task", under_parent),
+        ("the agent says it started it", lambda s: "Started task Document the notes" in selected_terminal(s)["text"])])
+    open_task(qa, "Document the notes")
+    qa.step("Its panel names where it came from", expect=[
+        ("it says which task it was started from",
+         lambda s: re.search(r"Started from\s+%s" % re.escape(parent), panel_text(qa, s)))])
+    open_task(qa, parent)
+    qa.step("The other panel names it", expect=[
+        ("it says which task it started", lambda s: re.search(r"Started\s+Document the notes", panel_text(qa, s)))])
+
+
 @journey("Start from another branch")
 def other_branch(qa, repo):
     """A task started from a branch merges into it, not the primary checkout's."""
@@ -3686,7 +3724,7 @@ JOURNEYS = [sweep, answer, next_waiting, fold, resize, merge, review, notes, sin
             search, workload, question_left,
             walk_away,
             frames, draft_frames, org, drafts, draft_fields, overlap, region, tabs,
-            forget, rename, fork, other_branch, switched_branch, merged, large, pull_request, merge_request, exits,
+            forget, rename, fork, offer, other_branch, switched_branch, merged, large, pull_request, merge_request, exits,
             include, slow_create,
             unreachable,
             doctor, scrollback,
