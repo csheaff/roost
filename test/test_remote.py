@@ -2649,6 +2649,30 @@ class Lifecycle(unittest.TestCase):
         literal = "Treat � in parser.py as a character of its own."
         self.assertEqual(self.started(parent, dict(brief=literal), client="pi", brief=brief)["prompt"], literal)
 
+    def test_an_offer_leaves_what_else_its_task_waited_on(self):
+        # As a subagent's permission request: waited on again once the
+        # offer is answered.
+        parent = self.create(name="parent")
+        store = roost.Store(str(self.state))
+        asked = dict(status="permission", request="Asks to run make test", requestCommand="make test")
+        store.save(dict(store.read(parent["id"]), **asked))
+        replies, asking = self.offer(parent, self.propose(), dict(id="roost-1", result=dict(action="decline")))
+        self.assertEqual(asking[0]["request"], "Offers a task: Document calc")
+        record = store.read(parent["id"])
+        self.assertEqual({key: record.get(key) for key in asked}, asked)
+
+    def test_an_offered_task_has_its_parents_branch_prefix(self):
+        # Any string, as roost-branch-prefix allows; for an older helper's
+        # record, as far as its branch's last slash.
+        parent = self.create(name="parent", branchPrefix="task-")
+        self.assertTrue(self.started(parent, title="One")["branch"].startswith("task-One-"))
+        older = self.create(name="older", branchPrefix="team/bugfix-")
+        store = roost.Store(str(self.state))
+        record = store.read(older["id"])
+        del record["branchPrefix"]
+        store.save(record)
+        self.assertTrue(self.started(older, title="Two")["branch"].startswith("team/Two-"))
+
     def test_a_task_that_merges_into_no_branch_offers_none(self):
         # Started with the primary checkout on no branch, it has none to
         # give the task it would offer, wherever that checkout is now.
@@ -2737,6 +2761,8 @@ class Lifecycle(unittest.TestCase):
         for arguments in ({}, dict(task="")):
             self.assertIn("Document calc, ID %s" % child["id"], call("read_task", **arguments)["content"][0]["text"])
         self.assertTrue(call("message_task", task="", message="Also the tests")["isError"])
+        # Nor one with nothing to say, which would start a turn of its header alone.
+        self.assertTrue(call("message_task", task=child["id"], message=" \n ")["isError"])
         for name, arguments in (("read_task", dict(task=other["id"])),
                                 ("message_task", dict(task=other["id"], message="Stop that"))):
             with self.subTest(name=name):

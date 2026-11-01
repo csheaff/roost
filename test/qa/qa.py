@@ -2415,6 +2415,12 @@ def leave_discard_question(qa, tasks):
     qa.leave_question()
 
 
+def leave_offer(qa, tasks):
+    # Its agent asks, in its terminal, whether to start a task of its own.
+    qa.type("offer Walk away from this\r")
+    qa.status(tasks["home"], "permission")
+
+
 def leave_mouse_press(qa, tasks):
     # In a terminal whose program takes the mouse, a press whose release
     # the terminal never gets, as when tmux wasn't replying.
@@ -2436,6 +2442,7 @@ WALK_STARTERS = [
     ("a mouse press in the terminal never let go", leave_mouse_press),
     ("a review note half written", leave_note_box),
     ("Roost's question before discarding a task left open", leave_discard_question),
+    ("an agent's offer of a task left unanswered", leave_offer),
 ]
 
 
@@ -2713,7 +2720,20 @@ def walk_away(qa, repo):
                      or any(w["mode"] == "magit-status-mode" and not w["child"] for w in s["windows"]))]
             if leave is leave_discard_question:
                 expect.append(("the task you were asked about is still there", lambda s: qa.task(s, home)))
+            if leave is leave_offer:
+                expect.append(("its offer still waits, unanswered, and started nothing",
+                               lambda s: (qa.task(s, home) or {}).get("status") == "permission"
+                               and not qa.task(s, "Walk away from this")))
             qa.step(pair, expect=expect)
+            if leave is leave_offer:
+                # Answered once you are back in its terminal.
+                open_task(qa, home)
+                qa.type("no\r")
+                qa.status(home, "ready", "idle")
+                qa.step(pair + ", then answered", expect=[
+                    ("its agent says it started nothing",
+                     lambda s: "didn't start it" in selected_terminal(s)["text"]
+                     and not qa.task(s, "Walk away from this"))])
     # GitHub as other journeys find it.
     github(qa, list=[], reviews={})
 

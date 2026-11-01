@@ -1923,7 +1923,8 @@ def make_task(store, request, create_id):
                 # Shown by its short name, as a branch asked for in full is.
                 worktree=str(worktree), branch=branch, baseCommit=commit,
                 baseRef=base[len("refs/heads/"):] if base.startswith("refs/heads/") else base,
-                integrationBranch=integration, socket=socket,
+                # For the tasks its agent offers, which any string can start.
+                branchPrefix=prefix, integrationBranch=integration, socket=socket,
                 # Its full name, which also tells this record from an older helper's.
                 integrationRef="refs/heads/" + integration if integration else None,
                 session=session_name(repo, task_id),
@@ -3946,9 +3947,11 @@ def offering(store, task_id, title):
     request = "Offers a task: " + (one_line(title) or "")[:REQUEST_LIMIT]
     with store.locked():
         task = store.read(task_id)
-        before = task["status"]
+        # What else it waited on, as a subagent's request, to wait on again.
+        before = {key: task.get(key) for key in ("status", "request", "requestCommand", "requestFrom")}
         task.update(status="permission", request=request, updatedAt=now())
         task.pop("requestCommand", None)
+        task.pop("requestFrom", None)
         store.save(task)
     try:
         yield
@@ -3957,8 +3960,12 @@ def offering(store, task_id, title):
             task = store.read(task_id)
             # Unless an event since says otherwise.
             if task["status"] == "permission" and task.get("request") == request:
-                task.update(status=before, updatedAt=now())
-                task.pop("request", None)
+                for key, value in before.items():
+                    if value is None:
+                        task.pop(key, None)
+                    else:
+                        task[key] = value
+                task["updatedAt"] = now()
                 store.save(task)
 
 
@@ -4024,7 +4031,9 @@ def offered_request(parent, title, brief):
     request = dict(directory=parent["repo"], name=title, prompt=brief, parent=parent["id"], base=offered_base(parent),
                    agent=parent.get("agent"), command=parent.get("command"), setup=parent.get("setup"),
                    socket=parent.get("socket"), programStatus=parent.get("programStatus") is True,
-                   branchPrefix=branch[:branch.rindex("/") + 1] if "/" in branch else None,
+                   # As its record says, or, for an older helper's, as its branch's start does.
+                   branchPrefix=text(parent.get("branchPrefix"))
+                   or (branch[:branch.rindex("/") + 1] if "/" in branch else None),
                    size=dict(width=int(size[0]), height=int(size[1]))
                    if len(size) == 2 and all(n.isdigit() for n in size) else None)
     return {key: value for key, value in request.items() if value is not None}
@@ -4066,7 +4075,8 @@ def read_tasks(store, task_id, wanted=None):
 
 
 def message_task(store, task_id, wanted, message):
-    if not text(message):
+    message = (text(message) or "").strip()
+    if not message:
         raise RoostError("The message is empty")
     if not (text(wanted) or "").strip():
         raise RoostError("Name the task to send it to by its ID")
@@ -4076,7 +4086,7 @@ def message_task(store, task_id, wanted, message):
             raise RoostError("%s is %s, and gets a message only while it waits for a prompt"
                              % (task.get("name"), STATUS_SAID.get(task.get("status"), task.get("status"))))
         parent = store.read(task_id)
-        send(task, "From %s, the task that started this one:\n\n%s" % (parent.get("name"), message.strip()))
+        send(task, "From %s, the task that started this one:\n\n%s" % (parent.get("name"), message))
     return "Sent to %s." % task.get("name")
 
 
