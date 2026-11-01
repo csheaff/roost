@@ -8998,6 +8998,13 @@ Windows showing the panel keep their scroll position, and the mark stays."
                                               (if-let* ((other (roost--other-branch task)))
                                                   (format "; the worktree is on %s" (roost--branch-label other))
                                                 "")))
+                         ;; Offered by an agent and started by you.
+                         ,@(when (roost--field task 'parent)
+                             `(("Started from" . ,(if-let* ((parent (roost--parent-task task)))
+                                                      (roost--task-label parent)
+                                                    "a task Roost no longer has"))))
+                         ,@(when-let* ((started (roost--started-tasks task)))
+                             `(("Started" . ,(mapconcat #'roost--task-label started ", "))))
                          ,@(unless (< width roost--wide-panel)
                              `(("Worktree" . ,(roost--abbreviate-path (or (roost--field task 'worktree) "")
                                                                       (roost--field task 'host)))
@@ -9190,13 +9197,63 @@ Refreshes are asynchronous; rendering uses only cached state.
         (if group (push task (cdr group)) (push (list key task) groups))))
     (sort (mapcar (lambda (group)
                     (cons (car group)
-                          (sort (cdr group)
-                                (lambda (a b) (string< (or (roost--field a 'startedAt) "")
-                                                       (or (roost--field b 'startedAt) ""))))))
+                          (roost--under-parents
+                           (sort (cdr group)
+                                 (lambda (a b) (string< (or (roost--field a 'startedAt) "")
+                                                        (or (roost--field b 'startedAt) "")))))))
                   groups)
           (lambda (a b)
             (string< (format "%s %s" (roost--host-label (caar a)) (cadar a))
                      (format "%s %s" (roost--host-label (caar b)) (cadar b)))))))
+
+(defun roost--parent-task (task)
+  "The task whose agent offered TASK, which you started, if Roost has it."
+  (when-let* ((parent (roost--field task 'parent)))
+    (gethash (list (roost--field task 'host) parent) roost--tasks)))
+
+(defun roost--started-tasks (task)
+  "The tasks TASK's agent offered and you started, oldest first."
+  (sort (seq-filter (lambda (other) (eq (roost--parent-task other) task))
+                    (hash-table-values roost--tasks))
+        (lambda (a b) (string< (or (roost--field a 'startedAt) "")
+                               (or (roost--field b 'startedAt) "")))))
+
+(defconst roost--nesting-shown 3
+  "How many levels of tasks started from others a view indents.")
+
+(defun roost--nesting (task)
+  "How many tasks up TASK was started from, as far as views indent it."
+  (let ((depth 0) (seen (list task)))
+    (while (and (< depth roost--nesting-shown)
+                (setq task (roost--parent-task task))
+                (not (memq task seen)))
+      (push task seen)
+      (cl-incf depth))
+    depth))
+
+(defun roost--nesting-indent (task)
+  "The indent of TASK's row under the task it was started from."
+  (make-string (* 2 (roost--nesting task)) ?\s))
+
+(defun roost--under-parents (tasks)
+  "TASKS in order, each followed by those it started that are among them."
+  (let ((started (make-hash-table :test 'eq))
+        (shown (make-hash-table :test 'eq))
+        roots ordered)
+    (dolist (task tasks)
+      (let ((parent (roost--parent-task task)))
+        (if (and parent (memq parent tasks))
+            (push task (gethash parent started))
+          (push task roots))))
+    (cl-labels ((walk (task)
+                  (unless (gethash task shown)
+                    (puthash task t shown)
+                    (push task ordered)
+                    (mapc #'walk (reverse (gethash task started))))))
+      (mapc #'walk (nreverse roots))
+      ;; Tasks each started from the other, which no record should say.
+      (mapc #'walk tasks))
+    (nreverse ordered)))
 
 (defconst roost--row-words
   '("permission" "starting" "error" "failed" "crashed" "ci failed" "conflicts" "comments"
@@ -9274,8 +9331,10 @@ them: a row that narrow keeps its room for an urgent status."
 (defun roost--dashboard-layout (tasks width)
   "Column widths for TASKS in a window WIDTH columns wide.
 The changes column shrinks first, then the agent column is dropped."
-  (let* ((name (min 28 (max 8 (apply #'max (mapcar (lambda (task) (string-width (roost--row-name task)))
-                                                   tasks)))))
+  (let* ((name (min 28 (max 8 (apply #'max (mapcar (lambda (task)
+                                                      (+ (* 2 (roost--nesting task))
+                                                         (string-width (roost--row-name task))))
+                                                    tasks)))))
          (agent (> (length (delete-dups (mapcar (lambda (task) (or (roost--field task 'agent) "claude"))
                                                 tasks)))
                    1))
@@ -9299,7 +9358,8 @@ The changes column shrinks first, then the agent column is dropped."
          (face (roost--status-word-face (roost--attention-status task)))
          (cell (lambda (text size &optional cell-face)
                  (propertize (truncate-string-to-width text size nil ?\s "…") 'face cell-face)))
-         (name (roost--row-name task (plist-get layout :name)))
+         (indent (roost--nesting-indent task))
+         (name (concat indent (roost--row-name task (max 1 (- (plist-get layout :name) (length indent))))))
          (line (concat "  " (roost--status-light task 'dashboard) " "
                        name (make-string (max 0 (- (plist-get layout :name) (string-width name))) ?\s)
                        "  "
@@ -9996,8 +10056,10 @@ have seen that waits for nothing."
                    (roost--status-face attention)
                  (roost--status-word-face attention)))
          (urgent (and face (not (eq face 'roost-dim))))
+         ;; Under the task it was started from, if any.
+         (indent (roost--nesting-indent task))
          ;; After an indent.
-         (room (1- width))
+         (room (- width 1 (length indent)))
          (idle (equal attention "idle"))
          ;; For an agent you have seen that waits for nothing, what changed
          ;; since you last looked, if anything.
@@ -10022,7 +10084,7 @@ have seen that waits for nothing."
                       (urgent (truncate-string-to-width status (max 1 (- room least 1)) nil nil "…"))))
          (name (roost--row-name task (if label (max 1 (- room (string-width label) 1)) room)
                                 (if current 'roost-heading 'default))))
-    (let ((row (concat " " name
+    (let ((row (concat " " indent name
                        (when label
                          (concat (make-string (max 1 (- room (string-width name) (string-width label))) ?\s)
                                  (propertize label 'face face))))))

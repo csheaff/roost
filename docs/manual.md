@@ -229,6 +229,23 @@ until it replies again; one that failed or stopped by itself stops counting
 once you've seen it. What you've seen is kept on the task's host, for your
 other machines and the next session.
 
+**Take the tasks an agent offers.** An agent that comes across work outside
+its task, such as a bug in code it read, can offer it as a task of its own.
+It asks in its terminal, with the task's name and the start of the brief it
+wrote: start it as a new task, in its own worktree, or have it done here, in
+this conversation. Its task waits on you meanwhile, as for a permission
+request (`Offers a task: Fix add in calc.py`). A task you start this way is
+like one you start with `c`: the same project, agent and command, from the
+same starting point, with the agent's brief as its prompt. The dashboard and
+sidebar show it under the task it came from, and each task's panel names the
+other. The agent that offered it can read how the task is doing, with its
+latest reply, and send it a message, which arrives as its next prompt,
+marked as from that task, and only while it waits for one. Roost gives the
+agent these tools as an MCP server of the helper's (Pi's through its
+extension), so an agent that can't show an MCP server's form can't offer a
+task. How often an agent offers rests on the model: Roost's instructions to
+it say when.
+
 **Keep them in view.** `b` in the dashboard, or `M-x roost-sidebar-mode`, keeps a
 compact task list at the left of every frame, through perspective and tab
 switches and `C-x 1`; add `(roost-sidebar-mode 1)` to your configuration to have
@@ -848,6 +865,12 @@ OpenCode plugin; with
 `roost-program-status` on, also from what the agent reports to its terminal.
 Roost never changes your global agent settings or answers prompts.
 
+Each agent runs the helper as an MCP server of its own, for the tasks it
+offers: Claude Code from `--mcp-config`, Codex from `-c mcp_servers.roost`,
+and OpenCode from the inline config that loads its plugin. The agent starts
+it and ends it with itself, so nothing else keeps running. Pi's extension
+runs it for each call.
+
 Each status, and what Roost makes of it, is in [What a task says](#what-a-task-says).
 
 The helper notes each change of a task's status, of whether you've seen its
@@ -1001,6 +1024,11 @@ What runs where:
   event on stdin, and the helper records it and prints nothing back: they
   report, and never approve or decline. The runner and hooks run the
   helper's file with the same Python, without `-I`.
+- Each agent runs the helper as an MCP server, its program and arguments
+  separate, with no shell. It starts a task only once you answer its
+  question in the agent's terminal, and reads and messages only the tasks
+  its agent started that way. Claude Code's settings for the task allow
+  its three tools without asking, as the offer asks you itself.
 - Claude Code and OpenCode may read one folder outside the task's
   worktree without asking: the task's attachments, under the state
   directory, given to Claude Code as `--add-dir` and to OpenCode as a rule

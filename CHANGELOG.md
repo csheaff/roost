@@ -4,6 +4,15 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- An agent can offer work it came across outside its task as a task of its
+  own. It asks in its terminal whether to start it as a new task, in its
+  own worktree, or to do it there, and its task waits on you meanwhile. A
+  task you start this way shows under the one it came from in the
+  dashboard and sidebar, and the agent that offered it can read how it is
+  doing and send it a message. Roost gives Claude Code, Codex and OpenCode
+  these tools as an MCP server of the helper's, and Pi through its
+  extension; the agent starts the server and ends it with itself. Nothing
+  to do when upgrading: a task gets them when its agent next starts.
 - Roost shows a GitLab merge request as it shows a GitHub pull request:
   numbered `!12`, with its pipeline's jobs as its checks and its
   unresolved threads, and a task whose merge request waits on you says

@@ -212,10 +212,16 @@ KIND is `committed', `uncommitted', `untracked' or `binary'."
                               '("docs" "scripts" "src" "test" "tools")))))
     ("with notes" (status . "ready") (live . t) (dirty . t) (diff . "1 file +4 −1 · uncommitted")
      (files . ,(roost-sweep--files '("ledger.py" . uncommitted))))
+    ;; Its agent asks you, in its terminal, whether to start a task.
+    ("offers a task" (status . "permission") (live . t)
+     (request . "Offers a task: Show each budget's total in the report"))
+    ;; Offered by the agent of the state named, and started by you.
+    ("started from another task" (status . "running") (live . t) (parentState . "ready, reviewing"))
+    ("started from a task since retired" (status . "ready") (live . t) (parent . "ffffffffffffffff"))
     ("unreachable host" (host . "gone") (status . "running") (live . t)))
   "Task states the views are drawn for: (NAME . FIELDS).
 FIELDS go over those of `roost-test--task', on host \"dev\" unless they
-name another.  Each state is a task of its own, with an ID from its
+name another; parentState names the state whose task started this one.  Each state is a task of its own, with an ID from its
 place here, so the dashboard and sidebar show them all at once.")
 
 (defun roost-sweep--key (name)
@@ -241,8 +247,10 @@ Each has what a host lists for every task, as where it started and the
 size of its changes, unless its state says otherwise."
   (cl-loop for (name . fields) in roost-sweep--gallery
            for key = (roost-sweep--key name)
+           for parent = (alist-get 'parentState fields)
            do (roost--cache-task (car key)
-                                 (append (assq-delete-all 'host (copy-tree fields))
+                                 (append (assq-delete-all 'host (assq-delete-all 'parentState (copy-tree fields)))
+                                         (when parent `((parent . ,(cadr (roost-sweep--key parent)))))
                                          `((id . ,(cadr key)) (name . ,name) (repo . "/home/user/ledger")
                                            (branch . ,(format "roost/%s" (replace-regexp-in-string " " "-" name)))
                                            (baseRef . "main")

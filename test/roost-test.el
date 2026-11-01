@@ -3046,6 +3046,48 @@ terminal's, on a pty.  Skips the test where it can't be made."
            (push-button (1- (point))))
          (should (string-suffix-p ":dev:/srv/ledger/" started)))))))
 
+(ert-deftest roost-tasks-an-agent-offered-sit-under-it ()
+  (roost-test--isolated
+   (let ((roost--current-task nil) (roost-watch-mode t)
+         (task (lambda (id name started &optional parent)
+                 (roost--cache-task "dev" (append `((name . ,name) (repo . "/srv/ledger") (startedAt . ,started)
+                                                    ,@(when parent `((parent . ,parent))))
+                                                  (roost-test--task id "running"))))))
+     ;; Started after another task, and before the one it was offered by
+     ;; started its own.
+     (funcall task "1111111111111111" "ledger" "2026-10-01T10:00:00Z")
+     (funcall task "2222222222222222" "budget" "2026-10-01T11:00:00Z")
+     (funcall task "3333333333333333" "docs" "2026-10-01T12:00:00Z" "1111111111111111")
+     (funcall task "4444444444444444" "docs tests" "2026-10-01T13:00:00Z" "3333333333333333")
+     ;; Its parent retired: a task like any other.
+     (funcall task "5555555555555555" "orphan" "2026-10-01T09:00:00Z" "ffffffffffffffff")
+     (with-temp-buffer
+       (roost-sidebar-list-mode)
+       (roost--render-sidebar)
+       (let ((names (seq-keep (lambda (line) (and (string-match "^\\( *[a-z ]*[a-z]\\) +running$" line)
+                                                  (match-string 1 line)))
+                              (split-string (buffer-string) "\n"))))
+         (should (equal names '(" orphan" " ledger" "   docs" "     docs tests" " budget")))))
+     (with-temp-buffer
+       (roost-dashboard-mode)
+       (let ((rows (mapcar (lambda (task) (roost--dashboard-row task (roost--dashboard-layout (roost-tasks) 120) 120))
+                           (cdar (roost--task-groups (roost-tasks))))))
+         (should (equal (mapcar (lambda (row) (and (string-match "\\`  . \\( *[a-z]+\\(?: [a-z]+\\)?\\)" row)
+                                                   (match-string 1 row)))
+                                rows)
+                        '("orphan" "ledger" "  docs" "    docs tests" "budget")))
+         ;; Each status in its column.
+         (should (= (length (delete-dups (mapcar (lambda (row) (string-search "running" row)) rows))) 1))))
+     (with-temp-buffer
+       (roost-task-info-mode)
+       (setq roost--buffer-task-key '("dev" "3333333333333333"))
+       (roost--render-task-info)
+       (should (string-match-p "Started from +ledger" (buffer-string)))
+       (should (string-match-p "Started +docs tests" (buffer-string)))
+       (setq roost--buffer-task-key '("dev" "5555555555555555"))
+       (roost--render-task-info)
+       (should (string-match-p "Started from +a task Roost no longer has" (buffer-string)))))))
+
 (ert-deftest roost-sidebar-shows-the-task-you-work-on ()
   ;; With more tasks than the sidebar has lines, the one you opened was
   ;; below them, and its band, status and ± with it.
