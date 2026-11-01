@@ -1084,22 +1084,31 @@ export default function (pi) {
     const child = spawn(process.env.ROOST_PYTHON, [process.env.ROOST_HELPER, "mcp",
       process.env.ROOST_STATE_DIRECTORY, process.env.ROOST_TASK_ID], { stdio: ["pipe", "pipe", "ignore"] });
     const write = message => child.stdin.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\n");
-    // Its choice is a list to pick from; what it shows to read, as the
-    // brief, goes above it, and back as it was.
+    // Its choice is a list to pick from. What it gives to read and change,
+    // as the brief, goes above the list, which offers to change it in Pi's
+    // editor and then asks again.
     const answer = async question => {
       const fields = Object.entries(question.params.requestedSchema.properties);
       const [key, field] = fields.find(([, f]) => f.enum);
-      const shown = fields.filter(([, f]) => !f.enum && typeof f.default === "string");
       const labels = field.enumNames || field.enum;
+      const texts = fields.filter(([, f]) => !f.enum && typeof f.default === "string");
+      const changes = texts.map(([k, f]) => "Change the " + (f.title || k).toLowerCase());
+      const content = Object.fromEntries(texts.map(([k, f]) => [k, f.default]));
       let chosen;
       try {
-        chosen = await ctx.ui.select([question.params.message, ...shown.map(([, f]) => f.default)].join("\n\n"),
-          [...labels, "Neither"]);
-      } catch {}
+        for (;;) {
+          chosen = await ctx.ui.select([question.params.message, ...texts.map(([k]) => content[k])].join("\n\n"),
+            [...labels, ...changes, "Neither"]);
+          const change = changes.indexOf(chosen);
+          if (change < 0) break;
+          const [k, f] = texts[change];
+          const changed = await ctx.ui.editor(f.title || k, content[k]);
+          if (typeof changed === "string" && changed.trim()) content[k] = changed;
+        }
+      } catch { chosen = undefined; }
       const at = labels.indexOf(chosen);
       write({ id: question.id, result: chosen === undefined ? { action: "cancel" }
-        : at < 0 ? { action: "decline" }
-        : { action: "accept", content: { [key]: field.enum[at], ...Object.fromEntries(shown.map(([k, f]) => [k, f.default])) } } });
+        : at < 0 ? { action: "decline" } : { action: "accept", content: { ...content, [key]: field.enum[at] } } });
     };
     let buffer = "";
     child.stdout.setEncoding("utf8");
@@ -3911,8 +3920,12 @@ class McpServer:
             if reply.get("method") == "ping" and reply.get("id") is not None:
                 self.write(dict(id=reply["id"], result={}))
             elif reply.get("method") == "notifications/cancelled":
-                if (reply.get("params") or {}).get("requestId") == ident:
+                cancelled = (reply.get("params") or {}).get("requestId")
+                if cancelled == ident:
                     raise McpCancelled
+                # One waiting its turn goes unanswered, as it would once begun.
+                self.pending = collections.deque(waiting for waiting in self.pending
+                                                 if waiting.get("id") != cancelled)
             elif reply.get("method"):
                 self.pending.append(reply)
 
@@ -3963,11 +3976,12 @@ def propose_task(server, title, brief, ident):
         answer = server.elicit("Start a task: %s" % title, schema, ident)
     content = answer.get("content") if answer.get("action") == "accept" else None
     start = content.get("start") if isinstance(content, dict) else None
-    if start == "here":
-        return "The user chose to have you do it here, in this conversation. Go ahead."
-    if start != "new":
+    if start not in ("new", "here"):
         return "The user didn't start it. Don't offer it again unless they ask."
     started = answered_brief(brief, content.get("brief"))
+    if start == "here":
+        return ("The user chose to have you do it here, in this conversation. Go ahead"
+                + (", as the brief they changed says:\n\n" + started if started != brief else "."))
     with server.store.locked():
         parent = server.store.read(server.task_id)
     task = make_task(server.store, offered_request(parent, title, started), None)

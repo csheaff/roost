@@ -2675,6 +2675,19 @@ class Lifecycle(unittest.TestCase):
             with self.subTest(answer=answer):
                 replies, _ = self.offer(parent, self.propose(), dict(id="roost-1", result=answer))
                 self.assertIn(said, replies["call"]["result"]["content"][0]["text"])
+        # Done here with the brief you changed, which the agent is told.
+        replies, _ = self.offer(parent, self.propose(), dict(id="roost-1", result=dict(
+            action="accept", content=dict(start="here", brief="Only the docs."))))
+        self.assertTrue(replies["call"]["result"]["content"][0]["text"].endswith(
+            "Go ahead, as the brief they changed says:\n\nOnly the docs."))
+        # A request that waits its turn behind the question, cancelled
+        # meanwhile, is never answered, as it would be once begun.
+        replies, _ = self.offer(parent, self.propose(),
+                                dict(id="queued", method="tools/call", params=dict(name="read_task", arguments={})),
+                                dict(method="notifications/cancelled", params=dict(requestId="queued")),
+                                dict(id="roost-1", result=dict(action="decline")))
+        self.assertIn("call", replies)
+        self.assertNotIn("queued", replies)
         # Stopped while it asks: no answer, and the agent goes on as before.
         replies, _ = self.offer(parent, self.propose(),
                                 dict(method="notifications/cancelled", params=dict(requestId="call")))
@@ -8240,15 +8253,19 @@ class ProgramStatus(unittest.TestCase):
                 "const tools = {};\n"
                 "observe({ on: () => {}, registerTool: tool => { tools[tool.name] = tool; } });\n"
                 "const asked = [];\n"
+                "const edited = [];\n"
+                "// The brief changed in Pi's editor first, then done here.\n"
                 "const ctx = { ui: { select: async (title, options) => { asked.push([title, options]);\n"
-                "                                                       return options[1]; } } };\n"
+                "                                                       return options[asked.length === 1 ? 2 : 1]; },\n"
+                "                    editor: async (title, text) => { edited.push([title, text]);\n"
+                "                                                     return 'Only the docs.'; } } };\n"
                 "const offered = await tools.propose_task.execute('1', { title: 'Docs', brief: 'Write them.' },\n"
                 "                                                 undefined, undefined, ctx);\n"
                 "const read = await tools.read_task.execute('2', {}, undefined, undefined, ctx);\n"
                 "let refused;\n"
                 "try { await tools.message_task.execute('3', { task: 'abcd', message: 'Hi' }, undefined, undefined, ctx); }\n"
                 "catch (error) { refused = error.message; }\n"
-                "console.log(JSON.stringify({ names: Object.keys(tools), asked, offered, read, refused,\n"
+                "console.log(JSON.stringify({ names: Object.keys(tools), asked, edited, offered, read, refused,\n"
                 "                             schema: tools.propose_task.parameters }));\n"
                 % json.dumps(extension.as_uri()))
             env = dict(os.environ, ROOST_PYTHON=sys.executable, ROOST_HELPER=str(SOURCE),
@@ -8267,10 +8284,12 @@ class ProgramStatus(unittest.TestCase):
                 % json.dumps(extension.as_uri()))
             self.assertEqual(subprocess.run(["node", str(refusing)], env=env, check=True, timeout=30,
                                             capture_output=True, text=True).stdout.strip(), "true")
-            self.assertEqual(said["asked"], [["Start a task: Docs\n\nWrite them.",
-                                              ["As a new task, in its own worktree", "Here, in this conversation",
-                                               "Neither"]]])
-            self.assertIn("do it here", said["offered"]["content"][0]["text"])
+            choices = ["As a new task, in its own worktree", "Here, in this conversation", "Change the brief", "Neither"]
+            self.assertEqual(said["asked"], [["Start a task: Docs\n\nWrite them.", choices],
+                                             ["Start a task: Docs\n\nOnly the docs.", choices]])
+            self.assertEqual(said["edited"], [["Brief", "Write them."]])
+            self.assertTrue(said["offered"]["content"][0]["text"].endswith(
+                "do it here, in this conversation. Go ahead, as the brief they changed says:\n\nOnly the docs."))
             self.assertEqual(said["read"]["content"][0]["text"], "You haven't started any tasks.")
             self.assertIn("No task you started", said["refused"])
             self.assertEqual(said["schema"]["required"], ["title", "brief"])

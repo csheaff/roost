@@ -6162,7 +6162,16 @@ With FAILING, it prints it on stderr and exits with status 1."
            (should (<= (string-width row) 12))
            (should (string-match-p " 444444 p…\\'" row))
            (should-not (string-match-p "±" row)))
-         (should (string-match-p "fix auth 444444 ± +permission\\'" (roost--sidebar-row twin 30)))))
+         (should (string-match-p "fix auth 444444 ± +permission\\'" (roost--sidebar-row twin 30)))
+         ;; Nor does the indent under the task it was started from, which
+         ;; gives up its columns first.
+         (setq twin (roost--cache-task "dev" (cons (cons 'parent (roost--field task 'id)) twin)))
+         (should (= (roost--nesting twin) 1))
+         (let ((row (roost--sidebar-row twin 12)))
+           (should (<= (string-width row) 12))
+           (should (string-match-p "\\` … 444444 p…\\'" row)))
+         (should (string-match-p "\\`  … 444444 p…\\'" (roost--sidebar-row twin 13)))
+         (should (string-match-p "\\`   fix auth 444444 ± +permission\\'" (roost--sidebar-row twin 32)))))
      ;; The panel says how large, and where.
      (with-temp-buffer
        (roost-task-info-mode)

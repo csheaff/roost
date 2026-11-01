@@ -10059,8 +10059,14 @@ have seen that waits for nothing."
                    (roost--status-face attention)
                  (roost--status-word-face attention)))
          (urgent (and face (not (eq face 'roost-dim))))
-         ;; Under the task it was started from, if any.
-         (indent (roost--nesting-indent task))
+         ;; The fewest columns the name takes: one, and the ID that tells
+         ;; it from a task of the same name.
+         (least (string-width (roost--row-name task 1)))
+         ;; Under the task it was started from, as far as leaves room for
+         ;; those and the two columns that start a status you should look
+         ;; at, as one letter and an ellipsis.
+         (indent (let ((nested (roost--nesting-indent task)))
+                   (substring nested 0 (min (length nested) (max 0 (- width 1 least 3))))))
          ;; After an indent.
          (room (- width 1 (length indent)))
          (idle (equal attention "idle"))
@@ -10069,9 +10075,6 @@ have seen that waits for nothing."
          (status (if idle
                      (and (roost--since-looked-shown-p task) (roost--since-looked-text task))
                    (roost--display-status task)))
-         ;; The fewest columns the name takes: one, and the ID that tells
-         ;; it from a task of the same name.
-         (least (string-width (roost--row-name task 1)))
          ;; A status you should look at shows even where the name then has
          ;; little room; the others, where its name keeps a dozen columns.
          ;; What changed since you looked shows only beside the whole name.
