@@ -364,6 +364,27 @@ terminal's, on a pty.  Skips the test where it can't be made."
                    (goto-char (point-min))
                    (roost-click-key (list 'mouse-1 (list (selected-window) at '(0 . 0) 0)))))
                (should (equal ran "0123456789abcdef"))
+               ;; A question left open in the minibuffer is quit first,
+               ;; which gives back the windows it found; then the click
+               ;; runs in the panel, where it was.
+               (setq ran nil)
+               (cl-letf (((symbol-function 'roost-pr)
+                          (lambda () (interactive)
+                            (setq ran (list (current-buffer) (get-text-property (point) 'roost-key-command))))))
+                 (let* ((panel (current-buffer))
+                        (at (save-excursion (goto-char (point-min)) (search-forward "P opens")))
+                        (then (catch 'left-open
+                                (cl-letf (((symbol-function 'roost--quit-questions-left-open)
+                                           (lambda (then) (throw 'left-open then))))
+                                  (roost-click-key (list 'mouse-1 (list (selected-window) at '(0 . 0) 0))))
+                                nil)))
+                   (should then)
+                   (should-not ran)
+                   (switch-to-buffer "*scratch*")
+                   (goto-char (point-min))
+                   (funcall then)
+                   (should (equal ran (list panel 'roost-pr)))
+                   (switch-to-buffer panel)))
                ;; Words before a key go with it when none come after.
                (setq roost--buffer-task-key (roost--key asking))
                (roost--render-task-info)
@@ -2398,12 +2419,15 @@ terminal's, on a pty.  Skips the test where it can't be made."
                (funcall failure "no such host\nssh: details")
                (should (string-match-p "Could not create the task: no such host · " (roost--compose-header)))
                (should-not (string-match-p "\n" (roost--compose-header)))
-               ;; With the mouse, its buttons stay to try again, unless
-               ;; they'd cut short what happened.
+               ;; With the mouse, its buttons stay to try again, and what
+               ;; happened, cut short beside them, is all in its help-echo.
                (let ((xterm-mouse-mode t))
                  (should (string-suffix-p " Create " (roost--compose-header)))
                  (funcall failure (concat "no such host " (make-string 80 ?x)))
-                 (should (string-suffix-p (make-string 80 ?x) (car (split-string (roost--compose-header) " · ")))))
+                 (let ((header (roost--compose-header)))
+                   (should (string-suffix-p " Create " header))
+                   (should (string-search "…" header))
+                   (should (string-search (make-string 80 ?x) (get-text-property 1 'help-echo header)))))
                (should (buffer-live-p (current-buffer)))))
          (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
 
@@ -7469,7 +7493,7 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
                        ((symbol-function 'roost--attachment-files) #'ignore)
                        ((symbol-function 'roost--send-attach-file)
                         (lambda (file _) (push (list "attach" file (current-buffer)) sent))))
-               (dolist (case '((send "Send") (send "Attach") (send "Cancel") (pr "Cancel")
+               (dolist (case '((send "Send") (send "Attach") (send "Cancel") (pr "Cancel") (pr "Create")
                                ;; Untouched, whose own question would outlive it.
                                (nil "Cancel")))
                  (setq sent nil)
@@ -7495,6 +7519,7 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
                    (funcall then)
                    (pcase (cadr case)
                      ("Send" (should (assoc "send" sent)))
+                     ("Create" (should (assoc "pr" sent)))
                      ("Attach" (should (equal (assoc "attach" sent) (list "attach" "/tmp/shot.png" draft))))
                      (_ (should-not (buffer-live-p draft)))))))))))))))
 

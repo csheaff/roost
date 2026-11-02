@@ -2792,20 +2792,21 @@ A text frame does with `xterm-mouse-mode'."
 (defun roost--draft-header (text buttons &optional busy)
   "A draft's header line: TEXT, or the draft's note, then BUTTONS at the right.
 BUTTONS are as `roost--header-buttons' takes them, shown where clicks
-reach Emacs, and not while BUSY.  TEXT gives way to them in a narrow
-window, and they to a note that doesn't fit beside them, which says
-its key."
+reach Emacs, and not while BUSY.  Text that doesn't fit beside them is
+cut short, with all of it in its help-echo: they are how a hand on the
+mouse tries again, or gives up."
   (let ((text (or roost--draft-note text)))
     (if (or busy (not (roost--clicks-p)))
         text
       (let* ((buttons (roost--header-buttons buttons))
              (width (string-pixel-width buttons))
-             (room (- (window-max-chars-per-line) (ceiling width (frame-char-width)) 2)))
-        (if (and roost--draft-note (> (string-width text) room))
-            text
-          (concat (truncate-string-to-width text (max 0 room) nil nil "…")
-                  (propertize " " 'display `(space :align-to (- right (,(+ width (frame-char-width))))))
-                  buttons))))))
+             (room (max 0 (- (window-max-chars-per-line) (ceiling width (frame-char-width)) 2))))
+        (concat (if (> (string-width text) room)
+                    (propertize (truncate-string-to-width text room nil nil "…")
+                                'help-echo (string-trim text))
+                  text)
+                (propertize " " 'display `(space :align-to (- right (,(+ width (frame-char-width))))))
+                buttons)))))
 
 (defun roost--compose-header ()
   "The new task draft's header line: its keys, then buttons."
@@ -3564,18 +3565,18 @@ left in `last-nonmenu-event' doesn't choose the draft."
                  (eq (buffer-local-value 'major-mode (window-buffer window)) mode))
         (select-window window)))))
 
-(defun roost--quit-questions-for-draft (function)
-  "Quit the questions you left open in the minibuffer, then call FUNCTION.
-FUNCTION, such as the draft command you gave, is called in the draft
-that is current.  A question left open would take one it asks, or hold
-back the task it opens.  Return nil when there are none; otherwise this
-doesn't return, as for `roost--quit-questions-left-open'."
-  (let ((draft (current-buffer)))
+(defun roost--quit-questions-here (function)
+  "Quit the questions you left open in the minibuffer, then call FUNCTION here.
+Here is the buffer that is current, such as the draft or panel whose
+button you clicked, shown again, as quitting gives back the windows the
+question found.  A question left open would take one FUNCTION asks, or
+hold back the task it opens.  Return nil when there are none; otherwise
+this doesn't return, as for `roost--quit-questions-left-open'."
+  (let ((buffer (current-buffer)))
     (roost--quit-questions-left-open
      (lambda ()
-       (when (buffer-live-p draft)
-         ;; Quitting gave back the windows the question found.
-         (pop-to-buffer draft)
+       (when (buffer-live-p buffer)
+         (pop-to-buffer buffer)
          (funcall function))))))
 
 (defun roost-compose-cancel (&optional event)
@@ -3583,7 +3584,7 @@ doesn't return, as for `roost--quit-questions-left-open'."
   (interactive (list last-nonmenu-event))
   (roost--draft-clicked event 'roost-compose-mode)
   ;; One of the draft's own, as for its name, would outlive it.
-  (roost--quit-questions-for-draft #'roost-compose-cancel)
+  (roost--quit-questions-here #'roost-compose-cancel)
   (when (or (string-empty-p (roost--compose-prompt))
             (yes-or-no-p "Discard this task draft? "))
     (quit-window t)))
@@ -3604,7 +3605,7 @@ EVENT, a click on the draft's Create button, says which draft."
     (when roost--compose-submitting
       (user-error "Already creating %s" name))
     ;; The project's setup command can be asked about.
-    (roost--quit-questions-for-draft #'roost-compose-submit)
+    (roost--quit-questions-here #'roost-compose-submit)
     (let* ((directory (plist-get fields :directory))
            (host (roost--directory-host directory)))
       ;; Asked again in the same project, as after no reply came, the host
@@ -3987,7 +3988,7 @@ draft clears them (see `roost-note')."
   (interactive (list last-nonmenu-event))
   (roost--draft-clicked event 'roost-send-mode)
   ;; One of the draft's own, as for an attachment, would outlive it.
-  (roost--quit-questions-for-draft #'roost-send-cancel)
+  (roost--quit-questions-here #'roost-send-cancel)
   (when (or (string-empty-p (string-trim (buffer-string)))
             (yes-or-no-p "Discard this prompt? "))
     (quit-window t)))
@@ -4014,7 +4015,7 @@ draft's Send button, says which draft."
     (when roost--send-sending
       (user-error "Already sending"))
     ;; Sending while its agent may be at a prompt asks first.
-    (roost--quit-questions-for-draft #'roost-send-submit)
+    (roost--quit-questions-here #'roost-send-submit)
     (setq roost--send-sending t
           roost--draft-note nil)
     (condition-case err
@@ -4342,7 +4343,7 @@ The copies go when the task does."
                  ;; From its Attach button, the draft clicked.
                  (roost--draft-clicked last-nonmenu-event 'roost-send-mode)
                  (roost--attaching-task)
-                 (roost--quit-questions-for-draft
+                 (roost--quit-questions-here
                   (lambda () (call-interactively #'roost-send-attach)))
                  (list (roost--read-attachment))))
   (roost--send-attach-file file (roost--attachment-files file)))
@@ -6291,7 +6292,7 @@ only open it."
   "Discard the pull request draft, or the one whose Cancel button EVENT clicked."
   (interactive (list last-nonmenu-event))
   (roost--draft-clicked event 'roost-pr-mode)
-  (roost--quit-questions-for-draft #'roost-pr-cancel)
+  (roost--quit-questions-here #'roost-pr-cancel)
   (when (or (string-empty-p (string-trim (buffer-string)))
             (yes-or-no-p "Discard this pull request? "))
     (quit-window t)))
@@ -6318,6 +6319,8 @@ Create button, says which draft."
       (user-error "Write a title on the first line"))
     (when roost--pr-sending
       (user-error "Already creating"))
+    ;; Or one of the draft's own, as whether to discard it, would outlive it.
+    (roost--quit-questions-here (lambda () (roost-pr-submit draft)))
     (setq roost--pr-sending t
           roost--draft-note nil)
     (message "Roost: creating a pull request for %s…" (roost--field task 'name))
@@ -8817,13 +8820,19 @@ Status is the last observation from the task's host.
   "<mouse-1>" #'roost-click-key)
 
 (defun roost-click-key (event)
-  "Do what the key clicked in EVENT does where it is named."
+  "Do what the key clicked in EVENT does where it is named.
+A question you left open in the minibuffer is quit first, as it would
+take one the key's command asks."
   (interactive "e")
   (mouse-set-point event)
-  (let ((command (get-text-property (point) 'roost-key-command)))
-    (if (commandp command)
-        (call-interactively command)
-      (user-error "Nothing to do here"))))
+  (let ((command (get-text-property (point) 'roost-key-command))
+        (position (point)))
+    (unless (commandp command)
+      (user-error "Nothing to do here"))
+    (roost--quit-questions-here (lambda ()
+                                  (goto-char (min position (point-max)))
+                                  (call-interactively command)))
+    (call-interactively command)))
 
 (defun roost--key-at-p (position)
   "Whether the text at POSITION names a key, in a key's face."

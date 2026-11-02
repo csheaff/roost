@@ -3638,8 +3638,12 @@ def slow_create(qa, repo):
         draft = lambda s: qa.window(s, "roost-compose-mode") or {}
         qa.wait("word that no reply came", lambda s: draft(s).get("header", "").startswith(" No reply from"))
         qa.step("No reply in time", expect=[
-            ("the draft says so, and that the task opens if it was made",
-             lambda s: "the task opens here if it was made · C-c C-c asks again" in draft(s)["header"]),
+            ("the draft says so, its buttons beside it to ask again or give up",
+             lambda s: draft(s)["header"].rstrip().endswith("Create")),
+            ("and, in full on hover, that the task opens if it was made",
+             lambda s: "the task opens here if it was made · C-c C-c asks again" in qa.emacs.eval(
+                 "(with-current-buffer roost--compose-buffer"
+                 " (or (get-text-property 1 'help-echo (format-mode-line header-line-format)) roost--draft-note))")),
             ("it keeps what you wrote", lambda s: "Make the slow one" in draft(s).get("text", ""))])
         qa.emacs.eval("(progn (setq roost-request-timeout 60 roost--create-seconds 600) t)")
         qa.wait("the half-made worktree to go", lambda s: (branches(), worktrees()) == known, timeout=30)
