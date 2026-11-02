@@ -3122,6 +3122,21 @@ terminal's, on a pty.  Skips the test where it can't be made."
              (roost--render-sidebar)
              (should-not (string-match-p "dev · b" (buffer-string)))
              (should (string-match-p (regexp-quote (funcall row "dev · d")) (buffer-string)))
+             ;; c goes under each method it was remembered by.
+             (roost-forget-project "/ssh:dev:/srv/c/")
+             (should-not (seq-filter (lambda (project) (string-suffix-p ":/srv/c/" project))
+                                     roost--remembered-projects))
+             ;; A question left open is quit first, then the draft opens.
+             (goto-char (point-min))
+             (search-forward "dev · d")
+             (let (quit)
+               (cl-letf (((symbol-function 'roost--compose)
+                          (lambda (_fork _seed directory) (setq drafted directory)))
+                         ((symbol-function 'roost--quit-questions-left-open)
+                          (lambda (then) (setq quit t) (funcall then) t)))
+                 (roost-sidebar-new-task))
+               (should quit)
+               (should (equal drafted "/ssh:dev:/srv/d/")))
              ;; With no tasks, the project they were in is offered too.
              (clrhash roost--tasks)
              (roost--render-sidebar)

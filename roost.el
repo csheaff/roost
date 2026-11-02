@@ -2436,7 +2436,15 @@ remembers it again."
                  (unless projects (user-error "Roost remembers no projects"))
                  (cdr (assoc (completing-read "Forget project: " projects nil t) projects)))))))
   (roost--known-projects)
-  (setq roost--remembered-projects (delete (file-name-as-directory directory) roost--remembered-projects))
+  ;; However it was spelled, as by another TRAMP method, which the
+  ;; sidebar takes for the same project.
+  (let ((place (roost--project-place directory)))
+    (setq roost--remembered-projects
+          (seq-remove (lambda (project)
+                        (if place
+                            (equal (roost--project-place project) place)
+                          (equal project (file-name-as-directory directory))))
+                      roost--remembered-projects)))
   (roost--write-json-list roost-projects-file roost--remembered-projects)
   (roost--redraw)
   (message "Roost no longer offers %s" (roost--project-label directory)))
@@ -2462,24 +2470,32 @@ offered as it is, since checking it would open a connection."
                         (directory-file-name (file-local-name directory))))
                     (roost--known-projects))))
 
+(defun roost--bare-host (host)
+  "HOST without its user, as me@dev and dev are one machine; nil for local."
+  (and host (replace-regexp-in-string "\\`[^@]*@" "" host)))
+
+(defun roost--project-place (directory)
+  "Project DIRECTORY as (HOST . PATH), HOST without its user, or nil.
+By name alone, so it opens no connection, and whatever TRAMP method
+spells it."
+  (when-let* ((at (roost--host-and-path directory)))
+    (cons (roost--bare-host (car at)) (cdr at))))
+
 (defun roost--recent-projects (tasks)
   "Projects none of TASKS is in that the sidebar lists, in its order.
 On each host Roost watches, the `roost-sidebar-recent-projects' you
 used last.  Matched by host and path alone, so none opens a connection."
-  (let* ((bare (lambda (host) (and host (replace-regexp-in-string "\\`[^@]*@" "" host))))
-         ;; By host without its user, as me@dev and dev are one machine.
-         (taken (mapcar (lambda (task)
-                          (cons (funcall bare (roost--field task 'host))
+  (let* ((taken (mapcar (lambda (task)
+                          (cons (roost--bare-host (roost--field task 'host))
                                 (file-name-as-directory (or (roost--field task 'repo) ""))))
                         tasks))
-         (hosts (mapcar bare (roost--hosts)))
+         (hosts (mapcar #'roost--bare-host (roost--hosts)))
          (counts nil)
          (places nil))
     (roost--known-projects)
     ;; Those of tasks are taken anyway.
     (dolist (directory roost--remembered-projects)
-      (when-let* ((at (roost--host-and-path directory))
-                  (place (cons (funcall bare (car at)) (cdr at)))
+      (when-let* ((place (roost--project-place directory))
                   ((member (car place) hosts))
                   ((not (member place taken)))
                   ((not (assoc place places)))
@@ -9590,13 +9606,18 @@ The mark stays where it was."
   (interactive (list last-nonmenu-event))
   (when (mouse-event-p event)
     (mouse-set-point event))
-  (pcase (get-text-property (point) 'roost-project)
-    ('nil (user-error "No project here"))
-    ;; Chosen by menus after a click, and locally in the system's
-    ;; folder dialog, as `read-directory-name' shows one then.
-    ('other (when-let* ((directory (roost--read-project-directory)))
-              (roost--compose nil nil (file-name-as-directory (expand-file-name directory)))))
-    (directory (roost--compose nil nil directory))))
+  (let* ((project (or (get-text-property (point) 'roost-project) (user-error "No project here")))
+         (start (lambda ()
+                  (if (stringp project)
+                      (roost--compose nil nil project)
+                    ;; Chosen by menus after a click, and locally in the
+                    ;; system's folder dialog, as `read-directory-name'
+                    ;; shows one then.
+                    (when-let* ((directory (roost--read-project-directory)))
+                      (roost--compose nil nil (file-name-as-directory (expand-file-name directory))))))))
+    ;; A question left open would hold up the folder's, or the new task.
+    (or (roost--quit-questions-left-open start)
+        (funcall start))))
 
 (easy-menu-define roost-project-menu nil
   "Menu for a project the sidebar lists for a new task."
