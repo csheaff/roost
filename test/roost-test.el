@@ -2348,8 +2348,11 @@ terminal's, on a pty.  Skips the test where it can't be made."
                (should (equal created '("/ssh:dev:/repo/" "fix-csv-importer-quoted" nil
                                         "Fix the CSV importer so quoted commas work.\nAdd tests." "claude")))
                (funcall failure "no such host\nssh: details")
-               (should (string-match-p "Could not create the task: no such host · " header-line-format))
-               (should-not (string-match-p "\n" header-line-format))
+               (should (string-match-p "Could not create the task: no such host · " (roost--compose-header)))
+               (should-not (string-match-p "\n" (roost--compose-header)))
+               ;; With the mouse, its buttons stay to try again.
+               (let ((xterm-mouse-mode t))
+                 (should (string-suffix-p " Create " (roost--compose-header))))
                (should (buffer-live-p (current-buffer)))))
          (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
 
@@ -3063,9 +3066,10 @@ terminal's, on a pty.  Skips the test where it can't be made."
        (roost--cache-task "dev" (append '((name . "budget-alerts") (repo . "/srv/ledger"))
                                         (roost-test--task "1111111111111111" "running")))
        ;; Most recent first, as Roost remembers them: c once, under either
-       ;; method; none on a host Roost doesn't watch.
+       ;; method; ledger, with a task, under no user name; none on a host
+       ;; Roost doesn't watch.
        (setq roost--remembered-projects
-             (list "/ssh:dev:/srv/ledger/" "/ssh:dev:/srv/c/" notes "/ssh:gone:/srv/x/"
+             (list "/ssh:dev:/srv/ledger/" "/ssh:me@dev:/srv/ledger/" "/ssh:dev:/srv/c/" notes "/ssh:gone:/srv/x/"
                    "/scp:dev:/srv/c/" "/ssh:dev:/srv/a/" "/ssh:dev:/srv/b/" "/ssh:dev:/srv/d/"))
        (switch-to-buffer (get-buffer-create "*sidebar test*"))
        (unwind-protect
@@ -3106,6 +3110,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
                  (cl-letf (((symbol-function 'roost--read-project-directory) #'ignore))
                    (roost-sidebar-new-task))
                  (should-not drafted)))
+             (should-error (call-interactively #'roost-forget-project) :type 'user-error)
              (search-backward "dev · b")
              ;; Forgotten, the next most recent takes its place.
              (call-interactively #'roost-forget-project)
@@ -6312,7 +6317,7 @@ With FAILING, it prints it on stderr and exits with status 1."
                (should (equal watched '(1)))
                (should (equal remembered '("dev")))
                (with-current-buffer roost--compose-buffer
-                 (should (equal header-line-format
+                 (should (equal (roost--compose-header)
                                 " No reply from dev after 11m; the task opens here if it was made · C-c C-c asks again"))
                  ;; Asked again, the host answers with the task it made.
                  (roost-compose-submit)

@@ -2428,7 +2428,9 @@ remembers it again."
   (interactive
    (progn
      (roost--known-projects)
-     (list (or (seq-find #'stringp (list (get-text-property (point) 'roost-project)))
+     (list (or (pcase (get-text-property (point) 'roost-project)
+                 ('other (user-error "No project here"))
+                 ((and (pred stringp) project) project))
                (let ((projects (mapcar (lambda (project) (cons (roost--project-label project) project))
                                        roost--remembered-projects)))
                  (unless projects (user-error "Roost remembers no projects"))
@@ -2464,15 +2466,20 @@ offered as it is, since checking it would open a connection."
   "Projects none of TASKS is in that the sidebar lists, in its order.
 On each host Roost watches, the `roost-sidebar-recent-projects' you
 used last.  Matched by host and path alone, so none opens a connection."
-  (let ((taken (mapcar (lambda (task)
-                         (cons (roost--field task 'host)
-                               (file-name-as-directory (or (roost--field task 'repo) ""))))
-                       tasks))
-        (hosts (roost--hosts))
-        (counts nil)
-        (places nil))
-    (dolist (directory (roost--known-projects))
-      (when-let* ((place (roost--host-and-path directory))
+  (let* ((bare (lambda (host) (and host (replace-regexp-in-string "\\`[^@]*@" "" host))))
+         ;; By host without its user, as me@dev and dev are one machine.
+         (taken (mapcar (lambda (task)
+                          (cons (funcall bare (roost--field task 'host))
+                                (file-name-as-directory (or (roost--field task 'repo) ""))))
+                        tasks))
+         (hosts (mapcar bare (roost--hosts)))
+         (counts nil)
+         (places nil))
+    (roost--known-projects)
+    ;; Those of tasks are taken anyway.
+    (dolist (directory roost--remembered-projects)
+      (when-let* ((at (roost--host-and-path directory))
+                  (place (cons (funcall bare (car at)) (cdr at)))
                   ((member (car place) hosts))
                   ((not (member place taken)))
                   ((not (assoc place places)))
@@ -2754,13 +2761,19 @@ task it made.")
   (roost--evil-state 'roost-compose-mode 'insert)
   (roost--quiet-display))
 
+(defvar-local roost--compose-note nil
+  "What the draft's header line says in place of its keys, or nil.
+As that its task is being created, or why creating it failed.")
+
 (defun roost--compose-header ()
   "The draft's header line: its keys, then buttons where clicks reach Emacs."
-  (let ((keys (substitute-command-keys
-               "\\<roost-compose-mode-map> \\[roost-compose-submit] create · \\[roost-compose-cancel] cancel")))
+  (let ((keys (or roost--compose-note
+                  (substitute-command-keys
+                   "\\<roost-compose-mode-map> \\[roost-compose-submit] create · \\[roost-compose-cancel] cancel"))))
     ;; As the frame it shows in reads clicks: a text frame does with
     ;; `xterm-mouse-mode'.
-    (if (not (or (display-graphic-p) (bound-and-true-p xterm-mouse-mode)))
+    (if (or roost--compose-submitting
+            (not (or (display-graphic-p) (bound-and-true-p xterm-mouse-mode))))
         keys
       (let* ((buttons (roost--header-buttons
                        '((" Cancel " roost-compose-cancel roost-note-box-button
@@ -2770,7 +2783,7 @@ task it made.")
              (width (string-pixel-width buttons))
              ;; The keys give way to the buttons in a narrow window.
              (room (- (window-max-chars-per-line) (ceiling width (frame-char-width)) 2)))
-        (concat (truncate-string-to-width (concat keys " · click a field to change it")
+        (concat (truncate-string-to-width (if roost--compose-note keys (concat keys " · click a field to change it"))
                                           (max 0 room) nil nil "…")
                 (propertize " " 'display `(space :align-to (- right (,(+ width (frame-char-width))))))
                 buttons)))))
@@ -3548,7 +3561,7 @@ EVENT, a click on the draft's Create button, says which draft."
       (unless (equal (car roost--compose-asked) directory)
         (setq roost--compose-asked (list directory (roost--random-id))))
       (setq roost--compose-submitting t
-            header-line-format (format " Creating %s…" name))
+            roost--compose-note (format " Creating %s…" name))
       (roost--create-task (plist-get fields :directory) name (plist-get fields :base) prompt
                           (plist-get fields :agent)
                           (lambda (task) (roost--compose-made buffer fields task))
@@ -3563,7 +3576,7 @@ EVENT, a click on the draft's Create button, says which draft."
                                   ;; It may yet be made: then a poll of its host lists it.
                                   (roost--remember-host host)
                                   (roost-watch-mode 1)
-                                  (setq header-line-format
+                                  (setq roost--compose-note
                                         (format " No reply from %s after %s; the task opens here if it was made · %s asks again"
                                                 (roost--host-label host)
                                                 (let ((seconds (+ roost-request-timeout roost--create-seconds)))
@@ -8259,10 +8272,14 @@ untracked file, with nothing to compare, is opened instead."
 (defun roost--draft-error (what err command)
   "Say in the draft's header line that WHAT failed with ERR; COMMAND retries.
 Only ERR's first line fits there; the echo area and *Messages* have it all."
-  (setq header-line-format
-        (format " %s: %s · %s retries" what
-                (or (car (split-string err "\n" t "[ \t]+")) err)
-                (substitute-command-keys (format "\\[%s]" command)))))
+  (let ((text (format " %s: %s · %s retries" what
+                     (or (car (split-string err "\n" t "[ \t]+")) err)
+                     (substitute-command-keys (format "\\[%s]" command)))))
+    ;; A new task's draft keeps its buttons beside it.
+    (if (derived-mode-p 'roost-compose-mode)
+        (setq roost--compose-note text)
+      (setq header-line-format text))
+    (force-mode-line-update)))
 
 (defun roost--one-line (string)
   "STRING with line breaks and tabs collapsed, for a table cell."
