@@ -7437,8 +7437,9 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
                                  (map (get-text-property (cl-search label header :from-end t) 'local-map header)))
                             (select-window (split-window draft))
                             (switch-to-buffer "*scratch*")
-                            (funcall (lookup-key map [header-line mouse-1])
-                                     (list 'mouse-1 (list draft 'header-line '(0 . 0) 0)))
+                            ;; As the command loop runs it.
+                            (let ((last-nonmenu-event (list 'mouse-1 (list draft 'header-line '(0 . 0) 0))))
+                              (call-interactively (lookup-key map [header-line mouse-1])))
                             (delete-other-windows draft)))))
              (roost--send-draft task)
              (insert "Name the due date")
@@ -7450,7 +7451,40 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
              (funcall click (current-buffer) "Create draft")
              (should (eq (alist-get 'draft (cdr (assoc "pr" sent))) t))
              ;; While it is being made, no buttons to press again.
-             (should-not (string-search "Create" (with-current-buffer (window-buffer) (roost-test--header))))))))))))
+             (should-not (string-search "Create" (with-current-buffer (window-buffer) (roost-test--header))))
+             ;; A question left open in the minibuffer is quit first,
+             ;; which gives back the windows it found; then the button
+             ;; acts on its draft.
+             (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_) t))
+                       ((symbol-function 'roost--read-attachment) (lambda () "/tmp/shot.png"))
+                       ((symbol-function 'roost--attachment-files) #'ignore)
+                       ((symbol-function 'roost--send-attach-file)
+                        (lambda (file _) (push (list "attach" file (current-buffer)) sent))))
+               (dolist (case '((send "Send") (send "Attach") (send "Cancel") (pr "Cancel")))
+                 (setq sent nil)
+                 (dolist (buffer (buffer-list))
+                   (when (memq (buffer-local-value 'major-mode buffer) '(roost-send-mode roost-pr-mode))
+                     (kill-buffer buffer)))
+                 (delete-other-windows)
+                 (if (eq (car case) 'pr)
+                     (roost-pr task)
+                   (roost--send-draft task)
+                   (insert "Name the due date"))
+                 (let* ((draft (current-buffer))
+                        (then (catch 'left-open
+                                (cl-letf (((symbol-function 'roost--quit-questions-left-open)
+                                           (lambda (then) (throw 'left-open then))))
+                                  (funcall click draft (cadr case)))
+                                nil)))
+                   (should then)
+                   (should-not sent)
+                   (delete-other-windows)
+                   (switch-to-buffer "*scratch*")
+                   (funcall then)
+                   (pcase (cadr case)
+                     ("Send" (should (assoc "send" sent)))
+                     ("Attach" (should (equal (assoc "attach" sent) (list "attach" "/tmp/shot.png" draft))))
+                     (_ (should-not (buffer-live-p draft)))))))))))))))
 
 (ert-deftest roost-pr-prefix-makes-a-draft-and-failure-keeps-the-text ()
   (roost-test--isolated

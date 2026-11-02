@@ -3984,6 +3984,7 @@ draft clears them (see `roost-note')."
   (interactive (list last-nonmenu-event))
   (roost--draft-clicked event 'roost-send-mode)
   (when (or (string-empty-p (string-trim (buffer-string)))
+            (roost--quit-questions-for-draft #'roost-send-cancel)
             (yes-or-no-p "Discard this prompt? "))
     (quit-window t)))
 
@@ -4008,6 +4009,8 @@ draft's Send button, says which draft."
         (user-error "A [Copying …] is from a copy since done, as undo brings back: redo for its path, or delete it")))
     (when roost--send-sending
       (user-error "Already sending"))
+    ;; Sending while its agent may be at a prompt asks first.
+    (roost--quit-questions-for-draft #'roost-send-submit)
     (setq roost--send-sending t
           roost--draft-note nil)
     (condition-case err
@@ -4335,6 +4338,8 @@ The copies go when the task does."
                  ;; From its Attach button, the draft clicked.
                  (roost--draft-clicked last-nonmenu-event 'roost-send-mode)
                  (roost--attaching-task)
+                 (roost--quit-questions-for-draft
+                  (lambda () (call-interactively #'roost-send-attach)))
                  (list (roost--read-attachment))))
   (roost--send-attach-file file (roost--attachment-files file)))
 
@@ -6283,6 +6288,7 @@ only open it."
   (interactive (list last-nonmenu-event))
   (roost--draft-clicked event 'roost-pr-mode)
   (when (or (string-empty-p (string-trim (buffer-string)))
+            (roost--quit-questions-for-draft #'roost-pr-cancel)
             (yes-or-no-p "Discard this pull request? "))
     (quit-window t)))
 
