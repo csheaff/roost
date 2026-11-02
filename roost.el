@@ -240,6 +240,12 @@ project = PROJ AND statusCategory != Done ORDER BY rank."
   "Width in columns of the task sidebar; see `roost-sidebar-mode'."
   :type 'natnum)
 
+(defcustom roost-sidebar-recent-projects 3
+  "How many projects with no tasks the sidebar lists on each host.
+They are the ones you used last, below the tasks, and a click on one
+starts a task there.  0 lists none."
+  :type 'natnum)
+
 (defcustom roost-task-panel-width 44
   "Width in columns of the task panel beside a task's terminal.
 See `roost-task-panel-mode'."
@@ -2411,7 +2417,27 @@ says once the terminal shows."
           roost--remembered-projects
           (seq-filter #'stringp (roost--read-json-list roost-projects-file))))
   (delete-dups (append roost--remembered-projects
-                       (mapcar #'roost--project-directory (roost-tasks)))))
+                       ;; A record naming no repository names no project.
+                       (mapcar #'roost--project-directory
+                               (seq-filter (lambda (task) (roost--field task 'repo)) (roost-tasks))))))
+
+(defun roost-forget-project (directory)
+  "Stop offering project DIRECTORY for new tasks, in the sidebar and drafts.
+Its tasks are left as they are, and starting another task there
+remembers it again."
+  (interactive
+   (progn
+     (roost--known-projects)
+     (list (or (seq-find #'stringp (list (get-text-property (point) 'roost-project)))
+               (let ((projects (mapcar (lambda (project) (cons (roost--project-label project) project))
+                                       roost--remembered-projects)))
+                 (unless projects (user-error "Roost remembers no projects"))
+                 (cdr (assoc (completing-read "Forget project: " projects nil t) projects)))))))
+  (roost--known-projects)
+  (setq roost--remembered-projects (delete (file-name-as-directory directory) roost--remembered-projects))
+  (roost--write-json-list roost-projects-file roost--remembered-projects)
+  (roost--redraw)
+  (message "Roost no longer offers %s" (roost--project-label directory)))
 
 (defun roost--project-choices ()
   "Projects to offer for a new task: Roost's own, then those project.el knows.
@@ -2433,6 +2459,30 @@ offered as it is, since checking it would open a connection."
                       (when (equal (ignore-errors (roost--directory-host directory)) host)
                         (directory-file-name (file-local-name directory))))
                     (roost--known-projects))))
+
+(defun roost--recent-projects (tasks)
+  "Projects none of TASKS is in that the sidebar lists, in its order.
+On each host Roost watches, the `roost-sidebar-recent-projects' you
+used last.  Matched by host and path alone, so none opens a connection."
+  (let ((taken (mapcar (lambda (task)
+                         (cons (roost--field task 'host)
+                               (file-name-as-directory (or (roost--field task 'repo) ""))))
+                       tasks))
+        (hosts (roost--hosts))
+        (counts nil)
+        (places nil))
+    (dolist (directory (roost--known-projects))
+      (when-let* ((place (roost--host-and-path directory))
+                  ((member (car place) hosts))
+                  ((not (member place taken)))
+                  ((not (assoc place places)))
+                  (count (alist-get (car place) counts 0 nil #'equal))
+                  ((< count roost-sidebar-recent-projects)))
+        (setf (alist-get (car place) counts 0 nil #'equal) (1+ count))
+        (push (cons place directory) places)))
+    (mapcar #'cdr (sort places (lambda (a b)
+                                 (string< (format "%s %s" (roost--host-label (caar a)) (cdar a))
+                                          (format "%s %s" (roost--host-label (caar b)) (cdar b))))))))
 
 (defun roost--abbreviate-path (path &optional host)
   "PATH with its owner's home directory shown as ~.
@@ -2698,17 +2748,32 @@ task it made.")
 (define-derived-mode roost-compose-mode text-mode "Roost New Task"
   "Draft a coding agent task.  Write the prompt below the line.
 \\{roost-compose-mode-map}"
-  (setq-local header-line-format
-              (list (substitute-command-keys
-                     " \\[roost-compose-submit] create · \\[roost-compose-cancel] cancel")
-                    ;; As the frame it shows in reads clicks: a text
-                    ;; frame does with `xterm-mouse-mode'.
-                    '(:eval (when (or (display-graphic-p) (bound-and-true-p xterm-mouse-mode))
-                              " · click a field to change it"))))
+  (setq-local header-line-format '(:eval (roost--compose-header)))
   (add-hook 'after-change-functions #'roost--compose-changed nil t)
   (add-hook 'after-change-major-mode-hook #'roost--quiet-display 90 t)
   (roost--evil-state 'roost-compose-mode 'insert)
   (roost--quiet-display))
+
+(defun roost--compose-header ()
+  "The draft's header line: its keys, then buttons where clicks reach Emacs."
+  (let ((keys (substitute-command-keys
+               "\\<roost-compose-mode-map> \\[roost-compose-submit] create · \\[roost-compose-cancel] cancel")))
+    ;; As the frame it shows in reads clicks: a text frame does with
+    ;; `xterm-mouse-mode'.
+    (if (not (or (display-graphic-p) (bound-and-true-p xterm-mouse-mode)))
+        keys
+      (let* ((buttons (roost--header-buttons
+                       '((" Cancel " roost-compose-cancel roost-note-box-button
+                          "mouse-1 or \\<roost-compose-mode-map>\\[roost-compose-cancel]: discard the draft")
+                         (" Create " roost-compose-submit roost-note-box-default-button
+                          "mouse-1 or \\<roost-compose-mode-map>\\[roost-compose-submit]: create the task"))))
+             (width (string-pixel-width buttons))
+             ;; The keys give way to the buttons in a narrow window.
+             (room (- (window-max-chars-per-line) (ceiling width (frame-char-width)) 2)))
+        (concat (truncate-string-to-width (concat keys " · click a field to change it")
+                                          (max 0 room) nil nil "…")
+                (propertize " " 'display `(space :align-to (- right (,(+ width (frame-char-width))))))
+                buttons)))))
 
 (defun roost--compose-default-directory (task fork)
   "Default project for a new task, given the TASK in context and FORK.
@@ -3445,16 +3510,27 @@ branch leads with the key of the one you choose."
             (insert text))))
       (roost--compose-render))))
 
-(defun roost-compose-cancel ()
-  "Discard the draft."
-  (interactive)
+(defun roost--compose-clicked (event)
+  "Select the window whose draft EVENT clicked a button of, if it did."
+  (when (mouse-event-p event)
+    (let ((window (posn-window (event-start event))))
+      (when (and (window-live-p window)
+                 (eq (buffer-local-value 'major-mode (window-buffer window)) 'roost-compose-mode))
+        (select-window window)))))
+
+(defun roost-compose-cancel (&optional event)
+  "Discard the draft, or the one whose Cancel button EVENT clicked."
+  (interactive (list last-nonmenu-event))
+  (roost--compose-clicked event)
   (when (or (string-empty-p (roost--compose-prompt))
             (yes-or-no-p "Discard this task draft? "))
     (quit-window t)))
 
-(defun roost-compose-submit ()
-  "Create the drafted task.  The draft is kept if creation fails."
-  (interactive)
+(defun roost-compose-submit (&optional event)
+  "Create the drafted task.  The draft is kept if creation fails.
+EVENT, a click on the draft's Create button, says which draft."
+  (interactive (list last-nonmenu-event))
+  (roost--compose-clicked event)
   (let ((fields roost--compose-fields)
         (prompt (roost--compose-prompt))
         (name (roost--compose-name))
@@ -5020,25 +5096,30 @@ over room left for it, where Emacs shows them, or in a window below."
     (message "%s" (substitute-command-keys
                    "\\<roost-note-box-mode-map>\\[roost-note-box-save] saves the note, \\[roost-note-box-cancel] cancels it"))))
 
+(defun roost--header-buttons (buttons)
+  "BUTTONS for a header line, each (LABEL COMMAND FACE HELP), as one string.
+A click on one runs its COMMAND; HELP goes through `substitute-command-keys'."
+  (mapconcat
+   (pcase-lambda (`(,label ,command ,face ,help))
+     (propertize label 'face face 'mouse-face 'highlight 'pointer 'hand
+                 'help-echo (substitute-command-keys help)
+                 'local-map (define-keymap "<header-line> <mouse-1>" command)))
+   (delq nil buttons)
+   " "))
+
 (defun roost--note-box-header ()
   "The heading of the note box: what the note is about, then buttons."
   (let* ((box roost--note-box)
          (old (plist-get box :old))
          (buttons
-          (mapconcat
-           (pcase-lambda (`(,label ,command ,face ,help))
-             (propertize label 'face face 'mouse-face 'highlight 'pointer 'hand
-                         'help-echo (substitute-command-keys help)
-                         'local-map (define-keymap "<header-line> <mouse-1>" command)))
-           (delq nil
-                 (list (when old
-                         '(" Remove " roost-note-box-remove roost-note-box-button
-                           "mouse-1: remove this note"))
-                       '(" Cancel " roost-note-box-cancel roost-note-box-button
-                         "mouse-1 or \\<roost-note-box-mode-map>\\[roost-note-box-cancel]: close without saving")
-                       `(,(if old " Save " " Add note ") roost-note-box-save roost-note-box-default-button
-                         "mouse-1 or \\<roost-note-box-mode-map>\\[roost-note-box-save]: save the note")))
-           " ")))
+          (roost--header-buttons
+           (list (when old
+                   '(" Remove " roost-note-box-remove roost-note-box-button
+                     "mouse-1: remove this note"))
+                 '(" Cancel " roost-note-box-cancel roost-note-box-button
+                   "mouse-1 or \\<roost-note-box-mode-map>\\[roost-note-box-cancel]: close without saving")
+                 `(,(if old " Save " " Add note ") roost-note-box-save roost-note-box-default-button
+                   "mouse-1 or \\<roost-note-box-mode-map>\\[roost-note-box-save]: save the note")))))
     (when box
       (concat " " (if old "Edit the note on " "Note on ")
               (roost--note-location (plist-get box :place))
@@ -9156,10 +9237,22 @@ are told apart."
   "<mouse-1>" #'roost-dashboard-mouse-open
   "<mouse-3>" #'roost-dashboard-mouse-menu)
 
+(defvar-keymap roost--project-row-map
+  :doc "Keys on a project the sidebar lists for a new task."
+  "RET" #'roost-sidebar-new-task
+  "X" #'roost-forget-project
+  "<mouse-1>" #'roost-sidebar-new-task
+  "<mouse-3>" #'roost-sidebar-project-menu)
+
+(defconst roost--clicked-commands
+  '(roost-dashboard-mouse-open roost-dashboard-mouse-menu roost-compose-open-task
+    roost-sidebar-new-task roost-sidebar-project-menu roost-compose-submit roost-compose-cancel)
+  "Commands that clicks on Roost's rows and buttons run.")
+
 ;; With a menu open, Roost's or another package's, a click on a task's
 ;; row closes the menu and does what it does, rather than being refused
 ;; as none of the menu's keys.
-(dolist (command '(roost-dashboard-mouse-open roost-dashboard-mouse-menu roost-compose-open-task))
+(dolist (command roost--clicked-commands)
   (define-key transient-predicate-map (vector command) #'transient--do-exit))
 
 (define-derived-mode roost-dashboard-mode special-mode "Roost"
@@ -9471,6 +9564,31 @@ The mark stays where it was."
   (interactive "e")
   (mouse-set-point event)
   (popup-menu roost-task-menu event))
+
+(defun roost-sidebar-new-task (&optional event)
+  "Draft a task in the project at point in the sidebar, or clicked in EVENT."
+  (interactive (list last-nonmenu-event))
+  (when (mouse-event-p event)
+    (mouse-set-point event))
+  (pcase (get-text-property (point) 'roost-project)
+    ('nil (user-error "No project here"))
+    ;; Chosen by menus after a click, and locally in the system's
+    ;; folder dialog, as `read-directory-name' shows one then.
+    ('other (when-let* ((directory (roost--read-project-directory)))
+              (roost--compose nil nil (file-name-as-directory (expand-file-name directory)))))
+    (directory (roost--compose nil nil directory))))
+
+(easy-menu-define roost-project-menu nil
+  "Menu for a project the sidebar lists for a new task."
+  '("Project"
+    ["New task here" roost-sidebar-new-task]
+    ["Forget" roost-forget-project]))
+
+(defun roost-sidebar-project-menu (event)
+  "Show what can be done with the project clicked in EVENT."
+  (interactive "e")
+  (mouse-set-point event)
+  (popup-menu roost-project-menu event))
 
 (defvar roost--shown-mode-line-count nil
   "The waiting count the mode lines last showed.")
@@ -10031,6 +10149,26 @@ have seen that waits for nothing."
         (add-face-text-property 0 (length row) 'roost-current t row))
       row)))
 
+(defun roost--sidebar-project-row (directory width)
+  "The sidebar's line for project DIRECTORY, within WIDTH columns.
+A click on it, or RET, drafts a task there.  Nil DIRECTORY is the line
+for any other directory, which asks for a host and a folder first."
+  (let* ((host (when directory (ignore-errors (roost--directory-host directory))))
+         (label (truncate-string-to-width
+                 (if directory
+                     (format "%s · %s" (roost--host-label host)
+                             (file-name-nondirectory (directory-file-name (file-local-name directory))))
+                   "Other directory…")
+                 (- width 3) nil nil "…")))
+    (propertize (concat " " label (make-string (max 1 (- width (string-width label) 2)) ?\s) "+\n")
+                'face 'roost-dim 'mouse-face 'highlight
+                'roost-project (or directory 'other) 'roost-directory directory
+                'keymap roost--project-row-map
+                'help-echo (if directory
+                               (format "New task in %s\nmouse-1: new task · mouse-3: forget"
+                                       (roost--project-label directory))
+                             "New task in a directory you choose: its host, then a folder there"))))
+
 (defun roost--render-sidebar ()
   "Render the task sidebar from cached state, keeping point on its row."
   ;; A sidebar drawn before Roost was loaded again may have lights, and a
@@ -10042,6 +10180,7 @@ have seen that waits for nothing."
          (position (if window (window-point window) (point)))
          (key (get-text-property position 'roost-task))
          (heading (unless key (get-text-property position 'roost-directory)))
+         (other (eq (get-text-property position 'roost-project) 'other))
          (tasks (roost-tasks))
          (roost--marked-key (if (roost--workspace-backend)
                                 (when-let* ((task (roost--frame-task))) (roost--key task))
@@ -10101,8 +10240,14 @@ have seen that waits for nothing."
                       (apply #'propertize "\n" (if (roost--current-task-p task)
                                                    (append '(face roost-current) row)
                                                  row))))))))
+    (when (> roost-sidebar-recent-projects 0)
+      (insert roost--gap (propertize "Start a task in" 'face 'roost-dim) "\n")
+      (dolist (directory (roost--recent-projects tasks))
+        (insert (roost--sidebar-project-row directory width)))
+      (insert (roost--sidebar-project-row nil width)))
     (goto-char (or (and key (roost--task-row key))
                    (and heading (roost--heading-row heading))
+                   (and other (text-property-any (point-min) (point-max) 'roost-project 'other))
                    (point-min)))
     (when window (set-window-point window (point)))
     (pcase-dolist (`(,shown . ,line) starts)
@@ -10413,7 +10558,7 @@ Beside a terminal, that turns off `roost-task-panel-mode'."
   (when (timerp roost--lights-timer) (cancel-timer roost--lights-timer))
   (when (timerp roost--notice-timer) (cancel-timer roost--notice-timer))
   (advice-remove 'persp-mode-line #'roost--compact-perspective-mode-line)
-  (dolist (command '(roost-dashboard-mouse-open roost-dashboard-mouse-menu roost-compose-open-task))
+  (dolist (command roost--clicked-commands)
     (define-key transient-predicate-map (vector command) nil t))
   ;; Continue with the standard unloading.
   nil)

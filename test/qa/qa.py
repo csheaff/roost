@@ -1475,6 +1475,84 @@ def draft_fields(qa, repo):
         (qa.jira / "issues.json").unlink(missing_ok=True)
 
 
+@journey("A task started with clicks")
+def by_clicks(qa, repo):
+    """A project you used, its tasks gone, stays in the sidebar under
+    "Start a task in": a click there drafts a task in it, and a click on
+    the draft's Create starts it.  "Other directory…" asks for a host and
+    a folder, Cancel drops its draft, and X on a project stops listing it."""
+    budget = qa.work / "budget"
+    if not budget.exists():
+        budget.mkdir()
+        (budget / "budget.py").write_text('"""A budget."""\n\nLIMIT = 100\n')
+        qa.git(budget, "init", "-q", "-b", "main")
+        for key, value in (("user.name", "Roost QA"), ("user.email", "qa@example.invalid")):
+            qa.git(budget, "config", key, value)
+        qa.git(budget, "add", "-A")
+        qa.git(budget, "commit", "-q", "-m", "Start the budget")
+    place = ("/ssh:%s:" % qa.host if qa.host else "") + str(budget) + "/"
+    label = qa.host_label + " · budget"
+    draft = lambda s: qa.window(s, "roost-compose-mode") or {}
+    offered = lambda s: re.search(r"Start a task in\n(?:.*\n)*? %s +\+" % re.escape(label), sidebar_rows(s))
+    # As if a task had been there: Roost remembers each project it starts one in.
+    qa.emacs.eval("(progn (roost--remember-project %s) (roost--redraw))" % lisp(place))
+    qa.wait("the project in the sidebar", offered)
+    qa.step("A project with no tasks, below the tasks", expect=[
+        ("under Start a task in", offered),
+        ("with Other directory… last",
+         lambda s: re.search(r"Start a task in\n(?:.*\n)* Other directory… +\+\n?\Z", sidebar_rows(s)))])
+    qa.emacs.eval("(qa-scroll-to-text %s \"roost-sidebar-list-mode\")" % lisp(label))
+    qa.click_text(label, "roost-sidebar-list-mode")
+    qa.wait("the draft", lambda s: draft(s).get("selected"))
+    qa.step("A click drafts a task there", expect=[
+        ("in that project", lambda s: re.search(r"Project .*/budget\b", draft(s)["text"])),
+        ("with Create and Cancel buttons", lambda s: draft(s).get("header", "").endswith(" Cancel   Create "))])
+    qa.type("Count the entries")
+    known = {t["key"] for t in qa.screen()["tasks"]}
+    qa.click_in("header", " Create ")
+    screen = qa.wait("the task", lambda s: {t["key"] for t in s["tasks"]} - known)
+    name = next(t["name"] for t in screen["tasks"] if t["key"] not in known)
+    qa.status(name, "ready", "idle")
+    worktree = task_worktree(qa, name)
+    qa.step("Create starts it", expect=[
+        ("in the budget", lambda s: qa.git(worktree, "log", "--format=%s", "-1") == "Start the budget"),
+        ("the project, with a task, is no longer offered", lambda s: not offered(s))])
+    # A folder typed, not chosen in the system's dialog, which nothing here
+    # could answer; on two hosts, the host first from a menu.
+    qa.emacs.eval("(setq use-file-dialog nil)")
+    try:
+        if qa.host:
+            qa.emacs.eval("(qa-answer-popups %s)" % lisp(qa.host_label))
+        qa.emacs.eval("(qa-scroll-to-text %s \"roost-sidebar-list-mode\")" % lisp("Other directory…"))
+        qa.click_text("Other directory…", "roost-sidebar-list-mode")
+        qa.wait("which directory", lambda s: (s["prompt"] or "").startswith("Project checkout"))
+        qa.type("budget/\r")
+        qa.wait("the draft", lambda s: draft(s).get("selected"))
+        qa.step("Other directory… drafts a task in the folder chosen", expect=[
+            ("in that folder", lambda s: re.search(r"Project .*/budget\b", draft(s)["text"]))])
+        qa.click_in("header", " Cancel ")
+        qa.wait("the draft to go", lambda s: not draft(s))
+        qa.step("Cancel drops the draft", expect=[("no draft", lambda s: not draft(s))])
+    finally:
+        qa.emacs.eval("(setq use-file-dialog t)")
+    # Gone, as new tasks start in the project of the task you were on last;
+    # with no work in it, retired.
+    open_task(qa, name)
+    qa.keys("C-c r x")
+    qa.wait("the question", lambda s: (s["prompt"] or "").startswith("Retire " + name))
+    qa.type("y")
+    qa.wait("the task to go", lambda s: qa.task(s, name) is None, timeout=30)
+    qa.wait("the project offered again", offered)
+    qa.emacs.eval("(qa-take-popups)")
+    qa.emacs.eval("(qa-answer-popups \"Forget\")")
+    qa.emacs.eval("(qa-scroll-to-text %s \"roost-sidebar-list-mode\")" % lisp(label))
+    qa.click_text(label, "roost-sidebar-list-mode", 3)
+    qa.wait("the project to go", lambda s: label not in sidebar_rows(s))
+    qa.step("Forget, from its menu, stops listing it", expect=[
+        ("the echo area says so", lambda s: s["echo"] == "Roost no longer offers " + qa.emacs.json(
+            "(json-encode (roost--project-label %s))" % lisp(place)))])
+
+
 def names_changing(text, name, how, path):
     """Whether TEXT has the line naming the tasks that change PATH, HOW
     ("also" or "already"), and NAME among them: one line, whatever their
@@ -3685,7 +3763,7 @@ JOURNEYS = [sweep, answer, next_waiting, fold, resize, merge, review, notes, sin
             dashboard, panel_keys, stop_resume, retire, discard, teardown, send, attach, update, conflicts, restart,
             search, workload, question_left,
             walk_away,
-            frames, draft_frames, org, drafts, draft_fields, overlap, region, tabs,
+            frames, draft_frames, org, drafts, draft_fields, by_clicks, overlap, region, tabs,
             forget, rename, fork, other_branch, switched_branch, merged, large, pull_request, merge_request, exits,
             include, slow_create,
             unreachable,

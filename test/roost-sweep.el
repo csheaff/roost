@@ -249,6 +249,8 @@ size of its changes, unless its state says otherwise."
                                            (size . ,(roost-sweep--size (alist-get 'files fields))))
                                          (roost-test--task (cadr key)))))
   (puthash "gone" "ssh: connect to host gone: Connection refused" roost--errors)
+  ;; A project with no tasks, which the sidebar offers for a new one.
+  (setq roost--remembered-projects (list (expand-file-name "~/code/budget/")))
   (setq roost--notes
         (list (roost-test--note "n1" (cadr (roost-sweep--key "with notes"))
                                 '(file . "ledger.py") '(line . 3) '(end . 3) '(text . "Keep the sign.")))))

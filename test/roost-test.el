@@ -3046,6 +3046,119 @@ terminal's, on a pty.  Skips the test where it can't be made."
            (push-button (1- (point))))
          (should (string-suffix-p ":dev:/srv/ledger/" started)))))))
 
+(ert-deftest roost-sidebar-offers-the-projects-you-used-lately ()
+  ;; Below the tasks, projects with none: the latest few on each host
+  ;; Roost watches, each a click from a new task's draft.
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let ((roost-hosts '(nil "dev"))
+           (roost-sidebar-recent-projects 3)
+           (notes (file-name-as-directory (expand-file-name "~/code/notes")))
+           ;; As wide as the window it's in.
+           (row (lambda (label)
+                  (concat " " label (make-string (- (window-max-chars-per-line) (string-width label) 2) ?\s)
+                          "+")))
+           drafted)
+       (roost--cache-task "dev" (append '((name . "budget-alerts") (repo . "/srv/ledger"))
+                                        (roost-test--task "1111111111111111" "running")))
+       ;; Most recent first, as Roost remembers them: c once, under either
+       ;; method; none on a host Roost doesn't watch.
+       (setq roost--remembered-projects
+             (list "/ssh:dev:/srv/ledger/" "/ssh:dev:/srv/c/" notes "/ssh:gone:/srv/x/"
+                   "/scp:dev:/srv/c/" "/ssh:dev:/srv/a/" "/ssh:dev:/srv/b/" "/ssh:dev:/srv/d/"))
+       (switch-to-buffer (get-buffer-create "*sidebar test*"))
+       (unwind-protect
+           (progn
+             (roost-sidebar-list-mode)
+             (roost--render-sidebar)
+             (should (equal (cdr (member "Start a task in" (split-string (buffer-string) "\n")))
+                            (list (funcall row "dev · a") (funcall row "dev · b") (funcall row "dev · c")
+                                  (funcall row "local · notes") (funcall row "Other directory…") "")))
+             (goto-char (point-min))
+             (search-forward "dev · b")
+             (should (string-match-p "New task in dev · /srv/b" (get-text-property (point) 'help-echo)))
+             (should (equal (roost--compose-default-directory nil nil) "/ssh:dev:/srv/b/"))
+             (should (eq (key-binding (kbd "RET")) #'roost-sidebar-new-task))
+             (should (eq (key-binding (kbd "X")) #'roost-forget-project))
+             ;; A click anywhere on the line drafts a task there.
+             (cl-letf (((symbol-function 'roost--compose)
+                        (lambda (_fork _seed directory) (setq drafted directory))))
+               (let ((at (point)))
+                 (goto-char (point-min))
+                 (roost-sidebar-new-task (list 'mouse-1 (list (selected-window) (1- at) '(0 . 0) 0)))))
+             (should (equal drafted "/ssh:dev:/srv/b/"))
+             ;; The last line asks for a host and a folder, then drafts.
+             (search-forward "Other directory")
+             ;; Drawn again, as each poll does, point stays on it.
+             (roost--render-sidebar)
+             (should (eq (get-text-property (point) 'roost-project) 'other))
+             (let (asked)
+               (cl-letf (((symbol-function 'roost--compose)
+                          (lambda (_fork _seed directory) (setq drafted directory)))
+                         ((symbol-function 'roost--read-project-directory)
+                          (lambda () (setq asked t) "/ssh:dev:/srv/new")))
+                 (roost-sidebar-new-task)
+                 (should asked)
+                 (should (equal drafted "/ssh:dev:/srv/new/"))
+                 ;; Clicked away from, nothing opens.
+                 (setq drafted nil)
+                 (cl-letf (((symbol-function 'roost--read-project-directory) #'ignore))
+                   (roost-sidebar-new-task))
+                 (should-not drafted)))
+             (search-backward "dev · b")
+             ;; Forgotten, the next most recent takes its place.
+             (call-interactively #'roost-forget-project)
+             (should-not (member "/ssh:dev:/srv/b/" roost--remembered-projects))
+             (should-not (member "/ssh:dev:/srv/b/" (roost--read-json-list roost-projects-file)))
+             (roost--render-sidebar)
+             (should-not (string-match-p "dev · b" (buffer-string)))
+             (should (string-match-p (regexp-quote (funcall row "dev · d")) (buffer-string)))
+             ;; With no tasks, the project they were in is offered too.
+             (clrhash roost--tasks)
+             (roost--render-sidebar)
+             (should (string-match-p "No tasks\\." (buffer-string)))
+             (should (string-match-p (regexp-quote (funcall row "dev · ledger")) (buffer-string)))
+             (let ((roost-sidebar-recent-projects 0))
+               (roost--render-sidebar)
+               (should-not (string-match-p "Start a task in" (buffer-string)))))
+         (kill-buffer "*sidebar test*"))))))
+
+(ert-deftest roost-draft-buttons-create-or-cancel-it ()
+  ;; A click on Create or Cancel acts on the draft, whichever window you
+  ;; were in.
+  (roost-test--isolated
+   (let ((default-directory "/tmp/") (xterm-mouse-mode t) created)
+     (save-window-excursion
+       (delete-other-windows)
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--create-task)
+                      (lambda (directory name &rest _) (setq created (list directory name))))
+                     ((symbol-function 'yes-or-no-p) (lambda (_) t)))
+             (let ((click (lambda (label)
+                            (let* ((draft (get-buffer-window roost--compose-buffer))
+                                   (header (with-selected-window draft (roost--compose-header)))
+                                   (map (get-text-property (string-search label header) 'local-map header)))
+                              (select-window (split-window draft))
+                              (switch-to-buffer "*scratch*")
+                              (funcall (lookup-key map [header-line mouse-1])
+                                       (list 'mouse-1 (list draft 'header-line '(0 . 0) 0)))))))
+               (roost--compose nil nil "/ssh:dev:/repo/")
+               (with-current-buffer roost--compose-buffer
+                 (goto-char (point-max))
+                 (insert "Fix the parser"))
+               (funcall click "Create")
+               (should (equal created '("/ssh:dev:/repo/" "fix-parser")))
+               (kill-buffer roost--compose-buffer)
+               (delete-other-windows)
+               (roost--compose nil nil "/ssh:dev:/repo/")
+               (with-current-buffer roost--compose-buffer
+                 (goto-char (point-max))
+                 (insert "Fix the lexer"))
+               (funcall click "Cancel")
+               (should-not (get-buffer roost--compose-buffer))))
+         (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
+
 (ert-deftest roost-sidebar-shows-the-task-you-work-on ()
   ;; With more tasks than the sidebar has lines, the one you opened was
   ;; below them, and its band, status and ± with it.
@@ -8249,12 +8362,15 @@ field (FIELD . :none) is left out."
    (with-temp-buffer
      (roost-compose-mode)
      ;; As drawn; batch Emacs draws no header line.
-     (let ((hint (cadr (assq :eval header-line-format))))
-       (should (string-search "C-c C-c create" (car header-line-format)))
-       (let ((xterm-mouse-mode nil))
-         (should-not (eval hint t)))
-       (let ((xterm-mouse-mode t))
-         (should (equal (eval hint t) " · click a field to change it")))))
+     (should (equal header-line-format '(:eval (roost--compose-header))))
+     (let ((xterm-mouse-mode nil))
+       (should (equal (roost--compose-header) " C-c C-c create · C-c C-k cancel")))
+     (let* ((xterm-mouse-mode t)
+            (header (roost--compose-header)))
+       (should (string-prefix-p " C-c C-c create · C-c C-k cancel · click a field" header))
+       ;; The buttons stay at the right; what's before them gives way.
+       (should (string-suffix-p " Cancel   Create " header))
+       (should (<= (string-width header) (window-max-chars-per-line)))))
    (with-temp-buffer
      (insert "+def due(note):\n")
      ;; Rules are drawn in the note's colour, which batch Emacs has none of.
