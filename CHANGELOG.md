@@ -15,6 +15,13 @@ What each release changes, and what to do when upgrading. Newest first.
   `roost_propose_task` and the rest; the agent starts the server and ends
   it with itself. Nothing to do when upgrading: a task gets them when its
   agent next starts.
+- The sidebar keeps the projects you used last on each host, three by
+  default, below the tasks under "Start a task in", once their tasks are
+  gone, and a click on one drafts a task there. "Other directory…", last,
+  asks for a host and then a folder, in the system's folder dialog for a
+  local one. `X` on a project stops listing it. The draft's header line has
+  Create and Cancel buttons beside `C-c C-c` and `C-c C-k`. To list none,
+  set `roost-sidebar-recent-projects` to 0.
 - Roost shows a GitLab merge request as it shows a GitHub pull request:
   numbered `!12`, with its pipeline's jobs as its checks and its
   unresolved threads, and a task whose merge request waits on you says
