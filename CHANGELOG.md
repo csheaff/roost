@@ -4,6 +4,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Each key the task panel names can be clicked, with the words that go
+  with it: a click on "m merges it" does what `m` does. The prompt draft
+  has Send, Attach and Cancel buttons in its header line, and the pull
+  request draft Create, Create draft and Cancel, beside their keys.
+  Nothing to do when upgrading.
 - The sidebar keeps the projects you used last on each host, three by
   default, below the tasks under "Start a task in", once their tasks are
   gone, and a click on one drafts a task there. "Other directory…", last,

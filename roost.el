@@ -2780,35 +2780,45 @@ task it made.")
   (roost--evil-state 'roost-compose-mode 'insert)
   (roost--quiet-display))
 
-(defvar-local roost--compose-note nil
-  "What the draft's header line says in place of its keys, or nil.
-As that its task is being created, or why creating it failed.")
+(defvar-local roost--draft-note nil
+  "What a draft's header line says in place of its keys, or nil.
+As that its task is being created, or why sending it failed.")
+
+(defun roost--clicks-p ()
+  "Whether the selected frame reads clicks.
+A text frame does with `xterm-mouse-mode'."
+  (or (display-graphic-p) (bound-and-true-p xterm-mouse-mode)))
+
+(defun roost--draft-header (text buttons &optional busy)
+  "A draft's header line: TEXT, or the draft's note, then BUTTONS at the right.
+BUTTONS are as `roost--header-buttons' takes them, shown where clicks
+reach Emacs, and not while BUSY.  Text that doesn't fit beside them is
+cut short, with all of it in its help-echo: they are how a hand on the
+mouse tries again, or gives up."
+  (let ((text (or roost--draft-note text)))
+    (if (or busy (not (roost--clicks-p)))
+        text
+      (let* ((buttons (roost--header-buttons buttons))
+             (width (string-pixel-width buttons))
+             (room (max 0 (- (window-max-chars-per-line) (ceiling width (frame-char-width)) 2))))
+        (concat (if (> (string-width text) room)
+                    (propertize (truncate-string-to-width text room nil nil "…")
+                                'help-echo (string-trim text))
+                  text)
+                (propertize " " 'display `(space :align-to (- right (,(+ width (frame-char-width))))))
+                buttons)))))
 
 (defun roost--compose-header ()
-  "The draft's header line: its keys, then buttons where clicks reach Emacs."
-  (let ((keys (or roost--compose-note
-                  (substitute-command-keys
-                   "\\<roost-compose-mode-map> \\[roost-compose-submit] create · \\[roost-compose-cancel] cancel"))))
-    ;; As the frame it shows in reads clicks: a text frame does with
-    ;; `xterm-mouse-mode'.
-    (if (or roost--compose-submitting
-            (not (or (display-graphic-p) (bound-and-true-p xterm-mouse-mode))))
-        keys
-      (let* ((buttons (roost--header-buttons
-                       '((" Cancel " roost-compose-cancel roost-note-box-button
-                          "mouse-1 or \\<roost-compose-mode-map>\\[roost-compose-cancel]: discard the draft")
-                         (" Create " roost-compose-submit roost-note-box-default-button
-                          "mouse-1 or \\<roost-compose-mode-map>\\[roost-compose-submit]: create the task"))))
-             (width (string-pixel-width buttons))
-             (room (- (window-max-chars-per-line) (ceiling width (frame-char-width)) 2)))
-        ;; The keys give way to the buttons in a narrow window, and the
-        ;; buttons to what became of creating the task, which says its key.
-        (if (and roost--compose-note (> (string-width keys) room))
-            keys
-          (concat (truncate-string-to-width (if roost--compose-note keys (concat keys " · click a field to change it"))
-                                            (max 0 room) nil nil "…")
-                  (propertize " " 'display `(space :align-to (- right (,(+ width (frame-char-width))))))
-                  buttons))))))
+  "The new task draft's header line: its keys, then buttons."
+  (roost--draft-header
+   (substitute-command-keys
+    (concat "\\<roost-compose-mode-map> \\[roost-compose-submit] create · \\[roost-compose-cancel] cancel"
+            (when (roost--clicks-p) " · click a field to change it")))
+   '((" Cancel " roost-compose-cancel roost-note-box-button
+      "mouse-1 or \\<roost-compose-mode-map>\\[roost-compose-cancel]: discard the draft")
+     (" Create " roost-compose-submit roost-note-box-default-button
+      "mouse-1 or \\<roost-compose-mode-map>\\[roost-compose-submit]: create the task"))
+   roost--compose-submitting))
 
 (defun roost--compose-default-directory (task fork)
   "Default project for a new task, given the TASK in context and FORK.
@@ -3545,34 +3555,36 @@ branch leads with the key of the one you choose."
             (insert text))))
       (roost--compose-render))))
 
-(defun roost--compose-clicked (event)
-  "Select the window whose draft EVENT clicked a button of, if it did."
-  (when (mouse-event-p event)
+(defun roost--draft-clicked (event mode)
+  "Select the window whose draft, in MODE, EVENT clicked a button of, if it did.
+Only a click in a header line, where the buttons are: an earlier click
+left in `last-nonmenu-event' doesn't choose the draft."
+  (when (and (mouse-event-p event) (eq (posn-area (event-start event)) 'header-line))
     (let ((window (posn-window (event-start event))))
       (when (and (window-live-p window)
-                 (eq (buffer-local-value 'major-mode (window-buffer window)) 'roost-compose-mode))
+                 (eq (buffer-local-value 'major-mode (window-buffer window)) mode))
         (select-window window)))))
 
-(defun roost--quit-questions-for-draft (function)
-  "Quit the questions you left open in the minibuffer, then call FUNCTION.
-FUNCTION, such as the draft command you gave, is called in the draft
-that is current.  A question left open would take one it asks, or hold
-back the task it opens.  Return nil when there are none; otherwise this
-doesn't return, as for `roost--quit-questions-left-open'."
-  (let ((draft (current-buffer)))
+(defun roost--quit-questions-here (function)
+  "Quit the questions you left open in the minibuffer, then call FUNCTION here.
+Here is the buffer that is current, such as the draft or panel whose
+button you clicked, shown again, as quitting gives back the windows the
+question found.  A question left open would take one FUNCTION asks, or
+hold back the task it opens.  Return nil when there are none; otherwise
+this doesn't return, as for `roost--quit-questions-left-open'."
+  (let ((buffer (current-buffer)))
     (roost--quit-questions-left-open
      (lambda ()
-       (when (buffer-live-p draft)
-         ;; Quitting gave back the windows the question found.
-         (pop-to-buffer draft)
+       (when (buffer-live-p buffer)
+         (pop-to-buffer buffer)
          (funcall function))))))
 
 (defun roost-compose-cancel (&optional event)
   "Discard the draft, or the one whose Cancel button EVENT clicked."
   (interactive (list last-nonmenu-event))
-  (roost--compose-clicked event)
+  (roost--draft-clicked event 'roost-compose-mode)
   ;; One of the draft's own, as for its name, would outlive it.
-  (roost--quit-questions-for-draft #'roost-compose-cancel)
+  (roost--quit-questions-here #'roost-compose-cancel)
   (when (or (string-empty-p (roost--compose-prompt))
             (yes-or-no-p "Discard this task draft? "))
     (quit-window t)))
@@ -3581,7 +3593,7 @@ doesn't return, as for `roost--quit-questions-left-open'."
   "Create the drafted task.  The draft is kept if creation fails.
 EVENT, a click on the draft's Create button, says which draft."
   (interactive (list last-nonmenu-event))
-  (roost--compose-clicked event)
+  (roost--draft-clicked event 'roost-compose-mode)
   (let ((fields roost--compose-fields)
         (prompt (roost--compose-prompt))
         (name (roost--compose-name))
@@ -3593,7 +3605,7 @@ EVENT, a click on the draft's Create button, says which draft."
     (when roost--compose-submitting
       (user-error "Already creating %s" name))
     ;; The project's setup command can be asked about.
-    (roost--quit-questions-for-draft #'roost-compose-submit)
+    (roost--quit-questions-here #'roost-compose-submit)
     (let* ((directory (plist-get fields :directory))
            (host (roost--directory-host directory)))
       ;; Asked again in the same project, as after no reply came, the host
@@ -3601,7 +3613,7 @@ EVENT, a click on the draft's Create button, says which draft."
       (unless (equal (car roost--compose-asked) directory)
         (setq roost--compose-asked (list directory (roost--random-id))))
       (setq roost--compose-submitting t
-            roost--compose-note (format " Creating %s…" name))
+            roost--draft-note (format " Creating %s…" name))
       (roost--create-task (plist-get fields :directory) name (plist-get fields :base) prompt
                           (plist-get fields :agent)
                           (lambda (task) (roost--compose-made buffer fields task))
@@ -3616,7 +3628,7 @@ EVENT, a click on the draft's Create button, says which draft."
                                   ;; It may yet be made: then a poll of its host lists it.
                                   (roost--remember-host host)
                                   (roost-watch-mode 1)
-                                  (setq roost--compose-note
+                                  (setq roost--draft-note
                                         (format " No reply from %s after %s; the task opens here if it was made · %s asks again"
                                                 (roost--host-label host)
                                                 (let ((seconds (+ roost-request-timeout roost--create-seconds)))
@@ -3923,8 +3935,17 @@ last looked at it."
   (yank-media-handler "image/png" #'roost--send-yank-image)
   (roost--quiet-display))
 
+(defconst roost--send-buttons
+  '((" Cancel " roost-send-cancel roost-note-box-button
+     "mouse-1 or \\<roost-send-mode-map>\\[roost-send-cancel]: discard the prompt")
+    (" Attach " roost-send-attach roost-note-box-button
+     "mouse-1 or \\<roost-send-mode-map>\\[roost-send-attach]: attach a file")
+    (" Send " roost-send-submit roost-note-box-default-button
+     "mouse-1 or \\<roost-send-mode-map>\\[roost-send-submit]: send it to the agent"))
+  "The buttons in a prompt draft's header line.")
+
 (defun roost--send-header (task)
-  "Header line for TASK's follow-up draft."
+  "Header line for TASK's follow-up draft, before its buttons."
   (substitute-command-keys
    (format " Send to %s · \\<roost-send-mode-map>\\[roost-send-submit] send · \\[roost-send-attach] attach · \\[roost-send-cancel] cancel"
            (roost--field task 'name))))
@@ -3938,7 +3959,10 @@ draft clears them (see `roost-note')."
     (with-current-buffer buffer
       (unless (derived-mode-p 'roost-send-mode) (roost-send-mode))
       (setq roost--send-task task
-            header-line-format (roost--send-header task))
+            ;; What became of sending it last is over.
+            roost--draft-note nil
+            header-line-format '(:eval (roost--draft-header (roost--send-header roost--send-task)
+                                                            roost--send-buttons roost--send-sending)))
       (let* ((empty (string-blank-p (buffer-string)))
              (notes (progn
                       ;; Notes deleted with the rest of the text come back.
@@ -3959,17 +3983,22 @@ draft clears them (see `roost-note')."
         (goto-char (if (and empty (not (string-empty-p addition))) (point-min) (point-max)))))
     (pop-to-buffer buffer)))
 
-(defun roost-send-cancel ()
-  "Discard the follow-up draft."
-  (interactive)
+(defun roost-send-cancel (&optional event)
+  "Discard the follow-up draft, or the one whose Cancel button EVENT clicked."
+  (interactive (list last-nonmenu-event))
+  (roost--draft-clicked event 'roost-send-mode)
+  ;; One of the draft's own, as for an attachment, would outlive it.
+  (roost--quit-questions-here #'roost-send-cancel)
   (when (or (string-empty-p (string-trim (buffer-string)))
             (yes-or-no-p "Discard this prompt? "))
     (quit-window t)))
 
-(defun roost-send-submit ()
+(defun roost-send-submit (&optional event)
   "Send the drafted follow-up.  The draft is kept if sending fails.
-Review notes in it are cleared once it is sent."
-  (interactive)
+Review notes in it are cleared once it is sent.  EVENT, a click on the
+draft's Send button, says which draft."
+  (interactive (list last-nonmenu-event))
+  (roost--draft-clicked event 'roost-send-mode)
   (let ((text (replace-regexp-in-string "\\`\\([ \t]*\n\\)+" "" (string-trim-right (buffer-string))))
         (task roost--send-task)
         (notes roost--send-notes)
@@ -3985,7 +4014,10 @@ Review notes in it are cleared once it is sent."
         (user-error "A [Copying …] is from a copy since done, as undo brings back: redo for its path, or delete it")))
     (when roost--send-sending
       (user-error "Already sending"))
-    (setq roost--send-sending t)
+    ;; Sending while its agent may be at a prompt asks first.
+    (roost--quit-questions-here #'roost-send-submit)
+    (setq roost--send-sending t
+          roost--draft-note nil)
     (condition-case err
         (roost--send-text
          task text
@@ -4307,7 +4339,13 @@ can read it, and puts its path in place of \"[Copying FILE…]\", or a
 note that it failed.  For a Scrawl capture's folder (\\`M-n' gives the
 newest), it copies all but its video and audio, and adds its summary.
 The copies go when the task does."
-  (interactive (progn (roost--attaching-task) (list (roost--read-attachment))))
+  (interactive (progn
+                 ;; From its Attach button, the draft clicked.
+                 (roost--draft-clicked last-nonmenu-event 'roost-send-mode)
+                 (roost--attaching-task)
+                 (roost--quit-questions-here
+                  (lambda () (call-interactively #'roost-send-attach)))
+                 (list (roost--read-attachment))))
   (roost--send-attach-file file (roost--attachment-files file)))
 
 (defun roost--attaching-task ()
@@ -6189,8 +6227,17 @@ closes it, and one from a Jira work item links to it."
       (setq body (append body (list (if url (format "Jira: [%s](%s)" key url) (concat "Jira: " key))))))
     (concat title "\n\n" (string-join body "\n\n") (if body "\n" ""))))
 
+(defconst roost--pr-buttons
+  '((" Cancel " roost-pr-cancel roost-note-box-button
+     "mouse-1 or \\<roost-pr-mode-map>\\[roost-pr-cancel]: discard the pull request")
+    (" Create draft " roost-pr-submit-draft roost-note-box-button
+     "mouse-1 or C-u \\<roost-pr-mode-map>\\[roost-pr-submit]: create it as a draft")
+    (" Create " roost-pr-submit roost-note-box-default-button
+     "mouse-1 or \\<roost-pr-mode-map>\\[roost-pr-submit]: create the pull request"))
+  "The buttons in a pull request draft's header line.")
+
 (defun roost--pr-header (task)
-  "Header line for TASK's pull request draft."
+  "Header line for TASK's pull request draft, before its buttons."
   (substitute-command-keys
    (format " Pull request for %s%s · \\<roost-pr-mode-map>\\[roost-pr-submit] create (C-u: draft) · \\[roost-pr-cancel] cancel"
            (roost--field task 'name)
@@ -6203,7 +6250,9 @@ An existing draft for TASK is reused, and kept as written unless it is empty."
     (with-current-buffer buffer
       (unless (derived-mode-p 'roost-pr-mode) (roost-pr-mode))
       (setq roost--pr-task task
-            header-line-format (roost--pr-header task))
+            roost--draft-note nil
+            header-line-format '(:eval (roost--draft-header (roost--pr-header roost--pr-task)
+                                                            roost--pr-buttons roost--pr-sending)))
       (when (string-empty-p (string-trim (buffer-string)))
         (erase-buffer)
         (insert (roost--pr-initial-text task (roost--pr-commits task)))
@@ -6239,17 +6288,27 @@ only open it."
            (browse-url url))))
     (roost--pr-draft task)))
 
-(defun roost-pr-cancel ()
-  "Discard the pull request draft."
-  (interactive)
+(defun roost-pr-cancel (&optional event)
+  "Discard the pull request draft, or the one whose Cancel button EVENT clicked."
+  (interactive (list last-nonmenu-event))
+  (roost--draft-clicked event 'roost-pr-mode)
+  (roost--quit-questions-here #'roost-pr-cancel)
   (when (or (string-empty-p (string-trim (buffer-string)))
             (yes-or-no-p "Discard this pull request? "))
     (quit-window t)))
 
-(defun roost-pr-submit (&optional draft)
+(defun roost-pr-submit-draft (&optional event)
+  "Create the drafted pull request as a draft.
+EVENT, a click on the draft's Create draft button, says which draft."
+  (interactive (list last-nonmenu-event))
+  (roost-pr-submit t event))
+
+(defun roost-pr-submit (&optional draft event)
   "Create the drafted pull request; with prefix argument DRAFT, as a draft.
-The text is kept if creation fails."
-  (interactive "P")
+The text is kept if creation fails.  EVENT, a click on the draft's
+Create button, says which draft."
+  (interactive (list current-prefix-arg last-nonmenu-event))
+  (roost--draft-clicked event 'roost-pr-mode)
   (let* ((text (buffer-string))
          (newline (string-match "\n" text))
          (title (string-trim (if newline (substring text 0 newline) text)))
@@ -6260,7 +6319,10 @@ The text is kept if creation fails."
       (user-error "Write a title on the first line"))
     (when roost--pr-sending
       (user-error "Already creating"))
-    (setq roost--pr-sending t)
+    ;; Or one of the draft's own, as whether to discard it, would outlive it.
+    (roost--quit-questions-here (lambda () (roost-pr-submit draft)))
+    (setq roost--pr-sending t
+          roost--draft-note nil)
     (message "Roost: creating a pull request for %s…" (roost--field task 'name))
     (roost--act
      task "pr" `((title . ,title) (body . ,body) (draft . ,(and draft t)))
@@ -8315,10 +8377,8 @@ Only ERR's first line fits there; the echo area and *Messages* have it all."
   (let ((text (format " %s: %s · %s retries" what
                      (or (car (split-string err "\n" t "[ \t]+")) err)
                      (substitute-command-keys (format "\\[%s]" command)))))
-    ;; A new task's draft keeps its buttons beside it.
-    (if (derived-mode-p 'roost-compose-mode)
-        (setq roost--compose-note text)
-      (setq header-line-format text))
+    ;; Beside the draft's buttons, which send it again.
+    (setq roost--draft-note text)
     (force-mode-line-update)))
 
 (defun roost--one-line (string)
@@ -8755,6 +8815,87 @@ Status is the last observation from the task's host.
 (defvar-local roost--beside-terminal nil
   "Non-nil if this task panel was last drawn with its agent's terminal on screen.")
 
+(defvar-keymap roost--clicked-key-map
+  :doc "A click on a key a view names, and the words that go with it."
+  "<mouse-1>" #'roost-click-key)
+
+(defun roost-click-key (event)
+  "Do what the key clicked in EVENT does where it is named.
+A question you left open in the minibuffer is quit first, as it would
+take one the key's command asks."
+  (interactive "e")
+  (mouse-set-point event)
+  (let ((command (get-text-property (point) 'roost-key-command))
+        (position (point)))
+    (unless (commandp command)
+      (user-error "Nothing to do here"))
+    (roost--quit-questions-here (lambda ()
+                                  (goto-char (min position (point-max)))
+                                  (call-interactively command)))
+    (call-interactively command)))
+
+(defun roost--key-at-p (position)
+  "Whether the text at POSITION names a key, in a key's face."
+  (or (memq 'roost-key (ensure-list (get-text-property position 'face)))
+      (memq 'help-key-binding (ensure-list (get-text-property position 'face)))
+      (eq (get-text-property position 'font-lock-face) 'help-key-binding)))
+
+(defun roost--clickable-keys (map)
+  "Make each key the current buffer names that MAP binds clickable.
+A click runs the key's command, as the key would.  With the key go the
+words after it up to a comma, colon, semicolon, bracket, dot or \"or\",
+as in \"m merges it\", or else those before it back to a semicolon,
+bracket, dot or \"or\", as in \"Finish it in Magit: r\"."
+  (let ((inhibit-read-only t)
+        (pos (point-min))
+        (taken (point-min)))
+    (while (< pos (point-max))
+      (let ((next (min (next-single-char-property-change pos 'face)
+                       (next-single-char-property-change pos 'font-lock-face))))
+        (if (not (roost--key-at-p pos))
+            (setq pos next)
+          (let ((end pos))
+            (while (and (< end (point-max)) (roost--key-at-p end))
+              (setq end (min (next-single-char-property-change end 'face)
+                             (next-single-char-property-change end 'font-lock-face))))
+            (when-let* ((key (buffer-substring-no-properties pos end))
+                        (command (ignore-errors (keymap-lookup map key)))
+                        ((commandp command))
+                        ((not (text-property-not-all pos end 'button nil))))
+              (let* ((limit (save-excursion (goto-char end) (line-end-position)))
+                     (after (save-excursion
+                              (goto-char end)
+                              (let ((stop (if (re-search-forward "[,;:()·.]\\| or " limit t)
+                                              (match-beginning 0)
+                                            limit))
+                                    (p end))
+                                (while (and (< p stop) (not (roost--key-at-p p)))
+                                  (setq p (1+ p)))
+                                (goto-char p)
+                                (skip-chars-backward " " end)
+                                (point))))
+                     (words (string-match-p "[[:alpha:]]" (buffer-substring-no-properties end after)))
+                     (start (if words
+                                pos
+                              (save-excursion
+                                (goto-char pos)
+                                (if (re-search-backward "[;()·.]\\| or " (max taken (line-beginning-position)) t)
+                                    (goto-char (match-end 0))
+                                  (goto-char (max taken (line-beginning-position))))
+                                (skip-chars-forward " " pos)
+                                (point))))
+                     (stop (if words after end)))
+                ;; Not over a button of the view's own.
+                (when (text-property-not-all start stop 'button nil)
+                  (setq start pos stop end))
+                (add-text-properties start stop
+                                     (list 'mouse-face 'highlight 'pointer 'hand
+                                           'keymap roost--clicked-key-map
+                                           'roost-key-command command
+                                           'help-echo (format "mouse-1 or %s" key)))
+                (setq taken stop)))
+            (setq pos end)))))))
+
 (defvar-local roost--near-terminal nil
   "Non-nil if this task panel was last drawn in a frame with its terminal.")
 
@@ -9163,6 +9304,8 @@ Windows showing the panel keep their scroll position, and the mark stays."
                                      "\\[roost-task-info-quit] closes"))
                             'face 'roost-dim)
                 "\n")))
+    ;; Each key it names can be clicked too, with the words that go with it.
+    (roost--clickable-keys roost-task-info-mode-map)
     (goto-char (min position (point-max)))
     (roost--restore-mark mark)
     (roost--restore-window-places places)
@@ -9303,7 +9446,9 @@ are told apart."
 
 (defconst roost--clicked-commands
   '(roost-dashboard-mouse-open roost-dashboard-mouse-menu roost-compose-open-task
-    roost-sidebar-new-task roost-sidebar-project-menu roost-compose-submit roost-compose-cancel)
+    roost-sidebar-new-task roost-sidebar-project-menu roost-compose-submit roost-compose-cancel
+    roost-click-key roost-send-submit roost-send-cancel roost-send-attach
+    roost-pr-submit roost-pr-submit-draft roost-pr-cancel)
   "Commands that clicks on Roost's rows and buttons run.")
 
 ;; With a menu open, Roost's or another package's, a click on a task's

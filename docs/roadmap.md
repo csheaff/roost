@@ -78,6 +78,14 @@ account, with no badge or verdict.
 
 ## Worth trying
 
+- **One hand and a voice, the rest of the way.** From the UX review of
+  2026-11-01 ([validation](validation.md)): a `+` in the sidebar's header
+  line offering the recent projects as a menu, for when many tasks push
+  "Start a task in" out of sight; a discard that takes its name as
+  dictation gives it, with capitals, spaces and a full stop; Roost's task
+  menu in a task's terminal, where most time goes; and a line in the
+  manual that answering an agent's question takes a real key (Enter takes
+  its default), which Roost doesn't press for you.
 - **A quiet word for a stalled task.** The task panel and dashboard say how
   long since an agent's last event ("for 14m"); the sidebar doesn't. A dim
   `quiet` there, for a working task far past its own usual gap between
