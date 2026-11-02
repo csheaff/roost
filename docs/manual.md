@@ -285,7 +285,9 @@ set to nil keeps one buffer for all). There `;` writes a note for the agent (mor
 Review in Magit, below). The terminal shows the agent's replies, so the panel leaves them out
 while the terminal is on screen; `i` shows the same panel in the main area,
 with the latest reply after the changes (a click or `RET` opens a link in it). `?` in the panel
-opens the menu of what you can do with the task. Add
+opens the menu of what you can do with the task. Each key the panel names
+can be clicked too, with the words that go with it: a click on "m merges
+it" does what `m` does there. Add
 `(roost-task-panel-mode 1)` to have the panel from the start. It steps aside
 when the terminal would drop below 80 columns, and `q` in it turns it off.
 
@@ -605,7 +607,8 @@ terminal, it opens in a window below.
 also drafts a prompt holding them.
 
 In a prompt draft (`e` or `@`): `C-c C-c` sends, `C-c C-k` cancels, `C-c C-a`
-attaches a file from this machine and `C-c C-v` the image on the clipboard (as does
+attaches a file from this machine (or the Send, Cancel and Attach buttons in its
+header line) and `C-c C-v` the image on the clipboard (as does
 `M-x yank-media`, where Emacs reads images from the clipboard). Roost copies
 an attachment to the task's host in the background, under `attachments` in its
 state directory there, where the agent can read it. Meanwhile the draft shows
@@ -655,7 +658,8 @@ isn't one, as `git switch` would. A task's branch, as when you fork one with
 tag or commit, it is the branch the primary checkout has checked out.
 
 In the pull request draft: `C-c C-c` creates the pull request (`C-u` as a draft)
-and `C-c C-k` cancels. A failed creation keeps the draft.
+and `C-c C-k` cancels, as do the Create, Create draft and Cancel buttons in its
+header line. A failed creation keeps the draft.
 
 ## Configuration
 
