@@ -10618,6 +10618,18 @@ With INITIAL, the box must start out holding it."
           (funcall click "Fine")
           (should-not roost--notes))))))
 
+(ert-deftest roost-nothing-is-sent-into-an-offer-that-waits ()
+  ;; Its form waits for as long as its record says, and a paste could fill
+  ;; it in and submit it, so Roost doesn't ask whether to send anyway.
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (append '((request . "Offers a task: Fix add"))
+                                                (roost-test--task "a" "permission"))))
+         sent)
+     (cl-letf (((symbol-function 'roost--act) (lambda (&rest args) (setq sent args))))
+       (should (string-match-p "offers a task; open it with RET"
+                               (cadr (should-error (roost--send-text task "Also this") :type 'user-error))))
+       (should-not sent)))))
+
 (ert-deftest roost-a-note-edited-while-it-is-sent-stays ()
   (roost-test--isolated
    (let ((task (roost--cache-task "dev" (roost-test--task "a"))) done)

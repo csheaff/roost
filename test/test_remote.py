@@ -364,6 +364,12 @@ class Lifecycle(unittest.TestCase):
                                                   message="reviewer needs your input: which branch?"))
         record = store.read(task["id"])
         self.assertEqual((record["status"], record["request"]), ("permission", "reviewer needs your input: which branch?"))
+        # An MCP server's form, once it has waited a few seconds, in Claude Code's words.
+        roost.update_hook(store, task["id"], dict(hook_event_name="Stop"))
+        roost.update_hook(store, task["id"], dict(hook_event_name="Notification", notification_type="elicitation_dialog",
+                                                  message="Claude Code needs your input"))
+        record = store.read(task["id"])
+        self.assertEqual((record["status"], record["request"]), ("permission", "Claude Code needs your input"))
         # The notification that follows a request of its own keeps the request.
         roost.update_hook(store, task["id"], dict(hook_event_name="PermissionRequest", tool_name="Bash",
                                                   tool_input=dict(command="make")))
@@ -2540,6 +2546,11 @@ class Lifecycle(unittest.TestCase):
         argv = roost.CodexAgent().launch(store, dict(task, command=["codex"]), False)
         self.assertIn("mcp_servers.roost.args=" + json.dumps(server), argv)
         self.assertIn("mcp_servers.roost.command=" + json.dumps(sys.executable), argv)
+        # Codex gives a server only a few variables: also where tmux keeps
+        # Roost's server, and what a new task's session takes from it.
+        forwarded = json.loads(next(arg for arg in argv if arg.startswith("mcp_servers.roost.env_vars="))
+                               .split("=", 1)[1])
+        self.assertTrue({"TMUX_TMPDIR", "SSH_AUTH_SOCK", "DISPLAY"} <= set(forwarded), forwarded)
 
     def test_the_mcp_server_runs_as_the_agent_starts_it(self):
         # As a process of its own, over its standard input and output,
@@ -2558,26 +2569,39 @@ class Lifecycle(unittest.TestCase):
         replies = {reply["id"]: reply for reply in map(json.loads, ran.stdout.splitlines())}
         self.assertEqual(replies["new"]["error"]["code"], -32601)
         self.assertEqual(replies[1]["result"]["protocolVersion"], "2025-11-25")
-        self.assertEqual([tool["name"] for tool in replies[2]["result"]["tools"]],
-                         ["propose_task", "read_task", "message_task"])
+        tools = {tool["name"]: tool for tool in replies[2]["result"]["tools"]}
+        self.assertEqual(list(tools), ["propose_task", "read_task", "message_task"])
+        # Said of each, for an agent that asks before a tool unless told it
+        # changes nothing, as Codex does: an offer asks you itself, and
+        # reading changes nothing, but a message is typed into a terminal.
+        self.assertFalse(tools["propose_task"]["annotations"]["destructiveHint"])
+        self.assertFalse(tools["propose_task"]["annotations"]["openWorldHint"])
+        self.assertTrue(tools["read_task"]["annotations"]["readOnlyHint"])
+        self.assertNotIn("annotations", tools["message_task"])
         self.assertEqual(replies[3]["result"]["content"][0]["text"], "You haven't started any tasks.")
 
-    def offer(self, task, *messages, elicits=True, client="claude-code"):
-        """Run TASK's MCP server on MESSAGES, after the handshake of a
-        CLIENT, Claude Code's by default, and return its replies by their
-        IDs, and what TASK's record said whenever it asked the user something."""
+    def offer(self, task, *messages, elicits=True, meanwhile=None):
+        """Run TASK's MCP server on MESSAGES, after Claude Code's handshake,
+        and return its replies by their IDs, with its notifications as
+        "notifications", and what TASK's record said whenever it asked the
+        user something, once MEANWHILE has run, if given."""
         capabilities = dict(elicitation=elicits if isinstance(elicits, dict) else {}) if elicits else {}
         lines = [dict(id="hello", method="initialize", params=dict(
-            protocolVersion="2025-06-18", capabilities=capabilities, clientInfo=dict(name=client, version="1"))),
+            protocolVersion="2025-06-18", capabilities=capabilities, clientInfo=dict(name="claude-code", version="1"))),
                  dict(method="notifications/initialized")] + list(messages)
         reader = io.StringIO("".join(json.dumps(dict(line, jsonrpc="2.0")) + "\n" for line in lines))
-        store, replies, asking = roost.Store(str(self.state)), {}, []
+        store, replies, asking = roost.Store(str(self.state)), dict(notifications=[]), []
 
         class Writer:
             def write(self, line):
                 message = json.loads(line)
+                if "id" not in message:
+                    replies["notifications"].append(message)
+                    return
                 replies[message["id"]] = message
                 if message.get("method") == "elicitation/create":
+                    if meanwhile:
+                        meanwhile()
                     asking.append(store.read(task["id"]))
 
             def flush(self):
@@ -2590,11 +2614,11 @@ class Lifecycle(unittest.TestCase):
         return dict(id=ident, method="tools/call",
                     params=dict(name="propose_task", arguments=dict(title=title, brief=brief)))
 
-    def started(self, parent, answer=None, client="claude-code", **proposed):
+    def started(self, parent, answer=None, **proposed):
         """The task PARENT's agent offered as PROPOSED, started with the
-        fields of the form ANSWER gives, in CLIENT."""
+        fields of the form ANSWER gives."""
         replies, _ = self.offer(parent, self.propose(**proposed), dict(id="roost-1", result=dict(
-            action="accept", content=dict(dict(start="new"), **(answer or {})))), client=client)
+            action="accept", content=dict(dict(start="new"), **(answer or {})))))
         said = replies["call"]["result"]
         self.assertNotIn("isError", said, said)
         return next(t for t in self.request("list")["result"]
@@ -2645,9 +2669,10 @@ class Lifecycle(unittest.TestCase):
                 self.assertEqual(self.started(parent, answer, brief=brief)["prompt"], brief)
         changed = self.started(parent, dict(brief="First paragraph.��Only the docs."), brief=brief)
         self.assertEqual(changed["prompt"], "First paragraph.\n\nOnly the docs.")
-        # Another client's text, as Pi's editor gives it, is as you wrote it.
+        # Another agent's text, as Pi's editor gives it, is as you wrote it.
         literal = "Treat � in parser.py as a character of its own."
-        self.assertEqual(self.started(parent, dict(brief=literal), client="pi", brief=brief)["prompt"], literal)
+        self.assertFalse(getattr(roost.PiAgent, "form_loses_line_breaks", False))
+        self.assertEqual(roost.answered_brief(brief, literal), literal)
 
     def test_an_offer_leaves_what_else_its_task_waited_on(self):
         # As a subagent's permission request: waited on again once the
@@ -2660,6 +2685,43 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(asking[0]["request"], "Offers a task: Document calc")
         record = store.read(parent["id"])
         self.assertEqual({key: record.get(key) for key in asked}, asked)
+        # Not the request to allow this very call, which you answered before
+        # it began, as no hook runs between.
+        store.save(dict(record, status="permission", request="Asks to use mcp__roost__propose_task"))
+        self.offer(parent, self.propose(), dict(id="roost-1", result=dict(action="decline")))
+        record = store.read(parent["id"])
+        self.assertEqual((record["status"], record.get("request")), ("running", None))
+
+    def test_an_offer_waits_on_you_until_it_is_answered(self):
+        # Through another tool's start or end, as a subagent's, Claude's own
+        # notice of the form, and a report that its agent works; and Roost
+        # types nothing into its form, even when asked to.
+        parent = self.create(name="parent")
+        store = roost.Store(str(self.state))
+        sent = []
+
+        def meanwhile():
+            roost.update_hook(store, parent["id"], dict(hook_event_name="PreToolUse", tool_name="Bash",
+                                                        agent_id="a1", tool_input=dict(command="ls")))
+            roost.update_hook(store, parent["id"], dict(hook_event_name="Notification",
+                                                        notification_type="elicitation_dialog",
+                                                        message="Claude Code needs your input"))
+            record = store.read(parent["id"])
+            if roost.apply_program_status(record, dict(state="working"), record.get("runId")):
+                store.save(record)
+            sent.append(self.request("send", id=parent["id"], text="Also this", force=True))
+
+        replies, asking = self.offer(parent, self.propose(), dict(id="roost-1", result=dict(action="decline")),
+                                     meanwhile=meanwhile)
+        self.assertEqual((asking[0]["status"], asking[0]["request"]), ("permission", "Offers a task: Document calc"))
+        self.assertFalse(sent[0]["ok"])
+        self.assertIn("offers a task", sent[0]["error"])
+        # Then as before, dated just after the last change: an interrupt
+        # Claude recorded meanwhile, with no hook, still counts as newer.
+        record = store.read(parent["id"])
+        self.assertEqual((record["status"], record.get("request"), record.get("requestFrom")), ("ready", None, None))
+        self.assertEqual(roost.parse_time(record["updatedAt"]) - roost.parse_time(asking[0]["updatedAt"]),
+                         datetime.timedelta(microseconds=1))
 
     def test_an_offered_task_has_its_parents_branch_prefix(self):
         # Any string, as roost-branch-prefix allows; for an older helper's
@@ -2695,6 +2757,20 @@ class Lifecycle(unittest.TestCase):
                 self.assertTrue(replies["call"]["result"]["isError"])
                 self.assertEqual(asking, [])
         self.assertEqual(roost.Store(str(self.state)).read(parent["id"])["status"], "ready")
+        # From a task whose branch to merge into is gone, as one deleted once
+        # merged, there is none to start from.
+        self.git("branch", "develop")
+        merged = self.create(name="merged", base="develop")
+        self.git("branch", "-D", "develop")
+        replies, asking = self.offer(merged, self.propose())
+        self.assertIn("develop, is gone", replies["call"]["result"]["content"][0]["text"])
+        self.assertEqual(asking, [])
+        # Nor from one you stopped as its agent asked.
+        store = roost.Store(str(self.state))
+        store.save(dict(store.read(parent["id"]), status="stopped"))
+        replies, asking = self.offer(parent, self.propose())
+        self.assertTrue(replies["call"]["result"]["isError"])
+        self.assertEqual((asking, store.read(parent["id"])["status"]), ([], "stopped"))
 
     def test_an_offer_that_fails_to_start_says_why_and_leaves_its_task_as_it_was(self):
         parent = self.create(name="parent")
@@ -2709,9 +2785,10 @@ class Lifecycle(unittest.TestCase):
 
     def test_an_offer_done_here_declined_or_cancelled_starts_nothing(self):
         parent = self.create(name="parent")
+        # Closed without a choice, as with Esc, isn't turned down.
         for answer, said in ((dict(action="accept", content=dict(start="here")), "do it here"),
-                             (dict(action="decline"), "didn't start it"),
-                             (dict(action="cancel"), "didn't start it")):
+                             (dict(action="decline"), "didn't start it. Don't offer it again"),
+                             (dict(action="cancel"), "closed the question without choosing")):
             with self.subTest(answer=answer):
                 replies, _ = self.offer(parent, self.propose(), dict(id="roost-1", result=answer))
                 self.assertIn(said, replies["call"]["result"]["content"][0]["text"])
@@ -2725,15 +2802,29 @@ class Lifecycle(unittest.TestCase):
         replies, _ = self.offer(parent, self.propose(),
                                 dict(id="queued", method="tools/call", params=dict(name="read_task", arguments={})),
                                 dict(method="notifications/cancelled", params=dict(requestId="queued")),
+                                dict(method="notifications/cancelled", params=["queued"]),
                                 dict(id="roost-1", result=dict(action="decline")))
         self.assertIn("call", replies)
+        self.assertNotIn("error", replies["call"])
         self.assertNotIn("queued", replies)
-        # Stopped while it asks: no answer, and the agent goes on as before.
+        # Stopped while it asks: no answer, its form closes, and the agent
+        # goes on as before.
         replies, _ = self.offer(parent, self.propose(),
                                 dict(method="notifications/cancelled", params=dict(requestId="call")))
         self.assertNotIn("call", replies)
+        self.assertEqual(replies["notifications"],
+                         [dict(jsonrpc="2.0", method="notifications/cancelled", params=dict(requestId="roost-1"))])
         self.assertEqual(roost.Store(str(self.state)).read(parent["id"])["status"], "ready")
         self.assertEqual([t["id"] for t in self.request("list")["result"]], [parent["id"]])
+
+    def test_an_offer_asks_with_its_brief_where_the_form_starts_empty(self):
+        # As Codex's form does, which shows no field's default.
+        parent = self.create(name="parent")
+        store = roost.Store(str(self.state))
+        store.save(dict(store.read(parent["id"]), agent="codex"))
+        replies, _ = self.offer(parent, self.propose(), dict(id="roost-1", result=dict(action="decline")))
+        self.assertEqual(replies["roost-1"]["params"]["message"],
+                         "Start a task: Document calc\n\nWrite the README's section on calc.")
 
     def test_an_agent_that_cant_show_a_form_gets_no_tools(self):
         # It could offer no task, so it has started none to read or send to:
@@ -2772,13 +2863,21 @@ class Lifecycle(unittest.TestCase):
         record = store.read(child["id"])
         store.save(dict(record, status="permission"))
         self.assertTrue(call("message_task", task=child["id"], message="Also the tests")["isError"])
-        store.save(record)
+        # Nor keys, as Escape, which would end the paste and press the rest.
+        said = call("message_task", task=child["id"], message="Hi\u001b[201~\u0003!touch pwned\r")
+        self.assertIn("control characters", said["content"][0]["text"])
+        # Claude Code takes a prompt with its work going on in the background.
+        store.save(dict(record, status="background"))
         self.assertEqual(call("message_task", task=child["id"][:6], message="Also the tests")["content"][0]["text"],
                          "Sent to Document calc.")
         deadline = time.monotonic() + 8
         while "Also the tests" not in (roost.Store(str(self.state)).read(child["id"]).get("lastReply") or ""):
             self.assertLess(time.monotonic(), deadline, "the message never reached the task")
             time.sleep(.04)
+        self.assertNotIn("pwned", roost.Store(str(self.state)).read(child["id"])["lastReply"])
+        # As a listing would have it, also when none has since.
+        roost.tmux(self.socket, "kill-window", "-t", child["windowId"])
+        self.assertIn("crashed", call("read_task", task=child["id"])["content"][0]["text"])
 
     def test_an_offer_is_answered_in_the_agents_terminal(self):
         # As Claude Code does it: the agent runs the helper from its
@@ -8285,37 +8384,79 @@ class ProgramStatus(unittest.TestCase):
         # The same tools as an MCP server gives other agents, through it.
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)
+            repo = root / "repo"
+            subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+            subprocess.run(["git", "-C", str(repo), "-c", "user.name=Roost", "-c", "user.email=roost@example.com",
+                            "commit", "-q", "--allow-empty", "-m", "Start"], check=True)
             store = roost.Store(str(root / "state"))
-            store.save(dict(id="0" * 16, agent="pi", status="running", runId="run", name="parent",
+            store.save(dict(id="0" * 16, agent="pi", status="running", runId="run", name="parent", repo=str(repo),
                             integrationBranch="main", integrationRef="refs/heads/main"))
             roost.PiAgent().launch(store, dict(id="0" * 16, command=["pi"], prompt=None), False)
             extension = next(store.root.glob("pi-observer-*.mjs"))
             driver = root / "driver.mjs"
+            # Pi's dialogs report as they open and close, as its own wrapper
+            # of an extension's has them.
             driver.write_text(
                 "const { default: observe } = await import(%s);\n"
                 "const tools = {};\n"
-                "observe({ on: () => {}, registerTool: tool => { tools[tool.name] = tool; } });\n"
+                "const handlers = {};\n"
+                "observe({ on: (name, handler) => { handlers[name] = handler; },\n"
+                "          registerTool: tool => { tools[tool.name] = tool; } });\n"
                 "const asked = [];\n"
                 "const edited = [];\n"
-                "// The brief changed in Pi's editor first, then done here.\n"
-                "const ctx = { ui: { select: async (title, options) => { asked.push([title, options]);\n"
-                "                                                       return options[asked.length === 1 ? 2 : 1]; },\n"
-                "                    editor: async (title, text) => { edited.push([title, text]);\n"
-                "                                                     return 'Only the docs.'; } } };\n"
-                "const offered = await tools.propose_task.execute('1', { title: 'Docs', brief: 'Write them.' },\n"
-                "                                                 undefined, undefined, ctx);\n"
-                "const read = await tools.read_task.execute('2', {}, undefined, undefined, ctx);\n"
+                "let stopping = false;\n"
+                "const dialog = (title, answer) => {\n"
+                "  handlers.ui_prompt_start({ title }, ctx);\n"
+                "  return answer().finally(() => handlers.ui_prompt_end({}, ctx));\n"
+                "};\n"
+                "// The brief changed in Pi's editor first, then done here; or a run stopped as it asks.\n"
+                "const ctx = { ui: {\n"
+                "  select: (title, options, opts) => dialog(title, async () => {\n"
+                "    asked.push([title, options]);\n"
+                "    if (stopping) return new Promise(done => opts.signal.addEventListener('abort', () => done()));\n"
+                "    return options[asked.length === 1 ? 2 : 1]; }),\n"
+                "  editor: (title, text) => dialog(title, async () => { edited.push([title, text]);\n"
+                "                                                       return 'Only the docs.'; }) } };\n"
+                "const offered = await tools.roost_propose_task.execute('1', { title: 'Docs', brief: 'Write them.' },\n"
+                "                                                       undefined, undefined, ctx);\n"
+                "const read = await tools.roost_read_task.execute('2', {}, undefined, undefined, ctx);\n"
                 "let refused;\n"
-                "try { await tools.message_task.execute('3', { task: 'abcd', message: 'Hi' }, undefined, undefined, ctx); }\n"
+                "try { await tools.roost_message_task.execute('3', { task: 'abcd', message: 'Hi' }, undefined,\n"
+                "                                             undefined, ctx); }\n"
                 "catch (error) { refused = error.message; }\n"
-                "console.log(JSON.stringify({ names: Object.keys(tools), asked, edited, offered, read, refused,\n"
-                "                             schema: tools.propose_task.parameters }));\n"
+                "stopping = true;\n"
+                "const run = new AbortController();\n"
+                "setTimeout(() => run.abort(), 500);\n"
+                "let stopped;\n"
+                "try { await tools.roost_propose_task.execute('4', { title: 'Tests', brief: 'Write them.' }, run.signal,\n"
+                "                                             undefined, ctx); }\n"
+                "catch (error) { stopped = error.message; }\n"
+                "// Time for the helper to put the task back, and for any report to land.\n"
+                "await new Promise(done => setTimeout(done, 1500));\n"
+                "const offer = tools.roost_propose_task;\n"
+                "console.log(JSON.stringify({ names: Object.keys(tools), asked, edited, offered, read, refused, stopped,\n"
+                "                             modes: Object.values(tools).map(tool => tool.executionMode),\n"
+                "                             description: offer.description, schema: offer.parameters }));\n"
                 % json.dumps(extension.as_uri()))
             env = dict(os.environ, ROOST_PYTHON=sys.executable, ROOST_HELPER=str(SOURCE),
-                       ROOST_STATE_DIRECTORY=str(store.root), ROOST_TASK_ID="0" * 16)
+                       ROOST_STATE_DIRECTORY=str(store.root), ROOST_TASK_ID="0" * 16, ROOST_RUN_ID="run")
             said = json.loads(subprocess.run(["node", str(driver)], env=env, check=True, timeout=30,
                                              capture_output=True, text=True).stdout)
-            self.assertEqual(said["names"], ["propose_task", "read_task", "message_task"])
+            # By Roost's names, which another extension's tools are unlikely
+            # to have and Pi refuses two of, one at a time, as Pi shows one
+            # dialog; their words name them so.
+            self.assertEqual(said["names"], ["roost_propose_task", "roost_read_task", "roost_message_task"])
+            self.assertEqual(said["modes"], ["sequential"] * 3)
+            self.assertIn("offer it with roost_propose_task", said["description"])
+            self.assertNotIn(" propose_task", said["description"])
+            # Stopped while it asks: its dialog closes, and the task is as it was.
+            self.assertEqual((said["stopped"], said["asked"][-1][0]), ("Stopped", "Start a task: Tests\n\nWrite them."))
+            record = store.read("0" * 16)
+            self.assertEqual((record["status"], record.get("request")), ("running", None))
+            # Its dialogs are the offer's, which the helper marks already, not
+            # Pi's to report.
+            self.assertNotIn("lastEvent", record)
+            del said["asked"][-1]
             # A tool Pi refuses leaves the rest of the extension loaded.
             refusing = root / "refusing.mjs"
             refusing.write_text(
@@ -8336,7 +8477,6 @@ class ProgramStatus(unittest.TestCase):
             self.assertEqual(said["read"]["content"][0]["text"], "You haven't started any tasks.")
             self.assertIn("No task you started", said["refused"])
             self.assertEqual(said["schema"]["required"], ["title", "brief"])
-            self.assertEqual(store.read("0" * 16)["status"], "running")
 
     @unittest.skipUnless(shutil.which("node"), "needs Node")
     def test_opencode_plugin_reports_what_you_sent_as_a_turn_takes_it_up(self):

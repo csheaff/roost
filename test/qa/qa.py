@@ -2666,6 +2666,7 @@ def walk_away(qa, repo):
             pair = "%s, then %s" % (title, going)
             qa.dismiss()
             qa.emacs.eval("(qa-fresh-start)")
+            answer_offer_left(qa, home)
             open_task(qa, home)
             try:
                 leave(qa, tasks)
@@ -2734,8 +2735,24 @@ def walk_away(qa, repo):
                     ("its agent says it started nothing",
                      lambda s: "didn't start it" in selected_terminal(s)["text"]
                      and not qa.task(s, "Walk away from this"))])
+    qa.dismiss()
+    answer_offer_left(qa, home)
     # GitHub as other journeys find it.
     github(qa, list=[], reviews={})
+
+
+def answer_offer_left(qa, home):
+    """Answer an offer that a walk-away pair skipped or stopped in left
+    waiting, as HOME's agent would read whatever is typed in its terminal
+    next as its answer."""
+    if (qa.task(qa.screen(), home) or {}).get("status") != "permission":
+        return
+    try:
+        open_task(qa, home)
+        qa.type("no\r")
+        qa.status(home, "ready", "idle")
+    except Stuck as stuck:
+        qa.step("Answering the offer left waiting", expect=[(str(stuck), lambda s: False)])
 
 
 @journey("A second frame")

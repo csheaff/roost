@@ -70,7 +70,8 @@ IGNORED_EVENTS = {
     "WorktreeRemove": "Claude's own worktrees: Roost finds them by the cwd other hooks report",
 }
 # Notification types Roost maps, and those it ignores.
-MAPPED_NOTIFICATIONS = ("permission_prompt", "worker_permission_prompt", "agent_needs_input", "idle_prompt")
+MAPPED_NOTIFICATIONS = ("permission_prompt", "worker_permission_prompt", "agent_needs_input", "elicitation_dialog",
+                        "elicitation_url_dialog", "idle_prompt")
 # plugin_notification (2.1.296) is a plugin's message to you, through its ui.notify.
 IGNORED_NOTIFICATIONS = ("agent_completed", "auth_storage_failure", "auth_success", "computer_use_enter",
                          "computer_use_exit", "elicitation_complete", "elicitation_response", "plugin_notification",
@@ -125,8 +126,12 @@ def static_check():
     known = set(MAPPED_NOTIFICATIONS) | set(IGNORED_NOTIFICATIONS)
     for kind in sorted(kinds - known):
         report(None, "notification %s: decide whether it means the agent waits for you" % kind)
-    # Some types are passed through variables, so only those named in the source can be missed.
-    missing = sorted(set(MAPPED_NOTIFICATIONS) - kinds - {"permission_prompt", "idle_prompt"})
+    # Some types are passed through variables, as an MCP server's form's,
+    # but the list a Notification hook's matcher takes names them.
+    matched = set()
+    for match in re.finditer(rb'\["permission_prompt","idle_prompt",[^\]]*\]', data):
+        matched |= set(value.decode() for value in re.findall(rb'"([a-z_]+)"', match.group(0)))
+    missing = sorted(set(MAPPED_NOTIFICATIONS) - kinds - matched - {"permission_prompt", "idle_prompt"})
     for kind in missing:
         report(False, "notification %s, which Roost maps, is gone" % kind)
     if kinds and kinds <= known and not missing:
@@ -159,6 +164,12 @@ def static_check():
     add_dir = re.search(rb"--add-dir <", data)
     report(bool(add_dir), "--add-dir is an option" if add_dir
            else "--add-dir is gone; check ClaudeAgent.launch")
+    # Roost's MCP server, its tools in the prompt, and the form it asks with.
+    mcp = [what for what, pattern in (("--mcp-config", rb"--mcp-config <"), ("alwaysLoad", rb"alwaysLoad:"),
+                                      ("the form's notification", rb'"elicitation_dialog"'))
+           if not re.search(pattern, data)]
+    report(not mcp, "Roost's MCP server's config and form" + (": missing %s; check ClaudeAgent.launch"
+                                                              % ", ".join(mcp) if mcp else ""))
     # Transcripts are found by the path hooks report, else by Claude's folder naming.
     naming = re.search(rb'replace\(/\[\^a-zA-Z0-9\]/g,"-"\).{0,120}\.length<=', data, re.S)
     report(bool(naming), "transcript folders named as claude_project_folder expects" if naming

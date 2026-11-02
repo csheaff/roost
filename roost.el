@@ -3753,12 +3753,22 @@ permission is declined in the terminal."
       (roost--send-draft task)
     (roost--send-text task (or text (read-string (format "Send to %s: " (roost--field task 'name)))))))
 
+(defconst roost--offer-request "Offers a task: "
+  "How a task's request starts while its agent offers a task.
+The helper's OFFER_REQUEST.")
+
 (defun roost--send-text (task text &optional callback failure look)
   "Send TEXT to TASK's agent, confirming first if it may be at a prompt.
 CALLBACK and FAILURE are passed to `roost--act'.  With LOOK, as for
 your notes, its host first records where the task stands as where you
 last looked at it."
   (let* ((status (roost--field task 'status))
+         ;; Its form waits for as long as its record says, and a paste
+         ;; could fill it in and submit it.
+         (_ (when (and (equal status "permission")
+                       (string-prefix-p roost--offer-request (or (roost--field task 'request) "")))
+              (user-error "%s offers a task; open it with RET and answer it in its terminal"
+                          (roost--field task 'name))))
          (force (when (member status '("starting" "permission"))
                   (or (yes-or-no-p
                        (format "Roost last saw %s %s; send anyway, if you have answered it in the terminal? "
