@@ -7428,7 +7428,10 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
         (should (buffer-live-p (current-buffer)))
         (should-not roost--pr-sending)
         (should (string-match-p "no remote" (roost-test--header)))
-        (should (string-prefix-p "Fix auth\n" (buffer-string))))))))
+        (should (string-prefix-p "Fix auth\n" (buffer-string)))
+        ;; Opened again, it no longer says so.
+        (roost-pr task)
+        (should-not (string-match-p "no remote" (roost-test--header))))))))
 
 (ert-deftest roost-pr-pushes-then-opens-the-existing-one-in-the-browser ()
   (roost-test--isolated

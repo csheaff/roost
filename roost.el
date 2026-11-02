@@ -3536,8 +3536,10 @@ branch leads with the key of the one you choose."
       (roost--compose-render))))
 
 (defun roost--draft-clicked (event mode)
-  "Select the window whose draft, in MODE, EVENT clicked a button of, if it did."
-  (when (mouse-event-p event)
+  "Select the window whose draft, in MODE, EVENT clicked a button of, if it did.
+Only a click in a header line, where the buttons are: an earlier click
+left in `last-nonmenu-event' doesn't choose the draft."
+  (when (and (mouse-event-p event) (eq (posn-area (event-start event)) 'header-line))
     (let ((window (posn-window (event-start event))))
       (when (and (window-live-p window)
                  (eq (buffer-local-value 'major-mode (window-buffer window)) mode))
@@ -3919,6 +3921,8 @@ draft clears them (see `roost-note')."
     (with-current-buffer buffer
       (unless (derived-mode-p 'roost-send-mode) (roost-send-mode))
       (setq roost--send-task task
+            ;; What became of sending it last is over.
+            roost--draft-note nil
             header-line-format '(:eval (roost--draft-header (roost--send-header roost--send-task)
                                                             roost--send-buttons roost--send-sending)))
       (let* ((empty (string-blank-p (buffer-string)))
@@ -3970,7 +3974,8 @@ draft's Send button, says which draft."
         (user-error "A [Copying …] is from a copy since done, as undo brings back: redo for its path, or delete it")))
     (when roost--send-sending
       (user-error "Already sending"))
-    (setq roost--send-sending t)
+    (setq roost--send-sending t
+          roost--draft-note nil)
     (condition-case err
         (roost--send-text
          task text
@@ -6201,6 +6206,7 @@ An existing draft for TASK is reused, and kept as written unless it is empty."
     (with-current-buffer buffer
       (unless (derived-mode-p 'roost-pr-mode) (roost-pr-mode))
       (setq roost--pr-task task
+            roost--draft-note nil
             header-line-format '(:eval (roost--draft-header (roost--pr-header roost--pr-task)
                                                             roost--pr-buttons roost--pr-sending)))
       (when (string-empty-p (string-trim (buffer-string)))
@@ -6268,7 +6274,8 @@ Create button, says which draft."
       (user-error "Write a title on the first line"))
     (when roost--pr-sending
       (user-error "Already creating"))
-    (setq roost--pr-sending t)
+    (setq roost--pr-sending t
+          roost--draft-note nil)
     (message "Roost: creating a pull request for %s…" (roost--field task 'name))
     (roost--act
      task "pr" `((title . ,title) (body . ,body) (draft . ,(and draft t)))
