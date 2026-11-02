@@ -2878,7 +2878,8 @@ class Lifecycle(unittest.TestCase):
         parent = self.create(name="parent")
         other = self.create(name="other")
         child = self.started(parent)
-        self.wait(child, "ready")
+        # Once its turn on the brief is over, not only once it has started.
+        self.wait(child, "ready", "Stop")
 
         def call(name, **arguments):
             replies, _ = self.offer(parent, dict(id=name, method="tools/call",
