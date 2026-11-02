@@ -1553,6 +1553,44 @@ def by_clicks(qa, repo):
             "(json-encode (roost--project-label %s))" % lisp(place)))])
 
 
+@journey("A task's next steps, with clicks")
+def clicks(qa, repo):
+    """With a hand on the mouse: a prompt drafted from a task's row menu
+    goes with its Send button, and a click on "m merges it" in the panel
+    merges the task, the question answered in the dialog a click brings."""
+    # Not ask sh -c, which merge's task is named after.
+    name = new_task(qa, "ask env sh -c \"printf 'Pay rent\\n' > RENT.md && git add RENT.md && git commit -qm 'Add rent'\"")
+    qa.status(name, "permission")
+    open_task(qa, name)
+    qa.type("yes\r")
+    qa.status(name, "ready", "idle")
+    qa.wait("its commit", lambda s: "m merges it" in panel_text(qa, s))
+    qa.emacs.eval("(qa-answer-popups \"Send prompt…\")")
+    qa.emacs.eval("(qa-sidebar-show-row %s)" % lisp(name))
+    qa.click_text(name, "roost-sidebar-list-mode", 3)
+    draft = lambda s: qa.window(s, "roost-send-mode") or {}
+    qa.wait("the draft", lambda s: draft(s).get("selected"))
+    qa.step("A prompt drafted from its row's menu", expect=[
+        ("with Cancel, Attach and Send", lambda s: draft(s).get("header", "").endswith(" Cancel   Attach   Send "))])
+    qa.type("How are you?")
+    qa.click_in("header", " Send ")
+    qa.wait("the agent to get it", lambda s: any("PROMPT How are you?" in w["text"] for w in terminals(s)))
+    qa.step("Send sends it", expect=[
+        ("the draft is gone", lambda s: not draft(s)),
+        ("the echo area says so", lambda s: "Sent to " + name in (s["echo"] or ""))])
+    qa.status(name, "ready", "idle")
+    qa.wait("the panel's next step", lambda s: "m merges it" in panel_text(qa, s))
+    qa.emacs.eval("(qa-take-popups)")
+    qa.emacs.eval("(qa-answer-popups \"Yes\")")
+    qa.click_text("merges it", "roost-task-info-mode")
+    qa.wait("the task to go", lambda s: qa.task(s, name) is None)
+    popups = qa.emacs.json("(json-encode (qa-take-popups))")
+    qa.step("A click on m merges it merges it", expect=[
+        ("main has the commit", lambda s: "Add rent" in qa.git(repo, "log", "--format=%s", "-3")),
+        ("the question came as a dialog naming the task",
+         lambda s: any(p.get("kind") == "dialog" and name in p.get("title", "") for p in popups))])
+
+
 def names_changing(text, name, how, path):
     """Whether TEXT has the line naming the tasks that change PATH, HOW
     ("also" or "already"), and NAME among them: one line, whatever their
@@ -3763,7 +3801,7 @@ JOURNEYS = [sweep, answer, next_waiting, fold, resize, merge, review, notes, sin
             dashboard, panel_keys, stop_resume, retire, discard, teardown, send, attach, update, conflicts, restart,
             search, workload, question_left,
             walk_away,
-            frames, draft_frames, org, drafts, draft_fields, by_clicks, overlap, region, tabs,
+            frames, draft_frames, org, drafts, draft_fields, by_clicks, clicks, overlap, region, tabs,
             forget, rename, fork, other_branch, switched_branch, merged, large, pull_request, merge_request, exits,
             include, slow_create,
             unreachable,

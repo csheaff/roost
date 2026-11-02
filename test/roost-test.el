@@ -324,6 +324,54 @@ terminal's, on a pty.  Skips the test where it can't be made."
                                    "enter the first prompt there")
                                  (buffer-string))))))))
 
+(ert-deftest roost-task-panel-keys-can-be-clicked ()
+  ;; Each key the panel names, with the words that go with it, runs what
+  ;; the key does there, for someone with a hand on the mouse.
+  (roost-test--isolated
+   (let ((spans (lambda ()
+                  ;; Each clickable stretch of the panel, as (TEXT . COMMAND).
+                  (let ((pos (point-min)) found)
+                    (while (setq pos (text-property-not-all pos (point-max) 'roost-key-command nil))
+                      (let ((end (next-single-property-change pos 'roost-key-command nil (point-max))))
+                        (push (cons (buffer-substring-no-properties pos end)
+                                    (get-text-property pos 'roost-key-command))
+                              found)
+                        (setq pos end)))
+                    (nreverse found)))))
+     (save-window-excursion
+       (delete-other-windows)
+       (let ((task (roost--cache-task "dev" (append '((ahead . 1) (diff . "1 file +1 −0")) (roost-test--task))))
+             (asking (roost--cache-task "dev" (roost-test--task "fedcba9876543210" "permission")))
+             ran)
+         (switch-to-buffer (get-buffer-create "*panel test*"))
+         (unwind-protect
+             (progn
+               (roost-task-info-mode)
+               (setq roost--buffer-task-key (roost--key task))
+               (roost--render-task-info)
+               (let ((found (funcall spans)))
+                 (should (member '("m merges it" . roost-merge-retire) found))
+                 (should (member '("P opens a pull request" . roost-pr) found))
+                 (should (member '("? opens the menu" . roost-dispatch) found))
+                 (should (member '("q closes" . roost-task-info-quit) found)))
+               ;; A click runs the command, in the panel, on its task.
+               (goto-char (point-min))
+               (search-forward "P opens")
+               (should (eq (lookup-key (get-text-property (point) 'keymap) [mouse-1]) #'roost-click-key))
+               (cl-letf (((symbol-function 'roost-pr)
+                          (lambda () (interactive) (setq ran (roost--field (roost--task-at-point) 'id)))))
+                 (let ((at (point)))
+                   (goto-char (point-min))
+                   (roost-click-key (list 'mouse-1 (list (selected-window) at '(0 . 0) 0)))))
+               (should (equal ran "0123456789abcdef"))
+               ;; Words before a key go with it when none come after.
+               (setq roost--buffer-task-key (roost--key asking))
+               (roost--render-task-info)
+               (should (member '("Answer it in its terminal: RET" . roost-open-task) (funcall spans)))
+               ;; The text itself is as it was.
+               (should (string-prefix-p "fix auth" (buffer-string))))
+           (kill-buffer "*panel test*")))))))
+
 (ert-deftest roost-task-panel-shows-latest-reply ()
   (roost-test--isolated
    (let ((task (roost--cache-task "dev" (append `((lastMessage . ,roost-test--reply))
@@ -6629,6 +6677,10 @@ With FAILING, it prints it on stderr and exits with status 1."
          (roost-update task))
        (should (string-match-p "conflicts in: b.py\\. It resolved those in a.py as they were resolved before (rerere); check them too\\. Resolve" sent))))))
 
+(defun roost-test--header ()
+  "The current buffer's header line, as its `:eval' gives it."
+  (if (stringp header-line-format) header-line-format (eval (cadr header-line-format) t)))
+
 (defmacro roost-test--with-send-buffers (&rest body)
   `(unwind-protect (progn ,@body)
      (dolist (buffer (buffer-list))
@@ -6748,7 +6800,7 @@ With FAILING, it prints it on stderr and exits with status 1."
                  (lambda (_host _action params &rest _) (setq sent params))))
         (call-interactively #'roost-send)
         (should (derived-mode-p 'roost-send-mode))
-        (should (string-match-p "fix auth" header-line-format))
+        (should (string-match-p "fix auth" (roost-test--header)))
         (should-not sent)
         (roost-send task "hello")
         (should (equal (alist-get 'text sent) "hello")))))))
@@ -6792,7 +6844,7 @@ With FAILING, it prints it on stderr and exits with status 1."
         (roost-send-submit)
         (should (buffer-live-p (current-buffer)))
         (should-not roost--send-sending)
-        (should (string-match-p "boom" header-line-format))
+        (should (string-match-p "boom" (roost-test--header)))
         (should (equal (buffer-string) "hello")))))))
 
 ;; Attachments
@@ -7324,6 +7376,42 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
         (should-not (buffer-live-p buffer))
         (should (alist-get 'pr (gethash '("dev" "0123456789abcdef") roost--tasks))))))))
 
+(ert-deftest roost-prompt-and-pull-request-drafts-have-buttons ()
+  ;; A click on Send, Create or Create draft acts on the draft it is in,
+  ;; whichever window you were in, as its key would.
+  (roost-test--isolated
+   (roost-test--with-send-buffers
+    (roost-test--with-pr-buffers
+     (save-window-excursion
+       (delete-other-windows)
+       (let ((task (roost--cache-task "dev" (roost-test--task))) (xterm-mouse-mode t) sent)
+         (cl-letf (((symbol-function 'roost--pr-commits) (lambda (_) nil))
+                   ((symbol-function 'roost--redraw) #'ignore)
+                   ((symbol-function 'roost--request)
+                    (lambda (_host action params &rest _) (push (cons action params) sent))))
+           (let ((click (lambda (buffer label)
+                          ;; From another window, on BUFFER's button LABEL.
+                          (let* ((draft (get-buffer-window buffer))
+                                 (header (with-selected-window draft (roost-test--header)))
+                                 ;; The button, at the right, not the same word before it.
+                                 (map (get-text-property (cl-search label header :from-end t) 'local-map header)))
+                            (select-window (split-window draft))
+                            (switch-to-buffer "*scratch*")
+                            (funcall (lookup-key map [header-line mouse-1])
+                                     (list 'mouse-1 (list draft 'header-line '(0 . 0) 0)))
+                            (delete-other-windows draft)))))
+             (roost--send-draft task)
+             (insert "Name the due date")
+             (should (string-suffix-p " Cancel   Attach   Send " (roost-test--header)))
+             (funcall click (current-buffer) "Send")
+             (should (equal (alist-get 'text (cdr (assoc "send" sent))) "Name the due date"))
+             (roost-pr task)
+             (should (string-suffix-p " Cancel   Create draft   Create " (roost-test--header)))
+             (funcall click (current-buffer) "Create draft")
+             (should (eq (alist-get 'draft (cdr (assoc "pr" sent))) t))
+             ;; While it is being made, no buttons to press again.
+             (should-not (string-search "Create" (with-current-buffer (window-buffer) (roost-test--header))))))))))))
+
 (ert-deftest roost-pr-prefix-makes-a-draft-and-failure-keeps-the-text ()
   (roost-test--isolated
    (roost-test--with-pr-buffers
@@ -7339,7 +7427,7 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
         (should (eq (alist-get 'draft sent) t))
         (should (buffer-live-p (current-buffer)))
         (should-not roost--pr-sending)
-        (should (string-match-p "no remote" header-line-format))
+        (should (string-match-p "no remote" (roost-test--header)))
         (should (string-prefix-p "Fix auth\n" (buffer-string))))))))
 
 (ert-deftest roost-pr-pushes-then-opens-the-existing-one-in-the-browser ()

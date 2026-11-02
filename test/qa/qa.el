@@ -330,6 +330,15 @@ screen."
         (append unread-command-events (list (list 'down-mouse-1 posn) (list 'mouse-1 posn))))
   t)
 
+(defun qa--clickable-search (label string)
+  "Where LABEL is in STRING with a keymap of its own, else first, or nil."
+  (let ((start 0) found)
+    (while (and (not found) (setq start (string-search label string start)))
+      (if (get-text-property start 'local-map string)
+          (setq found start)
+        (setq start (1+ start))))
+    (or found (string-search label string))))
+
 (defun qa-click-header (label)
   "Click with the mouse on LABEL in the header line of a window on screen.
 Return nil when no header line shows it."
@@ -344,7 +353,8 @@ Return nil when no header line shows it."
          (cl-loop for x from 0 below (window-body-width window t) by step
                   for posn = (posn-at-x-y x (+ top (/ height 2)) window)
                   for string = (and (eq (posn-area posn) 'header-line) (posn-string posn))
-                  for start = (and string (string-search label (car string)))
+                  ;; The clickable LABEL, as a button's, not the same words before it.
+                  for start = (and string (qa--clickable-search label (car string)))
                   when (and start (>= (cdr string) (+ start (/ (length label) 2)))
                             (< (cdr string) (+ start (length label))))
                   return (qa--click-at posn)))))

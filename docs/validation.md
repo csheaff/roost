@@ -35,6 +35,44 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## UX review — 2026-11-01
+
+- **Scope.** Every journey, from starting a task to finishing it, for
+  one persona: Clay with one hand on the mouse and his voice for text
+  (MacWhisper, which pastes what he says), the keyboard only when both
+  hands are free. He works in the Claude app largely because it allows
+  that. Built on #197, which keeps recent projects in the sidebar and
+  gives the new task draft Create and Cancel buttons.
+- **Evidence.** The whole `make qa` run for #197 (341 steps) and its
+  screenshots; the code's buttons, menus and mouse bindings; and Claude
+  Code 2.1.312 on Haiku in a scratch tmux socket. Pasted text, as
+  tmux-control pastes it, lands in Claude's prompt as typed. Its
+  permission menu ignored a pasted `4` and took a typed one, and Claude
+  asked tmux for no mouse reports, so a click can't reach it either. Its
+  folder-trust menu takes no digits at all. Accepting it for the scratch
+  folder added an entry to `~/.claude.json`.
+- **Found, most important first.** (1) The panel's next step names keys
+  in colour that can't be clicked, as do its other lines and footer.
+  (2) No prompt can be sent without a key: the terminal needs Enter,
+  and the prompt and pull request drafts had no buttons; a draft pull
+  request was `C-u` only. (3) Answering an agent's question needs a real
+  key, which Roost must not press for you. (4) terminal-notifier isn't
+  installed on Clay's Mac, so a click on a notification can't open its
+  task. (5) With about 37 tasks, "Start a task in" scrolls out of the
+  sidebar. (6) Discarding compares the typed name exactly, which
+  dictation's capitals and full stops miss. (7) No Roost menu in a task's
+  terminal, where most time goes. Good as they were: a click on a row
+  and its right-click menu, the mode line's count, file and thread
+  clicks, notes by the margin `+` and the note box's buttons, and
+  questions after a click coming as dialogs.
+- **Chosen.** 1 and 2: each key the panel names, with the words that go
+  with it, runs what the key runs there, and the sweep checks that for
+  every gallery state; the prompt draft has Send, Attach and Cancel, the
+  pull request draft Create, Create draft and Cancel, and a QA journey,
+  `clicks`, sends a prompt and merges a task with clicks only. 4 needs
+  only `brew install terminal-notifier`; 3, 5, 6 and 7 went to the
+  roadmap.
+
 ## Images in a task's terminal — 2026-10-30
 
 - **Why.** Whether an image a program draws can reach a terminal Roost

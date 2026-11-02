@@ -768,7 +768,24 @@ applies to the task."
                               (not (roost--action-applies-p task command)))
                          (push (format "it names %s, but %s doesn't apply to the task" key command)
                                problems)))
-                  (setq pos (cdr pos)))))
+                  (setq pos (cdr pos))))
+              ;; A click on a key it names, or the words with it, runs what
+              ;; the key runs there.
+              (setq pos (point-min))
+              (while (setq pos (text-property-not-all pos (point-max) 'roost-key-command nil))
+                (let* ((end (next-single-property-change pos 'roost-key-command nil (point-max)))
+                       (words (buffer-substring-no-properties pos end))
+                       (key (seq-find #'roost--key-at-p (number-sequence pos (1- end))))
+                       (command (get-text-property pos 'roost-key-command)))
+                  (cond ((not key)
+                         (push (format "a click on %S runs %s, but it names no key" words command) problems))
+                        ((not (eq command (keymap-lookup (current-local-map)
+                                                         (buffer-substring-no-properties
+                                                          key (or (seq-find (lambda (at) (not (roost--key-at-p at)))
+                                                                            (number-sequence key (1- end)))
+                                                                  end)))))
+                         (push (format "a click on %S runs %s, not what its key runs" words command) problems)))
+                  (setq pos end))))
           (kill-buffer buffer))
         problems))))
 
