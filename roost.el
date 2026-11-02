@@ -2423,9 +2423,11 @@ says once the terminal shows."
 
 ;;;###autoload
 (defun roost-forget-project (directory)
-  "Stop offering project DIRECTORY for new tasks, in the sidebar and drafts.
-Its tasks are left as they are, and starting another task there
-remembers it again."
+  "Stop offering project DIRECTORY for new tasks.
+The sidebar no longer lists it.  Drafts offer it still while one of its
+tasks is listed, or project.el knows it, as `project-forget-project'
+changes.  Its tasks are left as they are, and starting another task
+there remembers it again."
   (interactive
    (progn
      (roost--known-projects)
@@ -3569,8 +3571,9 @@ doesn't return, as for `roost--quit-questions-left-open'."
   "Discard the draft, or the one whose Cancel button EVENT clicked."
   (interactive (list last-nonmenu-event))
   (roost--compose-clicked event)
+  ;; One of the draft's own, as for its name, would outlive it.
+  (roost--quit-questions-for-draft #'roost-compose-cancel)
   (when (or (string-empty-p (roost--compose-prompt))
-            (roost--quit-questions-for-draft #'roost-compose-cancel)
             (yes-or-no-p "Discard this task draft? "))
     (quit-window t)))
 

@@ -3183,18 +3183,20 @@ terminal's, on a pty.  Skips the test where it can't be made."
                ;; A question left open in the minibuffer is quit first,
                ;; which gives back the windows it found; then the button
                ;; acts on its draft.
-               (dolist (label '("Create" "Cancel"))
+               ;; An untouched draft too, whose own question, as for its
+               ;; name, would outlive it.
+               (dolist (case '(("Create" . "Fix the lexer") ("Cancel" . "Fix the lexer") ("Cancel" . "")))
                  (setq created nil)
                  (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer))
                  (delete-other-windows)
                  (roost--compose nil nil "/ssh:dev:/repo/")
                  (with-current-buffer roost--compose-buffer
                    (goto-char (point-max))
-                   (insert "Fix the lexer"))
+                   (insert (cdr case)))
                  (let ((then (catch 'left-open
                                (cl-letf (((symbol-function 'roost--quit-questions-left-open)
                                           (lambda (then) (throw 'left-open then))))
-                                 (funcall click label))
+                                 (funcall click (car case)))
                                nil)))
                    (should then)
                    (should-not created)
@@ -3202,7 +3204,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
                    (delete-other-windows)
                    (switch-to-buffer "*scratch*")
                    (funcall then))
-                 (if (equal label "Create")
+                 (if (equal (car case) "Create")
                      (should (equal created '("/ssh:dev:/repo/" "fix-lexer")))
                    (should-not (get-buffer roost--compose-buffer))))))
          (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))

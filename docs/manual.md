@@ -637,7 +637,8 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
   you create tasks in are remembered in `roost-hosts-file` and `roost-projects-file`;
   `M-x roost-forget-host` stops watching one you no longer use, and closes
   its tasks' terminals and panels; their agents keep running.
-  `M-x roost-forget-project` stops offering a project for new tasks.
+  `M-x roost-forget-project` takes a project out of the sidebar; drafts offer
+  it still while one of its tasks is listed or project.el knows it.
 - `roost-default-agent`, `roost-agent-commands`: which agent new tasks use, and
   each CLI with extra arguments, such as `("claude" "claude" "--model" "sonnet")`.
   Roost owns worktree, resume and hook flags and rejects conflicting ones.
