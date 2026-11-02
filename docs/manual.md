@@ -143,7 +143,8 @@ Magit is optional (review falls back to Dired).
 
 **Start a task.** `c` opens a draft. The project comes from where you are, or from
 projects you've used. Click a field or use its key to change it, write the prompt
-(it can span lines), and press `C-c C-c`. Roost creates the branch and worktree,
+(it can span lines), and press `C-c C-c` or click Create in the header line.
+Roost creates the branch and worktree,
 starts the agent in tmux, and opens its terminal.
 
 **Start from where the work is.** Your task list can stay where it already is:
@@ -239,7 +240,14 @@ working or stopped, and none once you've seen an agent that waits for nothing; t
 since you last looked at it, if anything (below), where the whole name fits
 beside it. A click opens the task,
 quitting any question you left open in the minibuffer, which would hold it back,
-and closing a menu left open. `I` docks a panel at the right of an open task's terminal,
+and closing a menu left open. Each project's heading ends with a `+` that
+drafts a task there. Below the tasks, under "Start a task in", are the
+projects with no tasks now that you used last on each host, three
+(`roost-sidebar-recent-projects`), and "Other directory…". A click on one, or
+`RET`, drafts a task there; "Other directory…" first asks for a host, then a
+folder there, which after a click is the system's folder dialog for one on
+this machine. `X` on a project, or "Forget" on its menu, stops listing it until
+you start a task there again. `I` docks a panel at the right of an open task's terminal,
 kept current as the agent works: what to do next, the start of the task's
 prompt, three lines there, the files it changed, those not yet committed
 first, and what a merge would rest on (below). Once you have sent the agent more, your latest prompt shows
@@ -629,6 +637,8 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
   you create tasks in are remembered in `roost-hosts-file` and `roost-projects-file`;
   `M-x roost-forget-host` stops watching one you no longer use, and closes
   its tasks' terminals and panels; their agents keep running.
+  `M-x roost-forget-project` takes a project out of the sidebar; drafts offer
+  it still while one of its tasks is listed or project.el knows it.
 - `roost-default-agent`, `roost-agent-commands`: which agent new tasks use, and
   each CLI with extra arguments, such as `("claude" "claude" "--model" "sonnet")`.
   Roost owns worktree, resume and hook flags and rejects conflicting ones.
@@ -725,6 +735,9 @@ and `C-c C-k` cancels. A failed creation keeps the draft.
   session of its own, named after its project and task.
 - `roost-sidebar-width` (30), `roost-task-panel-width` (44): the sidebar and
   the panel docked beside a task's terminal.
+- `roost-sidebar-recent-projects` (3): how many projects with no tasks the
+  sidebar lists on each host for a new task; 0 lists none, nor "Other
+  directory…".
 - `roost-workspace`, `roost-compact-mode-line`: how tasks get their own windows
   (see above); with perspective.el, task perspectives share one
   `Roost: host/task +N` entry in the perspective bar, and a click on it shows

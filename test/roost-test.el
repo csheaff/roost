@@ -2348,8 +2348,14 @@ terminal's, on a pty.  Skips the test where it can't be made."
                (should (equal created '("/ssh:dev:/repo/" "fix-csv-importer-quoted" nil
                                         "Fix the CSV importer so quoted commas work.\nAdd tests." "claude")))
                (funcall failure "no such host\nssh: details")
-               (should (string-match-p "Could not create the task: no such host · " header-line-format))
-               (should-not (string-match-p "\n" header-line-format))
+               (should (string-match-p "Could not create the task: no such host · " (roost--compose-header)))
+               (should-not (string-match-p "\n" (roost--compose-header)))
+               ;; With the mouse, its buttons stay to try again, unless
+               ;; they'd cut short what happened.
+               (let ((xterm-mouse-mode t))
+                 (should (string-suffix-p " Create " (roost--compose-header)))
+                 (funcall failure (concat "no such host " (make-string 80 ?x)))
+                 (should (string-suffix-p (make-string 80 ?x) (car (split-string (roost--compose-header) " · ")))))
                (should (buffer-live-p (current-buffer)))))
          (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
 
@@ -3045,6 +3051,163 @@ terminal's, on a pty.  Skips the test where it can't be made."
            (search-forward "+")
            (push-button (1- (point))))
          (should (string-suffix-p ":dev:/srv/ledger/" started)))))))
+
+(ert-deftest roost-sidebar-offers-the-projects-you-used-lately ()
+  ;; Below the tasks, projects with none: the latest few on each host
+  ;; Roost watches, each a click from a new task's draft.
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let ((roost-hosts '(nil "dev"))
+           (roost-sidebar-recent-projects 3)
+           (notes (file-name-as-directory (expand-file-name "~/code/notes")))
+           ;; As wide as the window it's in.
+           (row (lambda (label)
+                  (concat " " label (make-string (- (window-max-chars-per-line) (string-width label) 2) ?\s)
+                          "+")))
+           drafted)
+       (roost--cache-task "dev" (append '((name . "budget-alerts") (repo . "/srv/ledger"))
+                                        (roost-test--task "1111111111111111" "running")))
+       ;; Most recent first, as Roost remembers them: c once, under either
+       ;; method; ledger, with a task, under no user name; none on a host
+       ;; Roost doesn't watch.
+       (setq roost--remembered-projects
+             (list "/ssh:dev:/srv/ledger/" "/ssh:me@dev:/srv/ledger/" "/ssh:dev:/srv/c/" notes "/ssh:gone:/srv/x/"
+                   "/scp:dev:/srv/c/" "/ssh:dev:/srv/a/" "/ssh:dev:/srv/b/" "/ssh:dev:/srv/d/"))
+       (switch-to-buffer (get-buffer-create "*sidebar test*"))
+       (unwind-protect
+           (progn
+             (roost-sidebar-list-mode)
+             (roost--render-sidebar)
+             (should (equal (cdr (member "Start a task in" (split-string (buffer-string) "\n")))
+                            (list (funcall row "dev · a") (funcall row "dev · b") (funcall row "dev · c")
+                                  (funcall row "local · notes") (funcall row "Other directory…") "")))
+             (goto-char (point-min))
+             (search-forward "dev · b")
+             (should (string-match-p "New task in dev · /srv/b" (get-text-property (point) 'help-echo)))
+             (should (equal (roost--compose-default-directory nil nil) "/ssh:dev:/srv/b/"))
+             (should (eq (key-binding (kbd "RET")) #'roost-sidebar-new-task))
+             (should (eq (key-binding (kbd "X")) #'roost-forget-project))
+             ;; A click anywhere on the line drafts a task there.
+             (cl-letf (((symbol-function 'roost--compose)
+                        (lambda (_fork _seed directory) (setq drafted directory))))
+               (let ((at (point)))
+                 (goto-char (point-min))
+                 (roost-sidebar-new-task (list 'mouse-1 (list (selected-window) (1- at) '(0 . 0) 0)))))
+             (should (equal drafted "/ssh:dev:/srv/b/"))
+             ;; The last line asks for a host and a folder, then drafts.
+             (search-forward "Other directory")
+             ;; Drawn again, as each poll does, point stays on it.
+             (roost--render-sidebar)
+             (should (eq (get-text-property (point) 'roost-project) 'other))
+             (let (asked)
+               (cl-letf (((symbol-function 'roost--compose)
+                          (lambda (_fork _seed directory) (setq drafted directory)))
+                         ((symbol-function 'roost--read-project-directory)
+                          (lambda () (setq asked t) "/ssh:dev:/srv/new")))
+                 (roost-sidebar-new-task)
+                 (should asked)
+                 (should (equal drafted "/ssh:dev:/srv/new/"))
+                 ;; Clicked away from, nothing opens.
+                 (setq drafted nil)
+                 (cl-letf (((symbol-function 'roost--read-project-directory) #'ignore))
+                   (roost-sidebar-new-task))
+                 (should-not drafted)))
+             (should-error (call-interactively #'roost-forget-project) :type 'user-error)
+             (search-backward "dev · b")
+             ;; Forgotten, the next most recent takes its place.
+             (call-interactively #'roost-forget-project)
+             (should-not (member "/ssh:dev:/srv/b/" roost--remembered-projects))
+             (should-not (member "/ssh:dev:/srv/b/" (roost--read-json-list roost-projects-file)))
+             (roost--render-sidebar)
+             (should-not (string-match-p "dev · b" (buffer-string)))
+             (should (string-match-p (regexp-quote (funcall row "dev · d")) (buffer-string)))
+             ;; c goes under each method it was remembered by.
+             (roost-forget-project "/ssh:dev:/srv/c/")
+             (should-not (seq-filter (lambda (project) (string-suffix-p ":/srv/c/" project))
+                                     roost--remembered-projects))
+             ;; A question left open is quit first, then the draft opens.
+             (goto-char (point-min))
+             (search-forward "dev · d")
+             (let (quit)
+               (cl-letf (((symbol-function 'roost--compose)
+                          (lambda (_fork _seed directory) (setq drafted directory)))
+                         ((symbol-function 'roost--quit-questions-left-open)
+                          (lambda (then) (setq quit t) (funcall then) t)))
+                 (roost-sidebar-new-task))
+               (should quit)
+               (should (equal drafted "/ssh:dev:/srv/d/")))
+             ;; With no tasks, the project they were in is offered too.
+             (clrhash roost--tasks)
+             (roost--render-sidebar)
+             (should (string-match-p "No tasks\\." (buffer-string)))
+             (should (string-match-p (regexp-quote (funcall row "dev · ledger")) (buffer-string)))
+             (let ((roost-sidebar-recent-projects 0))
+               (roost--render-sidebar)
+               (should-not (string-match-p "Start a task in" (buffer-string)))))
+         (kill-buffer "*sidebar test*"))))))
+
+(ert-deftest roost-draft-buttons-create-or-cancel-it ()
+  ;; A click on Create or Cancel acts on the draft, whichever window you
+  ;; were in.
+  (roost-test--isolated
+   (let ((default-directory "/tmp/") (xterm-mouse-mode t) created)
+     (save-window-excursion
+       (delete-other-windows)
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--create-task)
+                      (lambda (directory name &rest _) (setq created (list directory name))))
+                     ((symbol-function 'yes-or-no-p) (lambda (_) t)))
+             (let ((click (lambda (label)
+                            (let* ((draft (get-buffer-window roost--compose-buffer))
+                                   (header (with-selected-window draft (roost--compose-header)))
+                                   (map (get-text-property (string-search label header) 'local-map header)))
+                              (select-window (split-window draft))
+                              (switch-to-buffer "*scratch*")
+                              (funcall (lookup-key map [header-line mouse-1])
+                                       (list 'mouse-1 (list draft 'header-line '(0 . 0) 0)))))))
+               (roost--compose nil nil "/ssh:dev:/repo/")
+               (with-current-buffer roost--compose-buffer
+                 (goto-char (point-max))
+                 (insert "Fix the parser"))
+               (funcall click "Create")
+               (should (equal created '("/ssh:dev:/repo/" "fix-parser")))
+               (kill-buffer roost--compose-buffer)
+               (delete-other-windows)
+               (roost--compose nil nil "/ssh:dev:/repo/")
+               (with-current-buffer roost--compose-buffer
+                 (goto-char (point-max))
+                 (insert "Fix the lexer"))
+               (funcall click "Cancel")
+               (should-not (get-buffer roost--compose-buffer))
+               ;; A question left open in the minibuffer is quit first,
+               ;; which gives back the windows it found; then the button
+               ;; acts on its draft.
+               ;; An untouched draft too, whose own question, as for its
+               ;; name, would outlive it.
+               (dolist (case '(("Create" . "Fix the lexer") ("Cancel" . "Fix the lexer") ("Cancel" . "")))
+                 (setq created nil)
+                 (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer))
+                 (delete-other-windows)
+                 (roost--compose nil nil "/ssh:dev:/repo/")
+                 (with-current-buffer roost--compose-buffer
+                   (goto-char (point-max))
+                   (insert (cdr case)))
+                 (let ((then (catch 'left-open
+                               (cl-letf (((symbol-function 'roost--quit-questions-left-open)
+                                          (lambda (then) (throw 'left-open then))))
+                                 (funcall click (car case)))
+                               nil)))
+                   (should then)
+                   (should-not created)
+                   (should (get-buffer roost--compose-buffer))
+                   (delete-other-windows)
+                   (switch-to-buffer "*scratch*")
+                   (funcall then))
+                 (if (equal (car case) "Create")
+                     (should (equal created '("/ssh:dev:/repo/" "fix-lexer")))
+                   (should-not (get-buffer roost--compose-buffer))))))
+         (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
 
 (ert-deftest roost-sidebar-shows-the-task-you-work-on ()
   ;; With more tasks than the sidebar has lines, the one you opened was
@@ -6199,7 +6362,7 @@ With FAILING, it prints it on stderr and exits with status 1."
                (should (equal watched '(1)))
                (should (equal remembered '("dev")))
                (with-current-buffer roost--compose-buffer
-                 (should (equal header-line-format
+                 (should (equal (roost--compose-header)
                                 " No reply from dev after 11m; the task opens here if it was made · C-c C-c asks again"))
                  ;; Asked again, the host answers with the task it made.
                  (roost-compose-submit)
@@ -8249,12 +8412,15 @@ field (FIELD . :none) is left out."
    (with-temp-buffer
      (roost-compose-mode)
      ;; As drawn; batch Emacs draws no header line.
-     (let ((hint (cadr (assq :eval header-line-format))))
-       (should (string-search "C-c C-c create" (car header-line-format)))
-       (let ((xterm-mouse-mode nil))
-         (should-not (eval hint t)))
-       (let ((xterm-mouse-mode t))
-         (should (equal (eval hint t) " · click a field to change it")))))
+     (should (equal header-line-format '(:eval (roost--compose-header))))
+     (let ((xterm-mouse-mode nil))
+       (should (equal (roost--compose-header) " C-c C-c create · C-c C-k cancel")))
+     (let* ((xterm-mouse-mode t)
+            (header (roost--compose-header)))
+       (should (string-prefix-p " C-c C-c create · C-c C-k cancel · click a field" header))
+       ;; The buttons stay at the right; what's before them gives way.
+       (should (string-suffix-p " Cancel   Create " header))
+       (should (<= (string-width header) (window-max-chars-per-line)))))
    (with-temp-buffer
      (insert "+def due(note):\n")
      ;; Rules are drawn in the note's colour, which batch Emacs has none of.
