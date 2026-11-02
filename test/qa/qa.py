@@ -2510,6 +2510,8 @@ def leave_attaching(qa, tasks):
 def leave_opening(qa, tasks):
     # Its host replies after what comes next.
     qa.emacs.eval("(qa-slow-opens 1 3)")
+    # Scrolled into sight, as a click on a project below the tasks leaves it.
+    qa.emacs.eval("(qa-sidebar-show-row %s)" % lisp(tasks["opening"]))
     qa.click_text(tasks["opening"], "roost-sidebar-list-mode")
 
 
@@ -3403,8 +3405,13 @@ def pull_request(qa, repo):
          lambda s: "Committed" in panel_text(qa, s) and "No CI results" not in panel_text(qa, s))])
     qa.keys("C-c r P")
     qa.wait("the pull request's draft", lambda s: (qa.window(s, "roost-pr-mode") or {}).get("selected"))
-    qa.keys("C-c C-c")
+    # By its button, where C-u C-c C-c makes a draft too.
+    qa.click_in("header", " Create draft ")
     qa.wait("its pull request", lambda s: "#21" in panel_text(qa, s))
+    qa.step("Create draft makes a draft pull request", expect=[
+        ("gh is asked for a draft", lambda s: any(
+            line.startswith('["pr", "create"') and '"--draft"' in line
+            for line in (qa.github / "log").read_text().splitlines()))])
     branch = qa.git(repo, "branch", "--list", "--format=%(refname:short)", "roost/%s-*" % name)
     tip = qa.git(repo, "rev-parse", branch)
     url = "https://github.com/qa/notes/pull/21"
