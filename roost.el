@@ -10357,15 +10357,18 @@ for any other directory, which asks for a host and a folder first."
                      (format "%s · %s" (roost--host-label host)
                              (file-name-nondirectory (directory-file-name (file-local-name directory))))
                    "Other directory…")
-                 (- width 3) nil nil "…")))
-    (propertize (concat " " label (make-string (max 1 (- width (string-width label) 2)) ?\s) "+\n")
-                'face 'roost-dim 'mouse-face 'highlight
-                'roost-project (or directory 'other) 'roost-directory directory
-                'keymap roost--project-row-map
-                'help-echo (if directory
-                               (format "New task in %s\nmouse-1: new task · mouse-3: forget"
-                                       (roost--project-label directory))
-                             "New task in a directory you choose: its host, then a folder there"))))
+                 (- width 3) nil nil "…"))
+         (row (list 'roost-project (or directory 'other) 'roost-directory directory
+                    'keymap roost--project-row-map
+                    'help-echo (if directory
+                                   (format "New task in %s\nmouse-1: new task · mouse-3: forget"
+                                           (roost--project-label directory))
+                                 "New task in a directory you choose: its host, then a folder there"))))
+    (concat (apply #'propertize
+                   (concat " " label (make-string (max 1 (- width (string-width label) 2)) ?\s) "+")
+                   'face 'roost-dim 'mouse-face 'highlight row)
+            ;; Without `mouse-face', so each row lights up alone.
+            (apply #'propertize "\n" row))))
 
 (defun roost--render-sidebar ()
   "Render the task sidebar from cached state, keeping point on its row."

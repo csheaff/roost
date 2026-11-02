@@ -3133,6 +3133,13 @@ terminal's, on a pty.  Skips the test where it can't be made."
              (goto-char (point-min))
              (search-forward "dev · b")
              (should (string-match-p "New task in dev · /srv/b" (get-text-property (point) 'help-echo)))
+             ;; Hovered, it lights up alone, not with every line below it,
+             ;; and its newline is still its own.
+             (save-excursion
+               (end-of-line)
+               (should (eq (get-text-property (1- (point)) 'mouse-face) 'highlight))
+               (should-not (get-text-property (point) 'mouse-face))
+               (should (equal (get-text-property (point) 'roost-directory) "/ssh:dev:/srv/b/")))
              (should (equal (roost--compose-default-directory nil nil) "/ssh:dev:/srv/b/"))
              (should (eq (key-binding (kbd "RET")) #'roost-sidebar-new-task))
              (should (eq (key-binding (kbd "X")) #'roost-forget-project))

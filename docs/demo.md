@@ -2,7 +2,7 @@
 
 The images are native captures of GUI Emacs, taken while Claude Code worked
 on two small disposable projects: `notes`, a notes CLI on the Mac, and
-`ledger`, an expense-ledger CLI on the SSH host `claylien`. Every agent was a
+`ledger`, an expense-ledger CLI on the SSH host `dev`. Every agent was a
 real Claude Code session (`--model haiku`), in its own terminal with its
 normal permission prompts. They ran with `--permission-mode acceptEdits`, so
 they asked before commands but not before edits.
@@ -17,33 +17,42 @@ state directory and tmux socket named `roost-demo`; a normal setup shows
 
 | File | What it shows |
 | --- | --- |
-| `roost-hero.png` | Six agents on two machines: the sidebar, the terminal of `budget-alerts` on `claylien` asking to run `python3 -m unittest`, and that task's panel |
+| `roost-hero.png` | Six agents on two machines: the sidebar, with two more projects to start a task in below them, the terminal of `budget-alerts` on `dev` asking to run `python3 -m unittest`, and that task's panel |
 | `roost-new-task.png` | `plans.org` beside the draft that `C-c r c` made from its heading, which started `export` |
 | `roost-review.png` | `tag-filter`'s terminal above the diff of `notes.py`, opened from its panel, with a review note under a line |
 | `roost-dashboard.png` | The dashboard of the same six tasks, with `budget-alerts` asking and `export` at work |
 
 ## How they were made
 
-All four were taken on 2026-10-24, with Roost as of 0.11.0 and the changes
-after it, once its views kept colour for what needs you and the panel beside
-a terminal had grown shorter. They replace the stills of 2026-10-21, which
-replaced a clip that played a task through. Five tasks were started with
-prompts that ask the agent to run the tests with `python3 -m unittest`, and
-their prompts answered in their terminals until each finished. `export` was
-then drafted from the heading in `plans.org`. To have one agent asking and
-one working at the moment of the hero and the dashboard, `budget-alerts` was
+The hero, the draft and the dashboard were taken on 2026-11-02, with Roost
+as of 0.11.0 and the changes after it, once the sidebar listed the projects
+you used lately and the draft had Create and Cancel buttons. The review is
+of 2026-10-24, and its tasks were run the same way on `claylien`, a host of
+then. Five tasks were started with prompts that ask the agent to run the
+tests with `python3 -m unittest`, and their prompts answered in their
+terminals until each finished. `export` was then drafted from the heading
+in `plans.org`. Two more projects, `weather` on `dev` and `website` on the
+Mac, each a single commit, were remembered as used before, so the sidebar
+lists them under "Start a task in". To have one agent asking and one
+working at the moment of the hero and the dashboard, `budget-alerts` was
 asked to show amounts with a thousands separator and run its tests, and
-`export` was given a further prompt just before each capture. The review
-note was written in the note box and saved; the box itself floats over the
-diff in a frame of its own, which a capture of the Emacs window leaves out.
+`export` was given a further prompt, for docstrings, which needs no
+command, just before each capture. The review note was written in the note
+box and saved; the box itself floats over the diff in a frame of its own,
+which a capture of the Emacs window leaves out.
 
 Each was taken at its own frame size, so that the text reads at the width
-GitHub shows the README: 172 columns by 36 lines for the hero, 132 by 19 for
+GitHub shows the README: 172 columns by 36 lines for the hero, 142 by 19 for
 the draft, with the sidebar and panel off, 156 by 34 for the review, with the
-sidebar off, and 132 by 15 for the dashboard, with both off. The capture
-Emacs was given focus for a moment before each capture, so that its window
-looks active. The disposable projects, tasks and capture state were removed
-afterwards.
+sidebar off, and 132 by 15 for the dashboard, with both off. The draft is
+wider than before so that its keys and buttons fit on its header line. The
+capture Emacs was brought to the front for a moment before each capture, so
+that its window looks active. The disposable projects, tasks and capture
+state were removed afterwards.
+
+Next time, give `notes` and `ledger` a default store inside the project:
+they keep it in your home, and an agent trying `export` wrote its test
+notes to `~/.notes.json` before removing the file.
 
 ## Try the same workflow
 
