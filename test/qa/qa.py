@@ -2689,6 +2689,20 @@ def go_notification(qa, target):
     qa.settle()
 
 
+def go_panel_key(qa, target):
+    """Click the step TARGET's panel names to answer it, "Answer it in its
+    terminal: RET", in the panel `i' on its row shows beside the terminal
+    on screen."""
+    to_sidebar(qa)
+    if qa.emacs.eval("(qa-goto-row %s)" % lisp(target)) != "t":
+        raise Stuck("No row for %s in the sidebar" % target)
+    qa.keys("i")
+    step = "Answer it in its terminal"
+    qa.wait("its next step", lambda s: qa.emacs.eval("(qa-scroll-to-text %s \"roost-task-info-mode\")"
+                                                     % lisp(step)) == "t")
+    qa.click_text(step, "roost-task-info-mode")
+
+
 def go_terminal(qa, target):
     if qa.emacs.eval("(qa-click-terminal)") != "t":
         raise NotApplicable("No terminal on screen to click")
@@ -2743,6 +2757,7 @@ WALK_INTERRUPTERS = [
     ("a click on a file in another task's panel", go_changed_file, "other"),
     ("a click on another task's name in a draft", go_draft_name, "other"),
     ("a click on a review thread in another task's panel", go_review_thread, "other"),
+    ("a click on the step another task's panel names", go_panel_key, "waiting"),
     ("a click on a notification", go_notification, "other"),
     ("a click in the terminal", go_terminal, None),
     ("a click on a project to start a task in", go_project, None),
