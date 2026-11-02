@@ -12,10 +12,10 @@ worktree, a branch and a terminal, here or on any SSH host. It tells you which
 agents need you, and you review and merge their work with Magit. If you've
 used Orca, it's that idea, inside Emacs.
 
-![Emacs with three columns: Roost's sidebar listing six agents on two machines, the one you are on marked with a band and asking permission, three ready, one you have seen and one working; that agent's Claude Code terminal on the SSH host claylien, asking to run python3 -m unittest; and the task's panel, which says to answer it in its terminal and shows the prompt it was given, your latest prompt and the files it has changed](docs/images/roost-hero.png)
+![Emacs with three columns: Roost's sidebar listing six agents on two machines, the one you are on marked with a band and asking permission, four ready and one working, and below them two more projects to start a task in; that agent's Claude Code terminal on the SSH host dev, asking to run python3 -m unittest; and the task's panel, which says to answer it in its terminal and shows the prompt it was given, your latest prompt and the files it has changed](docs/images/roost-hero.png)
 
-*Six Claude Code agents on two machines. The one on `claylien` wants to run
-its tests: its own terminal in the middle, every task at the left, and at the
+*Six Claude Code agents on two machines. The one on `dev` wants to run its
+tests: its own terminal in the middle, every task at the left, and at the
 right what to do next, what you asked it and what it changed.*
 
 ## A task, start to finish
@@ -29,10 +29,10 @@ and a task's panel its keys work alone.
    GitHub issue or a Jira work item works the same way. `C-c C-c` makes the
    worktree and branch and starts the agent.
 
-   ![An Org file of plans beside the draft that C-c r c made from its heading, Export the notes as a Markdown checklist: the project notes on this machine, the agent claude, starting from main and merging into main, the task named export, and the heading and its notes as the prompt](docs/images/roost-new-task.png)
+   ![An Org file of plans beside the draft that C-c r c made from its heading, Export the notes as a Markdown checklist: Cancel and Create buttons at the top, the project notes on this machine, the agent claude, starting from main and merging into main, the task named export, and the heading and its notes as the prompt](docs/images/roost-new-task.png)
 
-2. **Go where you're needed.** While it works, an agent on `claylien` asks to
-   run its tests. `C-c r n` takes you to the next agent waiting for you, and
+2. **Go where you're needed.** While it works, an agent on `dev` asks to run
+   its tests. `C-c r n` takes you to the next agent waiting for you, and
    you answer it in its own terminal. With perspective.el or `tab-bar-mode`
    on, each task has a perspective or tab of its own, which keeps its
    terminal, diffs and files together as you left them.
@@ -53,7 +53,7 @@ and a task's panel its keys work alone.
 it's doing, what it changed, and its latest reply or what it asks. A
 notification says the same when one finishes or asks for something.
 
-![The dashboard, counting 1 permission, 3 ready, 1 running and 1 seen: two tasks on claylien, one ready and one asking to run python3 -m unittest, and four local ones, two ready, one you have seen and one working, each with its changes and latest reply](docs/images/roost-dashboard.png)
+![The dashboard, counting 1 permission, 4 ready and 1 running: two tasks on dev, one ready and one asking to run python3 -m unittest, and four local ones, three ready and one working, each with its changes and latest reply](docs/images/roost-dashboard.png)
 
 ## How it differs
 
