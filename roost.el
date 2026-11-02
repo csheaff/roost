@@ -2421,6 +2421,7 @@ says once the terminal shows."
                        (mapcar #'roost--project-directory
                                (seq-filter (lambda (task) (roost--field task 'repo)) (roost-tasks))))))
 
+;;;###autoload
 (defun roost-forget-project (directory)
   "Stop offering project DIRECTORY for new tasks, in the sidebar and drafts.
 Its tasks are left as they are, and starting another task there
@@ -3550,11 +3551,26 @@ branch leads with the key of the one you choose."
                  (eq (buffer-local-value 'major-mode (window-buffer window)) 'roost-compose-mode))
         (select-window window)))))
 
+(defun roost--quit-questions-for-draft (function)
+  "Quit the questions you left open in the minibuffer, then call FUNCTION.
+FUNCTION, such as the draft command you gave, is called in the draft
+that is current.  A question left open would take one it asks, or hold
+back the task it opens.  Return nil when there are none; otherwise this
+doesn't return, as for `roost--quit-questions-left-open'."
+  (let ((draft (current-buffer)))
+    (roost--quit-questions-left-open
+     (lambda ()
+       (when (buffer-live-p draft)
+         ;; Quitting gave back the windows the question found.
+         (pop-to-buffer draft)
+         (funcall function))))))
+
 (defun roost-compose-cancel (&optional event)
   "Discard the draft, or the one whose Cancel button EVENT clicked."
   (interactive (list last-nonmenu-event))
   (roost--compose-clicked event)
   (when (or (string-empty-p (roost--compose-prompt))
+            (roost--quit-questions-for-draft #'roost-compose-cancel)
             (yes-or-no-p "Discard this task draft? "))
     (quit-window t)))
 
@@ -3573,6 +3589,8 @@ EVENT, a click on the draft's Create button, says which draft."
       (user-error "Write a prompt, or name the task (%s)" (substitute-command-keys "\\[roost-compose-set-name]")))
     (when roost--compose-submitting
       (user-error "Already creating %s" name))
+    ;; The project's setup command can be asked about.
+    (roost--quit-questions-for-draft #'roost-compose-submit)
     (let* ((directory (plist-get fields :directory))
            (host (roost--directory-host directory)))
       ;; Asked again in the same project, as after no reply came, the host
