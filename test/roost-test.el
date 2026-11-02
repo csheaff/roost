@@ -2350,9 +2350,12 @@ terminal's, on a pty.  Skips the test where it can't be made."
                (funcall failure "no such host\nssh: details")
                (should (string-match-p "Could not create the task: no such host · " (roost--compose-header)))
                (should-not (string-match-p "\n" (roost--compose-header)))
-               ;; With the mouse, its buttons stay to try again.
+               ;; With the mouse, its buttons stay to try again, unless
+               ;; they'd cut short what happened.
                (let ((xterm-mouse-mode t))
-                 (should (string-suffix-p " Create " (roost--compose-header))))
+                 (should (string-suffix-p " Create " (roost--compose-header)))
+                 (funcall failure (concat "no such host " (make-string 80 ?x)))
+                 (should (string-suffix-p (make-string 80 ?x) (car (split-string (roost--compose-header) " · ")))))
                (should (buffer-live-p (current-buffer)))))
          (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
 

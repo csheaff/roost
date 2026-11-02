@@ -2781,12 +2781,15 @@ As that its task is being created, or why creating it failed.")
                          (" Create " roost-compose-submit roost-note-box-default-button
                           "mouse-1 or \\<roost-compose-mode-map>\\[roost-compose-submit]: create the task"))))
              (width (string-pixel-width buttons))
-             ;; The keys give way to the buttons in a narrow window.
              (room (- (window-max-chars-per-line) (ceiling width (frame-char-width)) 2)))
-        (concat (truncate-string-to-width (if roost--compose-note keys (concat keys " · click a field to change it"))
-                                          (max 0 room) nil nil "…")
-                (propertize " " 'display `(space :align-to (- right (,(+ width (frame-char-width))))))
-                buttons)))))
+        ;; The keys give way to the buttons in a narrow window, and the
+        ;; buttons to what became of creating the task, which says its key.
+        (if (and roost--compose-note (> (string-width keys) room))
+            keys
+          (concat (truncate-string-to-width (if roost--compose-note keys (concat keys " · click a field to change it"))
+                                            (max 0 room) nil nil "…")
+                  (propertize " " 'display `(space :align-to (- right (,(+ width (frame-char-width))))))
+                  buttons))))))
 
 (defun roost--compose-default-directory (task fork)
   "Default project for a new task, given the TASK in context and FORK.
