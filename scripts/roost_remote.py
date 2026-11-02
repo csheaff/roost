@@ -1168,13 +1168,12 @@ export default function (pi) {
   // Pi starts with none that two extensions name; one at a time, as Pi
   // shows one dialog. A tool Pi refuses, as for its parameters, leaves the
   // rest of this extension, which reports status, as it is.
-  const named = said => said.replace(/\b(propose_task|read_task|message_task)\b/g, "roost_$1");
   for (const tool of ROOST_TOOLS) {
     try {
       pi.registerTool({ ...tool, name: "roost_" + tool.name, label: "roost_" + tool.name, executionMode: "sequential",
         async execute(_id, params, signal, _onUpdate, ctx) {
           const result = await roostCall(tool.name, params, signal, ctx);
-          const said = named(result.content.map(part => part.text).join("\n"));
+          const said = result.content.map(part => part.text).join("\n");
           if (result.isError) throw new Error(said);
           return { content: [{ type: "text", text: said }], details: undefined };
         } });
@@ -1188,7 +1187,7 @@ def pi_extension():
     """Roost's Pi extension, with the tools of its MCP server, by the names
     Pi has them, and what the server tells an agent about them first, as
     Pi has no other place for it."""
-    named = lambda said: re.sub(r"\b(propose_task|read_task|message_task)\b", r"roost_\1", said)
+    named = lambda said: re.sub(r"\b(propose_task|read_task|message_task)\b", PiAgent.tool_prefix + r"\1", said)
     tools = [dict(name=name, parameters=json.loads(named(json.dumps(definition["inputSchema"]))),
                   description=named((MCP_INSTRUCTIONS + "\n\n" if name == "propose_task" else "")
                                     + definition["description"]))
@@ -1206,6 +1205,9 @@ class PiAgent:
     # Its extension shows an offer's brief above the choice, and in Pi's
     # editor to change it.
     form_shows_defaults = True
+    # Its extension names Roost's tools so, as another's may have one of
+    # the plain names.
+    tool_prefix = "roost_"
 
     def validate(self, command):
         validate_command(command, "Pi")
@@ -4019,8 +4021,9 @@ def offering(store, task_id, title):
         before = {key: task.get(key) for key in ("status", "request", "requestCommand", "requestFrom")}
         if before["status"] == "permission" and (before["request"] or "").endswith("propose_task"):
             before = dict(status="running", request=None, requestCommand=None, requestFrom=None)
-        # Marked as the offer's, which only its own server ends.
-        task.update(status="permission", request=request, requestFrom="offer", updatedAt=now())
+        # Marked as the offer's, which only its own server ends; a request
+        # that comes meanwhile waits behind it, in afterOffer.
+        task.update(status="permission", request=request, requestFrom="offer", afterOffer=before, updatedAt=now())
         task.pop("requestCommand", None)
         store.save(task)
     try:
@@ -4028,6 +4031,7 @@ def offering(store, task_id, title):
     finally:
         with store.locked(), contextlib.suppress(RoostError):
             task = store.read(task_id)
+            before = task.pop("afterOffer", None) or before
             # Unless an event since says otherwise.
             if task["status"] == "permission" and task.get("request") == request:
                 for key, value in before.items():
@@ -4040,7 +4044,7 @@ def offering(store, task_id, title):
                 # one since then must still count as newer.
                 stamp = parse_time(task.get("updatedAt"))
                 task["updatedAt"] = (stamp + datetime.timedelta(microseconds=1)).isoformat() if stamp else now()
-                store.save(task)
+            store.save(task)
 
 
 def propose_task(server, title, brief, ident):
@@ -4087,10 +4091,12 @@ def propose_task(server, title, brief, ident):
     with server.store.locked():
         parent = server.store.read(server.task_id)
     task = make_task(server.store, offered_request(parent, title, started), None)
+    # By the names its agent has the tools by; what the user wrote is as written.
+    tools = getattr(agent, "tool_prefix", "")
     return ("Started task %s, ID %s, on branch %s in a worktree of its own%s. Its agent works on its own; "
-            "read_task shows how it is doing, and message_task sends it a message."
+            "%sread_task shows how it is doing, and %smessage_task sends it a message."
             % (task["name"], task["id"], task["branch"],
-               ", with the brief as the user changed it" if started != brief else ""))
+               ", with the brief as the user changed it" if started != brief else "", tools, tools))
 
 
 def answered_brief(brief, said, breaks_lost=False):
@@ -5953,16 +5959,22 @@ def update_hook(store, task_id, payload, run_id=None):
             task.update(updates)
             request = (named or permission_request(payload, task.get("worktree"))) if asks else None
             if request:
-                task["request"] = request
-                task.pop("requestFrom", None)
                 # Its command, to see it start once you approve; the start
                 # identifies it, and a heredoc can be long.
                 arguments = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
                 command = arguments.get("command") if payload.get("tool_name") == "Bash" else None
-                if isinstance(command, str) and command.strip():
-                    task["requestCommand"] = command[:APPROVAL_MARKER_LIMIT]
+                command = command[:APPROVAL_MARKER_LIMIT] if isinstance(command, str) and command.strip() else None
+                asked = dict(request=request, requestCommand=command, requestFrom=None)
+                if task.get("requestFrom") == "offer":
+                    # As a subagent's: it waits behind the offer, which
+                    # stays what Roost shows and keeps text out of its form.
+                    task["afterOffer"] = dict(asked, status="permission")
                 else:
-                    task.pop("requestCommand", None)
+                    for key, value in asked.items():
+                        if value is None:
+                            task.pop(key, None)
+                        else:
+                            task[key] = value
             elif ((not relayed or not agent.reports_turns)
                   and (task["status"] != "permission" or before != "permission")):
                 # The notification that follows a request names no tool:
@@ -6787,7 +6799,7 @@ def require_not_removing(store, task, action):
 
 
 # Kept in task records for the helper's own use, and not sent to Emacs.
-PRIVATE = ("lastReply", "transcript", "requestFrom", "hookAt")
+PRIVATE = ("lastReply", "transcript", "requestFrom", "afterOffer", "hookAt")
 
 
 def outgoing(result):

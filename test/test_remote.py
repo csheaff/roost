@@ -2722,6 +2722,35 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual((record["status"], record.get("request"), record.get("requestFrom")), ("ready", None, None))
         self.assertEqual(roost.parse_time(record["updatedAt"]) - roost.parse_time(asking[0]["updatedAt"]),
                          datetime.timedelta(microseconds=1))
+        self.assertNotIn("afterOffer", record)
+
+    def test_a_request_while_an_offer_waits_comes_after_it(self):
+        # As a teammate's, or a subagent's command: the offer stays what
+        # Roost shows, and keeps text out of its form, until you answer it.
+        parent = self.create(name="parent")
+        store = roost.Store(str(self.state))
+        sent = []
+
+        def meanwhile():
+            roost.update_hook(store, parent["id"], dict(hook_event_name="Notification",
+                                                        notification_type="worker_permission_prompt",
+                                                        message="reviewer needs permission for Bash"))
+            roost.update_hook(store, parent["id"], dict(hook_event_name="PermissionRequest", tool_name="Bash",
+                                                        agent_id="a1", tool_input=dict(command="make test")))
+            sent.append(self.request("send", id=parent["id"], text="Also this", force=True))
+            sent.append(self.request("inspect", id=parent["id"]))
+
+        _, asking = self.offer(parent, self.propose(), dict(id="roost-1", result=dict(action="decline")),
+                               meanwhile=meanwhile)
+        self.assertEqual((asking[0]["request"], asking[0]["requestFrom"]), ("Offers a task: Document calc", "offer"))
+        self.assertNotIn("requestCommand", asking[0])
+        self.assertFalse(sent[0]["ok"])
+        self.assertEqual(sent[1]["result"]["request"], "Offers a task: Document calc")
+        self.assertNotIn("afterOffer", sent[1]["result"])
+        record = store.read(parent["id"])
+        self.assertEqual((record["status"], record["request"], record["requestCommand"]),
+                         ("permission", "Asks to run make test", "make test"))
+        self.assertNotIn("afterOffer", record)
 
     def test_an_offered_task_has_its_parents_branch_prefix(self):
         # Any string, as roost-branch-prefix allows; for an older helper's
@@ -2816,6 +2845,14 @@ class Lifecycle(unittest.TestCase):
                          [dict(jsonrpc="2.0", method="notifications/cancelled", params=dict(requestId="roost-1"))])
         self.assertEqual(roost.Store(str(self.state)).read(parent["id"])["status"], "ready")
         self.assertEqual([t["id"] for t in self.request("list")["result"]], [parent["id"]])
+
+    def test_an_offered_task_names_the_tools_as_its_agent_has_them(self):
+        # Pi's extension has them as roost_read_task and the rest.
+        parent = self.create(name="parent", agent="pi", command=[sys.executable, str(FAKE_AGENT), "pi"])
+        replies, _ = self.offer(parent, self.propose(), dict(id="roost-1", result=dict(
+            action="accept", content=dict(start="new"))))
+        self.assertIn("roost_read_task shows how it is doing, and roost_message_task sends it a message",
+                      replies["call"]["result"]["content"][0]["text"])
 
     def test_an_offer_asks_with_its_brief_where_the_form_starts_empty(self):
         # As Codex's form does, which shows no field's default.
@@ -8416,7 +8453,7 @@ class ProgramStatus(unittest.TestCase):
                 "    if (stopping) return new Promise(done => opts.signal.addEventListener('abort', () => done()));\n"
                 "    return options[asked.length === 1 ? 2 : 1]; }),\n"
                 "  editor: (title, text) => dialog(title, async () => { edited.push([title, text]);\n"
-                "                                                       return 'Only the docs.'; }) } };\n"
+                "                                                       return 'Only the docs of read_task.'; }) } };\n"
                 "const offered = await tools.roost_propose_task.execute('1', { title: 'Docs', brief: 'Write them.' },\n"
                 "                                                       undefined, undefined, ctx);\n"
                 "const read = await tools.roost_read_task.execute('2', {}, undefined, undefined, ctx);\n"
@@ -8470,10 +8507,11 @@ class ProgramStatus(unittest.TestCase):
                                             capture_output=True, text=True).stdout.strip(), "true")
             choices = ["As a new task, in its own worktree", "Here, in this conversation", "Change the brief", "Neither"]
             self.assertEqual(said["asked"], [["Start a task: Docs\n\nWrite them.", choices],
-                                             ["Start a task: Docs\n\nOnly the docs.", choices]])
+                                             ["Start a task: Docs\n\nOnly the docs of read_task.", choices]])
             self.assertEqual(said["edited"], [["Brief", "Write them."]])
+            # What the user wrote is as written, though it names a tool.
             self.assertTrue(said["offered"]["content"][0]["text"].endswith(
-                "do it here, in this conversation. Go ahead, as the brief they changed says:\n\nOnly the docs."))
+                "Go ahead, as the brief they changed says:\n\nOnly the docs of read_task."))
             self.assertEqual(said["read"]["content"][0]["text"], "You haven't started any tasks.")
             self.assertIn("No task you started", said["refused"])
             self.assertEqual(said["schema"]["required"], ["title", "brief"])
