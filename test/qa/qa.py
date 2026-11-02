@@ -1475,12 +1475,10 @@ def draft_fields(qa, repo):
         (qa.jira / "issues.json").unlink(missing_ok=True)
 
 
-@journey("A task started with clicks")
-def by_clicks(qa, repo):
-    """A project you used, its tasks gone, stays in the sidebar under
-    "Start a task in": a click there drafts a task in it, and a click on
-    the draft's Create starts it.  "Other directory…" asks for a host and
-    a folder, Cancel drops its draft, and X on a project stops listing it."""
+def budget_project(qa):
+    """A second project, budget, which the sidebar offers for a new task, as
+    if a task had been there: Roost remembers each project it starts one in.
+    Return its directory and its label there."""
     budget = qa.work / "budget"
     if not budget.exists():
         budget.mkdir()
@@ -1491,11 +1489,19 @@ def by_clicks(qa, repo):
         qa.git(budget, "add", "-A")
         qa.git(budget, "commit", "-q", "-m", "Start the budget")
     place = ("/ssh:%s:" % qa.host if qa.host else "") + str(budget) + "/"
-    label = qa.host_label + " · budget"
+    qa.emacs.eval("(progn (roost--remember-project %s) (roost--redraw))" % lisp(place))
+    return place, qa.host_label + " · budget"
+
+
+@journey("A task started with clicks")
+def by_clicks(qa, repo):
+    """A project you used, its tasks gone, stays in the sidebar under
+    "Start a task in": a click there drafts a task in it, and a click on
+    the draft's Create starts it.  "Other directory…" asks for a host and
+    a folder, Cancel drops its draft, and X on a project stops listing it."""
+    place, label = budget_project(qa)
     draft = lambda s: qa.window(s, "roost-compose-mode") or {}
     offered = lambda s: re.search(r"Start a task in\n(?:.*\n)*? %s +\+" % re.escape(label), sidebar_rows(s))
-    # As if a task had been there: Roost remembers each project it starts one in.
-    qa.emacs.eval("(progn (roost--remember-project %s) (roost--redraw))" % lisp(place))
     qa.wait("the project in the sidebar", offered)
     qa.step("A project with no tasks, below the tasks", expect=[
         ("under Start a task in", offered),
@@ -2707,6 +2713,22 @@ def drafts_own(screen):
 
 # Each: what you do, whose task it opens (None: none, you stay), and with
 # which pane.
+def go_project(qa, target):
+    _, label = budget_project(qa)
+    qa.emacs.eval("(qa-scroll-to-text %s \"roost-sidebar-list-mode\")" % lisp(label))
+    qa.click_text(label, "roost-sidebar-list-mode")
+
+
+def go_other_directory(qa, target):
+    # Its folder typed, not chosen in the system's dialog, which nothing here
+    # could answer; on two hosts, the host first from a menu.
+    qa.emacs.eval("(setq use-file-dialog nil)")
+    if qa.host:
+        qa.emacs.eval("(qa-answer-popups %s)" % lisp(qa.host_label))
+    qa.emacs.eval("(qa-scroll-to-text %s \"roost-sidebar-list-mode\")" % lisp("Other directory…"))
+    qa.click_text("Other directory…", "roost-sidebar-list-mode")
+
+
 WALK_INTERRUPTERS = [
     ("a click on another task", go_click, "other"),
     ("l in the sidebar", go_switch, "other"),
@@ -2721,6 +2743,8 @@ WALK_INTERRUPTERS = [
     ("a click on a review thread in another task's panel", go_review_thread, "other"),
     ("a click on a notification", go_notification, "other"),
     ("a click in the terminal", go_terminal, None),
+    ("a click on a project to start a task in", go_project, None),
+    ("a click on Other directory…", go_other_directory, None),
 ]
 
 
@@ -2793,6 +2817,14 @@ def walk_away(qa, repo):
                 opens = (target + "'s diff of the file opens", shows_view(qa, target, "magit-diff-mode"))
             elif go is go_review_thread:
                 opens = (target + "'s file opens at the thread", shows_file(qa, target, "notes.py"))
+            elif go is go_project:
+                # A draft begun stays as it is; an untouched one is the project's.
+                opens = ("a new task's draft opens, selected",
+                         lambda s: (qa.window(s, "roost-compose-mode") or {}).get("selected"))
+            elif go is go_other_directory:
+                opens = ("its folder is the one question open",
+                         lambda s: (s["prompt"] or "").startswith("Project checkout")
+                         and qa.emacs.eval("(minibuffer-depth)") == "1")
             else:
                 opens = ((target + "'s " + ("shell" if shell else "terminal") + " opens", shows(qa, target, shell))
                          if target else (home + "'s terminal stays", shows(qa, home)))
@@ -2830,6 +2862,8 @@ def walk_away(qa, repo):
             if leave is leave_discard_question:
                 expect.append(("the task you were asked about is still there", lambda s: qa.task(s, home)))
             qa.step(pair, expect=expect)
+            if go is go_other_directory:
+                qa.emacs.eval("(setq use-file-dialog t)")
     # GitHub as other journeys find it.
     github(qa, list=[], reviews={})
 
