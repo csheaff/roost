@@ -4142,8 +4142,10 @@ def offering(store, task_id, title):
             added = True
         yield
     finally:
-        path.unlink(missing_ok=True)
+        # Let go first, so nothing that fails after keeps the offer open.
         os.close(fd)
+        with contextlib.suppress(OSError):
+            path.unlink()
         if added:
             with contextlib.suppress(RoostError, OSError), store.locked():
                 task = store.read(task_id)

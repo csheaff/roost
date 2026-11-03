@@ -2964,6 +2964,10 @@ class Lifecycle(unittest.TestCase):
         with patch.object(roost.Store, "save", save):
             with roost.offering(store, parent["id"], "Docs"):
                 self.assertEqual(roost.offered(store.read(parent["id"])), "Docs")
+                # Nor does a lock file that can't be removed keep it open.
+                unlink = patch.object(Path, "unlink", side_effect=PermissionError(errno.EPERM, "Not permitted"))
+                unlink.start()
+        unlink.stop()
         record = store.read(parent["id"])
         self.assertEqual(len(record["offers"]), 1)
         self.assertIsNone(roost.offered(record))
