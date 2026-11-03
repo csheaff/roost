@@ -3899,12 +3899,14 @@ permission is declined in the terminal."
 CALLBACK and FAILURE are passed to `roost--act'.  With LOOK, as for
 your notes, its host first records where the task stands as where you
 last looked at it."
+  ;; As its host last said, not as a draft opened a while ago had it.
+  (setq task (or (gethash (roost--key task) roost--tasks) task))
+  ;; Its form waits for as long as its host says, and a paste could fill it
+  ;; in and submit it.
+  (when (roost--field task 'offer)
+    (user-error "%s offers a task; open it with RET and answer it in its terminal"
+                (roost--field task 'name)))
   (let* ((status (roost--field task 'status))
-         ;; Its form waits for as long as its host says, and a paste could
-         ;; fill it in and submit it.
-         (_ (when (roost--field task 'offer)
-              (user-error "%s offers a task; open it with RET and answer it in its terminal"
-                          (roost--field task 'name))))
          (force (when (member status '("starting" "permission"))
                   (or (yes-or-no-p
                        (format "Roost last saw %s %s; send anyway, if you have answered it in the terminal? "
@@ -8646,7 +8648,10 @@ Unknown Git statistics count as making sense."
     (pcase command
       ('roost-shell (and worktree (not (member (roost--field task 'status) '("stopped" "crashed")))))
       ((or 'roost-files 'roost-review 'roost-diff 'roost-mark-looked 'roost-update) worktree)
-      ((or 'roost-send 'roost-stop) (roost--agent-running-p task))
+      ;; Not into the form of a task its agent offers, which you answer
+      ;; in its terminal.
+      ('roost-send (and (roost--agent-running-p task) (not (roost--field task 'offer))))
+      ('roost-stop (roost--agent-running-p task))
       ('roost-resume (and worktree (not (roost--agent-running-p task))))
       ('roost-pr (and worktree (or (roost--field task 'pr) (not (eql ahead 0)))))
       ;; Merged, the task's branch may be, but not work on another branch

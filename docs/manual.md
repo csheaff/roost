@@ -233,11 +233,14 @@ other machines and the next session.
 **Take the tasks an agent offers.** An agent that comes across work outside
 its task, such as a bug in code it read, can offer it as a task of its own.
 It asks in its terminal, with the task's name and the whole brief it wrote,
-which you can change there: start it as a new task, in its own worktree, as
-it is chosen already, or have it done here, in this conversation. Close the
-question without choosing, as with Esc, and the agent mentions the work
-instead, as it does when its own settings turn the question down before
-you see it, as Codex's do under `approval_policy = "never"`. Its task waits
+which you can change there (in Codex's form, which starts its fields empty,
+what you write is added to the brief): start it as a new task, in its own
+worktree, as it is chosen already, or have it done here, in this
+conversation. Close the question without choosing, as with Esc, and the
+agent mentions the work instead, as it does when the question is answered
+sooner than anyone reads it: by its own settings, as Codex's under
+`approval_policy = "never"`, or by a key you were pressing as it opened,
+which starts nothing. Its task waits
 on you meanwhile, as for a permission request
 (`Offers a task: Fix add in calc.py`), and Roost sends it nothing until you
 answer. A task you start this way is in the same project, with the same
@@ -901,11 +904,14 @@ offers: Claude Code from `--mcp-config`, Codex from `-c mcp_servers.roost`,
 and OpenCode from the inline config that loads its plugin. The agent starts
 it and ends it with itself, so nothing else keeps running. Pi's extension
 runs it for each call. While an offer waits, its server keeps it in the
-task's record apart from the status the agent's hooks keep, so Roost shows
-the offer until you answer it, or the server ends, and the status after it
-is as the hooks have it. What the server runs, as Git making a new task's
-worktree, has neither the agent's terminal nor its input, so a checkout
-that needs a password fails, as one Emacs starts does.
+task's record apart from the status the agent's hooks keep, and holds a
+lock in the state directory's `offers` folder, which the system lets go of
+however the server ends. So Roost shows the offer until you answer it, or
+the server ends, and the status after it is as the hooks have it. Codex
+gives the server only some of its environment, which Roost adds to with
+tmux's and Git's own, as `XDG_CONFIG_HOME`. What the server runs, as Git
+making a new task's worktree, has neither the agent's terminal nor its
+input, so a checkout that needs a password fails, as one Emacs starts does.
 
 Each status, and what Roost makes of it, is in [What a task says](#what-a-task-says).
 
@@ -949,8 +955,9 @@ Things to know:
   themselves, at once.
 - An MCP server's form in Claude Code, as one asking you to confirm, shows
   `permission` a few seconds after it opens, in Claude's words (`Claude Code
-  needs your input`), and `running` again once you answer it, unless a
-  request that came meanwhile, as a teammate's, still waits.
+  needs your input`), and once you answer it goes back to working, or to
+  rest for a form a server opened between turns, unless a request that
+  came meanwhile, as a teammate's, still waits.
 - In auto mode, Claude Code refuses some commands without asking: the
   task stays `running`, and Claude's reply says what it refused. A
   dangerous `rm` asks for two minutes, and is refused if you don't

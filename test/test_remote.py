@@ -371,26 +371,40 @@ class Lifecycle(unittest.TestCase):
                                                   message="Claude Code needs your input"))
         record = store.read(task["id"])
         self.assertEqual((record["status"], record["request"]), ("permission", "Claude Code needs your input"))
-        # Answered, its tool goes on; Claude says so at once, and for one
-        # that no longer waits, it is no news.
-        roost.update_hook(store, task["id"], dict(hook_event_name="Notification", notification_type="elicitation_response",
-                                                  message='Elicitation response for server "deploy": accept'))
+        # Answered, Claude says so at once, and the task is back as the form
+        # found it: at rest, as for a form a server opens between turns, or
+        # at work, as for one a tool asks with. For one that no longer
+        # waits, it is no news.
+        form = dict(hook_event_name="Notification", notification_type="elicitation_dialog",
+                    message="Claude Code needs your input")
+        answered = dict(hook_event_name="Notification", notification_type="elicitation_response",
+                        message='Elicitation response for server "deploy": accept')
+        roost.update_hook(store, task["id"], answered)
+        record = store.read(task["id"])
+        self.assertEqual((record["status"], record.get("request")), ("ready", None))
+        roost.update_hook(store, task["id"], dict(hook_event_name="PreToolUse", tool_name="mcp__deploy__ship"))
+        roost.update_hook(store, task["id"], form)
+        roost.update_hook(store, task["id"], answered)
         record = store.read(task["id"])
         self.assertEqual((record["status"], record.get("request")), ("running", None))
         roost.update_hook(store, task["id"], dict(hook_event_name="Stop"))
         roost.update_hook(store, task["id"], dict(hook_event_name="Notification", notification_type="elicitation_complete"))
         self.assertEqual(store.read(task["id"])["status"], "ready")
         # Nor a request that came after the form's notice, as a teammate's,
-        # which still waits once the form is answered.
-        roost.update_hook(store, task["id"], dict(hook_event_name="Notification", notification_type="elicitation_dialog",
-                                                  message="Claude Code needs your input"))
-        roost.update_hook(store, task["id"], dict(hook_event_name="PermissionRequest", tool_name="Bash", agent_id="a1",
-                                                  tool_input=dict(command="make test")))
-        roost.update_hook(store, task["id"], dict(hook_event_name="Notification", notification_type="elicitation_response",
-                                                  message='Elicitation response for server "deploy": accept'))
-        record = store.read(task["id"])
-        self.assertEqual((record["status"], record["request"], record["requestCommand"]),
-                         ("permission", "Asks to run make test", "make test"))
+        # or a sandboxed command's that only its notice names, which still
+        # waits once the form is answered.
+        for after, asked in ((dict(hook_event_name="PermissionRequest", tool_name="Bash", agent_id="a1",
+                                   tool_input=dict(command="make test")), "Asks to run make test"),
+                             (dict(hook_event_name="Notification", notification_type="permission_prompt",
+                                   message="A sandboxed command needs network access"),
+                              "A sandboxed command needs network access")):
+            with self.subTest(after=after["hook_event_name"]):
+                roost.update_hook(store, task["id"], dict(hook_event_name="Stop"))
+                roost.update_hook(store, task["id"], form)
+                roost.update_hook(store, task["id"], after)
+                roost.update_hook(store, task["id"], answered)
+                record = store.read(task["id"])
+                self.assertEqual((record["status"], record["request"]), ("permission", asked))
         # The notification that follows a request of its own keeps the request.
         roost.update_hook(store, task["id"], dict(hook_event_name="PermissionRequest", tool_name="Bash",
                                                   tool_input=dict(command="make")))
@@ -2573,6 +2587,28 @@ class Lifecycle(unittest.TestCase):
                                .split("=", 1)[1])
         self.assertTrue({"TMUX_TMPDIR", "SSH_AUTH_SOCK", "DISPLAY"} <= set(forwarded), forwarded)
 
+    def test_a_request_cancelled_as_the_question_ends_never_runs(self):
+        # As you press Esc, the cancellation of a request that waited its
+        # turn behind the question comes just after the question's, and
+        # before that request runs.
+        task = self.create(name="parent")
+        lines = [dict(id=1, method="initialize",
+                      params=dict(protocolVersion="2025-11-25", capabilities=dict(elicitation=dict(form={})))),
+                 dict(method="notifications/initialized"),
+                 dict(id=2, method="tools/call", params=dict(name="propose_task",
+                                                             arguments=dict(title="Docs", brief="Write them."))),
+                 dict(id=3, method="tools/call", params=dict(name="read_task", arguments={})),
+                 dict(method="notifications/cancelled", params=dict(requestId=2)),
+                 dict(method="notifications/cancelled", params=dict(requestId=3))]
+        ran = subprocess.run([sys.executable, str(SOURCE), "mcp", str(self.state), task["id"]], timeout=30,
+                             input="".join(json.dumps(dict(line, jsonrpc="2.0")) + "\n" for line in lines),
+                             capture_output=True, text=True)
+        answered = [reply["id"] for reply in map(json.loads, ran.stdout.splitlines())
+                    if "result" in reply or "error" in reply]
+        self.assertEqual(answered, [1])
+        self.assertNotIn("offers", roost.Store(str(self.state)).read(task["id"]))
+        self.assertEqual(list((self.state / "offers").iterdir()), [])
+
     def test_what_the_mcp_server_runs_reads_neither_its_input_nor_its_terminal(self):
         # The agent's: Git would ask there for a password no one sees, and a
         # program could read the agent's messages.
@@ -2874,40 +2910,88 @@ class Lifecycle(unittest.TestCase):
                 for offer, _ in opened:
                     offer.__exit__(None, None, None)
 
-    def test_an_offer_ends_with_its_server_or_its_run(self):
-        # As when its agent is killed, and its server with it, before the
-        # server can take its offer back.
-        gone = subprocess.Popen([sys.executable, "-c", ""])
-        gone.wait()
-        task = dict(id="0" * 16, status="running", runId="run")
-        for offers in ([dict(title="Docs", pid=gone.pid, run="run")],
-                       [dict(title="Docs", pid=os.getpid(), run="earlier")], [dict(title="Docs")], ["Docs"]):
-            with self.subTest(offers=offers):
-                self.assertIsNone(roost.offered(dict(task, offers=offers)))
-                self.assertEqual(roost.outgoing(dict(task, offers=offers))["status"], "running")
-        live = dict(task, offers=[dict(title="Docs", pid=os.getpid(), run="run")])
-        self.assertEqual(roost.offered(live), "Docs")
-        # Nor once its agent has stopped or ended.
-        for status in ("stopped", "exited", "crashed"):
-            self.assertIsNone(roost.offered(dict(live, status=status)))
+    def test_an_offer_is_open_while_its_server_holds_its_lock(self):
+        # However the server ends, as killed with its agent before it can
+        # take its offer back, the system lets go of its lock.
+        folder = self.state / "offers"
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / ("0" * 16 + "." + "a" * 32 + ".lock")
+        task = dict(id="0" * 16, status="running", offers=[dict(title="Docs", lock=str(path))])
+        self.assertIsNone(roost.offered(task))
+        path.write_text("")
+        self.assertIsNone(roost.offered(task))
+        holder = subprocess.Popen([sys.executable, "-c", "import fcntl, sys, time\n"
+                                   "lock = open(sys.argv[1])\nfcntl.flock(lock, fcntl.LOCK_EX)\n"
+                                   "print(flush=True)\ntime.sleep(60)", str(path)], stdout=subprocess.PIPE, text=True)
+        try:
+            holder.stdout.readline()
+            self.assertEqual(roost.offered(task), "Docs")
+            self.assertEqual(roost.outgoing(dict(task))["status"], "permission")
+            # Nor once its agent has stopped or ended, nor in the reply that
+            # says it was removed.
+            for status in ("stopped", "exited", "crashed", "forgotten", "discarded"):
+                self.assertIsNone(roost.offered(dict(task, status=status)))
+            # Nor by a lock elsewhere than Roost's own for offers.
+            for lock in ("/etc/hosts", str(path.with_name("x.lock")), None):
+                self.assertIsNone(roost.offered(dict(task, offers=[dict(title="Docs", lock=lock)])))
+        finally:
+            holder.kill()
+            holder.wait()
+            holder.stdout.close()
+        self.assertIsNone(roost.offered(task))
+
+    def test_an_offer_ends_when_taking_it_back_fails(self):
+        # As on a full disk: the record keeps it, but its lock is let go, and
+        # the next listing that can save drops it.
+        parent = self.create(name="parent")
+        store = roost.Store(str(self.state))
+        real, saves = roost.Store.save, []
+
+        def save(store, task):
+            saves.append(task)
+            if len(saves) == 2:
+                raise OSError(errno.ENOSPC, "No space left on device")
+            real(store, task)
+
+        with patch.object(roost.Store, "save", save):
+            with roost.offering(store, parent["id"], "Docs"):
+                self.assertEqual(roost.offered(store.read(parent["id"])), "Docs")
+        record = store.read(parent["id"])
+        self.assertEqual(len(record["offers"]), 1)
+        self.assertIsNone(roost.offered(record))
+        self.assertEqual(self.request("list")["result"][0]["status"], "ready")
+        self.assertNotIn("offers", store.read(parent["id"]))
+        self.assertEqual(list((self.state / "offers").iterdir()), [])
 
     def test_the_history_ends_an_offer_whose_server_is_gone(self):
         # As one killed with its agent, which never took its offer back: the
         # next listing drops it, and the history notes the task no longer waits.
         task = self.create(name="parent")
         record = self.wait(task, "ready")
-        gone = subprocess.Popen([sys.executable, "-c", ""])
-        gone.wait()
         store = roost.Store(str(self.state))
-        store.save(dict(store.read(task["id"]), offers=[dict(title="Docs", pid=gone.pid, run=record["runId"])]))
+        (self.state / "offers").mkdir(exist_ok=True)
+
+        def left(token):
+            path = self.state / "offers" / ("%s.%s.lock" % (task["id"], token * 32))
+            path.write_text("")
+            store.save(dict(store.read(task["id"]), offers=[dict(title="Docs", lock=str(path))]))
+            return path
+
+        path = left("b")
         self.assertEqual(self.request("list")["result"][0]["status"], "ready")
         self.assertNotIn("offers", store.read(task["id"]))
+        self.assertFalse(path.exists())
         # Newer than a reply read before, which still showed the offer.
         self.assertEqual(roost.parse_time(store.read(task["id"])["updatedAt"]) - roost.parse_time(record["updatedAt"]),
                          datetime.timedelta(microseconds=1))
         changes = [change for change in self.request("history", since=0)["result"]["changes"]
                    if change["id"] == task["id"]]
         self.assertEqual([change["status"] for change in changes[-2:]], ["permission", "ready"])
+        # Also while tmux can't answer, which a dropped offer needs no word from.
+        left("c")
+        with patch.object(roost, "pane_inventory", return_value=None):
+            self.request("list")
+        self.assertNotIn("offers", store.read(task["id"]))
 
     def test_an_offered_task_has_its_parents_branch_prefix(self):
         # Any string, as roost-branch-prefix allows; for an older helper's
@@ -2944,6 +3028,9 @@ class Lifecycle(unittest.TestCase):
                 replies, asking = self.offer(parent, self.propose(title=title, brief=brief))
                 self.assertTrue(replies["call"]["result"]["isError"])
                 self.assertEqual(asking, [])
+        # Naming the mark, which may not show, as in a name pasted with it.
+        with self.assertRaisesRegex(roost.RoostError, r"U\+2068"):
+            roost.task_name("⁨Fix parser⁩ v2")
         self.assertEqual(roost.Store(str(self.state)).read(parent["id"])["status"], "ready")
         # From a task whose branch to merge into is gone, as one deleted once
         # merged, there is none to start from.
@@ -2982,8 +3069,30 @@ class Lifecycle(unittest.TestCase):
                 self.assertIn(said, replies["call"]["result"]["content"][0]["text"])
         # Declined sooner than anyone reads it, by the agent's own settings,
         # as Codex's under approval_policy "never": not the user's no.
-        replies, _ = self.offer(parent, self.propose(), dict(id="roost-1", result=dict(action="decline")), at_once=True)
-        self.assertIn("The user wasn't asked", replies["call"]["result"]["content"][0]["text"])
+        # Nor a start chosen as soon, as by a key you were pressing as it
+        # opened, which starts nothing.
+        for answer in (dict(action="decline"), dict(action="accept", content=dict(start="new"))):
+            with self.subTest(answer=answer):
+                replies, _ = self.offer(parent, self.propose(), dict(id="roost-1", result=answer), at_once=True)
+                self.assertIn("the user wasn't asked and nothing started",
+                              replies["call"]["result"]["content"][0]["text"])
+        self.assertEqual([t["id"] for t in self.request("list")["result"]], [parent["id"]])
+
+        # However long the registry keeps it waiting once answered.
+        def hold():
+            held = threading.Event()
+
+            def holding():
+                with roost.Store(str(self.state)).locked():
+                    held.set()
+                    time.sleep(.7)
+
+            threading.Thread(target=holding).start()
+            held.wait()
+
+        replies, _ = self.offer(parent, self.propose(), dict(id="roost-1", result=dict(action="decline")),
+                                at_once=True, meanwhile=hold)
+        self.assertIn("the user wasn't asked", replies["call"]["result"]["content"][0]["text"])
         # Started with a brief you made longer than a task starts with: nothing.
         replies, _ = self.offer(parent, self.propose(), dict(id="roost-1", result=dict(
             action="accept", content=dict(start="new", brief="x" * (roost.PROMPT_ARGUMENT_LIMIT + 1)))))
@@ -3029,6 +3138,14 @@ class Lifecycle(unittest.TestCase):
         replies, _ = self.offer(parent, self.propose(), dict(id="roost-1", result=dict(action="decline")))
         self.assertEqual(replies["roost-1"]["params"]["message"],
                          "Start a task: Document calc\n\nWrite the README's section on calc.")
+        # What you write in its empty field is added to the brief, not put
+        # in its place.
+        self.assertEqual(replies["roost-1"]["params"]["requestedSchema"]["properties"]["brief"],
+                         dict(type="string", title="Add to the brief"))
+        replies, _ = self.offer(parent, self.propose(), dict(id="roost-1", result=dict(
+            action="accept", content=dict(start="here", brief="Also the tests."))))
+        self.assertTrue(replies["call"]["result"]["content"][0]["text"].endswith(
+            "as the brief they changed says:\n\nWrite the README's section on calc.\n\nAlso the tests."))
 
     def test_an_agent_that_cant_show_a_form_gets_no_tools(self):
         # It could offer no task, so it has started none to read or send to:
@@ -3075,6 +3192,12 @@ class Lifecycle(unittest.TestCase):
         # Nor keys, as Escape, which would end the paste and press the rest.
         said = call("message_task", task=child["id"], message="Hi\u001b[201~\u0003!touch pwned\r")
         self.assertIn("control characters", said["content"][0]["text"])
+        # Nor while it offers a task of its own, which it says as read_task does.
+        store.save(dict(record, status="ready"))
+        with roost.offering(store, child["id"], "Docs"):
+            for name, arguments in (("message_task", dict(task=child["id"], message="Also the tests")),
+                                    ("read_task", dict(task=child["id"]))):
+                self.assertIn("waiting for the user to answer it", call(name, **arguments)["content"][0]["text"])
         # Claude Code takes a prompt with its work going on in the background.
         store.save(dict(record, status="background"))
         self.assertEqual(call("message_task", task=child["id"][:6], message="Also the tests")["content"][0]["text"],
@@ -3092,6 +3215,8 @@ class Lifecycle(unittest.TestCase):
         # As Claude Code does it: the agent runs the helper from its
         # --mcp-config, and you answer in its terminal.
         def type_in(task, text):
+            # As long after it asks as a person takes to read it.
+            time.sleep(roost.OFFER_READ_SECONDS)
             roost.tmux(self.socket, "send-keys", "-t", task["paneId"], "-l", text)
             roost.tmux(self.socket, "send-keys", "-t", task["paneId"], "Enter")
 
@@ -3107,8 +3232,6 @@ class Lifecycle(unittest.TestCase):
             with self.subTest(answer=answer):
                 self.assertTrue(self.request("send", id=parent["id"], text="offer Tidy calc")["ok"])
                 self.wait_for(parent, roost.offered)
-                # As long as a person takes to read it.
-                time.sleep(roost.OFFER_READ_SECONDS)
                 type_in(parent, answer)
                 self.assertIn(said, self.wait(parent, "ready", "Stop")["lastReply"])
         self.assertEqual(len(self.request("list")["result"]), 2)
@@ -8625,6 +8748,8 @@ class ProgramStatus(unittest.TestCase):
                 "  select: (title, options, opts) => dialog(title, async () => {\n"
                 "    asked.push([title, options]);\n"
                 "    if (stopping) return new Promise(done => opts.signal.addEventListener('abort', () => done()));\n"
+                "    // The choice, as long after it asks as a person takes to read it.\n"
+                "    if (asked.length > 1) await new Promise(done => setTimeout(done, 600));\n"
                 "    return options[asked.length === 1 ? 2 : 1]; }),\n"
                 "  editor: (title, text) => dialog(title, async () => { edited.push([title, text]);\n"
                 "                                                       return 'Only the docs of read_task.'; }) } };\n"

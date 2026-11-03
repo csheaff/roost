@@ -10954,7 +10954,16 @@ With INITIAL, the box must start out holding it."
      (cl-letf (((symbol-function 'roost--act) (lambda (&rest args) (setq sent args))))
        (should (string-match-p "offers a task; open it with RET"
                                (cadr (should-error (roost--send-text task "Also this") :type 'user-error))))
-       (should-not sent)))))
+       (should-not sent)
+       ;; Nor is a prompt offered for it.
+       (should-not (roost--action-applies-p task 'roost-send))
+       (should (roost--action-applies-p task 'roost-stop))
+       ;; Once answered, a draft begun meanwhile, which holds the task as it
+       ;; was, sends as its host now has it.
+       (roost--cache-task "dev" (append '((updatedAt . "2099-01-01T00:00:00+00:00"))
+                                        (roost-test--task "a" "ready")))
+       (roost--send-text task "Also this")
+       (should sent)))))
 
 (ert-deftest roost-a-note-edited-while-it-is-sent-stays ()
   (roost-test--isolated

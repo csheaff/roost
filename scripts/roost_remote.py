@@ -277,8 +277,8 @@ def history_state(task):
         return None
     # By the offers its record holds rather than whether their servers still
     # run, so an offer ends where a record that drops it is saved.
-    return dict(status="permission" if offered(task, alive=False) else task.get("status"),
-                seen=seen_since_last_event(task), turn=text(task.get("turn")))
+    return dict(status=shown_status(task, alive=False), seen=seen_since_last_event(task),
+                turn=text(task.get("turn")))
 
 
 class History:
@@ -631,8 +631,12 @@ def delete_branch(repo, branch, commit):
 # checks them, and the rest, against the installed Claude Code.
 CLAUDE_HOOK_EVENTS = ("SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse",
                       "PostToolUse", "PermissionRequest", "Notification", "Stop", "StopFailure")
+# Claude Code's notifications of an MCP server's form, waiting a few
+# seconds, and of its answer, or the link it gave followed.
+FORM_NOTICES = ("elicitation_dialog", "elicitation_url_dialog")
+FORM_ANSWERS = ("elicitation_response", "elicitation_complete")
 # Claude Code's notifications of a prompt that its own words name.
-NAMED_NOTIFICATIONS = ("permission_prompt", "elicitation_dialog", "elicitation_url_dialog")
+NAMED_NOTIFICATIONS = ("permission_prompt",) + FORM_NOTICES
 # The first Claude Code that knows all of them. Older ones skip a whole
 # settings file that names an event they don't know, every hook in it.
 CLAUDE_MIN_VERSION = (2, 1, 78)
@@ -816,8 +820,9 @@ class ClaudeAgent:
             argv += ["--", task["prompt"]]
         return argv
 
-    def observe(self, payload, current=None):
-        """Status updates for hook PAYLOAD, given the task's CURRENT status."""
+    def observe(self, payload, current=None, source=None):
+        """Status updates for hook PAYLOAD, given the task's CURRENT status
+        and the SOURCE of the request it waits on, if any, as a form's."""
         event = payload.get("hook_event_name")
         # What every event reports: the conversation, and where its transcript is.
         reported = (dict(agentSession=payload["session_id"], claudeSession=payload["session_id"])
@@ -847,29 +852,32 @@ class ClaudeAgent:
             # agent you have seen as waiting again, or forget why it failed.
             if kind == "idle_prompt" and current not in ("starting", "running"):
                 return None
-            # An MCP server's form you answered, or whose link you followed:
-            # its tool goes on, and its end comes later.
-            if kind in ("elicitation_response", "elicitation_complete") and current != "permission":
-                return None
             # A teammate's permission prompt, and a background agent of this
             # session blocked on you, also wait in this terminal, as does an
             # MCP server's form, once it has waited a few seconds.
             status = {"permission_prompt": "permission", "worker_permission_prompt": "permission",
                       "agent_needs_input": "permission", "elicitation_dialog": "permission",
-                      "elicitation_url_dialog": "permission", "elicitation_response": "running",
-                      "elicitation_complete": "running", "idle_prompt": "ready"}.get(kind)
+                      "elicitation_url_dialog": "permission", "idle_prompt": "ready"}.get(kind)
+            # A form you answered ends only the wait its notice began, not a
+            # request that came after it, as a teammate's, and goes back to
+            # what it interrupted: work, or rest, as a form a server opens
+            # between turns.
+            if kind in FORM_ANSWERS and current == "permission" and (source or "").startswith("form"):
+                status = {"form:ready": "ready", "form:background": "background"}.get(source, "running")
         if not status:
             return None
         updates = dict(status=status, updatedAt=now(), lastEvent=event, error=None)
         # A prompt that runs no PermissionRequest, as when a sandboxed
-        # command needs a new network host, is named by its notification.
+        # command needs a new network host, is named by its notification;
+        # so is one that comes while a form waits, which its answer then
+        # leaves waiting.
         message = payload.get("message") if isinstance(payload.get("message"), str) else ""
-        if (event == "Notification" and payload.get("notification_type") in NAMED_NOTIFICATIONS
-                and current != "permission" and one_line(message)):
+        kind = payload.get("notification_type")
+        if (event == "Notification" and kind in NAMED_NOTIFICATIONS and one_line(message)
+                and (current != "permission" or (source or "").startswith("form"))):
             updates["request"] = one_line(message)[:REQUEST_LIMIT]
-            # A form's, which its answer ends; see `concerns`.
-            if payload.get("notification_type") != "permission_prompt":
-                updates["requestFrom"] = "form"
+            if kind in FORM_NOTICES and current != "permission":
+                updates["requestFrom"] = "form:" + current if current in ("ready", "background") else "form"
         if event == "StopFailure":
             # The turn ended on an API error, such as a usage limit; the
             # agent itself still runs and waits for you.
@@ -892,15 +900,6 @@ class ClaudeAgent:
         # The old claudeSession field serves tasks whose original helper still runs.
         updates.update(reported)
         return updates
-
-    def concerns(self, task, payload):
-        """Whether hook PAYLOAD says anything of what TASK waits on. The
-        answer to an MCP server's form ends only the wait its notice began,
-        not a request that came after it, as a teammate's."""
-        if (payload.get("hook_event_name") == "Notification"
-                and payload.get("notification_type") in ("elicitation_response", "elicitation_complete")):
-            return task.get("requestFrom") == "form"
-        return True
 
     def transcript(self, task):
         """Where the conversation's transcript is: as Claude reported it, or,
@@ -1039,7 +1038,7 @@ class CodexAgent:
         except (OSError, ValueError):
             return True
 
-    def observe(self, payload, current=None):
+    def observe(self, payload, current=None, source=None):
         event = payload.get("hook_event_name")
         status = {"SessionStart": "ready", "SessionEnd": "exited", "UserPromptSubmit": "running",
                   "PreToolUse": "running", "PostToolUse": "running", "PermissionRequest": "permission",
@@ -1126,6 +1125,10 @@ export default function (pi) {
     const child = spawn(process.env.ROOST_PYTHON, [process.env.ROOST_HELPER, "mcp",
       process.env.ROOST_STATE_DIRECTORY, process.env.ROOST_TASK_ID], { stdio: ["pipe", "pipe", "ignore"] });
     const write = message => child.stdin.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\n");
+    // Its question closes if the run stops, as by another extension, or the
+    // helper ends, meanwhile.
+    const asking = new AbortController();
+    signal?.addEventListener("abort", () => asking.abort(), { once: true });
     // Its choice is a list to pick from. What it gives to read and change,
     // as the brief, goes above the list, which offers to change it in Pi's
     // editor and then asks again.
@@ -1139,18 +1142,17 @@ export default function (pi) {
       let chosen;
       try {
         for (;;) {
-          // Closed if the run stops, as by another extension, meanwhile.
           chosen = await ctx.ui.select([question.params.message, ...texts.map(([k]) => content[k])].join("\n\n"),
-            [...labels, ...changes, "Neither"], { signal });
+            [...labels, ...changes, "Neither"], { signal: asking.signal });
           const change = changes.indexOf(chosen);
-          if (change < 0 || signal?.aborted) break;
+          if (change < 0 || asking.signal.aborted) break;
           const [k, f] = texts[change];
           const changed = await ctx.ui.editor(f.title || k, content[k]);
           if (typeof changed === "string" && changed.trim()) content[k] = changed;
         }
       } catch { chosen = undefined; }
       const at = labels.indexOf(chosen);
-      write({ id: question.id, result: chosen === undefined || signal?.aborted ? { action: "cancel" }
+      write({ id: question.id, result: chosen === undefined || asking.signal.aborted ? { action: "cancel" }
         : at < 0 ? { action: "decline" } : { action: "accept", content: { ...content, [key]: field.enum[at] } } });
     };
     let buffer = "";
@@ -1177,6 +1179,7 @@ export default function (pi) {
     child.on("error", reject);
     child.on("close", () => {
       signal?.removeEventListener("abort", stop);
+      asking.abort();
       reject(new Error("Roost's helper ended without an answer"));
     });
     child.stdin.on("error", () => {});
@@ -1253,7 +1256,7 @@ class PiAgent:
             argv.append("\n" + task["prompt"])
         return argv
 
-    def observe(self, payload, current=None):
+    def observe(self, payload, current=None, source=None):
         event = payload.get("event")
         if event == "prompt":
             # Yours, as Claude's UserPromptSubmit has it; one an extension
@@ -1585,7 +1588,7 @@ class OpenCodeAgent:
         return one_line("Asks to use " + (permission.replace("_", " ") if permission else "a tool")
                         + (" for " + patterns[0] if patterns else ""))
 
-    def observe(self, payload, current=None):
+    def observe(self, payload, current=None, source=None):
         event = payload.get("event")
         updates = dict(updatedAt=now())
         if event == "start":
@@ -1737,11 +1740,16 @@ def name_slug(name):
 def task_name(value):
     """VALUE, trimmed, as a task's name, or an error when it can't be one."""
     name = value.strip() if isinstance(value, str) else ""
-    # Nor one a terminal takes as keys, or that turns the rest of a row
-    # around, as an agent's title for a task it offers might be.
-    if (not any(c.isalnum() for c in name) or any(unicodedata.category(c) == "Cc" for c in name)
-            or any("\u202a" <= c <= "\u202e" or "\u2066" <= c <= "\u2069" for c in name)):
+    if not any(c.isalnum() for c in name):
         raise RoostError("Give the task a printable name containing letters or numbers")
+    # Nor one a terminal takes as keys, or that turns the rest of a row
+    # around, as an agent's title for a task it offers might be, or a name
+    # pasted from where such marks are hidden.
+    hidden = next((c for c in name if unicodedata.category(c) == "Cc"
+                   or "\u202a" <= c <= "\u202e" or "\u2066" <= c <= "\u2069"), None)
+    if hidden:
+        raise RoostError("The name holds U+%04X, a control or direction mark that may not show; "
+                         "type the name without it" % ord(hidden))
     return name
 
 
@@ -2381,6 +2389,10 @@ def reconcile(store, tasks):
     inventories = {}
     table = None  # The process table, read only when a request may have been approved.
     for task in tasks:
+        # An offer whose server ended without taking it back, as one killed
+        # with its agent, ends here, where the history notes it, and newer
+        # than a reply that still showed it; tmux needn't answer for that.
+        changed = prune_offers(task)
         socket = task["socket"]
         if socket not in inventories:
             inventories[socket] = pane_inventory(socket)
@@ -2389,15 +2401,10 @@ def reconcile(store, tasks):
             # tmux could not answer: keep the last observed status rather than
             # declaring every agent on this socket crashed.
             task["live"] = None
+            if changed:
+                store.save(task)
             continue
         pane = owned_pane(task, inventory)
-        changed = False
-        # An offer whose server ended without taking it back, as one killed
-        # with its agent, ends here, where the history notes it, and newer
-        # than a reply that still showed it.
-        if task.get("offers") and open_offers(task) != task["offers"]:
-            set_offers(task, open_offers(task))
-            changed = True
         if pane and (task.get("session"), task.get("windowIndex")) != (pane["session_name"], pane["index"]):
             task.update(session=pane["session_name"], windowIndex=pane["index"])
             changed = True
@@ -3858,10 +3865,12 @@ MCP_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 MCP_TOOL_SECONDS = 24 * 3600
 # What the server needs of its agent's environment, beyond what any
 # program gets: where tmux keeps Roost's server, as tmux-control sets it on
-# a host, and what a task it starts takes from it into its own session,
-# tmux's update-environment.
+# a host, what a task it starts takes from it into its own session,
+# tmux's update-environment, and where Git finds your settings as it makes
+# that task's worktree.
 MCP_SERVER_ENVIRONMENT = ["TMUX_TMPDIR", "DISPLAY", "KRB5CCNAME", "MSYSTEM", "SSH_ASKPASS", "SSH_AUTH_SOCK",
-                          "SSH_AGENT_PID", "SSH_CONNECTION", "WINDOWID", "XAUTHORITY"]
+                          "SSH_AGENT_PID", "SSH_CONNECTION", "WINDOWID", "XAUTHORITY", "XDG_CONFIG_HOME",
+                          "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM"]
 MCP_INSTRUCTIONS = (
     "Roost runs you in a task of your own: a Git worktree and branch that the user reviews and merges. "
     "When you come across work outside what you were asked to do that is worth a task of its own, such "
@@ -3926,19 +3935,36 @@ class McpServer:
     """The MCP server for TASK_ID's agent: JSON-RPC, a message on each line."""
 
     def __init__(self, store, task_id, reader=None, writer=None):
+        """READER, as a test's, or else standard input, read unbuffered so
+        that what has come is known."""
         self.store, self.task_id = store, task_id
-        self.reader, self.writer = reader or sys.stdin, writer or sys.stdout
+        self.reader, self.writer = reader, writer or sys.stdout
+        self.buffer = b""
         self.elicits = False
         self.asked = 0
         self.pending = collections.deque()
+        # Answers read before their question was asked, as a test's.
+        self.early = {}
 
     def write(self, message):
         self.writer.write(json.dumps(dict(message, jsonrpc="2.0"), ensure_ascii=False) + "\n")
         self.writer.flush()
 
+    def line(self):
+        if self.reader is not None:
+            return self.reader.readline()
+        while b"\n" not in self.buffer:
+            chunk = os.read(sys.stdin.fileno(), 65536)
+            if not chunk:
+                line, self.buffer = self.buffer, b""
+                return line.decode("utf-8", "replace")
+            self.buffer += chunk
+        line, _, self.buffer = self.buffer.partition(b"\n")
+        return line.decode("utf-8", "replace") + "\n"
+
     def read(self):
         while True:
-            line = self.reader.readline()
+            line = self.line()
             if not line:
                 raise EOFError
             with contextlib.suppress(ValueError):
@@ -3946,9 +3972,42 @@ class McpServer:
                 if isinstance(message, dict):
                     return message
 
+    def waiting(self):
+        """Whether a message has come that reading takes without waiting."""
+        if self.reader is not None:
+            at = self.reader.tell()
+            more = bool(self.reader.readline())
+            self.reader.seek(at)
+            return more
+        return b"\n" in self.buffer or bool(select.select([sys.stdin.fileno()], [], [], 0)[0])
+
+    def take(self, message):
+        """Deal with MESSAGE, come while a question or another request
+        waits: answer a ping, queue a request, keep an answer, and drop a
+        queued request cancelled meanwhile, whose ID it returns."""
+        if message.get("method") == "ping" and message.get("id") is not None:
+            self.write(dict(id=message["id"], result={}))
+        elif message.get("method") == "notifications/cancelled":
+            params = message.get("params") if isinstance(message.get("params"), dict) else {}
+            cancelled = params.get("requestId")
+            # One waiting its turn goes unanswered, as it would once begun.
+            self.pending = collections.deque(waiting for waiting in self.pending
+                                             if waiting.get("id") != cancelled)
+            return cancelled
+        elif message.get("method"):
+            self.pending.append(message)
+        elif message.get("id") is not None:
+            self.early[message["id"]] = message
+        return None
+
     def serve(self):
         with contextlib.suppress(EOFError, BrokenPipeError):
             while True:
+                # A request that waited behind a question runs once what came
+                # meanwhile is read, as its cancellation, which comes with
+                # the question's as you press Esc.
+                while self.pending and self.waiting():
+                    self.take(self.read())
                 self.handle(self.pending.popleft() if self.pending else self.read())
 
     def handle(self, message):
@@ -4022,26 +4081,16 @@ class McpServer:
         self.write(dict(id=question, method="elicitation/create",
                         params=dict(message=message, requestedSchema=schema)))
         while True:
-            reply = self.read()
+            reply = self.early.pop(question, None) or self.read()
             if reply.get("id") == question and "method" not in reply:
                 if isinstance(reply.get("error"), dict):
                     raise RoostError("The agent couldn't ask: %s" % reply["error"].get("message"))
                 return reply.get("result") if isinstance(reply.get("result"), dict) else {}
-            if reply.get("method") == "ping" and reply.get("id") is not None:
-                self.write(dict(id=reply["id"], result={}))
-            elif reply.get("method") == "notifications/cancelled":
-                params = reply.get("params") if isinstance(reply.get("params"), dict) else {}
-                cancelled = params.get("requestId")
-                if cancelled == ident:
-                    # Its form closes too: one left open would take an answer
-                    # no one waits for.
-                    self.write(dict(method="notifications/cancelled", params=dict(requestId=question)))
-                    raise McpCancelled
-                # One waiting its turn goes unanswered, as it would once begun.
-                self.pending = collections.deque(waiting for waiting in self.pending
-                                                 if waiting.get("id") != cancelled)
-            elif reply.get("method"):
-                self.pending.append(reply)
+            if self.take(reply) == ident:
+                # Its form closes too: one left open would take an answer no
+                # one waits for.
+                self.write(dict(method="notifications/cancelled", params=dict(requestId=question)))
+                raise McpCancelled
 
 
 def mcp_arguments(store, task):
@@ -4066,52 +4115,97 @@ def set_offers(task, offers):
 def offering(store, task_id, title):
     """Show TASK_ID as waiting on you while its agent asks whether to start
     TITLE. The offer is this server's own entry in the record, beside the
-    status the agent's hooks and reports keep as they would without it."""
-    offer = dict(title=(one_line(title) or "")[:REQUEST_LIMIT], pid=os.getpid())
-    with store.locked():
-        task = store.read(task_id)
-        # Its agent may be gone already, as when you stopped the task.
-        if task["status"] in ("stopped", "retired"):
-            raise RoostError("The task is %s" % task["status"])
-        offer["run"] = task.get("runId")
-        set_offers(task, open_offers(task) + [offer])
-        store.save(task)
+    status the agent's hooks and reports keep as they would without it,
+    and open for as long as the server holds its lock: the system lets go
+    of it however the server ends, as killed with its agent, and whatever
+    fails as it takes the entry back."""
+    folder = store.root / "offers"
+    folder.mkdir(mode=0o700, exist_ok=True)
+    path = folder / ("%s.%s.lock" % (task_id, uuid.uuid4().hex))
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600)
+    offer = dict(title=(one_line(title) or "")[:REQUEST_LIMIT], lock=str(path))
+    added = False
     try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        with store.locked():
+            task = store.read(task_id)
+            # Its agent may be gone already, as when you stopped the task.
+            if task["status"] in ("stopped", "retired"):
+                raise RoostError("The task is %s" % task["status"])
+            set_offers(task, open_offers(task) + [offer])
+            store.save(task)
+            added = True
         yield
     finally:
-        with store.locked(), contextlib.suppress(RoostError):
-            task = store.read(task_id)
-            set_offers(task, [other for other in open_offers(task) if other != offer])
-            store.save(task)
+        path.unlink(missing_ok=True)
+        os.close(fd)
+        if added:
+            with contextlib.suppress(RoostError, OSError), store.locked():
+                task = store.read(task_id)
+                set_offers(task, [other for other in open_offers(task) if other != offer])
+                store.save(task)
+
+
+def offer_lock(offer):
+    """The lock file that offer entry OFFER names, if it is one of Roost's."""
+    path = offer.get("lock") if isinstance(offer, dict) else None
+    if (isinstance(path, str) and re.fullmatch(r"[0-9a-f]{16}\.[0-9a-f]{32}\.lock", os.path.basename(path))
+            and os.path.basename(os.path.dirname(path)) == "offers"):
+        return path
+    return None
 
 
 def open_offers(task, alive=True):
-    """The offers TASK's agent has open: those of its current run whose
-    server still runs, as one killed with its agent leaves its entry; or,
-    not ALIVE, those of its run its record holds, as the history counts
-    them until a listing finds their server gone."""
-    def running(pid):
-        if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+    """The offers TASK's agent has open, whose server holds its lock still;
+    or, not ALIVE, those its record holds, as the history counts them until
+    a listing finds their server gone."""
+    def held(path):
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC)
+        except OSError:
             return False
         try:
-            os.kill(pid, 0)
+            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
         except OSError:
-            # Gone, or another user's process that took its number since.
             return False
-        return True
+        finally:
+            os.close(fd)
+        return False
 
     return [offer for offer in task.get("offers") or []
-            if isinstance(offer, dict) and offer.get("run") == task.get("runId")
-            and (not alive or running(offer.get("pid")))]
+            if offer_lock(offer) and (not alive or held(offer_lock(offer)))]
+
+
+def prune_offers(task):
+    """Drop the offers in TASK whose server ended without taking them back,
+    and their locks, and say whether it changed."""
+    still = open_offers(task)
+    if not task.get("offers") or still == task["offers"]:
+        return False
+    for gone in task["offers"]:
+        if gone not in still and offer_lock(gone):
+            with contextlib.suppress(OSError):
+                os.unlink(offer_lock(gone))
+    set_offers(task, still)
+    return True
 
 
 def offered(task, alive=True):
     """The title of the task TASK's agent offers you, for as long as it
-    waits on your answer, or None; not ALIVE, as `open_offers` says."""
-    if task.get("status") in ("stopped", "retired", "exited", "crashed"):
+    waits on your answer, or None; not ALIVE, as `open_offers` says. Not
+    once its agent is gone, nor in the reply that says it was removed."""
+    if task.get("status") in ("stopped", "retired", "exited", "crashed", "forgotten", "discarded"):
         return None
     offers = open_offers(task, alive)
     return text(offers[-1].get("title")) or "a task" if offers else None
+
+
+def shown_status(task, alive=True):
+    """TASK's status as Roost shows it: waiting on you while its agent
+    offers a task."""
+    return "permission" if offered(task, alive) else task.get("status")
 
 
 def propose_task(server, title, brief, ident):
@@ -4134,29 +4228,40 @@ def propose_task(server, title, brief, ident):
         raise RoostError("The branch this task merges into, %s, is gone, so a task it offered would have no "
                          "branch to start from; mention the work instead" % base[len("refs/heads/"):])
     agent = agent_for(parent)
+    shown = getattr(agent, "form_shows_defaults", False)
     # The brief whole, to read and change: the message shows a few lines.
+    # A form that starts its fields empty shows it in the message instead,
+    # and what you write in the field is added to it.
     schema = dict(type="object", required=["start"], properties=dict(
         start=dict(type="string", title="Where", enum=["new", "here"], default="new",
                    enumNames=["As a new task, in its own worktree", "Here, in this conversation"]),
-        brief=dict(type="string", title="Brief", default=brief)))
-    # In the message too, for a form that starts its fields empty.
-    message = "Start a task: %s" % title + ("" if getattr(agent, "form_shows_defaults", False) else "\n\n" + brief)
+        brief=dict(type="string", title="Brief", default=brief) if shown
+        else dict(type="string", title="Add to the brief")))
+    message = "Start a task: %s" % title + ("" if shown else "\n\n" + brief)
     with offering(server.store, server.task_id, title):
-        # From the question, not the wait for the registry before it.
+        # From the question to its answer, not the waits for the registry
+        # either side.
         asked = time.monotonic()
         answer = server.elicit(message, schema, ident)
+        quick = time.monotonic() - asked < OFFER_READ_SECONDS
     content = answer.get("content") if answer.get("action") == "accept" else None
     start = content.get("start") if isinstance(content, dict) else None
-    if answer.get("action") == "decline" and time.monotonic() - asked < OFFER_READ_SECONDS:
-        return ("The user wasn't asked: this agent's settings declined the question at once, so nothing "
-                "started. Mention the work in your reply rather than offering tasks.")
+    if quick and answer.get("action") in ("accept", "decline"):
+        # Not a choice: the agent's own settings, as Codex's under
+        # approval_policy "never", or a key you were pressing as it opened.
+        return ("The question was answered sooner than anyone reads it, by this agent's settings or a key "
+                "pressed as it opened, so the user wasn't asked and nothing started. Mention the work in "
+                "your reply.")
     if answer.get("action") not in ("accept", "decline"):
         # As with Esc: closed without a choice either way.
         return ("The user closed the question without choosing, and nothing started. Mention the work in "
                 "your reply rather than offering it again now.")
     if start not in ("new", "here"):
         return "The user didn't start it. Don't offer it again unless they ask."
-    started = answered_brief(brief, content.get("brief"), getattr(agent, "form_loses_line_breaks", False))
+    said = content.get("brief")
+    if not shown:
+        said = brief + "\n\n" + said.strip() if isinstance(said, str) and said.strip() else None
+    started = answered_brief(brief, said, getattr(agent, "form_loses_line_breaks", False))
     if start == "new" and len(started.encode()) > PROMPT_ARGUMENT_LIMIT:
         # Lengthened in the form, past what a task can start with.
         return ("The user chose to start it, but the brief as they changed it is %d KB, and a task can start "
@@ -4240,7 +4345,7 @@ def read_tasks(store, task_id, wanted=None):
         return "You haven't started any tasks."
     said = []
     for task in tasks:
-        status = "permission" if offered(task) else task.get("status")
+        status = shown_status(task)
         line = "%s, ID %s, on branch %s: %s." % (task.get("name"), task["id"], task.get("branch"),
                                                   STATUS_SAID.get(status, status))
         reply = last_message(task)
@@ -4265,9 +4370,11 @@ def message_task(store, task_id, wanted, message):
         # Or, for an agent at its prompt while its work goes on in the
         # background, then too.
         waits = ("ready", "background") if getattr(agent_for(task), "prompt_in_background", False) else ("ready",)
-        if task.get("status") not in waits:
+        # As read_task says it, as waiting on the user while it offers a task.
+        status = shown_status(task)
+        if status not in waits:
             raise RoostError("%s is %s, and gets a message only while it waits for a prompt"
-                             % (task.get("name"), STATUS_SAID.get(task.get("status"), task.get("status"))))
+                             % (task.get("name"), STATUS_SAID.get(status, status)))
         parent = store.read(task_id)
         send(task, "From %s, the task that started this one:\n\n%s" % (parent.get("name"), message))
     return "Sent to %s." % task.get("name")
@@ -6017,7 +6124,8 @@ def update_hook(store, task_id, payload, run_id=None):
             store.save(task)
         agent = agent_for(task)
         concerns = getattr(agent, "concerns", None)
-        updates = agent.observe(payload, before) if not concerns or concerns(task, payload) else None
+        updates = (agent.observe(payload, before, task.get("requestFrom"))
+                   if not concerns or concerns(task, payload) else None)
         if updates:
             asks = updates.get("status", before) == "permission"
             relayed = task.get("programStatusRun") == task.get("runId")

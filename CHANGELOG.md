@@ -17,11 +17,13 @@ What each release changes, and what to do when upgrading. Newest first.
   which it doesn't yet. Nothing to do when upgrading: a task gets them when
   its agent next starts.
 - A Claude Code task shows `permission` while an MCP server's form waits
-  on you, a few seconds after it opens, and `running` again once you
-  answer it, unless a request that came meanwhile still waits. Nothing to
-  do when upgrading.
+  on you, a few seconds after it opens, and, once you answer it, goes back
+  to working or to rest, as the form found it, unless a request that came
+  meanwhile still waits. Nothing to do when upgrading.
 - A task's name can't hold characters a terminal takes as keys, or that
-  turn the rest of a line around. Nothing to do when upgrading.
+  turn the rest of a line around, and Roost names the one it found. To
+  rename a task whose name holds one, as pasted from a chat, type its
+  name afresh rather than editing the old one.
 - Each key the task panel names can be clicked, with the words that go
   with it: a click on "m merges it" does what `m` does. The prompt draft
   has Send, Attach and Cancel buttons in its header line, and the pull
