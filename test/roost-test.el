@@ -6325,7 +6325,7 @@ With FAILING, it prints it on stderr and exits with status 1."
    (let ((tasks (list (append '((agent . "codex") (diff . "3 files changed, 38 insertions(+), 1 deletion(-)") (dirty . t))
                               (roost-test--task "1111111111111111"))
                       (append '((name . "dedupe-imports")) (roost-test--task "2222222222222222")))))
-     (should (equal (roost--dashboard-layout tasks 150) '(:name 14 :agent t :changes 28 :pr 0)))
+     (should (equal (roost--dashboard-layout tasks 150) '(:name 14 :indent 0 :agent t :changes 28 :pr 0)))
      (should (plist-get (roost--dashboard-layout tasks 75) :agent))
      (should-not (plist-get (roost--dashboard-layout tasks 50) :agent))
      (should (= (plist-get (roost--dashboard-layout tasks 30) :changes) 0))
@@ -10943,6 +10943,28 @@ With INITIAL, the box must start out holding it."
           (setq choice 'discard)
           (funcall click "Fine")
           (should-not roost--notes))))))
+
+(ert-deftest roost-nested-rows-fit-a-narrow-dashboard ()
+  ;; The indent gives way before the name and the columns that always show.
+  (roost-test--isolated
+   (let ((task (lambda (id name &optional parent)
+                 (roost--cache-task "dev" (append `((name . ,name) ,@(when parent `((parent . ,parent))))
+                                                  (roost-test--task id "running"))))))
+     (funcall task "1111111111111111" "ledger")
+     (funcall task "2222222222222222" "docs" "1111111111111111")
+     (funcall task "3333333333333333" "documentation pass" "2222222222222222")
+     (with-temp-buffer
+       (roost-dashboard-mode)
+       (dolist (width '(45 60 120))
+         (let ((layout (roost--dashboard-layout (roost-tasks) width)))
+           (dolist (task (roost-tasks))
+             (should (<= (string-width (roost--dashboard-row task layout width)) width)))))
+       ;; With room, each level indents in full.
+       (should (string-match-p "\\`  .     documentation pass"
+                               (roost--dashboard-row (seq-find (lambda (task)
+                                                                 (equal (roost--field task 'name) "documentation pass"))
+                                                               (roost-tasks))
+                                                     (roost--dashboard-layout (roost-tasks) 120) 120)))))))
 
 (ert-deftest roost-nothing-is-sent-into-an-offer-that-waits ()
   ;; Its form waits for as long as its host says, and a paste could fill

@@ -878,6 +878,11 @@ class ClaudeAgent:
             updates["request"] = one_line(message)[:REQUEST_LIMIT]
             if kind in FORM_NOTICES and current != "permission":
                 updates["requestFrom"] = "form:" + current if current in ("ready", "background") else "form"
+            elif kind in FORM_NOTICES:
+                # Another form behind the first: still a form's wait, back to
+                # what the first interrupted once answered. Claude names the
+                # next again as it comes to the front.
+                updates["requestFrom"] = source
         if event == "StopFailure":
             # The turn ended on an API error, such as a usage limit; the
             # agent itself still runs and waits for you.

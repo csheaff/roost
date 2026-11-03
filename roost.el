@@ -9638,10 +9638,10 @@ them: a row that narrow keeps its room for an urgent status."
 
 (defun roost--dashboard-layout (tasks width)
   "Column widths for TASKS in a window WIDTH columns wide.
-The changes column shrinks first, then the agent column is dropped."
-  (let* ((name (min 28 (max 8 (apply #'max (mapcar (lambda (task)
-                                                      (+ (* 2 (roost--nesting task))
-                                                         (string-width (roost--row-name task))))
+Rows started from another task indent only as far as the window leaves
+room beside the name and the columns that always show.  The changes
+column shrinks first, then the agent column is dropped."
+  (let* ((plain (min 28 (max 8 (apply #'max (mapcar (lambda (task) (string-width (roost--row-name task)))
                                                     tasks)))))
          (agent (> (length (delete-dups (mapcar (lambda (task) (or (roost--field task 'agent) "claude"))
                                                 tasks)))
@@ -9651,14 +9651,21 @@ The changes column shrinks first, then the agent column is dropped."
          (changes widest)
          (pr (apply #'max (mapcar (lambda (task) (string-width (roost--pr-marker task))) tasks)))
          ;; Bullet, name, status, since and their separators.
-         (fixed (+ 4 name 2 11 1 6 2 (if (> pr 0) (+ pr 2) 0)))
+         (base (+ 4 plain 2 11 1 6 2 (if (> pr 0) (+ pr 2) 0)))
+         (indent (max 0 (min (apply #'max (mapcar (lambda (task) (length (roost--nesting-indent task))) tasks))
+                             (- width base))))
+         (name (apply #'max plain (mapcar (lambda (task)
+                                            (+ (min indent (length (roost--nesting-indent task)))
+                                               (min 28 (string-width (roost--row-name task)))))
+                                          tasks)))
+         (fixed (+ base (- name plain)))
          (over (- (+ fixed (if agent 10 0) (if (> changes 0) (+ changes 2) 0)) width)))
     (when (> over 0)
       (setq changes (max 0 (- changes over)))
       (when (and agent (< changes 12))
         (setq agent nil changes (min widest (max 0 (- width fixed 2))))))
     (when (< changes 6) (setq changes 0))
-    (list :name name :agent agent :changes changes :pr pr)))
+    (list :name name :indent indent :agent agent :changes changes :pr pr)))
 
 (defun roost--dashboard-row (task layout width)
   "Dashboard line for TASK using column LAYOUT, fitting WIDTH columns."
@@ -9666,7 +9673,8 @@ The changes column shrinks first, then the agent column is dropped."
          (face (roost--status-word-face (roost--attention-status task)))
          (cell (lambda (text size &optional cell-face)
                  (propertize (truncate-string-to-width text size nil ?\s "…") 'face cell-face)))
-         (indent (roost--nesting-indent task))
+         (indent (let ((nested (roost--nesting-indent task)))
+                   (substring nested 0 (min (length nested) (or (plist-get layout :indent) 0)))))
          (name (concat indent (roost--row-name task (max 1 (- (plist-get layout :name) (length indent))))))
          (line (concat "  " (roost--status-light task 'dashboard) " "
                        name (make-string (max 0 (- (plist-get layout :name) (string-width name))) ?\s)

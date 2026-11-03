@@ -405,6 +405,14 @@ class Lifecycle(unittest.TestCase):
                 roost.update_hook(store, task["id"], answered)
                 record = store.read(task["id"])
                 self.assertEqual((record["status"], record["request"]), ("permission", asked))
+        # Two forms a server opens between turns: each answer goes back to
+        # rest, the second's after Claude names it again at the front, and
+        # none is left waiting.
+        roost.update_hook(store, task["id"], dict(hook_event_name="Stop"))
+        for step in (form, dict(form, message="Claude Code needs your input: deploy"), answered, form, answered):
+            roost.update_hook(store, task["id"], step)
+        record = store.read(task["id"])
+        self.assertEqual((record["status"], record.get("request")), ("ready", None))
         # The notification that follows a request of its own keeps the request.
         roost.update_hook(store, task["id"], dict(hook_event_name="PermissionRequest", tool_name="Bash",
                                                   tool_input=dict(command="make")))
