@@ -3544,10 +3544,12 @@ terminal's, on a pty.  Skips the test where it can't be made."
             (b (roost--cache-task "dev" (roost-test--task "1111111111111111")))
             (roost-workspace nil) (roost-task-panel-mode t)
             (code (get-buffer-create "*roost-test code*"))
+            (old (get-buffer-create "*roost-test a's terminal*"))
             (terminal (selected-window)))
        (unwind-protect
            (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 160))
-                     ((symbol-function 'roost--refresh-host) #'ignore))
+                     ((symbol-function 'roost--refresh-host) #'ignore)
+                     ((symbol-function 'roost--terminal-task) (lambda (buffer) (and (eq buffer old) a))))
              (set-frame-parameter nil 'roost-task (roost--key a))
              (roost--sync-side-windows)
              ;; B's panel, as `i' shows it from the sidebar: below the
@@ -3568,6 +3570,17 @@ terminal's, on a pty.  Skips the test where it can't be made."
                (should-not (window-live-p below))
                (should (eq (window-buffer beside) code))
                (should (eq (selected-window) terminal))
+               ;; Nor back to a terminal it took the place of: A's, beside B's.
+               (set-frame-parameter nil 'roost-task (roost--key a))
+               (roost--sync-side-windows)
+               (with-selected-window beside
+                 (switch-to-buffer old)
+                 (display-buffer (roost--task-info-buffer b) '(display-buffer-same-window)))
+               (set-frame-parameter nil 'roost-task (roost--key b))
+               (roost--sync-side-windows)
+               (should-not (window-live-p beside))
+               (should-not (get-buffer-window old))
+               (should (eq (selected-window) terminal))
                ;; Read in its window when it docks, as when the frame widens:
                ;; you are left in it, docked.
                (set-frame-parameter nil 'roost-task (roost--key a))
@@ -3579,7 +3592,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
                (should (equal (get-buffer-window-list (roost--task-info-buffer a) 'nomini)
                               (list (roost--task-panel-window))))))
          ;; Named for two tasks of a name, which later tests aren't.
-         (mapc #'kill-buffer (list code (roost--task-info-buffer a) (roost--task-info-buffer b))))))))
+         (mapc #'kill-buffer (list code old (roost--task-info-buffer a) (roost--task-info-buffer b))))))))
 
 (ert-deftest roost-task-panel-needs-room-in-the-widest-main-window ()
   (roost-test--isolated

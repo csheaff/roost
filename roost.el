@@ -10600,10 +10600,19 @@ task's terminal, and if you were in one, you are now in DOCKED."
                                  (roost--main-windows))))
     (let ((selected (selected-window))
           (switch-to-prev-buffer-skip
-           (lambda (_window shown _bury-or-kill) (roost--terminal-task shown))))
-      (mapc #'quit-restore-window extra)
+           (lambda (_window shown _bury-or-kill)
+             (or (eq shown buffer) (roost--terminal-task shown)))))
+      (dolist (window extra)
+        (quit-restore-window window)
+        ;; What it showed before, restored as it was, can be a terminal
+        ;; that has moved on, such as the one the task opened in place of.
+        (when (and (window-live-p window) (roost--terminal-task (window-buffer window)))
+          (if (eq (window-deletable-p window) t)
+              (delete-window window)
+            (switch-to-prev-buffer window))))
       ;; Quitting selects the window you were in when it showed.
-      (select-window (if (window-live-p selected) selected docked)))))
+      (unless (eq (selected-window) selected)
+        (select-window (if (window-live-p selected) selected docked))))))
 
 (defun roost--sync-side-windows ()
   "Add or remove the selected frame's sidebar and task panel to match.
