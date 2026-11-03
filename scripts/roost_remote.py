@@ -1121,6 +1121,8 @@ export default function (pi) {
   // server: each call here runs that server, and its question is Pi's
   // own dialog.
   const roostCall = (name, params, signal, ctx) => new Promise((resolve, reject) => {
+    // Stopped already, before its abort could be heard: nothing runs.
+    if (signal?.aborted) return reject(new Error("Stopped"));
     const child = spawn(process.env.ROOST_PYTHON, [process.env.ROOST_HELPER, "mcp",
       process.env.ROOST_STATE_DIRECTORY, process.env.ROOST_TASK_ID], { stdio: ["pipe", "pipe", "ignore"] });
     const write = message => child.stdin.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\n");

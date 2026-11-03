@@ -8642,10 +8642,18 @@ class ProgramStatus(unittest.TestCase):
                 "try { await tools.roost_propose_task.execute('4', { title: 'Tests', brief: 'Write them.' }, run.signal,\n"
                 "                                             undefined, ctx); }\n"
                 "catch (error) { stopped = error.message; }\n"
+                "// A call stopped before it begins, as one Pi hands on once its run is stopped.\n"
+                "const already = new AbortController();\n"
+                "already.abort();\n"
+                "let skipped;\n"
+                "try { await tools.roost_message_task.execute('5', { task: 'abcd', message: 'Hi' }, already.signal,\n"
+                "                                             undefined, ctx); }\n"
+                "catch (error) { skipped = error.message; }\n"
                 "// Time for the helper to put the task back, and for any report to land.\n"
                 "await new Promise(done => setTimeout(done, 1500));\n"
                 "const offer = tools.roost_propose_task;\n"
                 "console.log(JSON.stringify({ names: Object.keys(tools), asked, edited, offered, read, refused, stopped,\n"
+                "                             skipped,\n"
                 "                             modes: Object.values(tools).map(tool => tool.executionMode),\n"
                 "                             description: offer.description, schema: offer.parameters }));\n"
                 % json.dumps(extension.as_uri()))
@@ -8662,6 +8670,9 @@ class ProgramStatus(unittest.TestCase):
             self.assertNotIn(" propose_task", said["description"])
             # Stopped while it asks: its dialog closes, and the task is as it was.
             self.assertEqual((said["stopped"], said["asked"][-1][0]), ("Stopped", "Start a task: Tests\n\nWrite them."))
+            # One stopped before it begins runs nothing: the helper would
+            # have said it knows no such task.
+            self.assertEqual(said["skipped"], "Stopped")
             # Pi reports its dialogs as it does any, and the offer is gone.
             record = store.read("0" * 16)
             self.assertEqual((record["status"], record.get("request")), ("running", None))
