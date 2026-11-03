@@ -380,6 +380,17 @@ class Lifecycle(unittest.TestCase):
         roost.update_hook(store, task["id"], dict(hook_event_name="Stop"))
         roost.update_hook(store, task["id"], dict(hook_event_name="Notification", notification_type="elicitation_complete"))
         self.assertEqual(store.read(task["id"])["status"], "ready")
+        # Nor a request that came after the form's notice, as a teammate's,
+        # which still waits once the form is answered.
+        roost.update_hook(store, task["id"], dict(hook_event_name="Notification", notification_type="elicitation_dialog",
+                                                  message="Claude Code needs your input"))
+        roost.update_hook(store, task["id"], dict(hook_event_name="PermissionRequest", tool_name="Bash", agent_id="a1",
+                                                  tool_input=dict(command="make test")))
+        roost.update_hook(store, task["id"], dict(hook_event_name="Notification", notification_type="elicitation_response",
+                                                  message='Elicitation response for server "deploy": accept'))
+        record = store.read(task["id"])
+        self.assertEqual((record["status"], record["request"], record["requestCommand"]),
+                         ("permission", "Asks to run make test", "make test"))
         # The notification that follows a request of its own keeps the request.
         roost.update_hook(store, task["id"], dict(hook_event_name="PermissionRequest", tool_name="Bash",
                                                   tool_input=dict(command="make")))
@@ -2879,6 +2890,21 @@ class Lifecycle(unittest.TestCase):
         # Nor once its agent has stopped or ended.
         for status in ("stopped", "exited", "crashed"):
             self.assertIsNone(roost.offered(dict(live, status=status)))
+
+    def test_the_history_ends_an_offer_whose_server_is_gone(self):
+        # As one killed with its agent, which never took its offer back: the
+        # next listing drops it, and the history notes the task no longer waits.
+        task = self.create(name="parent")
+        record = self.wait(task, "ready")
+        gone = subprocess.Popen([sys.executable, "-c", ""])
+        gone.wait()
+        store = roost.Store(str(self.state))
+        store.save(dict(store.read(task["id"]), offers=[dict(title="Docs", pid=gone.pid, run=record["runId"])]))
+        self.assertEqual(self.request("list")["result"][0]["status"], "ready")
+        self.assertNotIn("offers", store.read(task["id"]))
+        changes = [change for change in self.request("history", since=0)["result"]["changes"]
+                   if change["id"] == task["id"]]
+        self.assertEqual([change["status"] for change in changes[-2:]], ["permission", "ready"])
 
     def test_an_offered_task_has_its_parents_branch_prefix(self):
         # Any string, as roost-branch-prefix allows; for an older helper's

@@ -18,7 +18,8 @@ What each release changes, and what to do when upgrading. Newest first.
   its agent next starts.
 - A Claude Code task shows `permission` while an MCP server's form waits
   on you, a few seconds after it opens, and `running` again once you
-  answer it. Nothing to do when upgrading.
+  answer it, unless a request that came meanwhile still waits. Nothing to
+  do when upgrading.
 - A task's name can't hold characters a terminal takes as keys, or that
   turn the rest of a line around. Nothing to do when upgrading.
 - Each key the task panel names can be clicked, with the words that go

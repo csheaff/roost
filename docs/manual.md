@@ -949,7 +949,8 @@ Things to know:
   themselves, at once.
 - An MCP server's form in Claude Code, as one asking you to confirm, shows
   `permission` a few seconds after it opens, in Claude's words (`Claude Code
-  needs your input`), and `running` again once you answer it.
+  needs your input`), and `running` again once you answer it, unless a
+  request that came meanwhile, as a teammate's, still waits.
 - In auto mode, Claude Code refuses some commands without asking: the
   task stays `running`, and Claude's reply says what it refused. A
   dangerous `rm` asks for two minutes, and is refused if you don't

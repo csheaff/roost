@@ -275,8 +275,10 @@ def history_state(task):
     last said."""
     if task is None:
         return None
-    return dict(status="permission" if offered(task) else task.get("status"), seen=seen_since_last_event(task),
-                turn=text(task.get("turn")))
+    # By the offers its record holds rather than whether their servers still
+    # run, so an offer ends where a record that drops it is saved.
+    return dict(status="permission" if offered(task, alive=False) else task.get("status"),
+                seen=seen_since_last_event(task), turn=text(task.get("turn")))
 
 
 class History:
@@ -865,6 +867,9 @@ class ClaudeAgent:
         if (event == "Notification" and payload.get("notification_type") in NAMED_NOTIFICATIONS
                 and current != "permission" and one_line(message)):
             updates["request"] = one_line(message)[:REQUEST_LIMIT]
+            # A form's, which its answer ends; see `concerns`.
+            if payload.get("notification_type") != "permission_prompt":
+                updates["requestFrom"] = "form"
         if event == "StopFailure":
             # The turn ended on an API error, such as a usage limit; the
             # agent itself still runs and waits for you.
@@ -887,6 +892,15 @@ class ClaudeAgent:
         # The old claudeSession field serves tasks whose original helper still runs.
         updates.update(reported)
         return updates
+
+    def concerns(self, task, payload):
+        """Whether hook PAYLOAD says anything of what TASK waits on. The
+        answer to an MCP server's form ends only the wait its notice began,
+        not a request that came after it, as a teammate's."""
+        if (payload.get("hook_event_name") == "Notification"
+                and payload.get("notification_type") in ("elicitation_response", "elicitation_complete")):
+            return task.get("requestFrom") == "form"
+        return True
 
     def transcript(self, task):
         """Where the conversation's transcript is: as Claude reported it, or,
@@ -2376,6 +2390,14 @@ def reconcile(store, tasks):
             continue
         pane = owned_pane(task, inventory)
         changed = False
+        # An offer whose server ended without taking it back, as one killed
+        # with its agent, ends here, where the history notes it.
+        if task.get("offers") and open_offers(task) != task["offers"]:
+            if open_offers(task):
+                task["offers"] = open_offers(task)
+            else:
+                del task["offers"]
+            changed = True
         if pane and (task.get("session"), task.get("windowIndex")) != (pane["session_name"], pane["index"]):
             task.update(session=pane["session_name"], windowIndex=pane["index"])
             changed = True
@@ -2392,16 +2414,16 @@ def reconcile(store, tasks):
         elif guess and task["status"] in ("running", "permission") and was_interrupted(task):
             # Stopped by you, so waiting for you; it reports no event of its own.
             task.update(status="ready", updatedAt=now(), lastEvent="Interrupt")
-            task.pop("request", None)
-            task.pop("requestCommand", None)
+            for key in ("request", "requestCommand", "requestFrom"):
+                task.pop(key, None)
             changed = True
         elif guess and task["status"] == "permission" and task.get("requestCommand"):
             if table is None:
                 table = processes()
             if approved_command_running(task, pane, table):
                 task.update(status="running", updatedAt=now(), lastEvent="Approved")
-                task.pop("request", None)
-                task.pop("requestCommand", None)
+                for key in ("request", "requestCommand", "requestFrom"):
+                    task.pop(key, None)
                 changed = True
         if changed:
             store.save(task)
@@ -4061,9 +4083,11 @@ def offering(store, task_id, title):
             change(task, [other for other in open_offers(task) if other != offer])
 
 
-def open_offers(task):
+def open_offers(task, alive=True):
     """The offers TASK's agent has open: those of its current run whose
-    server still runs, as one killed with its agent leaves its entry."""
+    server still runs, as one killed with its agent leaves its entry; or,
+    not ALIVE, those of its run its record holds, as the history counts
+    them until a listing finds their server gone."""
     def running(pid):
         if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
             return False
@@ -4075,15 +4099,16 @@ def open_offers(task):
         return True
 
     return [offer for offer in task.get("offers") or []
-            if isinstance(offer, dict) and offer.get("run") == task.get("runId") and running(offer.get("pid"))]
+            if isinstance(offer, dict) and offer.get("run") == task.get("runId")
+            and (not alive or running(offer.get("pid")))]
 
 
-def offered(task):
+def offered(task, alive=True):
     """The title of the task TASK's agent offers you, for as long as it
-    waits on your answer, or None."""
+    waits on your answer, or None; not ALIVE, as `open_offers` says."""
     if task.get("status") in ("stopped", "retired", "exited", "crashed"):
         return None
-    offers = open_offers(task)
+    offers = open_offers(task, alive)
     return text(offers[-1].get("title")) or "a task" if offers else None
 
 
@@ -5998,15 +6023,20 @@ def update_hook(store, task_id, payload, run_id=None):
                 updates = beside_program_status(updates, before, agent.reports_turns)
             if not agent.reports_turns and "status" in updates:
                 task["hookAt"] = read_at = time.time()
-            # What the agent asks, if its adapter can say better than its payload.
+            # What the agent asks, if its adapter can say better than its
+            # payload, and whose it is, as an MCP server's form's.
             named = updates.pop("request", None)
+            source = updates.pop("requestFrom", None)
             if "lastPrompt" in updates:
                 updates["lastPrompt"] = later_prompt(task, updates["lastPrompt"])
             task.update(updates)
             request = (named or permission_request(payload, task.get("worktree"))) if asks else None
             if request:
                 task["request"] = request
-                task.pop("requestFrom", None)
+                if named and source:
+                    task["requestFrom"] = source
+                else:
+                    task.pop("requestFrom", None)
                 # Its command, to see it start once you approve; the start
                 # identifies it, and a heredoc can be long.
                 arguments = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
@@ -6020,8 +6050,8 @@ def update_hook(store, task_id, payload, run_id=None):
                 # The notification that follows a request names no tool:
                 # keep the request it follows, and only that one. The agent's
                 # status reports clear it, for one whose reports end its turns.
-                task.pop("request", None)
-                task.pop("requestCommand", None)
+                for key in ("request", "requestCommand", "requestFrom"):
+                    task.pop(key, None)
             store.save(task)
         capture(store, task_id, {"hook": payload}, read_at)
 
