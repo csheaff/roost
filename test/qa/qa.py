@@ -2894,10 +2894,17 @@ def walk_away(qa, repo):
             if go is go_other_directory:
                 qa.emacs.eval("(setq use-file-dialog t)")
             if leave is leave_offer:
-                # Answered once you are back in its terminal.
-                open_task(qa, home)
-                qa.type("no\r")
-                qa.status(home, "ready", "idle")
+                # Answered once you are back in its terminal, with what the
+                # pair left open, as Other directory…'s question, quit first:
+                # Roost opens no task behind a question you are in.
+                qa.dismiss()
+                try:
+                    open_task(qa, home)
+                    qa.type("no\r")
+                    qa.status(home, "ready", "idle")
+                except Stuck as stuck:
+                    qa.step(pair + ", then answered", expect=[(str(stuck), lambda s: False)])
+                    continue
                 qa.step(pair + ", then answered", expect=[
                     ("its agent says it started nothing",
                      lambda s: "didn't start it" in selected_terminal(s)["text"]

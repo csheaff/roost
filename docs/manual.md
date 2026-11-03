@@ -236,7 +236,9 @@ It asks in its terminal, with the task's name and the whole brief it wrote,
 which you can change there: start it as a new task, in its own worktree, as
 it is chosen already, or have it done here, in this conversation. Close the
 question without choosing, as with Esc, and the agent mentions the work
-instead. Its task waits on you meanwhile, as for a permission request
+instead, as it does when its own settings turn the question down before
+you see it, as Codex's do under `approval_policy = "never"`. Its task waits
+on you meanwhile, as for a permission request
 (`Offers a task: Fix add in calc.py`), and Roost sends it nothing until you
 answer. A task you start this way is in the same project, with the same
 agent, command and setup command, as the task it came from, starts from the
@@ -247,12 +249,15 @@ sidebar show it under the task it came from, and each task's panel names the
 other. The agent that offered it can read how the task is doing, with its
 latest reply, and send it a message, which arrives as its next prompt,
 marked as from that task, and only while it waits for one. Roost types it
-into that task's terminal, so it takes plain text only, and Claude Code
-treats each message as a tool you haven't allowed: it asks you, or in auto
-mode its classifier decides. Roost gives the agent these tools as an MCP
-server of the helper's (Pi's through its extension, as `roost_propose_task`
-and the rest), so an agent that can't show an MCP server's form gets none
-of them. How often an agent offers rests on the model: Roost's
+into that task's terminal, so it takes plain text only, and it joins
+anything you are typing there. Claude Code treats each message as a tool
+you haven't allowed: it asks you, or in auto mode its classifier decides.
+Roost gives
+the agent these tools as an MCP server of the helper's (Pi's through its
+extension, as `roost_propose_task` and the rest), so an agent that can't
+show an MCP server's form, as OpenCode can't yet, gets none of them. A
+task you start this way merges where the one it came from does. How often
+an agent offers rests on the model: Roost's
 instructions to it say when, and that it should offer only real work, at
 most once a turn.
 
@@ -895,7 +900,12 @@ Each agent runs the helper as an MCP server of its own, for the tasks it
 offers: Claude Code from `--mcp-config`, Codex from `-c mcp_servers.roost`,
 and OpenCode from the inline config that loads its plugin. The agent starts
 it and ends it with itself, so nothing else keeps running. Pi's extension
-runs it for each call.
+runs it for each call. While an offer waits, its server keeps it in the
+task's record apart from the status the agent's hooks keep, so Roost shows
+the offer until you answer it, or the server ends, and the status after it
+is as the hooks have it. What the server runs, as Git making a new task's
+worktree, has neither the agent's terminal nor its input, so a checkout
+that needs a password fails, as one Emacs starts does.
 
 Each status, and what Roost makes of it, is in [What a task says](#what-a-task-says).
 
@@ -937,6 +947,9 @@ Things to know:
   showing `permission` until the agent moves on, and `e` asks before sending
   to a task in that state. With `roost-program-status` on, both say so
   themselves, at once.
+- An MCP server's form in Claude Code, as one asking you to confirm, shows
+  `permission` a few seconds after it opens, in Claude's words (`Claude Code
+  needs your input`), and `running` again once you answer it.
 - In auto mode, Claude Code refuses some commands without asking: the
   task stays `running`, and Claude's reply says what it refused. A
   dangerous `rm` asks for two minutes, and is refused if you don't

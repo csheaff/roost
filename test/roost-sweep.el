@@ -214,7 +214,8 @@ KIND is `committed', `uncommitted', `untracked' or `binary'."
      (files . ,(roost-sweep--files '("ledger.py" . uncommitted))))
     ;; Its agent asks you, in its terminal, whether to start a task.
     ("offers a task" (status . "permission") (live . t)
-     (request . "Offers a task: Show each budget's total in the report"))
+     (request . "Offers a task: Show each budget's total in the report")
+     (offer . "Show each budget's total in the report"))
     ;; Offered by the agent of the state named, and started by you.
     ("started from another task" (status . "running") (live . t) (parentState . "ready, reviewing"))
     ("started from a task since retired" (status . "ready") (live . t) (parent . "ffffffffffffffff"))

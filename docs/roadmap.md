@@ -258,7 +258,12 @@ Larger, or undecided.
   offered, shown under the task it came from. It waits for daily use
   before it merges. Open: a finished task's report reaching the agent
   that offered it unasked, as the app's do; a message that can't land in
-  a menu or in what you are typing; and Codex and OpenCode tried live.
+  a menu or in what you are typing; a task a Codex agent offers keeping
+  the variables your tmux config adds to `update-environment`, which
+  Codex keeps from its server; the server's memory, about 38 MB a task
+  run from source; Codex and OpenCode tried live; and, before it merges,
+  a live run in `docs/validation.md` and `test/captures` of Claude Code's
+  forms.
 - **A map of the agent's work** beside its terminal: the files it reads and
   edits over time, drawn with Emacs 32's canvas images. Prototype on branch
   `work-map`.

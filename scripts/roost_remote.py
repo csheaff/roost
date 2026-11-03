@@ -79,12 +79,18 @@ def text(value):
 # Descriptors the commands Roost runs inherit, as Git does the lock held
 # on a worktree while it is removed or pushed; see `holding_worktree`.
 INHERITED = []
+# Set in an agent's MCP server, whose input is the agent's messages and
+# whose terminal is the agent's: what it runs reads neither, so Git fails
+# rather than asking there for a password no one sees.
+DETACHED = False
 
 
 def execute(argv, cwd=None, check=True, input=None, env=None):
     # A file name that is not UTF-8, possible on Linux, must not fail every
     # listing of the host: undecodable bytes are replaced, here and below.
     result = subprocess.run(argv, cwd=cwd, input=input, text=True, errors="replace", env=env,
+                            stdin=subprocess.DEVNULL if DETACHED and input is None else None,
+                            start_new_session=DETACHED,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, pass_fds=tuple(INHERITED))
     if check and result.returncode:
         raise RoostError(result.stderr.strip() or result.stdout.strip()
@@ -269,7 +275,8 @@ def history_state(task):
     last said."""
     if task is None:
         return None
-    return dict(status=task.get("status"), seen=seen_since_last_event(task), turn=text(task.get("turn")))
+    return dict(status="permission" if offered(task) else task.get("status"), seen=seen_since_last_event(task),
+                turn=text(task.get("turn")))
 
 
 class History:
@@ -838,12 +845,17 @@ class ClaudeAgent:
             # agent you have seen as waiting again, or forget why it failed.
             if kind == "idle_prompt" and current not in ("starting", "running"):
                 return None
+            # An MCP server's form you answered, or whose link you followed:
+            # its tool goes on, and its end comes later.
+            if kind in ("elicitation_response", "elicitation_complete") and current != "permission":
+                return None
             # A teammate's permission prompt, and a background agent of this
             # session blocked on you, also wait in this terminal, as does an
             # MCP server's form, once it has waited a few seconds.
             status = {"permission_prompt": "permission", "worker_permission_prompt": "permission",
                       "agent_needs_input": "permission", "elicitation_dialog": "permission",
-                      "elicitation_url_dialog": "permission", "idle_prompt": "ready"}.get(kind)
+                      "elicitation_url_dialog": "permission", "elicitation_response": "running",
+                      "elicitation_complete": "running", "idle_prompt": "ready"}.get(kind)
         if not status:
             return None
         updates = dict(status=status, updatedAt=now(), lastEvent=event, error=None)
@@ -1087,11 +1099,8 @@ export default function (pi) {
   pi.on("agent_settled", (event, ctx) => report("agent_settled", ctx, { aborted: event.aborted === true }));
   // Pi 0.84.4 and later say when a dialog, such as an extension's asking
   // whether a tool may run, waits on you. Older Pi never sends these.
-  // Not the dialogs of Roost's own tools, below: the helper marks the task
-  // as waiting on you for those already, with what it asks.
-  let asking = 0;
-  pi.on("ui_prompt_start", (event, ctx) => { if (!asking) report("ui_prompt_start", ctx, { title: event.title }); });
-  pi.on("ui_prompt_end", (_event, ctx) => { if (!asking) report("ui_prompt_end", ctx, { idle: idleOf(ctx) }); });
+  pi.on("ui_prompt_start", (event, ctx) => report("ui_prompt_start", ctx, { title: event.title }));
+  pi.on("ui_prompt_end", (_event, ctx) => report("ui_prompt_end", ctx, { idle: idleOf(ctx) }));
   // Pi emits shutdown when replacing a session too; the runner records actual exit.
 
   // Roost's tools, which other agents have from the helper as an MCP
@@ -1112,7 +1121,6 @@ export default function (pi) {
       const changes = texts.map(([k, f]) => "Change the " + (f.title || k).toLowerCase());
       const content = Object.fromEntries(texts.map(([k, f]) => [k, f.default]));
       let chosen;
-      asking++;
       try {
         for (;;) {
           // Closed if the run stops, as by another extension, meanwhile.
@@ -1125,8 +1133,6 @@ export default function (pi) {
           if (typeof changed === "string" && changed.trim()) content[k] = changed;
         }
       } catch { chosen = undefined; }
-      // After Pi's own report of the dialog's end, which comes a moment later.
-      finally { setTimeout(() => asking--, 0); }
       const at = labels.indexOf(chosen);
       write({ id: question.id, result: chosen === undefined || signal?.aborted ? { action: "cancel" }
         : at < 0 ? { action: "decline" } : { action: "accept", content: { ...content, [key]: field.enum[at] } } });
@@ -1642,6 +1648,8 @@ def spawn(store, task, resume=False, size=()):
     script = str(Path(__file__).resolve())
     task["runId"] = uuid.uuid4().hex
     task.pop("shellPaneId", None)
+    # A run's offers end with it.
+    task.pop("offers", None)
     argv = [sys.executable, script, "run", str(store.root), task["id"], task["runId"]]
     if resume:
         argv.append("resume")
@@ -1713,7 +1721,10 @@ def name_slug(name):
 def task_name(value):
     """VALUE, trimmed, as a task's name, or an error when it can't be one."""
     name = value.strip() if isinstance(value, str) else ""
-    if not any(c.isalnum() for c in name) or any(ord(c) < 32 or ord(c) == 127 for c in name):
+    # Nor one a terminal takes as keys, or that turns the rest of a row
+    # around, as an agent's title for a task it offers might be.
+    if (not any(c.isalnum() for c in name) or any(unicodedata.category(c) == "Cc" for c in name)
+            or any("\u202a" <= c <= "\u202e" or "\u2066" <= c <= "\u2069" for c in name)):
         raise RoostError("Give the task a printable name containing letters or numbers")
     return name
 
@@ -1943,8 +1954,14 @@ def make_task(store, request, create_id):
                              "(git commit --allow-empty -m 'Start' will do)" % repo)
         raise RoostError("No branch, tag or commit named %r to start from" % base)
     commit = resolved.stdout.strip()
-    integration = (integration_for(store, repo, directory, explicit_base, current) if explicit_base
-                   else current)
+    # One an agent offered merges where the task it came from does, also
+    # into another task's branch, which integration_for would take that
+    # task's own branch for.
+    if request.get("parent") is not None and (explicit_base or "").startswith("refs/heads/"):
+        integration = explicit_base[len("refs/heads/"):]
+    else:
+        integration = (integration_for(store, repo, directory, explicit_base, current) if explicit_base
+                       else current)
     task_id = uuid.uuid4().hex[:16]
     prefix = text(request.get("branchPrefix")) or DEFAULT_BRANCH_PREFIX
     branch = prefix + slug + "-" + task_id[:6]
@@ -2375,16 +2392,16 @@ def reconcile(store, tasks):
         elif guess and task["status"] in ("running", "permission") and was_interrupted(task):
             # Stopped by you, so waiting for you; it reports no event of its own.
             task.update(status="ready", updatedAt=now(), lastEvent="Interrupt")
-            for key in ("request", "requestCommand", "requestFrom"):
-                task.pop(key, None)
+            task.pop("request", None)
+            task.pop("requestCommand", None)
             changed = True
         elif guess and task["status"] == "permission" and task.get("requestCommand"):
             if table is None:
                 table = processes()
             if approved_command_running(task, pane, table):
                 task.update(status="running", updatedAt=now(), lastEvent="Approved")
-                for key in ("request", "requestCommand", "requestFrom"):
-                    task.pop(key, None)
+                task.pop("request", None)
+                task.pop("requestCommand", None)
                 changed = True
         if changed:
             store.save(task)
@@ -3788,9 +3805,9 @@ def send(task, text, force=False):
     pane = owned_pane(task, inventory_for(task))
     if not pane or pane["dead"]:
         raise RoostError("The agent is not running; resume the task first")
-    # Its offer's form waits for as long as the record says so, and a paste
-    # and Return could fill in its fields and submit it.
-    if task["status"] == "permission" and task.get("requestFrom") == "offer":
+    # Its offer's form waits for as long as its server runs, and a paste and
+    # Return could fill in its fields and submit it.
+    if offered(task):
         raise RoostError("%s offers a task; answer it in its terminal first" % task["name"])
     # A paste could answer a startup or permission menu. The status can lag
     # (agents report no event after a declined permission), so the client
@@ -3866,6 +3883,9 @@ STATUS_SAID = {"starting": "starting", "running": "working", "background": "work
                "crashed": "crashed"}
 # The request a task waits on while its agent offers a task.
 OFFER_REQUEST = "Offers a task: "
+# Sooner than anyone reads the question: a decline this quick is the
+# agent's own, as Codex's under approval_policy "never".
+OFFER_READ_SECONDS = 0.5
 
 
 class McpCancelled(Exception):
@@ -3937,9 +3957,10 @@ class McpServer:
             # by name, or, as before the protocol named kinds, by none.
             elicitation = capabilities.get("elicitation")
             self.elicits = isinstance(elicitation, dict) and (not elicitation or "form" in elicitation)
-            return dict(protocolVersion=asked if asked in MCP_VERSIONS else MCP_VERSIONS[0],
-                        capabilities=dict(tools={}), serverInfo=dict(name="roost", version="1"),
-                        instructions=MCP_INSTRUCTIONS)
+            hello = dict(protocolVersion=asked if asked in MCP_VERSIONS else MCP_VERSIONS[0],
+                         capabilities=dict(tools={}), serverInfo=dict(name="roost", version="1"))
+            # Only to one that gets the tools they name.
+            return dict(hello, instructions=MCP_INSTRUCTIONS) if self.elicits else hello
         if method == "ping":
             return {}
         if method == "tools/list":
@@ -4009,42 +4030,61 @@ def mcp_arguments(store, task):
 @contextlib.contextmanager
 def offering(store, task_id, title):
     """Show TASK_ID as waiting on you while its agent asks whether to start
-    TITLE, and as before once you answer."""
-    request = OFFER_REQUEST + (one_line(title) or "")[:REQUEST_LIMIT]
+    TITLE. The offer is this server's own entry in the record, beside the
+    status the agent's hooks and reports keep as they would without it."""
+    offer = dict(title=(one_line(title) or "")[:REQUEST_LIMIT], pid=os.getpid())
+
+    def change(task, offers):
+        if offers:
+            task["offers"] = offers
+        else:
+            task.pop("offers", None)
+        # Just after the change before it rather than now, so Emacs takes it
+        # as newer: Claude records an interrupt in its transcript and runs no
+        # hook, and one since then must still count as newer than this.
+        stamp = parse_time(task.get("updatedAt"))
+        task["updatedAt"] = (stamp + datetime.timedelta(microseconds=1)).isoformat() if stamp else now()
+        store.save(task)
+
     with store.locked():
         task = store.read(task_id)
         # Its agent may be gone already, as when you stopped the task.
         if task["status"] in ("stopped", "retired"):
             raise RoostError("The task is %s" % task["status"])
-        # What else it waited on, as a subagent's request, to wait on again;
-        # not one to allow this very call, which you answered.
-        before = {key: task.get(key) for key in ("status", "request", "requestCommand", "requestFrom")}
-        if before["status"] == "permission" and (before["request"] or "").endswith("propose_task"):
-            before = dict(status="running", request=None, requestCommand=None, requestFrom=None)
-        # Marked as the offer's, which only its own server ends; a request
-        # that comes meanwhile waits behind it, in afterOffer.
-        task.update(status="permission", request=request, requestFrom="offer", afterOffer=before, updatedAt=now())
-        task.pop("requestCommand", None)
-        store.save(task)
+        offer["run"] = task.get("runId")
+        change(task, open_offers(task) + [offer])
     try:
         yield
     finally:
         with store.locked(), contextlib.suppress(RoostError):
             task = store.read(task_id)
-            before = task.pop("afterOffer", None) or before
-            # Unless an event since says otherwise.
-            if task["status"] == "permission" and task.get("request") == request:
-                for key, value in before.items():
-                    if value is None:
-                        task.pop(key, None)
-                    else:
-                        task[key] = value
-                # Just after the change before it rather than now: Claude
-                # records an interrupt in its transcript and runs no hook, and
-                # one since then must still count as newer.
-                stamp = parse_time(task.get("updatedAt"))
-                task["updatedAt"] = (stamp + datetime.timedelta(microseconds=1)).isoformat() if stamp else now()
-            store.save(task)
+            change(task, [other for other in open_offers(task) if other != offer])
+
+
+def open_offers(task):
+    """The offers TASK's agent has open: those of its current run whose
+    server still runs, as one killed with its agent leaves its entry."""
+    def running(pid):
+        if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+            return False
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            # Gone, or another user's process that took its number since.
+            return False
+        return True
+
+    return [offer for offer in task.get("offers") or []
+            if isinstance(offer, dict) and offer.get("run") == task.get("runId") and running(offer.get("pid"))]
+
+
+def offered(task):
+    """The title of the task TASK's agent offers you, for as long as it
+    waits on your answer, or None."""
+    if task.get("status") in ("stopped", "retired", "exited", "crashed"):
+        return None
+    offers = open_offers(task)
+    return text(offers[-1].get("title")) or "a task" if offers else None
 
 
 def propose_task(server, title, brief, ident):
@@ -4075,9 +4115,14 @@ def propose_task(server, title, brief, ident):
     # In the message too, for a form that starts its fields empty.
     message = "Start a task: %s" % title + ("" if getattr(agent, "form_shows_defaults", False) else "\n\n" + brief)
     with offering(server.store, server.task_id, title):
+        # From the question, not the wait for the registry before it.
+        asked = time.monotonic()
         answer = server.elicit(message, schema, ident)
     content = answer.get("content") if answer.get("action") == "accept" else None
     start = content.get("start") if isinstance(content, dict) else None
+    if answer.get("action") == "decline" and time.monotonic() - asked < OFFER_READ_SECONDS:
+        return ("The user wasn't asked: this agent's settings declined the question at once, so nothing "
+                "started. Mention the work in your reply rather than offering tasks.")
     if answer.get("action") not in ("accept", "decline"):
         # As with Esc: closed without a choice either way.
         return ("The user closed the question without choosing, and nothing started. Mention the work in "
@@ -4085,6 +4130,11 @@ def propose_task(server, title, brief, ident):
     if start not in ("new", "here"):
         return "The user didn't start it. Don't offer it again unless they ask."
     started = answered_brief(brief, content.get("brief"), getattr(agent, "form_loses_line_breaks", False))
+    if start == "new" and len(started.encode()) > PROMPT_ARGUMENT_LIMIT:
+        # Lengthened in the form, past what a task can start with.
+        return ("The user chose to start it, but the brief as they changed it is %d KB, and a task can start "
+                "with at most %d KB, so nothing started. Tell them, and offer it again with a shorter brief "
+                "if they want." % (-(-len(started.encode()) // 1024), PROMPT_ARGUMENT_LIMIT // 1024))
     if start == "here":
         return ("The user chose to have you do it here, in this conversation. Go ahead"
                 + (", as the brief they changed says:\n\n" + started if started != brief else "."))
@@ -4163,8 +4213,9 @@ def read_tasks(store, task_id, wanted=None):
         return "You haven't started any tasks."
     said = []
     for task in tasks:
+        status = "permission" if offered(task) else task.get("status")
         line = "%s, ID %s, on branch %s: %s." % (task.get("name"), task["id"], task.get("branch"),
-                                                  STATUS_SAID.get(task.get("status"), task.get("status")))
+                                                  STATUS_SAID.get(status, status))
         reply = last_message(task)
         said.append(line + ("\nIts latest reply:\n" + reply if reply else ""))
     return "\n\n".join(said)
@@ -5945,11 +5996,6 @@ def update_hook(store, task_id, payload, run_id=None):
             relayed = task.get("programStatusRun") == task.get("runId")
             if relayed:
                 updates = beside_program_status(updates, before, agent.reports_turns)
-            # An offer waits on you until its own server says otherwise: a
-            # tool's start or end, as a subagent's, says nothing of it.
-            if before == "permission" and task.get("requestFrom") == "offer" and updates.get("status") == "running":
-                updates = {key: value for key, value in updates.items()
-                           if key not in ("status", "updatedAt", "lastEvent", "error")}
             if not agent.reports_turns and "status" in updates:
                 task["hookAt"] = read_at = time.time()
             # What the agent asks, if its adapter can say better than its payload.
@@ -5959,29 +6005,23 @@ def update_hook(store, task_id, payload, run_id=None):
             task.update(updates)
             request = (named or permission_request(payload, task.get("worktree"))) if asks else None
             if request:
+                task["request"] = request
+                task.pop("requestFrom", None)
                 # Its command, to see it start once you approve; the start
                 # identifies it, and a heredoc can be long.
                 arguments = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
                 command = arguments.get("command") if payload.get("tool_name") == "Bash" else None
-                command = command[:APPROVAL_MARKER_LIMIT] if isinstance(command, str) and command.strip() else None
-                asked = dict(request=request, requestCommand=command, requestFrom=None)
-                if task.get("requestFrom") == "offer":
-                    # As a subagent's: it waits behind the offer, which
-                    # stays what Roost shows and keeps text out of its form.
-                    task["afterOffer"] = dict(asked, status="permission")
+                if isinstance(command, str) and command.strip():
+                    task["requestCommand"] = command[:APPROVAL_MARKER_LIMIT]
                 else:
-                    for key, value in asked.items():
-                        if value is None:
-                            task.pop(key, None)
-                        else:
-                            task[key] = value
+                    task.pop("requestCommand", None)
             elif ((not relayed or not agent.reports_turns)
                   and (task["status"] != "permission" or before != "permission")):
                 # The notification that follows a request names no tool:
                 # keep the request it follows, and only that one. The agent's
                 # status reports clear it, for one whose reports end its turns.
-                for key in ("request", "requestCommand", "requestFrom"):
-                    task.pop(key, None)
+                task.pop("request", None)
+                task.pop("requestCommand", None)
             store.save(task)
         capture(store, task_id, {"hook": payload}, read_at)
 
@@ -6147,9 +6187,7 @@ def apply_program_status(task, fields, run_id):
     if not turns and fields.get("receivedAt", float("inf")) < (task.get("hookAt") or 0):
         return task != before
     changes = None
-    # As for a hook, an offer's own server ends it.
-    offer = status == "permission" and task.get("requestFrom") == "offer"
-    if state == "working" and status != "running" and (turns or status == "permission") and not offer:
+    if state == "working" and status != "running" and (turns or status == "permission"):
         changes = dict(status="running", lastEvent="Approved" if status == "permission" else "Working")
     elif state == "blocked" and status != "permission":
         # A dialog while it rests, as one at its start or one you open,
@@ -6799,13 +6837,18 @@ def require_not_removing(store, task, action):
 
 
 # Kept in task records for the helper's own use, and not sent to Emacs.
-PRIVATE = ("lastReply", "transcript", "requestFrom", "afterOffer", "hookAt")
+PRIVATE = ("lastReply", "transcript", "requestFrom", "offers", "hookAt")
 
 
 def outgoing(result):
-    """RESULT, a task or a list of them, without the fields only the helper uses."""
+    """RESULT, a task or a list of them, without the fields only the helper
+    uses, and waiting on you while its agent offers a task."""
     for task in result if isinstance(result, list) else [result]:
         if isinstance(task, dict):
+            title = offered(task)
+            if title:
+                task.update(status="permission", request=OFFER_REQUEST + title, offer=title)
+                task.pop("requestCommand", None)
             for field in PRIVATE:
                 task.pop(field, None)
     return result
@@ -6975,6 +7018,8 @@ def main():
     elif mode == "run":
         return runner(sys.argv[2], sys.argv[3], sys.argv[4], len(sys.argv) > 5)
     elif mode == "mcp":
+        global DETACHED
+        DETACHED = True
         McpServer(Store(sys.argv[2]), sys.argv[3]).serve()
     else:
         raise RoostError("Unknown mode")

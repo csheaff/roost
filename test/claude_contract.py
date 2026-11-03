@@ -47,7 +47,7 @@ IGNORED_EVENTS = {
     "ConfigChange": "settings changed",
     "CwdChanged": "the shell's directory changed",
     "DirectoryAdded": "a directory was added to the session",
-    "Elicitation": "an MCP server asks a question; rare, not yet shown as waiting",
+    "Elicitation": "an MCP server asks a question; its Notification shows it as waiting",
     "ElicitationResult": "the answer to an MCP server's question",
     "FileChanged": "a watched file changed",
     "InstructionsLoaded": "CLAUDE.md or rules were loaded",
@@ -71,11 +71,10 @@ IGNORED_EVENTS = {
 }
 # Notification types Roost maps, and those it ignores.
 MAPPED_NOTIFICATIONS = ("permission_prompt", "worker_permission_prompt", "agent_needs_input", "elicitation_dialog",
-                        "elicitation_url_dialog", "idle_prompt")
+                        "elicitation_url_dialog", "elicitation_response", "elicitation_complete", "idle_prompt")
 # plugin_notification (2.1.296) is a plugin's message to you, through its ui.notify.
 IGNORED_NOTIFICATIONS = ("agent_completed", "auth_storage_failure", "auth_success", "computer_use_enter",
-                         "computer_use_exit", "elicitation_complete", "elicitation_response", "plugin_notification",
-                         "push_notification")
+                         "computer_use_exit", "plugin_notification", "push_notification")
 # SessionStart sources: compact and clear are handled specially, the rest are a fresh start.
 SESSION_SOURCES = ("startup", "resume", "clear", "compact", "fork")
 # Payload fields the helper reads.
