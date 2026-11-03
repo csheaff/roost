@@ -5,17 +5,16 @@ What each release changes, and what to do when upgrading. Newest first.
 ## Unreleased
 
 - An agent can offer work it came across outside its task as a task of its
-  own. It asks in its terminal whether to start it as a new task, in its
-  own worktree, or to do it there, and its task waits on you meanwhile,
-  with nothing sent into it until you answer. A task you start this way
-  shows under the one it came from in the dashboard and sidebar, and the
-  agent that offered it can read how it is doing and send it a message in
-  plain text. Roost gives Claude Code and Codex these tools,
-  `propose_task`, `read_task` and `message_task`, as an MCP server of the
-  helper's, and Pi through its extension; the agent starts the server and
-  ends it with itself. OpenCode gets them once it shows an MCP server's form,
-  which it doesn't yet. Nothing to do when upgrading: a task gets them when
-  its agent next starts.
+  own, and goes on with its own work. The offer waits, dim, under its task
+  in the dashboard and sidebar. A click opens it as a new task draft,
+  filled in, whose buttons start it, have the agent do it there, leave it
+  for later or dismiss it. A task you start this way shows under the one
+  it came from, and the agent that offered it can read how it is doing and
+  send it a message in plain text. Roost gives Claude Code, Codex and
+  OpenCode these tools, `propose_task`, `read_task` and `message_task`, as
+  an MCP server of the helper's, and Pi through its extension; the agent
+  starts the server and ends it with itself. Nothing to do when upgrading:
+  a task gets them when its agent next starts.
 - A Claude Code task shows `permission` while an MCP server's form waits
   on you, a few seconds after it opens, and, once you answer it, goes back
   to working or to rest, as the form found it, unless a request that came

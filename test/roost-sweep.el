@@ -212,10 +212,11 @@ KIND is `committed', `uncommitted', `untracked' or `binary'."
                               '("docs" "scripts" "src" "test" "tools")))))
     ("with notes" (status . "ready") (live . t) (dirty . t) (diff . "1 file +4 −1 · uncommitted")
      (files . ,(roost-sweep--files '("ledger.py" . uncommitted))))
-    ;; Its agent asks you, in its terminal, whether to start a task.
-    ("offers a task" (status . "permission") (live . t)
-     (request . "Offers a task: Show each budget's total in the report")
-     (offer . "Show each budget's total in the report"))
+    ;; Its agent offered a task, which waits under it for you.
+    ("offers a task" (status . "ready") (live . t)
+     (offers ((id . "0a1b2c3d") (title . "Show each budget's total in the report")
+              (brief . "The report lists each entry but no budget's total.\n\nAdd one per budget.")
+              (at . "2026-10-03T19:58:00+00:00"))))
     ;; Offered by the agent of the state named, and started by you.
     ("started from another task" (status . "running") (live . t) (parentState . "ready, reviewing"))
     ("started from a task since retired" (status . "ready") (live . t) (parent . "ffffffffffffffff"))
@@ -440,6 +441,16 @@ among them."
     (dolist (file (seq-take files 2))
       (insert "\n\n" (roost--quoting file) ":3-4\n\ntotal = 0"))))
 
+(defun roost-sweep--offer-draft-setup (state)
+  "Make the current buffer the draft of an offer STATE's task's agent made."
+  (let ((inhibit-modification-hooks t))
+    (setq roost--compose-body (copy-marker (point-min))
+          roost--compose-fields (list :directory "/ssh:dev:/home/user/ledger/" :agent "claude"
+                                      :base "refs/heads/main" :integration "main"
+                                      :name "Show each budget's total" :offer (list (roost-sweep--key state) "0a1b2c3d")
+                                      :offer-brief "Add one per budget."))
+    (insert "Add one per budget.")))
+
 (defvar roost-sweep--views
   '((panel :mode roost-task-info-mode :render roost--render-task-info :widths (40 100)
            :layouts (selected none other both) :setup roost-sweep--panel-setup)
@@ -455,7 +466,10 @@ among them."
               :keys (roost-workload))
     (draft :mode roost-compose-mode :render roost--compose-render :buffer "*roost new task*"
            :layouts (selected none other both) :setup roost-sweep--draft-setup
-           :keys (roost-compose-submit roost-compose-cancel roost-compose-set-project)))
+           :keys (roost-compose-submit roost-compose-cancel roost-compose-set-project))
+    (offer :mode roost-compose-mode :render roost--compose-render :buffer "*roost new task*"
+           :layouts (selected none other both) :setup roost-sweep--offer-draft-setup
+           :keys (roost-compose-submit roost-compose-cancel roost-compose-dismiss roost-compose-here)))
   "Roost's views, each (NAME . PLIST).
 :mode makes the buffer, :setup gives it what it shows for a state,
 :render draws it, :point finds the state's task in it, and :buffer names

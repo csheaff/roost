@@ -2542,10 +2542,19 @@ def leave_discard_question(qa, tasks):
     qa.leave_question()
 
 
-def leave_offer(qa, tasks):
-    # Its agent asks, in its terminal, whether to start a task of its own.
-    qa.type("offer Walk away from this\r")
-    qa.status(tasks["home"], "permission")
+def offer_row(qa, screen, title):
+    """Whether the sidebar lists an offer of TITLE under its task."""
+    return any(re.match(r" +%s.* offer$" % re.escape(title), line)
+               for line in qa.window(screen, "roost-sidebar-list-mode")["text"].split("\n"))
+
+
+def leave_offer_draft(qa, tasks):
+    # Its agent offers a task, whose draft you open from its row and change.
+    qa.type("offer Walk away\r")
+    qa.wait("the offer under its task", lambda s: offer_row(qa, s, "Walk away"))
+    qa.click_text("Walk away", "roost-sidebar-list-mode")
+    qa.wait("its draft", lambda s: (qa.window(s, "roost-compose-mode") or {}).get("selected"))
+    qa.type("Half a thought. ")
 
 
 def leave_mouse_press(qa, tasks):
@@ -2569,7 +2578,7 @@ WALK_STARTERS = [
     ("a mouse press in the terminal never let go", leave_mouse_press),
     ("a review note half written", leave_note_box),
     ("Roost's question before discarding a task left open", leave_discard_question),
-    ("an agent's offer of a task left unanswered", leave_offer),
+    ("an agent's offer opened as a draft and changed", leave_offer_draft),
 ]
 
 
@@ -2826,7 +2835,6 @@ def walk_away(qa, repo):
             pair = "%s, then %s" % (title, going)
             qa.dismiss()
             qa.emacs.eval("(qa-fresh-start)")
-            answer_offer_left(qa, home)
             open_task(qa, home)
             try:
                 leave(qa, tasks)
@@ -2889,47 +2897,14 @@ def walk_away(qa, repo):
                      or any(w["mode"] == "magit-status-mode" and not w["child"] for w in s["windows"]))]
             if leave is leave_discard_question:
                 expect.append(("the task you were asked about is still there", lambda s: qa.task(s, home)))
-            if leave is leave_offer:
-                expect.append(("its offer still waits, unanswered, and started nothing",
-                               lambda s: (qa.task(s, home) or {}).get("status") == "permission"
-                               and not qa.task(s, "Walk away from this")))
+            if leave is leave_offer_draft:
+                expect.append(("its offer still waits, and started nothing",
+                               lambda s: offer_row(qa, s, "Walk away") and not qa.task(s, "Walk away")))
             qa.step(pair, expect=expect)
             if go is go_other_directory:
                 qa.emacs.eval("(setq use-file-dialog t)")
-            if leave is leave_offer:
-                # Answered once you are back in its terminal, with what the
-                # pair left open, as Other directory…'s question, quit first:
-                # Roost opens no task behind a question you are in.
-                qa.dismiss()
-                try:
-                    open_task(qa, home)
-                    qa.type("no\r")
-                    qa.status(home, "ready", "idle")
-                except Stuck as stuck:
-                    qa.step(pair + ", then answered", expect=[(str(stuck), lambda s: False)])
-                    continue
-                qa.step(pair + ", then answered", expect=[
-                    ("its agent says it started nothing",
-                     lambda s: "didn't start it" in selected_terminal(s)["text"]
-                     and not qa.task(s, "Walk away from this"))])
-    qa.dismiss()
-    answer_offer_left(qa, home)
     # GitHub as other journeys find it.
     github(qa, list=[], reviews={})
-
-
-def answer_offer_left(qa, home):
-    """Answer an offer that a walk-away pair skipped or stopped in left
-    waiting, as HOME's agent would read whatever is typed in its terminal
-    next as its answer."""
-    if (qa.task(qa.screen(), home) or {}).get("status") != "permission":
-        return
-    try:
-        open_task(qa, home)
-        qa.type("no\r")
-        qa.status(home, "ready", "idle")
-    except Stuck as stuck:
-        qa.step("Answering the offer left waiting", expect=[(str(stuck), lambda s: False)])
 
 
 @journey("A second frame")
@@ -3258,33 +3233,43 @@ def fork(qa, repo):
 
 @journey("A task an agent offers")
 def offer(qa, repo):
-    """An agent offers a task of its own and asks in its terminal; started
-    from there, it sits under the task that offered it, and each panel
-    names the other."""
+    """An agent offers a task of its own, which waits under the task that
+    offered it. Its draft starts it there, where each panel names the
+    other, or has the agent do it instead, or dismisses it."""
     parent = new_task(qa, "offer Document the notes")
-    qa.status(parent, "permission")
-    qa.step("The agent offers a task", expect=[
-        ("the sidebar shows it waiting", lambda s: "permission" in qa.window(s, "roost-sidebar-list-mode")["text"])])
-    # By name: n goes first to what other journeys left waiting longer.
-    open_task(qa, parent)
-    qa.step("Its terminal asks", expect=[
-        ("the agent asks where to start it",
-         lambda s: "ASKS Start a task: Document the notes" in selected_terminal(s)["text"]),
-        ("the panel says to answer in the terminal", lambda s: "Answer it in its terminal" in panel_text(qa, s))])
-    before = {t["key"] for t in qa.screen()["tasks"]}
-    qa.type("new\r")
-    qa.wait("the task it offered", lambda s: {t["key"] for t in s["tasks"]} - before)
     qa.status(parent, "ready", "idle")
 
-    def under_parent(screen):
+    def under(screen, title, word=None):
         lines = qa.window(screen, "roost-sidebar-list-mode")["text"].split("\n")
         row = next((i for i, line in enumerate(lines) if line.startswith(" " + parent[:12])), None)
-        return row is not None and row + 1 < len(lines) and lines[row + 1].startswith("   Document")
+        return row is not None and row + 1 < len(lines) and lines[row + 1].startswith("   " + title[:12]) \
+            and (word is None or lines[row + 1].endswith(" " + word))
 
-    qa.wait("its row", under_parent)
+    qa.wait("the offer under its task", lambda s: under(s, "Document the notes", "offer"))
+    # By name: n goes first to what other journeys left waiting longer.
+    open_task(qa, parent)
+    qa.step("The agent offers a task, which waits under its own", expect=[
+        ("the sidebar lists it under the task that offered it", lambda s: under(s, "Document the notes", "offer")),
+        ("the agent says where it waits",
+         lambda s: "It waits in Roost under this task" in selected_terminal(s)["text"])])
+
+    def opened(title):
+        qa.click_text(title, "roost-sidebar-list-mode")
+        qa.wait("its draft", lambda s: (qa.window(s, "roost-compose-mode") or {}).get("selected"))
+
+    opened("Document the notes")
+    qa.step("Its draft is filled in", expect=[
+        ("it names the task that offered it",
+         lambda s: "New task, offered by " + parent in qa.window(s, "roost-compose-mode")["text"]),
+        ("its prompt is the agent's brief",
+         lambda s: "Brief for Document the notes" in qa.window(s, "roost-compose-mode")["text"])])
+    before = {t["key"] for t in qa.screen()["tasks"]}
+    qa.click_in("header", " Create ")
+    qa.wait("the task it offered", lambda s: {t["key"] for t in s["tasks"]} - before)
+    qa.wait("its row", lambda s: under(s, "Document the notes") and not offer_row(qa, s, "Document the notes"))
     qa.step("Started, under the task that offered it", expect=[
-        ("the sidebar shows it indented under that task", under_parent),
-        ("the agent says it started it", lambda s: "Started task Document the notes" in selected_terminal(s)["text"])])
+        ("the sidebar shows it indented under that task", lambda s: under(s, "Document the notes")),
+        ("the offer no longer waits", lambda s: not offer_row(qa, s, "Document the notes"))])
     open_task(qa, "Document the notes")
     qa.step("Its panel names where it came from", expect=[
         ("it says which task it was started from",
@@ -3292,6 +3277,33 @@ def offer(qa, repo):
     open_task(qa, parent)
     qa.step("The other panel names it", expect=[
         ("it says which task it started", lambda s: re.search(r"Started\s+Document the notes", panel_text(qa, s)))])
+
+    # Done by the agent that offered it, with its brief as its next prompt.
+    qa.type("offer Tidy the notes\r")
+    qa.wait("the second offer", lambda s: offer_row(qa, s, "Tidy the notes"))
+    opened("Tidy the notes")
+    qa.click_in("header", " Do it here ")
+    qa.wait("the offer gone", lambda s: not offer_row(qa, s, "Tidy the notes"))
+    open_task(qa, parent)
+    qa.wait("the brief in its terminal",
+            lambda s: "PROMPT Brief for Tidy the notes" in (selected_terminal(s) or {}).get("text", ""))
+    qa.step("Done where it was offered", expect=[
+        ("the agent took the brief as its prompt",
+         lambda s: "PROMPT Brief for Tidy the notes" in selected_terminal(s)["text"]),
+        ("the offer no longer waits, and started nothing",
+         lambda s: not offer_row(qa, s, "Tidy the notes") and not qa.task(s, "Tidy the notes"))])
+
+    # Dismissed.
+    qa.status(parent, "ready", "idle")
+    qa.type("offer Lint the notes\r")
+    qa.wait("the third offer", lambda s: offer_row(qa, s, "Lint the notes"))
+    opened("Lint the notes")
+    qa.click_in("header", " Dismiss ")
+    qa.wait("the offer gone", lambda s: not offer_row(qa, s, "Lint the notes"))
+    qa.step("Dismissed", expect=[
+        ("the offer no longer waits, and started nothing",
+         lambda s: not offer_row(qa, s, "Lint the notes") and not qa.task(s, "Lint the notes")),
+        ("the draft is gone", lambda s: not qa.window(s, "roost-compose-mode"))])
 
 
 @journey("Start from another branch")

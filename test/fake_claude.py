@@ -101,31 +101,16 @@ print("FAKE_CLAUDE_READY " + session, flush=True)
 
 def offer(title):
     """Offer TITLE as a task through Roost's MCP server, as Claude Code
-    does, and ask in the terminal, as Claude Code's form does: new or here,
-    typed, answers, and anything else declines.  What the server said."""
-    server = subprocess.Popen([SERVER["command"], *SERVER["args"]], stdin=subprocess.PIPE,
-                              stdout=subprocess.PIPE, text=True)
-
-    def send(message):
-        server.stdin.write(json.dumps(dict(message, jsonrpc="2.0")) + "\n")
-        server.stdin.flush()
-
-    send(dict(id=1, method="initialize", params=dict(protocolVersion="2025-11-25",
-                                                     capabilities=dict(elicitation=dict(form={})))))
-    send(dict(method="notifications/initialized"))
-    send(dict(id=2, method="tools/call", params=dict(name="propose_task", arguments=dict(
-        title=title, brief="Brief for " + title))))
-    for reply in server.stdout:
-        message = json.loads(reply)
-        if message.get("method") == "elicitation/create":
-            print("ASKS " + message["params"]["message"] + ": new, here or no?", flush=True)
-            answer = sys.stdin.readline().strip()
-            send(dict(id=message["id"], result=dict(action="accept", content=dict(start=answer))
-                      if answer in ("new", "here") else dict(action="decline")))
-        elif message.get("id") == 2:
-            server.stdin.close()
-            server.wait()
-            return message["result"]["content"][0]["text"]
+    does, and return what the server said."""
+    lines = [dict(id=1, method="initialize", params=dict(protocolVersion="2025-11-25", capabilities={})),
+             dict(method="notifications/initialized"),
+             dict(id=2, method="tools/call", params=dict(name="propose_task", arguments=dict(
+                 title=title, brief="Brief for " + title)))]
+    ran = subprocess.run([SERVER["command"], *SERVER["args"]], capture_output=True, text=True,
+                         input="".join(json.dumps(dict(line, jsonrpc="2.0")) + "\n" for line in lines))
+    for reply in map(json.loads, ran.stdout.splitlines()):
+        if reply.get("id") == 2:
+            return reply["result"]["content"][0]["text"]
     return "Roost's MCP server ended"
 
 
@@ -170,7 +155,7 @@ for line in lines():
             event("Stop")
         status("done")
     elif line.startswith("offer "):
-        # Offer a task of its own, which Roost's MCP server asks you about.
+        # Offer a task of its own, which waits in Roost for you.
         event("PreToolUse", tool_name="mcp__roost__propose_task")
         said = offer(line[len("offer "):].strip())
         event("PostToolUse", tool_name="mcp__roost__propose_task")

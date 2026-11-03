@@ -275,10 +275,7 @@ def history_state(task):
     last said."""
     if task is None:
         return None
-    # By the offers its record holds rather than whether their servers still
-    # run, so an offer ends where a record that drops it is saved.
-    return dict(status=shown_status(task, alive=False), seen=seen_since_last_event(task),
-                turn=text(task.get("turn")))
+    return dict(status=task.get("status"), seen=seen_since_last_event(task), turn=text(task.get("turn")))
 
 
 class History:
@@ -650,10 +647,10 @@ def claude_hook_settings(store, task):
                 # A worktree the agent makes for itself starts from the
                 # task's work, not from the default branch.
                 "worktree": {"baseRef": "head"},
-                # Roost's own tools that need no asking: an offer asks you
-                # itself, and reading changes nothing. A message types into
-                # another agent's terminal, so it goes by your permission
-                # mode, as any tool you haven't allowed does.
+                # Roost's own tools that need no asking: an offer only waits
+                # in Roost for you, and reading changes nothing. A message
+                # types into another agent's terminal, so it goes by your
+                # permission mode, as any tool you haven't allowed does.
                 "permissions": {"allow": ["mcp__roost__propose_task", "mcp__roost__read_task"]}}
     path = store.tasks_dir / (task["id"] + ".settings")
     atomic_json(path, settings)
@@ -783,11 +780,6 @@ class ClaudeAgent:
     # Its status reports, which the runner reads for a task that asks,
     # say when a turn ends and how.
     reports_turns = True
-    # Its form for an MCP server's question fills each field with its
-    # default, as an offer's brief, and sends each line break in one back
-    # as U+FFFD.
-    form_shows_defaults = True
-    form_loses_line_breaks = True
     # A turn that ended with work left in the background leaves its prompt
     # taking the next one.
     prompt_in_background = True
@@ -807,8 +799,7 @@ class ClaudeAgent:
         attachments.mkdir(mode=0o700, parents=True, exist_ok=True)
         # Its tools in the prompt, rather than behind a search the agent
         # would make only once it knew of them.
-        server = dict(type="stdio", command=sys.executable, args=mcp_arguments(store, task),
-                      timeout=MCP_TOOL_SECONDS * 1000, alwaysLoad=True)
+        server = dict(type="stdio", command=sys.executable, args=mcp_arguments(store, task), alwaysLoad=True)
         argv = task["command"] + ["--settings", claude_hook_settings(store, task),
                                   "--mcp-config=" + json.dumps({"mcpServers": {"roost": server}}),
                                   "--add-dir=" + str(attachments)]
@@ -1021,8 +1012,7 @@ class CodexAgent:
         # a few of its variables, and names the others it may have.
         argv += ["-c", "mcp_servers.roost.command=" + json.dumps(sys.executable),
                  "-c", "mcp_servers.roost.args=" + json.dumps(mcp_arguments(store, task)),
-                 "-c", "mcp_servers.roost.env_vars=" + json.dumps(MCP_SERVER_ENVIRONMENT),
-                 "-c", "mcp_servers.roost.tool_timeout_sec=%d" % MCP_TOOL_SECONDS]
+                 "-c", "mcp_servers.roost.env_vars=" + json.dumps(MCP_SERVER_ENVIRONMENT)]
         session = task.get("agentSession")
         if resume_conversation and session:
             argv += ["resume", session]
@@ -1122,44 +1112,13 @@ export default function (pi) {
   // Pi emits shutdown when replacing a session too; the runner records actual exit.
 
   // Roost's tools, which other agents have from the helper as an MCP
-  // server: each call here runs that server, and its question is Pi's
-  // own dialog.
-  const roostCall = (name, params, signal, ctx) => new Promise((resolve, reject) => {
+  // server: each call here runs that server.
+  const roostCall = (name, params, signal) => new Promise((resolve, reject) => {
     // Stopped already, before its abort could be heard: nothing runs.
     if (signal?.aborted) return reject(new Error("Stopped"));
     const child = spawn(process.env.ROOST_PYTHON, [process.env.ROOST_HELPER, "mcp",
       process.env.ROOST_STATE_DIRECTORY, process.env.ROOST_TASK_ID], { stdio: ["pipe", "pipe", "ignore"] });
     const write = message => child.stdin.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\n");
-    // Its question closes if the run stops, as by another extension, or the
-    // helper ends, meanwhile.
-    const asking = new AbortController();
-    signal?.addEventListener("abort", () => asking.abort(), { once: true });
-    // Its choice is a list to pick from. What it gives to read and change,
-    // as the brief, goes above the list, which offers to change it in Pi's
-    // editor and then asks again.
-    const answer = async question => {
-      const fields = Object.entries(question.params.requestedSchema.properties);
-      const [key, field] = fields.find(([, f]) => f.enum);
-      const labels = field.enumNames || field.enum;
-      const texts = fields.filter(([, f]) => !f.enum && typeof f.default === "string");
-      const changes = texts.map(([k, f]) => "Change the " + (f.title || k).toLowerCase());
-      const content = Object.fromEntries(texts.map(([k, f]) => [k, f.default]));
-      let chosen;
-      try {
-        for (;;) {
-          chosen = await ctx.ui.select([question.params.message, ...texts.map(([k]) => content[k])].join("\n\n"),
-            [...labels, ...changes, "Neither"], { signal: asking.signal });
-          const change = changes.indexOf(chosen);
-          if (change < 0 || asking.signal.aborted) break;
-          const [k, f] = texts[change];
-          const changed = await ctx.ui.editor(f.title || k, content[k]);
-          if (typeof changed === "string" && changed.trim()) content[k] = changed;
-        }
-      } catch { chosen = undefined; }
-      const at = labels.indexOf(chosen);
-      write({ id: question.id, result: chosen === undefined || asking.signal.aborted ? { action: "cancel" }
-        : at < 0 ? { action: "decline" } : { action: "accept", content: { ...content, [key]: field.enum[at] } } });
-    };
     let buffer = "";
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", chunk => {
@@ -1167,42 +1126,39 @@ export default function (pi) {
       for (let at; (at = buffer.indexOf("\n")) >= 0; buffer = buffer.slice(at + 1)) {
         let message;
         try { message = JSON.parse(buffer.slice(0, at)); } catch { continue; }
-        if (message.method === "elicitation/create") answer(message);
-        else if (message.id === "call") {
+        if (message.id === "call") {
           child.stdin.end();
           message.error ? reject(new Error(message.error.message)) : resolve(message.result);
         }
       }
     });
-    // Stopped, the helper hears its input end, and puts the task back as
-    // it was; one making the task you chose finishes it.
+    // Stopped, the helper hears its input end; a call it has begun, which
+    // takes a moment, finishes.
     const stop = () => {
-      write({ method: "notifications/cancelled", params: { requestId: "call" } });
       child.stdin.end();
       reject(new Error("Stopped"));
     };
     child.on("error", reject);
     child.on("close", () => {
       signal?.removeEventListener("abort", stop);
-      asking.abort();
       reject(new Error("Roost's helper ended without an answer"));
     });
     child.stdin.on("error", () => {});
     signal?.addEventListener("abort", stop, { once: true });
     write({ id: "hello", method: "initialize", params: { protocolVersion: "2025-06-18",
-      capabilities: { elicitation: {} }, clientInfo: { name: "pi", version: "1" } } });
+      capabilities: {}, clientInfo: { name: "pi", version: "1" } } });
     write({ method: "notifications/initialized" });
     write({ id: "call", method: "tools/call", params: { name, arguments: params } });
   });
   // By Roost's name, as another extension's tool may have one of these, and
-  // Pi starts with none that two extensions name; one at a time, as Pi
-  // shows one dialog. A tool Pi refuses, as for its parameters, leaves the
-  // rest of this extension, which reports status, as it is.
+  // Pi starts with none that two extensions name. A tool Pi refuses, as for
+  // its parameters, leaves the rest of this extension, which reports
+  // status, as it is.
   for (const tool of ROOST_TOOLS) {
     try {
-      pi.registerTool({ ...tool, name: "roost_" + tool.name, label: "roost_" + tool.name, executionMode: "sequential",
-        async execute(_id, params, signal, _onUpdate, ctx) {
-          const result = await roostCall(tool.name, params, signal, ctx);
+      pi.registerTool({ ...tool, name: "roost_" + tool.name, label: "roost_" + tool.name,
+        async execute(_id, params, signal) {
+          const result = await roostCall(tool.name, params, signal);
           const said = result.content.map(part => part.text).join("\n");
           if (result.isError) throw new Error(said);
           return { content: [{ type: "text", text: said }], details: undefined };
@@ -1232,9 +1188,6 @@ class PiAgent:
     default_command = ["pi"]
     # Pi 1.1.0 and later report their status, and say when a turn ends and how.
     reports_turns = True
-    # Its extension shows an offer's brief above the choice, and in Pi's
-    # editor to change it.
-    form_shows_defaults = True
     # Its extension names Roost's tools so, as another's may have one of
     # the plain names.
     tool_prefix = "roost_"
@@ -1672,8 +1625,6 @@ def spawn(store, task, resume=False, size=()):
     script = str(Path(__file__).resolve())
     task["runId"] = uuid.uuid4().hex
     task.pop("shellPaneId", None)
-    # A run's offers end with it.
-    task.pop("offers", None)
     argv = [sys.executable, script, "run", str(store.root), task["id"], task["runId"]]
     if resume:
         argv.append("resume")
@@ -1937,11 +1888,17 @@ def create(store, request):
     before, the one made then."""
     create_id = request.get("createId")
     if create_id is None:
-        return make_task(store, request, None)
-    if not (isinstance(create_id, str) and CREATE_ID.fullmatch(create_id)):
+        task = make_task(store, request, None)
+    elif not (isinstance(create_id, str) and CREATE_ID.fullmatch(create_id)):
         raise RoostError("Invalid creation ID")
-    with asking_for(store, create_id):
-        return made_for(store, create_id) or make_task(store, request, create_id)
+    else:
+        with asking_for(store, create_id):
+            task = made_for(store, create_id) or make_task(store, request, create_id)
+    # Started from its parent's offer, which no longer waits.
+    if request.get("parent") is not None and text(request.get("offer")):
+        with store.locked(), contextlib.suppress(RoostError, OSError):
+            dismiss_offer(store, store.read(request["parent"]), request["offer"])
+    return task
 
 
 def make_task(store, request, create_id):
@@ -2394,10 +2351,6 @@ def reconcile(store, tasks):
     inventories = {}
     table = None  # The process table, read only when a request may have been approved.
     for task in tasks:
-        # An offer whose server ended without taking it back, as one killed
-        # with its agent, ends here, where the history notes it, and newer
-        # than a reply that still showed it; tmux needn't answer for that.
-        changed = prune_offers(task)
         socket = task["socket"]
         if socket not in inventories:
             inventories[socket] = pane_inventory(socket)
@@ -2406,10 +2359,9 @@ def reconcile(store, tasks):
             # tmux could not answer: keep the last observed status rather than
             # declaring every agent on this socket crashed.
             task["live"] = None
-            if changed:
-                store.save(task)
             continue
         pane = owned_pane(task, inventory)
+        changed = False
         if pane and (task.get("session"), task.get("windowIndex")) != (pane["session_name"], pane["index"]):
             task.update(session=pane["session_name"], windowIndex=pane["index"])
             changed = True
@@ -3839,10 +3791,6 @@ def send(task, text, force=False):
     pane = owned_pane(task, inventory_for(task))
     if not pane or pane["dead"]:
         raise RoostError("The agent is not running; resume the task first")
-    # Its offer's form waits for as long as its server runs, and a paste and
-    # Return could fill in its fields and submit it.
-    if offered(task):
-        raise RoostError("%s offers a task; answer it in its terminal first" % task["name"])
     # A paste could answer a startup or permission menu. The status can lag
     # (agents report no event after a declined permission), so the client
     # may confirm with the user and force the send.
@@ -3862,20 +3810,15 @@ def send(task, text, force=False):
 
 # Tasks an agent offers. The agent runs this helper as an MCP server of its
 # own, over its standard input and output, for as long as the agent runs:
-# through it the agent offers you a task, which you start or have it do
-# where it is, reads the tasks it started, and sends them a message.
+# through it the agent offers a task, which waits under its own in Roost
+# for you to start, have it do where it is, or dismiss, reads the tasks
+# started from its offers, and sends them a message.
 
 MCP_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
-# How long an agent waits on a call, such as an offer you haven't answered.
-MCP_TOOL_SECONDS = 24 * 3600
 # What the server needs of its agent's environment, beyond what any
 # program gets: where tmux keeps Roost's server, as tmux-control sets it on
-# a host, what a task it starts takes from it into its own session,
-# tmux's update-environment, and where Git finds your settings as it makes
-# that task's worktree.
-MCP_SERVER_ENVIRONMENT = ["TMUX_TMPDIR", "DISPLAY", "KRB5CCNAME", "MSYSTEM", "SSH_ASKPASS", "SSH_AUTH_SOCK",
-                          "SSH_AGENT_PID", "SSH_CONNECTION", "WINDOWID", "XAUTHORITY", "XDG_CONFIG_HOME",
-                          "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM"]
+# a host, to read and message the tasks started from its offers.
+MCP_SERVER_ENVIRONMENT = ["TMUX_TMPDIR"]
 MCP_INSTRUCTIONS = (
     "Roost runs you in a task of your own: a Git worktree and branch that the user reviews and merges. "
     "When you come across work outside what you were asked to do that is worth a task of its own, such "
@@ -3883,33 +3826,35 @@ MCP_INSTRUCTIONS = (
     "only mention it or ask whether to fix it: offer it with propose_task, with a brief another agent "
     "could start from, before you end your turn. Offer real work, not a one-line tweak or a guess, at "
     "most one in a turn, and never one the user turned down. A piece of what you were asked to do stays "
-    "here, without an offer. Roost asks the user whether to start it as a new task or to have you do it "
-    "here, and tells you which. read_task shows how the tasks you started are doing, and message_task "
-    "sends one a message.")
+    "here, without an offer. The offer waits in Roost, under this task, where the user can start it as "
+    "a task of its own or have you do it here; say in your reply what you offered. read_task shows how "
+    "the tasks started from your offers are doing, and message_task sends one a message.")
 MCP_TOOLS = {
     "propose_task": dict(
         description=(
             "Offer the user a task of its own, with its own agent, Git worktree and branch, for work "
-            "that shouldn't happen in this conversation. The user chooses to start it, or to have you "
-            "do it here, and this says which. The new agent sees only the brief, not this "
-            "conversation: say what to do, where, what you found, and what done looks like."),
+            "that shouldn't happen in this conversation. It returns at once: the offer waits in Roost, "
+            "under this task, for the user to start, to have you do here, or to dismiss, and you can't "
+            "start it yourself. Offering it again by the same title changes its brief. The new agent "
+            "sees only the brief, not this conversation: say what to do, where, what you found, and "
+            "what done looks like."),
         inputSchema=dict(type="object", required=["title", "brief"], properties=dict(
             title=dict(type="string", description="A short name for the task, as a few words"),
             brief=dict(type="string", description="Everything the new task's agent needs to start"))),
-        # It asks you itself, so an agent that asks before a tool, as Codex
-        # does before one that says nothing of itself, needn't ask too.
+        # It only waits for you, so an agent that asks before a tool, as
+        # Codex does before one that says nothing of itself, needn't ask.
         annotations=dict(readOnlyHint=False, destructiveHint=False, openWorldHint=False)),
     "read_task": dict(
-        description=("How the tasks you started are doing: each one's status, branch and latest "
-                     "reply. Name one by its ID for that one alone."),
+        description=("How the tasks started from your offers are doing: each one's ID, status, branch and "
+                     "latest reply. Name one by its ID for that one alone."),
         inputSchema=dict(type="object", properties=dict(
-            task=dict(type="string", description="A task's ID, as propose_task gave it"))),
+            task=dict(type="string", description="A task's ID, as read_task gives it"))),
         annotations=dict(readOnlyHint=True)),
     "message_task": dict(
-        description=("Send a task you started a message, as its next prompt. It goes only while "
-                     "that task's agent waits for a prompt."),
+        description=("Send a task started from your offer a message, as its next prompt. It goes only "
+                     "while that task's agent waits for a prompt."),
         inputSchema=dict(type="object", required=["task", "message"], properties=dict(
-            task=dict(type="string", description="The task's ID, as propose_task gave it"),
+            task=dict(type="string", description="The task's ID, as read_task gives it"),
             message=dict(type="string")))),
 }
 # What a task's status says to an agent reading it.
@@ -3917,15 +3862,8 @@ STATUS_SAID = {"starting": "starting", "running": "working", "background": "work
                "permission": "waiting for the user to answer it", "ready": "waiting for a prompt",
                "stopped": "stopped", "exited": "exited", "failed": "stopped on an error",
                "crashed": "crashed"}
-# The request a task waits on while its agent offers a task.
-OFFER_REQUEST = "Offers a task: "
-# Sooner than anyone reads the question: a decline this quick is the
-# agent's own, as Codex's under approval_policy "never".
-OFFER_READ_SECONDS = 0.5
-
-
-class McpCancelled(Exception):
-    pass
+# The most offers a task keeps waiting for you at once.
+OFFER_LIMIT = 3
 
 
 class McpError(Exception):
@@ -3940,80 +3878,28 @@ class McpServer:
     """The MCP server for TASK_ID's agent: JSON-RPC, a message on each line."""
 
     def __init__(self, store, task_id, reader=None, writer=None):
-        """READER, as a test's, or else standard input, read unbuffered so
-        that what has come is known."""
+        """READER, as a test's, or else standard input."""
         self.store, self.task_id = store, task_id
         self.reader, self.writer = reader, writer or sys.stdout
-        self.buffer = b""
-        self.elicits = False
-        self.asked = 0
-        self.pending = collections.deque()
-        # Answers read before their question was asked, as a test's.
-        self.early = {}
 
     def write(self, message):
         self.writer.write(json.dumps(dict(message, jsonrpc="2.0"), ensure_ascii=False) + "\n")
         self.writer.flush()
 
-    def line(self):
+    def lines(self):
         if self.reader is not None:
-            return self.reader.readline()
-        while b"\n" not in self.buffer:
-            chunk = os.read(sys.stdin.fileno(), 65536)
-            if not chunk:
-                line, self.buffer = self.buffer, b""
-                return line.decode("utf-8", "replace")
-            self.buffer += chunk
-        line, _, self.buffer = self.buffer.partition(b"\n")
-        return line.decode("utf-8", "replace") + "\n"
-
-    def read(self):
-        while True:
-            line = self.line()
-            if not line:
-                raise EOFError
-            with contextlib.suppress(ValueError):
-                message = json.loads(line)
-                if isinstance(message, dict):
-                    return message
-
-    def waiting(self):
-        """Whether a message has come that reading takes without waiting."""
-        if self.reader is not None:
-            at = self.reader.tell()
-            more = bool(self.reader.readline())
-            self.reader.seek(at)
-            return more
-        return b"\n" in self.buffer or bool(select.select([sys.stdin.fileno()], [], [], 0)[0])
-
-    def take(self, message):
-        """Deal with MESSAGE, come while a question or another request
-        waits: answer a ping, queue a request, keep an answer, and drop a
-        queued request cancelled meanwhile, whose ID it returns."""
-        if message.get("method") == "ping" and message.get("id") is not None:
-            self.write(dict(id=message["id"], result={}))
-        elif message.get("method") == "notifications/cancelled":
-            params = message.get("params") if isinstance(message.get("params"), dict) else {}
-            cancelled = params.get("requestId")
-            # One waiting its turn goes unanswered, as it would once begun.
-            self.pending = collections.deque(waiting for waiting in self.pending
-                                             if waiting.get("id") != cancelled)
-            return cancelled
-        elif message.get("method"):
-            self.pending.append(message)
-        elif message.get("id") is not None:
-            self.early[message["id"]] = message
-        return None
+            yield from iter(self.reader.readline, "")
+        else:
+            for line in iter(sys.stdin.buffer.readline, b""):
+                yield line.decode("utf-8", "replace")
 
     def serve(self):
-        with contextlib.suppress(EOFError, BrokenPipeError):
-            while True:
-                # A request that waited behind a question runs once what came
-                # meanwhile is read, as its cancellation, which comes with
-                # the question's as you press Esc.
-                while self.pending and self.waiting():
-                    self.take(self.read())
-                self.handle(self.pending.popleft() if self.pending else self.read())
+        with contextlib.suppress(BrokenPipeError):
+            for line in self.lines():
+                with contextlib.suppress(ValueError):
+                    message = json.loads(line)
+                    if isinstance(message, dict):
+                        self.handle(message)
 
     def handle(self, message):
         method, ident = message.get("method"), message.get("id")
@@ -4022,42 +3908,30 @@ class McpServer:
             return
         params = message.get("params") if isinstance(message.get("params"), dict) else {}
         try:
-            result = self.answer(method, params, ident)
+            result = self.answer(method, params)
         except McpError as exc:
             self.write(dict(id=ident, error=dict(code=exc.code, message=str(exc))))
-        except McpCancelled:
-            return
-        except (EOFError, BrokenPipeError):
-            # The agent ended, as while it asked you something.
+        except BrokenPipeError:
             raise
         except Exception as exc:  # A bug answers its request rather than ending the server.
             self.write(dict(id=ident, error=dict(code=-32603, message="%s: %s" % (type(exc).__name__, exc))))
         else:
             self.write(dict(id=ident, result=result))
 
-    def answer(self, method, params, ident):
+    def answer(self, method, params):
         if method == "initialize":
             asked = params.get("protocolVersion")
-            capabilities = params.get("capabilities") if isinstance(params.get("capabilities"), dict) else {}
-            # Asking you needs a client that shows a form, which says so:
-            # by name, or, as before the protocol named kinds, by none.
-            elicitation = capabilities.get("elicitation")
-            self.elicits = isinstance(elicitation, dict) and (not elicitation or "form" in elicitation)
-            hello = dict(protocolVersion=asked if asked in MCP_VERSIONS else MCP_VERSIONS[0],
-                         capabilities=dict(tools={}), serverInfo=dict(name="roost", version="1"))
-            # Only to one that gets the tools they name.
-            return dict(hello, instructions=MCP_INSTRUCTIONS) if self.elicits else hello
+            return dict(protocolVersion=asked if asked in MCP_VERSIONS else MCP_VERSIONS[0],
+                        capabilities=dict(tools={}), serverInfo=dict(name="roost", version="1"),
+                        instructions=MCP_INSTRUCTIONS)
         if method == "ping":
             return {}
         if method == "tools/list":
-            # Without a way to ask you, an agent can offer no task, and
-            # so has started none to read or send to.
-            return dict(tools=[dict(definition, name=name) for name, definition in MCP_TOOLS.items()]
-                        if self.elicits else [])
+            return dict(tools=[dict(definition, name=name) for name, definition in MCP_TOOLS.items()])
         if method == "tools/call":
             arguments = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
             try:
-                said = self.call(params.get("name"), arguments, ident)
+                said = self.call(params.get("name"), arguments)
             except RoostError as exc:
                 return dict(content=[dict(type="text", text=str(exc))], isError=True)
             return dict(content=[dict(type="text", text=said)])
@@ -4065,37 +3939,14 @@ class McpServer:
         # starts again with an older one.
         raise McpError(-32601, "Unknown method: " + method)
 
-    def call(self, name, arguments, ident):
-        if not self.elicits:
-            raise RoostError("Unknown tool: %s" % name)
+    def call(self, name, arguments):
         if name == "propose_task":
-            return propose_task(self, arguments.get("title"), arguments.get("brief"), ident)
+            return propose_task(self.store, self.task_id, arguments.get("title"), arguments.get("brief"))
         if name == "read_task":
             return read_tasks(self.store, self.task_id, arguments.get("task"))
         if name == "message_task":
             return message_task(self.store, self.task_id, arguments.get("task"), arguments.get("message"))
         raise RoostError("Unknown tool: %s" % name)
-
-    def elicit(self, message, schema, ident):
-        """Ask the user MESSAGE with a form of SCHEMA, in the agent's own
-        terminal, and return the client's answer. Meanwhile pings are
-        answered and other requests wait their turn; cancelling the tool
-        call IDENT ends the question."""
-        self.asked += 1
-        question = "roost-%d" % self.asked
-        self.write(dict(id=question, method="elicitation/create",
-                        params=dict(message=message, requestedSchema=schema)))
-        while True:
-            reply = self.early.pop(question, None) or self.read()
-            if reply.get("id") == question and "method" not in reply:
-                if isinstance(reply.get("error"), dict):
-                    raise RoostError("The agent couldn't ask: %s" % reply["error"].get("message"))
-                return reply.get("result") if isinstance(reply.get("result"), dict) else {}
-            if self.take(reply) == ident:
-                # Its form closes too: one left open would take an answer no
-                # one waits for.
-                self.write(dict(method="notifications/cancelled", params=dict(requestId=question)))
-                raise McpCancelled
 
 
 def mcp_arguments(store, task):
@@ -4103,11 +3954,18 @@ def mcp_arguments(store, task):
     return [str(Path(__file__).resolve()), "mcp", str(store.root), task["id"]]
 
 
+def task_offers(task):
+    """The offers of TASK's agent that wait for you, oldest first: those
+    this helper wrote, each with an ID, a title and a brief."""
+    return [offer for offer in task.get("offers") or []
+            if isinstance(offer, dict) and all(text(offer.get(key)) for key in ("id", "title", "brief"))]
+
+
 def set_offers(task, offers):
-    """Leave OFFERS as TASK's open offers, dated just after the change
-    before rather than now, so Emacs takes TASK as newer than a reply read
-    before: Claude records an interrupt in its transcript and runs no hook,
-    and one since then must still count as newer than this."""
+    """Leave OFFERS as TASK's offers, dated just after the change before
+    rather than now, so Emacs takes TASK as newer than a reply read before:
+    Claude records an interrupt in its transcript and runs no hook, and one
+    since then must still count as newer than this."""
     if offers:
         task["offers"] = offers
     else:
@@ -4116,116 +3974,19 @@ def set_offers(task, offers):
     task["updatedAt"] = (stamp + datetime.timedelta(microseconds=1)).isoformat() if stamp else now()
 
 
-@contextlib.contextmanager
-def offering(store, task_id, title):
-    """Show TASK_ID as waiting on you while its agent asks whether to start
-    TITLE. The offer is this server's own entry in the record, beside the
-    status the agent's hooks and reports keep as they would without it,
-    and open for as long as the server holds its lock: the system lets go
-    of it however the server ends, as killed with its agent, and whatever
-    fails as it takes the entry back."""
-    folder = store.root / "offers"
-    folder.mkdir(mode=0o700, exist_ok=True)
-    path = folder / ("%s.%s.lock" % (task_id, uuid.uuid4().hex))
-    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600)
-    offer = dict(title=(one_line(title) or "")[:REQUEST_LIMIT], lock=str(path))
-    added = False
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        with store.locked():
-            task = store.read(task_id)
-            # Its agent may be gone already, as when you stopped the task.
-            if task["status"] in ("stopped", "retired"):
-                raise RoostError("The task is %s" % task["status"])
-            set_offers(task, open_offers(task) + [offer])
-            store.save(task)
-            added = True
-        yield
-    finally:
-        # Let go first, so nothing that fails after keeps the offer open.
-        os.close(fd)
-        with contextlib.suppress(OSError):
-            path.unlink()
-        if added:
-            with contextlib.suppress(RoostError, OSError), store.locked():
-                task = store.read(task_id)
-                set_offers(task, [other for other in open_offers(task) if other != offer])
-                store.save(task)
-
-
-def offer_lock(offer):
-    """The lock file that offer entry OFFER names, if it is one of Roost's."""
-    path = offer.get("lock") if isinstance(offer, dict) else None
-    if (isinstance(path, str) and re.fullmatch(r"[0-9a-f]{16}\.[0-9a-f]{32}\.lock", os.path.basename(path))
-            and os.path.basename(os.path.dirname(path)) == "offers"):
-        return path
-    return None
-
-
-def open_offers(task, alive=True):
-    """The offers TASK's agent has open, whose server holds its lock still;
-    or, not ALIVE, those its record holds, as the history counts them until
-    a listing finds their server gone."""
-    def held(path):
-        try:
-            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC)
-        except OSError:
-            return False
-        try:
-            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
-        except BlockingIOError:
-            return True
-        except OSError:
-            return False
-        finally:
-            os.close(fd)
-        return False
-
-    return [offer for offer in task.get("offers") or []
-            if offer_lock(offer) and (not alive or held(offer_lock(offer)))]
-
-
-def prune_offers(task):
-    """Drop the offers in TASK whose server ended without taking them back,
-    and their locks, and say whether it changed."""
-    still = open_offers(task)
-    if not task.get("offers") or still == task["offers"]:
-        return False
-    for gone in task["offers"]:
-        if gone not in still and offer_lock(gone):
-            with contextlib.suppress(OSError):
-                os.unlink(offer_lock(gone))
-    set_offers(task, still)
-    return True
-
-
-def offered(task, alive=True):
-    """The title of the task TASK's agent offers you, for as long as it
-    waits on your answer, or None; not ALIVE, as `open_offers` says. Not
-    once its agent is gone, nor in the reply that says it was removed."""
-    if task.get("status") in ("stopped", "retired", "exited", "crashed", "forgotten", "discarded"):
-        return None
-    offers = open_offers(task, alive)
-    return text(offers[-1].get("title")) or "a task" if offers else None
-
-
-def shown_status(task, alive=True):
-    """TASK's status as Roost shows it: waiting on you while its agent
-    offers a task."""
-    return "permission" if offered(task, alive) else task.get("status")
-
-
-def propose_task(server, title, brief, ident):
+def propose_task(store, task_id, title, brief):
+    """Offer the task TITLE, with BRIEF, as TASK_ID's agent asks: it waits
+    under that task in Roost for you, and its agent goes on meanwhile."""
     title, brief = (text(title) or "").strip(), (text(brief) or "").strip()
     if not title or not brief:
         raise RoostError("Give the task a title and a brief")
-    # Refused before you are asked, rather than once you have said yes.
+    # Refused now, rather than once you have chosen to start it.
     task_name(title)
     if len(brief.encode()) > PROMPT_ARGUMENT_LIMIT:
         raise RoostError("The brief is %d KB, and a task can start with at most %d KB; shorten it"
                          % (-(-len(brief.encode()) // 1024), PROMPT_ARGUMENT_LIMIT // 1024))
-    with server.store.locked():
-        parent = server.store.read(server.task_id)
+    with store.locked():
+        parent = store.read(task_id)
     base = offered_base(parent)
     if not base:
         raise RoostError("This task merges into no branch, as it started with the primary checkout on "
@@ -4234,91 +3995,33 @@ def propose_task(server, title, brief, ident):
     if read_git(parent["repo"], "rev-parse", "--verify", "--quiet", base + "^{commit}").returncode:
         raise RoostError("The branch this task merges into, %s, is gone, so a task it offered would have no "
                          "branch to start from; mention the work instead" % base[len("refs/heads/"):])
-    agent = agent_for(parent)
-    shown = getattr(agent, "form_shows_defaults", False)
-    # The brief whole, to read and change: the message shows a few lines.
-    # A form that starts its fields empty shows it in the message instead,
-    # and what you write in the field is added to it.
-    schema = dict(type="object", required=["start"], properties=dict(
-        start=dict(type="string", title="Where", enum=["new", "here"], default="new",
-                   enumNames=["As a new task, in its own worktree", "Here, in this conversation"]),
-        brief=dict(type="string", title="Brief", default=brief) if shown
-        else dict(type="string", title="Add to the brief")))
-    message = "Start a task: %s" % title + ("" if shown else "\n\n" + brief)
-    with offering(server.store, server.task_id, title):
-        # From the question to its answer, not the waits for the registry
-        # either side.
-        asked = time.monotonic()
-        answer = server.elicit(message, schema, ident)
-        quick = time.monotonic() - asked < OFFER_READ_SECONDS
-    content = answer.get("content") if answer.get("action") == "accept" else None
-    start = content.get("start") if isinstance(content, dict) else None
-    if quick and answer.get("action") in ("accept", "decline"):
-        # Not a choice: the agent's own settings, as Codex's under
-        # approval_policy "never", or a key you were pressing as it opened.
-        return ("The question was answered sooner than anyone reads it, by this agent's settings or a key "
-                "pressed as it opened, so the user wasn't asked and nothing started. Mention the work in "
-                "your reply.")
-    if answer.get("action") not in ("accept", "decline"):
-        # As with Esc: closed without a choice either way.
-        return ("The user closed the question without choosing, and nothing started. Mention the work in "
-                "your reply rather than offering it again now.")
-    if start not in ("new", "here"):
-        return "The user didn't start it. Don't offer it again unless they ask."
-    said = content.get("brief")
-    if not shown:
-        said = brief + "\n\n" + said.strip() if isinstance(said, str) and said.strip() else None
-    started = answered_brief(brief, said, getattr(agent, "form_loses_line_breaks", False))
-    if start == "new" and len(started.encode()) > PROMPT_ARGUMENT_LIMIT:
-        # Lengthened in the form, past what a task can start with.
-        return ("The user chose to start it, but the brief as they changed it is %d KB, and a task can start "
-                "with at most %d KB, so nothing started. Tell them, and offer it again with a shorter brief "
-                "if they want." % (-(-len(started.encode()) // 1024), PROMPT_ARGUMENT_LIMIT // 1024))
-    if start == "here":
-        return ("The user chose to have you do it here, in this conversation. Go ahead"
-                + (", as the brief they changed says:\n\n" + started if started != brief else "."))
-    with server.store.locked():
-        parent = server.store.read(server.task_id)
-    task = make_task(server.store, offered_request(parent, title, started), None)
-    # By the names its agent has the tools by; what the user wrote is as written.
-    tools = getattr(agent, "tool_prefix", "")
-    return ("Started task %s, ID %s, on branch %s in a worktree of its own%s. Its agent works on its own; "
-            "%sread_task shows how it is doing, and %smessage_task sends it a message."
-            % (task["name"], task["id"], task["branch"],
-               ", with the brief as the user changed it" if started != brief else "", tools, tools))
+    with store.locked():
+        task = store.read(task_id)
+        # Its agent may be gone already, as when you stopped the task.
+        if task["status"] in ("stopped", "retired"):
+            raise RoostError("The task is %s" % task["status"])
+        # One offered again by its title is its agent's word on it now.
+        offers = [offer for offer in task_offers(task) if offer["title"] != title]
+        if len(offers) >= OFFER_LIMIT:
+            raise RoostError("%d offers of this task already wait for the user; mention this work in your "
+                             "reply instead" % len(offers))
+        set_offers(task, offers + [dict(id=uuid.uuid4().hex[:8], title=title, brief=brief, at=now())])
+        store.save(task)
+    return ("Offered. It waits in Roost under this task, where the user can start it as a task of its own, "
+            "have you do it here, or dismiss it. Say in your reply what you offered, and don't do the work "
+            "unless the user asks. If they ask you to start it, tell them to open the offer in Roost: you "
+            "can't start it yourself.")
 
 
-def answered_brief(brief, said, breaks_lost=False):
-    """BRIEF as you left it in the form, SAID, or as written if you emptied
-    it. An agent whose form loses line breaks (BREAKS_LOST), as Claude
-    Code's sends each back as U+FFFD, gives back BRIEF for one you left
-    alone, and one you changed with its breaks; another's text is as you
-    wrote it."""
-    if not isinstance(said, str) or not said.strip():
-        return brief
-    if breaks_lost:
-        if said == brief.replace("\n", "�"):
-            return brief
-        said = said.replace("�", "\n")
-    return brief if said == brief else said.strip()
-
-
-def offered_request(parent, title, brief):
-    """The request that makes the task PARENT's agent offered as TITLE: in
-    PARENT's project and terminal server, by the same agent and command,
-    starting from the branch PARENT merges into, by its full name."""
-    branch = parent.get("branch") or ""
-    size = tmux(parent["socket"], "display-message", "-p", "-t", parent.get("paneId") or "",
-                "#{pane_width}\t#{pane_height}", check=False).stdout.split()
-    request = dict(directory=parent["repo"], name=title, prompt=brief, parent=parent["id"], base=offered_base(parent),
-                   agent=parent.get("agent"), command=parent.get("command"), setup=parent.get("setup"),
-                   socket=parent.get("socket"), programStatus=parent.get("programStatus") is True,
-                   # As its record says, or, for an older helper's, as its branch's start does.
-                   branchPrefix=text(parent.get("branchPrefix"))
-                   or (branch[:branch.rindex("/") + 1] if "/" in branch else None),
-                   size=dict(width=int(size[0]), height=int(size[1]))
-                   if len(size) == 2 and all(n.isdigit() for n in size) else None)
-    return {key: value for key, value in request.items() if value is not None}
+def dismiss_offer(store, task, offer):
+    """TASK, saved without its offer OFFER, an ID, as you dismissed it or
+    started it."""
+    offers = task_offers(task)
+    still = [other for other in offers if other["id"] != offer]
+    if len(still) != len(offers):
+        set_offers(task, still)
+        store.save(task)
+    return task
 
 
 def offered_base(parent):
@@ -4330,8 +4033,8 @@ def offered_base(parent):
 
 
 def started_by(store, task_id, wanted=None):
-    """The tasks TASK_ID's agent started, or the one of them WANTED names by
-    its ID or the start of it."""
+    """The tasks started from TASK_ID's agent's offers, or the one of them
+    WANTED names by its ID or the start of it."""
     tasks = [task for task in store.all() if task.get("parent") == task_id]
     # An empty one, as an agent may give for an argument it leaves out.
     wanted = (text(wanted) or "").strip()
@@ -4339,7 +4042,8 @@ def started_by(store, task_id, wanted=None):
         return tasks
     found = [task for task in tasks if len(wanted) >= 4 and task["id"].startswith(wanted)]
     if len(found) != 1:
-        raise RoostError("No task you started has the ID %r; one merged, retired or discarded is gone" % wanted)
+        raise RoostError("No task started from your offers has the ID %r; one merged, retired or discarded "
+                         "is gone" % wanted)
     return found
 
 
@@ -4349,10 +4053,10 @@ def read_tasks(store, task_id, wanted=None):
         tasks = started_by(store, task_id, wanted)
         reconcile(store, tasks)
     if not tasks:
-        return "You haven't started any tasks."
+        return "No task has started from your offers."
     said = []
     for task in tasks:
-        status = shown_status(task)
+        status = task.get("status")
         line = "%s, ID %s, on branch %s: %s." % (task.get("name"), task["id"], task.get("branch"),
                                                   STATUS_SAID.get(status, status))
         reply = last_message(task)
@@ -4377,13 +4081,12 @@ def message_task(store, task_id, wanted, message):
         # Or, for an agent at its prompt while its work goes on in the
         # background, then too.
         waits = ("ready", "background") if getattr(agent_for(task), "prompt_in_background", False) else ("ready",)
-        # As read_task says it, as waiting on the user while it offers a task.
-        status = shown_status(task)
+        status = task.get("status")
         if status not in waits:
             raise RoostError("%s is %s, and gets a message only while it waits for a prompt"
                              % (task.get("name"), STATUS_SAID.get(status, status)))
         parent = store.read(task_id)
-        send(task, "From %s, the task that started this one:\n\n%s" % (parent.get("name"), message))
+        send(task, "From %s, the task that offered this one:\n\n%s" % (parent.get("name"), message))
     return "Sent to %s." % task.get("name")
 
 
@@ -6984,20 +6687,18 @@ def require_not_removing(store, task, action):
 
 
 # Kept in task records for the helper's own use, and not sent to Emacs.
-PRIVATE = ("lastReply", "transcript", "requestFrom", "offers", "hookAt")
+PRIVATE = ("lastReply", "transcript", "requestFrom", "hookAt")
 
 
 def outgoing(result):
     """RESULT, a task or a list of them, without the fields only the helper
-    uses, and waiting on you while its agent offers a task."""
+    uses, and with only the offers it can show."""
     for task in result if isinstance(result, list) else [result]:
         if isinstance(task, dict):
-            title = offered(task)
-            if title:
-                task.update(status="permission", request=OFFER_REQUEST + title, offer=title)
-                task.pop("requestCommand", None)
             for field in PRIVATE:
                 task.pop(field, None)
+            if "offers" in task:
+                task["offers"] = task_offers(task)
     return result
 
 
@@ -7005,7 +6706,9 @@ TASK_ACTIONS = {
     "resume": lambda store, task, request: resume(store, task, request.get("programStatus"),
                                                         size_options(request)),
     "stop": lambda store, task, request: stop(store, task),
-    "send": lambda store, task, request: send(task, request["text"], request.get("force") is True),
+    # Sent from an offer's draft, as its brief, the offer no longer waits.
+    "send": lambda store, task, request: dismiss_offer(store, send(task, request["text"], request.get("force") is True),
+                                                       text(request.get("offer"))),
     "shell": lambda store, task, request: shell(store, task),
     "attach": lambda store, task, request: attach(store, task, request.get("files")),
     "inspect": lambda store, task, request: inspect(store, task),
@@ -7022,6 +6725,7 @@ TASK_ACTIONS = {
                                                     request.get("dryRun") is True,
                                                     text(request.get("teardown"))),
     "update": lambda store, task, request: update(store, task),
+    "dismiss-offer": lambda store, task, request: dismiss_offer(store, task, text(request.get("offer"))),
 }
 
 

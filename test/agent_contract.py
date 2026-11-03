@@ -67,14 +67,9 @@ PI_API = (r"isIdle\(\): boolean", r"hasPendingMessages\(\): boolean", r"sessionM
           r"interface UIPromptStartEvent \{[^}]*\btitle\?: string",
           r"interface InputEvent \{[^}]*\btext: string[^}]*\bsource: InputSource",
           r"type InputSource = [^;]*\"extension\"",
-          # Roost's tools, and the dialog they ask you with.
+          # Roost's tools.
           r"registerTool<[^>]*>\(tool: ToolDefinition",
-          r"executionMode\?: ToolExecutionMode",
-          r"execute\(toolCallId: string, params: [^,]+, signal: AbortSignal \| undefined, onUpdate: [^,]+, "
-          r"ctx: ExtensionToolContext\)",
-          r"select\(title: string, options: string\[\], opts\?: ExtensionUIDialogOptions\)",
-          r"interface ExtensionUIDialogOptions \{[^}]*\bsignal\?: AbortSignal",
-          r"editor\(title: string, prefill\?: string\)")
+          r"execute\(toolCallId: string, params: [^,]+, signal: AbortSignal \| undefined")
 PI_FLAGS = ("--extension", "--session-dir", "--session")
 
 # OpenCode events, of the kinds Roost's plugin reads, that it does not.

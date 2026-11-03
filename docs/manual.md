@@ -231,44 +231,46 @@ once you've seen it. What you've seen is kept on the task's host, for your
 other machines and the next session.
 
 **Take the tasks an agent offers.** An agent that comes across work outside
-its task, such as a bug in code it read, can offer it as a task of its own.
-It asks in its terminal, with the task's name and the brief it wrote, which
-you can change there, and its task waits on you, as for a permission request
-(`Offers a task: Fix add in calc.py`). Roost sends that task nothing until you
-answer.
+its task, such as a bug in code it read, can offer it as a task of its own,
+and goes on with its own work. The offer waits, dim, under the task whose
+agent made it in the dashboard and sidebar (`Fix add in calc.py  offer`),
+and the agent says in its reply what it offered. It doesn't count as
+waiting on you: the task's own status is as it would be without it.
 
-- **As a new task**, already chosen, starts it in its own worktree, in the
-  same project, with the same agent, command and setup command. It starts
-  from the branch the offering task merges into, merges there too, and has
-  the brief as its prompt.
-- **Here** has the agent do the work in the conversation it offered it from.
-- **Declining it**, where the form lets you, as with Pi's Neither, starts
-  nothing, and the agent won't offer it again unless you ask.
-- **Esc**, closing the question without choosing, starts nothing, and the
-  agent mentions the work in its reply instead.
+Click the offer, or press `RET` on it, to open it as a new task draft,
+filled in: in the same project, with the same agent, starting from the
+branch the offering task merges into and merging there too, named and
+prompted as the agent offered it. Change any of it as in any draft. Its
+header has four buttons:
 
-Codex's form starts its fields empty, so there what you write is added to
-the brief. An answer quicker than anyone reads the question, from the
-agent's own settings, as Codex's under `approval_policy = "never"`, or a key
-you were pressing as it opened, starts nothing either. A task that merges
-into no branch, as one started with the primary checkout on none, or whose
-branch to merge into is gone, offers none.
+- **Create** (`C-c C-c`) starts it in its own worktree, under the task that
+  offered it.
+- **Do it here** (`C-c C-e`) sends the prompt to the offering task's agent
+  as its next prompt, as `e` does.
+- **Later** (`C-c C-k`) closes the draft and leaves the offer waiting.
+- **Dismiss** (`C-c C-d`) drops the offer, and nothing starts.
+
+Telling the agent in its terminal to do the work there works too; the offer
+then waits until you dismiss it. The agent can't start a task itself. A
+task keeps at most three offers waiting, and one offered again by its title
+changes its brief. A task that merges into no branch, as one started with
+the primary checkout on none, or whose branch to merge into is gone, offers
+none.
 
 A task you start this way shows under the one it came from in the dashboard
 and sidebar, and each task's panel names the other. The agent that offered
 it can read how it is doing, with its latest reply, and send it a message.
 The message arrives as that task's next prompt, marked as from the task that
-sent it, and only while that task waits for a prompt. Roost types it into
+offered it, and only while that task waits for a prompt. Roost types it into
 the terminal, so it takes plain text only, and it joins anything you are
 typing there. Claude Code asks you before each message, as for any tool you
 haven't allowed, or in auto mode lets its classifier decide.
 
 The agent has three tools for this, `propose_task`, `read_task` and
-`message_task`: Claude Code and Codex from an MCP server of the helper's, and
-Pi from Roost's extension, as `roost_propose_task` and so on. OpenCode gets
-none until it can show an MCP server's form. How often an agent offers rests
-on the model: Roost tells it to offer only real work, at most once a turn,
-and never one you turned down.
+`message_task`: Claude Code, Codex and OpenCode from an MCP server of the
+helper's, and Pi from Roost's extension, as `roost_propose_task` and so on.
+How often an agent offers rests on the model: Roost tells it to offer only
+real work, at most once a turn, and never one you turned down.
 
 **Keep them in view.** `b` in the dashboard, or `M-x roost-sidebar-mode`, keeps a
 compact task list at the left of every frame, through perspective and tab
@@ -645,7 +647,9 @@ In the new task draft: `C-c C-c` creates, `C-c C-k` cancels, and `C-c C-p`,
 `C-c C-a`, `C-c C-b` and `C-c C-n` change the project, agent, starting ref and
 name. `C-c C-t` starts from a GitHub or GitLab issue (with `gh` or `glab` on
 the project's host) or a Jira work item (with `twg` on this machine). An empty name is derived
-from the prompt; `R` renames the task later.
+from the prompt; `R` renames the task later. In the draft of an agent's offer,
+`C-c C-e` has that agent do it instead, `C-c C-d` dismisses the offer, and
+`C-c C-k` leaves it for later.
 
 Emacs waits up to eleven minutes for a new task's worktree, which a
 repository with gigabytes of Git LFS files can take that long to check
@@ -910,15 +914,11 @@ Each agent runs the helper as an MCP server of its own, for the tasks it
 offers: Claude Code from `--mcp-config`, Codex from `-c mcp_servers.roost`,
 and OpenCode from the inline config that loads its plugin. The agent starts
 it and ends it with itself, so nothing else keeps running. Pi's extension
-runs it for each call. While an offer waits, its server keeps it in the
-task's record apart from the status the agent's hooks keep, and holds a
-lock in the state directory's `offers` folder, which the system lets go of
-however the server ends. So Roost shows the offer until you answer it, or
-the server ends, and the status after it is as the hooks have it. Codex
-gives the server only some of its environment, which Roost adds to with
-tmux's and Git's own, as `XDG_CONFIG_HOME`. What the server runs, as Git
-making a new task's worktree, has neither the agent's terminal nor its
-input, so a checkout that needs a password fails, as one Emacs starts does.
+runs it for each call. An offer is kept in the record of the task that made
+it, apart from its status, through restarts of its agent, until you start
+or dismiss it. Codex gives the server only some of its environment, which
+Roost adds to with where tmux keeps its server. What the server runs has
+neither the agent's terminal nor its input.
 
 Each status, and what Roost makes of it, is in [What a task says](#what-a-task-says).
 
@@ -1079,17 +1079,16 @@ What runs where:
   report, and never approve or decline. The runner and hooks run the
   helper's file with the same Python, without `-I`.
 - Each agent runs the helper as an MCP server, its program and arguments
-  separate, with no shell. Through it, an agent starts a task only once you
-  answer its question in the agent's terminal, and reads and messages only
-  the tasks it started that way. Claude Code's settings for the task allow
-  offering and reading without asking, as an offer asks you itself, and
-  the tools tell Codex the same. A message, which Roost types into the
-  other agent's terminal while that agent waits for a prompt, goes by your
-  permission mode, as any tool you haven't allowed does, and one with a
-  control character, such as Escape, is refused: the terminal would take it
-  as a key. Codex gives the server only some of its environment, and Roost
-  names the rest it needs: where tmux keeps its server, and what tmux copies
-  into a new task's session, such as `SSH_AUTH_SOCK`.
+  separate, with no shell. Through it, an agent offers a task, which only
+  you start, from Roost, and reads and messages only the tasks started from
+  its offers. Claude Code's settings for the task allow offering and
+  reading without asking, as an offer only waits for you, and the tools
+  tell Codex the same. A message, which Roost types into the other agent's
+  terminal while that agent waits for a prompt, goes by your permission
+  mode, as any tool you haven't allowed does, and one with a control
+  character, such as Escape, is refused: the terminal would take it as a
+  key. Codex gives the server only some of its environment, and Roost
+  names the one more it needs: where tmux keeps its server.
 - Claude Code and OpenCode may read one folder outside the task's
   worktree without asking: the task's attachments, under the state
   directory, given to Claude Code as `--add-dir` and to OpenCode as a rule
