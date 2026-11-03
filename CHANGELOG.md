@@ -10,10 +10,10 @@ What each release changes, and what to do when upgrading. Newest first.
   with nothing sent into it until you answer. A task you start this way
   shows under the one it came from in the dashboard and sidebar, and the
   agent that offered it can read how it is doing and send it a message in
-  plain text. Roost gives Claude Code and Codex these tools as an MCP
-  server of the helper's, and Pi through its extension, as
-  `roost_propose_task` and the rest; the agent starts the server and ends
-  it with itself. OpenCode gets them once it shows an MCP server's form,
+  plain text. Roost gives Claude Code and Codex these tools,
+  `propose_task`, `read_task` and `message_task`, as an MCP server of the
+  helper's, and Pi through its extension; the agent starts the server and
+  ends it with itself. OpenCode gets them once it shows an MCP server's form,
   which it doesn't yet. Nothing to do when upgrading: a task gets them when
   its agent next starts.
 - A Claude Code task shows `permission` while an MCP server's form waits

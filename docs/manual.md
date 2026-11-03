@@ -232,37 +232,43 @@ other machines and the next session.
 
 **Take the tasks an agent offers.** An agent that comes across work outside
 its task, such as a bug in code it read, can offer it as a task of its own.
-It asks in its terminal, with the task's name and the whole brief it wrote,
-which you can change there (in Codex's form, which starts its fields empty,
-what you write is added to the brief): start it as a new task, in its own
-worktree, as it is chosen already, or have it done here, in this
-conversation. Close the question without choosing, as with Esc, and the
-agent mentions the work instead, as it does when the question is answered
-sooner than anyone reads it: by its own settings, as Codex's under
-`approval_policy = "never"`, or by a key you were pressing as it opened,
-which starts nothing. Its task waits
-on you meanwhile, as for a permission request
-(`Offers a task: Fix add in calc.py`), and Roost sends it nothing until you
-answer. A task you start this way is in the same project, with the same
-agent, command and setup command, as the task it came from, starts from the
-branch that task merges into, and has the brief as its prompt. A task
-started with the primary checkout on no branch merges into none, and offers
-no task, as does one whose branch to merge into is gone. The dashboard and
-sidebar show it under the task it came from, and each task's panel names the
-other. The agent that offered it can read how the task is doing, with its
-latest reply, and send it a message, which arrives as its next prompt,
-marked as from that task, and only while it waits for one. Roost types it
-into that task's terminal, so it takes plain text only, and it joins
-anything you are typing there. Claude Code treats each message as a tool
-you haven't allowed: it asks you, or in auto mode its classifier decides.
-Roost gives
-the agent these tools as an MCP server of the helper's (Pi's through its
-extension, as `roost_propose_task` and the rest), so an agent that can't
-show an MCP server's form, as OpenCode can't yet, gets none of them. A
-task you start this way merges where the one it came from does. How often
-an agent offers rests on the model: Roost's
-instructions to it say when, and that it should offer only real work, at
-most once a turn.
+It asks in its terminal, with the task's name and the brief it wrote, which
+you can change there, and its task waits on you, as for a permission request
+(`Offers a task: Fix add in calc.py`). Roost sends that task nothing until you
+answer.
+
+- **As a new task**, already chosen, starts it in its own worktree, in the
+  same project, with the same agent, command and setup command. It starts
+  from the branch the offering task merges into, merges there too, and has
+  the brief as its prompt.
+- **Here** has the agent do the work in the conversation it offered it from.
+- **Declining it**, where the form lets you, as with Pi's Neither, starts
+  nothing, and the agent won't offer it again unless you ask.
+- **Esc**, closing the question without choosing, starts nothing, and the
+  agent mentions the work in its reply instead.
+
+Codex's form starts its fields empty, so there what you write is added to
+the brief. An answer quicker than anyone reads the question, from the
+agent's own settings, as Codex's under `approval_policy = "never"`, or a key
+you were pressing as it opened, starts nothing either. A task that merges
+into no branch, as one started with the primary checkout on none, or whose
+branch to merge into is gone, offers none.
+
+A task you start this way shows under the one it came from in the dashboard
+and sidebar, and each task's panel names the other. The agent that offered
+it can read how it is doing, with its latest reply, and send it a message.
+The message arrives as that task's next prompt, marked as from the task that
+sent it, and only while that task waits for a prompt. Roost types it into
+the terminal, so it takes plain text only, and it joins anything you are
+typing there. Claude Code asks you before each message, as for any tool you
+haven't allowed, or in auto mode lets its classifier decide.
+
+The agent has three tools for this, `propose_task`, `read_task` and
+`message_task`: Claude Code and Codex from an MCP server of the helper's, and
+Pi from Roost's extension, as `roost_propose_task` and so on. OpenCode gets
+none until it can show an MCP server's form. How often an agent offers rests
+on the model: Roost tells it to offer only real work, at most once a turn,
+and never one you turned down.
 
 **Keep them in view.** `b` in the dashboard, or `M-x roost-sidebar-mode`, keeps a
 compact task list at the left of every frame, through perspective and tab
