@@ -24,6 +24,10 @@ What each release changes, and what to do when upgrading. Newest first.
   turn the rest of a line around, and Roost names the one it found. To
   rename a task whose name holds one, as pasted from a chat, type its
   name afresh rather than editing the old one.
+- A task panel that `i` showed beside a terminal closes when its task
+  opens there and the panel docks at the right, rather than showing
+  twice. The window goes back to what it showed before, or closes if `i`
+  made it. Nothing to do when upgrading.
 - Each key the task panel names can be clicked, with the words that go
   with it: a click on "m merges it" does what `m` does. The prompt draft
   has Send, Attach and Cancel buttons in its header line, and the pull

@@ -298,7 +298,8 @@ you visit has, so another file's diff, in the same window, leaves it open behind
 set to nil keeps one buffer for all). There `;` writes a note for the agent (more under
 Review in Magit, below). The terminal shows the agent's replies, so the panel leaves them out
 while the terminal is on screen; `i` shows the same panel in the main area,
-with the latest reply after the changes (a click or `RET` opens a link in it). `?` in the panel
+with the latest reply after the changes (a click or `RET` opens a link in it), until
+its task opens there and the panel docks. `?` in the panel
 opens the menu of what you can do with the task. Each key the panel names
 can be clicked too, with the words that go with it: a click on "m merges
 it" does what `m` does there. Add

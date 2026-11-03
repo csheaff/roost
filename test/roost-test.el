@@ -3578,6 +3578,92 @@ terminal's, on a pty.  Skips the test where it can't be made."
            (roost--sync-side-windows)
            (should (roost--task-panel-window))))))))
 
+(ert-deftest roost-a-panel-docking-closes-its-other-windows ()
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let* ((a (roost--cache-task "dev" (roost-test--task)))
+            (b (roost--cache-task "dev" (roost-test--task "1111111111111111")))
+            (roost-workspace nil) (roost-task-panel-mode t)
+            (code (get-buffer-create "*roost-test code*"))
+            (old (get-buffer-create "*roost-test a's terminal*"))
+            (draft (with-current-buffer (get-buffer-create "*roost-test a's draft*")
+                     (setq roost--send-task a)
+                     (current-buffer)))
+            (terminal (selected-window)))
+       (unwind-protect
+           (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 160))
+                     ((symbol-function 'roost--refresh-host) #'ignore)
+                     ((symbol-function 'roost--terminal-task) (lambda (buffer) (and (eq buffer old) a))))
+             (set-frame-parameter nil 'roost-task (roost--key a))
+             (roost--sync-side-windows)
+             ;; B's panel, as `i' shows it from the sidebar: below the
+             ;; terminal, and in place of the code beside it.
+             (let* ((other (split-window-right))
+                    (below (display-buffer (roost--task-info-buffer b) '(display-buffer-below-selected)))
+                    (beside (with-selected-window other
+                              (switch-to-buffer code)
+                              (display-buffer (roost--task-info-buffer b) '(display-buffer-same-window)))))
+               (should (eq (window-buffer below) (roost--task-info-buffer b)))
+               (should (eq (window-buffer beside) (roost--task-info-buffer b)))
+               ;; B opens in the terminal's window: its panel docks, and only there.
+               (set-frame-parameter nil 'roost-task (roost--key b))
+               (roost--sync-side-windows)
+               (should (eq (window-buffer (roost--task-panel-window)) (roost--task-info-buffer b)))
+               (should (equal (get-buffer-window-list (roost--task-info-buffer b) 'nomini)
+                              (list (roost--task-panel-window))))
+               (should-not (window-live-p below))
+               (should (eq (window-buffer beside) code))
+               (should (eq (selected-window) terminal))
+               ;; Nor back to a terminal it took the place of: A's, beside B's.
+               (set-frame-parameter nil 'roost-task (roost--key a))
+               (roost--sync-side-windows)
+               (with-selected-window beside
+                 (switch-to-buffer old)
+                 (display-buffer (roost--task-info-buffer b) '(display-buffer-same-window)))
+               (set-frame-parameter nil 'roost-task (roost--key b))
+               (roost--sync-side-windows)
+               (should-not (window-live-p beside))
+               (should-not (get-buffer-window old))
+               (should (eq (selected-window) terminal))
+               (cl-flet ((over (shown)
+                           (set-frame-parameter nil 'roost-task (roost--key a))
+                           (roost--sync-side-windows)
+                           (let ((window (split-window-right)))
+                             (with-selected-window window
+                               (switch-to-buffer shown)
+                               (display-buffer (roost--task-info-buffer b) '(display-buffer-same-window)))
+                             window)))
+                 ;; Nor to A's draft, which waits for A to open in the frame again.
+                 (over draft)
+                 (set-frame-parameter nil 'roost-task (roost--key b))
+                 (roost--sync-side-windows)
+                 (should-not (get-buffer-window draft))
+                 (should (memq (selected-frame) (buffer-local-value 'roost--set-aside draft)))
+                 (should (eq (selected-window) terminal))
+                 ;; Read in a window it took the place of: the window goes back
+                 ;; to what it showed, and you to the panel, docked.
+                 (let ((window (over code)))
+                   (select-window window)
+                   (set-frame-parameter nil 'roost-task (roost--key b))
+                   (roost--sync-side-windows)
+                   (should (eq (window-buffer window) code))
+                   (should (eq (selected-window) (roost--task-panel-window)))
+                   (delete-window window)
+                   (select-window terminal)))
+               ;; Read in its window when it docks, as when the frame widens:
+               ;; you are left in it, docked.
+               (set-frame-parameter nil 'roost-task (roost--key a))
+               (roost--sync-side-windows)
+               (select-window (display-buffer (roost--task-info-buffer a) '(display-buffer-below-selected)))
+               (delete-window (roost--task-panel-window))
+               (roost--sync-side-windows)
+               (should (eq (selected-window) (roost--task-panel-window)))
+               (should (equal (get-buffer-window-list (roost--task-info-buffer a) 'nomini)
+                              (list (roost--task-panel-window))))))
+         ;; Named for two tasks of a name, which later tests aren't.
+         (mapc #'kill-buffer (list code old draft (roost--task-info-buffer a) (roost--task-info-buffer b))))))))
+
 (ert-deftest roost-task-panel-needs-room-in-the-widest-main-window ()
   (roost-test--isolated
    (save-window-excursion

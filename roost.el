@@ -10676,6 +10676,36 @@ any; its columns count as free."
          roost-task-panel-width)
       80))
 
+(defun roost--close-extra-panels (task buffer docked)
+  "Close the selected frame's main windows on TASK's panel BUFFER, now DOCKED.
+Such as the one \\<roost-dashboard-mode-map>\\[roost-task-info] showed below a terminal before TASK opened
+there.  Each goes as `quit-window' would take it, though not to a
+terminal, such as the one TASK opened in place of, nor to another task's
+draft, which waits for its task as when TASK took the frame.  If you
+were in one, you are now in DOCKED."
+  (when-let* ((docked)
+              (extra (seq-filter (lambda (window) (eq (window-buffer window) buffer))
+                                 (roost--main-windows))))
+    (let ((selected (selected-window))
+          (switch-to-prev-buffer-skip
+           (lambda (_window shown _bury-or-kill)
+             (or (eq shown buffer) (roost--terminal-task shown) (roost--draft-task shown)))))
+      (dolist (window extra)
+        ;; Buried, the panel is left out of what the window goes back to.
+        (quit-restore-window window 'bury)
+        ;; What it showed before, restored as it was, can be a terminal
+        ;; that has moved on, such as the one TASK opened in place of.
+        (when (and (window-live-p window) (roost--terminal-task (window-buffer window)))
+          (if (eq (window-deletable-p window) t)
+              (delete-window window)
+            (switch-to-prev-buffer window))))
+      (unless (roost--workspace-backend)
+        (roost--set-aside-drafts task))
+      ;; Quitting selects the window you were in when the panel showed.
+      (let ((window (if (and (window-live-p selected) (not (memq selected extra))) selected docked)))
+        (unless (eq window (selected-window))
+          (select-window window))))))
+
 (defun roost--sync-side-windows ()
   "Add or remove the selected frame's sidebar and task panel to match.
 See `roost-sidebar-mode' and `roost-task-panel-mode'.  This only adds and
@@ -10698,8 +10728,9 @@ scrolled stays where you left it."
             ((and panel (equal (buffer-local-value 'roost--buffer-task-key (window-buffer panel))
                                (roost--key task))))
             (t
-             (let ((buffer (roost--task-info-buffer task)))
-               (roost--show-side-window buffer 'right roost-task-panel-width)
+             (let* ((buffer (roost--task-info-buffer task))
+                    (docked (roost--show-side-window buffer 'right roost-task-panel-width)))
+               (roost--close-extra-panels task buffer docked)
                ;; Lay it out for its window now rather than at the next resize.
                (with-current-buffer buffer (roost--render-task-info)))
              (unless (assq 'diff task)

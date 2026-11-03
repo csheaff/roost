@@ -600,7 +600,10 @@ class Run:
         if task and len(frames) == 1 and qa_sidebar(screen) and screen.get("marked") != task["key"]:
             problems.append("The sidebar marks %s, not %s, the frame's task (%s)"
                             % (screen.get("marked"), task["key"], task["name"]))
+        docked = {(window.get("frame"), window["buffer"]) for window in screen["windows"] if window.get("side")}
         for window in screen["windows"]:
+            if not window.get("side") and (window.get("frame"), window["buffer"]) in docked:
+                problems.append("%s shows twice in a frame: docked, and beside it" % window["buffer"])
             if window.get("terminal") and not window.get("child"):
                 own = (frames.get(window.get("frame")) or None) if window.get("frame") in frames else task
                 if not own:
