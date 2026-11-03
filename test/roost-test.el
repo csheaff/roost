@@ -11196,6 +11196,74 @@ With INITIAL, the box must start out holding it."
          (when (get-buffer roost--compose-buffer)
            (kill-buffer roost--compose-buffer)))))))
 
+(ert-deftest roost-an-offer-draft-acts-once-and-stays-its-own ()
+  ;; While its prompt goes to the agent, or the offer is dismissed, nothing
+  ;; else of it can go too, and a failure gives its buttons back; moved
+  ;; to another project, it is a draft of its own there.
+  (roost-test--isolated
+   (let ((default-directory "/tmp/") (xterm-mouse-mode t) pending created
+         (offer '((id . "0a1b2c3d") (title . "Fix add in calc.py") (brief . "add() subtracts."))))
+     (save-window-excursion
+       (delete-other-windows)
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--act)
+                      (lambda (_task action &optional _parameters callback failure)
+                        (setq pending (list action callback failure))))
+                     ((symbol-function 'roost--create-task)
+                      (lambda (&rest args) (setq created args))))
+             (let ((task (roost--cache-task "dev" (append `((name . "budget") (repo . "/srv/ledger")
+                                                            (integrationBranch . "main") (live . t)
+                                                            (offers ,offer))
+                                                          (roost-test--task "1111111111111111" "ready")))))
+               (dolist (command '(roost-compose-here roost-compose-dismiss))
+                 (roost--compose-offer task offer)
+                 (set-buffer roost--compose-buffer)
+                 (funcall command)
+                 (should pending)
+                 ;; Once only, and neither another way nor created meanwhile.
+                 (dolist (again '(roost-compose-here roost-compose-dismiss roost-compose-submit))
+                   (should-error (funcall again) :type 'user-error))
+                 (should-not created)
+                 ;; Failed, it can be tried again, and says why.
+                 (funcall (nth 2 pending) "tmux is gone")
+                 (should-not roost--compose-submitting)
+                 (should (string-match-p "tmux is gone" roost--draft-note))
+                 (setq pending nil)
+                 (kill-buffer roost--compose-buffer))
+               ;; In another project, the draft is no longer the offer's.
+               (roost--compose-offer task offer)
+               (set-buffer roost--compose-buffer)
+               (cl-letf (((symbol-function 'roost--choose-from) (lambda (&rest _) "/ssh:other:/srv/notes/"))
+                         ((symbol-function 'roost--compose-integration) (lambda (&rest _) "main")))
+                 (roost-compose-set-project))
+               (should-not (plist-get roost--compose-fields :offer))
+               (should (string-prefix-p "New task\n" (buffer-string)))
+               (should (string-search "Cancel" (roost--compose-header)))
+               (roost-compose-submit)
+               (should-not (assq 'parent (car (last created))))
+               ;; Its offer still waits.
+               (should (roost--offers (gethash '("dev" "1111111111111111") roost--tasks)))))
+         (when (get-buffer roost--compose-buffer)
+           (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-a-reply-from-before-an-offer-changed-keeps-it-as-it-is ()
+  ;; An offer is no event of the agent's: the task's updatedAt stays, and
+  ;; its own stamp says which reply knows it better.
+  (roost-test--isolated
+   (let ((offer '((id . "0a1b2c3d") (title . "Fix add") (brief . "add() subtracts."))))
+     (roost--cache-task "dev" (append `((offers ,offer) (offersAt . "2026-11-03T10:00:01.000002+00:00"))
+                                      (roost-test--task "a" "ready")))
+     ;; Read before it was offered.
+     (roost--cache-task "dev" (append '((offersAt . "2026-11-03T10:00:00+00:00")) (roost-test--task "a" "ready")))
+     (should (roost--offers (gethash '("dev" "a") roost--tasks)))
+     ;; Dismissed since.
+     (roost--cache-task "dev" (append '((offersAt . "2026-11-03T10:00:02+00:00")) (roost-test--task "a" "ready")))
+     (should-not (roost--offers (gethash '("dev" "a") roost--tasks)))
+     ;; And a reply read before that brings it back no more.
+     (roost--cache-task "dev" (append `((offers ,offer) (offersAt . "2026-11-03T10:00:01.000002+00:00"))
+                                      (roost-test--task "a" "ready")))
+     (should-not (roost--offers (gethash '("dev" "a") roost--tasks))))))
+
 (ert-deftest roost-a-note-edited-while-it-is-sent-stays ()
   (roost-test--isolated
    (let ((task (roost--cache-task "dev" (roost-test--task "a"))) done)

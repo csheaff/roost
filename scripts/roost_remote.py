@@ -3962,26 +3962,36 @@ def task_offers(task):
 
 
 def set_offers(task, offers):
-    """Leave OFFERS as TASK's offers, dated just after the change before
-    rather than now, so Emacs takes TASK as newer than a reply read before:
-    Claude records an interrupt in its transcript and runs no hook, and one
-    since then must still count as newer than this."""
+    """Leave OFFERS as TASK's offers. `offersAt` tells Emacs a reply read
+    before this from one read since; `updatedAt` stays as the agent's last
+    event left it, as an offer is none, so you have seen what you had."""
     if offers:
         task["offers"] = offers
     else:
         task.pop("offers", None)
-    stamp = parse_time(task.get("updatedAt"))
-    task["updatedAt"] = (stamp + datetime.timedelta(microseconds=1)).isoformat() if stamp else now()
+    task["offersAt"] = now()
+
+
+def control_character(value):
+    """The first character of VALUE that a terminal takes as a key, other
+    than a line break or a tab, or None."""
+    return next((c for c in value if ord(c) < 32 and c not in "\n\t" or 127 <= ord(c) < 160), None)
 
 
 def propose_task(store, task_id, title, brief):
     """Offer the task TITLE, with BRIEF, as TASK_ID's agent asks: it waits
     under that task in Roost for you, and its agent goes on meanwhile."""
-    title, brief = (text(title) or "").strip(), (text(brief) or "").strip()
+    title, brief = (text(title) or "").strip(), (text(brief) or "").replace("\r\n", "\n").strip()
     if not title or not brief:
         raise RoostError("Give the task a title and a brief")
     # Refused now, rather than once you have chosen to start it.
     task_name(title)
+    # Done where it was offered, the brief is pasted into its agent's
+    # terminal, where one, as Escape, would end the paste and press the rest.
+    hidden = control_character(brief)
+    if hidden:
+        raise RoostError("The brief holds U+%04X, a control character its terminal would take as a key; "
+                         "write it as plain text" % ord(hidden))
     if len(brief.encode()) > PROMPT_ARGUMENT_LIMIT:
         raise RoostError("The brief is %d KB, and a task can start with at most %d KB; shorten it"
                          % (-(-len(brief.encode()) // 1024), PROMPT_ARGUMENT_LIMIT // 1024))
@@ -4000,12 +4010,18 @@ def propose_task(store, task_id, title, brief):
         # Its agent may be gone already, as when you stopped the task.
         if task["status"] in ("stopped", "retired"):
             raise RoostError("The task is %s" % task["status"])
-        # One offered again by its title is its agent's word on it now.
-        offers = [offer for offer in task_offers(task) if offer["title"] != title]
-        if len(offers) >= OFFER_LIMIT:
+        offers = task_offers(task)
+        again = next((offer for offer in offers if offer["title"] == title), None)
+        if again:
+            # Its agent's word on it now, under the ID a draft open of it
+            # has, so that the draft still starts or ends it.
+            again.update(brief=brief, at=now())
+        elif len(offers) >= OFFER_LIMIT:
             raise RoostError("%d offers of this task already wait for the user; mention this work in your "
                              "reply instead" % len(offers))
-        set_offers(task, offers + [dict(id=uuid.uuid4().hex[:8], title=title, brief=brief, at=now())])
+        else:
+            offers.append(dict(id=uuid.uuid4().hex[:8], title=title, brief=brief, at=now()))
+        set_offers(task, offers)
         store.save(task)
     return ("Offered. It waits in Roost under this task, where the user can start it as a task of its own, "
             "have you do it here, or dismiss it. Say in your reply what you offered, and don't do the work "

@@ -976,6 +976,21 @@ host measured, such as Git statistics, is as new as anything."
             kept
           (assq-delete-all 'prStatus kept))))))
 
+(defun roost--newer-offers (task old)
+  "TASK, with OLD's offers when they changed since TASK was read.
+An offer made, started or dismissed is no event of the agent's, which
+`roost--newer-events' goes by, and leaves `updatedAt' as it was, so you
+have still seen the task: this keeps a reply read before the change from
+bringing back an offer since started or dismissed, or hiding a new one."
+  (let ((changed (roost--field old 'offersAt)))
+    (if (not (and (stringp changed)
+                  (string< (or (roost--field task 'offersAt) "") changed)))
+        task
+      (dolist (field '(offers offersAt) task)
+        (setq task (assq-delete-all field (copy-sequence task)))
+        (when-let* ((cell (assq field old)))
+          (setq task (cons cell task)))))))
+
 (defun roost--newer-name (task old)
   "TASK, with OLD's name when OLD was renamed since TASK was read.
 A reply its host read before you renamed the task, such as one to
@@ -1008,7 +1023,8 @@ must a reply with a newer look lose it for an older agent event."
   (when-let* ((old (gethash (roost--key task) roost--tasks)))
     ;; Looks and the agent's events move apart: the newer of each counts.
     (let ((looked (roost--newer-look old task)))
-      (setq task (roost--newer-look (roost--newer-name (roost--newer-events task old) old) looked))))
+      (setq task (roost--newer-look (roost--newer-offers (roost--newer-name (roost--newer-events task old) old) old)
+                                    looked))))
   (let* ((key (roost--key task))
          (old (gethash key roost--tasks))
          (had-merged (and old (roost--pr-merges old)))
@@ -2755,7 +2771,9 @@ Nil too on another host, where reading it would hold up the draft."
           (cons directory (and directory (roost--checkout-branch directory)))))
   (cdr roost--compose-checkout-branch))
 (defvar-local roost--compose-submitting nil
-  "Non-nil while the drafted task is being created.")
+  "Non-nil while the drafted task is being created.
+A string says what else of the draft's is under way, as its offer
+being sent or dismissed.")
 
 (defvar-local roost--compose-asked nil
   "The project directory and the ID the draft last asked to create its task with.
@@ -3457,13 +3475,21 @@ then for a folder there, starting above the project used last on it."
       (setq choice (roost--read-project-directory)))
     (when choice
       (let* ((directory (file-name-as-directory (expand-file-name choice)))
-             (base (plist-get roost--compose-fields :base)))
+             (base (plist-get roost--compose-fields :base))
+             ;; In another project, maybe on another host, a task of its own
+             ;; rather than the offer's, which still waits under its task.
+             (leaves (and (plist-get roost--compose-fields :offer)
+                          (not (equal directory (plist-get roost--compose-fields :directory))))))
         ;; The starting ref now names a ref of this project, not the task's.
         (setq roost--compose-fields
               (thread-first roost--compose-fields
                             (plist-put :directory directory)
                             (plist-put :integration (and base (roost--compose-integration directory base)))
-                            (plist-put :source nil))))
+                            (plist-put :source nil)))
+        (when leaves
+          (setq roost--compose-fields
+                (thread-first roost--compose-fields (plist-put :offer nil) (plist-put :offer-brief nil)))
+          (message "This draft is no longer the offer's, which still waits under its task")))
       (roost--compose-render))))
 
 (defun roost-compose-set-agent ()
@@ -3668,6 +3694,12 @@ waits under its task to be opened again."
       (when offer
         (message "The offer waits under its task; open it again from its row")))))
 
+(defun roost--compose-busy (creating)
+  "Refuse while the draft is being created, said as CREATING, or its offer
+sent or dismissed, which would do the work twice, or both ways."
+  (when roost--compose-submitting
+    (user-error "Already %s" (if (stringp roost--compose-submitting) roost--compose-submitting creating))))
+
 (defun roost--compose-offering-task ()
   "The task whose agent made the offer this draft is of."
   (let ((offer (or (plist-get roost--compose-fields :offer) (user-error "This draft isn't of an offer"))))
@@ -3679,15 +3711,24 @@ waits under its task to be opened again."
 It is no longer listed under the task that offered it, and nothing starts."
   (interactive (list last-nonmenu-event))
   (roost--draft-clicked event 'roost-compose-mode)
+  (roost--compose-busy "creating the task")
   (let ((task (roost--compose-offering-task))
         (offer (plist-get roost--compose-fields :offer))
         (buffer (current-buffer)))
+    (setq roost--compose-submitting "dismissing the offer"
+          roost--draft-note " Dismissing the offer…")
     (roost--act task "dismiss-offer" (list (cons 'offer (cadr offer)))
                 (lambda (_task)
                   (when (buffer-live-p buffer)
                     (quit-windows-on buffer t)
                     (when (buffer-live-p buffer) (kill-buffer buffer)))
-                  (message "Dismissed %s's offer" (roost--field task 'name))))))
+                  (message "Dismissed %s's offer" (roost--field task 'name)))
+                (lambda (err)
+                  (message "Roost could not dismiss the offer: %s" err)
+                  (when (buffer-live-p buffer)
+                    (with-current-buffer buffer
+                      (setq roost--compose-submitting nil)
+                      (roost--draft-error "Could not dismiss it" err 'roost-compose-dismiss)))))))
 
 (defun roost-compose-here (&optional event)
   "Have the task whose agent offered this draft's work do it, as written.
@@ -3696,6 +3737,7 @@ longer waits.  EVENT, a click on the draft's Do it here button, says
 which draft."
   (interactive (list last-nonmenu-event))
   (roost--draft-clicked event 'roost-compose-mode)
+  (roost--compose-busy "creating the task")
   (let ((task (roost--compose-offering-task))
         (offer (plist-get roost--compose-fields :offer))
         (prompt (roost--compose-prompt))
@@ -3706,12 +3748,24 @@ which draft."
       (user-error "%s's agent isn't running; resume it first" (roost--field task 'name)))
     ;; Sending while its agent may be at a prompt asks first.
     (roost--quit-questions-here #'roost-compose-here)
-    (roost--send-text task prompt
-                      (lambda (_task)
-                        (when (buffer-live-p buffer)
-                          (quit-windows-on buffer t)
-                          (when (buffer-live-p buffer) (kill-buffer buffer))))
-                      nil nil (list (cons 'offer (cadr offer))))))
+    (setq roost--compose-submitting (format "sending it to %s" (roost--field task 'name))
+          roost--draft-note (format " Sending it to %s…" (roost--field task 'name)))
+    (condition-case err
+        (roost--send-text task prompt
+                          (lambda (_task)
+                            (when (buffer-live-p buffer)
+                              (quit-windows-on buffer t)
+                              (when (buffer-live-p buffer) (kill-buffer buffer))))
+                          (lambda (err)
+                            (message "Roost could not send to %s: %s" (roost--field task 'name) err)
+                            (when (buffer-live-p buffer)
+                              (with-current-buffer buffer
+                                (setq roost--compose-submitting nil)
+                                (roost--draft-error "Could not send it" err 'roost-compose-here))))
+                          nil (list (cons 'offer (cadr offer))))
+      ;; A declined confirmation leaves the draft ready to send again.
+      (quit (setq roost--compose-submitting nil roost--draft-note nil) (signal (car err) (cdr err)))
+      (error (setq roost--compose-submitting nil roost--draft-note nil) (signal (car err) (cdr err))))))
 
 (defun roost-compose-submit (&optional event)
   "Create the drafted task.  The draft is kept if creation fails.
@@ -3726,8 +3780,7 @@ EVENT, a click on the draft's Create button, says which draft."
       (user-error "Choose a project first (%s)" (substitute-command-keys "\\[roost-compose-set-project]")))
     (when (string-empty-p name)
       (user-error "Write a prompt, or name the task (%s)" (substitute-command-keys "\\[roost-compose-set-name]")))
-    (when roost--compose-submitting
-      (user-error "Already creating %s" name))
+    (roost--compose-busy (format "creating %s" name))
     ;; The project's setup command can be asked about.
     (roost--quit-questions-here #'roost-compose-submit)
     (let* ((directory (plist-get fields :directory))

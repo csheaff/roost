@@ -2671,30 +2671,35 @@ class Lifecycle(unittest.TestCase):
     def test_an_offer_waits_under_its_task_while_its_agent_goes_on(self):
         parent = self.create(name="parent")
         store = roost.Store(str(self.state))
+        # One you have seen since its agent's last event.
+        record = store.read(parent["id"])
+        store.save(dict(record, seen=record["updatedAt"]))
         before = store.read(parent["id"])
-        said = self.call(parent, "propose_task", title="Document calc", brief="Write the README's section on calc.")
+        said = self.call(parent, "propose_task", title="Document calc", brief="Write the README's\r\nsection on calc.")
         self.assertIn("It waits in Roost under this task", said["content"][0]["text"])
         self.assertIn("you can't start it yourself", said["content"][0]["text"])
-        # Nothing else of the task changes, and nothing starts. It is dated
-        # just after the change before: an interrupt Claude recorded with
-        # no hook still counts as newer.
+        # Nothing else of the task changes, and nothing starts: an offer is
+        # no event of its agent's, so you have still seen it. Its own stamp
+        # tells Emacs a reply read before it from one read since.
         record = store.read(parent["id"])
-        self.assertEqual({key: record.get(key) for key in ("status", "request", "lastEvent")},
-                         {key: before.get(key) for key in ("status", "request", "lastEvent")})
-        self.assertEqual(roost.parse_time(record["updatedAt"]) - roost.parse_time(before["updatedAt"]),
-                         datetime.timedelta(microseconds=1))
+        self.assertEqual({key: record.get(key) for key in ("status", "request", "lastEvent", "updatedAt", "seen")},
+                         {key: before.get(key) for key in ("status", "request", "lastEvent", "updatedAt", "seen")})
+        self.assertTrue(roost.seen_since_last_event(record))
+        self.assertGreater(record["offersAt"], before["updatedAt"])
         [offer] = record["offers"]
         self.assertRegex(offer["id"], r"^[0-9a-f]{8}$")
-        self.assertEqual((offer["title"], offer["brief"]), ("Document calc", "Write the README's section on calc."))
+        self.assertEqual((offer["title"], offer["brief"]), ("Document calc", "Write the README's\nsection on calc."))
         listed = self.request("list")["result"]
         self.assertEqual([(t["id"], t["offers"]) for t in listed], [(parent["id"], [offer])])
-        # Offered again by its title, its brief changes; a few wait at most.
+        # Offered again by its title, its brief changes, under the ID a
+        # draft open of it has; a few wait at most.
         self.offered(parent, brief="Write the README's section on calc, with an example.")
         self.offered(parent, title="Test calc")
         self.offered(parent, title="Lint calc")
         offers = store.read(parent["id"])["offers"]
         self.assertEqual([o["title"] for o in offers], ["Document calc", "Test calc", "Lint calc"])
-        self.assertEqual(offers[0]["brief"], "Write the README's section on calc, with an example.")
+        self.assertEqual((offers[0]["id"], offers[0]["brief"]),
+                         (offer["id"], "Write the README's section on calc, with an example."))
         said = self.call(parent, "propose_task", title="Type calc", brief="Add type hints.")
         self.assertTrue(said["isError"])
         self.assertIn("3 offers of this task already wait", said["content"][0]["text"])
@@ -2749,8 +2754,10 @@ class Lifecycle(unittest.TestCase):
         before = store.read(parent["id"])
         reply = self.request("dismiss-offer", id=parent["id"], offer=first["id"])
         self.assertEqual(reply["result"]["offers"], [second])
-        self.assertEqual(roost.parse_time(store.read(parent["id"])["updatedAt"]) - roost.parse_time(before["updatedAt"]),
-                         datetime.timedelta(microseconds=1))
+        # No event of its agent's, as making it was none.
+        after = store.read(parent["id"])
+        self.assertEqual(after["updatedAt"], before["updatedAt"])
+        self.assertGreater(after["offersAt"], before["offersAt"])
         # Again, or one that never was: nothing changes.
         for offer in (first["id"], "ffffffff", None):
             with self.subTest(offer=offer):
@@ -2778,13 +2785,23 @@ class Lifecycle(unittest.TestCase):
         # Nor a title a terminal would take as keys, or that turns a row around.
         for title, brief in (("two\nlines", "Write it."), ("Docs", "x" * (roost.PROMPT_ARGUMENT_LIMIT + 1)),
                              ("Docs", "  "), ("...", "Write it."), ("Fix \u009b2J add", "Write it."),
-                             ("Fix ‮add", "Write it.")):
+                             ("Fix \u202eadd", "Write it.")):
             with self.subTest(title=title, brief=brief[:20]):
                 self.assertTrue(self.call(parent, "propose_task", title=title, brief=brief)["isError"])
                 self.assertNotIn("offers", store.read(parent["id"]))
         # Naming the mark, which may not show, as in a name pasted with it.
         with self.assertRaisesRegex(roost.RoostError, r"U\+2068"):
-            roost.task_name("⁨Fix parser⁩ v2")
+            roost.task_name("\u2068Fix parser\u2069 v2")
+        # Nor a brief that would end the paste Do it here makes of it and
+        # press the rest, as Escape does; lines and tabs are its own.
+        for brief in ("Fix it.\u001b[201~\u0003!touch pwned\r", "Fix\u009b it.", "Fix it.\u007f"):
+            with self.subTest(brief=brief):
+                said = self.call(parent, "propose_task", title="Docs", brief=brief)
+                self.assertTrue(said["isError"])
+                self.assertIn("control character", said["content"][0]["text"])
+        self.assertNotIn("offers", store.read(parent["id"]))
+        self.assertNotIn("isError", self.call(parent, "propose_task", title="Docs", brief="One\n\tTwo"))
+        store.save({key: value for key, value in store.read(parent["id"]).items() if key != "offers"})
         # From a task whose branch to merge into is gone, as one deleted once
         # merged, there is none to start from.
         self.git("branch", "develop")
