@@ -259,16 +259,12 @@ none.
 
 A task you start this way shows under the one it came from in the dashboard
 and sidebar, and each task's panel names the other. The agent that offered
-it can read how it is doing, with its latest reply, and send it a message.
-The message arrives as that task's next prompt, marked as from the task that
-offered it, and only while that task waits for a prompt. Roost types it into
-the terminal, so it takes plain text only, and it joins anything you are
-typing there. Claude Code asks you before each message, as for any tool you
-haven't allowed, or in auto mode lets its classifier decide.
+it can read how it is doing, with its latest reply, but sends it nothing: to
+pass something on, send it yourself, with `e`.
 
-The agent has three tools for this, `propose_task`, `read_task` and
-`message_task`: Claude Code, Codex and OpenCode from an MCP server of the
-helper's, and Pi from Roost's extension, as `roost_propose_task` and so on.
+The agent has two tools for this, `propose_task` and `read_task`: Claude
+Code, Codex and OpenCode from an MCP server of the helper's, and Pi from
+Roost's extension, as `roost_propose_task` and `roost_read_task`.
 How often an agent offers rests on the model: Roost tells it to offer only
 real work, at most once a turn, and never one you turned down.
 
@@ -1080,15 +1076,14 @@ What runs where:
   helper's file with the same Python, without `-I`.
 - Each agent runs the helper as an MCP server, its program and arguments
   separate, with no shell. Through it, an agent offers a task, which only
-  you start, from Roost, and reads and messages only the tasks started from
-  its offers. Claude Code's settings for the task allow offering and
-  reading without asking, as an offer only waits for you, and the tools
-  tell Codex the same. A message, which Roost types into the other agent's
-  terminal while that agent waits for a prompt, goes by your permission
-  mode, as any tool you haven't allowed does, and one with a control
-  character, such as Escape, is refused: the terminal would take it as a
-  key. Codex gives the server only some of its environment, and Roost
-  names the one more it needs: where tmux keeps its server.
+  you start, from Roost, and reads only the tasks started from its offers;
+  it types into no terminal. A brief that holds a control character, such
+  as Escape, is refused, as Do it here would type it into the agent's
+  terminal, which would take it as a key. Claude Code's settings for the
+  task allow offering and reading without asking, as an offer only waits
+  for you and reading changes nothing, and the tools tell Codex the same.
+  Codex gives the server only some of its environment, and Roost names the
+  one more it needs: where tmux keeps its server.
 - Claude Code and OpenCode may read one folder outside the task's
   worktree without asking: the task's attachments, under the state
   directory, given to Claude Code as `--add-dir` and to OpenCode as a rule

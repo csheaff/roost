@@ -222,16 +222,18 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(tmux_says(shell, "#{pane_current_path}"), worktree)
 
         # Offered by its agent, under a name and with a brief the agent
-        # chose, through the helper's MCP server, started from that offer,
-        # then sent a message.
+        # chose, through the helper's MCP server, and started from that
+        # offer; another done where it was offered, its brief sent as the
+        # agent's next prompt.
         title, brief = hostile("offer"), hostile("brief") + "\n" + hostile("brief-second")
         child = reply_to(self.started(task, title=title, brief=brief, branchPrefix=prefix), brief)
         self.assertEqual((child["name"], child["prompt"], child["integrationBranch"]), (title, brief, branch))
         self.assertTrue(child["branch"].startswith(prefix), child["branch"])
         self.assertEqual(tmux_says(child["windowId"], "#{window_name}"), title)
-        said = hostile("message")
-        self.assertNotIn("isError", self.call(task, "message_task", task=child["id"], message=said))
-        reply_to(child, said)
+        here = self.offered(task, title=hostile("here"), brief=hostile("here-brief"))
+        self.assertTrue(self.request("send", id=task["id"], text=here["brief"], offer=here["id"])["ok"])
+        reply_to(task, here["brief"])
+        self.assertNotIn("offers", roost.Store(str(self.state)).read(task["id"]))
         told = self.request("discard", id=child["id"], dryRun=True)["result"]["discard"]
         self.assertTrue(self.request("discard", id=child["id"], expect=told["commit"])["ok"])
 
@@ -2622,14 +2624,13 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(replies[1]["result"]["protocolVersion"], "2025-11-25")
         self.assertIn("offer it with propose_task", replies[1]["result"]["instructions"])
         tools = {tool["name"]: tool for tool in replies[2]["result"]["tools"]}
-        self.assertEqual(list(tools), ["propose_task", "read_task", "message_task"])
+        self.assertEqual(list(tools), ["propose_task", "read_task"])
         # Said of each, for an agent that asks before a tool unless told it
         # changes nothing, as Codex does: an offer only waits for you, and
-        # reading changes nothing, but a message is typed into a terminal.
+        # reading changes nothing.
         self.assertFalse(tools["propose_task"]["annotations"]["destructiveHint"])
         self.assertFalse(tools["propose_task"]["annotations"]["openWorldHint"])
         self.assertTrue(tools["read_task"]["annotations"]["readOnlyHint"])
-        self.assertNotIn("annotations", tools["message_task"])
         self.assertEqual(replies[3]["result"]["content"][0]["text"], "No task has started from your offers.")
         self.assertEqual(replies[4]["result"], {})
 
@@ -2815,40 +2816,23 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(store.read(parent["id"])["status"], "stopped")
         self.assertNotIn("offers", store.read(parent["id"]))
 
-    def test_an_agent_reads_and_messages_only_the_tasks_started_from_its_offers(self):
+    def test_an_agent_reads_only_the_tasks_started_from_its_offers(self):
         parent = self.create(name="parent")
         other = self.create(name="other")
         child = self.started(parent)
-        # Once its turn on the brief is over, not only once it has started.
+        # Once its turn on the brief is over, with its reply.
         self.wait(child, "ready", "Stop")
-        # All of them, also for an ID left empty, as an agent may send it.
-        for arguments in ({}, dict(task="")):
-            self.assertIn("Document calc, ID %s" % child["id"],
-                          self.call(parent, "read_task", **arguments)["content"][0]["text"])
-        self.assertTrue(self.call(parent, "message_task", task="", message="Also the tests")["isError"])
-        # Nor one with nothing to say, which would start a turn of its header alone.
-        self.assertTrue(self.call(parent, "message_task", task=child["id"], message=" \n ")["isError"])
-        for name, arguments in (("read_task", dict(task=other["id"])),
-                                ("message_task", dict(task=other["id"], message="Stop that"))):
-            with self.subTest(name=name):
-                self.assertTrue(self.call(parent, name, **arguments)["isError"])
-        # Not into a terminal where it works or asks you something.
-        store = roost.Store(str(self.state))
-        record = store.read(child["id"])
-        store.save(dict(record, status="permission"))
+        # All of them, also for an ID left empty, as an agent may send it,
+        # or by the start of its ID.
+        for arguments in ({}, dict(task=""), dict(task=child["id"][:6])):
+            with self.subTest(arguments=arguments):
+                said = self.call(parent, "read_task", **arguments)["content"][0]["text"]
+                self.assertIn("Document calc, ID %s" % child["id"], said)
+                self.assertIn("waiting for a prompt", said)
+                self.assertIn("Its latest reply:\nPROMPT Write the README's section on calc.", said)
+        self.assertTrue(self.call(parent, "read_task", task=other["id"])["isError"])
+        # Nor is there a tool to send it anything.
         self.assertTrue(self.call(parent, "message_task", task=child["id"], message="Also the tests")["isError"])
-        # Nor keys, as Escape, which would end the paste and press the rest.
-        said = self.call(parent, "message_task", task=child["id"], message="Hi\u001b[201~\u0003!touch pwned\r")
-        self.assertIn("control characters", said["content"][0]["text"])
-        # Claude Code takes a prompt with its work going on in the background.
-        store.save(dict(record, status="background"))
-        self.assertEqual(self.call(parent, "message_task", task=child["id"][:6],
-                                   message="Also the tests")["content"][0]["text"], "Sent to Document calc.")
-        deadline = time.monotonic() + 8
-        while "Also the tests" not in (roost.Store(str(self.state)).read(child["id"]).get("lastReply") or ""):
-            self.assertLess(time.monotonic(), deadline, "the message never reached the task")
-            time.sleep(.04)
-        self.assertNotIn("pwned", roost.Store(str(self.state)).read(child["id"])["lastReply"])
         # As a listing would have it, also when none has since.
         roost.tmux(self.socket, "kill-window", "-t", child["windowId"])
         self.assertIn("crashed", self.call(parent, "read_task", task=child["id"])["content"][0]["text"])
@@ -8361,7 +8345,7 @@ class ProgramStatus(unittest.TestCase):
                 "const offered = await tools.roost_propose_task.execute('1', { title: 'Docs', brief: 'Write them.' });\n"
                 "const read = await tools.roost_read_task.execute('2', {});\n"
                 "let refused;\n"
-                "try { await tools.roost_message_task.execute('3', { task: 'abcd', message: 'Hi' }); }\n"
+                "try { await tools.roost_read_task.execute('3', { task: 'abcd' }); }\n"
                 "catch (error) { refused = error.message; }\n"
                 "// A call stopped before it begins, as one Pi hands on once its run is stopped.\n"
                 "const already = new AbortController();\n"
@@ -8380,7 +8364,7 @@ class ProgramStatus(unittest.TestCase):
                                              capture_output=True, text=True).stdout)
             # By Roost's names, which another extension's tools are unlikely
             # to have and Pi refuses two of; their words name them so.
-            self.assertEqual(said["names"], ["roost_propose_task", "roost_read_task", "roost_message_task"])
+            self.assertEqual(said["names"], ["roost_propose_task", "roost_read_task"])
             self.assertIn("offer it with roost_propose_task", said["description"])
             self.assertNotIn(" propose_task", said["description"])
             self.assertIn("It waits in Roost under this task", said["offered"]["content"][0]["text"])

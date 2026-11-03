@@ -647,10 +647,8 @@ def claude_hook_settings(store, task):
                 # A worktree the agent makes for itself starts from the
                 # task's work, not from the default branch.
                 "worktree": {"baseRef": "head"},
-                # Roost's own tools that need no asking: an offer only waits
-                # in Roost for you, and reading changes nothing. A message
-                # types into another agent's terminal, so it goes by your
-                # permission mode, as any tool you haven't allowed does.
+                # Roost's own tools, which need no asking: an offer only
+                # waits in Roost for you, and reading changes nothing.
                 "permissions": {"allow": ["mcp__roost__propose_task", "mcp__roost__read_task"]}}
     path = store.tasks_dir / (task["id"] + ".settings")
     atomic_json(path, settings)
@@ -780,9 +778,6 @@ class ClaudeAgent:
     # Its status reports, which the runner reads for a task that asks,
     # say when a turn ends and how.
     reports_turns = True
-    # A turn that ended with work left in the background leaves its prompt
-    # taking the next one.
-    prompt_in_background = True
 
     def validate(self, command):
         validate_command(command, "Claude")
@@ -1173,7 +1168,7 @@ def pi_extension():
     """Roost's Pi extension, with the tools of its MCP server, by the names
     Pi has them, and what the server tells an agent about them first, as
     Pi has no other place for it."""
-    named = lambda said: re.sub(r"\b(propose_task|read_task|message_task)\b", PiAgent.tool_prefix + r"\1", said)
+    named = lambda said: re.sub(r"\b(propose_task|read_task)\b", PiAgent.tool_prefix + r"\1", said)
     tools = [dict(name=name, parameters=json.loads(named(json.dumps(definition["inputSchema"]))),
                   description=named((MCP_INSTRUCTIONS + "\n\n" if name == "propose_task" else "")
                                     + definition["description"]))
@@ -3811,13 +3806,13 @@ def send(task, text, force=False):
 # Tasks an agent offers. The agent runs this helper as an MCP server of its
 # own, over its standard input and output, for as long as the agent runs:
 # through it the agent offers a task, which waits under its own in Roost
-# for you to start, have it do where it is, or dismiss, reads the tasks
-# started from its offers, and sends them a message.
+# for you to start, have it do where it is, or dismiss, and reads the tasks
+# started from its offers.
 
 MCP_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 # What the server needs of its agent's environment, beyond what any
 # program gets: where tmux keeps Roost's server, as tmux-control sets it on
-# a host, to read and message the tasks started from its offers.
+# a host, to read the tasks started from its offers.
 MCP_SERVER_ENVIRONMENT = ["TMUX_TMPDIR"]
 MCP_INSTRUCTIONS = (
     "Roost runs you in a task of your own: a Git worktree and branch that the user reviews and merges. "
@@ -3828,7 +3823,7 @@ MCP_INSTRUCTIONS = (
     "most one in a turn, and never one the user turned down. A piece of what you were asked to do stays "
     "here, without an offer. The offer waits in Roost, under this task, where the user can start it as "
     "a task of its own or have you do it here; say in your reply what you offered. read_task shows how "
-    "the tasks started from your offers are doing, and message_task sends one a message.")
+    "the tasks started from your offers are doing.")
 MCP_TOOLS = {
     "propose_task": dict(
         description=(
@@ -3850,12 +3845,6 @@ MCP_TOOLS = {
         inputSchema=dict(type="object", properties=dict(
             task=dict(type="string", description="A task's ID, as read_task gives it"))),
         annotations=dict(readOnlyHint=True)),
-    "message_task": dict(
-        description=("Send a task started from your offer a message, as its next prompt. It goes only "
-                     "while that task's agent waits for a prompt."),
-        inputSchema=dict(type="object", required=["task", "message"], properties=dict(
-            task=dict(type="string", description="The task's ID, as read_task gives it"),
-            message=dict(type="string")))),
 }
 # What a task's status says to an agent reading it.
 STATUS_SAID = {"starting": "starting", "running": "working", "background": "working in the background",
@@ -3944,8 +3933,6 @@ class McpServer:
             return propose_task(self.store, self.task_id, arguments.get("title"), arguments.get("brief"))
         if name == "read_task":
             return read_tasks(self.store, self.task_id, arguments.get("task"))
-        if name == "message_task":
-            return message_task(self.store, self.task_id, arguments.get("task"), arguments.get("message"))
         raise RoostError("Unknown tool: %s" % name)
 
 
@@ -4078,32 +4065,6 @@ def read_tasks(store, task_id, wanted=None):
         reply = last_message(task)
         said.append(line + ("\nIts latest reply:\n" + reply if reply else ""))
     return "\n\n".join(said)
-
-
-def message_task(store, task_id, wanted, message):
-    message = (text(message) or "").replace("\r\n", "\n").strip()
-    if not message:
-        raise RoostError("The message is empty")
-    # Pasted into the task's terminal, where one, as Escape, would reach its
-    # agent as a key: one that ends the paste, then any others.
-    if any(ord(c) < 32 and c not in "\n\t" or 127 <= ord(c) < 160 for c in message):
-        raise RoostError("The message has control characters, which the task's terminal would take as keys; "
-                         "send it as plain text")
-    if not (text(wanted) or "").strip():
-        raise RoostError("Name the task to send it to by its ID")
-    with store.locked():
-        task = started_by(store, task_id, wanted)[0]
-        reconcile(store, [task])
-        # Or, for an agent at its prompt while its work goes on in the
-        # background, then too.
-        waits = ("ready", "background") if getattr(agent_for(task), "prompt_in_background", False) else ("ready",)
-        status = task.get("status")
-        if status not in waits:
-            raise RoostError("%s is %s, and gets a message only while it waits for a prompt"
-                             % (task.get("name"), STATUS_SAID.get(status, status)))
-        parent = store.read(task_id)
-        send(task, "From %s, the task that offered this one:\n\n%s" % (parent.get("name"), message))
-    return "Sent to %s." % task.get("name")
 
 
 def numbered(folder, stem, number, suffix):
