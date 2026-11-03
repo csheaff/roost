@@ -2902,6 +2902,9 @@ class Lifecycle(unittest.TestCase):
         store.save(dict(store.read(task["id"]), offers=[dict(title="Docs", pid=gone.pid, run=record["runId"])]))
         self.assertEqual(self.request("list")["result"][0]["status"], "ready")
         self.assertNotIn("offers", store.read(task["id"]))
+        # Newer than a reply read before, which still showed the offer.
+        self.assertEqual(roost.parse_time(store.read(task["id"])["updatedAt"]) - roost.parse_time(record["updatedAt"]),
+                         datetime.timedelta(microseconds=1))
         changes = [change for change in self.request("history", since=0)["result"]["changes"]
                    if change["id"] == task["id"]]
         self.assertEqual([change["status"] for change in changes[-2:]], ["permission", "ready"])

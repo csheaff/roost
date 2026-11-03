@@ -2391,12 +2391,10 @@ def reconcile(store, tasks):
         pane = owned_pane(task, inventory)
         changed = False
         # An offer whose server ended without taking it back, as one killed
-        # with its agent, ends here, where the history notes it.
+        # with its agent, ends here, where the history notes it, and newer
+        # than a reply that still showed it.
         if task.get("offers") and open_offers(task) != task["offers"]:
-            if open_offers(task):
-                task["offers"] = open_offers(task)
-            else:
-                del task["offers"]
+            set_offers(task, open_offers(task))
             changed = True
         if pane and (task.get("session"), task.get("windowIndex")) != (pane["session_name"], pane["index"]):
             task.update(session=pane["session_name"], windowIndex=pane["index"])
@@ -4049,38 +4047,40 @@ def mcp_arguments(store, task):
     return [str(Path(__file__).resolve()), "mcp", str(store.root), task["id"]]
 
 
+def set_offers(task, offers):
+    """Leave OFFERS as TASK's open offers, dated just after the change
+    before rather than now, so Emacs takes TASK as newer than a reply read
+    before: Claude records an interrupt in its transcript and runs no hook,
+    and one since then must still count as newer than this."""
+    if offers:
+        task["offers"] = offers
+    else:
+        task.pop("offers", None)
+    stamp = parse_time(task.get("updatedAt"))
+    task["updatedAt"] = (stamp + datetime.timedelta(microseconds=1)).isoformat() if stamp else now()
+
+
 @contextlib.contextmanager
 def offering(store, task_id, title):
     """Show TASK_ID as waiting on you while its agent asks whether to start
     TITLE. The offer is this server's own entry in the record, beside the
     status the agent's hooks and reports keep as they would without it."""
     offer = dict(title=(one_line(title) or "")[:REQUEST_LIMIT], pid=os.getpid())
-
-    def change(task, offers):
-        if offers:
-            task["offers"] = offers
-        else:
-            task.pop("offers", None)
-        # Just after the change before it rather than now, so Emacs takes it
-        # as newer: Claude records an interrupt in its transcript and runs no
-        # hook, and one since then must still count as newer than this.
-        stamp = parse_time(task.get("updatedAt"))
-        task["updatedAt"] = (stamp + datetime.timedelta(microseconds=1)).isoformat() if stamp else now()
-        store.save(task)
-
     with store.locked():
         task = store.read(task_id)
         # Its agent may be gone already, as when you stopped the task.
         if task["status"] in ("stopped", "retired"):
             raise RoostError("The task is %s" % task["status"])
         offer["run"] = task.get("runId")
-        change(task, open_offers(task) + [offer])
+        set_offers(task, open_offers(task) + [offer])
+        store.save(task)
     try:
         yield
     finally:
         with store.locked(), contextlib.suppress(RoostError):
             task = store.read(task_id)
-            change(task, [other for other in open_offers(task) if other != offer])
+            set_offers(task, [other for other in open_offers(task) if other != offer])
+            store.save(task)
 
 
 def open_offers(task, alive=True):
