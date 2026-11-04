@@ -3451,6 +3451,39 @@ terminal's, on a pty.  Skips the test where it can't be made."
        (should-not (get-buffer-window roost--sidebar-buffer))
        (should-not roost-sidebar-mode)))))
 
+;; perspective.el's main, or a tab of your own, looks like a task's when
+;; the sidebar is there beside a plain terminal: it goes without.
+(ert-deftest roost-sidebar-shows-only-where-a-task-is ()
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let* ((roost-watch-interval 3600)
+            (task (roost--cache-task "dev" (roost-test--task)))
+            (current "main"))
+       (cl-letf (((symbol-function 'roost-refresh) #'ignore)
+                 ((symbol-function 'frame-width) (lambda (&rest _) 200))
+                 ((symbol-function 'roost--workspace-backend) (lambda () 'perspective))
+                 ((symbol-function 'roost--current-workspace) (lambda () current)))
+         (unwind-protect
+             (progn
+               (roost-sidebar-mode 1)
+               (should-not (get-buffer-window roost--sidebar-buffer))
+               (setq current (roost--workspace-name task))
+               (roost--sync-side-windows)
+               (should (window-live-p (get-buffer-window roost--sidebar-buffer)))
+               ;; Back in main, it goes, and you are in the main area.
+               (select-window (get-buffer-window roost--sidebar-buffer))
+               (setq current "main")
+               (roost--sync-side-windows)
+               (should-not (get-buffer-window roost--sidebar-buffer))
+               (should-not (window-parameter (selected-window) 'window-side))
+               ;; Without workspaces, every frame has it.
+               (cl-letf (((symbol-function 'roost--workspace-backend) #'ignore))
+                 (roost--sync-side-windows)
+                 (should (window-live-p (get-buffer-window roost--sidebar-buffer)))))
+           (roost-sidebar-mode -1)
+           (roost-watch-mode -1)))))))
+
 (ert-deftest roost-loading-adds-no-hooks ()
   (let ((window-configuration-change-hook nil)
         (window-size-change-functions nil)
@@ -4458,10 +4491,13 @@ Read from the layout transient keeps, whose form varies by version."
 (ert-deftest roost-hidden-sidebar-stays-hidden-after-restoring-a-tab ()
   (roost-test--isolated
    (save-window-excursion
-     (let ((roost-watch-interval 3600) (roost-workspace 'tab-bar)
-           (original-tab-bar-mode tab-bar-mode))
+     (let* ((roost-watch-interval 3600) (roost-workspace 'tab-bar)
+            (original-tab-bar-mode tab-bar-mode)
+            (task (roost--cache-task "dev" (roost-test--task))))
        (cl-letf (((symbol-function 'roost-refresh) #'ignore)
-                 ((symbol-function 'frame-width) (lambda (&rest _) 200)))
+                 ((symbol-function 'frame-width) (lambda (&rest _) 200))
+                 ;; Tabs of a task's, where the sidebar shows.
+                 ((symbol-function 'roost--frame-task) (lambda () task)))
          (unwind-protect
              (progn
                (tab-bar-mode 1)

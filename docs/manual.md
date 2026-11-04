@@ -231,9 +231,11 @@ once you've seen it. What you've seen is kept on the task's host, for your
 other machines and the next session.
 
 **Keep them in view.** `b` in the dashboard, or `M-x roost-sidebar-mode`, keeps a
-compact task list at the left of every frame, through perspective and tab
-switches and `C-x 1`; add `(roost-sidebar-mode 1)` to your configuration to have
-it from the start. Each task there is its name and, at the right, its status:
+compact task list at the left of every frame, through `C-x 1`; add
+`(roost-sidebar-mode 1)` to your configuration to have it from the start. With
+perspectives or tabs, it shows in a task's workspace, and in one of your own,
+such as perspective.el's `main`, only while that shows a task's terminal, so a
+shell of your own there doesn't look like a task. Each task there is its name and, at the right, its status:
 in its colour when the task waits for you, such as `permission` or a `ready`
 you haven't seen, plain when it is `merged`, dim when the agent is only
 working or stopped, and none once you've seen an agent that waits for nothing; then, dim, what changed
@@ -748,7 +750,7 @@ header line. A failed creation keeps the draft.
   `Roost: host/task +N` entry in the perspective bar, and a click on it shows
   the tasks in a menu. In a workspace that is no task's, such as the one a
   frame made with `C-x 5 2` starts in, the panel and the sidebar follow the
-  task whose terminal it shows.
+  task whose terminal it shows, and show only while it shows one.
 - `roost-mode-line-count`: the waiting count in `global-mode-string`. For a
   mode line of your own, set it to nil and place
   `(:eval (and (fboundp 'roost-mode-line-waiting) (roost-mode-line-waiting)))`

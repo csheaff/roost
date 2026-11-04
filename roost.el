@@ -10620,6 +10620,16 @@ were in one, you are now in DOCKED."
         (unless (eq window (selected-window))
           (select-window window))))))
 
+(defun roost--sidebar-wanted-p ()
+  "Whether the selected frame should show the sidebar.
+With workspaces, only where a task is: in its workspace, or in one that
+is no task's while it shows a task's terminal.  A workspace of your own,
+such as perspective.el's main, goes without, so that it doesn't look
+like a task's."
+  (and roost-sidebar-mode
+       (or (not (roost--workspace-backend))
+           (roost--frame-task))))
+
 (defun roost--sync-side-windows ()
   "Add or remove the selected frame's sidebar and task panel to match.
 See `roost-sidebar-mode' and `roost-task-panel-mode'.  This only adds and
@@ -10627,12 +10637,16 @@ removes windows; their contents follow task updates, so a panel you have
 scrolled stays where you left it."
   (when (roost--side-frame-p)
     (roost--adopt-shown-task)
-    (let ((sidebar (get-buffer-window roost--sidebar-buffer)))
-      (cond ((and roost-sidebar-mode (not sidebar)
+    (let ((sidebar (get-buffer-window roost--sidebar-buffer))
+          (wanted (roost--sidebar-wanted-p)))
+      (cond ((and wanted (not sidebar)
                   (>= (frame-width) (+ roost-sidebar-width 80)))
              (roost--show-side-window (roost--sidebar-get-buffer) 'left roost-sidebar-width))
-            ;; A saved workspace can bring back a sidebar after the mode is off.
-            ((and sidebar (not roost-sidebar-mode))
+            ;; A saved workspace can bring back a sidebar after the mode is
+            ;; off, or into a workspace that is no task's.
+            ((and sidebar (not wanted))
+             (when (eq (window-buffer) (get-buffer roost--sidebar-buffer))
+               (roost--leave-side-window))
              (dolist (window (get-buffer-window-list roost--sidebar-buffer))
                (when (window-parameter window 'window-side) (delete-window window))))))
     (let* ((panel (roost--task-panel-window))
@@ -10716,11 +10730,13 @@ Tasks open in the main area, never in the sidebar or the task panel."
 ;;;###autoload
 (define-minor-mode roost-sidebar-mode
   "Keep a compact list of tasks at the left of every frame.
-It stays when you switch perspectives or tabs and survives
-\\[delete-other-windows].  Click a task, or press RET on it, to open it in
-the main area; task commands such as `roost-review' act on the task at
-point.  Turning the mode on starts `roost-watch-mode'.  Frames narrower
-than `roost-sidebar-width' plus 80 columns go without."
+It survives \\[delete-other-windows].  With perspectives or tabs, it
+shows in a task's workspace, or one showing a task's terminal, and not
+in your own, such as perspective.el's main.  Click a task, or press RET
+on it, to open it in the main area; task commands such as `roost-review'
+act on the task at point.  Turning the mode on starts
+`roost-watch-mode'.  Frames narrower than `roost-sidebar-width' plus 80
+columns go without."
   :global t
   (roost--watch-layout)
   (when roost-sidebar-mode (roost-watch-mode 1))
@@ -10734,6 +10750,7 @@ than `roost-sidebar-width' plus 80 columns go without."
                     (substitute-command-keys
                      "Sidebar off; \\<roost-dashboard-mode-map>\\[roost-sidebar-mode] in the dashboard turns it back on"))
                    ((get-buffer-window roost--sidebar-buffer) "Sidebar on")
+                   ((not (roost--sidebar-wanted-p)) "Sidebar on; it shows where a task is open")
                    (t (format "Sidebar on, in frames at least %d columns wide"
                               (+ roost-sidebar-width 80)))))))
 
