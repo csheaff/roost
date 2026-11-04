@@ -1901,21 +1901,33 @@ def made_for(store, create_id):
 
 def create(store, request):
     """The task asked for: made now, or, for a creation ID asked with
-    before, the one made then."""
+    before, the one made then. Nothing new is made of an offer that no
+    longer waits."""
     create_id = request.get("createId")
-    if create_id is None:
-        task = make_task(store, request, None)
-    elif not (isinstance(create_id, str) and CREATE_ID.fullmatch(create_id)):
+    if create_id is not None and not (isinstance(create_id, str) and CREATE_ID.fullmatch(create_id)):
         raise RoostError("Invalid creation ID")
-    else:
-        with asking_for(store, create_id):
-            task = made_for(store, create_id) or make_task(store, request, create_id)
-    # Started from its parent's offer, which no longer waits; not by a task
-    # an earlier request made under this ID, which is another's.
-    offer = text(request.get("offer"))
-    if offer and task.get("offer") == offer and task.get("parent") == request.get("parent"):
-        with store.locked(), contextlib.suppress(RoostError, OSError):
-            dismiss_offer(store, store.read(request["parent"]), offer)
+    parent, offer = request.get("parent"), text(request.get("offer"))
+    offered = parent is not None and bool(offer)
+    with contextlib.ExitStack() as held:
+        # Until the offer has gone, so that a request for it with another
+        # creation ID, as from another Emacs, waits, and finds that.
+        if offered:
+            store.path(parent)
+            held.enter_context(asking_for(store, hashlib.sha256(
+                (parent + offer).encode("utf-8", "replace")).hexdigest()[:32]))
+        if create_id is not None:
+            held.enter_context(asking_for(store, create_id))
+        task = None if create_id is None else made_for(store, create_id)
+        if task is None:
+            if offered:
+                with store.locked():
+                    require_offer(store.read(parent), offer)
+            task = make_task(store, request, create_id)
+        # Started from its parent's offer, which no longer waits; not by a
+        # task an earlier request made under this ID, which is another's.
+        if offered and task.get("offer") == offer and task.get("parent") == parent:
+            with store.locked(), contextlib.suppress(RoostError, OSError):
+                dismiss_offer(store, store.read(parent), offer)
     return task
 
 
@@ -4059,10 +4071,20 @@ def send_offered(store, task, request):
     """Send TASK REQUEST's text. Sent from an offer's draft, as its brief,
     the offer no longer waits; one that can't be dropped stays to dismiss,
     since a failure here would ask you to send what its agent has."""
+    offer = text(request.get("offer"))
+    if offer:
+        require_offer(task, offer)
     send(task, request["text"], request.get("force") is True)
     with contextlib.suppress(RoostError, OSError):
-        return dismiss_offer(store, dict(task), text(request.get("offer")))
+        return dismiss_offer(store, dict(task), offer)
     return task
+
+
+def require_offer(task, offer):
+    """Refuse OFFER, an ID, once it no longer waits under TASK, as when it
+    was acted on from another Emacs or by a request that got no reply."""
+    if not any(other["id"] == offer for other in task_offers(task)):
+        raise RoostError("That offer no longer waits: it was started, done or dismissed")
 
 
 def dismiss_offer(store, task, offer):

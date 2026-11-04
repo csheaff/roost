@@ -2855,6 +2855,63 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(reply["result"]["id"], earlier["id"])
         self.assertEqual(self.request("inspect", id=parent["id"])["result"]["offers"], [offer])
 
+    def test_an_offer_that_no_longer_waits_starts_nothing(self):
+        # As from a second Emacs, whose row of it is out of date, or a draft
+        # opened anew after a request that got no reply.
+        parent = self.create(name="parent")
+        record = roost.Store(str(self.state)).read(parent["id"])
+
+        def start(offer, create_id):
+            return self.request("create", directory=record["repo"], name=offer["title"], prompt=offer["brief"],
+                                parent=parent["id"], offer=offer["id"], createId=create_id, socket=self.socket,
+                                command=record["command"])
+        offer = self.offered(parent)
+        made = start(offer, "a" * 16)
+        self.assertTrue(made["ok"], made)
+        refused = start(offer, "b" * 16)
+        self.assertFalse(refused["ok"])
+        self.assertIn("no longer waits", refused["error"])
+        with patch.object(roost, "send") as sent:
+            refused = self.request("send", id=parent["id"], text=offer["brief"], offer=offer["id"])
+        self.assertFalse(refused["ok"])
+        sent.assert_not_called()
+        # Asked again by its own ID, it answers with the task it made.
+        self.assertEqual(start(offer, "a" * 16)["result"]["id"], made["result"]["id"])
+        self.assertEqual(len(self.request("list")["result"]), 2)
+        # Dismissed, or done here, it is gone the same way.
+        for title, act in (("Dismissed", lambda offer: self.request("dismiss-offer", id=parent["id"], offer=offer["id"])),
+                           ("Done here", lambda offer: self.request("send", id=parent["id"], text=offer["brief"],
+                                                                    offer=offer["id"]))):
+            offer = self.offered(parent, title=title)
+            with patch.object(roost, "send"):
+                self.assertTrue(act(offer)["ok"])
+            self.assertFalse(start(offer, uuid.uuid4().hex)["ok"])
+
+    def test_two_requests_for_an_offer_make_one_task(self):
+        # The second waits while the first is making it, not only after.
+        parent = self.create(name="parent")
+        offer = self.offered(parent)
+        making, go, made = threading.Event(), threading.Event(), []
+
+        def make(_store, request, create_id):
+            made.append(create_id)
+            making.set()
+            go.wait(10)
+            return dict(id="1" * 16, parent=request["parent"], offer=request["offer"])
+
+        def start(create_id):
+            return roost.create(roost.Store(str(self.state)), dict(parent=parent["id"], offer=offer["id"], createId=create_id))
+        with patch.object(roost, "make_task", make), concurrent.futures.ThreadPoolExecutor(2) as pool:
+            first = pool.submit(start, "a" * 16)
+            self.assertTrue(making.wait(10))
+            second = pool.submit(start, "b" * 16)
+            time.sleep(0.2)
+            go.set()
+            self.assertEqual(first.result(10)["id"], "1" * 16)
+            with self.assertRaisesRegex(roost.RoostError, "no longer waits"):
+                second.result(10)
+        self.assertEqual(made, ["a" * 16])
+
     def test_a_task_made_from_one_offer_leaves_another_waiting(self):
         # Under its parent too: only the offer it was started from has gone.
         parent = self.create(name="parent")
