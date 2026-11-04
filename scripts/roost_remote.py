@@ -236,7 +236,9 @@ def atomic_text(path, text):
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=".roost-", dir=path.parent)
     try:
-        with os.fdopen(fd, "w") as output:
+        # With what the file can't hold, as a lone surrogate from a hook,
+        # replaced, rather than the event lost.
+        with os.fdopen(fd, "w", errors="replace") as output:
             output.write(text)
             output.flush()
             os.fsync(output.fileno())
@@ -1637,9 +1639,9 @@ def spawn(store, task, resume=False, size=()):
         argv.append("resume")
     # The runner waits on the registry lock, held here, until its stable pane
     # ID is saved, so the agent starts only after this is done. tmux reads
-    # the name and the directory as formats, where # starts one.
+    # the directory as a format, where # starts one, as it does the name.
     window_options = ["-P", "-F", "#{window_id}\t#{pane_id}\t#{window_index}\t#{session_name}",
-                      "-n", task["name"].replace("#", "##"), "-c", task["worktree"].replace("#", "##"),
+                      "-n", window_name(task["name"]), "-c", task["worktree"].replace("#", "##"),
                       shlex.join(argv)]
     if tmux(socket, "has-session", "-t", "=" + session, check=False).returncode:
         # The task's own session holds only its agent's window, so stopping
@@ -1692,6 +1694,19 @@ def prune_helpers(store):
 PROMPT_ARGUMENT_LIMIT = 120 * 1024
 
 
+# What a task's name can hold, which a tmux command has to fit.
+NAME_LIMIT = 1000
+# Format characters that real writing has: the soft hyphen, the joiners,
+# and the signs that draw before a number in Arabic and Syriac.
+WRITTEN_FORMATS = "\u00ad\u200c\u200d\u0600\u0601\u0602\u0603\u0604\u0605\u06dd\u070f\u0890\u0891\u08e2" \
+    "\U000110bd\U000110cd"
+# What draws nothing though its category doesn't say so: blanks that count
+# as letters or marks, selectors, past the two an emoji uses, and all that
+# Unicode keeps to be ignored. Emacs drops the same from a derived name.
+UNDRAWN = re.compile("[\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u2800\u3164\ufe00-\ufe0d\uffa0\ufff0-\ufff8"
+                     "\U000e0000-\U000e0fff]")
+
+
 def name_slug(name):
     """NAME in ASCII for the task's branch and directory: accents dropped,
     and each run of other characters but letters, digits and _ a single -.
@@ -1705,9 +1720,8 @@ def hidden_character(value):
     after it around, so that what you read isn't what an agent gets, or
     None. The joiners and the soft hyphen that real writing has can stay."""
     return next((c for c in value
-                 if (unicodedata.category(c) == "Cf" and ord(c) not in (0xAD, 0x200C, 0x200D))
-                 # The variation selectors past the emoji's, which select nothing.
-                 or 0xE0100 <= ord(c) <= 0xE01EF), None)
+                 if (unicodedata.category(c) in ("Cf", "Cs", "Zl", "Zp") and c not in WRITTEN_FORMATS)
+                 or UNDRAWN.match(c)), None)
 
 
 def task_name(value):
@@ -1715,14 +1729,25 @@ def task_name(value):
     name = value.strip() if isinstance(value, str) else ""
     if not any(c.isalnum() for c in name):
         raise RoostError("Give the task a printable name containing letters or numbers")
+    # tmux takes no command as long as one that names thousands of characters.
+    if len(name) > NAME_LIMIT:
+        raise RoostError("The name is %d characters, and a task's can have at most %d; shorten it"
+                         % (len(name), NAME_LIMIT))
     # Nor one a terminal takes as keys, or that hides text or turns the
     # rest of a row around, as an agent's title for a task it offers might,
     # or a name pasted from where such marks are hidden.
     hidden = next((c for c in name if unicodedata.category(c) == "Cc"), None) or hidden_character(name)
     if hidden:
-        raise RoostError("The name holds U+%04X, a control or direction mark that may not show; "
-                         "type the name without it" % ord(hidden))
+        raise RoostError("The name holds U+%04X, a character that may not show; type the name without it"
+                         % ord(hidden))
     return name
+
+
+def window_name(name):
+    """NAME as tmux reads it for a window, as a format, where # starts one,
+    in an argument, whose last ; ends a command unless a \\ goes before it."""
+    name = name.replace("#", "##")
+    return name[:-1] + "\\;" if name.endswith(";") else name
 
 
 def current_branch(repo):
@@ -1901,31 +1926,29 @@ def made_for(store, create_id):
 
 def create(store, request):
     """The task asked for: made now, or, for a creation ID asked with
-    before, the one made then. Nothing new is made of an offer that no
-    longer waits."""
+    before, the one made then. Emacs asks for an offer's by an ID made
+    from the offer's, so that whatever asks for it gets one task, and
+    nothing new is made of an offer that no longer waits."""
     create_id = request.get("createId")
-    if create_id is not None and not (isinstance(create_id, str) and CREATE_ID.fullmatch(create_id)):
+    if create_id is None:
+        return make_task(store, request, None)
+    if not (isinstance(create_id, str) and CREATE_ID.fullmatch(create_id)):
         raise RoostError("Invalid creation ID")
     parent, offer = request.get("parent"), text(request.get("offer"))
     offered = parent is not None and bool(offer)
-    with contextlib.ExitStack() as held:
-        # Until the offer has gone, so that a request for it with another
-        # creation ID, as from another Emacs, waits, and finds that.
-        if offered:
-            store.path(parent)
-            held.enter_context(asking_for(store, hashlib.sha256(
-                (parent + offer).encode("utf-8", "replace")).hexdigest()[:32]))
-        if create_id is not None:
-            held.enter_context(asking_for(store, create_id))
-        task = None if create_id is None else made_for(store, create_id)
+    with asking_for(store, create_id):
+        task = made_for(store, create_id)
         if task is None:
             if offered:
                 with store.locked():
-                    require_offer(store.read(parent), offer)
+                    # With its parent gone, a draft left open is all that
+                    # is left of it.
+                    waiting = store.recorded(parent)
+                    if waiting:
+                        require_offer(waiting, offer)
             task = make_task(store, request, create_id)
-        # Started from its parent's offer, which no longer waits; not by a
-        # task an earlier request made under this ID, which is another's.
-        if offered and task.get("offer") == offer and task.get("parent") == parent:
+        # Started from its parent's offer, which no longer waits.
+        if offered:
             with store.locked(), contextlib.suppress(RoostError, OSError):
                 dismiss_offer(store, store.read(parent), offer)
     return task
@@ -2008,11 +2031,10 @@ def make_task(store, request, create_id):
                 status="starting", startedAt=now(), updatedAt=now(), claudeSession=None)
     if create_id:
         task["createId"] = create_id
-    # The task whose agent offered this one, which you started, and the offer.
+    # The task whose agent offered this one, which you started.
     if request.get("parent") is not None:
         store.path(request["parent"])
         task["parent"] = request["parent"]
-        task["offer"] = text(request.get("offer"))
     issue = request.get("issue")
     if isinstance(issue, dict) and isinstance(issue.get("number"), int) and not isinstance(issue["number"], bool):
         task["issue"] = dict(number=issue["number"], title=text(issue.get("title")),
@@ -2378,7 +2400,7 @@ def list_tasks(store, request):
 def reconcile(store, tasks, save=True):
     """Put right what TASKS' records say of their agents where no event
     told: a pane that ended or came back, a turn you stopped, a request you
-    approved. Under the registry lock; or without SAVE, for what an agent
+    approved. Under the registry lock; without SAVE, for what an agent
     reads from its own environment, only in TASKS as they were read."""
     inventories = {}
     table = None  # The process table, read only when a request may have been approved.
@@ -3799,8 +3821,7 @@ def rename(store, task, name):
     task["live"] = bool(pane and not pane["dead"])
     if pane:
         # A name may start with -, which tmux would take for an option.
-        tmux(task["socket"], "rename-window", "-t", pane["window"], "--", name.replace("#", "##"),
-             check=False)
+        tmux(task["socket"], "rename-window", "-t", pane["window"], "--", window_name(name), check=False)
     return task
 
 
@@ -3967,7 +3988,7 @@ class McpServer:
             arguments = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
             try:
                 said = self.call(params.get("name"), arguments)
-            except RoostError as exc:
+            except (RoostError, OSError, ValueError) as exc:
                 return dict(content=[dict(type="text", text=str(exc))], isError=True)
             return dict(content=[dict(type="text", text=said)])
         # Such as a newer protocol's first request, after which the client
@@ -4027,6 +4048,11 @@ def propose_task(store, task_id, title, brief):
     if hidden:
         raise RoostError("The brief holds U+%04X, a character a terminal takes as a key, or that doesn't "
                          "show in the draft the user reads; write it as plain text" % ord(hidden))
+    # Typed there, at the start of a prompt, ! runs a shell, outside the
+    # agent's permission prompts, and / one of its commands, as /exit.
+    if brief[0] in "!/":
+        raise RoostError("The brief starts with %s, which an agent's terminal takes as a command, not a "
+                         "prompt; start it with a word" % brief[0])
     if len(brief.encode()) > PROMPT_ARGUMENT_LIMIT:
         raise RoostError("The brief is %d KB, and a task can start with at most %d KB; shorten it"
                          % (-(-len(brief.encode()) // 1024), PROMPT_ARGUMENT_LIMIT // 1024))
@@ -4131,12 +4157,14 @@ def started_by(store, task_id, wanted=None):
 
 
 def read_tasks(store, task_id, wanted=None):
-    tasks = started_by(store, task_id, wanted)
-    # As a listing has them, also while Emacs isn't listing them, but saved
-    # only by one: a startup file can send the agent's tmux elsewhere.
-    reconcile(store, tasks, save=False)
+    # Under the lock, as a task being made has its record before its pane.
+    with store.locked():
+        tasks = started_by(store, task_id, wanted)
+        # As a listing has them, also while Emacs isn't listing them, but
+        # saved only by one: a startup file can send the agent's tmux elsewhere.
+        reconcile(store, tasks, save=False)
     if not tasks:
-        return "No task has started from your offers."
+        return "No task started from your offers is in Roost now; one merged, retired or discarded is gone."
     said = []
     for task in tasks:
         status = task.get("status")
@@ -6909,6 +6937,9 @@ def rpc(request):
 def main():
     mode = sys.argv[1]
     if mode == "rpc":
+        # With what no reply can carry, as a lone surrogate from a
+        # transcript, replaced: Emacs would have none at all.
+        sys.stdout.reconfigure(errors="replace")
         print(json.dumps(rpc(json.load(sys.stdin)), ensure_ascii=False))
     elif mode in ("hook", "hook-env"):
         # Observational hooks never emit decision-control JSON or fail

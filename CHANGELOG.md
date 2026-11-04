@@ -20,8 +20,20 @@ What each release changes, and what to do when upgrading. Newest first.
   meanwhile still waits. Nothing to do when upgrading.
 - A task's name can't hold characters a terminal takes as keys, that draw
   nothing, or that turn the rest of a line around, and Roost names the one
-  it found. To rename a task whose name holds one, as pasted from a chat,
-  type its name afresh rather than editing the old one.
+  it found; nor can it run past 1,000 characters. To rename a task whose name
+  holds one, as pasted from a chat, type its name afresh rather than editing
+  the old one.
+- A task's name can end in `;`, which tmux took as the end of a command, so
+  that it didn't start, or resume once renamed. Nothing to do when upgrading.
+- Undo in a new task draft undoes what you did. Once the fields above the
+  prompt had changed length, as when its name filled in, it cut the wrong
+  text. Nothing to do when upgrading.
+- A draft's header line shows a task's name as it is, with its `%` or
+  backslashes, and says at once that it is creating or sending. A draft
+  stays open as it was when a question before its request is quit. Nothing
+  to do when upgrading.
+- A lone surrogate in what an agent reports, which failed a host's reply or
+  lost the event, is replaced. Nothing to do when upgrading.
 - A task panel that `i` showed beside a terminal closes when its task
   opens there and the panel docks at the right, rather than showing
   twice. The window goes back to what it showed before, or closes if `i`

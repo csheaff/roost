@@ -248,14 +248,17 @@ header has four buttons:
 - **Do it here** (`C-c C-e`) sends the prompt to the offering task's agent
   as its next prompt, as `e` does.
 - **Later** (`C-c C-k`) closes the draft and leaves the offer waiting.
-- **Dismiss** (`C-c C-d`) drops the offer, and nothing starts.
+- **Dismiss** (`C-c C-d`) drops the offer, and nothing starts. With changes of
+  yours in the draft, it asks first.
 
 Telling the agent in its terminal to do the work there works too; the offer
 then waits until you dismiss it. The agent can't start a task itself. A
 task keeps at most three offers waiting, one offered again by its title
 changes its brief, and one you dismissed can't be offered again by that
 title. A task that merges into no branch, as one started with the primary
-checkout on none, or whose branch to merge into is gone, offers none. On an
+checkout on none, or whose branch to merge into is gone, offers none. An
+offer ends with its task: the question before you merge, retire, discard or
+forget it names what waits, and a draft you left open can still start. On an
 offer's row, the keys for a task, and `mouse-3`, act on the task it sits
 under.
 
@@ -914,9 +917,9 @@ and OpenCode from the inline config that loads its plugin. The agent starts
 it and ends it with itself, so nothing else keeps running. Pi's extension
 runs it for each call. An offer is kept in the record of the task that made
 it, apart from its status, through restarts of its agent, until you start
-or dismiss it. Codex gives the server only some of its environment, which
-Roost adds to with where tmux keeps its server. What the server runs has
-neither the agent's terminal nor its input.
+or dismiss it, or that task ends. Codex gives the server only some of its
+environment, which Roost adds to with where tmux keeps its server. What the
+server runs has neither the agent's terminal nor its input.
 
 Each status, and what Roost makes of it, is in [What a task says](#what-a-task-says).
 
@@ -1082,11 +1085,14 @@ What runs where:
   it types into no terminal. A brief that holds a control character, such
   as Escape, is refused, as Do it here would type it into the agent's
   terminal, which would take it as a key; so is a title or brief with a
-  character that draws nothing, or turns the text after it around, which
-  would hide from the draft you read what the new agent gets. Claude
-  Code's settings for the task allow offering and reading without asking,
-  as an offer only waits for you and reading changes nothing, and the
-  tools tell Codex the same.
+  character that draws nothing, other than the joiners and soft hyphen real
+  writing has, or turns the text after it around, which would hide from the
+  draft you read what the new agent gets. A brief that starts with `!` or
+  `/` is refused too: typed there, it would run a shell, past the agent's
+  permission prompts, or one of the agent's commands. Claude Code's settings
+  for the task allow offering and reading without asking, as an offer only
+  waits for you and reading changes nothing, and the tools tell Codex the
+  same.
   Codex gives the server only some of its environment, and Roost names the
   one more it needs: where tmux keeps its server.
 - Claude Code and OpenCode may read one folder outside the task's
