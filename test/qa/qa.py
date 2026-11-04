@@ -165,6 +165,8 @@ class Run:
         self.env["QA_JIRA"] = str(self.jira)
         self.env["QA_GITLAB"] = str(self.gitlab)
         self.notes = set()
+        # Terminals of your own, as HOST/SOCKET/SESSION: no task's.
+        self.plain_terminals = set()
         # Commands run in an Emacs since restarted.
         self.ran = set()
         # The host the tasks are on, and the tmux there, whose sockets
@@ -604,7 +606,7 @@ class Run:
         for window in screen["windows"]:
             if not window.get("side") and (window.get("frame"), window["buffer"]) in docked:
                 problems.append("%s shows twice in a frame: docked, and beside it" % window["buffer"])
-            if window.get("terminal") and not window.get("child"):
+            if window.get("terminal") and not window.get("child") and window["terminal"] not in self.plain_terminals:
                 own = (frames.get(window.get("frame")) or None) if window.get("frame") in frames else task
                 if not own:
                     problems.append("%s, a terminal, is on screen with no task for its frame" % window["buffer"])
@@ -768,7 +770,10 @@ def sweep(qa, repo):
 
 @journey("Start a task and answer it")
 def answer(qa, repo):
+    # With workspaces, the sidebar waits for a task's.
+    workspaces = qa.emacs.eval("(and (roost--workspace-backend) t)") == "t"
     qa.step("Roost with no tasks", expect=[
+        ("no sidebar, with no task's workspace", lambda s: not qa_sidebar(s)) if workspaces else
         ("the sidebar says there are none",
          lambda s: "No tasks" in qa.window(s, "roost-sidebar-list-mode")["text"])])
     qa.keys("C-c r")
@@ -807,7 +812,8 @@ def next_waiting(qa, repo):
     qa.status(asking, "permission")
     # Its turn ends while you are back in notes.py, so it waits for you.
     streaming = new_task(qa, "stream next 16 0.4")
-    if qa.emacs.eval("(roost--workspace-backend)") == "perspective":
+    perspective = qa.emacs.eval("(roost--workspace-backend)") == "perspective"
+    if perspective:
         # In a task's perspective, notes.py would count as that task's.
         qa.keys("M-x")
         qa.type("persp-switch\r")
@@ -821,6 +827,7 @@ def next_waiting(qa, repo):
     if others:
         raise Stuck("Other tasks wait as well: %s" % ", ".join(others))
     qa.step("Two tasks wait, and you are in notes.py", expect=[
+        ("no sidebar in main", lambda s: not qa_sidebar(s)) if perspective else
         ("the sidebar says both wait", lambda s: "permission" in qa.window(s, "roost-sidebar-list-mode")["text"]
          and "ready" in qa.window(s, "roost-sidebar-list-mode")["text"])])
 
@@ -3053,6 +3060,87 @@ def tabs(qa, repo):
         qa.settle()
 
 
+@journey("The sidebar where a task is")
+def own_workspace(qa, repo):
+    """With workspaces, the sidebar is in a task's, and in one of your own
+    only while it shows a task's terminal: a plain tmux terminal there
+    doesn't pass for a task.  A new frame, in a workspace of its own, goes
+    by the same rule.  Tabs, or with --popular, perspectives."""
+    perspective = qa.emacs.eval("(roost--workspace-backend)") == "perspective"
+    workspace = None if perspective else tab_per_task(qa)
+    mine = "(persp-switch \"main\")" if perspective else "(tab-bar-select-tab 1)"
+    plain = "local/%s/plain" % qa.name
+
+    def to_mine():
+        qa.emacs.eval("(progn %s (qa-fresh-start))" % mine)
+        return qa.wait("no sidebar", lambda s: not qa_sidebar(s))
+
+    try:
+        to_mine()
+        qa.step("A workspace of your own", expect=[
+            ("no sidebar", lambda s: not qa_sidebar(s)),
+            ("no panel", lambda s: not qa.window(s, "roost-task-info-mode"))])
+        qa.keys("M-x")
+        qa.wait("the question", lambda s: s["prompt"])
+        qa.type("roost-sidebar\r")
+        qa.wait("it to be off", lambda s: (s["echo"] or "").startswith("Sidebar off"))
+        qa.keys("M-x")
+        qa.wait("the question", lambda s: s["prompt"])
+        qa.type("roost-sidebar\r")
+        qa.step("Turned on there", expect=[
+            ("the echo area says where it shows",
+             lambda s: s["echo"] == "Sidebar on; it shows where a task is open"),
+            ("no sidebar", lambda s: not qa_sidebar(s))])
+        name = start_task(qa, "Mind the sidebar")
+        screen = qa.wait("the sidebar", lambda s: qa_sidebar(s) and selected_terminal(s))
+        terminal = selected_terminal(screen)["buffer"]
+        qa.step("A task's workspace", expect=[
+            ("its terminal", lambda s: (s.get("task") or {}).get("name") == name and selected_terminal(s)),
+            ("the sidebar", lambda s: qa_sidebar(s)),
+            ("its panel", lambda s: panel_text(qa, s).startswith(name))])
+        to_mine()
+        qa.step("Yours again", expect=[("no sidebar", lambda s: not qa_sidebar(s))])
+        qa.plain_terminals.add(plain)
+        qa.tmux("new-session", "-d", "-s", "plain")
+        qa.emacs.eval("(tmux-control-connect nil %s \"plain\")" % lisp(qa.name))
+        screen = qa.wait("your terminal", lambda s: any(w.get("terminal") == plain for w in s["windows"]))
+        mine_terminal = next(w["buffer"] for w in screen["windows"] if w.get("terminal") == plain)
+        # The whole of the frame: a panel steps aside for a split.
+        qa.emacs.eval("(progn (select-window (get-buffer-window %s)) (delete-other-windows))" % lisp(mine_terminal))
+        qa.step("A plain tmux terminal there", expect=[
+            ("no sidebar", lambda s: not qa_sidebar(s)),
+            ("no panel", lambda s: not qa.window(s, "roost-task-info-mode"))])
+        qa.emacs.eval("(switch-to-buffer %s)" % lisp(terminal))
+        qa.wait("the sidebar", qa_sidebar)
+        qa.step("The task's terminal there", expect=[
+            ("the sidebar", lambda s: qa_sidebar(s)),
+            ("its panel", lambda s: panel_text(qa, s).startswith(name))])
+        qa.emacs.eval("(switch-to-buffer %s)" % lisp(mine_terminal))
+        qa.wait("no sidebar", lambda s: not qa_sidebar(s))
+        qa.step("Your terminal again", expect=[("no sidebar", lambda s: not qa_sidebar(s))])
+        open_task(qa, name)
+        qa.wait("the sidebar", qa_sidebar)
+        qa.keys("C-x 5 2")
+        qa.wait("the new frame", lambda s: len(s.get("frames") or {}) == 2)
+        qa.emacs.eval("(set-frame-size nil %d %d)" % FRAME)
+        sidebars = lambda s: len([w for w in s["windows"] if w["mode"] == "roost-sidebar-list-mode"])
+        qa.wait("its sidebar", lambda s: sidebars(s) == 2)
+        qa.step("A new frame on the terminal", expect=[("each frame has the sidebar", lambda s: sidebars(s) == 2)])
+        qa.emacs.eval("(switch-to-buffer \"*scratch*\")")
+        qa.wait("only the task's frame to have it", lambda s: sidebars(s) == 1)
+        qa.step("Something else in that frame", expect=[
+            ("only the task's frame has the sidebar", lambda s: sidebars(s) == 1)])
+        qa.keys("C-x 5 0")
+        qa.wait("one frame", lambda s: len(s.get("frames") or {}) == 1)
+    finally:
+        qa.tmux("kill-session", "-t", "plain")
+        qa.plain_terminals.discard(plain)
+        if not perspective:
+            qa.emacs.eval("(progn (tab-bar-close-other-tabs) (tab-bar-rename-tab \"\") (tab-bar-mode -1) "
+                          "(setq roost-workspace '%s))" % workspace)
+        qa.settle()
+
+
 @journey("A shell beside the agent")
 def shell(qa, repo):
     """t opens a shell in the task's worktree beside its agent, and the view
@@ -3864,7 +3952,7 @@ JOURNEYS = [sweep, answer, next_waiting, fold, resize, merge, review, notes, sin
             dashboard, panel_keys, stop_resume, retire, discard, teardown, send, attach, update, conflicts, restart,
             search, workload, question_left,
             walk_away,
-            frames, draft_frames, org, drafts, draft_fields, by_clicks, clicks, overlap, region, tabs,
+            frames, draft_frames, org, drafts, draft_fields, by_clicks, clicks, overlap, region, tabs, own_workspace,
             forget, rename, fork, other_branch, switched_branch, merged, large, pull_request, merge_request, exits,
             include, slow_create,
             unreachable,

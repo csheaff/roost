@@ -9830,9 +9830,10 @@ The mark stays where it was."
     (with-current-buffer buffer
       (when (derived-mode-p 'roost-search-mode)
         (roost--render-visible #'roost--render-search))))
-  ;; Data that just arrived can name the task a restored workspace shows.
+  ;; Data that just arrived can name the task a restored workspace shows,
+  ;; in any frame.
   (when (memq #'roost--layout-changed (default-value 'window-configuration-change-hook))
-    (roost--sync-side-windows))
+    (roost--sync-all-frames))
   (roost--compose-redraw-changing)
   (dolist (buffer (buffer-list))
     (with-current-buffer buffer
@@ -10665,8 +10666,9 @@ scrolled stays where you left it."
                (roost--refresh-host (roost--field task 'host) nil)))))))
 
 (defun roost--sync-all-frames ()
-  "Apply `roost--sync-side-windows' to every frame."
-  (dolist (frame (frame-list))
+  "Apply `roost--sync-side-windows' to every frame but child frames.
+They have no side windows, and each poll comes here."
+  (dolist (frame (seq-remove #'frame-parent (frame-list)))
     (with-selected-frame frame (roost--sync-side-windows))))
 
 (defvar roost--layout-timer nil

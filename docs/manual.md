@@ -235,9 +235,9 @@ compact task list at the left of every frame, through `C-x 1`; add
 `(roost-sidebar-mode 1)` to your configuration to have it from the start. With
 perspectives or tabs, it shows in a task's workspace, and in one of your own,
 such as perspective.el's `main`, only while that shows a task's terminal, so a
-shell of your own there doesn't look like a task. Each task there is its name and, at the right, its status:
-in its colour when the task waits for you, such as `permission` or a `ready`
-you haven't seen, plain when it is `merged`, dim when the agent is only
+shell of your own there doesn't look like a task. Each task there is its name
+and, at the right, its status: in its colour when the task waits for you, such
+as `permission` or a `ready` you haven't seen, plain when it is `merged`, dim when the agent is only
 working or stopped, and none once you've seen an agent that waits for nothing; then, dim, what changed
 since you last looked at it, if anything (below), where the whole name fits
 beside it. A click opens the task,
@@ -535,7 +535,7 @@ counted once you stop and resume it (`K`, then `s`).
 | `R` | `roost-rename` | Rename the task, in Roost, its tab or perspective, and its agent's tmux window; its branch and worktree keep the name it started with |
 | `l` | `roost-switch-task` | Choose a task by name, waiting tasks first |
 | `/` | `roost-search` | Find messages in your tasks' conversations, retired tasks' too; `RET` opens a live task, `TAB` shows more of a message (its first 1,500 characters) |
-| `b` | `roost-sidebar-mode` | Keep the task list at the left of every frame |
+| `b` | `roost-sidebar-mode` | Keep the task list at the left of the frame |
 | `I` | `roost-task-panel-mode` | Dock the open task's panel beside its terminal |
 | `u` | `roost-update` | Bring the task up to date: merge the branch it merges into, such as `main`, into it; for uncommitted changes or conflicts, offers to have its agent do it |
 | `P` | `roost-pr` | Draft a pull request for the task; if it has one, push new commits and open it (`C-u`: open only) |

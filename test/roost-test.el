@@ -3484,6 +3484,83 @@ terminal's, on a pty.  Skips the test where it can't be made."
            (roost-sidebar-mode -1)
            (roost-watch-mode -1)))))))
 
+;; After a restart into a task's workspace, nothing names its task until
+;; the host replies.  The sidebar then shows in each frame that is in one,
+;; not only the frame selected, where nothing else would bring it.
+(ert-deftest roost-sidebar-shows-in-each-frame-once-tasks-load ()
+  (roost-test--isolated
+   (roost-test--with-another-frame other
+    (let* ((roost-watch-interval 3600)
+           (task (roost--cache-task "dev" (roost-test--task)))
+           (name (roost--perspective-name task))
+           shown)
+      (cl-letf (((symbol-function 'roost-refresh) #'ignore)
+                ((symbol-function 'frame-width) (lambda (&rest _) 200))
+                ((symbol-function 'roost--workspace-backend) (lambda () 'perspective))
+                ((symbol-function 'roost--current-workspace) (lambda () name))
+                ;; The frame on a pty is too small for a window beside another.
+                ((symbol-function 'roost--show-side-window)
+                 (lambda (&rest _) (push (selected-frame) shown) nil)))
+        (unwind-protect
+            (progn
+              (clrhash roost--tasks)
+              (roost-sidebar-mode 1)
+              (should-not shown)
+              (roost--apply-snapshot "dev" (list task))
+              (roost--redraw)
+              (should (memq (selected-frame) shown))
+              (should (memq other shown)))
+          (roost-sidebar-mode -1)
+          (roost-watch-mode -1)))))))
+
+;; With real perspectives: each `main' goes without, a frame in a task's
+;; perspective has it, and a new frame on a task's terminal has it until it
+;; shows something else.
+(ert-deftest roost-sidebar-follows-real-perspectives ()
+  (roost-test--with-perspectives
+   (let* ((roost-watch-interval 3600)
+          (task (roost--cache-task "dev" (roost-test--task "1111111111111111")))
+          (start (persp-current-name))
+          (terminal (generate-new-buffer " terminal"))
+          (file (generate-new-buffer "a file"))
+          (shown (lambda () (get-buffer-window roost--sidebar-buffer))))
+     (delete-other-windows)
+     (cl-letf (((symbol-function 'roost-refresh) #'ignore)
+               ((symbol-function 'frame-width) (lambda (&rest _) 200))
+               ((symbol-function 'roost--terminal-task)
+                (lambda (buffer) (and (eq buffer terminal) task))))
+       (unwind-protect
+           (progn
+             (roost-sidebar-mode 1)
+             (should-not (funcall shown))
+             (roost--activate-workspace task)
+             (roost--sync-side-windows)
+             (should (window-live-p (funcall shown)))
+             (persp-switch start)
+             (roost--sync-side-windows)
+             (should-not (funcall shown))
+             ;; Back in the task's, as perspective.el saved it.
+             (roost--activate-workspace task)
+             (roost--sync-side-windows)
+             (should (window-live-p (funcall shown)))
+             ;; A terminal of the task's in main, as a new frame starts with.
+             (persp-switch start)
+             (switch-to-buffer terminal)
+             (roost--sync-side-windows)
+             (should (window-live-p (funcall shown)))
+             (switch-to-buffer file)
+             (roost--sync-side-windows)
+             (should-not (funcall shown)))
+         (roost-sidebar-mode -1)
+         (roost-watch-mode -1)
+         (persp-switch start)
+         (let ((name (roost--perspective-name task)))
+           (persp-kill name)
+           (when-let* ((scratch (get-buffer (persp-scratch-buffer name))))
+             (kill-buffer scratch)))
+         (kill-buffer terminal)
+         (kill-buffer file))))))
+
 (ert-deftest roost-loading-adds-no-hooks ()
   (let ((window-configuration-change-hook nil)
         (window-size-change-functions nil)
@@ -5462,23 +5539,28 @@ of its own, which shows in the selected window of its workspace."
   ;; Emacs frozen until ssh connected or gave up: ten seconds for a host
   ;; that was down.  The error then blamed a closed pipe rather than ssh.
   (roost-test--isolated
-   (let ((large (make-string 200000 ?x))
-         (inputs (directory-files temporary-file-directory nil "\\`roost-input-")))
-     (dolist (case `((,large 2) ("{}" 2) ("{}" 0)))
-       (let ((start (float-time)) failure)
-         (roost--run nil (format "import sys,time; time.sleep(%d); sys.stderr.write('ssh: connect to host dev port 22: Operation timed out'); sys.exit(255)"
-                                 (cadr case))
-                     (car case) #'ignore (lambda (err) (setq failure err)))
-         (should (< (- (float-time) start) 1))
-         (roost-test--wait-for (lambda () failure))
-         (should (equal failure "ssh: connect to host dev port 22: Operation timed out"))))
-     (let (result)
-       (roost--run nil "import sys,json; data=sys.stdin.read(); print(json.dumps({'ok': True, 'result': [len(data), data[:3]]}))"
-                   (concat "é" large) (lambda (value) (setq result value)) #'ignore)
-       (roost-test--wait-for (lambda () result))
-       (should (equal result '(200001 "éxx"))))
-     (should-not roost--requests)
-     (should (equal (directory-files temporary-file-directory nil "\\`roost-input-") inputs)))))
+   ;; A directory of its own: any other Roost on this machine, or these
+   ;; tests in another worktree, make input files in the shared one.
+   (let ((temporary-file-directory (file-name-as-directory (make-temp-file "roost-inputs" t)))
+         (large (make-string 200000 ?x)))
+     (unwind-protect
+         (progn
+           (dolist (case `((,large 2) ("{}" 2) ("{}" 0)))
+             (let ((start (float-time)) failure)
+               (roost--run nil (format "import sys,time; time.sleep(%d); sys.stderr.write('ssh: connect to host dev port 22: Operation timed out'); sys.exit(255)"
+                                       (cadr case))
+                           (car case) #'ignore (lambda (err) (setq failure err)))
+               (should (< (- (float-time) start) 1))
+               (roost-test--wait-for (lambda () failure))
+               (should (equal failure "ssh: connect to host dev port 22: Operation timed out"))))
+           (let (result)
+             (roost--run nil "import sys,json; data=sys.stdin.read(); print(json.dumps({'ok': True, 'result': [len(data), data[:3]]}))"
+                         (concat "é" large) (lambda (value) (setq result value)) #'ignore)
+             (roost-test--wait-for (lambda () result))
+             (should (equal result '(200001 "éxx"))))
+           (should-not roost--requests)
+           (should-not (directory-files temporary-file-directory nil "\\`roost-input-")))
+       (delete-directory temporary-file-directory t)))))
 
 (defun roost-test--host-printing (file &optional failing)
   "A stub of `roost--python-command' for a host that prints FILE.
