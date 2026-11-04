@@ -279,6 +279,10 @@ class Lifecycle(unittest.TestCase):
                     self.assertFalse(reply["ok"], reply)
                     self.assertIn("Line 2 of the prompt holds", reply["error"])
                     self.assertIn("U+%04X" % code, reply["error"])
+                    # Alone, as what Python counts as white space, it is named too.
+                    reply = self.request("send", id=task["id"], text=chr(code))
+                    self.assertFalse(reply["ok"], reply)
+                    self.assertIn("U+%04X" % code, reply["error"])
         # Confirming the send, as at a menu, or sending notes, changes nothing.
         for args in (dict(force=True), dict(look=True)):
             reply = self.request("send", id=task["id"], text="before\x1b[201~\x1b[Zafter", **args)

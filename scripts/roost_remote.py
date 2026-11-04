@@ -3647,7 +3647,7 @@ def send(task, text, force=False):
     # may confirm with the user and force the send.
     if task["status"] in ("starting", "permission") and not force:
         raise RoostError("Open the task to finish startup or answer its permission prompt")
-    if not isinstance(text, str) or not text.strip():
+    if not isinstance(text, str):
         raise RoostError("Empty prompt")
     # A paste only marks text for the agent; its terminal still acts on
     # these. Refused, as your text isn't ours to change.
@@ -3659,6 +3659,8 @@ def send(task, text, force=False):
             name = "^%s (%s)" % (chr(ord(control) ^ 0x40), name)
         raise RoostError("Line %d of the prompt holds %s, a control character the agent's terminal would take "
                          "as a key; nothing was sent" % (text.count("\n", 0, text.index(control)) + 1, name))
+    if not text.strip():
+        raise RoostError("Empty prompt")
     buffer = "roost-" + uuid.uuid4().hex
     tmux(task["socket"], "load-buffer", "-b", buffer, "-", input=text)
     try:
