@@ -1025,6 +1025,9 @@ What runs where:
   allowing it.
 - Roost won't paste a prompt into an agent that is starting or asking for
   permission unless you confirm, as the paste could answer its menu.
+- Roost won't paste text holding a control character, other than a line
+  or page break or a tab, as the agent's terminal would take it as a key.
+  It says which and on what line, and sends nothing.
 
 Files:
 

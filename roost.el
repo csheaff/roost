@@ -3887,7 +3887,9 @@ Interactively, write the prompt in a draft buffer, which holds your
 review notes for the agent (see `roost-note'); \\<roost-send-mode-map>\\[roost-send-submit] sends it.
 While Roost last saw a startup or permission prompt, ask first: the
 paste could answer that menu, but agents report no event when a
-permission is declined in the terminal."
+permission is declined in the terminal.  TEXT holding a control
+character, other than a line or page break or a tab, is refused: the
+agent's terminal would take it as a key."
   (interactive)
   (setq task (roost--choose task))
   (if (and (not text) (called-interactively-p 'any))

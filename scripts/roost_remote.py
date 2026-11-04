@@ -3629,6 +3629,15 @@ def inspect(store, task):
     return task
 
 
+def control_character(value):
+    """The first character of VALUE that a terminal takes as a key, or None.
+    What real text holds is left, and does nothing in a paste: newlines and
+    tabs; carriage returns, which tmux pastes for each newline and which end
+    the lines quoted from a CRLF file's diff; and form feeds, which divide
+    the pages of much Emacs Lisp, so a quoted region can cross one."""
+    return next((c for c in value if unicodedata.category(c) == "Cc" and c not in "\n\r\t\f"), None)
+
+
 def send(task, text, force=False):
     pane = owned_pane(task, inventory_for(task))
     if not pane or pane["dead"]:
@@ -3640,6 +3649,16 @@ def send(task, text, force=False):
         raise RoostError("Open the task to finish startup or answer its permission prompt")
     if not isinstance(text, str) or not text.strip():
         raise RoostError("Empty prompt")
+    # A paste only marks text for the agent; its terminal still acts on
+    # these. Refused, as your text isn't ours to change.
+    control = control_character(text)
+    if control:
+        name = "U+%04X" % ord(control)
+        if ord(control) < 0x80:
+            # As Emacs shows it in the draft.
+            name = "^%s (%s)" % (chr(ord(control) ^ 0x40), name)
+        raise RoostError("Line %d of the prompt holds %s, a control character the agent's terminal would take "
+                         "as a key; nothing was sent" % (text.count("\n", 0, text.index(control)) + 1, name))
     buffer = "roost-" + uuid.uuid4().hex
     tmux(task["socket"], "load-buffer", "-b", buffer, "-", input=text)
     try:
