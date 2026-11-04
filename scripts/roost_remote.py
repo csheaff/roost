@@ -1912,9 +1912,10 @@ def create(store, request):
             task = made_for(store, create_id) or make_task(store, request, create_id)
     # Started from its parent's offer, which no longer waits; not by a task
     # an earlier request made under this ID, which is another's.
-    if request.get("parent") is not None and task.get("parent") == request["parent"] and text(request.get("offer")):
+    offer = text(request.get("offer"))
+    if offer and task.get("offer") == offer and task.get("parent") == request.get("parent"):
         with store.locked(), contextlib.suppress(RoostError, OSError):
-            dismiss_offer(store, store.read(request["parent"]), request["offer"])
+            dismiss_offer(store, store.read(request["parent"]), offer)
     return task
 
 
@@ -1995,10 +1996,11 @@ def make_task(store, request, create_id):
                 status="starting", startedAt=now(), updatedAt=now(), claudeSession=None)
     if create_id:
         task["createId"] = create_id
-    # The task whose agent offered this one, which you started.
+    # The task whose agent offered this one, which you started, and the offer.
     if request.get("parent") is not None:
         store.path(request["parent"])
         task["parent"] = request["parent"]
+        task["offer"] = text(request.get("offer"))
     issue = request.get("issue")
     if isinstance(issue, dict) and isinstance(issue.get("number"), int) and not isinstance(issue["number"], bool):
         task["issue"] = dict(number=issue["number"], title=text(issue.get("title")),
@@ -3855,8 +3857,8 @@ MCP_TOOLS = {
             "that shouldn't happen in this conversation. It returns at once: the offer waits in Roost, "
             "under this task, for the user to start, to have you do here, or to dismiss, and you can't "
             "start it yourself. Offering it again by the same title changes its brief, and one the "
-            "user dismissed can't be offered again. The new agent sees only the brief, not this conversation: say what to do, where, what you found, and "
-            "what done looks like."),
+            "user dismissed can't be offered again. The new agent sees only the brief, not this "
+            "conversation: say what to do, where, what you found, and what done looks like."),
         inputSchema=dict(type="object", required=["title", "brief"], properties=dict(
             title=dict(type="string", description="A short name for the task, as a few words"),
             brief=dict(type="string", description="Everything the new task's agent needs to start"))),
@@ -4059,7 +4061,7 @@ def send_offered(store, task, request):
     since a failure here would ask you to send what its agent has."""
     send(task, request["text"], request.get("force") is True)
     with contextlib.suppress(RoostError, OSError):
-        dismiss_offer(store, task, text(request.get("offer")))
+        return dismiss_offer(store, dict(task), text(request.get("offer")))
     return task
 
 

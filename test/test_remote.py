@@ -2833,11 +2833,14 @@ class Lifecycle(unittest.TestCase):
         # Its agent has it: a failure now would ask you to send it again.
         parent = self.create(name="parent")
         offer = self.offered(parent)
-        with patch.object(roost, "send") as sent, patch.object(roost, "dismiss_offer", side_effect=OSError(28, "No space")):
+        stamp = roost.Store(str(self.state)).read(parent["id"])["offersAt"]
+        with patch.object(roost, "send") as sent, patch.object(roost.Store, "save", side_effect=OSError(28, "No space")):
             reply = self.request("send", id=parent["id"], text=offer["brief"], offer=offer["id"])
         self.assertTrue(reply["ok"], reply)
         sent.assert_called_once()
+        # As its record has it, which a later listing has to be able to say.
         self.assertEqual(reply["result"]["offers"], [offer])
+        self.assertEqual(reply["result"]["offersAt"], stamp)
 
     def test_a_task_made_earlier_leaves_an_offer_waiting(self):
         # A creation ID asked with before answers with the task it made,
@@ -2851,6 +2854,21 @@ class Lifecycle(unittest.TestCase):
                              command=record["command"])
         self.assertEqual(reply["result"]["id"], earlier["id"])
         self.assertEqual(self.request("inspect", id=parent["id"])["result"]["offers"], [offer])
+
+    def test_a_task_made_from_one_offer_leaves_another_waiting(self):
+        # Under its parent too: only the offer it was started from has gone.
+        parent = self.create(name="parent")
+        record = roost.Store(str(self.state)).read(parent["id"])
+        first = self.offered(parent)
+        second = self.offered(parent, title="Fix the other thing")
+
+        def start(offer):
+            return self.request("create", directory=record["repo"], name=first["title"], prompt=first["brief"],
+                                parent=parent["id"], offer=offer["id"], createId="c" * 16, socket=self.socket,
+                                command=record["command"])
+        made = start(first)
+        self.assertEqual(start(second)["result"]["id"], made["result"]["id"])
+        self.assertEqual(self.request("inspect", id=parent["id"])["result"]["offers"], [second])
 
     def test_a_task_that_merges_into_no_branch_offers_none(self):
         # Started with the primary checkout on no branch, it has none to
@@ -8439,7 +8457,7 @@ class ProgramStatus(unittest.TestCase):
             repo = root / "repo"
             subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
             subprocess.run(["git", "-C", str(repo), "-c", "user.name=Roost", "-c", "user.email=roost@example.com",
-                            "commit", "-q", "--allow-empty", "-m", "Start"], check=True)
+                            "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "Start"], check=True)
             store = roost.Store(str(root / "state"))
             store.save(dict(id="0" * 16, agent="pi", status="running", runId="run", name="parent", repo=str(repo),
                             integrationBranch="main", integrationRef="refs/heads/main", updatedAt=roost.now()))

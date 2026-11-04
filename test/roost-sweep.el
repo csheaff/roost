@@ -447,9 +447,9 @@ among them."
     (setq roost--compose-body (copy-marker (point-min))
           roost--compose-fields (list :directory "/ssh:dev:/home/user/ledger/" :agent "claude"
                                       :base "refs/heads/main" :integration "main"
-                                      :name "Show each budget's total" :offer (list (roost-sweep--key state) "0a1b2c3d")
-                                      :offer-brief "Add one per budget."))
-    (insert "Add one per budget.")))
+                                      :name "Show each budget's total" :offer (list (roost-sweep--key state) "0a1b2c3d")))
+    (insert "Add one per budget.")
+    (setq roost--compose-fields (plist-put roost--compose-fields :offered (roost--compose-as-offered)))))
 
 (defvar roost-sweep--views
   '((panel :mode roost-task-info-mode :render roost--render-task-info :widths (40 100)

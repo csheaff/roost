@@ -11177,7 +11177,14 @@ With INITIAL, the box must start out holding it."
                (should-not asked)
                (should (equal (plist-get (buffer-local-value 'roost--compose-fields (get-buffer roost--compose-buffer)) :name)
                               "Lint"))
-               ;; Changed, it does.
+               ;; Changed, it does, in its fields as in its prompt.
+               (dolist (change '(:name :agent :base))
+                 (with-current-buffer roost--compose-buffer
+                   (should-not (roost--compose-written-p))
+                   (let ((was (plist-get roost--compose-fields change)))
+                     (setq roost--compose-fields (plist-put roost--compose-fields change "changed"))
+                     (should (roost--compose-written-p))
+                     (setq roost--compose-fields (plist-put roost--compose-fields change was)))))
                (with-current-buffer roost--compose-buffer
                  (goto-char (point-max))
                  (insert " And more."))
@@ -11341,6 +11348,31 @@ With INITIAL, the box must start out holding it."
                (funcall (nth 2 pending) (propertize "No reply after 30s" 'roost-no-reply t))
                (should-not roost--compose-submitting)
                (should (string-search "see its terminal" roost--draft-note))
+               (kill-buffer roost--compose-buffer)
+               ;; With no reply to Create, its task may yet be made, which
+               ;; nothing else of the offer may cross until it is settled,
+               ;; as asking the same again can.
+               (setq pending nil)
+               (roost--compose-offer task offer)
+               (set-buffer roost--compose-buffer)
+               (cl-letf (((symbol-function 'roost--remember-host) #'ignore)
+                         ((symbol-function 'roost-watch-mode) #'ignore))
+                 (roost-compose-submit)
+                 (funcall (nth 6 created) (propertize "No reply after 660s" 'roost-no-reply t)))
+               (dolist (other '(roost-compose-here roost-compose-dismiss))
+                 (should (string-prefix-p "Its task may yet be made"
+                                          (cadr (should-error (funcall other) :type 'user-error)))))
+               (should-not pending)
+               (let ((first created))
+                 (setq created nil)
+                 (roost-compose-submit)
+                 (should (equal (alist-get 'createId (nth 7 created)) (alist-get 'createId (nth 7 first)))))
+               ;; Answered that it failed, it wasn't made.
+               (funcall (nth 6 created) "No space left")
+               (should-not roost--compose-unsettled)
+               (roost-compose-dismiss)
+               (should pending)
+               (setq pending nil created nil)
                (kill-buffer roost--compose-buffer)
                ;; One that fails before it has gone gives the draft back.
                (cl-letf (((symbol-function 'roost--act) (lambda (&rest _) (error "No helper"))))

@@ -2747,7 +2747,8 @@ DIRECTORY's checkout, or a project Roost knows it is in."
 (defvar-local roost--compose-fields nil
   "Plist of the draft task: :directory :agent :base :integration :name :source.
 A draft of an offer has :offer, the key of the task whose agent made it
-and the offer's ID, and :offer-brief, the brief as the agent wrote it.")
+and the offer's ID, and :offered, what the offer filled in, as
+`roost--compose-as-offered' says it.")
 (defvar-local roost--compose-body nil
   "Marker at the start of the prompt text.")
 (defvar-local roost--compose-timer nil)
@@ -2775,6 +2776,9 @@ Nil too on another host, where reading it would hold up the draft."
 (defvar-local roost--compose-submitting nil
   "What the draft is doing, to say so, as creating its task, or nil.
 Its offer being sent or dismissed is too.")
+
+(defvar-local roost--compose-unsettled nil
+  "Whether the draft's request for its task got no reply, so it may yet be made.")
 
 (defvar-local roost--compose-asked nil
   "The project directory and the ID the draft last asked to create its task with.
@@ -3154,8 +3158,8 @@ request of one before it would be answered with that one's task."
                                                       (concat "refs/heads/" into))))
                             (plist-put :integration into)
                             (plist-put :name (alist-get 'title offer))
-                            (plist-put :offer key)
-                            (plist-put :offer-brief (string-trim (alist-get 'brief offer)))))
+                            (plist-put :offer key)))
+        (setq roost--compose-fields (plist-put roost--compose-fields :offered (roost--compose-as-offered)))
         (roost--compose-render)))))
 
 (defun roost--tiled-pane-window-p (window)
@@ -3500,7 +3504,7 @@ then for a folder there, starting above the project used last on it."
                             (plist-put :source nil)))
         (when leaves
           (setq roost--compose-fields
-                (thread-first roost--compose-fields (plist-put :offer nil) (plist-put :offer-brief nil)))
+                (thread-first roost--compose-fields (plist-put :offer nil) (plist-put :offered nil)))
           (message "This draft is no longer the offer's, which still waits under its task")))
       (roost--compose-render))))
 
@@ -3708,12 +3712,18 @@ waits under its task to be opened again."
       (when offer
         (message "The offer waits under its task; open it again from its row")))))
 
+(defun roost--compose-as-offered ()
+  "What of the draft an offer fills in and you can change."
+  (cons (roost--compose-prompt)
+        (mapcar (lambda (field) (plist-get roost--compose-fields field))
+                '(:name :agent :base :issue))))
+
 (defun roost--compose-written-p ()
-  "Whether the draft holds a prompt of yours, not only its offer's as it came."
-  (let ((prompt (roost--compose-prompt)))
-    (not (or (string-empty-p prompt)
-             (and (plist-get roost--compose-fields :offer)
-                  (equal prompt (plist-get roost--compose-fields :offer-brief)))))))
+  "Whether the draft holds something of yours.
+That is a prompt, or in a draft of an offer, any change to what it filled in."
+  (if (plist-get roost--compose-fields :offer)
+      (not (equal (roost--compose-as-offered) (plist-get roost--compose-fields :offered)))
+    (not (string-empty-p (roost--compose-prompt)))))
 
 (defun roost--compose-busy ()
   "Refuse while the draft's task is being created, or its offer sent or
@@ -3741,8 +3751,13 @@ before it has gone gives the draft back."
     (when (buffer-live-p buffer) (kill-buffer buffer))))
 
 (defun roost--compose-offering-task ()
-  "The task whose agent made the offer this draft is of."
+  "The task whose agent made the offer this draft is of.
+Refused while the task asked for may yet be made, which does the
+offer's work: the same request asked again settles that."
   (let ((offer (or (plist-get roost--compose-fields :offer) (user-error "This draft isn't of an offer"))))
+    (when roost--compose-unsettled
+      (user-error "Its task may yet be made; %s asks again"
+                  (substitute-command-keys "\\[roost-compose-submit]")))
     (or (gethash (car offer) roost--tasks)
         (user-error "The task that offered it is no longer listed"))))
 
@@ -3839,8 +3854,9 @@ EVENT, a click on the draft's Create button, says which draft."
           (lambda (err)
             (when (buffer-live-p buffer)
               (with-current-buffer buffer
-                (setq roost--compose-submitting nil)
-                (if (not (get-text-property 0 'roost-no-reply err))
+                (setq roost--compose-submitting nil
+                      roost--compose-unsettled (get-text-property 0 'roost-no-reply err))
+                (if (not roost--compose-unsettled)
                     (progn (message "Roost could not create the task: %s" err)
                            (roost--draft-error "Could not create the task" err
                                                'roost-compose-submit))
