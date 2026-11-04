@@ -4034,6 +4034,11 @@ draft's Send button, says which draft."
            (when (buffer-live-p buffer)
              (with-current-buffer buffer
                (setq roost--send-sending nil)
+               ;; The blank lines above it weren't sent, and the host counts
+               ;; the lines it names from what was.
+               (delete-region (point-min) (save-excursion (goto-char (point-min))
+                                                          (skip-chars-forward " \t\n")
+                                                          (line-beginning-position)))
                (roost--draft-error "Could not send" err 'roost-send-submit))))
          ;; You have looked at what your notes are about.
          (and notes t))

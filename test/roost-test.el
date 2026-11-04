@@ -7006,6 +7006,32 @@ With FAILING, it prints it on stderr and exits with status 1."
         (should (string-match-p "boom" (roost-test--header)))
         (should (equal (buffer-string) "hello")))))))
 
+(ert-deftest roost-a-refused-draft-numbers-its-lines-as-its-host-did ()
+  "A host names a line of what it was sent, which starts below the blank
+lines a quote leaves for your own words."
+  (roost-test--isolated
+   (roost-test--with-send-buffers
+    (let ((task (roost--cache-task "dev" (roost-test--task))) sent)
+      (cl-letf (((symbol-function 'pop-to-buffer) #'set-buffer)
+                ((symbol-function 'roost--request)
+                 (lambda (_host _action params _success failure)
+                   (setq sent (alist-get 'text params))
+                   (funcall failure "Line 2 of the prompt holds ^[ (U+001B)"))))
+        (roost--send-draft task "a.py:1-1\n\e[31mred")
+        (should (equal (buffer-string) "\n\na.py:1-1\n\e[31mred"))
+        (roost-send-submit)
+        (should (equal sent "a.py:1-1\n\e[31mred"))
+        (should (string-match-p "Line 2" (roost-test--header)))
+        (should (equal (buffer-string) sent))
+        (goto-char (point-min))
+        (forward-line 1)
+        (should (eq (char-after) ?\e))
+        ;; Your own indentation of its first line isn't a blank line.
+        (erase-buffer)
+        (insert "  \n\t\n  indented")
+        (roost-send-submit)
+        (should (equal (buffer-string) "  indented")))))))
+
 ;; Attachments
 
 (defmacro roost-test--attaching (sent &rest body)
