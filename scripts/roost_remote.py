@@ -632,6 +632,8 @@ CLAUDE_HOOK_EVENTS = ("SessionStart", "SessionEnd", "UserPromptSubmit", "PreTool
 # seconds, and of its answer, or the link it gave followed.
 FORM_NOTICES = ("elicitation_dialog", "elicitation_url_dialog")
 FORM_ANSWERS = ("elicitation_response", "elicitation_complete")
+# What a form can interrupt that nothing moves on from by itself.
+FORM_RESTS = ("ready", "background", "failed")
 # Claude Code's notifications of a prompt that its own words name.
 NAMED_NOTIFICATIONS = ("permission_prompt",) + FORM_NOTICES
 # The first Claude Code that knows all of them. Older ones skip a whole
@@ -849,10 +851,13 @@ class ClaudeAgent:
             # what it interrupted: work, or rest, as a form a server opens
             # between turns.
             if kind in FORM_ANSWERS and current == "permission" and (source or "").startswith("form"):
-                status = {"form:ready": "ready", "form:background": "background"}.get(source, "running")
+                status = source.partition(":")[2] or "running"
         if not status:
             return None
         updates = dict(status=status, updatedAt=now(), lastEvent=event, error=None)
+        # A form says nothing of why a turn failed, which it goes back to.
+        if event == "Notification" and payload.get("notification_type") in FORM_NOTICES + FORM_ANSWERS:
+            del updates["error"]
         # A prompt that runs no PermissionRequest, as when a sandboxed
         # command needs a new network host, is named by its notification;
         # so is one that comes while a form waits, which its answer then
@@ -863,7 +868,7 @@ class ClaudeAgent:
                 and (current != "permission" or (source or "").startswith("form"))):
             updates["request"] = one_line(message)[:REQUEST_LIMIT]
             if kind in FORM_NOTICES and current != "permission":
-                updates["requestFrom"] = "form:" + current if current in ("ready", "background") else "form"
+                updates["requestFrom"] = "form:" + current if current in FORM_RESTS else "form"
             elif kind in FORM_NOTICES:
                 # Another form behind the first: still a form's wait, back to
                 # what the first interrupted once answered. Claude names the
@@ -1513,14 +1518,21 @@ class OpenCodeAgent:
                 raise RoostError("Roost adds its observer to OPENCODE_CONFIG_CONTENT, which must be a JSON object")
         plugins = config.get("plugin") if isinstance(config.get("plugin"), list) else []
         config["plugin"] = plugins + [self.plugin(store).as_uri()]
-        # Roost's own tools. An OpenCode that shows no form for a server's
-        # question is offered none to start a task with.
+        # Roost's own tools, which this config hands on as it does the plugin.
         servers = config.get("mcp") if isinstance(config.get("mcp"), dict) else {}
-        config["mcp"] = dict(servers, roost=dict(type="local", command=[sys.executable] + mcp_arguments(store, task)))
+        config["mcp"] = dict(servers, roost=dict(type="local",
+                                                 command=[sys.executable] + mcp_arguments(store, task) + ["opencode"]))
         # Its plugin marks the OpenCode that reports; one Roost starts, as
         # from another task's shell, is a new one.
         return {"OPENCODE_CONFIG_CONTENT": json.dumps(config), "ROOST_OPENCODE_OBSERVER": "",
                 "ROOST_OPENCODE_ATTACHMENTS": str(store.attachments(task["id"])) + "/*"}
+
+    @staticmethod
+    def nested():
+        """Whether the OpenCode that runs this server is one started from
+        Roost's, as by its shell tool, which the plugin has marked by now."""
+        observer = os.environ.get("ROOST_OPENCODE_OBSERVER")
+        return bool(observer) and observer != str(os.getppid())
 
     def request(self, payload):
         """What a question or permission request asks, in Roost's words."""
@@ -1688,16 +1700,25 @@ def name_slug(name):
     return re.sub(r"[^a-zA-Z0-9_]+", "-", folded).strip("-")[:50].rstrip("-") or "task"
 
 
+def hidden_character(value):
+    """The first character of VALUE that draws nothing, or turns the text
+    after it around, so that what you read isn't what an agent gets, or
+    None. The joiners and the soft hyphen that real writing has can stay."""
+    return next((c for c in value
+                 if (unicodedata.category(c) == "Cf" and ord(c) not in (0xAD, 0x200C, 0x200D))
+                 # The variation selectors past the emoji's, which select nothing.
+                 or 0xE0100 <= ord(c) <= 0xE01EF), None)
+
+
 def task_name(value):
     """VALUE, trimmed, as a task's name, or an error when it can't be one."""
     name = value.strip() if isinstance(value, str) else ""
     if not any(c.isalnum() for c in name):
         raise RoostError("Give the task a printable name containing letters or numbers")
-    # Nor one a terminal takes as keys, or that turns the rest of a row
-    # around, as an agent's title for a task it offers might be, or a name
-    # pasted from where such marks are hidden.
-    hidden = next((c for c in name if unicodedata.category(c) == "Cc"
-                   or "\u202a" <= c <= "\u202e" or "\u2066" <= c <= "\u2069"), None)
+    # Nor one a terminal takes as keys, or that hides text or turns the
+    # rest of a row around, as an agent's title for a task it offers might,
+    # or a name pasted from where such marks are hidden.
+    hidden = next((c for c in name if unicodedata.category(c) == "Cc"), None) or hidden_character(name)
     if hidden:
         raise RoostError("The name holds U+%04X, a control or direction mark that may not show; "
                          "type the name without it" % ord(hidden))
@@ -1889,8 +1910,9 @@ def create(store, request):
     else:
         with asking_for(store, create_id):
             task = made_for(store, create_id) or make_task(store, request, create_id)
-    # Started from its parent's offer, which no longer waits.
-    if request.get("parent") is not None and text(request.get("offer")):
+    # Started from its parent's offer, which no longer waits; not by a task
+    # an earlier request made under this ID, which is another's.
+    if request.get("parent") is not None and task.get("parent") == request["parent"] and text(request.get("offer")):
         with store.locked(), contextlib.suppress(RoostError, OSError):
             dismiss_offer(store, store.read(request["parent"]), request["offer"])
     return task
@@ -2339,10 +2361,11 @@ def list_tasks(store, request):
     return tasks
 
 
-def reconcile(store, tasks):
+def reconcile(store, tasks, save=True):
     """Put right what TASKS' records say of their agents where no event
     told: a pane that ended or came back, a turn you stopped, a request you
-    approved. Under the registry lock."""
+    approved. Under the registry lock; or without SAVE, for what an agent
+    reads from its own environment, only in TASKS as they were read."""
     inventories = {}
     table = None  # The process table, read only when a request may have been approved.
     for task in tasks:
@@ -2350,7 +2373,8 @@ def reconcile(store, tasks):
         if socket not in inventories:
             inventories[socket] = pane_inventory(socket)
         inventory = inventories[socket]
-        if inventory is None:
+        # An agent inside tmux that finds no server looked in the wrong place.
+        if inventory is None or not (save or inventory):
             # tmux could not answer: keep the last observed status rather than
             # declaring every agent on this socket crashed.
             task["live"] = None
@@ -2384,7 +2408,7 @@ def reconcile(store, tasks):
                 for key in ("request", "requestCommand", "requestFrom"):
                     task.pop(key, None)
                 changed = True
-        if changed:
+        if changed and save:
             store.save(task)
 
 
@@ -3830,8 +3854,8 @@ MCP_TOOLS = {
             "Offer the user a task of its own, with its own agent, Git worktree and branch, for work "
             "that shouldn't happen in this conversation. It returns at once: the offer waits in Roost, "
             "under this task, for the user to start, to have you do here, or to dismiss, and you can't "
-            "start it yourself. Offering it again by the same title changes its brief. The new agent "
-            "sees only the brief, not this conversation: say what to do, where, what you found, and "
+            "start it yourself. Offering it again by the same title changes its brief, and one the "
+            "user dismissed can't be offered again. The new agent sees only the brief, not this conversation: say what to do, where, what you found, and "
             "what done looks like."),
         inputSchema=dict(type="object", required=["title", "brief"], properties=dict(
             title=dict(type="string", description="A short name for the task, as a few words"),
@@ -3851,8 +3875,10 @@ STATUS_SAID = {"starting": "starting", "running": "working", "background": "work
                "permission": "waiting for the user to answer it", "ready": "waiting for a prompt",
                "stopped": "stopped", "exited": "exited", "failed": "stopped on an error",
                "crashed": "crashed"}
-# The most offers a task keeps waiting for you at once.
+# The most offers a task keeps waiting for you at once, and the most titles
+# of those you dismissed that it remembers.
 OFFER_LIMIT = 3
+DECLINED_LIMIT = 20
 
 
 class McpError(Exception):
@@ -3869,10 +3895,14 @@ class McpServer:
     def __init__(self, store, task_id, reader=None, writer=None):
         """READER, as a test's, or else standard input."""
         self.store, self.task_id = store, task_id
-        self.reader, self.writer = reader, writer or sys.stdout
+        self.reader, self.writer = reader, writer or sys.stdout.buffer
 
     def write(self, message):
-        self.writer.write(json.dumps(dict(message, jsonrpc="2.0"), ensure_ascii=False) + "\n")
+        # UTF-8 whatever the locale, and with what no reply can carry, as a
+        # lone surrogate from a transcript, replaced: an agent waits for
+        # every answer until you stop it.
+        line = json.dumps(dict(message, jsonrpc="2.0"), ensure_ascii=False) + "\n"
+        self.writer.write(line.encode("utf-8", "replace"))
         self.writer.flush()
 
     def lines(self):
@@ -3885,10 +3915,12 @@ class McpServer:
     def serve(self):
         with contextlib.suppress(BrokenPipeError):
             for line in self.lines():
-                with contextlib.suppress(ValueError):
+                try:
                     message = json.loads(line)
-                    if isinstance(message, dict):
-                        self.handle(message)
+                except ValueError:
+                    continue
+                if isinstance(message, dict):
+                    self.handle(message)
 
     def handle(self, message):
         method, ident = message.get("method"), message.get("id")
@@ -3962,7 +3994,7 @@ def set_offers(task, offers):
 def control_character(value):
     """The first character of VALUE that a terminal takes as a key, other
     than a line break or a tab, or None."""
-    return next((c for c in value if ord(c) < 32 and c not in "\n\t" or 127 <= ord(c) < 160), None)
+    return next((c for c in value if unicodedata.category(c) == "Cc" and c not in "\n\t"), None)
 
 
 def propose_task(store, task_id, title, brief):
@@ -3974,11 +4006,13 @@ def propose_task(store, task_id, title, brief):
     # Refused now, rather than once you have chosen to start it.
     task_name(title)
     # Done where it was offered, the brief is pasted into its agent's
-    # terminal, where one, as Escape, would end the paste and press the rest.
-    hidden = control_character(brief)
+    # terminal, where a control character, as Escape, would end the paste
+    # and press the rest. And you read it in its draft before it starts
+    # anything, where one that draws nothing hides what its new agent gets.
+    hidden = control_character(brief) or hidden_character(brief)
     if hidden:
-        raise RoostError("The brief holds U+%04X, a control character its terminal would take as a key; "
-                         "write it as plain text" % ord(hidden))
+        raise RoostError("The brief holds U+%04X, a character a terminal takes as a key, or that doesn't "
+                         "show in the draft the user reads; write it as plain text" % ord(hidden))
     if len(brief.encode()) > PROMPT_ARGUMENT_LIMIT:
         raise RoostError("The brief is %d KB, and a task can start with at most %d KB; shorten it"
                          % (-(-len(brief.encode()) // 1024), PROMPT_ARGUMENT_LIMIT // 1024))
@@ -3997,6 +4031,9 @@ def propose_task(store, task_id, title, brief):
         # Its agent may be gone already, as when you stopped the task.
         if task["status"] in ("stopped", "retired"):
             raise RoostError("The task is %s" % task["status"])
+        if title in (task.get("declined") or []):
+            raise RoostError("The user dismissed this offer in Roost, so it isn't offered again; mention "
+                             "the work in your reply if it still matters")
         offers = task_offers(task)
         again = next((offer for offer in offers if offer["title"] == title), None)
         if again:
@@ -4016,6 +4053,16 @@ def propose_task(store, task_id, title, brief):
             "can't start it yourself.")
 
 
+def send_offered(store, task, request):
+    """Send TASK REQUEST's text. Sent from an offer's draft, as its brief,
+    the offer no longer waits; one that can't be dropped stays to dismiss,
+    since a failure here would ask you to send what its agent has."""
+    send(task, request["text"], request.get("force") is True)
+    with contextlib.suppress(RoostError, OSError):
+        dismiss_offer(store, task, text(request.get("offer")))
+    return task
+
+
 def dismiss_offer(store, task, offer):
     """TASK, saved without its offer OFFER, an ID, as you dismissed it or
     started it."""
@@ -4025,6 +4072,15 @@ def dismiss_offer(store, task, offer):
         set_offers(task, still)
         store.save(task)
     return task
+
+
+def decline_offer(store, task, offer):
+    """TASK, saved without its offer OFFER, an ID, as you dismissed it,
+    which its agent can't see: its title is kept, to refuse it next time."""
+    title = next((other["title"] for other in task_offers(task) if other["id"] == offer), None)
+    if title:
+        task["declined"] = ((task.get("declined") or []) + [title])[-DECLINED_LIMIT:]
+    return dismiss_offer(store, task, offer)
 
 
 def offered_base(parent):
@@ -4051,10 +4107,10 @@ def started_by(store, task_id, wanted=None):
 
 
 def read_tasks(store, task_id, wanted=None):
-    # As a listing has them, also while Emacs isn't listing them.
-    with store.locked():
-        tasks = started_by(store, task_id, wanted)
-        reconcile(store, tasks)
+    tasks = started_by(store, task_id, wanted)
+    # As a listing has them, also while Emacs isn't listing them, but saved
+    # only by one: a startup file can send the agent's tmux elsewhere.
+    reconcile(store, tasks, save=False)
     if not tasks:
         return "No task has started from your offers."
     said = []
@@ -6664,7 +6720,7 @@ def require_not_removing(store, task, action):
 
 
 # Kept in task records for the helper's own use, and not sent to Emacs.
-PRIVATE = ("lastReply", "transcript", "requestFrom", "hookAt")
+PRIVATE = ("lastReply", "transcript", "requestFrom", "hookAt", "declined")
 
 
 def outgoing(result):
@@ -6683,9 +6739,7 @@ TASK_ACTIONS = {
     "resume": lambda store, task, request: resume(store, task, request.get("programStatus"),
                                                         size_options(request)),
     "stop": lambda store, task, request: stop(store, task),
-    # Sent from an offer's draft, as its brief, the offer no longer waits.
-    "send": lambda store, task, request: dismiss_offer(store, send(task, request["text"], request.get("force") is True),
-                                                       text(request.get("offer"))),
+    "send": send_offered,
     "shell": lambda store, task, request: shell(store, task),
     "attach": lambda store, task, request: attach(store, task, request.get("files")),
     "inspect": lambda store, task, request: inspect(store, task),
@@ -6702,7 +6756,7 @@ TASK_ACTIONS = {
                                                     request.get("dryRun") is True,
                                                     text(request.get("teardown"))),
     "update": lambda store, task, request: update(store, task),
-    "dismiss-offer": lambda store, task, request: dismiss_offer(store, task, text(request.get("offer"))),
+    "dismiss-offer": lambda store, task, request: decline_offer(store, task, text(request.get("offer"))),
 }
 
 
@@ -6846,6 +6900,9 @@ def main():
     elif mode == "run":
         return runner(sys.argv[2], sys.argv[3], sys.argv[4], len(sys.argv) > 5)
     elif mode == "mcp":
+        # Its tools would offer tasks as the agent of a task it isn't.
+        if sys.argv[4:] == ["opencode"] and OpenCodeAgent.nested():
+            return 0
         global DETACHED
         DETACHED = True
         McpServer(Store(sys.argv[2]), sys.argv[3]).serve()

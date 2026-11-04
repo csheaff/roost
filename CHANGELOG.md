@@ -18,10 +18,10 @@ What each release changes, and what to do when upgrading. Newest first.
   on you, a few seconds after it opens, and, once you answer it, goes back
   to working or to rest, as the form found it, unless a request that came
   meanwhile still waits. Nothing to do when upgrading.
-- A task's name can't hold characters a terminal takes as keys, or that
-  turn the rest of a line around, and Roost names the one it found. To
-  rename a task whose name holds one, as pasted from a chat, type its
-  name afresh rather than editing the old one.
+- A task's name can't hold characters a terminal takes as keys, that draw
+  nothing, or that turn the rest of a line around, and Roost names the one
+  it found. To rename a task whose name holds one, as pasted from a chat,
+  type its name afresh rather than editing the old one.
 - A task panel that `i` showed beside a terminal closes when its task
   opens there and the panel docks at the right, rather than showing
   twice. The window goes back to what it showed before, or closes if `i`

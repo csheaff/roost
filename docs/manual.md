@@ -252,10 +252,12 @@ header has four buttons:
 
 Telling the agent in its terminal to do the work there works too; the offer
 then waits until you dismiss it. The agent can't start a task itself. A
-task keeps at most three offers waiting, and one offered again by its title
-changes its brief. A task that merges into no branch, as one started with
-the primary checkout on none, or whose branch to merge into is gone, offers
-none.
+task keeps at most three offers waiting, one offered again by its title
+changes its brief, and one you dismissed can't be offered again by that
+title. A task that merges into no branch, as one started with the primary
+checkout on none, or whose branch to merge into is gone, offers none. On an
+offer's row, the keys for a task, and `mouse-3`, act on the task it sits
+under.
 
 A task you start this way shows under the one it came from in the dashboard
 and sidebar, and each task's panel names the other. The agent that offered
@@ -1079,9 +1081,12 @@ What runs where:
   you start, from Roost, and reads only the tasks started from its offers;
   it types into no terminal. A brief that holds a control character, such
   as Escape, is refused, as Do it here would type it into the agent's
-  terminal, which would take it as a key. Claude Code's settings for the
-  task allow offering and reading without asking, as an offer only waits
-  for you and reading changes nothing, and the tools tell Codex the same.
+  terminal, which would take it as a key; so is a title or brief with a
+  character that draws nothing, or turns the text after it around, which
+  would hide from the draft you read what the new agent gets. Claude
+  Code's settings for the task allow offering and reading without asking,
+  as an offer only waits for you and reading changes nothing, and the
+  tools tell Codex the same.
   Codex gives the server only some of its environment, and Roost names the
   one more it needs: where tmux keeps its server.
 - Claude Code and OpenCode may read one folder outside the task's

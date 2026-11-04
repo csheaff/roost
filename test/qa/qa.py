@@ -2544,15 +2544,21 @@ def leave_discard_question(qa, tasks):
 
 def offer_row(qa, screen, title):
     """Whether the sidebar lists an offer of TITLE under its task."""
-    return any(re.match(r" +%s.* offer$" % re.escape(title), line)
-               for line in qa.window(screen, "roost-sidebar-list-mode")["text"].split("\n"))
+    return any(re.match(r" +%s.* offer$" % re.escape(title), line) for line in sidebar_rows(screen).split("\n"))
+
+
+def click_offer(qa, title):
+    """Click the offer of TITLE in the sidebar, which many tasks can scroll
+    out of sight."""
+    qa.emacs.eval("(qa-scroll-to-text %s \"roost-sidebar-list-mode\")" % lisp(title))
+    qa.click_text(title, "roost-sidebar-list-mode")
 
 
 def leave_offer_draft(qa, tasks):
     # Its agent offers a task, whose draft you open from its row and change.
     qa.type("offer Walk away\r")
     qa.wait("the offer under its task", lambda s: offer_row(qa, s, "Walk away"))
-    qa.click_text("Walk away", "roost-sidebar-list-mode")
+    click_offer(qa, "Walk away")
     qa.wait("its draft", lambda s: (qa.window(s, "roost-compose-mode") or {}).get("selected"))
     qa.type("Half a thought. ")
 
@@ -2764,6 +2770,22 @@ def go_other_directory(qa, target):
     qa.click_text("Other directory…", "roost-sidebar-list-mode")
 
 
+WALK_OFFER = "Tally it later"
+
+
+def draft_kept(qa):
+    """Whether a draft still holds what the walk left half written."""
+    return any("Half a thought" in draft for draft in qa.emacs.json("(json-encode (vconcat (qa-drafts)))"))
+
+
+def go_offer(qa, target):
+    # A draft you wrote in is asked about, in a dialog after a click.
+    if qa.emacs.eval("(when-let* ((draft (get-buffer roost--compose-buffer)))"
+                     " (with-current-buffer draft (and (roost--compose-written-p) t)))") == "t":
+        qa.emacs.eval('(qa-answer-popups "No")')
+    click_offer(qa, WALK_OFFER)
+
+
 WALK_INTERRUPTERS = [
     ("a click on another task", go_click, "other"),
     ("l in the sidebar", go_switch, "other"),
@@ -2780,6 +2802,7 @@ WALK_INTERRUPTERS = [
     ("a click on a notification", go_notification, "other"),
     ("a click in the terminal", go_terminal, None),
     ("a click on a project to start a task in", go_project, None),
+    ("a click on an agent's offer", go_offer, None),
     ("a click on Other directory…", go_other_directory, None),
 ]
 
@@ -2823,6 +2846,12 @@ def walk_away(qa, repo):
         qa.wait("its review thread", lambda s: qa.emacs.eval(
             "(and (alist-get 'openThreads (roost--field (seq-find (lambda (task) (equal (roost--field task 'name) %s))"
             " (roost-tasks)) 'prStatus)) t)" % lisp(other)) == "t")
+    # An offer of its own, to click on.
+    open_task(qa, other)
+    # Its pull request's word stands in for ready.
+    qa.wait("its turn over", lambda s: qa.task(s, other)["status"] not in ("starting", "running", "permission"))
+    qa.type("offer %s\r" % WALK_OFFER)
+    qa.wait("its offer", lambda s: offer_row(qa, s, WALK_OFFER))
     waiting = new_task(qa, "ask git log")
     qa.status(waiting, "permission")
     timeout = 15 if qa.host else 8
@@ -2857,6 +2886,13 @@ def walk_away(qa, repo):
                 # A draft begun stays as it is; an untouched one is the project's.
                 opens = ("a new task's draft opens, selected",
                          lambda s: (qa.window(s, "roost-compose-mode") or {}).get("selected"))
+            elif go is go_offer:
+                # A draft you wrote in stays, if you say so.
+                opens = (("your draft stays in its place", lambda s: draft_kept(qa))
+                         if leave in (leave_draft, leave_offer_draft) else
+                         ("the offer's draft opens, selected",
+                          lambda s: (qa.window(s, "roost-compose-mode") or {}).get("selected")
+                          and "offered by " + other in qa.window(s, "roost-compose-mode")["text"]))
             elif go is go_other_directory:
                 opens = ("its folder is the one question open",
                          lambda s: (s["prompt"] or "").startswith("Project checkout")
@@ -2882,8 +2918,7 @@ def walk_away(qa, repo):
                 qa.settle()
                 expect.append(late)
             if leave in (leave_draft, leave_attaching):
-                expect.append(("the draft is kept", lambda s: any(
-                    "Half a thought" in draft for draft in qa.emacs.json("(json-encode (vconcat (qa-drafts)))"))))
+                expect.append(("the draft is kept", lambda s: draft_kept(qa)))
             if leave is leave_note_box:
                 box = lambda s: qa.window(s, "roost-note-box-mode")
                 expect += [
@@ -3240,7 +3275,7 @@ def offer(qa, repo):
     qa.status(parent, "ready", "idle")
 
     def under(screen, title, word=None):
-        lines = qa.window(screen, "roost-sidebar-list-mode")["text"].split("\n")
+        lines = sidebar_rows(screen).split("\n")
         row = next((i for i, line in enumerate(lines) if line.startswith(" " + parent[:12])), None)
         return row is not None and row + 1 < len(lines) and lines[row + 1].startswith("   " + title[:12]) \
             and (word is None or lines[row + 1].endswith(" " + word))
@@ -3254,7 +3289,7 @@ def offer(qa, repo):
          lambda s: "It waits in Roost under this task" in selected_terminal(s)["text"])])
 
     def opened(title):
-        qa.click_text(title, "roost-sidebar-list-mode")
+        click_offer(qa, title)
         qa.wait("its draft", lambda s: (qa.window(s, "roost-compose-mode") or {}).get("selected"))
 
     opened("Document the notes")

@@ -981,10 +981,12 @@ host measured, such as Git statistics, is as new as anything."
 An offer made, started or dismissed is no event of the agent's, which
 `roost--newer-events' goes by, and leaves `updatedAt' as it was, so you
 have still seen the task: this keeps a reply read before the change from
-bringing back an offer since started or dismissed, or hiding a new one."
+bringing back an offer since started or dismissed, or hiding a new one.
+A reply as old as OLD doesn't replace it either, as OLD may have lost an
+offer here, to the task just started from it."
   (let ((changed (roost--field old 'offersAt)))
     (if (not (and (stringp changed)
-                  (string< (or (roost--field task 'offersAt) "") changed)))
+                  (not (string< changed (or (roost--field task 'offersAt) "")))))
         task
       (dolist (field '(offers offersAt) task)
         (setq task (assq-delete-all field (copy-sequence task)))
@@ -2771,9 +2773,8 @@ Nil too on another host, where reading it would hold up the draft."
           (cons directory (and directory (roost--checkout-branch directory)))))
   (cdr roost--compose-checkout-branch))
 (defvar-local roost--compose-submitting nil
-  "Non-nil while the drafted task is being created.
-A string says what else of the draft's is under way, as its offer
-being sent or dismissed.")
+  "What the draft is doing, to say so, as creating its task, or nil.
+Its offer being sent or dismissed is too.")
 
 (defvar-local roost--compose-asked nil
   "The project directory and the ID the draft last asked to create its task with.
@@ -2818,16 +2819,18 @@ BUTTONS are as `roost--header-buttons' takes them, shown where clicks
 reach Emacs, and not while BUSY.  Text that doesn't fit beside them is
 cut short, with all of it in its help-echo: they are how a hand on the
 mouse tries again, or gives up."
-  (let ((text (or roost--draft-note text)))
+  (let ((text (or roost--draft-note text))
+        ;; A header line reads a name's % as one of its own constructs.
+        (literal (lambda (string) (string-replace "%" "%%" string))))
     (if (or busy (not (roost--clicks-p)))
-        text
+        (funcall literal text)
       (let* ((buttons (roost--header-buttons buttons))
              (width (string-pixel-width buttons))
              (room (max 0 (- (window-max-chars-per-line) (ceiling width (frame-char-width)) 2))))
         (concat (if (> (string-width text) room)
-                    (propertize (truncate-string-to-width text room nil nil "…")
+                    (propertize (funcall literal (truncate-string-to-width text room nil nil "…"))
                                 'help-echo (string-trim text))
-                  text)
+                  (funcall literal text))
                 (propertize " " 'display `(space :align-to (- right (,(+ width (frame-char-width))))))
                 buttons)))))
 
@@ -3115,22 +3118,31 @@ prompt are the offer's title and brief, to change as you like."
                (task (or (gethash key roost--tasks)
                          (user-error "That task is no longer listed; refresh with `g'")))
                (offer (or (seq-find (lambda (offer) (equal (alist-get 'id offer) id)) (roost--offers task))
-                          (user-error "That offer no longer waits; refresh with `g'"))))
-    (roost--compose-offer task offer)))
+                          (user-error "That offer no longer waits; refresh with `g'")))
+              (open (lambda () (roost--compose-offer task offer))))
+    ;; A question left open would give back the windows it found, without
+    ;; the draft, once it ended.
+    (or (roost--quit-questions-left-open open)
+        (funcall open))))
 
 (defun roost--compose-offer (task offer)
   "Open the new task draft of OFFER, which TASK's agent made.
 A draft of this offer already open is shown as you left it; one of
-anything else you have written in is replaced only if you say so."
+anything else you have written in is replaced only if you say so, and
+one on its way to its host isn't.  It starts anew either way, as the
+request of one before it would be answered with that one's task."
   (let* ((key (list (roost--key task) (alist-get 'id offer)))
          (buffer (get-buffer roost--compose-buffer))
          (into (roost--field task 'integrationBranch)))
     (if (and buffer (equal (plist-get (buffer-local-value 'roost--compose-fields buffer) :offer) key))
         (progn (roost--leave-side-window)
                (roost--pop-to-buffer-in-place buffer))
-      (when (and buffer (not (string-empty-p (with-current-buffer buffer (roost--compose-prompt)))))
-        (unless (yes-or-no-p "Put this offer in place of your task draft? ")
-          (user-error "Your task draft is as it was"))
+      (when buffer
+        (when (with-current-buffer buffer
+                (roost--compose-busy)
+                (roost--compose-written-p))
+          (unless (yes-or-no-p "Put this offer in place of your task draft? ")
+            (user-error "Your task draft is as it was")))
         (kill-buffer buffer))
       (roost--compose nil (cons (alist-get 'brief offer) t) (roost--project-directory task))
       (with-current-buffer roost--compose-buffer
@@ -3687,18 +3699,46 @@ waits under its task to be opened again."
   ;; One of the draft's own, as for its name, would outlive it.
   (roost--quit-questions-here #'roost-compose-cancel)
   (let ((offer (plist-get roost--compose-fields :offer)))
-    (when (or (string-empty-p (roost--compose-prompt))
-              (and offer (equal (roost--compose-prompt) (plist-get roost--compose-fields :offer-brief)))
+    ;; What is under way goes on, and an offer it ends no longer waits.
+    (when offer
+      (roost--compose-busy))
+    (when (or (not (roost--compose-written-p))
               (yes-or-no-p (if offer "Discard your changes to this offer? " "Discard this task draft? ")))
       (quit-window t)
       (when offer
         (message "The offer waits under its task; open it again from its row")))))
 
-(defun roost--compose-busy (creating)
-  "Refuse while the draft is being created, said as CREATING, or its offer
-sent or dismissed, which would do the work twice, or both ways."
+(defun roost--compose-written-p ()
+  "Whether the draft holds a prompt of yours, not only its offer's as it came."
+  (let ((prompt (roost--compose-prompt)))
+    (not (or (string-empty-p prompt)
+             (and (plist-get roost--compose-fields :offer)
+                  (equal prompt (plist-get roost--compose-fields :offer-brief)))))))
+
+(defun roost--compose-busy ()
+  "Refuse while the draft's task is being created, or its offer sent or
+dismissed, which would do the work twice, or both ways."
   (when roost--compose-submitting
-    (user-error "Already %s" (if (stringp roost--compose-submitting) roost--compose-submitting creating))))
+    (user-error "Already %s" roost--compose-submitting)))
+
+(defun roost--compose-acting (doing note act)
+  "Hold the draft as DOING, said as NOTE in its header line, and call ACT.
+ACT sends the draft's request; one that fails, or a question you quit,
+before it has gone gives the draft back."
+  (setq roost--compose-submitting doing
+        roost--draft-note note)
+  (condition-case err
+      (funcall act)
+    ((quit error)
+     (setq roost--compose-submitting nil
+           roost--draft-note nil)
+     (signal (car err) (cdr err)))))
+
+(defun roost--compose-close (buffer)
+  "Close BUFFER, a draft that did what it was for, if it is still open."
+  (when (buffer-live-p buffer)
+    (quit-windows-on buffer t)
+    (when (buffer-live-p buffer) (kill-buffer buffer))))
 
 (defun roost--compose-offering-task ()
   "The task whose agent made the offer this draft is of."
@@ -3711,24 +3751,23 @@ sent or dismissed, which would do the work twice, or both ways."
 It is no longer listed under the task that offered it, and nothing starts."
   (interactive (list last-nonmenu-event))
   (roost--draft-clicked event 'roost-compose-mode)
-  (roost--compose-busy "creating the task")
+  (roost--compose-busy)
   (let ((task (roost--compose-offering-task))
         (offer (plist-get roost--compose-fields :offer))
         (buffer (current-buffer)))
-    (setq roost--compose-submitting "dismissing the offer"
-          roost--draft-note " Dismissing the offer…")
-    (roost--act task "dismiss-offer" (list (cons 'offer (cadr offer)))
-                (lambda (_task)
-                  (when (buffer-live-p buffer)
-                    (quit-windows-on buffer t)
-                    (when (buffer-live-p buffer) (kill-buffer buffer)))
-                  (message "Dismissed %s's offer" (roost--field task 'name)))
-                (lambda (err)
-                  (message "Roost could not dismiss the offer: %s" err)
-                  (when (buffer-live-p buffer)
-                    (with-current-buffer buffer
-                      (setq roost--compose-submitting nil)
-                      (roost--draft-error "Could not dismiss it" err 'roost-compose-dismiss)))))))
+    (roost--compose-acting
+     "dismissing the offer" " Dismissing the offer…"
+     (lambda ()
+       (roost--act task "dismiss-offer" (list (cons 'offer (cadr offer)))
+                   (lambda (_task)
+                     (roost--compose-close buffer)
+                     (message "Dismissed %s's offer" (roost--field task 'name)))
+                   (lambda (err)
+                     (message "Roost could not dismiss the offer: %s" err)
+                     (when (buffer-live-p buffer)
+                       (with-current-buffer buffer
+                         (setq roost--compose-submitting nil)
+                         (roost--draft-error "Could not dismiss it" err 'roost-compose-dismiss)))))))))
 
 (defun roost-compose-here (&optional event)
   "Have the task whose agent offered this draft's work do it, as written.
@@ -3737,35 +3776,36 @@ longer waits.  EVENT, a click on the draft's Do it here button, says
 which draft."
   (interactive (list last-nonmenu-event))
   (roost--draft-clicked event 'roost-compose-mode)
-  (roost--compose-busy "creating the task")
-  (let ((task (roost--compose-offering-task))
-        (offer (plist-get roost--compose-fields :offer))
-        (prompt (roost--compose-prompt))
-        (buffer (current-buffer)))
+  (roost--compose-busy)
+  (let* ((task (roost--compose-offering-task))
+         (name (roost--field task 'name))
+         (offer (plist-get roost--compose-fields :offer))
+         (prompt (roost--compose-prompt))
+         (buffer (current-buffer)))
     (when (string-empty-p prompt)
       (user-error "Write what to do first"))
     (unless (roost--agent-running-p task)
-      (user-error "%s's agent isn't running; resume it first" (roost--field task 'name)))
+      (user-error "%s's agent isn't running; resume it first" name))
     ;; Sending while its agent may be at a prompt asks first.
     (roost--quit-questions-here #'roost-compose-here)
-    (setq roost--compose-submitting (format "sending it to %s" (roost--field task 'name))
-          roost--draft-note (format " Sending it to %s…" (roost--field task 'name)))
-    (condition-case err
-        (roost--send-text task prompt
-                          (lambda (_task)
-                            (when (buffer-live-p buffer)
-                              (quit-windows-on buffer t)
-                              (when (buffer-live-p buffer) (kill-buffer buffer))))
-                          (lambda (err)
-                            (message "Roost could not send to %s: %s" (roost--field task 'name) err)
-                            (when (buffer-live-p buffer)
-                              (with-current-buffer buffer
-                                (setq roost--compose-submitting nil)
-                                (roost--draft-error "Could not send it" err 'roost-compose-here))))
-                          nil (list (cons 'offer (cadr offer))))
-      ;; A declined confirmation leaves the draft ready to send again.
-      (quit (setq roost--compose-submitting nil roost--draft-note nil) (signal (car err) (cdr err)))
-      (error (setq roost--compose-submitting nil roost--draft-note nil) (signal (car err) (cdr err))))))
+    (roost--compose-acting
+     (format "sending it to %s" name) (format " Sending it to %s…" name)
+     (lambda ()
+       (roost--send-text
+        task prompt
+        (lambda (_task) (roost--compose-close buffer))
+        (lambda (err)
+          (message "Roost could not send to %s: %s" name err)
+          (when (buffer-live-p buffer)
+            (with-current-buffer buffer
+              (setq roost--compose-submitting nil)
+              (if (not (get-text-property 0 'roost-no-reply err))
+                  (roost--draft-error "Could not send it" err 'roost-compose-here)
+                ;; Sent again, it would reach an agent that has it twice.
+                (setq roost--draft-note
+                      (format " No reply; %s's agent may have it · see its terminal before sending it again" name))
+                (force-mode-line-update)))))
+        nil (list (cons 'offer (cadr offer))))))))
 
 (defun roost-compose-submit (&optional event)
   "Create the drafted task.  The draft is kept if creation fails.
@@ -3780,7 +3820,7 @@ EVENT, a click on the draft's Create button, says which draft."
       (user-error "Choose a project first (%s)" (substitute-command-keys "\\[roost-compose-set-project]")))
     (when (string-empty-p name)
       (user-error "Write a prompt, or name the task (%s)" (substitute-command-keys "\\[roost-compose-set-name]")))
-    (roost--compose-busy (format "creating %s" name))
+    (roost--compose-busy)
     ;; The project's setup command can be asked about.
     (roost--quit-questions-here #'roost-compose-submit)
     (let* ((directory (plist-get fields :directory))
@@ -3789,36 +3829,38 @@ EVENT, a click on the draft's Create button, says which draft."
       ;; answers with the task it made, if it did.
       (unless (equal (car roost--compose-asked) directory)
         (setq roost--compose-asked (list directory (roost--random-id))))
-      (setq roost--compose-submitting t
-            roost--draft-note (format " Creating %s…" name))
-      (roost--create-task (plist-get fields :directory) name (plist-get fields :base) prompt
-                          (plist-get fields :agent)
-                          (lambda (task) (roost--compose-made buffer fields task))
-                          (lambda (err)
-                            (when (buffer-live-p buffer)
-                              (with-current-buffer buffer
-                                (setq roost--compose-submitting nil)
-                                (if (not (get-text-property 0 'roost-no-reply err))
-                                    (progn (message "Roost could not create the task: %s" err)
-                                           (roost--draft-error "Could not create the task" err
-                                                               'roost-compose-submit))
-                                  ;; It may yet be made: then a poll of its host lists it.
-                                  (roost--remember-host host)
-                                  (roost-watch-mode 1)
-                                  (setq roost--draft-note
-                                        (format " No reply from %s after %s; the task opens here if it was made · %s asks again"
-                                                (roost--host-label host)
-                                                (let ((seconds (+ roost-request-timeout roost--create-seconds)))
-                                                  (if (< seconds 60) (format "%ds" seconds) (format "%dm" (/ seconds 60))))
-                                                (substitute-command-keys "\\[roost-compose-submit]")))
-                                  (message "Roost: no reply from %s about %s yet; it opens if it was made"
-                                           (roost--host-label host) name)))))
-                          `((createId . ,(cadr roost--compose-asked))
-                            ,@(when-let* ((issue (plist-get fields :issue)))
-                                (list (cons 'issue issue)))
-                            ;; Started from it, the offer no longer waits.
-                            ,@(when-let* ((offer (plist-get fields :offer)))
-                                (list (cons 'parent (cadr (car offer))) (cons 'offer (cadr offer)))))))))
+      (roost--compose-acting
+       (format "creating %s" name) (format " Creating %s…" name)
+       (lambda ()
+         (roost--create-task
+          (plist-get fields :directory) name (plist-get fields :base) prompt
+          (plist-get fields :agent)
+          (lambda (task) (roost--compose-made buffer fields task))
+          (lambda (err)
+            (when (buffer-live-p buffer)
+              (with-current-buffer buffer
+                (setq roost--compose-submitting nil)
+                (if (not (get-text-property 0 'roost-no-reply err))
+                    (progn (message "Roost could not create the task: %s" err)
+                           (roost--draft-error "Could not create the task" err
+                                               'roost-compose-submit))
+                  ;; It may yet be made: then a poll of its host lists it.
+                  (roost--remember-host host)
+                  (roost-watch-mode 1)
+                  (setq roost--draft-note
+                        (format " No reply from %s after %s; the task opens here if it was made · %s asks again"
+                                (roost--host-label host)
+                                (let ((seconds (+ roost-request-timeout roost--create-seconds)))
+                                  (if (< seconds 60) (format "%ds" seconds) (format "%dm" (/ seconds 60))))
+                                (substitute-command-keys "\\[roost-compose-submit]")))
+                  (message "Roost: no reply from %s about %s yet; it opens if it was made"
+                           (roost--host-label host) name)))))
+          `((createId . ,(cadr roost--compose-asked))
+            ,@(when-let* ((issue (plist-get fields :issue)))
+                (list (cons 'issue issue)))
+            ;; Started from it, the offer no longer waits.
+            ,@(when-let* ((offer (plist-get fields :offer)))
+                (list (cons 'parent (cadr (car offer))) (cons 'offer (cadr offer)))))))))))
 
 (defun roost--compose-made (buffer fields task)
   "Close BUFFER, the draft with FIELDS that TASK was made from.
@@ -3831,9 +3873,7 @@ An Org entry it was drafted from links to TASK."
     (setf (alist-get 'offers parent)
           (seq-remove (lambda (other) (equal (alist-get 'id other) (cadr offer)))
                       (roost--field parent 'offers))))
-  (when (buffer-live-p buffer)
-    (quit-windows-on buffer t)
-    (when (buffer-live-p buffer) (kill-buffer buffer))))
+  (roost--compose-close buffer))
 
 (defun roost--compose-listed (host tasks)
   "Open the drafted task if TASKS, which HOST listed, hold it.
@@ -9642,7 +9682,8 @@ are told apart."
 (defvar-keymap roost--offer-row-map
   :doc "Keys on an offer the dashboard or sidebar lists under its task."
   "RET" #'roost-open-offer
-  "<mouse-1>" #'roost-open-offer)
+  "<mouse-1>" #'roost-open-offer
+  "<mouse-3>" #'roost-dashboard-mouse-menu)
 
 (defconst roost--clicked-commands
   '(roost-dashboard-mouse-open roost-dashboard-mouse-menu roost-compose-open-task
@@ -9767,7 +9808,7 @@ Refreshes are asynchronous; rendering uses only cached state.
                    'keymap roost--offer-row-map)))
     (insert (apply #'propertize line
                    'mouse-face 'highlight
-                   'help-echo (format "Offered by %s: %s\nmouse-1: open it as a task draft"
+                   'help-echo (format "Offered by %s: %s\nmouse-1: open it as a task draft · mouse-3: that task's actions"
                                       (roost--field task 'name) (alist-get 'title offer))
                    row)
             ;; Without `mouse-face', so each row lights up alone.
@@ -10062,7 +10103,8 @@ The mark stays where it was."
               (dolist (offer (roost--offers task))
                 (roost--insert-offer-row task offer (roost--dashboard-offer-row task offer layout width))))))))
     (let ((target (or (and key (roost--task-row key))
-                      (and offer (roost--offer-row offer))
+                      ;; One no longer waiting leaves you on its task.
+                      (and offer (or (roost--offer-row offer) (roost--task-row (car offer))))
                       (and heading (roost--heading-row heading))
                       (text-property-not-all (point-min) (point-max) 'roost-task nil)
                       (point-min))))
@@ -10076,8 +10118,11 @@ The mark stays where it was."
     (roost--lights-forget 'dashboard (mapcar #'roost--key tasks))))
 
 (defun roost--dashboard-task ()
-  "The task on the current dashboard line, if any."
-  (when-let* ((key (get-text-property (line-beginning-position) 'roost-task)))
+  "The task on the current dashboard line, if any: on an offer's, the one
+whose agent made it, which is what its row sits under."
+  (when-let* ((start (line-beginning-position))
+              (key (or (get-text-property start 'roost-task)
+                       (car (get-text-property start 'roost-offer)))))
     (gethash key roost--tasks)))
 
 (defun roost-dashboard-next-task (&optional count)
@@ -10607,15 +10652,16 @@ are in one."
 
 (defun roost--sidebar-entered (&rest _)
   "Start on a task when you enter the sidebar, then highlight it.
-Entering it anywhere but on a task starts on the task you are working
-on, or else the first.  Once in, point may also rest on a project's
+Entering it anywhere but on a task or an offer starts on the task you
+are working on, or else the first.  Once in, point may also rest on a project's
 heading, where `c' starts a task in that project; so may a click."
   (when-let* ((buffer (get-buffer roost--sidebar-buffer))
               (window (selected-window))
               ((eq (window-buffer window) buffer)))
     (with-current-buffer buffer
       (unless (or (mouse-event-p last-input-event)
-                  (get-text-property (window-point window) 'roost-task))
+                  (get-text-property (window-point window) 'roost-task)
+                  (get-text-property (window-point window) 'roost-offer))
         (when-let* ((row (or (when-let* ((task (roost--frame-task)))
                                (roost--task-row (roost--key task)))
                              (text-property-not-all (point-min) (point-max) 'roost-task nil))))
@@ -10816,7 +10862,8 @@ for any other directory, which asks for a host and a folder first."
         (insert (roost--sidebar-project-row directory width)))
       (insert (roost--sidebar-project-row nil width)))
     (goto-char (or (and key (roost--task-row key))
-                   (and offer (roost--offer-row offer))
+                   ;; One no longer waiting leaves you on its task.
+                   (and offer (or (roost--offer-row offer) (roost--task-row (car offer))))
                    (and heading (roost--heading-row heading))
                    (and other (text-property-any (point-min) (point-max) 'roost-project 'other))
                    (point-min)))
