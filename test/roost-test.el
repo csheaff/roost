@@ -3124,6 +3124,18 @@ terminal's, on a pty.  Skips the test where it can't be made."
            (push-button (1- (point))))
          (should (string-suffix-p ":dev:/srv/ledger/" started)))))))
 
+(ert-deftest roost-reads-a-state-file-holding-no-list-as-empty ()
+  ;; Damaged, a file of projects, hosts or notes is as good as missing,
+  ;; whatever is left in it, rather than an error the first time it's read.
+  (roost-test--isolated
+   (dolist (text '("5" "true" "\"text\"" "[\"/tmp/a/\"" "" "null"))
+     (with-temp-file roost-projects-file (insert text))
+     (setq roost--projects-loaded nil roost--remembered-projects nil)
+     (should-not (roost--known-projects)))
+   (with-temp-file roost-projects-file (insert "[1,null,\"/tmp/a/\"]"))
+   (setq roost--projects-loaded nil)
+   (should (equal (roost--known-projects) '("/tmp/a/")))))
+
 (ert-deftest roost-sidebar-offers-the-projects-you-used-lately ()
   ;; Below the tasks, projects with none: the latest few on each host
   ;; Roost watches, each a click from a new task's draft.
@@ -3153,7 +3165,15 @@ terminal's, on a pty.  Skips the test where it can't be made."
              (roost--render-sidebar)
              (should (equal (cdr (member "Start a task in" (split-string (buffer-string) "\n")))
                             (list (funcall row "dev · a") (funcall row "dev · b") (funcall row "dev · c")
-                                  (funcall row "local · notes") (funcall row "Other directory…") "")))
+                                  (funcall row "local · notes") (funcall row "Other directory…") "" "")))
+             ;; A click on the space below the rows is on none of them.
+             (should-not (memq (key-binding [mouse-1] t nil (point-max))
+                               '(roost-sidebar-new-task roost-dashboard-mouse-open)))
+             (let ((roost-sidebar-recent-projects 0))
+               (roost--render-sidebar)
+               (should-not (memq (key-binding [mouse-1] t nil (point-max))
+                                 '(roost-sidebar-new-task roost-dashboard-mouse-open))))
+             (roost--render-sidebar)
              (goto-char (point-min))
              (search-forward "dev · b")
              (should (string-match-p "New task in dev · /srv/b" (get-text-property (point) 'help-echo)))
@@ -3193,7 +3213,12 @@ terminal's, on a pty.  Skips the test where it can't be made."
                    (roost-sidebar-new-task))
                  (should-not drafted)))
              (should-error (call-interactively #'roost-forget-project) :type 'user-error)
-             (search-backward "dev · b")
+             ;; Its menu doesn't offer what it refuses.
+             (let ((forget (lambda ()
+                             (eval (plist-get (nthcdr 4 (assq 'Forget roost-project-menu)) :enable) t))))
+               (should-not (funcall forget))
+               (search-backward "dev · b")
+               (should (funcall forget)))
              ;; Forgotten, the next most recent takes its place.
              (call-interactively #'roost-forget-project)
              (should-not (member "/ssh:dev:/srv/b/" roost--remembered-projects))
@@ -3221,10 +3246,38 @@ terminal's, on a pty.  Skips the test where it can't be made."
              (roost--render-sidebar)
              (should (string-match-p "No tasks\\." (buffer-string)))
              (should (string-match-p (regexp-quote (funcall row "dev · ledger")) (buffer-string)))
-             (let ((roost-sidebar-recent-projects 0))
-               (roost--render-sidebar)
-               (should-not (string-match-p "Start a task in" (buffer-string)))))
+             (dolist (none '(0 nil))
+               (let ((roost-sidebar-recent-projects none))
+                 (roost--render-sidebar)
+                 (should-not (string-match-p "Start a task in" (buffer-string))))))
          (kill-buffer "*sidebar test*"))))))
+
+(ert-deftest roost-header-lines-show-percent-signs-as-written ()
+  ;; A header line reads %- as dashes to its end, over the buttons, and
+  ;; drops a % before a space, so what it shows of a task's name, an
+  ;; error or a file doubles them.
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let ((task (roost--cache-task "dev" (append '((name . "fix 50%-off coupon")) (roost-test--task))))
+           (xterm-mouse-mode t))
+       (roost--send-draft task)
+       (unwind-protect
+           (cl-flet ((shows (expected)
+                       (should (string-search expected (eval (cadr header-line-format) t)))))
+             (shows "Send to fix 50%%-off coupon")
+             ;; Beside its buttons or not, and cut short.
+             (setq roost--send-sending t)
+             (shows "Send to fix 50%%-off coupon")
+             (setq roost--send-sending nil)
+             (roost--draft-error "Could not send" "disk 100% full" 'roost-send-submit)
+             (shows "disk 100%% full")
+             (cl-letf (((symbol-function 'window-max-chars-per-line) (lambda (&rest _) 40)))
+               (setq roost--draft-note " 100% of the disk is full, and more besides that")
+               (shows "100%% of")))
+         (kill-buffer)))
+     (let ((roost--note-box '(:buffer nil :place ((file . "50%-off.py") (line . 3) (end . 3)))))
+       (should (string-search "50%%-off.py:3" (roost--note-box-header)))))))
 
 (ert-deftest roost-draft-buttons-create-or-cancel-it ()
   ;; A click on Create or Cancel acts on the draft, whichever window you
@@ -3748,6 +3801,56 @@ terminal's, on a pty.  Skips the test where it can't be made."
          ;; Named for two tasks of a name, which later tests aren't.
          (mapc #'kill-buffer (list code old draft (roost--task-info-buffer a) (roost--task-info-buffer b))))))))
 
+(ert-deftest roost-a-panel-docking-gives-back-its-own-terminal ()
+  ;; The panel took the place of its task's terminal, as `i' does from
+  ;; the window beside it: docking, it gives the terminal back, though
+  ;; not a second window on it.
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let* ((a (roost--cache-task "dev" (roost-test--task)))
+            (roost-workspace nil) (roost-task-panel-mode nil)
+            (terminal (get-buffer-create "*roost-test a's terminal*"))
+            (code (get-buffer-create "*roost-test code*"))
+            (panel (roost--task-info-buffer a)))
+       (unwind-protect
+           (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 160))
+                     ((symbol-function 'roost--refresh-host) #'ignore)
+                     ((symbol-function 'roost--terminal-task) (lambda (buffer) (and (eq buffer terminal) a))))
+             (set-frame-parameter nil 'roost-task (roost--key a))
+             (cl-flet ((dock ()
+                         (let ((roost-task-panel-mode t)) (roost--sync-side-windows)))
+                       (undock ()
+                         (delete-window (roost--task-panel-window))))
+               ;; As the frame's only main window.
+               (switch-to-buffer terminal)
+               (display-buffer panel '(display-buffer-same-window))
+               (dock)
+               (should (window-live-p (get-buffer-window terminal)))
+               ;; You were there, and stay, to talk to its agent.
+               (should (eq (window-buffer) terminal))
+               (undock)
+               ;; Beside a window of yours, as the one that goes.
+               (switch-to-buffer code)
+               (let ((other (split-window-right)))
+                 (set-window-buffer other terminal)
+                 (with-selected-window other
+                   (display-buffer panel '(display-buffer-same-window)))
+                 (dock)
+                 (should (window-live-p other))
+                 (should (eq (window-buffer other) terminal))
+                 (undock)
+                 ;; Shown beside the panel's window too, it isn't shown twice.
+                 (with-selected-window other
+                   (switch-to-buffer code)
+                   (switch-to-buffer terminal)
+                   (display-buffer panel '(display-buffer-same-window)))
+                 (set-window-buffer (selected-window) terminal)
+                 (dock)
+                 (should-not (window-live-p other))
+                 (should (equal (get-buffer-window-list terminal 'nomini) (list (selected-window)))))))
+         (mapc #'kill-buffer (list panel terminal code)))))))
+
 (ert-deftest roost-task-panel-needs-room-in-the-widest-main-window ()
   (roost-test--isolated
    (save-window-excursion
@@ -3876,6 +3979,39 @@ terminal's, on a pty.  Skips the test where it can't be made."
                                                                    (line-end-position))))
              (should (equal (buffer-substring (line-beginning-position) (point)) "Line 30 ")))
          (kill-buffer buffer))))))
+(ert-deftest roost-opens-a-file-under-a-folder-named-tilde-in-the-worktree ()
+  ;; An agent can leave a folder named ~: its files aren't yours.
+  (roost-test--isolated
+   (let ((task (roost--cache-task nil (append '((worktree . "/tmp/roost-worktree")) (roost-test--task))))
+         opened)
+     (cl-letf (((symbol-function 'roost--activate-workspace) #'ignore)
+               ((symbol-function 'find-file) (lambda (file &rest _) (setq opened file)))
+               ((symbol-function 'find-file-other-window) (lambda (file &rest _) (setq opened file))))
+       (roost--diff-file task '((path . "~/.ssh/config") (untracked . t)))
+       (should (equal opened "/tmp/roost-worktree/~/.ssh/config"))
+       (setq opened nil)
+       (with-temp-buffer
+         (roost--visit-review-thread task '((path . "~/.ssh/config") (line . 1)))
+         (should (equal opened "/tmp/roost-worktree/~/.ssh/config")))))))
+
+(ert-deftest roost-task-panel-lists-no-files-of-a-worktree-gone ()
+  ;; A host says nothing of the files of a worktree gone, so Emacs still
+  ;; has those of its last full refresh: no diff can show them.
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (append '((worktreeMissing . t) (diff . "1 file +1 −0")
+                                                  (files ((path . "notes.py") (added . 1) (deleted . 0))))
+                                                (roost-test--task)))))
+     (with-temp-buffer
+       (roost-task-info-mode)
+       (setq roost--buffer-task-key (roost--key task))
+       (roost--render-task-info)
+       (should (string-search "The worktree is gone" (buffer-string)))
+       (should-not (string-search "notes.py" (buffer-string))))
+     ;; A pull request's thread on the whole file says so too.
+     (should (string-search "worktree is gone"
+                            (cadr (should-error (roost--visit-review-thread task '((path . "notes.py")))
+                                                :type 'user-error)))))))
+
 (ert-deftest roost-task-panel-lists-changed-files-that-open-their-diffs ()
   (let* ((files '(((path . "notes.py") (added . 10) (deleted . 3) (uncommitted . t))
                   ((path . "docs/a/very/long/path/to/the/guide.md") (added . 1) (deleted . 0))
@@ -4237,6 +4373,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
      (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
                ((symbol-function 'y-or-n-p) (lambda (&rest _) t))
                ((symbol-function 'roost-discard) (lambda (task) (setq discarded (roost--field task 'id))))
+               ((symbol-function 'roost--ask-after-reply) (lambda (_key _listed ask) (funcall ask)))
                ((symbol-function 'roost--request)
                 (lambda (_host _action _params _success failure)
                   (funcall failure "Task branch has unmerged commits; merge it (m) first, discard it, or forget the task to keep its branch"))))
@@ -4310,6 +4447,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
    (let ((own "codex/roost/fix-auth-123456") asked discarded)
      (cl-letf (((symbol-function 'y-or-n-p) (lambda (prompt &rest _) (push prompt asked) t))
                ((symbol-function 'roost-discard) (lambda (task) (setq discarded (roost--field task 'id))))
+               ((symbol-function 'roost--ask-after-reply) (lambda (_key _listed ask) (funcall ask)))
                ((symbol-function 'roost--request) (lambda (&rest _) (error "Asked its host"))))
        (roost-retire (roost--cache-task "dev" (append '((ahead . 1) (dirty) (worktreeBranch . "feat"))
                                                       (roost-test--task nil "ready"))))
@@ -6936,6 +7074,7 @@ With FAILING, it prints it on stderr and exits with status 1."
                                              (integrationBranch . "main"))
                                            (roost-test--task)))))
                ((symbol-function 'roost--refresh-host) #'ignore)
+               ((symbol-function 'roost--ask-after-reply) (lambda (_key _listed ask) (funcall ask)))
                ((symbol-function 'y-or-n-p) (lambda (_) t))
                ((symbol-function 'roost-send) (lambda (_task text) (setq sent text))))
        (roost-update task)
@@ -6952,6 +7091,7 @@ With FAILING, it prints it on stderr and exits with status 1."
                                              (integrationBranch . "main"))
                                            (roost-test--task)))))
                ((symbol-function 'roost--refresh-host) #'ignore)
+               ((symbol-function 'roost--ask-after-reply) (lambda (_key _listed ask) (funcall ask)))
                ((symbol-function 'y-or-n-p) (lambda (prompt) (setq asked prompt) nil))
                ((symbol-function 'roost-send) (lambda (_task text) (setq sent text))))
        (roost-update task)
@@ -7165,6 +7305,97 @@ lines a quote leaves for your own words."
         (insert "  \n\t\n  indented")
         (roost-send-submit)
         (should (equal (buffer-string) "  indented")))))))
+
+(ert-deftest roost-a-byte-that-isnt-text-is-refused-in-words ()
+  "A file that isn't UTF-8 quoted in a prompt holds bytes JSON can't carry.
+Roost says which and where, as its host does for a control character,
+and the draft stays as it was, ready to send once it is deleted."
+  (roost-test--isolated
+   (roost-test--with-send-buffers
+    (let ((task (roost--cache-task "dev" (roost-test--task))) sent)
+      (cl-letf (((symbol-function 'pop-to-buffer) #'set-buffer)
+                ((symbol-function 'roost--request)
+                 (lambda (_host _action params &rest _) (setq sent (alist-get 'text params)))))
+        (roost--send-draft task (concat "a.py:1-1\ncaf" (string #x3FFFE9)))
+        (roost-send-submit)
+        (should-not sent)
+        (should-not roost--send-sending)
+        ;; Counted from the line it names, as the blank lines above go.
+        (should (string-match-p "Line 2 of the prompt holds \\\\351" (roost-test--header)))
+        (should (equal (buffer-string) (concat "a.py:1-1\ncaf" (string #x3FFFE9))))
+        (goto-char (point-max))
+        (delete-char -1)
+        (roost-send-submit)
+        (should (equal sent "a.py:1-1\ncaf"))
+        ;; Asked in the minibuffer, there's no draft to say it in.
+        (should-error (roost--send-text task (string #x3FFFE9)) :type 'user-error)))))
+  ;; A string Emacs read as bytes holds them just the same.
+  (should (string-match-p "\\\\351" (roost--text-problem "caf\351")))
+  (should-not (roost--text-problem "café ☕ \U0001F600"))
+  (should (equal (roost--shown-text (concat "é" (string #x3FFFE9 #xD800))) "é\\351\\xD800"))
+  ;; It names what holds the byte, and any good text before it is left alone.
+  (should (equal (should-error (roost--json-encode `((prompt . ,(concat "é\n\n" (string #x3FFFE9)))))
+                               :type 'user-error)
+                 '(user-error "Line 3 of the prompt holds \\351, a byte that isn't text; nothing was sent")))
+  (should (string-match-p "of the directory holds"
+                          (cadr (should-error (roost--json-encode `((directory . ,(string #x3FFFE9))))
+                                              :type 'user-error)))))
+
+(ert-deftest roost-a-request-refused-before-it-starts-leaves-its-draft-ready ()
+  "Quitting the question about a project's setup command, or a byte JSON
+can't carry, stops a draft before anything reaches its host.  It mustn't
+then say \"Already creating\" for as long as it is open."
+  (roost-test--isolated
+   (let ((default-directory "/tmp/") (roost-hosts '("dev")) made)
+     (save-window-excursion
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--project-value)
+                      (lambda (&rest _) (signal 'quit nil)))
+                     ((symbol-function 'roost--helper) (lambda () '("helper" . "source")))
+                     ((symbol-function 'roost--run)
+                      (lambda (&rest _) (setq made t))))
+             (puthash (list nil roost-state-directory) "helper" roost--installed)
+             (roost--compose)
+             (with-current-buffer roost--compose-buffer
+               (setq roost--compose-fields (plist-put roost--compose-fields :directory "/tmp/"))
+               (goto-char (point-max))
+               (insert "Do the thing")
+               ;; `should-error' takes no quit.
+               (should (eq (condition-case nil (roost-compose-submit) (quit 'quit)) 'quit))
+               (should-not roost--compose-submitting)
+               (should-not roost--draft-note)
+               (cl-letf (((symbol-function 'roost--project-value) (lambda (&rest _) nil)))
+                 (goto-char (point-max))
+                 (insert (string #x3FFFE9))
+                 (should-error (roost-compose-submit) :type 'user-error)
+                 (should-not made)
+                 (should-not roost--compose-submitting)
+                 (delete-char -1)
+                 (roost-compose-submit)
+                 (should made))))
+         (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-a-byte-in-a-pull-request-draft-leaves-it-ready ()
+  "A commit whose message isn't UTF-8 puts its bytes in the draft."
+  (roost-test--isolated
+   (roost-test--with-pr-buffers
+    (let ((task (roost--cache-task "dev" (roost-test--task))) created)
+      (cl-letf (((symbol-function 'pop-to-buffer) #'set-buffer)
+                ((symbol-function 'roost--pr-commits)
+                 (lambda (_task) (list (concat "caf" (string #x3FFFE9)))))
+                ((symbol-function 'roost--helper) (lambda () '("helper" . "source")))
+                ((symbol-function 'roost--run) (lambda (&rest _) (setq created t))))
+        (puthash (list nil roost-state-directory) "helper" roost--installed)
+        (puthash (list "dev" roost-state-directory) "helper" roost--installed)
+        (roost-pr task)
+        (should (string-search (string #x3FFFE9) (buffer-string)))
+        (should-error (roost-pr-submit) :type 'user-error)
+        (should-not created)
+        (should-not roost--pr-sending)
+        (goto-char (point-min))
+        (while (search-forward (string #x3FFFE9) nil t) (replace-match "e"))
+        (roost-pr-submit)
+        (should created))))))
 
 (ert-deftest roost-a-draft-edited-while-sending-keeps-its-blank-lines ()
   "The draft stays open to write in while a send is on its way, and what
@@ -9875,6 +10106,37 @@ ssh: connect to host dev port 22: Operation timed out"
                 (should-not reconnected))
             (kill-buffer terminal))))))))
 
+(ert-deftest roost-a-terminal-comes-back-when-resuming-is-refused ()
+  ;; The agent exited, and you started it by hand in the task's shell, which
+  ;; shares its session: the host refuses to start a second one on the
+  ;; conversation, and says to exit that one, in the terminal Roost closed
+  ;; to resume.
+  (roost-test--isolated
+   (let* ((task (roost--cache-task "dev" (append '((session . "roost-p-012345") (live))
+                                                 (roost-test--task "0123456789abcdef" "exited"))))
+          (terminal (with-current-buffer (generate-new-buffer " *terminal*")
+                      (setq-local roost-test--tmux '(:host "dev" :socket "main" :session "roost-p-012345"))
+                      (current-buffer)))
+          reconnected refusal)
+     (roost-test--with-tmux-buffers
+      (cl-letf (((symbol-function 'tmux-control-buffer-session)
+                 (lambda () (plist-get roost-test--tmux :session)))
+                ((symbol-function 'tmux-control-disconnect) #'ignore)
+                ((symbol-function 'tmux-control-reconnect)
+                 (lambda () (push (current-buffer) reconnected)))
+                ((symbol-function 'roost--request)
+                 (lambda (_host action _parameters success failure)
+                   (if (equal action "inspect")
+                       (funcall success task)
+                     (funcall failure "The agent is running outside Roost in the task's shell")))))
+        (unwind-protect
+            (save-window-excursion
+              (set-window-buffer (selected-window) terminal)
+              (roost--act task "resume" nil nil (lambda (err) (setq refusal err)))
+              (should (equal refusal "The agent is running outside Roost in the task's shell"))
+              (should (equal reconnected (list terminal))))
+          (kill-buffer terminal)))))))
+
 (ert-deftest roost-the-sidebar-highlights-the-row-its-keys-act-on ()
   ;; It has no mode line, so nothing said you were in it, or which task
   ;; `s' would resume.
@@ -10453,6 +10715,7 @@ answered with `answer'."
                   (if (equal action "update")
                       (funcall failure "Commit the task's changes before updating it from main")
                     (setq sent (alist-get 'text params)))))
+               ((symbol-function 'roost--ask-after-reply) (lambda (_key _listed ask) (funcall ask)))
                ((symbol-function 'y-or-n-p) (lambda (_) answer))
                ((symbol-function 'message)
                 (lambda (format &rest args) (setq shown (apply #'format-message format args)))))
@@ -10921,6 +11184,32 @@ With INITIAL, the box must start out holding it."
       (roost-test--write-note "" "Name it")
       (should (equal (mapcar (lambda (note) (alist-get 'text note)) roost--notes)
                      '("These two" "Whole file"))))))
+
+(ert-deftest roost-a-note-on-a-line-that-isnt-utf-8-is-kept-with-the-rest ()
+  "A byte in a diff's line stopped that note being saved, and with it every
+note after, for any task, so a restart lost them all."
+  (roost-test--with-magit-task
+    (let ((coding-system-for-write 'no-conversion))
+      (with-temp-file "a.txt"
+        (set-buffer-multibyte nil)
+        (insert "line 1\ncaf\351 here\nline 3\nplain\n")))
+    (magit-diff-unstaged)
+    (with-current-buffer (magit-get-mode-buffer 'magit-diff-mode)
+      (goto-char (point-min))
+      (re-search-forward "^\\+caf")
+      (beginning-of-line)
+      (roost-test--write-note "Encoding?")
+      (roost-test--goto-line-text "plain")
+      (roost-test--write-note "And this")
+      (should (equal (mapcar #'roost--format-note roost--notes)
+                     '("a.txt:2\n> +caf\\351 here\nEncoding?"
+                       "a.txt:4\n> +plain\nAnd this")))
+      ;; It reads back, and shows under its line, after a restart.
+      (setq roost--notes nil
+            roost--notes-loaded nil)
+      (should (= (length (roost--notes)) 2))
+      (roost--show-notes-everywhere)
+      (should (equal (mapcar #'cdr (roost-test--shown-notes)) '("Encoding?" "And this"))))))
 
 (ert-deftest roost-a-note-shows-once-in-a-magit-buffer-opened-again ()
   (roost-test--with-magit-task
@@ -11723,6 +12012,31 @@ With INITIAL, the box must start out holding it."
             (should (equal (shown) '("a.txt" "a.txt" "b.txt")))
             (funcall diff "b.txt")
             (should (equal (shown) '("a.txt" "b.txt")))))))))
+
+(ert-deftest roost-a-moved-files-diff-shows-the-move ()
+  ;; With its new path alone, Git would show every line of it as new,
+  ;; beside the panel's +0 −0.
+  (roost-test--with-magit-task
+    (setq task (roost--cache-task nil (append `((baseCommit . ,(car (process-lines "git" "rev-parse" "HEAD"))))
+                                              task)))
+    (call-process "git" nil nil nil "mv" "a.txt" "b.txt")
+    (cl-letf (((symbol-function 'roost--activate-workspace) #'ignore))
+      (save-current-buffer (roost--diff-file task '((path . "b.txt") (from . "a.txt")))))
+    (with-current-buffer (window-buffer (selected-window))
+      (should (eq major-mode 'magit-diff-mode))
+      (goto-char (point-min))
+      (should (re-search-forward "^renamed +a\\.txt -> b\\.txt" nil t))
+      (should-not (string-search "new file" (buffer-string))))
+    ;; Updated past the move, the file has no origin now, and the diff of
+    ;; it from before is one to close like any other.
+    (call-process "git" nil nil nil "commit" "-qm" "Move")
+    (setq task (roost--cache-task nil (append `((baseCommit . ,(car (process-lines "git" "rev-parse" "HEAD"))))
+                                              task)))
+    (roost-test--write-lines "b.txt" (number-sequence 1 10) "new line\n")
+    (cl-letf (((symbol-function 'roost--activate-workspace) #'ignore))
+      (save-current-buffer (roost--diff-file task '((path . "b.txt")))))
+    (should (= 1 (seq-count (lambda (buffer) (buffer-local-value 'roost--file-diff buffer))
+                            (buffer-list))))))
 
 ;;;; Workload
 

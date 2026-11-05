@@ -63,6 +63,164 @@ What each release changes, and what to do when upgrading. Newest first.
   task, showed every running agent as `crashed`, and let you resume one
   beside itself or forget it while it ran. Nothing to do when upgrading; a
   running agent shown as `crashed` shows as it is at the next refresh.
+- A draft or task panel that closes as a host replies leaves you where you
+  are. On Emacs 30 it took you to the window it was in, from wherever you
+  had gone, out of the minibuffer too, where your next keys went elsewhere;
+  and a question asked from a buffer that closed ended in `Selecting
+  deleted buffer`. They now close once the minibuffer is done. Nothing to
+  do when upgrading.
+- Unloading Roost drops the requests under way: a reply that came after
+  it ended in `error in process sentinel` and left its buffers behind.
+  Nothing to do when upgrading.
+- `g` in the setup check shows what its latest run found: a slower reply
+  to the run before, such as the timeout of a host you have since brought
+  back, no longer takes its place. Nothing to do when upgrading.
+- A poll that fails after you forgot its host says nothing of it, and
+  leaves no error for the host's next use. Nothing to do when upgrading.
+- A draft whose task can't be made says why once, in the echo area and its
+  header line, not twice in `*Messages*`. Nothing to do when upgrading.
+- Answering a question of a task's draft once its task has been made says
+  the draft has closed, rather than `Wrong type argument`: the name, agent,
+  project, starting ref or issue you were choosing while it was made.
+  Nothing to do when upgrading.
+- A task you create opens only if you are still where you asked for it.
+  Making one can take minutes, and its terminal then took the window you
+  had gone to, with the keys you were typing. The echo area says it was
+  made, it shows in the sidebar and dashboard, and `RET` there opens it.
+  Nothing to do when upgrading.
+- A task you resume, or a shell you open, shows once its host replies only
+  if you are still where you asked for it. An agent can take seconds to
+  start, and its terminal then took the window you had gone to, with the
+  keys you were typing. It starts all the same, and `RET` opens it.
+  Nothing to do when upgrading.
+- What Roost asks once a host replies waits until you are out of the
+  minibuffer, and goes no further if the task went meanwhile: whether to
+  have the agent resolve what `u` left, or to discard what `x` refused to
+  retire. It landed in the question you were typing in, where the next
+  `y` or `n` answered it. Nothing to do when upgrading.
+- A task that went stays gone when a reply about it comes late. A reply
+  read before the task was retired, or before you forgot its host, used
+  to list it again, for good in the case of a forgotten host, and could
+  open its terminal or Magit. Roost now says it didn't open it, as it is
+  no longer listed. Nothing to do when upgrading.
+- A review note on a line of a file that isn't UTF-8 is saved, and keeps
+  the line as Magit shows it, with `\351` for a byte. Saving it failed
+  with `Wrong type argument: json-value-p`, and so did saving every note
+  after it, for any task, which a restart then lost. A prompt or pull
+  request holding such a byte is refused in words, like a control
+  character: Roost says which and on what line, and sends nothing.
+  Nothing to do when upgrading.
+- A task or pull request draft stopped before anything reached its host,
+  as when you quit the question about a project's setup command, can be
+  created again. It said "Already creating" until you killed it. Nothing
+  to do when upgrading.
+- What a repository's post-merge or post-commit hook leaves running in the
+  background no longer holds up `m` or `u`, which waited for as long as
+  that ran, or until Emacs stopped waiting. Nothing to do when upgrading.
+- What a repository's post-checkout hook leaves running in the background
+  no longer holds up a new task. Roost waited for as long as that ran, up
+  to the eleven minutes a draft waits, and then a second try waited on it
+  too. Nothing to do when upgrading.
+- Roost refuses to create a task whose prompt holds a NUL character, and
+  says on which line. It made the task, whose agent could never start: it
+  failed with no reason given, and a Python traceback in its terminal.
+  Nothing to do when upgrading.
+- A task's terminal on screen reconnects when Roost refuses to resume the
+  task, as while the agent runs where you started it by hand. It stayed
+  disconnected, though Roost had just said to exit that agent there.
+  Nothing to do when upgrading.
+- Discarding removes a task's worktree that has lost its `.git` file, as
+  after a teardown command or an agent emptied it, and counts its files
+  among what it asks you about. Git refused, each time, and only
+  forgetting the task was left, which keeps the folder and the branch.
+  Where Git keeps work beside it, as its submodules' repositories, Roost
+  says so and how to restore the link. A task folder replaced with a link
+  is refused, for every action that would act through it. Nothing to do
+  when upgrading.
+- A teardown command may remove the task's worktree itself. Merging or
+  retiring then said the worktree had files left in it, of a worktree that
+  was gone, and discarding failed if Git no longer knew it; each worked
+  the second time. Nothing to do when upgrading.
+- A project in a folder whose name ends in a space or, with Git 2.36 or
+  newer, holds a newline starts its tasks there. One ending in a space
+  couldn't start a task, and one with a newline in its name started it
+  in the folder named by what came before the newline, if that was a
+  repository, and merged it there. Nothing to do when upgrading.
+- A new task reads a relative URL in `.gitmodules`, such as `../lib.git`,
+  as the primary checkout would: from the remote its branch tracks, or,
+  with none, from the primary checkout's folder. With no `origin`, a task
+  read it from its worktree, so the submodule couldn't be fetched, and
+  what it made of it went in the config the primary checkout shares. To
+  upgrade, if `git config --get-regexp 'submodule\..*\.url'` names Roost's
+  state directory, run `git config --remove-section submodule.NAME` for
+  that one in the primary checkout; `s` then tries again. A task that
+  failed after another left that URL leaves the submodule out on `s`:
+  start it afresh.
+- A task started while another fetches its first submodule checks out all
+  of them, where the repository has initialized none. It left out the
+  rest without a word, having taken the other's first for your choice.
+  Nothing to do when upgrading: `git submodule update --init` in a task
+  it happened to fetches what's missing.
+- A task stopped because a submodule couldn't be fetched retires. Git
+  refused, saying "working trees containing submodules cannot be moved
+  or removed", of the empty folder the failed clone left. Nothing to do
+  when upgrading.
+- A click on the empty part of the sidebar, below its rows, does nothing.
+  It said "No project here", or that a task was no longer listed.
+  Nothing to do when upgrading.
+- "Forget" is dimmed in the menu of the sidebar's "Other directory…",
+  which is no project to forget; it said "No project here". Nothing to do
+  when upgrading.
+- Roost reads a damaged file of projects, hosts or notes that holds a
+  number or `true` as an empty one, as it does others. The first command
+  to read it failed with "Wrong type argument". Nothing to do when
+  upgrading.
+- `roost-sidebar-recent-projects` set to `nil` lists no projects, as 0
+  does. The sidebar stopped drawing, and with it each redraw of Roost's
+  views. Nothing to do when upgrading.
+- The diff of a file a task moved shows the move and what changed. It
+  showed every line as new, beside the `+0 −0` the task panel gave a
+  plain move. Nothing to do when upgrading.
+- A changed file under a folder named `~` in a task's worktree opens from
+  there. A click on it in the task panel, a pull request's thread, or
+  Magit's whole-file diff took the `~` for your home, and opened your own
+  file of that name. Nothing to do when upgrading.
+- The task panel lists no changed files for a task whose worktree is
+  gone, as no diff can show them. A click on one, or on a pull request's
+  thread on a whole file there, failed with "Setting current directory";
+  the thread now says the worktree is gone. Nothing to do when upgrading.
+- A percent sign in a draft's header line, or a review note's, shows as
+  it is. In a task's name, an error or a file name, Emacs took it for a
+  format: `50%-off` filled the line with dashes over the buttons, and
+  `100% full` lost the sign. Nothing to do when upgrading.
+- A task panel that had taken the place of its own task's terminal, as
+  `i` does from the window beside it, gives the terminal back when it
+  docks. The terminal went from the frame instead. Nothing to do when
+  upgrading.
+- Retiring a task whose pull request merged leaves its branch on the
+  remote while another pull request from it is open, into another branch.
+  Deleting the branch closed that one. Nothing to do when upgrading.
+- `P` opens a pull request of the task's own when the only open one from
+  a branch of that name is on someone else's fork. It used to take that
+  one for the task's, and show its checks and review from then on. For a
+  task that did, open yours on the forge, and Roost goes over to it.
+- A GitLab merge request caught while GitLab merges it stays open until
+  Roost next asks, rather than reading closed. Nothing to do when
+  upgrading.
+- A GitLab merge request that GitLab holds for a reason Roost doesn't
+  show, such as one it must rebase, or one blocked by another, no longer
+  reads `to merge`. Nothing to do when upgrading.
+- A GitLab pipeline that lists no jobs, as one GitLab refused for its
+  configuration or another CI reports to, counts as one check with the
+  pipeline's status. Its merge request read `to merge` however the
+  pipeline went. Nothing to do when upgrading.
+- An answer from `glab` or `gh` that Roost can't read leaves that task
+  without news of its pull request. It used to fail the whole listing, so
+  every task on the host read `offline`. Nothing to do when upgrading.
+- Retiring a task whose pull request merged deletes its branch on the
+  remote only while that branch is still at the commit that merged. One
+  with commits pushed since, from another clone or on the forge, stays,
+  where before they went with it. Nothing to do when upgrading.
 - Roost refuses to send a prompt holding a control character, other than
   a line or page break or a tab, as the agent's terminal would take it as
   a key. It says which and on what line, and sends nothing. A draft stays
