@@ -2075,26 +2075,39 @@ pane's buffer, or another window the one you were in."
       (and place (eq (selected-frame) frame)
            (equal (roost--terminal-place (window-buffer (selected-window))) place))))
 
-(defun roost--while-you-stay (&optional task)
-  "Return a function for a command that opens something once its host replies.
-It takes a function that opens it, and calls that once you are out of
-the minibuffer, unless by then you have opened something else, or gone
-to another window or buffer, or TASK, if given, went.  You are where
-you are now until then: a reply that takes more than a moment, as an
-agent's start does, must not take you from where you went."
+(defun roost--window-you-are-in ()
+  "The selected window, or the one you asked a question from in the minibuffer."
+  (or (and (window-minibuffer-p) (minibuffer-selected-window))
+      (selected-window)))
+
+(defun roost--you-stay ()
+  "Return a function that says whether you are still where you are now.
+That is, whether you have opened nothing since, nor gone to another
+window or buffer, or out of the minibuffer to one.  For a command that
+opens something once its host replies: a reply that takes more than a
+moment, as an agent's start does, must not take you from where you went."
   (let* ((generation (cl-incf roost--open-generation))
-         (window (if (window-minibuffer-p) (minibuffer-selected-window) (selected-window)))
+         (window (roost--window-you-are-in))
          (shown (window-buffer window))
          (place (roost--terminal-place shown))
-         (frame (window-frame window))
-         (key (and task (roost--key task)))
-         (listed (and task (gethash key roost--tasks))))
+         (frame (window-frame window)))
+    (lambda ()
+      (and (= generation roost--open-generation)
+           (with-selected-window (roost--window-you-are-in)
+             (roost--still-there-p window shown place frame))))))
+
+(defun roost--while-you-stay (task)
+  "Return a function for a command that opens something of TASK's.
+It takes a function that opens it, and calls that once you are out of
+the minibuffer, unless by then you have gone elsewhere, as
+`roost--you-stay' says, or TASK went."
+  (let* ((stayed (roost--you-stay))
+         (key (roost--key task))
+         (listed (gethash key roost--tasks)))
     (lambda (open)
       (roost--when-out-of-minibuffer
        (lambda ()
-         (when (and (= generation roost--open-generation)
-                    (not (roost--went-p key listed))
-                    (roost--still-there-p window shown place frame))
+         (when (and (funcall stayed) (not (roost--went-p key listed)))
            (funcall open)))))))
 
 (defun roost--terminal-window-for (task)
@@ -2645,7 +2658,8 @@ EXTRA is an alist of further request fields, such as the issue."
   (unless (member agent roost--agents)
     (user-error "Unsupported Roost agent: %s" agent))
   (let ((host (roost--directory-host directory))
-        (setup (roost--project-value directory 'roost-setup-command)))
+        (setup (roost--project-value directory 'roost-setup-command))
+        (stayed (roost--you-stay)))
     (roost--request
      host "create"
      `(,(cons 'directory (file-local-name directory))
@@ -2664,23 +2678,26 @@ EXTRA is an alist of further request fields, such as the issue."
            . ,extra)
      (lambda (task)
        (cl-incf (gethash host roost--revisions 0))
-       (roost--task-made host task name on-success))
+       (roost--task-made host task name on-success stayed))
      (lambda (err)
        (message "Roost could not create %s: %s" name err)
        (when on-failure (funcall on-failure err)))
      (+ roost-request-timeout roost--create-seconds))
     (message "Roost: creating %s…" name)))
 
-(defun roost--task-made (host task name &optional on-success)
-  "Cache and open TASK, which HOST made as NAME, first calling ON-SUCCESS with it."
+(defun roost--task-made (host task name on-success stayed)
+  "Cache TASK, which HOST made as NAME, and call ON-SUCCESS, if any, with it.
+Then open it, if STAYED, called before anything else moves, says you are
+still where you asked for it: making a task can take minutes."
   (roost--remember-host host)
   (when (roost--field task 'repo)
     (roost--remember-project (roost--project-directory (cons (cons 'host host) task))))
   (setq task (roost--cache-task host task))
-  (when on-success (funcall on-success task))
-  (roost-watch-mode 1)
-  (roost--redraw)
-  (roost-open-task task)
+  (let ((stayed (funcall stayed)))
+    (when on-success (funcall on-success task))
+    (roost-watch-mode 1)
+    (roost--redraw)
+    (when stayed (roost-open-task task)))
   (message "Roost created %s on %s from %s; it merges into %s"
            name (roost--host-label host)
            (roost--field task 'baseRef) (roost--field task 'integrationBranch)))
@@ -3715,9 +3732,9 @@ An Org entry it was drafted from links to TASK."
     (when (buffer-live-p buffer) (kill-buffer buffer))))
 
 (defun roost--compose-listed (host tasks)
-  "Open the drafted task if TASKS, which HOST listed, hold it.
+  "Close the draft of the task TASKS, which HOST listed, hold, and open it.
 That is once the draft's request got no reply in time, and the host
-made the task anyway."
+made the task anyway.  It opens where the draft is, if you are there."
   (when-let* ((buffer (get-buffer roost--compose-buffer))
               ((not (buffer-local-value 'roost--compose-submitting buffer)))
               (asked (buffer-local-value 'roost--compose-asked buffer))
@@ -3729,7 +3746,8 @@ made the task anyway."
               (task (gethash (list host (roost--field made 'id)) roost--tasks)))
     (let ((fields (buffer-local-value 'roost--compose-fields buffer)))
       (roost--task-made host task (roost--field task 'name)
-                        (lambda (task) (roost--compose-made buffer fields task))))))
+                        (lambda (task) (roost--compose-made buffer fields task))
+                        (lambda () (eq (window-buffer (roost--window-you-are-in)) buffer))))))
 
 ;;;; Task commands
 

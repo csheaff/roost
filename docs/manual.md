@@ -619,6 +619,10 @@ answers with the one it made, or makes it, never a second. A creation cut
 short, as when Emacs stops one on this machine, leaves no worktree or
 branch behind.
 
+The new task opens if you are still where you created it. If you have gone to
+another buffer, window or task by then, you stay there: the echo area says it
+was made, and `RET` on it in the sidebar or dashboard opens it.
+
 `C-c C-p` lists the projects Roost has used, the last first, then those
 `project.el` knows. "Other directory…", second in the list, asks for a host,
 of those Roost knows or another from `~/.ssh/config`, starting on the draft's,

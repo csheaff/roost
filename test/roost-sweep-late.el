@@ -719,12 +719,24 @@ with Emacs running only timers and other replies.")
      :action "attach" :refusals ((,roost-sweep-late--retired)))
     (create
      :start ,(lambda () (roost-new-task "/ssh:dev:/home/user/ledger/" "made" nil "Go on." "claude"))
-     :action "create" :opens t :watches t :makes t
+     :action "create" :opens t :shows "*late terminal cccccc*" :watches t :makes t
      :refusals (("No branch, tag or commit named 'x' to start from")))
     (compose-submit
      :origin compose :start ,#'roost-compose-submit
-     :action "create" :opens t :closes t :watches t :makes t
+     :action "create" :opens t :shows "*late terminal cccccc*" :closes t :watches t :makes t
      :refusals (("No branch, tag or commit named 'x' to start from")))
+    (compose-listed-once-no-reply-came
+     :origin compose
+     :start ,(lambda ()
+               (roost-compose-submit)
+               (let ((request (roost-sweep-late--take "create")))
+                 (roost-sweep-late--record-replied request)
+                 (roost-sweep-late--answer request 'no-reply))
+               (roost-refresh t))
+     ;; A reply to another action makes the list older than it, and it
+     ;; waits for the next.
+     :action "list" :opens t :shows "*late terminal cccccc*" :closes t :watches t :makes t :background t
+     :not (same-task-send))
     (resume
      :fields ((status . "stopped") (live))
      :start ,(lambda () (roost-resume (roost-sweep-late--mine)))
@@ -1122,7 +1134,10 @@ for replies."
       (unwind-protect (funcall function)
         (setq roost-sweep-late--frame nil)
         (when (frame-live-p home) (select-frame home))
-        (when (frame-live-p frame) (delete-frame frame t))))))
+        (when (frame-live-p frame) (delete-frame frame t))
+        ;; What each frame wrote to its terminal, or Emacs would wait,
+        ;; with nobody to read it, once a pty's buffer filled.
+        (while (accept-process-output roost-sweep-late--pty 0 nil t))))))
 
 (defun roost-sweep-late--case (spec interrupter form answer)
   "Run SPEC's command with its reply held, then INTERRUPTER, then its reply in FORM.
@@ -1249,9 +1264,7 @@ Return their problems, each (TEXT PLACE...), as `roost-sweep--report' takes them
   '("\\`stale: a forgotten host shows an error"
     "\\`stale: a reply to an older run changes"
     "\\`lisp-error: the \\(?:command signals\\|question ends in\\) (wrong-type-argument"
-    "\\`words: says .* 2 times"
-    "\\`moved: the selected window shows \\*late terminal cccccc"
-    "\\`moved: the task opened last is now (\"dev\" \"cccccc")
+    "\\`words: says .* 2 times")
   "What the sweep finds that isn't fixed yet, as regexps of its problems.")
 
 (defun roost-sweep-late--report (problems)
@@ -1474,6 +1487,21 @@ COMMAND, INTERRUPTER and FORM keeps RULE until FUNCTION is REPLACEMENT.")
       (roost-sweep-late--in-minibuffer (lambda () (roost-sweep-late--answer reply 'good))))
     (roost-sweep-late--settle)
     (should (equal (buffer-name (window-buffer (selected-window))) "*late terminal aaaaaa*"))))
+
+(ert-deftest roost-sweep-late-a-new-task-opens-only-if-you-stayed ()
+  (dolist (stay '(t nil))
+    (roost-sweep-late--world
+      (roost-sweep-late--populate nil nil)
+      (roost-sweep-late--lay-out 'compose)
+      (roost-compose-submit)
+      (unless stay (switch-to-buffer "*late elsewhere*"))
+      (roost-sweep-late--answer (roost-sweep-late--take "create") 'good)
+      (roost-sweep-late--settle)
+      (should-not (get-buffer roost--compose-buffer))
+      (should (roost-sweep-late--task "cccccc0000000000"))
+      (should (equal (buffer-name (window-buffer (selected-window)))
+                     (if stay "*late terminal cccccc*" "*late elsewhere*")))
+      (should (string-match-p "Roost created" (roost-sweep-late--messages 1))))))
 
 (provide 'roost-sweep-late)
 

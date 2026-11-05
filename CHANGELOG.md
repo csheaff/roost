@@ -4,6 +4,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A task you create opens only if you are still where you asked for it.
+  Making one can take minutes, and its terminal then took the window you
+  had gone to, with the keys you were typing. The echo area says it was
+  made, it shows in the sidebar and dashboard, and `RET` there opens it.
+  Nothing to do when upgrading.
 - A task you resume, or a shell you open, shows once its host replies only
   if you are still where you asked for it. An agent can take seconds to
   start, and its terminal then took the window you had gone to, with the
