@@ -472,8 +472,10 @@ See `roost--report-turn'.")
 (defvar roost--hosts-loaded nil)
 (defvar roost--remembered-projects nil)
 (defvar roost--projects-loaded nil)
-(defconst roost--sidebar-buffer "*roost sidebar*"
-  "Name of the task sidebar buffer; see `roost-sidebar-mode'.")
+(defconst roost--sidebar-buffer " *roost sidebar*"
+  "Name of the task sidebar buffer; see `roost-sidebar-mode'.
+Hidden, as Emacs would otherwise show it across a window that loses its
+buffer wherever it isn't on screen, such as a workspace of your own.")
 
 (defvar roost-sidebar-mode)
 (defvar roost-task-panel-mode)

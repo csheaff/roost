@@ -3561,6 +3561,22 @@ terminal's, on a pty.  Skips the test where it can't be made."
          (kill-buffer terminal)
          (kill-buffer file))))))
 
+;; Out of sight in a workspace of your own, the sidebar was the buffer Emacs
+;; chose for a window that lost its own: it filled perspective.el's main
+;; once a terminal shown there had gone.
+(ert-deftest roost-sidebar-is-no-buffer-to-fall-back-on ()
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let ((sidebar (roost--sidebar-get-buffer))
+           (gone (generate-new-buffer "gone")))
+       (unwind-protect
+           (progn
+             (switch-to-buffer sidebar)
+             (switch-to-buffer gone)
+             (should-not (eq (other-buffer gone) sidebar)))
+         (kill-buffer gone))))))
+
 (ert-deftest roost-loading-adds-no-hooks ()
   (let ((window-configuration-change-hook nil)
         (window-size-change-functions nil)

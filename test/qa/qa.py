@@ -924,6 +924,9 @@ def resize(qa, repo):
             ("the panel is there just when the terminal keeps 80 columns beside it",
              lambda s: panel_fits(qa, s))])
     qa.emacs.eval("(set-frame-size nil %d %d)" % FRAME)
+    # Seen while its terminal shows: unseen, it would wait on you, and n in
+    # the next journey would go to it.
+    qa.status("say-hello", "ready", "idle")
 
 
 @journey("Commit, then merge")
@@ -2371,7 +2374,10 @@ def restart(qa, repo):
     name = start_task(qa, "Remember me", "remember-me")
     qa.restart()
     qa.wait("the task, after the restart", lambda s: qa.task(s, name))
+    workspaces = qa.emacs.eval("(and (roost--workspace-backend) t)") == "t"
     qa.step("After a restart", expect=[
+        # With workspaces, Emacs starts in one of your own.
+        ("no sidebar there", lambda s: not qa_sidebar(s)) if workspaces else
         ("the sidebar lists it", lambda s: name in sidebar_rows(s))])
     open_task(qa, name)
     # Painted from the host, a round trip away.
