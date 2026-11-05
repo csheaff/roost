@@ -152,7 +152,8 @@ starts the agent in tmux, and opens its terminal.
 - Run `M-x roost-new-task` on an Org heading, or on its agenda line. The
   heading and its notes become the prompt, and the heading records the task (a
   `ROOST_TASK` property), so Roost commands run there, such as
-  `roost-open-task` or `roost-review`, act on it.
+  `roost-open-task` or `roost-review`, act on it. Set
+  `roost-org-link-tasks` to nil to leave your entries as they are.
 - Select a region first, and the selection becomes the prompt. Code is quoted
   with its file and lines, ready for you to say what to do with it: its lines
   in the whole file, though you have narrowed to it, and from an Org source

@@ -5373,7 +5373,7 @@ def discard(store, task, expect=None, dry_run=False, teardown=None):
     branch_exists = ref_exists(repo, branch)
     ref = "refs/heads/" + branch
     commit = git(repo, "rev-parse", ref + "^{commit}").stdout.strip() if branch_exists else None
-    unlinked = worktree_exists and not (worktree / ".git").is_file()
+    unlinked = worktree_exists and not linked(worktree)
     if unlinked or not worktree_exists:
         require_nothing_kept(repo, worktree, unlinked, bool(task.get("removing")))
     # The worktrees its agent made go with it.
@@ -5383,7 +5383,7 @@ def discard(store, task, expect=None, dry_run=False, teardown=None):
         branches = ([branch] if branch_exists else []) + [entry["branch"] for entry in work if entry["branch"]]
         # Commits on a detached HEAD there, too; another branch keeps its own.
         heads = [head for head in [read_git(path, "rev-parse", "-q", "--verify", "HEAD").stdout.strip()
-                                   for path in paths if (Path(path) / ".git").is_file()] if head]
+                                   for path in paths if linked(path)] if head]
         tips = ["refs/heads/" + name for name in branches] + heads
         # --exclude applies to the --branches that follows it, by short name.
         commits = int(git(repo, "rev-list", "--count", *tips, "--not",
@@ -6011,11 +6011,24 @@ def run_teardown(task, worktree, command):
         return "could not run (%s)" % exc, ""
 
 
+def linked(worktree):
+    """Whether WORKTREE's .git file links it to a Git directory Git accepts.
+    Git stopped as it made one leaves that file empty, or its directory
+    without a HEAD it can read, and refuses to remove such a worktree,
+    however forced."""
+    with contextlib.suppress(OSError):
+        said = (Path(worktree) / ".git").read_bytes()
+        if said.startswith(b"gitdir:"):
+            gitdir = Path(worktree) / os.fsdecode(said[len(b"gitdir:"):].strip())
+            return git(worktree, "--git-dir", str(gitdir), "rev-parse", "--git-dir", check=False).returncode == 0
+    return False
+
+
 def unlinked_files(worktree):
     """How many files WORKTREE holds if it has lost its link to the
     repository, which Git can't count, and removing it deletes; else 0.
     Those of a repository made there count too: its history goes with it."""
-    if (Path(worktree) / ".git").is_file():
+    if linked(worktree):
         return 0
     return sum(len(files) + sum(os.path.islink(os.path.join(folder, name)) for name in folders)
                for folder, folders, files in os.walk(worktree))
@@ -6049,7 +6062,7 @@ def remove_worktrees(store, task, worktree, agents, force=False, teardown=None):
                     if not force:
                         require_nothing_kept(task["repo"], worktree)
                     unregister_gone(task["repo"], worktree)
-                elif worktree and force and not (worktree / ".git").is_file():
+                elif worktree and force and not linked(worktree):
                     # Git removes no worktree that has lost its link to the
                     # repository, however forced.
                     shutil.rmtree(worktree)

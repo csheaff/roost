@@ -34,6 +34,9 @@ What each release changes, and what to do when upgrading. Newest first.
   to do when upgrading.
 - A lone surrogate in what an agent reports, which failed a host's reply or
   lost the event, is replaced. Nothing to do when upgrading.
+- Discarding removes a task's worktree that Git stopped partway through
+  making, as in a reboot, with its link to the repository empty or leading
+  nowhere. Git refused, each time. Nothing to do when upgrading.
 - A listing that misses a live agent's pane, then finds it again, leaves
   a task you had seen as seen. It read as finished since you looked, and
   waited on you. Nothing to do when upgrading.

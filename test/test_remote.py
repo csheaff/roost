@@ -4442,6 +4442,18 @@ class Lifecycle(unittest.TestCase):
         def link_gone(wt):
             (wt / ".git").unlink()
 
+        def link_half_written(wt):
+            (wt / ".git").write_text("")
+
+        def git_directory_half_written(wt):
+            # As Git stopped partway leaves it, before HEAD or an index.
+            for name in ("HEAD", "index"):
+                (self.repo / ".git/worktrees" / wt.name / name).unlink()
+
+        def head_half_written(wt):
+            (self.repo / ".git/worktrees" / wt.name / "HEAD").write_text("")
+            (self.repo / ".git/worktrees" / wt.name / "index").unlink()
+
         def repository_instead(wt):
             link_gone(wt)
             roost.git(wt, "init", "-q")
@@ -4458,7 +4470,8 @@ class Lifecycle(unittest.TestCase):
             for item in wt.iterdir():
                 item.unlink()
             (wt / "link").symlink_to(wt.parent, target_is_directory=True)
-        for lose in (link_gone, repository_instead, history_alone, a_link_alone):
+        for lose in (link_gone, link_half_written, git_directory_half_written, head_half_written, repository_instead,
+                     history_alone, a_link_alone):
             with self.subTest(lose.__name__):
                 task = self.worked()
                 wt = Path(task["worktree"])
