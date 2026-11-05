@@ -4309,18 +4309,20 @@ def squash_merge(task, integration, here):
 
 def merged_pull_request_head(task):
     """The task branch's tip when GitHub merged it as one of the task's pull
-    requests, or None. GitHub is asked for a task with a pull request
-    recorded or a pushed branch; a merge it recorded earlier counts too.
+    requests, or None, and whether another is open from the branch, which
+    deleting it on the remote would close. GitHub is asked for a task with
+    a pull request recorded or a pushed branch; a merge it recorded earlier
+    counts too, and without an answer, what it recorded of an open one.
     Slow: call it without the registry lock and pass the answer to `retire`."""
     tip = branch_tip(task)
     if not tip:
-        return None
+        return None, False
     recorded = recorded_pull_request(task)
-    if recorded or pushed(task):
-        prs = task_pull_requests(task, tip)
-        if prs and any(pr.get("state") == "MERGED" and pr.get("headRefOid") == tip for pr in prs):
-            return tip
-    return tip if recorded_merge_at(task, tip) else None
+    prs = task_pull_requests(task, tip) if recorded or pushed(task) else None
+    merged = any(pr.get("state") == "MERGED" and pr.get("headRefOid") == tip for pr in prs or [])
+    still_open = (any(pr.get("state") == "OPEN" for pr in prs) if prs is not None
+                  else recorded.get("state") == "OPEN")
+    return (tip if merged or recorded_merge_at(task, tip) else None), still_open
 
 
 def safe_to_delete(task, commit, merged_head=None):
@@ -4345,7 +4347,7 @@ def safe_to_delete(task, commit, merged_head=None):
     return merged_head is not None and merged_head == commit
 
 
-def retire(store, task, merge=False, merged_head=None, squash=False, teardown=None):
+def retire(store, task, merge=False, merged_head=None, squash=False, teardown=None, still_open=False):
     """Remove a finished task's worktree, branch, window and record.
     Never discards uncommitted files or unmerged commits. With MERGE, merge
     the task first, as one commit with SQUASH. TEARDOWN, the project's
@@ -4451,10 +4453,8 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
         delete_branch(repo, branch, commit)
     store.remove(task["id"])
     task.update(status="retired", updatedAt=now())
-    recorded = recorded_pull_request(task)
     # Not with one open from there as well: deleting the branch would close it.
-    if commit and merged_head == commit and not (recorded.get("state") == "OPEN"
-                                                 and recorded.get("mergedHead") == commit):
+    if commit and merged_head == commit and not still_open:
         task["remoteCleanup"] = True
     return task
 
@@ -6316,10 +6316,12 @@ TASK_ACTIONS = {
     "turn": lambda store, task, request: turn(store, task, text(request.get("turn"))),
     "rename": lambda store, task, request: rename(store, task, request.get("name")),
     "retire": lambda store, task, request: retire(store, task, merged_head=request.get("mergedHead"),
-                                                  teardown=text(request.get("teardown"))),
+                                                  teardown=text(request.get("teardown")),
+                                                  still_open=request.get("stillOpen") is True),
     "merge": lambda store, task, request: retire(store, task, merge=True, merged_head=request.get("mergedHead"),
                                                  squash=request.get("style") == "squash",
-                                                 teardown=text(request.get("teardown"))),
+                                                 teardown=text(request.get("teardown")),
+                                                 still_open=request.get("stillOpen") is True),
     "forget": lambda store, task, request: forget(store, task),
     "discard": lambda store, task, request: discard(store, task, request.get("expect"),
                                                     request.get("dryRun") is True,
@@ -6395,7 +6397,8 @@ def rpc(request):
             # Ask GitHub without the lock; retire then trusts only this answer.
             with store.locked():
                 task = store.read(request["id"])
-            request = dict(request, mergedHead=merged_pull_request_head(task))
+            merged_head, still_open = merged_pull_request_head(task)
+            request = dict(request, mergedHead=merged_head, stillOpen=still_open)
         with store.locked():
             if action == "list":
                 result = list_tasks(store, request)

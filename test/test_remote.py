@@ -4456,18 +4456,22 @@ sys.exit(status)
     def test_retire_leaves_the_remote_branch_of_a_pull_request_still_open(self):
         # Merged into one branch and open for another: deleting it would close that one.
         self.github()
-        task = self.create()
-        tip = self.commit_in(task)
-        self.push(task)
         url = "https://github.com/octo/repo/pull/%d"
-        (self.gh_dir / "list.json").write_text(json.dumps([
-            dict(number=11, url=url % 11, state="OPEN", headRefOid=tip, baseRefName="main"),
-            dict(number=10, url=url % 10, state="MERGED", headRefOid=tip, baseRefName="release")]))
         (self.gh_dir / "reviews.json").write_text("{}")
-        self.assertIs(self.request("list", full=True)["result"][0]["landed"], True)
-        self.assertTrue(self.request("retire", id=task["id"])["ok"])
-        self.assertEqual(self.git("branch", "--list", task["branch"]), "")
-        self.assertEqual(self.git("rev-parse", "refs/heads/" + task["branch"], cwd=self.origin), tip)
+        # Whether or not a poll saw it open: `x` may come first.
+        for polled in (True, False):
+            with self.subTest(polled=polled):
+                task = self.create(name="open-%s" % polled)
+                tip = self.commit_in(task)
+                self.push(task)
+                (self.gh_dir / "list.json").write_text(json.dumps([
+                    dict(number=11, url=url % 11, state="OPEN", headRefOid=tip, baseRefName="main"),
+                    dict(number=10, url=url % 10, state="MERGED", headRefOid=tip, baseRefName="release")]))
+                if polled:
+                    self.assertIs(self.request("list", full=True)["result"][0]["landed"], True)
+                self.assertTrue(self.request("retire", id=task["id"])["ok"])
+                self.assertEqual(self.git("branch", "--list", task["branch"]), "")
+                self.assertEqual(self.git("rev-parse", "refs/heads/" + task["branch"], cwd=self.origin), tip)
 
     def test_retire_leaves_a_remote_branch_with_commits_pushed_since_the_merge(self):
         self.github()
@@ -4667,7 +4671,7 @@ sys.exit(status)
         listed = self.request("list", full=True)["result"][0]
         self.assertNotIn("pr", listed)
         self.assertIs(listed["landed"], False)
-        self.assertIsNone(roost.merged_pull_request_head(roost.Store(str(self.state)).read(task["id"])))
+        self.assertIsNone(roost.merged_pull_request_head(roost.Store(str(self.state)).read(task["id"]))[0])
 
     def test_a_pull_request_is_a_tasks_only_at_a_commit_it_made(self):
         # Brought up to main's M, then committing T: another fork's PR at M is not its.
@@ -4722,7 +4726,7 @@ sys.exit(status)
         # Retiring trusts it too when gh can't say.
         (self.gh_dir / "gh").unlink()
         with patch.object(roost, "agent_path", lambda inherited: str(self.gh_dir)):
-            self.assertEqual(roost.merged_pull_request_head(roost.Store(str(self.state)).read(task["id"])), tip)
+            self.assertEqual(roost.merged_pull_request_head(roost.Store(str(self.state)).read(task["id"]))[0], tip)
 
     def test_a_merge_at_the_tip_stays_when_a_later_lookup_lists_it_no_more(self):
         # A branch with more than a page of pull requests.
@@ -4736,7 +4740,7 @@ sys.exit(status)
                                                            for n in range(20, 10, -1)]))
         listed = self.request("list", full=True)["result"][0]
         self.assertEqual((listed["pr"]["mergedHead"], listed["landed"]), (tip, True))
-        self.assertEqual(roost.merged_pull_request_head(roost.Store(str(self.state)).read(task["id"])), tip)
+        self.assertEqual(roost.merged_pull_request_head(roost.Store(str(self.state)).read(task["id"]))[0], tip)
 
     def test_a_worktree_on_another_branch_shows_that_branchs_pull_request(self):
         # Its agent made a branch to follow a team's naming, pushed it and
