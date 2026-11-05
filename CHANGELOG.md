@@ -4,6 +4,9 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- `g` in the setup check shows what its latest run found: a slower reply
+  to the run before, such as the timeout of a host you have since brought
+  back, no longer takes its place. Nothing to do when upgrading.
 - A poll that fails after you forgot its host says nothing of it, and
   leaves no error for the host's next use. Nothing to do when upgrading.
 - A draft whose task can't be made says why once, in the echo area and its

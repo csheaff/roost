@@ -1262,24 +1262,13 @@ Return their problems, each (TEXT PLACE...), as `roost-sweep--report' takes them
                     (unless (cdr result) (cl-return))))))))))
     problems))
 
-(defconst roost-sweep-late--known
-  '("\\`stale: a reply to an older run changes")
-  "What the sweep finds that isn't fixed yet, as regexps of its problems.")
-
-(defun roost-sweep-late--report (problems)
-  "Fail with PROBLEMS, leaving out those `roost-sweep-late--known' names."
-  (roost-sweep--report
-   (seq-remove (lambda (problem)
-                 (seq-some (lambda (known) (string-match-p known (car problem))) roost-sweep-late--known))
-               problems)))
-
 (defun roost-sweep-late--interrupter-names (&rest leaving-out)
   "The names of `roost-sweep-late--interrupters', but for LEAVING-OUT."
   (seq-difference (mapcar #'car roost-sweep-late--interrupters) leaving-out))
 
 (ert-deftest roost-sweep-late-replies ()
   ;; Each command against all you might do meanwhile, each form of reply.
-  (roost-sweep-late--report
+  (roost-sweep--report
    (roost-sweep-late--sweep (mapcar #'car roost-sweep-late--commands)
                             (roost-sweep-late--interrupter-names 'delete-frame))))
 
@@ -1287,7 +1276,7 @@ Return their problems, each (TEXT PLACE...), as `roost-sweep--report' takes them
   (skip-unless (let ((frame (roost-sweep-late--make-frame)))
                  (when frame (delete-frame frame t))
                  frame))
-  (roost-sweep-late--report
+  (roost-sweep--report
    (roost-sweep-late--sweep (mapcar #'car roost-sweep-late--commands) '(delete-frame))))
 
 (defconst roost-sweep-late--beside-side-windows
@@ -1297,7 +1286,7 @@ Return their problems, each (TEXT PLACE...), as `roost-sweep--report' takes them
 (ert-deftest roost-sweep-late-replies-beside-the-sidebar-and-panel ()
   (roost-sweep-late--with-room
     (let ((roost-sweep-late--sides t))
-      (roost-sweep-late--report
+      (roost-sweep--report
        (roost-sweep-late--sweep roost-sweep-late--beside-side-windows
                                 (roost-sweep-late--interrupter-names 'delete-frame))))))
 
@@ -1318,7 +1307,7 @@ Return their problems, each (TEXT PLACE...), as `roost-sweep--report' takes them
   "Commands from a draft, which a question of the draft's can be open beside.")
 
 (ert-deftest roost-sweep-late-replies-to-questions-left-open ()
-  (roost-sweep-late--report
+  (roost-sweep--report
    (roost-sweep-late--question-sweep
     (append roost-sweep-late--drafts-pending
             '(open retire merge update update-conflicts stop rename resume poll-full notice))
@@ -1532,6 +1521,18 @@ COMMAND, INTERRUPTER and FORM keeps RULE until FUNCTION is REPLACEMENT.")
     (should-not (gethash roost-sweep-late--host roost--failures))
     (should-not (gethash roost-sweep-late--host roost--refreshing))
     (should-not (string-search roost-sweep-late--dropped (roost-sweep-late--messages 1)))))
+
+(ert-deftest roost-sweep-late-the-setup-check-shows-what-its-latest-run-found ()
+  (roost-sweep-late--world
+    (roost-sweep-late--populate nil nil)
+    (roost-doctor)
+    (let ((older (car roost-sweep-late--requests)))
+      (roost-doctor)
+      (roost-sweep-late--answer (car (last roost-sweep-late--requests)) 'good)
+      (roost-sweep-late--answer older 'dropped)
+      (with-current-buffer "*roost doctor*"
+        (should-not (string-search roost-sweep-late--dropped (buffer-string)))
+        (should (string-search "Python" (buffer-string)))))))
 
 (provide 'roost-sweep-late)
 

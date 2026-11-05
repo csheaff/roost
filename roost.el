@@ -11242,6 +11242,9 @@ here: see `roost--away'."
   "Alist of (HOST . RESULT) for `roost-doctor'.
 RESULT is `pending', a list of checks, or (error . MESSAGE).")
 
+(defvar roost--doctor-generation 0
+  "Counts runs of `roost-doctor', so that replies to earlier ones are ignored.")
+
 (defvar-keymap roost-doctor-mode-map
   :doc "Keys for the Roost setup check."
   "g" #'roost-doctor)
@@ -11461,23 +11464,25 @@ With a prefix argument, read a HOST to check (empty for this machine)."
              (if (string-empty-p host) nil host)))))
   (let ((hosts (if (or host current-prefix-arg) (list host) (roost--hosts)))
         (commands (mapcar (lambda (agent) (cons (intern agent) (vconcat (roost--agent-command agent))))
-                          roost--agents)))
+                          roost--agents))
+        (generation (cl-incf roost--doctor-generation)))
     (setq roost--doctor-results (mapcar (lambda (host) (cons host 'pending)) hosts))
     (with-current-buffer (get-buffer-create "*roost doctor*")
       (unless (derived-mode-p 'roost-doctor-mode) (roost-doctor-mode)))
     (roost--render-doctor)
     (pop-to-buffer "*roost doctor*")
     (dolist (host hosts)
-      (let ((host host))
+      (let* ((host host)
+             (done (lambda (result)
+                     ;; A host down for the last run, say, may be up for this one.
+                     (when (= generation roost--doctor-generation)
+                       (setf (alist-get host roost--doctor-results nil nil #'equal) result)
+                       (roost--render-doctor)))))
         (roost--request
          host "doctor" (list (cons 'commands commands)
                              (cons 'projects (vconcat (roost--host-projects host))))
-         (lambda (checks)
-           (setf (alist-get host roost--doctor-results nil nil #'equal) checks)
-           (roost--render-doctor))
-         (lambda (err)
-           (setf (alist-get host roost--doctor-results nil nil #'equal) (cons 'error err))
-           (roost--render-doctor)))))))
+         done
+         (lambda (err) (funcall done (cons 'error err))))))))
 
 ;;;###autoload
 (defcustom roost-mode-line-count t
