@@ -4,6 +4,7 @@
 """Roost's host-side task manager. Standard library only; JSON over stdin/stdout."""
 
 import base64
+import codecs
 import collections
 import concurrent.futures
 import contextlib
@@ -14,6 +15,7 @@ import functools
 import hashlib
 import heapq
 import json
+import locale
 import os
 from pathlib import Path, PurePosixPath
 import pty
@@ -77,8 +79,30 @@ def text(value):
 
 
 # Descriptors the commands Roost runs inherit, as Git does the lock held
-# on a worktree while it is removed or pushed; see `holding_worktree`.
+# on a worktree while it is removed or pushed; see `handing_on`.
 INHERITED = []
+
+
+@contextlib.contextmanager
+def handing_on(fd):
+    """Hand FD, which holds a lock, on to each command started meanwhile, so
+    that the lock lasts for as long as they run, even past this helper. But
+    not to Git's own file system monitor, a daemon any Git may start, which
+    runs until you stop it: refused from here on, finishing a task, or
+    asking again for one cut short, would wait on it forever."""
+    count = int(os.environ.get("GIT_CONFIG_COUNT") or 0)
+    os.environ.update({"GIT_CONFIG_COUNT": str(count + 1), "GIT_CONFIG_KEY_%d" % count: "core.fsmonitor",
+                       "GIT_CONFIG_VALUE_%d" % count: "false"})
+    INHERITED.append(fd)
+    try:
+        yield
+    finally:
+        INHERITED.remove(fd)
+        del os.environ["GIT_CONFIG_KEY_%d" % count], os.environ["GIT_CONFIG_VALUE_%d" % count]
+        if count:
+            os.environ["GIT_CONFIG_COUNT"] = str(count)
+        else:
+            del os.environ["GIT_CONFIG_COUNT"]
 
 
 def execute(argv, cwd=None, check=True, input=None, env=None):
@@ -99,7 +123,11 @@ def git(repo, *args, check=True, env=None):
 def git_with_hooks(repo, *args, check=True, input=None):
     """`git` for what runs the repository's hooks, with INPUT, text, on its
     stdin. It says what it says to files: what a hook leaves running,
-    holding a pipe, would keep this waiting for as long as that runs."""
+    holding a pipe, would keep this waiting for as long as that runs, and
+    told to a pipe with no reader, once this helper dies, as when its
+    connection drops, Git would stop at its report, with a merge committed
+    and still marked as under way, or a conflict in the files and no merge
+    under way to say why."""
     argv = ["git", "-C", str(repo), *args]
     with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
         result = subprocess.run(argv, input=None if input is None else input.encode(), stdout=output, stderr=errors,
@@ -132,7 +160,7 @@ def measuring(repo):
     gpg.program, and diffs take --no-ext-diff and --no-textconv. Clean filters and merge drivers, which attributes pick by name, still
     run: turning them off would break Git LFS."""
     return ("--no-optional-locks", "-c", "log.showSignature=false",
-            "-c", "core.fsmonitor=" + ("true" if gits_own_fsmonitor(str(repo)) else "false"))
+            "-c", "core.fsmonitor=" + ("true" if gits_own_fsmonitor(str(repo)) and not INHERITED else "false"))
 
 
 def read_git(repo, *args, env=None):
@@ -219,7 +247,9 @@ def tool(name, cwd, args, timeout, missing, said=lambda result: None):
 
 
 def tmux(socket, *args, check=True, input=None):
-    return execute(["tmux", "-L", socket, *args], check=check, input=input)
+    # As a UTF-8 client, whatever the locale: under LC_ALL=C or POSIX tmux
+    # prints the tabs between fields, and what isn't ASCII, as underscores.
+    return execute(["tmux", "-u", "-L", socket, *args], check=check, input=input)
 
 
 def enable_extended_keys(socket):
@@ -364,6 +394,25 @@ class History:
         return changes
 
 
+# What every helper wrote in every record, which listing tasks takes for
+# granted, and what is text whenever it is there.
+RECORD_TEXT = ("name", "status", "repo", "worktree", "branch", "baseCommit", "socket")
+RECORD_OPTIONAL_TEXT = ("integrationBranch", "paneId", "windowId")
+
+
+def listable(task):
+    """Whether TASK's record holds what listing it takes for granted."""
+    return (all(isinstance(task.get(field), str) for field in RECORD_TEXT)
+            and all(isinstance(task.get(field), (str, type(None))) for field in RECORD_OPTIONAL_TEXT)
+            and isinstance(task.get("agentWorktrees"), (list, type(None))))
+
+
+def own_record(record, task_id):
+    """Whether RECORD, read from TASK_ID's file, is a record of that task
+    at all, and not what damage left there."""
+    return isinstance(record, dict) and record.get("id") == task_id
+
+
 class Store:
     def __init__(self, root):
         self.root = Path(root).expanduser().absolute()
@@ -410,12 +459,30 @@ class Store:
         return self.root / "attachments" / task_id
 
     def read(self, task_id):
+        path = self.path(task_id)
         try:
-            task = json.loads(self.path(task_id).read_text())
+            task = json.loads(path.read_text())
         except FileNotFoundError:
             raise RoostError("Task no longer exists: " + task_id)
+        except ValueError:
+            task = None
+        if not own_record(task, task_id):
+            raise self.damaged(task_id)
         # An older helper's record may name its integration branch heads/X.
         recorded_integration(task)
+        return task
+
+    def damaged(self, task_id):
+        return RoostError("The record of this task, %s, is damaged, so Roost no longer lists it. Its worktree and "
+                          "branch are as they were: move the record aside, and finish them with Git"
+                          % self.path(task_id))
+
+    def read_to_act_on(self, task_id):
+        """TASK_ID's record, for an action asked for by name: listing hides
+        one without what it takes for granted, as actions take it too."""
+        task = self.read(task_id)
+        if not listable(task):
+            raise self.damaged(task_id)
         return task
 
     def recorded(self, task_id):
@@ -431,6 +498,12 @@ class Store:
         record = {key: value for key, value in task.items() if key not in TRANSIENT}
         atomic_json(self.path(task["id"]), record)
         self.history.note(task["id"], before, record)
+
+    def note(self, task):
+        """Save what looking at TASK found, if there is room: looking will
+        find it again, and a full disk is no time to hide your tasks."""
+        with contextlib.suppress(OSError):
+            self.save(task)
 
     def remove(self, task_id):
         """Delete a task's record and hook settings. Conversations are kept,
@@ -453,7 +526,9 @@ class Store:
         for path in sorted(self.tasks_dir.glob("*.json")):
             # One unreadable record must not hide every other task.
             with contextlib.suppress(OSError, ValueError):
-                tasks.append(json.loads(path.read_text()))
+                record = json.loads(path.read_text())
+                if own_record(record, path.stem):
+                    tasks.append(record)
         for task in tasks:
             recorded_integration(task)
         return tasks
@@ -535,7 +610,12 @@ def check_worktree(store, task, branch=True):
             raise RoostError(under_way)
         # In full, as in `other_branch`: a tag of the branch's name would
         # make the short one heads/….
-        current = git(worktree, "symbolic-ref", "-q", "HEAD", check=False).stdout.strip()
+        head = git(worktree, "symbolic-ref", "-q", "HEAD", check=False)
+        # 1 says only that HEAD is detached.
+        if head.returncode > 1:
+            raise RoostError("Git can't read the task's worktree (%s); bring back what is missing, then try again, "
+                             "or forget the task" % head.stderr.strip())
+        current = head.stdout.strip()
         short = current.removeprefix("refs/heads/")
         if (short != task["branch"] and current.startswith("refs/heads/")
                 and not ref_exists(task["repo"], task["branch"])):
@@ -1521,7 +1601,8 @@ def spawn(store, task, resume=False, size=()):
     script = str(Path(__file__).resolve())
     task["runId"] = uuid.uuid4().hex
     task.pop("shellPaneId", None)
-    argv = [sys.executable, script, "run", str(store.root), task["id"], task["runId"]]
+    # In UTF-8 mode, as `main` would start it, but as the pane's own process.
+    argv = [sys.executable, "-X", "utf8", script, "run", str(store.root), task["id"], task["runId"]]
     if resume:
         argv.append("resume")
     # The runner waits on the registry lock, held here, until its stable pane
@@ -1705,9 +1786,11 @@ def undo_creation(store, task):
         # holds Git's checkout and nothing else, as no agent ever ran there.
         if os.path.lexists(worktree):
             git(repo, "worktree", "remove", "--force", "--force", str(worktree), check=False)
-        else:
-            unregister_gone(repo, worktree.resolve())
+        # Stopped before it wrote HEAD, Git doesn't take it for a worktree.
+        if worktree.is_dir():
+            shutil.rmtree(worktree, ignore_errors=True)
         if not os.path.lexists(worktree):
+            unregister_gone(repo, worktree.resolve())
             with contextlib.suppress(RoostError):
                 delete_branch(repo, task["branch"], task["baseCommit"])
             return
@@ -1873,28 +1956,26 @@ def make_task(store, request, create_id):
         task["programStatus"] = True
     existed, there = ref_exists(repo, branch), worktree.exists()
     with noting_creation(store, task) as note:
-        INHERITED.append(note)
-        try:
-            git_with_hooks(repo, "-c", "branch.autoSetupMerge=false", "worktree", "add", "-b", branch,
-                           str(worktree), commit)
-        except RoostError as exc:
-            said = "\n".join(line for line in str(exc).splitlines() if not line.startswith("Preparing worktree"))
-            if there or not worktree.exists():
-                # A checkout that failed, as a filter can, leaves the new branch.
-                if not existed:
-                    with contextlib.suppress(RoostError):
-                        delete_branch(repo, branch, commit)
-                raise RoostError(said)
-            # Git made the worktree, then its post-checkout hook failed.
-            with store.locked():
-                store.save(task)
-                abandon(store, task)
-            raise RoostError("The repository's post-checkout hook failed in the task's new worktree, so the task "
-                             "didn't start%s: %s" % ("; its worktree is kept, as the hook left files there"
-                                                     if worktree.exists() else "", said))
-        finally:
-            # Not tmux's, whose server would hold it for as long as it runs.
-            INHERITED.remove(note)
+        # Not to tmux, whose server would hold it for as long as it runs.
+        with handing_on(note):
+            try:
+                git_with_hooks(repo, "-c", "branch.autoSetupMerge=false", "worktree", "add", "-b", branch,
+                               str(worktree), commit)
+            except RoostError as exc:
+                said = "\n".join(line for line in str(exc).splitlines() if not line.startswith("Preparing worktree"))
+                if there or not worktree.exists():
+                    # A checkout that failed, as a filter can, leaves the new branch.
+                    if not existed:
+                        with contextlib.suppress(RoostError):
+                            delete_branch(repo, branch, commit)
+                    raise RoostError(said)
+                # Git made the worktree, then its post-checkout hook failed.
+                with store.locked():
+                    store.save(task)
+                    abandon(store, task)
+                raise RoostError("The repository's post-checkout hook failed in the task's new worktree, so the task "
+                                 "didn't start%s: %s" % ("; its worktree is kept, as the hook left files there"
+                                                         if worktree.exists() else "", said))
         # `git worktree add` leaves them out. Its runner checks them out, in
         # its terminal, as that fetches.
         if (worktree / ".gitmodules").is_file():
@@ -2207,14 +2288,15 @@ def put_right_prompt(task):
 
 def list_tasks(store, request):
     tasks = []
-    for task in store.all():
+    # One damaged record must not hide every other task.
+    for task in filter(listable, store.all()):
         if task["status"] == "retired":
             # Retirement now deletes records; clear out ones left by older helpers.
             store.remove(task["id"])
         else:
             # Kept, so the transcript is read once for each such prompt.
             if put_right_prompt(task):
-                store.save(task)
+                store.note(task)
             tasks.append(task)
     inventories = {}
     table = None  # The process table, read only when a request may have been approved.
@@ -2237,11 +2319,16 @@ def list_tasks(store, request):
         # An agent that reports its status to its terminal needs no guessing.
         guess = task["live"] and task.get("programStatusRun") != task.get("runId")
         if task["live"] and task["status"] == "crashed":
-            # An earlier poll missed a pane that is in fact alive.
+            # An earlier poll missed a pane that is in fact alive. Nothing
+            # happened since you last saw it, if you had.
+            seen = task.pop("seenBeforeCrash", False) or seen_since_last_event(task)
             task.update(status=task.pop("statusBeforeCrash", None) or "ready", updatedAt=now())
+            if seen:
+                task["seen"] = task["updatedAt"]
             changed = True
         elif not task["live"] and task["status"] not in ENDED:
-            task.update(status="crashed", statusBeforeCrash=task["status"], updatedAt=now())
+            task.update(status="crashed", statusBeforeCrash=task["status"],
+                        seenBeforeCrash=seen_since_last_event(task), updatedAt=now())
             changed = True
         elif guess and task["status"] in ("running", "permission") and was_interrupted(task):
             # Stopped by you, so waiting for you; it reports no event of its own.
@@ -2258,7 +2345,7 @@ def list_tasks(store, request):
                 task.pop("requestCommand", None)
                 changed = True
         if changed:
-            store.save(task)
+            store.note(task)
     return tasks
 
 
@@ -3539,7 +3626,7 @@ def prepare_look(store, task_id, tracked=False):
     Magit: the files, and the two commits to compare. A look at what you
     looked at before keeps that. Git runs without the registry lock."""
     with store.locked():
-        task = store.read(task_id)
+        task = store.read_to_act_on(task_id)
         if task["status"] == "retired":
             raise RoostError("Task is retired")
         require_not_removing(store, task, "look")
@@ -3678,7 +3765,7 @@ def inspect(store, task):
         raise RoostError("The agent's tmux window is gone; resume the task")
     task.update(windowIndex=pane["index"], session=pane["session_name"])
     put_right_prompt(task)
-    store.save(task)
+    store.note(task)
     task["live"] = not pane["dead"]
     reply = last_message(task)
     if reply:
@@ -4001,7 +4088,8 @@ def integration_branch(task):
     require_not_rebasing(repo, branch)
     if current_branch(repo) == branch:
         if git(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0:
-            raise RoostError("The primary repository already has a merge in progress")
+            raise RoostError("The primary repository %s already has a merge in progress; finish it with git commit, "
+                             "or undo it with git merge --abort, then try again" % repo)
         return branch, True
     if not ref_exists(repo, branch):
         raise RoostError("The integration branch %s no longer exists" % branch)
@@ -4113,12 +4201,13 @@ def kept_of_gone(repo, worktree):
     return None
 
 
-def require_nothing_kept(repo, worktree, unlinked=False):
+def require_nothing_kept(repo, worktree, unlinked=False, removing=False):
     """Refuse to finish a task whose worktree folder is missing, or with
     UNLINKED there but no longer linked to REPO, while what Git keeps of it
     holds what may be work no branch has: the repositories of its
     submodules, or commits on its detached HEAD. Forgetting it would delete
-    them, uncounted."""
+    them, uncounted. REMOVING says a removal of Roost's was cut short, which
+    began with nothing uncommitted, and can leave it without its HEAD."""
     gitdir = None
     if Path(repo).is_dir():
         gitdir = (next((place for place, path in linked_worktrees(repo) if Path(path).resolve() == worktree), None)
@@ -4151,8 +4240,10 @@ def require_nothing_kept(repo, worktree, unlinked=False):
         held.append("a merge under way")
     if (gitdir / "MERGE_AUTOSTASH").exists():
         held.append("changes a merge set aside")
-    # What was staged there, kept in its index, and in no commit.
-    if (gitdir / "index").is_file():
+    # What was staged there, kept in its index, and in no commit. Without
+    # HEAD, which only a removal of Roost's explains, there's nothing to
+    # compare it to, and all of it counts.
+    if (head or not removing) and (gitdir / "index").is_file():
         commit = git(repo, "rev-parse", "--verify", "-q", (head[len("ref:"):].strip() if head.startswith("ref:")
                                                           else head) + "^{commit}", check=False).stdout.strip()
         staged = git(repo, "--no-optional-locks", "diff-index", "--cached", "--quiet", commit or EMPTY_TREE,
@@ -4167,6 +4258,30 @@ def require_nothing_kept(repo, worktree, unlinked=False):
         raise RoostError("The task's worktree folder is missing, and Git keeps what may be work with it: %s. Restore "
                          "the folder, or delete it all with git worktree remove --force --force %s, then try again"
                          % (" and ".join(held), shlex.quote(str(worktree))))
+
+
+def put_back_removed(store, task):
+    """Put back what a removal cut short took from TASK's worktree: Git
+    deletes a worktree file by file, and its link to the repository may go
+    among them. Otherwise it looks like changes of yours, which committing
+    would make real, or isn't a worktree at all. Roost began that removal
+    with nothing uncommitted there, and with its tracked files back,
+    Git says what is there since, as for any task, and nothing is forced."""
+    if not task.get("removing"):
+        return
+    # Its own folder, and no other checkout a link in its place leads to.
+    worktree = check_worktree(store, task, branch=False)
+    if not (worktree.is_dir() and Path(task["repo"]).is_dir()):
+        return
+    if not os.path.lexists(worktree / ".git"):
+        gitdir = next((gitdir for gitdir, path in linked_worktrees(task["repo"]) if Path(path).resolve() == worktree), None)
+        if gitdir is None:
+            return
+        atomic_text(worktree / ".git", "gitdir: %s\n" % gitdir)
+    gone = git_fields(worktree, *measuring(worktree), "ls-files", "--deleted", "-z")
+    if gone:
+        git_fields(worktree, *measuring(worktree), "checkout-index", "-f", "-z", "--stdin",
+                   input=b"".join(os.fsencode(path) + b"\0" for path in gone))
 
 
 def unregister_gone(repo, worktree):
@@ -4401,6 +4516,7 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
         raise RoostError("Task's tmux ownership changed; stop or forget the task instead")
     repo = task["repo"]
     branch = task["branch"]
+    put_back_removed(store, task)
     worktree = check_worktree(store, task)
     worktree_exists = worktree.exists()
     branch_exists = ref_exists(repo, branch)
@@ -4415,9 +4531,12 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
                          % (" (%s)" % lock if lock else "", "" if worktree_exists else ", and its folder is missing",
                             "" if worktree_exists else "reconnect it, or ", shlex.quote(str(worktree))))
     if not worktree_exists:
-        require_nothing_kept(repo, worktree)
+        require_nothing_kept(repo, worktree, removing=bool(task.get("removing")))
     require_agent_work_kept(task)
     squashed = None
+    # Asked again after a request that got as far as deleting the branch,
+    # with the task's work where it belongs: only the record is left.
+    merge = merge and (branch_exists or not task.get("retiringCommit"))
     if merge:
         if not branch_exists:
             raise RoostError("The task branch no longer exists; there is nothing to merge")
@@ -4727,6 +4846,7 @@ def discard(store, task, expect=None, dry_run=False, teardown=None):
     worktree before it is removed."""
     repo = task["repo"]
     branch = task["branch"]
+    put_back_removed(store, task)
     # Whatever branch its agent left the worktree on: that goes too.
     worktree = check_worktree(store, task, branch=False)
     worktree_exists = worktree.exists()
@@ -4735,7 +4855,7 @@ def discard(store, task, expect=None, dry_run=False, teardown=None):
     commit = git(repo, "rev-parse", ref + "^{commit}").stdout.strip() if branch_exists else None
     unlinked = worktree_exists and not (worktree / ".git").is_file()
     if unlinked or not worktree_exists:
-        require_nothing_kept(repo, worktree, unlinked)
+        require_nothing_kept(repo, worktree, unlinked, bool(task.get("removing")))
     # The worktrees its agent made go with it.
     work = agent_work(task)
     if dry_run:
@@ -4808,8 +4928,9 @@ def remember_repository(store, repo):
 
 def read_repository(marker):
     """The repository noted in MARKER: its text but the newline written after
-    it, since a directory's name may end in a space."""
-    return marker.read_text().removesuffix("\n")
+    it, since a directory's name may end in a space. A damaged one stops
+    nothing: it just names no repository."""
+    return marker.read_text(errors="replace").removesuffix("\n")
 
 SEARCH_TASK_LIMIT = 50
 SEARCH_HITS_PER_TASK = 10
@@ -5310,11 +5431,8 @@ def holding_worktree(store, task, operation, refusal):
             fcntl.flock(lock, operation | fcntl.LOCK_NB)
         except BlockingIOError:
             raise RoostError(refusal)
-        INHERITED.append(lock.fileno())
-        try:
+        with handing_on(lock.fileno()):
             yield
-        finally:
-            INHERITED.remove(lock.fileno())
 
 
 def worktree_holder(store, task):
@@ -6268,6 +6386,11 @@ def runner(root, task_id, run_id, resume_conversation=False):
     with store.locked():
         task = store.read(task_id)
         if task.get("runId") != run_id:
+            # The request that made this window stopped before saying so:
+            # nothing knows of it, so it mustn't stay once this exits.
+            if os.environ.get("TMUX_PANE"):
+                tmux(task["socket"], "set-option", "-p", "-t", os.environ["TMUX_PANE"], "remain-on-exit", "off",
+                     check=False)
             return 0
     env = os.environ.copy()
     env["ROOST_TASK_ID"] = task_id
@@ -6449,7 +6572,7 @@ def rpc(request):
             return {"ok": True, "result": search(store, request)}
         if action == "pr":
             with store.locked():
-                task = store.read(request["id"])
+                task = store.read_to_act_on(request["id"])
                 if task["status"] == "retired":
                     raise RoostError("Task is retired")
                 require_not_removing(store, task, action)
@@ -6464,7 +6587,7 @@ def rpc(request):
                         return {"ok": True, "result": outgoing(dict(store.read(request["id"]), pushed=pushed))}
                     with store.released():
                         pr = pull_request(store, task, request)
-                    task = store.read(request["id"])
+                    task = store.read_to_act_on(request["id"])
                     task["pr"] = pr
                     store.save(task)
             return {"ok": True, "result": outgoing(task)}
@@ -6483,14 +6606,14 @@ def rpc(request):
         if action in ("retire", "merge"):
             # Ask GitHub without the lock; retire then trusts only this answer.
             with store.locked():
-                task = store.read(request["id"])
+                task = store.read_to_act_on(request["id"])
             merged_head, still_open = merged_pull_request_head(task)
             request = dict(request, mergedHead=merged_head, stillOpen=still_open)
         with store.locked():
             if action == "list":
                 result = list_tasks(store, request)
             elif action in TASK_ACTIONS:
-                task = store.read(request["id"])
+                task = store.read_to_act_on(request["id"])
                 if task["status"] == "retired":
                     raise RoostError("Task is retired")
                 require_not_removing(store, task, action)
@@ -6541,8 +6664,18 @@ def rpc(request):
 
 
 def main():
+    # Emacs, agents and the records speak UTF-8, whatever this host's locale
+    # says: Python would take what they say for it, and fail on a name in
+    # any other script. Its UTF-8 mode goes for what it reads and writes,
+    # files and arguments alike, and isn't handed on to what it starts.
+    if (sys.version_info >= PYTHON_FLOOR and not sys.flags.utf8_mode
+            and codecs.lookup(locale.getpreferredencoding(False)).name != "utf-8"):
+        return subprocess.run([sys.executable, "-I", "-X", "utf8", __file__, *sys.argv[1:]]).returncode
     mode = sys.argv[1]
     if mode == "rpc":
+        # What is not UTF-8, as a file named in a message from Git, would
+        # otherwise end the reply here, with nothing said.
+        sys.stdout.reconfigure(errors="replace")
         print(json.dumps(rpc(json.load(sys.stdin)), ensure_ascii=False))
     elif mode in ("hook", "hook-env"):
         # Observational hooks never emit decision-control JSON or fail

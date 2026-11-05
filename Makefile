@@ -13,6 +13,16 @@ test:
 	  -f ert-run-tests-batch-and-exit
 	python3 -m unittest discover -s test -p 'test_*.py' -v
 
+# The helper killed at every step of every action, as a dropped connection
+# or a reboot would, and what a user does next: see test/crash_harness.py.
+# Slow, and slower with CRASH_SWEEP=lines, which kills it at every line it
+# reaches too.
+CRASH_SWEEP ?= commands
+
+.PHONY: crash
+crash:
+	ROOST_CRASH_SWEEP=$(CRASH_SWEEP) python3 -m unittest discover -s test -p 'test_crash.py' -v
+
 # Roost used as you would, in a GUI Emacs of its own with a fake agent,
 # each step checked and captured: see test/qa/qa.py.  Emacs needs
 # tmux-control, and Magit for review, as in
