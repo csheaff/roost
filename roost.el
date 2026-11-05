@@ -3819,8 +3819,9 @@ FAILURE, if given, receives the error message instead of Roost reporting it."
                                  (roost--field task 'name) torn
                                  (if (member output '(nil "")) "." (concat ":\n\n" output)))))))
            (lambda (err)
-             ;; Refused, as retiring unmerged work is: the agent runs on.
-             (when (roost--field task 'live)
+             ;; Refused, as retiring unmerged work is: the agent runs on,
+             ;; or, refused a resume, one you started by hand in its session.
+             (when (or (roost--field task 'live) (equal action "resume"))
                (roost--restore-terminal task terminals))
              (if failure
                  (funcall failure err)

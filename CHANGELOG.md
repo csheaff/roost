@@ -15,6 +15,57 @@ What each release changes, and what to do when upgrading. Newest first.
   as when you quit the question about a project's setup command, can be
   created again. It said "Already creating" until you killed it. Nothing
   to do when upgrading.
+- What a repository's post-merge or post-commit hook leaves running in the
+  background no longer holds up `m` or `u`, which waited for as long as
+  that ran, or until Emacs stopped waiting. Nothing to do when upgrading.
+- What a repository's post-checkout hook leaves running in the background
+  no longer holds up a new task. Roost waited for as long as that ran, up
+  to the eleven minutes a draft waits, and then a second try waited on it
+  too. Nothing to do when upgrading.
+- Roost refuses to create a task whose prompt holds a NUL character, and
+  says on which line. It made the task, whose agent could never start: it
+  failed with no reason given, and a Python traceback in its terminal.
+  Nothing to do when upgrading.
+- A task's terminal on screen reconnects when Roost refuses to resume the
+  task, as while the agent runs where you started it by hand. It stayed
+  disconnected, though Roost had just said to exit that agent there.
+  Nothing to do when upgrading.
+- Discarding removes a task's worktree that has lost its `.git` file, as
+  after a teardown command or an agent emptied it, and counts its files
+  among what it asks you about. Git refused, each time, and only
+  forgetting the task was left, which keeps the folder and the branch.
+  Where Git keeps work beside it, as its submodules' repositories, Roost
+  says so and how to restore the link. A task folder replaced with a link
+  is refused, for every action that would act through it. Nothing to do
+  when upgrading.
+- A teardown command may remove the task's worktree itself. Merging or
+  retiring then said the worktree had files left in it, of a worktree that
+  was gone, and discarding failed if Git no longer knew it; each worked
+  the second time. Nothing to do when upgrading.
+- A project in a folder whose name ends in a space or, with Git 2.36 or
+  newer, holds a newline starts its tasks there. One ending in a space
+  couldn't start a task, and one with a newline in its name started it
+  in the folder named by what came before the newline, if that was a
+  repository, and merged it there. Nothing to do when upgrading.
+- A new task reads a relative URL in `.gitmodules`, such as `../lib.git`,
+  as the primary checkout would: from the remote its branch tracks, or,
+  with none, from the primary checkout's folder. With no `origin`, a task
+  read it from its worktree, so the submodule couldn't be fetched, and
+  what it made of it went in the config the primary checkout shares. To
+  upgrade, if `git config --get-regexp 'submodule\..*\.url'` names Roost's
+  state directory, run `git config --remove-section submodule.NAME` for
+  that one in the primary checkout; `s` then tries again. A task that
+  failed after another left that URL leaves the submodule out on `s`:
+  start it afresh.
+- A task started while another fetches its first submodule checks out all
+  of them, where the repository has initialized none. It left out the
+  rest without a word, having taken the other's first for your choice.
+  Nothing to do when upgrading: `git submodule update --init` in a task
+  it happened to fetches what's missing.
+- A task stopped because a submodule couldn't be fetched retires. Git
+  refused, saying "working trees containing submodules cannot be moved
+  or removed", of the empty folder the failed clone left. Nothing to do
+  when upgrading.
 - A click on the empty part of the sidebar, below its rows, does nothing.
   It said "No project here", or that a task was no longer listed.
   Nothing to do when upgrading.
