@@ -396,7 +396,7 @@ class History:
 
 # What every helper wrote in every record, which listing tasks takes for
 # granted, and what is text whenever it is there.
-RECORD_TEXT = ("status", "repo", "worktree", "branch", "baseCommit", "socket")
+RECORD_TEXT = ("name", "status", "repo", "worktree", "branch", "baseCommit", "socket")
 RECORD_OPTIONAL_TEXT = ("integrationBranch", "paneId", "windowId")
 
 
@@ -2321,8 +2321,9 @@ def list_tasks(store, request):
         if task["live"] and task["status"] == "crashed":
             # An earlier poll missed a pane that is in fact alive. Nothing
             # happened since you last saw it, if you had.
+            seen = task.pop("seenBeforeCrash", False) or seen_since_last_event(task)
             task.update(status=task.pop("statusBeforeCrash", None) or "ready", updatedAt=now())
-            if task.pop("seenBeforeCrash", False):
+            if seen:
                 task["seen"] = task["updatedAt"]
             changed = True
         elif not task["live"] and task["status"] not in ENDED:
@@ -3625,7 +3626,7 @@ def prepare_look(store, task_id, tracked=False):
     Magit: the files, and the two commits to compare. A look at what you
     looked at before keeps that. Git runs without the registry lock."""
     with store.locked():
-        task = store.read(task_id)
+        task = store.read_to_act_on(task_id)
         if task["status"] == "retired":
             raise RoostError("Task is retired")
         require_not_removing(store, task, "look")

@@ -342,11 +342,12 @@ class Records(unittest.TestCase):
 
     def test_a_record_missing_what_listing_needs_says_so_when_asked_about(self):
         record = json.loads(self.good)
-        for field in ("status", "repo", "worktree", "branch", "baseCommit", "socket"):
+        for field in ("name", "status", "repo", "worktree", "branch", "baseCommit", "socket"):
             with self.subTest(field=field):
                 self.path.write_text(json.dumps({key: value for key, value in record.items() if key != field}))
                 self.assert_the_other_task_stays()
-                self.assertIn("is damaged", self.box.helper("inspect", id=self.task["id"])["error"])
+                for action in ("inspect", "look"):
+                    self.assertIn("is damaged", self.box.helper(action, id=self.task["id"])["error"])
 
     def test_agent_worktrees_of_the_wrong_type_leave_the_others_listed(self):
         record = json.loads(self.good)
