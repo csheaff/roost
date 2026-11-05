@@ -2435,7 +2435,7 @@ def forge_for(repo):
     named = bool(host) and any(label.startswith("gitlab") for label in host.split(":")[0].split("."))
     if said == "gitlab" or (named and said != "github"):
         return GitLabForge(host, project)
-    return GitHubForge(host)
+    return GitHubForge(host, project.split("/")[0] if project else None)
 
 
 class GitHubForge:
@@ -2447,8 +2447,9 @@ class GitHubForge:
     # as records from older helpers are all GitHub's.
     mark = {}
 
-    def __init__(self, host):
+    def __init__(self, host, owner=None):
         self.host = host
+        self.owner = owner
 
     def pull_requests(self, repo, branch, timeout):
         """REPO's latest pull requests from BRANCH, as `gh pr list` has them."""
@@ -2457,17 +2458,27 @@ class GitHubForge:
                              "--json", PULL_REQUEST_FIELDS, timeout=timeout))
 
     def open_pull_request(self, worktree, branch):
-        """BRANCH's open pull request, as a record, or None."""
+        """BRANCH's open pull request, as a record, or None. Not one from
+        someone else's fork, whose branch of that name gh lists too."""
         try:
             existing = json.loads(gh(worktree, "pr", "list", "--head", branch, "--state", "open",
-                                     "--json", "number,url"))
+                                     "--json", "number,url,isCrossRepository,headRepositoryOwner"))
         except RoostError as error:
             if "none of the git remotes" not in str(error):
                 raise
             raise RoostError("origin is on %s, which gh doesn't know as GitHub. Roost opens pull requests on "
                              "GitHub and GitLab; for a GitLab server, run `git config roost.forge gitlab` in %s"
                              % (self.host or "no host", worktree))
-        return dict(number=existing[0]["number"], url=existing[0]["url"]) if existing else None
+
+        def theirs(pr):
+            # From this repository, whatever origin's older name for its
+            # owner, is ours. From a fork, it may be: origin may be that fork.
+            login = (pr.get("headRepositoryOwner") or {}).get("login")
+            return pr.get("isCrossRepository") is True and bool(self.owner and login) \
+                and login.lower() != self.owner.lower()
+
+        mine = [pr for pr in existing or [] if not theirs(pr)]
+        return dict(number=mine[0]["number"], url=mine[0]["url"]) if mine else None
 
     def create(self, worktree, base, branch, title, body, draft):
         """Open a pull request of BRANCH into BASE, and return its record."""
@@ -2502,7 +2513,8 @@ GITLAB_PULL_REQUESTS = """query($path: ID!, $branch: String!) { project(fullPath
       last: notes(last: 1) { nodes { createdAt } }
       first: notes(first: 1) { nodes { author { username } body position { filePath newLine } } } } } } } } }"""
 GITLAB_OPEN = """query($path: ID!, $branch: String!) { project(fullPath: $path) {
-  mergeRequests(sourceBranches: [$branch], state: opened, first: 1) { nodes { iid webUrl } } } }"""
+  mergeRequests(sourceBranches: [$branch], state: opened, first: 10) { nodes {
+    iid webUrl sourceProject { fullPath } targetProject { fullPath } } } } }"""
 GITLAB_CREATE = """mutation($path: ID!, $source: String!, $target: String!, $title: String!, $description: String) {
   mergeRequestCreate(input: {projectPath: $path, sourceBranch: $source, targetBranch: $target,
                              title: $title, description: $description}) {
@@ -2510,9 +2522,13 @@ GITLAB_CREATE = """mutation($path: ID!, $source: String!, $target: String!, $tit
 GITLAB_ISSUES = """query($path: ID!) { project(fullPath: $path) {
   issues(state: opened, first: 100, sort: CREATED_DESC) {
     nodes { iid title description webUrl labels { nodes { title } } } } } }"""
-GITLAB_STATES = {"opened": "OPEN", "merged": "MERGED", "closed": "CLOSED", "locked": "CLOSED"}
-# GitLab's word for whether a merge request conflicts, while it works it out.
-GITLAB_UNCHECKED = (None, "UNCHECKED", "CHECKING", "PREPARING", "APPROVALS_SYNCING")
+# Locked is how GitLab has one while it merges it.
+GITLAB_STATES = {"opened": "OPEN", "merged": "MERGED", "closed": "CLOSED", "locked": "OPEN"}
+# GitLab's words for a merge request that only what Roost shows of it holds
+# up, its draft, review, threads and pipeline. Any other, as while it works
+# out whether one conflicts, or holds one for a rebase, leaves that unknown.
+GITLAB_MERGEABLE = ("MERGEABLE", "DRAFT_STATUS", "NOT_APPROVED", "REQUESTED_CHANGES", "DISCUSSIONS_NOT_RESOLVED",
+                    "CI_MUST_PASS", "CI_STILL_RUNNING")
 
 
 class GitLabForge:
@@ -2577,7 +2593,7 @@ class GitLabForge:
             review = None
         reviewed = dict(
             mergeable=("CONFLICTING" if found.get("conflicts") is True or merge_status == "CONFLICT"
-                       else "UNKNOWN" if merge_status in GITLAB_UNCHECKED else "MERGEABLE"),
+                       else "MERGEABLE" if merge_status in GITLAB_MERGEABLE else "UNKNOWN"),
             # Those yet to review it: GitLab keeps every reviewer, with how far they got.
             requested=[reviewer["username"] for reviewer, state in zip(reviewers, said)
                        if state in ("UNREVIEWED", "REVIEW_STARTED") and isinstance(reviewer.get("username"), str)],
@@ -2585,16 +2601,18 @@ class GitLabForge:
         pipeline = found.get("headPipeline") or {}
         jobs = pipeline.get("jobs") or {}
         checks = [self.check(job) for job in jobs.get("nodes") or [] if isinstance(job, dict)]
-        if (jobs.get("pageInfo") or {}).get("hasNextPage"):
-            # More jobs than were asked for: the pipeline's own status stands
-            # for the rest, failed if one that may not fail did.
+        if (jobs.get("pageInfo") or {}).get("hasNextPage") or (pipeline and not checks):
+            # More jobs than were asked for, or none, as for a pipeline GitLab
+            # refused for its configuration or another CI reports to: the
+            # pipeline's own status stands for the rest, failed if one that
+            # may not fail did.
             checks.append(self.check(dict(name="pipeline", status=pipeline.get("status"))))
         if merge_status in ("CI_MUST_PASS", "CI_STILL_RUNNING") and all(
                 check_state(check) == "passing" for check in checks):
             # GitLab waits for a pipeline no job says hasn't passed, as one
             # missing or skipped.
             checks.append(self.check(dict(name="pipeline")))
-        return dict(number=int(iid) if isinstance(iid, str) and iid.isdigit() else None, url=found.get("webUrl"),
+        return dict(number=int(iid) if isinstance(iid, str) and iid.isdigit() else None, url=text(found.get("webUrl")),
                     state=GITLAB_STATES.get(found.get("state")), isDraft=found.get("draft") is True,
                     reviewDecision=review, statusCheckRollup=checks,
                     headRefOid=found.get("diffHeadSha"), baseRefName=found.get("targetBranch"),
@@ -2647,11 +2665,18 @@ class GitLabForge:
         return state
 
     def open_pull_request(self, worktree, branch):
-        """BRANCH's open merge request, as a record, or None."""
-        listed = self.found(GITLAB_OPEN, branch=branch)["mergeRequests"]["nodes"]
+        """BRANCH's open merge request, as a record, or None. Not one from
+        someone else's fork, whose branch of that name GitLab lists too."""
+        def ours(found):
+            # As GitLab names both, whatever name origin has for the project.
+            # A fork since deleted names no source.
+            return isinstance(found, dict) and ((found.get("sourceProject") or {}).get("fullPath")
+                                                == (found.get("targetProject") or {}).get("fullPath"))
+
+        listed = [found for found in self.found(GITLAB_OPEN, branch=branch)["mergeRequests"]["nodes"] if ours(found)]
         if not listed:
             return None
-        found = self.pull_request(listed[0]) if isinstance(listed[0], dict) else {}
+        found = self.pull_request(listed[0])
         if not isinstance(found.get("number"), int):
             raise RoostError("Unexpected answer from GitLab about open merge requests: %s" % listed[0])
         return dict(number=found["number"], url=found["url"], **self.mark)
@@ -2763,7 +2788,8 @@ def task_pull_requests(task, tip, timeout=15, branch=None):
     are those whose head is a commit made there or on the task's branch."""
     try:
         listed = forge_for(task["repo"]).pull_requests(task["repo"], branch or task["branch"], timeout)
-    except (RoostError, ValueError, OSError):
+    # What can't be read, too: every task's listing waits on this one.
+    except (RoostError, ValueError, OSError, KeyError, TypeError, AttributeError):
         return None
     if not isinstance(listed, list):
         return None
@@ -4425,17 +4451,21 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
         delete_branch(repo, branch, commit)
     store.remove(task["id"])
     task.update(status="retired", updatedAt=now())
-    if commit and merged_head == commit:
+    recorded = recorded_pull_request(task)
+    # Not with one open from there as well: deleting the branch would close it.
+    if commit and merged_head == commit and not (recorded.get("state") == "OPEN"
+                                                 and recorded.get("mergedHead") == commit):
         task["remoteCleanup"] = True
     return task
 
 
-def delete_remote_branch(repo, branch):
-    """Best effort: GitHub may already have deleted the merged branch."""
+def delete_remote_branch(repo, branch, commit):
+    """Best effort: GitHub may already have deleted the merged branch. Only
+    while it is still at COMMIT, the tip that merged, as commits pushed there
+    since are in no pull request and nowhere else."""
+    ref = "refs/heads/" + branch
     with contextlib.suppress(OSError, RoostError):
-        if remote_git(repo, "ls-remote", "--exit-code", "--heads", "origin", branch,
-                      check=False).returncode == 0:
-            remote_git(repo, "push", "origin", "--delete", branch, check=False)
+        remote_git(repo, "push", "origin", "--delete", "--force-with-lease=%s:%s" % (ref, commit), ref, check=False)
 
 
 def push_pull_request(store, task):
@@ -6406,7 +6436,7 @@ def rpc(request):
                     else:
                         task["landed"] = False
         elif action in ("retire", "merge") and result.pop("remoteCleanup", None):
-            delete_remote_branch(result["repo"], result["branch"])
+            delete_remote_branch(result["repo"], result["branch"], result["retiringCommit"])
         elif prepared:
             with contextlib.suppress(RoostError, OSError):
                 looked = record_look(store, request["id"], *prepared)
