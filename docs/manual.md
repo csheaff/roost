@@ -1031,7 +1031,9 @@ What runs where:
   permission unless you confirm, as the paste could answer its menu.
 - Roost won't paste text holding a control character, other than a line
   or page break or a tab, as the agent's terminal would take it as a key.
-  It says which and on what line, and sends nothing.
+  It says which and on what line, and sends nothing. The same goes for a
+  byte that isn't text, from a file that isn't UTF-8, which shows as
+  `\351` in Emacs. A review note quotes such a line as Emacs shows it.
 
 Files:
 

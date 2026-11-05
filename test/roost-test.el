@@ -7166,6 +7166,97 @@ lines a quote leaves for your own words."
         (roost-send-submit)
         (should (equal (buffer-string) "  indented")))))))
 
+(ert-deftest roost-a-byte-that-isnt-text-is-refused-in-words ()
+  "A file that isn't UTF-8 quoted in a prompt holds bytes JSON can't carry.
+Roost says which and where, as its host does for a control character,
+and the draft stays as it was, ready to send once it is deleted."
+  (roost-test--isolated
+   (roost-test--with-send-buffers
+    (let ((task (roost--cache-task "dev" (roost-test--task))) sent)
+      (cl-letf (((symbol-function 'pop-to-buffer) #'set-buffer)
+                ((symbol-function 'roost--request)
+                 (lambda (_host _action params &rest _) (setq sent (alist-get 'text params)))))
+        (roost--send-draft task (concat "a.py:1-1\ncaf" (string #x3FFFE9)))
+        (roost-send-submit)
+        (should-not sent)
+        (should-not roost--send-sending)
+        ;; Counted from the line it names, as the blank lines above go.
+        (should (string-match-p "Line 2 of the prompt holds \\\\351" (roost-test--header)))
+        (should (equal (buffer-string) (concat "a.py:1-1\ncaf" (string #x3FFFE9))))
+        (goto-char (point-max))
+        (delete-char -1)
+        (roost-send-submit)
+        (should (equal sent "a.py:1-1\ncaf"))
+        ;; Asked in the minibuffer, there's no draft to say it in.
+        (should-error (roost--send-text task (string #x3FFFE9)) :type 'user-error)))))
+  ;; A string Emacs read as bytes holds them just the same.
+  (should (string-match-p "\\\\351" (roost--text-problem "caf\351")))
+  (should-not (roost--text-problem "café ☕ \U0001F600"))
+  (should (equal (roost--shown-text (concat "é" (string #x3FFFE9 #xD800))) "é\\351\\xD800"))
+  ;; It names what holds the byte, and any good text before it is left alone.
+  (should (equal (should-error (roost--json-encode `((prompt . ,(concat "é\n\n" (string #x3FFFE9)))))
+                               :type 'user-error)
+                 '(user-error "Line 3 of the prompt holds \\351, a byte that isn't text; nothing was sent")))
+  (should (string-match-p "of the directory holds"
+                          (cadr (should-error (roost--json-encode `((directory . ,(string #x3FFFE9))))
+                                              :type 'user-error)))))
+
+(ert-deftest roost-a-request-refused-before-it-starts-leaves-its-draft-ready ()
+  "Quitting the question about a project's setup command, or a byte JSON
+can't carry, stops a draft before anything reaches its host.  It mustn't
+then say \"Already creating\" for as long as it is open."
+  (roost-test--isolated
+   (let ((default-directory "/tmp/") (roost-hosts '("dev")) made)
+     (save-window-excursion
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--project-value)
+                      (lambda (&rest _) (signal 'quit nil)))
+                     ((symbol-function 'roost--helper) (lambda () '("helper" . "source")))
+                     ((symbol-function 'roost--run)
+                      (lambda (&rest _) (setq made t))))
+             (puthash (list nil roost-state-directory) "helper" roost--installed)
+             (roost--compose)
+             (with-current-buffer roost--compose-buffer
+               (setq roost--compose-fields (plist-put roost--compose-fields :directory "/tmp/"))
+               (goto-char (point-max))
+               (insert "Do the thing")
+               ;; `should-error' takes no quit.
+               (should (eq (condition-case nil (roost-compose-submit) (quit 'quit)) 'quit))
+               (should-not roost--compose-submitting)
+               (should-not roost--draft-note)
+               (cl-letf (((symbol-function 'roost--project-value) (lambda (&rest _) nil)))
+                 (goto-char (point-max))
+                 (insert (string #x3FFFE9))
+                 (should-error (roost-compose-submit) :type 'user-error)
+                 (should-not made)
+                 (should-not roost--compose-submitting)
+                 (delete-char -1)
+                 (roost-compose-submit)
+                 (should made))))
+         (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-a-byte-in-a-pull-request-draft-leaves-it-ready ()
+  "A commit whose message isn't UTF-8 puts its bytes in the draft."
+  (roost-test--isolated
+   (roost-test--with-pr-buffers
+    (let ((task (roost--cache-task "dev" (roost-test--task))) created)
+      (cl-letf (((symbol-function 'pop-to-buffer) #'set-buffer)
+                ((symbol-function 'roost--pr-commits)
+                 (lambda (_task) (list (concat "caf" (string #x3FFFE9)))))
+                ((symbol-function 'roost--helper) (lambda () '("helper" . "source")))
+                ((symbol-function 'roost--run) (lambda (&rest _) (setq created t))))
+        (puthash (list nil roost-state-directory) "helper" roost--installed)
+        (puthash (list "dev" roost-state-directory) "helper" roost--installed)
+        (roost-pr task)
+        (should (string-search (string #x3FFFE9) (buffer-string)))
+        (should-error (roost-pr-submit) :type 'user-error)
+        (should-not created)
+        (should-not roost--pr-sending)
+        (goto-char (point-min))
+        (while (search-forward (string #x3FFFE9) nil t) (replace-match "e"))
+        (roost-pr-submit)
+        (should created))))))
+
 (ert-deftest roost-a-draft-edited-while-sending-keeps-its-blank-lines ()
   "The draft stays open to write in while a send is on its way, and what
 you wrote meanwhile isn't what its host counted lines in."
@@ -10921,6 +11012,32 @@ With INITIAL, the box must start out holding it."
       (roost-test--write-note "" "Name it")
       (should (equal (mapcar (lambda (note) (alist-get 'text note)) roost--notes)
                      '("These two" "Whole file"))))))
+
+(ert-deftest roost-a-note-on-a-line-that-isnt-utf-8-is-kept-with-the-rest ()
+  "A byte in a diff's line stopped that note being saved, and with it every
+note after, for any task, so a restart lost them all."
+  (roost-test--with-magit-task
+    (let ((coding-system-for-write 'no-conversion))
+      (with-temp-file "a.txt"
+        (set-buffer-multibyte nil)
+        (insert "line 1\ncaf\351 here\nline 3\nplain\n")))
+    (magit-diff-unstaged)
+    (with-current-buffer (magit-get-mode-buffer 'magit-diff-mode)
+      (goto-char (point-min))
+      (re-search-forward "^\\+caf")
+      (beginning-of-line)
+      (roost-test--write-note "Encoding?")
+      (roost-test--goto-line-text "plain")
+      (roost-test--write-note "And this")
+      (should (equal (mapcar #'roost--format-note roost--notes)
+                     '("a.txt:2\n> +caf\\351 here\nEncoding?"
+                       "a.txt:4\n> +plain\nAnd this")))
+      ;; It reads back, and shows under its line, after a restart.
+      (setq roost--notes nil
+            roost--notes-loaded nil)
+      (should (= (length (roost--notes)) 2))
+      (roost--show-notes-everywhere)
+      (should (equal (mapcar #'cdr (roost-test--shown-notes)) '("Encoding?" "And this"))))))
 
 (ert-deftest roost-a-note-shows-once-in-a-magit-buffer-opened-again ()
   (roost-test--with-magit-task
