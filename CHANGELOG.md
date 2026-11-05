@@ -47,6 +47,30 @@ What each release changes, and what to do when upgrading. Newest first.
   `i` does from the window beside it, gives the terminal back when it
   docks. The terminal went from the frame instead. Nothing to do when
   upgrading.
+- Retiring a task whose pull request merged leaves its branch on the
+  remote while another pull request from it is open, into another branch.
+  Deleting the branch closed that one. Nothing to do when upgrading.
+- `P` opens a pull request of the task's own when the only open one from
+  a branch of that name is on someone else's fork. It used to take that
+  one for the task's, and show its checks and review from then on. For a
+  task that did, open yours on the forge, and Roost goes over to it.
+- A GitLab merge request caught while GitLab merges it stays open until
+  Roost next asks, rather than reading closed. Nothing to do when
+  upgrading.
+- A GitLab merge request that GitLab holds for a reason Roost doesn't
+  show, such as one it must rebase, or one blocked by another, no longer
+  reads `to merge`. Nothing to do when upgrading.
+- A GitLab pipeline that lists no jobs, as one GitLab refused for its
+  configuration or another CI reports to, counts as one check with the
+  pipeline's status. Its merge request read `to merge` however the
+  pipeline went. Nothing to do when upgrading.
+- An answer from `glab` or `gh` that Roost can't read leaves that task
+  without news of its pull request. It used to fail the whole listing, so
+  every task on the host read `offline`. Nothing to do when upgrading.
+- Retiring a task whose pull request merged deletes its branch on the
+  remote only while that branch is still at the commit that merged. One
+  with commits pushed since, from another clone or on the forge, stays,
+  where before they went with it. Nothing to do when upgrading.
 - Roost refuses to send a prompt holding a control character, other than
   a line or page break or a tab, as the agent's terminal would take it as
   a key. It says which and on what line, and sends nothing. A draft stays
