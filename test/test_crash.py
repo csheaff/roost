@@ -163,6 +163,51 @@ class Crashes(unittest.TestCase):
         self.assertIn("no longer exists", box.helper("merge", id=task["id"])["error"])
 
 
+class Records(unittest.TestCase):
+    """Damage to the records on a host."""
+
+    def setUp(self):
+        self.box = Box()
+        self.addCleanup(self.box.close)
+        self.task, self.other = self.box.create("damaged"), self.box.create("other")
+        self.path = self.box.state / "tasks" / (self.task["id"] + ".json")
+        self.good = self.path.read_bytes()
+
+    def assert_the_other_task_stays(self):
+        listed = self.box.helper("list", full=True, socket=self.box.socket)
+        self.assertTrue(listed["ok"], listed)
+        self.assertIn(self.other["id"], [task["id"] for task in listed["result"]])
+
+    def test_a_damaged_record_leaves_the_others_listed(self):
+        for damage in (b"", self.good[:len(self.good) // 2], b"{not json", b"\0" * 64, b'{"id": "\xff"}',
+                       b"[]\n", b"null\n", b"3\n", b'"text"\n', b"{}\n"):
+            with self.subTest(damage=damage):
+                self.path.write_bytes(damage)
+                self.assert_the_other_task_stays()
+                for action in ("inspect", "forget", "stop"):
+                    error = self.box.helper(action, id=self.task["id"])["error"]
+                    self.assertIn("is damaged", error)
+                    self.assertIsNone(harness.BUG_WORDS.search(error), error)
+
+    def test_a_field_of_the_wrong_type_leaves_the_others_listed(self):
+        record = json.loads(self.good)
+        for field in ("id", "status", "repo", "worktree", "branch", "baseCommit", "socket", "integrationBranch", "paneId",
+                      "windowId"):  # Each of these stopped the listing.
+            for value in (5, ["a"]):
+                with self.subTest(field=field, value=value):
+                    self.path.write_text(json.dumps(dict(record, **{field: value})))
+                    self.assert_the_other_task_stays()
+        for field in ("id", "status", "repo", "worktree", "branch", "baseCommit", "socket"):
+            with self.subTest(missing=field):
+                self.path.write_text(json.dumps({key: value for key, value in record.items() if key != field}))
+                self.assert_the_other_task_stays()
+
+    def test_a_record_with_another_tasks_id_is_damaged(self):
+        self.path.write_text(json.dumps(dict(json.loads(self.good), id=self.other["id"])))
+        listed = self.box.helper("list", socket=self.box.socket)["result"]
+        self.assertEqual([task["id"] for task in listed], [self.other["id"]])
+
+
 class Hosts(unittest.TestCase):
     """Hosts that aren't set up as yours is."""
 

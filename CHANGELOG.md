@@ -4,6 +4,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A task's record that is damaged, as valid JSON that isn't a record or a
+  field of the wrong type, no longer stops the host listing every other
+  task. It is left out, as an unreadable record always was, and acting on
+  it from a list shown before says the record is damaged and where it is.
+  Nothing to do when upgrading.
 - A merge, retirement or discard stopped while Git deleted the task's
   worktree finishes when you ask again. Roost said files were uncommitted,
   and to commit them, which would have committed the deletion of the task's

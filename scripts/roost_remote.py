@@ -364,6 +364,24 @@ class History:
         return changes
 
 
+# What every helper wrote in every record, which listing tasks takes for
+# granted, and what is text whenever it is there.
+RECORD_TEXT = ("status", "repo", "worktree", "branch", "baseCommit", "socket")
+RECORD_OPTIONAL_TEXT = ("integrationBranch", "paneId", "windowId")
+
+
+def listable(task):
+    """Whether TASK's record holds what listing it takes for granted."""
+    return (all(isinstance(task.get(field), str) for field in RECORD_TEXT)
+            and all(isinstance(task.get(field), (str, type(None))) for field in RECORD_OPTIONAL_TEXT))
+
+
+def own_record(record, task_id):
+    """Whether RECORD, read from TASK_ID's file, is a record of that task
+    at all, and not what damage left there."""
+    return isinstance(record, dict) and record.get("id") == task_id
+
+
 class Store:
     def __init__(self, root):
         self.root = Path(root).expanduser().absolute()
@@ -410,10 +428,16 @@ class Store:
         return self.root / "attachments" / task_id
 
     def read(self, task_id):
+        path = self.path(task_id)
         try:
-            task = json.loads(self.path(task_id).read_text())
+            task = json.loads(path.read_text())
         except FileNotFoundError:
             raise RoostError("Task no longer exists: " + task_id)
+        except ValueError:
+            task = None
+        if not own_record(task, task_id):
+            raise RoostError("The record of this task, %s, is damaged, so Roost no longer lists it. Its worktree and "
+                             "branch are as they were: move the record aside, and finish them with Git" % path)
         # An older helper's record may name its integration branch heads/X.
         recorded_integration(task)
         return task
@@ -453,7 +477,9 @@ class Store:
         for path in sorted(self.tasks_dir.glob("*.json")):
             # One unreadable record must not hide every other task.
             with contextlib.suppress(OSError, ValueError):
-                tasks.append(json.loads(path.read_text()))
+                record = json.loads(path.read_text())
+                if own_record(record, path.stem):
+                    tasks.append(record)
         for task in tasks:
             recorded_integration(task)
         return tasks
@@ -2196,7 +2222,8 @@ def put_right_prompt(task):
 
 def list_tasks(store, request):
     tasks = []
-    for task in store.all():
+    # One damaged record must not hide every other task.
+    for task in filter(listable, store.all()):
         if task["status"] == "retired":
             # Retirement now deletes records; clear out ones left by older helpers.
             store.remove(task["id"])
