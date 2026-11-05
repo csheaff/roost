@@ -35,6 +35,63 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## A bug hunt, with two new sweeps — 2026-11-05
+
+- **Why.** About 2,000 lines had landed since the last hunt, and two kinds
+  of failure had no test: a helper killed partway, and a reply that comes
+  after you have moved on.
+- **What found what.** Five read and tested an area each: forges, how a
+  task starts and ends, what Emacs draws, crashes, and late replies. 52
+  bugs, in #207 to #214, each with a test that fails without its fix.
+- **Late replies.** `test/roost-sweep-late.el` holds back the reply to each
+  of 51 commands, does one of 23 things you might do meanwhile, then
+  delivers it good, refused, dropped or timed out: about 5,000 cases in
+  `make test`. It found tasks that went coming back, questions landing in
+  the minibuffer you were typing in, and a task taking your window minutes
+  after you left it (#211).
+- **Crashes.** `make crash` kills the helper at each step of each action,
+  in 31 task states, and recovers as you would (#212). A whole run takes
+  39 minutes. Its first flagged 4 scenarios: `Create` and
+  `CreateFromRemote`, a worktree Git stopped making, fixed in #214, and
+  `Update` and `UpdateConflict`, whose 7 flags are below.
+  `test/test_crash.py` keeps what went wrong for `make test`.
+- **A false crash.** `make qa QA_FLAGS=--remote` failed its whole runs on a running
+  agent reading `crashed` for nine seconds, then back, which read as
+  unseen and waited on you. The host's history showed it, once the task's
+  `seen` and `updatedAt` had been compared. It reproduced twice without
+  `tmux -u` and not with it, so tmux's tabs printed as `_` are the likely
+  cause, though what put a C locale on those requests wasn't found.
+- **What reviews added.** Copilot's rounds found real gaps in code that
+  deletes: a task folder replaced with a link would have sent `rmtree`
+  through it to the tasks beside it, and history in a repository made in a
+  worktree counted as nothing lost. Asking a test to fail first caught two
+  of mine that passed either way.
+- **Runs.** `make test compile` passes with real Magit and perspective.el.
+  Whole `make qa`: 386 steps, no problems. `make qa QA_FLAGS=--remote`, before and
+  after: 21 problems, then 3, all in the `shell` journey's split panes, the
+  history above a terminal noted on 2026-10-26.
+- **Emacs 29.** `rx` before Emacs 30 leaves a range running into raw bytes
+  as it is, and such a range matches none of them: write them apart.
+- **Left for a decision.**
+  - `u` with a submodule bump on the integration branch leaves ` M lib`, so
+    `m` refuses, and following its advice reverts the bump. New since #189.
+  - After Git dies mid-merge, refusals say "uncommitted changes" without
+    naming the half-done merge, and following the one on `u` would commit
+    it: `make crash`'s 7 flags.
+  - A ref deletion that fails during undo, as with a lock left by a
+    reboot, leaves an empty branch with no task.
+  - A pull request that branch rules block or that needs updating reads
+    `to merge` on GitHub: Roost asks only for `mergeable`.
+  - A damaged record is hidden, so its worktree and branch can't be
+    finished from Roost.
+  - Text typed in a draft after sending it goes when the good reply closes
+    the draft.
+  - A click on another project with a written draft keeps the old project.
+  - `ref_exists` reads any Git failure as no branch, and tmux calls have no
+    timeout, so a stopped server holds the registry lock.
+  - `approvalsLeft` may be GitLab EE's alone, which would fail the merge
+    request query on a CE server: unverified, needs a run against one.
+
 ## UX review — 2026-11-01
 
 - **Scope.** Every journey, from starting a task to finishing it, for
