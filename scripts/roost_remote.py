@@ -6230,6 +6230,11 @@ def runner(root, task_id, run_id, resume_conversation=False):
     with store.locked():
         task = store.read(task_id)
         if task.get("runId") != run_id:
+            # The request that made this window stopped before saying so:
+            # nothing knows of it, so it mustn't stay once this exits.
+            if os.environ.get("TMUX_PANE"):
+                tmux(task["socket"], "set-option", "-p", "-t", os.environ["TMUX_PANE"], "remain-on-exit", "off",
+                     check=False)
             return 0
     env = os.environ.copy()
     env["ROOST_TASK_ID"] = task_id

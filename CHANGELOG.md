@@ -4,6 +4,10 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A task's tmux window closes if the request that made it stopped before
+  saying so. It stayed, with nothing running in it, in a session no Roost
+  command would then close. Nothing to do when upgrading; a window like
+  that left earlier goes when you end tmux on that host.
 - A host whose locale isn't UTF-8 or C, such as `en_US.US-ASCII` or
   `ja_JP.eucJP`, takes task names and prompts in any script. The helper
   stopped on them with a Python traceback, and hooks lost what the agent

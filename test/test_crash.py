@@ -154,6 +154,23 @@ class Crashes(unittest.TestCase):
         self.assertTrue(reply["ok"], reply)
         self.assert_finished(box, task)
 
+    def test_a_window_nothing_knows_of_closes(self):
+        box = self.box()
+        task = box.create()
+        box.helper("stop", id=task["id"])
+        # A window made to resume the task, about to be noted in its record.
+        box.arm("after", match="automatic-rename")
+        self.assertIsNone(box.helper("resume", id=task["id"]))
+        box.disarm()
+        deadline = time.monotonic() + 8
+        while box.windows() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertEqual(box.windows(), [])
+        reply = box.helper("resume", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        box.wait_for(task, "ready")
+        self.assertEqual(len(box.windows()), 1)
+
     def test_merging_a_task_whose_branch_you_deleted_still_says_so(self):
         box = self.box()
         task = box.create()
