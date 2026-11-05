@@ -1263,8 +1263,7 @@ Return their problems, each (TEXT PLACE...), as `roost-sweep--report' takes them
     problems))
 
 (defconst roost-sweep-late--known
-  '("\\`stale: a forgotten host shows an error"
-    "\\`stale: a reply to an older run changes")
+  '("\\`stale: a reply to an older run changes")
   "What the sweep finds that isn't fixed yet, as regexps of its problems.")
 
 (defun roost-sweep-late--report (problems)
@@ -1522,6 +1521,17 @@ COMMAND, INTERRUPTER and FORM keeps RULE until FUNCTION is REPLACEMENT.")
       (roost-sweep-late--answer (roost-sweep-late--take "create") '(refused . "No such ref"))
       (should (= (roost-sweep-late--count "No such ref" (roost-sweep-late--messages 1)) 1))
       (should (string-search "No such ref" roost--draft-note)))))
+
+(ert-deftest roost-sweep-late-a-poll-that-fails-says-nothing-of-a-host-you-forgot ()
+  (roost-sweep-late--world
+    (roost-sweep-late--populate nil nil)
+    (roost-refresh t)
+    (roost-forget-host roost-sweep-late--host)
+    (roost-sweep-late--answer (roost-sweep-late--take "list") 'dropped)
+    (should-not (gethash roost-sweep-late--host roost--errors))
+    (should-not (gethash roost-sweep-late--host roost--failures))
+    (should-not (gethash roost-sweep-late--host roost--refreshing))
+    (should-not (string-search roost-sweep-late--dropped (roost-sweep-late--messages 1)))))
 
 (provide 'roost-sweep-late)
 

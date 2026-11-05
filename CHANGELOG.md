@@ -4,6 +4,8 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A poll that fails after you forgot its host says nothing of it, and
+  leaves no error for the host's next use. Nothing to do when upgrading.
 - A draft whose task can't be made says why once, in the echo area and its
   header line, not twice in `*Messages*`. Nothing to do when upgrading.
 - Answering a question of a task's draft once its task has been made says

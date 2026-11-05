@@ -1361,7 +1361,9 @@ those tasks."
       (let ((failed
              (lambda (err)
                (unwind-protect
-                   (progn
+                   ;; Not for a host forgotten meanwhile, which is no longer
+                   ;; yours to hear about.
+                   (when (member host (roost--hosts))
                      ;; Once per outage: ssh words a sleeping host's failure differently
                      ;; from one poll to the next, and the sidebar shows it meanwhile.
                      ;; Its last line says what failed; ssh's earlier ones say less, such
