@@ -171,6 +171,26 @@ class Crashes(unittest.TestCase):
         box.wait_for(task, "ready")
         self.assertEqual(len(box.windows()), 1)
 
+    def test_a_creation_stopped_before_git_wrote_its_worktrees_head_leaves_nothing(self):
+        box = self.box()
+        box.arm("before", match="worktree add")
+        self.assertIsNone(box.helper("create", directory=str(box.repo), name="made", socket=box.socket,
+                                     command=[sys.executable, str(harness.FAKE)], createId="ab" * 8))
+        box.disarm()
+        planned = json.loads(next((box.state / "creating").glob("*.json")).read_text())
+        # As a reboot leaves Git, a moment into `git worktree add`.
+        box.git("worktree", "add", "-q", "-b", planned["branch"], planned["worktree"], planned["baseCommit"])
+        kept = box.repo / ".git/worktrees" / Path(planned["worktree"]).name
+        for path in kept.iterdir():
+            if path.is_file() and path.name not in ("commondir", "gitdir"):
+                path.unlink()
+        (kept / "locked").write_text("initializing\n")
+        self.assertEqual(box.helper("list", socket=box.socket)["result"], [])
+        self.assertEqual(box.worktrees(), [str(box.repo)])
+        self.assertEqual(box.branches(), ["main"])
+        self.assertFalse(Path(planned["worktree"]).exists())
+        self.assertFalse(kept.exists())
+
     def test_a_task_whose_repository_went_says_so(self):
         box = self.box()
         task = box.create()

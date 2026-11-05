@@ -1763,9 +1763,11 @@ def undo_creation(store, task):
         # holds Git's checkout and nothing else, as no agent ever ran there.
         if os.path.lexists(worktree):
             git(repo, "worktree", "remove", "--force", "--force", str(worktree), check=False)
-        else:
-            unregister_gone(repo, worktree.resolve())
+        # Stopped before it wrote HEAD, Git doesn't take it for a worktree.
+        if worktree.is_dir():
+            shutil.rmtree(worktree, ignore_errors=True)
         if not os.path.lexists(worktree):
+            unregister_gone(repo, worktree.resolve())
             with contextlib.suppress(RoostError):
                 delete_branch(repo, task["branch"], task["baseCommit"])
             return

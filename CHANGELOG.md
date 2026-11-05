@@ -4,6 +4,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A task's creation stopped by a reboot just as Git began its worktree
+  leaves nothing behind. It stayed as a failed task that couldn't be
+  retired or discarded, and forgetting it left a folder Git still listed.
+  To clear one left earlier, forget the task and run `git worktree prune`
+  in the project once you delete the folder Roost names.
 - A damaged `.repository` file beside a project's worktrees no longer stops
   starting tasks in that project or searching on that host. It is written
   anew with the next task. Nothing to do when upgrading.
