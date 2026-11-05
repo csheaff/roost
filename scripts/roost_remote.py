@@ -2981,7 +2981,7 @@ def changed_files(worktree, base, uncommitted=frozenset(), limit=50):
     LIMIT of them, and the size of all of them: see `change_size`. Line
     counts are absent for binary files, and untracked files are marked
     so, as are files among UNCOMMITTED, those with changes not yet
-    committed; both come first."""
+    committed; both come first. A moved file says where from."""
     files = []
     # Where files were moved from: a move changes the directory it leaves.
     moved = []
@@ -2991,11 +2991,15 @@ def changed_files(worktree, base, uncommitted=frozenset(), limit=50):
         if not entry:
             break
         added, deleted, path = entry.split("\t", 2)
+        origin = None
         if not path:
             # A rename: its old and new paths follow.
-            moved.append(next(fields, ""))
+            origin = next(fields, "")
+            moved.append(origin)
             path = next(fields, "")
         file = dict(path=path)
+        if origin:
+            file["from"] = origin
         if added != "-":
             file.update(added=int(added), deleted=int(deleted))
         if path in uncommitted:

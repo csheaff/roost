@@ -15,6 +15,38 @@ What each release changes, and what to do when upgrading. Newest first.
   as when you quit the question about a project's setup command, can be
   created again. It said "Already creating" until you killed it. Nothing
   to do when upgrading.
+- A click on the empty part of the sidebar, below its rows, does nothing.
+  It said "No project here", or that a task was no longer listed.
+  Nothing to do when upgrading.
+- "Forget" is dimmed in the menu of the sidebar's "Other directory…",
+  which is no project to forget; it said "No project here". Nothing to do
+  when upgrading.
+- Roost reads a damaged file of projects, hosts or notes that holds a
+  number or `true` as an empty one, as it does others. The first command
+  to read it failed with "Wrong type argument". Nothing to do when
+  upgrading.
+- `roost-sidebar-recent-projects` set to `nil` lists no projects, as 0
+  does. The sidebar stopped drawing, and with it each redraw of Roost's
+  views. Nothing to do when upgrading.
+- The diff of a file a task moved shows the move and what changed. It
+  showed every line as new, beside the `+0 −0` the task panel gave a
+  plain move. Nothing to do when upgrading.
+- A changed file under a folder named `~` in a task's worktree opens from
+  there. A click on it in the task panel, a pull request's thread, or
+  Magit's whole-file diff took the `~` for your home, and opened your own
+  file of that name. Nothing to do when upgrading.
+- The task panel lists no changed files for a task whose worktree is
+  gone, as no diff can show them. A click on one, or on a pull request's
+  thread on a whole file there, failed with "Setting current directory";
+  the thread now says the worktree is gone. Nothing to do when upgrading.
+- A percent sign in a draft's header line, or a review note's, shows as
+  it is. In a task's name, an error or a file name, Emacs took it for a
+  format: `50%-off` filled the line with dashes over the buttons, and
+  `100% full` lost the sign. Nothing to do when upgrading.
+- A task panel that had taken the place of its own task's terminal, as
+  `i` does from the window beside it, gives the terminal back when it
+  docks. The terminal went from the frame instead. Nothing to do when
+  upgrading.
 - Roost refuses to send a prompt holding a control character, other than
   a line or page break or a tab, as the agent's terminal would take it as
   a key. It says which and on what line, and sends nothing. A draft stays
