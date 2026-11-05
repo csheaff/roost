@@ -188,6 +188,25 @@ class Crashes(unittest.TestCase):
             self.assertIn("is a link", reply["error"])
             self.assertFalse((other / "hello").exists())
 
+    def test_putting_back_a_removal_runs_no_program_the_config_names(self):
+        box = self.box()
+        task = box.create()
+        box.commit(task)
+        worktree = self.cut_short_removing(box, task, "merge")
+        (worktree / "hello").unlink()
+        # Away from the box, whose name has a space: Git runs it with a shell.
+        away = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, away)
+        ran = away / "ran"
+        program = away / "monitor"
+        program.write_text("#!/bin/sh\ntouch '%s'\n" % ran)
+        program.chmod(0o755)
+        box.git("config", "core.fsmonitor", str(program))
+        reply = box.helper("discard", id=task["id"], dryRun=True)
+        self.assertTrue(reply["ok"], reply)
+        self.assertTrue((worktree / "hello").exists())
+        self.assertFalse(ran.exists())
+
     def test_a_window_nothing_knows_of_closes(self):
         box = self.box()
         task = box.create()
@@ -328,6 +347,12 @@ class Records(unittest.TestCase):
                 self.path.write_text(json.dumps({key: value for key, value in record.items() if key != field}))
                 self.assert_the_other_task_stays()
                 self.assertIn("is damaged", self.box.helper("inspect", id=self.task["id"])["error"])
+
+    def test_agent_worktrees_of_the_wrong_type_leave_the_others_listed(self):
+        record = json.loads(self.good)
+        self.path.write_text(json.dumps(dict(record, agentWorktrees=5)))
+        self.assert_the_other_task_stays()
+        self.assertIn("is damaged", self.box.helper("inspect", id=self.task["id"])["error"])
 
     def test_a_field_of_the_wrong_type_leaves_the_others_listed(self):
         record = json.loads(self.good)

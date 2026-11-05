@@ -403,7 +403,8 @@ RECORD_OPTIONAL_TEXT = ("integrationBranch", "paneId", "windowId")
 def listable(task):
     """Whether TASK's record holds what listing it takes for granted."""
     return (all(isinstance(task.get(field), str) for field in RECORD_TEXT)
-            and all(isinstance(task.get(field), (str, type(None))) for field in RECORD_OPTIONAL_TEXT))
+            and all(isinstance(task.get(field), (str, type(None))) for field in RECORD_OPTIONAL_TEXT)
+            and isinstance(task.get("agentWorktrees"), (list, type(None))))
 
 
 def own_record(record, task_id):
@@ -4276,9 +4277,9 @@ def put_back_removed(store, task):
         if gitdir is None:
             return
         atomic_text(worktree / ".git", "gitdir: %s\n" % gitdir)
-    gone = git_fields(worktree, "ls-files", "--deleted", "-z")
+    gone = git_fields(worktree, *measuring(worktree), "ls-files", "--deleted", "-z")
     if gone:
-        git_fields(worktree, "checkout-index", "-f", "-z", "--stdin",
+        git_fields(worktree, *measuring(worktree), "checkout-index", "-f", "-z", "--stdin",
                    input=b"".join(os.fsencode(path) + b"\0" for path in gone))
 
 
