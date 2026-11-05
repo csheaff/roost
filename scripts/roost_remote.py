@@ -2306,11 +2306,15 @@ def list_tasks(store, request):
         # An agent that reports its status to its terminal needs no guessing.
         guess = task["live"] and task.get("programStatusRun") != task.get("runId")
         if task["live"] and task["status"] == "crashed":
-            # An earlier poll missed a pane that is in fact alive.
+            # An earlier poll missed a pane that is in fact alive. Nothing
+            # happened since you last saw it, if you had.
             task.update(status=task.pop("statusBeforeCrash", None) or "ready", updatedAt=now())
+            if task.pop("seenBeforeCrash", False):
+                task["seen"] = task["updatedAt"]
             changed = True
         elif not task["live"] and task["status"] not in ENDED:
-            task.update(status="crashed", statusBeforeCrash=task["status"], updatedAt=now())
+            task.update(status="crashed", statusBeforeCrash=task["status"],
+                        seenBeforeCrash=seen_since_last_event(task), updatedAt=now())
             changed = True
         elif guess and task["status"] in ("running", "permission") and was_interrupted(task):
             # Stopped by you, so waiting for you; it reports no event of its own.

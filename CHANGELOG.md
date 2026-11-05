@@ -4,6 +4,9 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A listing that misses a live agent's pane, then finds it again, leaves
+  a task you had seen as seen. It read as finished since you looked, and
+  waited on you. Nothing to do when upgrading.
 - A task's creation stopped by a reboot just as Git began its worktree
   leaves nothing behind. It stayed as a failed task that couldn't be
   retired or discarded, and forgetting it left a folder Git still listed.
