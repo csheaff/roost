@@ -208,6 +208,29 @@ class Records(unittest.TestCase):
         self.assertEqual([task["id"] for task in listed], [self.other["id"]])
 
 
+class FullDisk(unittest.TestCase):
+    def setUp(self):
+        self.box = Box()
+        self.addCleanup(self.box.close)
+
+    def test_your_tasks_stay_listed_and_open(self):
+        box = self.box
+        task = box.create()
+        before = (box.state / "tasks" / (task["id"] + ".json")).read_text()
+        reply = box.helper("inspect", id=task["id"], full_disk=True)
+        self.assertTrue(reply["ok"], reply)
+        # So that the listing has news that it has no room to save.
+        box.tmux("kill-server")
+        reply = box.helper("list", socket=box.socket, full_disk=True)
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual([t["status"] for t in reply["result"]], ["crashed"])
+        self.assertEqual((box.state / "tasks" / (task["id"] + ".json")).read_text(), before)
+        self.assertEqual(box.records(), [task["id"] + ".json", task["id"] + ".settings"])
+        # With room again, it is saved.
+        box.helper("list", socket=box.socket)
+        self.assertEqual(box.record(task["id"])["status"], "crashed")
+
+
 class Hosts(unittest.TestCase):
     """Hosts that aren't set up as yours is."""
 

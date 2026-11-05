@@ -4,6 +4,9 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- With the disk of a host full, its tasks stay listed, and each opens.
+  Roost refused to list any of them once one had news to save. Nothing to
+  do when upgrading.
 - A task's record that is damaged, as valid JSON that isn't a record or a
   field of the wrong type, no longer stops the host listing every other
   task. It is left out, as an unreadable record always was, and acting on

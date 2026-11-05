@@ -456,6 +456,12 @@ class Store:
         atomic_json(self.path(task["id"]), record)
         self.history.note(task["id"], before, record)
 
+    def note(self, task):
+        """Save what looking at TASK found, if there is room: looking will
+        find it again, and a full disk is no time to hide your tasks."""
+        with contextlib.suppress(OSError):
+            self.save(task)
+
     def remove(self, task_id):
         """Delete a task's record and hook settings. Conversations are kept,
         and found by searching under the repository noted beside the worktrees,
@@ -2230,7 +2236,7 @@ def list_tasks(store, request):
         else:
             # Kept, so the transcript is read once for each such prompt.
             if put_right_prompt(task):
-                store.save(task)
+                store.note(task)
             tasks.append(task)
     inventories = {}
     table = None  # The process table, read only when a request may have been approved.
@@ -2274,7 +2280,7 @@ def list_tasks(store, request):
                 task.pop("requestCommand", None)
                 changed = True
         if changed:
-            store.save(task)
+            store.note(task)
     return tasks
 
 
@@ -3664,7 +3670,7 @@ def inspect(store, task):
         raise RoostError("The agent's tmux window is gone; resume the task")
     task.update(windowIndex=pane["index"], session=pane["session_name"])
     put_right_prompt(task)
-    store.save(task)
+    store.note(task)
     task["live"] = not pane["dead"]
     reply = last_message(task)
     if reply:
