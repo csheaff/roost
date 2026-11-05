@@ -34,6 +34,68 @@ What each release changes, and what to do when upgrading. Newest first.
   to do when upgrading.
 - A lone surrogate in what an agent reports, which failed a host's reply or
   lost the event, is replaced. Nothing to do when upgrading.
+- A listing that misses a live agent's pane, then finds it again, leaves
+  a task you had seen as seen. It read as finished since you looked, and
+  waited on you. Nothing to do when upgrading.
+- A task's creation stopped by a reboot just as Git began its worktree
+  leaves nothing behind. It stayed as a failed task that couldn't be
+  retired or discarded, and forgetting it left a folder Git still listed.
+  To clear one left earlier, forget the task and run `git worktree prune`
+  in the project once you delete the folder Roost names.
+- A damaged `.repository` file beside a project's worktrees no longer stops
+  starting tasks in that project or searching on that host. It is written
+  anew with the next task. Nothing to do when upgrading.
+- Merging or retiring a task whose repository is gone, or whose worktree
+  Git can no longer read, says so and offers to bring it back or forget
+  the task. Roost said the worktree was on a detached HEAD, and to check out
+  the task's branch there, which can't be done. Nothing to do when upgrading.
+- With `core.fsmonitor` set to `true`, Git's monitor no longer starts while
+  Roost holds a lock it hands on to Git. It went on holding that lock for as
+  long as it ran, which is until you stop it: merging, retiring or
+  discarding a task said Roost was busy, or a task whose creation was cut
+  short never left, and asking for it again never returned. Nothing to do
+  when upgrading; a task stuck this way today is freed by
+  `git fsmonitor--daemon stop` in its worktree.
+- A task's tmux window closes if the request that made it stopped before
+  saying so. It stayed, with nothing running in it, in a session no Roost
+  command would then close. Nothing to do when upgrading; a window like
+  that left earlier goes when you end tmux on that host.
+- A host whose locale isn't UTF-8 or C, such as `en_US.US-ASCII` or
+  `ja_JP.eucJP`, takes task names and prompts in any script. The helper
+  stopped on them with a Python traceback, and hooks lost what the agent
+  reported. And a message from Git naming a file that isn't UTF-8 reaches
+  you, rather than ending the reply. Nothing to do when upgrading.
+- With the disk of a host full, its tasks stay listed, and each opens.
+  Roost refused to list any of them once one had news to save. Nothing to
+  do when upgrading.
+- A task's record that is damaged, as valid JSON that isn't a record or a
+  field of the wrong type, no longer stops the host listing every other
+  task. It is left out, as an unreadable record always was, and acting on
+  it from a list shown before says the record is damaged and where it is.
+  Nothing to do when upgrading.
+- A merge, retirement or discard stopped while Git deleted the task's
+  worktree finishes when you ask again. Roost said files were uncommitted,
+  and to commit them, which would have committed the deletion of the task's
+  work; or, once Git had deleted the worktree's link to the repository,
+  that the worktree was on a detached HEAD, and even discarding failed.
+  Roost now puts back what Git deleted and carries on. Nothing to do when
+  upgrading.
+- A merge or update whose connection dropped while Git ran it goes on to
+  its end. Git stopped as it reported to the helper that had gone: a merge
+  stayed marked as under way in the primary checkout, though committed,
+  and an update that conflicted left the file with its markers and no
+  merge under way, so that `u` said to commit it. If a merge in the primary
+  checkout is left under way, as by a reboot, `m` now says to finish it with
+  `git commit` or undo it with `git merge --abort`. Nothing to do when
+  upgrading.
+- A merge whose connection dropped just after it deleted the task's branch
+  finishes when you press `m` again. Roost said there was nothing to merge,
+  and the task stayed until you retired it. Nothing to do when upgrading.
+- On a host with `LC_ALL` set to `C` or `POSIX`, tasks work as anywhere else.
+  tmux wrote its answers differently there, so Roost could not start a
+  task, showed every running agent as `crashed`, and let you resume one
+  beside itself or forget it while it ran. Nothing to do when upgrading; a
+  running agent shown as `crashed` shows as it is at the next refresh.
 - A draft or task panel that closes as a host replies leaves you where you
   are. On Emacs 30 it took you to the window it was in, from wherever you
   had gone, out of the minibuffer too, where your next keys went elsewhere;

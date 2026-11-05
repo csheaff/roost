@@ -30,6 +30,12 @@ The [manual](docs/manual.md#how-it-works) says how it fits together.
   new question in the minibuffer one in `roost-sweep-late--questions`. A new
   rule goes in `roost-sweep-late--breakages` too, with the way to break Roost
   that it catches.
+- `make crash` kills the host helper at each step of each action, as a
+  dropped connection or a reboot would, and recovers as you would. It is
+  slow, so `make test` keeps only the crashes that went wrong, in
+  `test/test_crash.py`. Run it after changing how the helper merges,
+  retires, removes a worktree or records a task. A new action goes in
+  `test/crash_scenarios.py`.
 - Tests hold Roost to what it says about security. Every ERT test fails if
   Roost starts a program not in `roost-test--programs`; the helper's
   `Subprocesses` test allows a shell only for the project's own setup and

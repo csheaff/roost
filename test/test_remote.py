@@ -4353,6 +4353,29 @@ class Lifecycle(unittest.TestCase):
                     self.assertEqual(len(roost.worktree_branches(self.repo)), 1)
                     self.assertEqual(self.request("list")["result"], [])
 
+    def test_a_pane_a_listing_missed_leaves_a_task_you_saw_as_you_saw_it(self):
+        task = self.worked()
+        self.wait(task, "ready")
+        stamp = self.request("list")["result"][0]["updatedAt"]
+        self.assertTrue(self.request("seen", id=task["id"], updatedAt=stamp)["ok"])
+        store = roost.Store(str(self.state))
+        with patch.object(roost, "pane_inventory", lambda socket: {}):
+            self.assertEqual(roost.list_tasks(store, {})[0]["status"], "crashed")
+        listed = self.request("list")["result"][0]
+        self.assertEqual(listed["status"], "ready")
+        self.assertEqual(listed["seen"], listed["updatedAt"])
+        self.assertNotIn("seenBeforeCrash", listed)
+        # So with one you looked at while it read crashed.
+        record = store.read(task["id"])
+        record.update(seen=None, lastEvent="Stop")
+        store.save(record)
+        with patch.object(roost, "pane_inventory", lambda socket: {}):
+            crashed = roost.list_tasks(store, {})[0]
+        self.assertFalse(crashed.get("seenBeforeCrash"))
+        self.assertTrue(self.request("seen", id=task["id"], updatedAt=crashed["updatedAt"])["ok"])
+        listed = self.request("list")["result"][0]
+        self.assertEqual(listed["seen"], listed["updatedAt"])
+
     def test_a_task_folder_made_a_link_is_refused_and_its_neighbours_stay(self):
         task, neighbour = self.create(name="linked"), self.create(name="neighbour")
         wt = Path(task["worktree"])
