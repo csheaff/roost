@@ -25,7 +25,9 @@
 ;; - `stale': no reply overwrites what is newer, or brings back a task
 ;;   that went.
 ;; - `left-behind': nothing stays busy or waits on, as a draft that says
-;;   it is sending, a hook, a poll that never ends, a timer.
+;;   it is sending, a hook, a poll that never ends, a timer.  One test
+;;   takes each way a reply can end through a real process, so no
+;;   process, buffer or file of its input stays either.
 ;; - `gone': no row in a view offers a task that went.
 ;; - `question': a question can't land in a minibuffer you are typing in,
 ;;   and none is asked about a task that went.
@@ -239,18 +241,20 @@ FORM is `good', `dropped', `no-reply', or (refused . WORDS)."
                               'roost-no-reply t)))
       (`(refused . ,words) (roost-sweep-late--as-sentinel what (plist-get request :failure) words)))))
 
-(defun roost-sweep-late--roost-timer-p (timer)
-  "Whether TIMER is one this case made, and could be Roost's.
+(defun roost-sweep-late--roost-timers ()
+  "The timers this case made that could be Roost's.
 Emacs's own, as for undo, go on as they would."
-  (let ((function (timer--function timer)))
-    (and (not (memq timer roost-sweep-late--timers))
-         (not (timer--repeat-delay timer))
-         (or (not (symbolp function))
-             (string-prefix-p "roost-" (symbol-name function))))))
+  (seq-filter (lambda (timer)
+                (let ((function (timer--function timer)))
+                  (and (not (memq timer roost-sweep-late--timers))
+                       (or (not (symbolp function))
+                           (string-prefix-p "roost-" (symbol-name function))))))
+              (append timer-list timer-idle-list)))
 
 (defun roost-sweep-late--fire-timers ()
-  "Run the timers this case made as if their time had come; non-nil if any did."
-  (let ((due (seq-filter #'roost-sweep-late--roost-timer-p (append timer-list timer-idle-list))))
+  "Run the timers this case made as if their time had come; non-nil if any did.
+Those that repeat are left: nothing comes of them that a command waits for."
+  (let ((due (seq-remove #'timer--repeat-delay (roost-sweep-late--roost-timers))))
     (dolist (timer due)
       (cancel-timer timer)
       (with-current-buffer (window-buffer (selected-window))
@@ -372,8 +376,9 @@ but for a reply's question."
                   (lambda (&rest _)
                     (if-let* ((pump roost-sweep-late--pump))
                         (progn (setq roost-sweep-late--pump nil) (funcall pump))
+                      ;; What a command waits for it has only now asked.
                       (when roost-sweep-late--requests
-                        (roost-sweep-late--answer (car roost-sweep-late--requests) 'good))))))
+                        (roost-sweep-late--answer (car (last roost-sweep-late--requests)) 'good))))))
          (setq roost--remembered-hosts (list roost-sweep-late--host))
          (dolist (host (list roost-sweep-late--host nil))
            (puthash (list host roost-state-directory) (car (roost--helper)) roost--installed))
@@ -384,9 +389,7 @@ but for a reply's question."
                (dolist (buffer (buffer-list))
                  (unless (memq buffer existing)
                    (let ((kill-buffer-query-functions nil)) (kill-buffer buffer))))
-               (when (timerp roost--watch-timer) (cancel-timer roost--watch-timer))
-               (dolist (timer (append timer-list timer-idle-list))
-                 (when (roost-sweep-late--roost-timer-p timer) (cancel-timer timer))))))))))))
+               (mapc #'cancel-timer (roost-sweep-late--roost-timers)))))))))))
 
 (defun roost-sweep-late--populate (fields others)
   "Give the host its tasks, and Roost a list of them.
@@ -439,13 +442,21 @@ with nothing to do with any task."
     (set-window-buffer code "*late code*"))
   (unless (eq origin 'dashboard)
     (set-window-buffer (split-window-below) (roost-sweep-late--dashboard)))
+  ;; Out of sight, as when another task took the frame.
+  (cl-letf (((symbol-function 'pop-to-buffer) #'ignore))
+    (roost--send-draft (roost-sweep-late--task roost-sweep-late--other)))
+  (with-current-buffer "*roost send: other*"
+    (insert "Half a prompt for the other task."))
   (roost-sweep-late--origin origin))
 
 (defun roost-sweep-late--fingerprint ()
-  "What must not change in the bystander, as (TEXT POINT), or nil once it is gone."
-  (when-let* ((buffer (get-buffer "*late code*")))
-    (with-current-buffer buffer
-      (list (buffer-string) (point)))))
+  "What must not change in the bystanders, the code and the other task's draft.
+Their text and point, as (TEXT POINT), or nil once one is gone."
+  (mapcar (lambda (name)
+            (when-let* ((buffer (get-buffer name)))
+              (with-current-buffer buffer
+                (list (buffer-string) (point)))))
+          '("*late code*" "*roost send: other*")))
 
 ;;;; What you might do meanwhile
 
@@ -586,6 +597,12 @@ That is RET unless given."
              (roost-sweep-late--answer (car (last roost-sweep-late--requests)) 'good)
              (setq roost-sweep-late--view (with-current-buffer (window-buffer (selected-window))
                                             (buffer-string)))
+             (funcall deliver)))
+    (another-project
+     :when :draft
+     :run ,(lambda (deliver)
+             ;; As from the sidebar's recent projects.
+             (roost--compose nil nil "/ssh:dev:/home/user/other/")
              (funcall deliver)))
     (retired
      :gone t :while-waiting t
@@ -755,7 +772,7 @@ with Emacs running only timers and other replies.")
      :refusals (("No branch, tag or commit named 'x' to start from")))
     (compose-submit
      :origin compose :start ,#'roost-compose-submit
-     :action "create" :opens t :shows "*late terminal cccccc*" :closes t :watches t :makes t
+     :action "create" :opens t :shows "*late terminal cccccc*" :closes t :watches t :makes t :draft t
      :refusals (("No branch, tag or commit named 'x' to start from")))
     (compose-listed-once-no-reply-came
      :origin compose
@@ -910,7 +927,7 @@ echo area.  :wait that the command waits for the reply.  :reply makes
 the good reply from what the host would say.  :others are the other
 task's fields.  :watches that it starts `roost-watch-mode', and :makes
 that it makes a task of its own, and uses its host, so remembers it.
-:again that it
+:draft that it goes from a new task's draft.  :again that it
 shows what a run of it found, so that a late reply to an older run must
 change nothing.  :list that it asks for the tasks.  :sides-only that it
 starts from the sidebar, so needs one.  :not names interrupters that
@@ -1029,6 +1046,8 @@ the reply came."
     (roost-sweep-late--problem 'left-behind "tasks count as resuming still"))
   (when minibuffer-exit-hook
     (roost-sweep-late--problem 'left-behind "the minibuffer's exit hook keeps %S" minibuffer-exit-hook))
+  (when (seq-remove (lambda (timer) (eq timer roost--watch-timer)) (roost-sweep-late--roost-timers))
+    (roost-sweep-late--problem 'left-behind "a timer goes on with nothing left to come"))
   (dolist (buffer (buffer-list))
     (with-current-buffer buffer
       (when (or roost--send-sending roost--pr-sending roost--compose-submitting)
@@ -1081,6 +1100,8 @@ elsewhere."
     (draft-start :origin compose :ask ,#'roost-compose-set-base :keys "\r")
     (draft-cancel :origin compose :ask ,#'roost-compose-cancel :keys "no\r")
     (prompt-cancel :origin send-draft :ask ,#'roost-send-cancel :keys "no\r")
+    (prompt-attach :origin send-draft :ask ,(lambda () (call-interactively #'roost-send-attach))
+                   :keys ,(lambda () (concat (locate-library "roost.el") "\r")))
     (pull-request-cancel :origin pr-draft :ask ,#'roost-pr-cancel :keys "no\r")
     (rename :ask ,(lambda () (roost-rename (roost-sweep-late--mine))) :keys "x\r")
     (stop :ask ,(lambda () (roost-stop (roost-sweep-late--mine))) :keys "y\r")
@@ -1092,7 +1113,8 @@ elsewhere."
     (other-question :ask ,(lambda () (read-string "Anything else? ")) :keys "x\r"))
   "Questions Roost asks in the minibuffer, each (NAME . PLIST).
 :ask asks it from a window showing :origin, `here' unless it says
-otherwise, and :keys answer it.  A reply comes while it is open.")
+otherwise, and :keys, or what that function returns, answer it.  A reply
+comes while it is open.")
 
 (defun roost-sweep-late--question-case (spec question form)
   "Run SPEC's command with its reply held, and have the reply come in FORM during QUESTION.
@@ -1116,7 +1138,9 @@ Return what broke, a list of (RULE . TEXT)."
         (setq roost-sweep-late--real-questions t)
         (roost-sweep-late--note-place)
         (let ((executing-kbd-macro t)
-              (unread-command-events (append (listify-key-sequence (plist-get question :keys))
+              (unread-command-events (append (listify-key-sequence
+                                              (let ((keys (plist-get question :keys)))
+                                                (if (functionp keys) (funcall keys) keys)))
                                              '(?\C-g ?\C-g ?\C-g))))
           (minibuffer-with-setup-hook
               (lambda ()
@@ -1131,7 +1155,9 @@ Return what broke, a list of (RULE . TEXT)."
                 (quit nil)
                 (error (roost-sweep-late--problem 'lisp-error "the question ends in %S" err))))))
         (setq roost-sweep-late--real-questions nil)
+        ;; Or this case tries nothing.
         (unless delivered
+          (roost-sweep-late--problem 'question "it asks nothing in the minibuffer")
           (roost-sweep-late--answer request form)))
       (roost-sweep-late--settle)
       (roost-sweep-late--check-left-behind)
@@ -1381,6 +1407,7 @@ Return their problems, each (TEXT PLACE...), as `roost-sweep--report' takes them
     (moved open other-buffer good roost--still-there-p ,(lambda (&rest _) t))
     (stale open newer-poll good roost--newer-events ,(lambda (task _old) task))
     (left-behind poll none good roost--task-list-p ,(lambda (_) (error "Broken")))
+    (left-behind search none good roost--search-arrived ,(lambda (&rest _) (run-with-timer 60 60 (lambda ()))))
     (gone retire none good roost--redraw ,#'ignore)
     (question open minibuffer (refused . ,roost-sweep-late--no-window)
               roost--when-out-of-minibuffer ,#'funcall)
@@ -1632,8 +1659,8 @@ COMMAND, INTERRUPTER and FORM keeps RULE until FUNCTION is REPLACEMENT.")
        (delete-directory state t))))))
 
 (ert-deftest roost-sweep-late-what-a-reply-closes-leaves-you-where-you-are ()
-  ;; Quitting a window selects the one you were in as it came to show its
-  ;; buffer: before Emacs 31, from wherever you are.
+  ;; On Emacs 30, quitting a window selects the one you were in as it came
+  ;; to show its buffer, from wherever you are.
   (pcase-dolist (`(,origin ,action ,command)
                  `((send-draft "send" ,#'roost-send-submit)
                    (pr-draft "pr" ,#'roost-pr-submit)
