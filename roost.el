@@ -3724,9 +3724,7 @@ EVENT, a click on the draft's Create button, says which draft."
                               (with-current-buffer buffer
                                 (setq roost--compose-submitting nil)
                                 (if (not (get-text-property 0 'roost-no-reply err))
-                                    (progn (message "Roost could not create the task: %s" err)
-                                           (roost--draft-error "Could not create the task" err
-                                                               'roost-compose-submit))
+                                    (roost--draft-error "Could not create the task" err 'roost-compose-submit)
                                   ;; It may yet be made: then a poll of its host lists it.
                                   (roost--remember-host host)
                                   (roost-watch-mode 1)

@@ -4,6 +4,8 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A draft whose task can't be made says why once, in the echo area and its
+  header line, not twice in `*Messages*`. Nothing to do when upgrading.
 - Answering a question of a task's draft once its task has been made says
   the draft has closed, rather than `Wrong type argument`: the name, agent,
   project, starting ref or issue you were choosing while it was made.

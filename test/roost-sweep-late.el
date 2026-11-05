@@ -1264,8 +1264,7 @@ Return their problems, each (TEXT PLACE...), as `roost-sweep--report' takes them
 
 (defconst roost-sweep-late--known
   '("\\`stale: a forgotten host shows an error"
-    "\\`stale: a reply to an older run changes"
-    "\\`words: says .* 2 times")
+    "\\`stale: a reply to an older run changes")
   "What the sweep finds that isn't fixed yet, as regexps of its problems.")
 
 (defun roost-sweep-late--report (problems)
@@ -1514,6 +1513,15 @@ COMMAND, INTERRUPTER and FORM keeps RULE until FUNCTION is REPLACEMENT.")
   (should-not (car (roost-sweep-late--case (cdr (assq 'issues roost-sweep-late--commands))
                                            (cdr (assq 'kill-origin roost-sweep-late--interrupters))
                                            'good t))))
+
+(ert-deftest roost-sweep-late-a-draft-says-once-why-its-task-was-not-made ()
+  (roost-sweep-late--world
+    (roost-sweep-late--populate nil nil)
+    (with-current-buffer (roost-sweep-late--lay-out 'compose)
+      (roost-compose-submit)
+      (roost-sweep-late--answer (roost-sweep-late--take "create") '(refused . "No such ref"))
+      (should (= (roost-sweep-late--count "No such ref" (roost-sweep-late--messages 1)) 1))
+      (should (string-search "No such ref" roost--draft-note)))))
 
 (provide 'roost-sweep-late)
 
