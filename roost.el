@@ -527,9 +527,41 @@ watching from the start of each session.")
   "Read FIELD from TASK."
   (alist-get field task))
 
+(defconst roost--not-text
+  ;; Raw bytes in a range of their own: one running into them from below
+  ;; matches none of them, and `rx' before Emacs 30 writes it that way.
+  (concat "[" (string #xD800 ?- #xDFFF #x110000 ?- #x3FFF7F #x3FFF80 ?- #x3FFFFF) "]")
+  "Matches what a string can hold and JSON can't carry.
+Mostly the bytes of a file that isn't UTF-8, which Emacs keeps and shows
+as \\351.")
+
+(defun roost--shown-text (string)
+  "STRING with what JSON can't carry written as Emacs shows it, as \\351.
+For what Roost keeps or quotes of its own accord, such as a diff's line."
+  (replace-regexp-in-string
+   roost--not-text
+   (lambda (match)
+     (let ((char (aref (string-to-multibyte match) 0)))
+       (if (< char #x3FFF80) (format "\\x%X" char) (format "\\%o" (- char #x3FFF00)))))
+   string t t))
+
+(defun roost--text-problem (text &optional what)
+  "What stops TEXT, which you wrote or quoted, reaching a host, or nil.
+As with a control character, it is your text and not Roost's to change.
+WHAT names it, if it isn't the prompt."
+  (when-let* ((position (string-match-p roost--not-text text)))
+    (format "Line %d of the %s holds %s, a byte that isn't text; nothing was sent"
+            (1+ (cl-count ?\n text :end position)) (or what "prompt")
+            (roost--shown-text (substring text position (1+ position))))))
+
 (defun roost--json-encode (alist)
   "Serialize ALIST as a JSON object, encoding nil values as null.
 `json-serialize' would otherwise encode nil as an empty object."
+  (when-let* ((problem (seq-some (lambda (entry)
+                                   (and (stringp (cdr entry))
+                                        (roost--text-problem (cdr entry) (car entry))))
+                                 alist)))
+    (user-error "%s" problem))
   (json-serialize (mapcar (lambda (entry) (cons (car entry) (or (cdr entry) :null)))
                           alist)))
 
@@ -854,15 +886,17 @@ is the seconds ACTION may take, if not `roost-request-timeout'."
          (installation-key (list host root))
          (failure (or failure
                       (lambda (err) (message "Roost %s: %s" (roost--host-label host) err))))
+         ;; Now, as what it can refuse should reach the command that asked,
+         ;; rather than a process sentinel once the helper is installed.
+         (input (roost--json-encode (append (list (cons 'action action) (cons 'root root))
+                                            parameters)))
          (invoke
           (lambda (on-failure)
             (roost--run
              host
              (format "import os,runpy,sys; p=os.path.join(os.path.expanduser(%s),%s); sys.argv=[p,'rpc']; runpy.run_path(p,run_name='__main__')"
                      (json-serialize root) (json-serialize filename))
-             (roost--json-encode (append (list (cons 'action action) (cons 'root root))
-                                         parameters))
-             success on-failure timeout)))
+             input success on-failure timeout)))
          (install-and-invoke
           (lambda ()
             (roost--run
@@ -3616,31 +3650,39 @@ EVENT, a click on the draft's Create button, says which draft."
         (setq roost--compose-asked (list directory (roost--random-id))))
       (setq roost--compose-submitting t
             roost--draft-note (format " Creating %s…" name))
-      (roost--create-task (plist-get fields :directory) name (plist-get fields :base) prompt
-                          (plist-get fields :agent)
-                          (lambda (task) (roost--compose-made buffer fields task))
-                          (lambda (err)
-                            (when (buffer-live-p buffer)
-                              (with-current-buffer buffer
-                                (setq roost--compose-submitting nil)
-                                (if (not (get-text-property 0 'roost-no-reply err))
-                                    (progn (message "Roost could not create the task: %s" err)
-                                           (roost--draft-error "Could not create the task" err
-                                                               'roost-compose-submit))
-                                  ;; It may yet be made: then a poll of its host lists it.
-                                  (roost--remember-host host)
-                                  (roost-watch-mode 1)
-                                  (setq roost--draft-note
-                                        (format " No reply from %s after %s; the task opens here if it was made · %s asks again"
-                                                (roost--host-label host)
-                                                (let ((seconds (+ roost-request-timeout roost--create-seconds)))
-                                                  (if (< seconds 60) (format "%ds" seconds) (format "%dm" (/ seconds 60))))
-                                                (substitute-command-keys "\\[roost-compose-submit]")))
-                                  (message "Roost: no reply from %s about %s yet; it opens if it was made"
-                                           (roost--host-label host) name)))))
-                          `((createId . ,(cadr roost--compose-asked))
-                            ,@(when-let* ((issue (plist-get fields :issue)))
-                                (list (cons 'issue issue))))))))
+      (condition-case err
+          (roost--create-task
+           (plist-get fields :directory) name (plist-get fields :base) prompt
+           (plist-get fields :agent)
+           (lambda (task) (roost--compose-made buffer fields task))
+           (lambda (err)
+             (when (buffer-live-p buffer)
+               (with-current-buffer buffer
+                 (setq roost--compose-submitting nil)
+                 (if (not (get-text-property 0 'roost-no-reply err))
+                     (progn (message "Roost could not create the task: %s" err)
+                            (roost--draft-error "Could not create the task" err
+                                                'roost-compose-submit))
+                   ;; It may yet be made: then a poll of its host lists it.
+                   (roost--remember-host host)
+                   (roost-watch-mode 1)
+                   (setq roost--draft-note
+                         (format " No reply from %s after %s; the task opens here if it was made · %s asks again"
+                                 (roost--host-label host)
+                                 (let ((seconds (+ roost-request-timeout roost--create-seconds)))
+                                   (if (< seconds 60) (format "%ds" seconds) (format "%dm" (/ seconds 60))))
+                                 (substitute-command-keys "\\[roost-compose-submit]")))
+                   (message "Roost: no reply from %s about %s yet; it opens if it was made"
+                            (roost--host-label host) name)))))
+           `((createId . ,(cadr roost--compose-asked))
+             ,@(when-let* ((issue (plist-get fields :issue)))
+                 (list (cons 'issue issue)))))
+        ;; Nothing reached the host, as when you quit the question about
+        ;; the project's setup command: the draft is ready to create again.
+        ((quit error)
+         (setq roost--compose-submitting nil
+               roost--draft-note nil)
+         (signal (car err) (cdr err)))))))
 
 (defun roost--compose-made (buffer fields task)
   "Close BUFFER, the draft with FIELDS that TASK was made from.
@@ -3903,17 +3945,21 @@ agent's terminal would take it as a key."
 CALLBACK and FAILURE are passed to `roost--act'.  With LOOK, as for
 your notes, its host first records where the task stands as where you
 last looked at it."
-  (let* ((status (roost--field task 'status))
-         (force (when (member status '("starting" "permission"))
+  (let* ((problem (roost--text-problem text))
+         (status (roost--field task 'status))
+         (force (when (and (not problem) (member status '("starting" "permission")))
                   (or (yes-or-no-p
                        (format "Roost last saw %s %s; send anyway, if you have answered it in the terminal? "
                                (roost--field task 'name)
                                (if (equal status "starting") "starting up" "asking for permission")))
                       (user-error "Open the task with RET to answer it")))))
-    (roost--act task "send" (append (list (cons 'text text))
-                                    (when force (list (cons 'force t)))
-                                    (when look (list (cons 'look t))))
-                callback failure)))
+    (cond ((not problem)
+           (roost--act task "send" (append (list (cons 'text text))
+                                           (when force (list (cons 'force t)))
+                                           (when look (list (cons 'look t))))
+                       callback failure))
+          (failure (funcall failure problem))
+          (t (user-error "%s" problem)))))
 
 ;;;; Composing a follow-up
 
@@ -4453,9 +4499,13 @@ child frames, the box is `:frame', over `:room' pixels left for it.")
    (mapcar (lambda (note)
              ;; JSON has no nil: absent fields stay out, and lists are arrays.
              (seq-keep (lambda (field)
-                         (when (cdr field)
+                         (when-let* ((value (cdr field)))
                            (cons (car field)
-                                 (if (consp (cdr field)) (vconcat (cdr field)) (cdr field)))))
+                                 (cond ((consp value) (vconcat value))
+                                       ;; A note that can't be sent as it is
+                                       ;; still mustn't stop any being saved.
+                                       ((stringp value) (roost--shown-text value))
+                                       (t value)))))
                        note))
            roost--notes)))
 
@@ -4835,8 +4885,9 @@ A combined diff, of a merge with conflicts, has none."
           (goto-char (roost--slot hunk 'content))
           (let ((old (car from)) (new (car to)) (end (roost--slot hunk 'end)) lines)
             (while (and (< (point) end) (not (eobp)))
-              (let ((text (buffer-substring-no-properties
-                           (min (1+ (point)) (line-end-position)) (line-end-position))))
+              (let ((text (roost--shown-text
+                           (buffer-substring-no-properties
+                            (min (1+ (point)) (line-end-position)) (line-end-position)))))
                 (pcase (char-after)
                   (?- (push (list (point) 'old old text) lines) (cl-incf old))
                   (?+ (push (list (point) 'new new text) lines) (cl-incf new))
@@ -4887,7 +4938,8 @@ must stay within one hunk."
             (quote . ,(mapcar (lambda (line)
                                 (save-excursion
                                   (goto-char (car line))
-                                  (buffer-substring-no-properties (point) (line-end-position))))
+                                  (roost--shown-text
+                                   (buffer-substring-no-properties (point) (line-end-position)))))
                               chosen))))))
      ((magit-section-match 'file section)
       `((file . ,(roost--slot section 'value))))
@@ -6336,21 +6388,26 @@ Create button, says which draft."
     (setq roost--pr-sending t
           roost--draft-note nil)
     (message "Roost: creating a pull request for %s…" (roost--field task 'name))
-    (roost--act
-     task "pr" `((title . ,title) (body . ,body) (draft . ,(and draft t)))
-     (lambda (updated)
-       (when (buffer-live-p buffer)
-         (quit-windows-on buffer t)
-         (when (buffer-live-p buffer) (kill-buffer buffer)))
-       (message "Roost: opened pull request %s %s"
-                (roost--pr-number (roost--field updated 'pr))
-                (alist-get 'url (roost--field updated 'pr))))
-     (lambda (err)
-       (message "Roost could not create the pull request: %s" err)
-       (when (buffer-live-p buffer)
-         (with-current-buffer buffer
-           (setq roost--pr-sending nil)
-           (roost--draft-error "Could not create" err 'roost-pr-submit)))))))
+    (condition-case err
+        (roost--act
+         task "pr" `((title . ,title) (body . ,body) (draft . ,(and draft t)))
+         (lambda (updated)
+           (when (buffer-live-p buffer)
+             (quit-windows-on buffer t)
+             (when (buffer-live-p buffer) (kill-buffer buffer)))
+           (message "Roost: opened pull request %s %s"
+                    (roost--pr-number (roost--field updated 'pr))
+                    (alist-get 'url (roost--field updated 'pr))))
+         (lambda (err)
+           (message "Roost could not create the pull request: %s" err)
+           (when (buffer-live-p buffer)
+             (with-current-buffer buffer
+               (setq roost--pr-sending nil)
+               (roost--draft-error "Could not create" err 'roost-pr-submit)))))
+      ;; Nothing reached the host, as for a byte in a commit quoted there.
+      ((quit error)
+       (setq roost--pr-sending nil)
+       (signal (car err) (cdr err))))))
 
 (defun roost--worktree-pr (task)
   "The pull request from the branch TASK's worktree is on, when not the task's.
