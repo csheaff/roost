@@ -54,7 +54,9 @@ What each release changes, and what to do when upgrading. Newest first.
   what it made of it went in the config the primary checkout shares. To
   upgrade, if `git config --get-regexp 'submodule\..*\.url'` names Roost's
   state directory, run `git config --remove-section submodule.NAME` for
-  that one in the primary checkout; `s` then tries again.
+  that one in the primary checkout; `s` then tries again. A task that
+  failed after another left that URL leaves the submodule out on `s`:
+  start it afresh.
 - A task started while another fetches its first submodule checks out all
   of them, where the repository has initialized none. It left out the
   rest without a word, having taken the other's first for your choice.

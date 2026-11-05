@@ -3832,7 +3832,12 @@ class Lifecycle(unittest.TestCase):
             for item in wt.iterdir():
                 if item.name != ".git":
                     item.unlink()
-        for lose in (link_gone, repository_instead, history_alone):
+        def a_link_alone(wt):
+            link_gone(wt)
+            for item in wt.iterdir():
+                item.unlink()
+            (wt / "link").symlink_to(wt.parent, target_is_directory=True)
+        for lose in (link_gone, repository_instead, history_alone, a_link_alone):
             with self.subTest(lose.__name__):
                 task = self.worked()
                 wt = Path(task["worktree"])
@@ -3840,7 +3845,8 @@ class Lifecycle(unittest.TestCase):
                 lose(wt)
                 told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
                 # You are told of what Git can't see, before it goes.
-                self.assertEqual(told["changes"], sum(1 for item in wt.rglob("*") if item.is_file()))
+                self.assertEqual(told["changes"], sum(1 for item in wt.rglob("*")
+                                                      if item.is_file() or item.is_symlink()))
                 self.assertGreater(told["changes"], 0)
                 reply = self.request("discard", id=task["id"], expect=told["commit"])
                 self.assertTrue(reply["ok"], reply)

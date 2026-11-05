@@ -5375,7 +5375,8 @@ def unlinked_files(worktree):
     Those of a repository made there count too: its history goes with it."""
     if (Path(worktree) / ".git").is_file():
         return 0
-    return sum(len(files) for folder, folders, files in os.walk(worktree))
+    return sum(len(files) + sum(os.path.islink(os.path.join(folder, name)) for name in folders)
+               for folder, folders, files in os.walk(worktree))
 
 
 def remove_worktrees(store, task, worktree, agents, force=False, teardown=None):
