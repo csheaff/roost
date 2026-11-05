@@ -1598,6 +1598,39 @@ COMMAND, INTERRUPTER and FORM keeps RULE until FUNCTION is REPLACEMENT.")
                      (if stay "*late terminal cccccc*" "*late elsewhere*")))
       (should (string-match-p "Roost created" (roost-sweep-late--messages 1))))))
 
+(ert-deftest roost-sweep-late-what-you-opened-from-a-question-stands ()
+  ;; A reply comes while you choose in the minibuffer, and what you chose
+  ;; opens as it ends: what the reply waits to open must not then override it.
+  (pcase-dolist (`(,fields ,place ,command ,action ,shown)
+                 `((nil compose ,#'roost-compose-submit "create" "*late terminal cccccc*")
+                   (((status . "stopped") (live)) here
+                    ,(lambda () (roost-resume (roost-sweep-late--mine))) "resume" "*late terminal aaaaaa*")))
+    (roost-sweep-late--world
+      (roost-sweep-late--populate fields nil)
+      (roost-sweep-late--lay-out place)
+      (funcall command)
+      (let ((reply (roost-sweep-late--take action)))
+        (roost-sweep-late--in-minibuffer
+         (lambda ()
+           (roost-sweep-late--answer reply 'good)
+           ;; As `roost-open-task' does on your choice.
+           (cl-incf roost--open-generation))))
+      (roost-sweep-late--settle)
+      (should-not (equal (buffer-name (window-buffer (selected-window))) shown)))))
+
+(ert-deftest roost-sweep-late-a-task-that-went-while-you-answered-opens-nothing ()
+  (roost-sweep-late--world
+    (roost-sweep-late--populate '((status . "stopped") (live)) nil)
+    (roost-sweep-late--lay-out 'here)
+    (roost-resume (roost-sweep-late--mine))
+    (let ((reply (roost-sweep-late--take "resume")))
+      (roost-sweep-late--in-minibuffer
+       (lambda ()
+         (roost-sweep-late--answer reply 'good)
+         (clrhash roost--tasks))))
+    (roost-sweep-late--settle)
+    (should-not (equal (buffer-name (window-buffer (selected-window))) "*late terminal aaaaaa*"))))
+
 (ert-deftest roost-sweep-late-a-draft-that-closes-ends-what-it-asked ()
   ;; While its task is made, which closes it.
   (let ((submit (cdr (assq 'compose-submit roost-sweep-late--commands))))

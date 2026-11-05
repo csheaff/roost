@@ -2345,6 +2345,16 @@ is gone."
          (when (and (window-live-p selected) (not (eq selected (selected-window))))
            (select-window selected)))))))
 
+(defun roost--open-once-out (generation key listed open)
+  "Call OPEN once you are out of the minibuffer, if it is still wanted.
+Not if you opened something since GENERATION, as what you chose there,
+or the task with KEY went, LISTED being as for `roost--went-p'."
+  (roost--when-out-of-minibuffer
+   (lambda ()
+     (when (and (= generation roost--open-generation)
+                (not (roost--went-p key listed)))
+       (funcall open)))))
+
 (defun roost--ask-after-reply (key listed function)
   "Call FUNCTION, which asks about the task with KEY, once out of a host's reply.
 That is from a timer, and once the minibuffer you are in is done, as a
@@ -2754,17 +2764,18 @@ EXTRA is an alist of further request fields, such as the issue."
 
 (defun roost--task-made (host task name on-success stayed)
   "Cache TASK, which HOST made as NAME, and call ON-SUCCESS, if any, with it.
-Then open it, if STAYED, called before anything else moves, says you are
-still where you asked for it: making a task can take minutes."
+Then open it, if STAYED, called once you are out of the minibuffer and
+before ON-SUCCESS moves anything, says you are still where you asked for
+it: making a task can take minutes."
   (roost--remember-host host)
   (when (roost--field task 'repo)
     (roost--remember-project (roost--project-directory (cons (cons 'host host) task))))
   (setq task (roost--cache-task host task))
-  (let ((stayed (funcall stayed)))
-    (roost-watch-mode 1)
-    ;; It opens where the draft closes.
-    (roost--when-out-of-minibuffer
-     (lambda ()
+  (roost-watch-mode 1)
+  ;; It opens where the draft closes.
+  (roost--when-out-of-minibuffer
+   (lambda ()
+     (let ((stayed (funcall stayed)))
        (when on-success (funcall on-success task))
        (roost--redraw)
        (when stayed (roost-open-task task)))))
@@ -3981,14 +3992,16 @@ resume those too."
         (roost--resume-together task others)
       ;; Now, rather than in its turn among several resuming.
       (setq roost--resuming (delete (roost--key task) roost--resuming))
-      (let ((listed (gethash (roost--key task) roost--tasks))
-            (stayed (roost--you-stay))
-            there)
+      (let* ((listed (gethash (roost--key task) roost--tasks))
+             (stayed (roost--you-stay))
+             (generation roost--open-generation)
+             there)
         (roost--act task "resume" (roost--resume-parameters task)
                     (lambda (updated)
-                      (when (and there (not (roost--went-p (roost--key updated) listed)))
+                      (when there
                         ;; After its old terminal, which waits for that too.
-                        (roost--when-out-of-minibuffer (lambda () (roost-open-task updated)))))
+                        (roost--open-once-out generation (roost--key updated) listed
+                                              (lambda () (roost-open-task updated)))))
                     nil
                     ;; Its terminal, which you may be in, is about to go.
                     (lambda () (setq there (funcall stayed))))))))
@@ -4023,11 +4036,12 @@ OTHERS' terminals stay closed.  Once all have replied, say how many
 resumed, naming each that didn't and why: one that fails doesn't stop
 the rest.  One you resumed, stopped or forgot meanwhile, or that no
 longer shows as crashed, is passed over."
-  (let ((host (roost--field task 'host))
-        (listed (gethash (roost--key task) roost--tasks))
-        (stayed (roost--you-stay))
-        (tried 1)
-        there failures said)
+  (let* ((host (roost--field task 'host))
+         (listed (gethash (roost--key task) roost--tasks))
+         (stayed (roost--you-stay))
+         (generation roost--open-generation)
+         (tried 1)
+         there failures said)
     ;; Until each replies, opening one of them offers the rest no more.
     (setq roost--resuming (append (mapcar #'roost--key (cons task others)) roost--resuming))
     (cl-labels ((replied (task)
@@ -4060,9 +4074,9 @@ longer shows as crashed, is passed over."
                     (next others)
                     ;; Said again once its terminal shows, if done by then:
                     ;; opening clears the echo area.
-                    (when (and there (not (roost--went-p (roost--key updated) listed)))
-                      (roost--when-out-of-minibuffer
-                       (lambda () (roost-open-task updated nil (lambda (_) said))))))
+                    (when there
+                      (roost--open-once-out generation (roost--key updated) listed
+                                            (lambda () (roost-open-task updated nil (lambda (_) said))))))
                   (lambda (err)
                     (replied task)
                     (push (cons task err) failures)
