@@ -1963,6 +1963,13 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(reply["result"]["update"]["conflicts"], [name])
         self.assertEqual(self.request("list", full=True)["result"][0]["merging"], dict(conflicts=[name]))
 
+    def test_a_moved_file_says_where_from(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        self.git("mv", "hello", "greeting", cwd=wt)
+        self.assertEqual(self.request("list", full=True)["result"][0]["files"],
+                         [{"path": "greeting", "from": "hello", "added": 0, "deleted": 0, "uncommitted": True}])
+
     def test_a_full_listing_names_the_changed_files(self):
         task = self.create()
         wt = Path(task["worktree"])

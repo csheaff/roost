@@ -19,7 +19,12 @@
 ;; - A button or key that changes only the view keeps that change through
 ;;   a redraw, and another button or key changes it back.
 ;; - A key the view tells you to press is bound there, and its command
-;;   applies to the task.
+;;   applies to the task.  A click on it, there or gone since, never ends
+;;   in a Lisp error.
+;; - The keys and clicks of the sidebar's rows for a new task never end
+;;   in a Lisp error.
+;; - The sidebar, whose hidden buffer Emacs doesn't fontify, has its faces
+;;   in `face'.
 ;; - What `n' says on opening a task that waits fits one line of the echo
 ;;   area, narrow or wide: its status and name first, then why it waits
 ;;   where there is room, and the keys it names apply.
@@ -102,7 +107,9 @@ KIND is `committed', `uncommitted', `untracked' or `binary'."
     ;; With the one above, as after its host restarted: each offers the other.
     ("crashed too" (status . "crashed") (live) (ahead . 1) (diff . "1 file +12 −3")
      (files . ,(roost-sweep--files '("report.py" . committed))))
-    ("worktree gone" (status . "ready") (live) (worktreeMissing . t))
+    ;; With the files of its last full refresh, as Emacs keeps them.
+    ("worktree gone" (status . "ready") (live) (worktreeMissing . t) (diff . "1 file +12 −3")
+     (files . ,(roost-sweep--files '("report.py" . committed))))
     ("merge conflicts" (status . "ready") (live . t) (integrationBranch . "main")
      (merging (conflicts "ledger.py" "report.py")) (diff . "1 file +1 −1 · uncommitted")
      (files . ,(roost-sweep--files '("ledger.py" . uncommitted))))
@@ -789,6 +796,62 @@ applies to the task."
           (kill-buffer buffer))
         problems))))
 
+(defun roost-sweep--check-key-clicks (view state width)
+  "Problems clicking the keys VIEW names for STATE at WIDTH, there or gone since.
+As from the window beside it, where a terminal is."
+  (let ((spans (roost-sweep--world
+                 (save-window-excursion
+                   (let ((buffer (roost-sweep--draw view state width)) (pos (point-min)) found)
+                     (while (setq pos (text-property-not-all pos (point-max) 'roost-key-command nil))
+                       (let ((end (next-single-property-change pos 'roost-key-command nil (point-max))))
+                         (push (cons pos (buffer-substring-no-properties pos end)) found)
+                         (setq pos end)))
+                     (kill-buffer buffer)
+                     (nreverse found)))))
+        problems)
+    (pcase-dolist (`(,pos . ,words) spans)
+      (dolist (gone '(nil t))
+        (when-let* ((failure (plist-get (roost-sweep--click view state width 'other
+                                                            (cons 'mouse-1 (cons pos #'roost-click-key)) gone)
+                                        :error)))
+          (push (format "a click on %S%s fails: %S" words (if gone ", of a task gone since," "") failure)
+                problems))))
+    (nreverse problems)))
+
+(defun roost-sweep--check-plain-faces (view state width)
+  "Problems with the faces of VIEW for STATE at WIDTH, which Emacs doesn't fontify.
+A buffer named with a leading space goes without Font Lock, so
+`font-lock-face' alone shows nothing there."
+  (roost-sweep--world
+    (save-window-excursion
+      (let ((buffer (roost-sweep--draw view state width)) (pos (point-min)) problems)
+        (while (setq pos (text-property-not-all pos (point-max) 'font-lock-face nil))
+          (let ((end (next-single-property-change pos 'font-lock-face nil (point-max))))
+            (unless (get-text-property pos 'face)
+              (push (format "%S has `font-lock-face' alone" (buffer-substring-no-properties pos end)) problems))
+            (setq pos end)))
+        (kill-buffer buffer)
+        problems))))
+
+(defun roost-sweep--project-row-failure (label key)
+  "The Lisp error from KEY on the sidebar's row LABEL for a new task, or nil.
+KEY is a key sequence, or the name of a mouse event."
+  (roost-sweep--world
+    (save-window-excursion
+      (let ((buffer (roost-sweep--draw 'sidebar "running" nil)))
+        (unwind-protect
+            (progn
+              (goto-char (point-min))
+              (search-forward label)
+              (forward-line 0)
+              (set-window-point (selected-window) (point))
+              (let* ((click (and (symbolp key) (list key (list (selected-window) (point) '(0 . 0) 0))))
+                     (command (key-binding (if click (vector key) key) t nil (point)))
+                     (last-nonmenu-event (or click last-nonmenu-event)))
+                (roost-sweep--do (cons 'key (cons (if click (vector click) key) command)))))
+          (when (buffer-live-p buffer) (kill-buffer buffer))
+          (when-let* ((draft (get-buffer roost--compose-buffer))) (kill-buffer draft)))))))
+
 (defun roost-sweep--check-next-message (_view state _width)
   "Problems with what `roost-next-waiting' says on opening STATE's task.
 Only for a task that waits, which it goes to, in echo areas narrow and wide."
@@ -952,6 +1015,30 @@ Return them as (PROBLEM . PLACES), PLACES naming the view, state and width."
   ;; Only the task panel says what to do next.
   (roost-test--isolated
    (roost-sweep--report (roost-sweep--run #'roost-sweep--check-named-keys '(panel)))))
+
+(ert-deftest roost-sweep-named-keys-can-be-clicked ()
+  (roost-test--isolated
+   (roost-sweep--report (roost-sweep--run #'roost-sweep--check-key-clicks '(panel)))))
+
+(ert-deftest roost-sweep-the-sidebar-needs-no-font-lock ()
+  (roost-test--isolated
+   (roost-sweep--report (roost-sweep--run #'roost-sweep--check-plain-faces '(sidebar)))))
+
+(ert-deftest roost-sweep-rows-for-a-new-task-keep-to-their-keys ()
+  ;; They have keys of their own, over the task keys of the sidebar's.
+  (roost-test--isolated
+   (let ((keys (roost-sweep--world
+                 (save-window-excursion
+                   (let ((buffer (roost-sweep--draw 'sidebar "running" nil)))
+                     (prog1 (mapcar #'car (roost-sweep--keys)) (kill-buffer buffer))))))
+         problems)
+     (should (length> keys 6))
+     (dolist (label '("local · budget" "Other directory"))
+       (dolist (key (append keys '(mouse-1 mouse-3)))
+         (when-let* ((failure (roost-sweep--project-row-failure label key)))
+           (push (format "%s on %S fails: %S" (if (symbolp key) key (key-description key)) label failure)
+                 problems))))
+     (should-not problems))))
 
 (ert-deftest roost-sweep-n-says-where-it-went-and-why ()
   (roost-test--isolated
