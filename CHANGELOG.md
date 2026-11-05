@@ -4,6 +4,13 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- With `core.fsmonitor` set to `true`, Git's monitor no longer starts while
+  Roost holds a lock it hands on to Git. It went on holding that lock for as
+  long as it ran, which is until you stop it: merging, retiring or
+  discarding a task said Roost was busy, or a task whose creation was cut
+  short never left, and asking for it again never returned. Nothing to do
+  when upgrading; a task stuck this way today is freed by
+  `git fsmonitor--daemon stop` in its worktree.
 - A task's tmux window closes if the request that made it stopped before
   saying so. It stayed, with nothing running in it, in a session no Roost
   command would then close. Nothing to do when upgrading; a window like

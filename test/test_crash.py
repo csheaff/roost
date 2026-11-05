@@ -180,6 +180,55 @@ class Crashes(unittest.TestCase):
         self.assertIn("no longer exists", box.helper("merge", id=task["id"])["error"])
 
 
+def monitors():
+    """Whether this Git has a file system monitor of its own."""
+    with tempfile.TemporaryDirectory() as folder:
+        subprocess.run([harness.REAL["git"], "init", "-q", folder], check=True)
+        said = subprocess.run([harness.REAL["git"], "-C", folder, "fsmonitor--daemon", "status"],
+                              capture_output=True, text=True)
+    return "not supported" not in said.stdout + said.stderr
+
+
+@unittest.skipUnless(monitors(), "This Git has no file system monitor of its own")
+class Monitor(unittest.TestCase):
+    """Git's own file system monitor, a daemon any Git may start, and which
+    a command would hand on what it inherits."""
+
+    def setUp(self):
+        self.box = Box()
+        self.addCleanup(self.box.close)
+        self.box.git("config", "core.fsmonitor", "true")
+        self.addCleanup(self.stop_monitor, self.box.repo)
+
+    def stop_monitor(self, worktree):
+        self.box.run(harness.REAL["git"], "fsmonitor--daemon", "stop", cwd=worktree, check=False)
+
+    def test_it_keeps_no_worktree_lock(self):
+        box = self.box
+        box.origin()
+        task = box.create()
+        box.commit(task)
+        # As after a reboot: nothing has started it again yet.
+        self.stop_monitor(task["worktree"])
+        reply = box.helper("pr", id=task["id"], title="Add work")
+        self.assertTrue(reply["ok"], reply)
+        reply = box.helper("merge", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+
+    def test_it_keeps_no_creation_waiting(self):
+        box = self.box
+        asked = dict(directory=str(box.repo), name="made", socket=box.socket, command=[sys.executable, str(harness.FAKE)],
+                     createId="ab" * 8)
+        box.arm("after", match="worktree add")
+        self.assertIsNone(box.helper("create", **asked))
+        box.disarm()
+        self.assertEqual(box.helper("list", socket=box.socket)["result"], [])
+        self.assertEqual(box.worktrees(), [str(box.repo)])
+        reply = box.helper("create", timeout=20, **asked)
+        self.assertTrue(reply["ok"], reply)
+        self.addCleanup(self.stop_monitor, reply["result"]["worktree"])
+
+
 class Records(unittest.TestCase):
     """Damage to the records on a host."""
 

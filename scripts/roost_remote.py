@@ -79,8 +79,30 @@ def text(value):
 
 
 # Descriptors the commands Roost runs inherit, as Git does the lock held
-# on a worktree while it is removed or pushed; see `holding_worktree`.
+# on a worktree while it is removed or pushed; see `handing_on`.
 INHERITED = []
+
+
+@contextlib.contextmanager
+def handing_on(fd):
+    """Hand FD, which holds a lock, on to each command started meanwhile, so
+    that the lock lasts for as long as they run, even past this helper. But
+    not to Git's own file system monitor, a daemon any Git may start, which
+    runs until you stop it: refused from here on, finishing a task, or
+    asking again for one cut short, would wait on it forever."""
+    count = int(os.environ.get("GIT_CONFIG_COUNT") or 0)
+    os.environ.update({"GIT_CONFIG_COUNT": str(count + 1), "GIT_CONFIG_KEY_%d" % count: "core.fsmonitor",
+                       "GIT_CONFIG_VALUE_%d" % count: "false"})
+    INHERITED.append(fd)
+    try:
+        yield
+    finally:
+        INHERITED.remove(fd)
+        del os.environ["GIT_CONFIG_KEY_%d" % count], os.environ["GIT_CONFIG_VALUE_%d" % count]
+        if count:
+            os.environ["GIT_CONFIG_COUNT"] = str(count)
+        else:
+            del os.environ["GIT_CONFIG_COUNT"]
 
 
 def execute(argv, cwd=None, check=True, input=None, env=None):
@@ -132,7 +154,7 @@ def measuring(repo):
     gpg.program, and diffs take --no-ext-diff and --no-textconv. Clean filters and merge drivers, which attributes pick by name, still
     run: turning them off would break Git LFS."""
     return ("--no-optional-locks", "-c", "log.showSignature=false",
-            "-c", "core.fsmonitor=" + ("true" if gits_own_fsmonitor(str(repo)) else "false"))
+            "-c", "core.fsmonitor=" + ("true" if gits_own_fsmonitor(str(repo)) and not INHERITED else "false"))
 
 
 def read_git(repo, *args, env=None):
@@ -1897,28 +1919,26 @@ def make_task(store, request, create_id):
         task["programStatus"] = True
     existed, there = ref_exists(repo, branch), worktree.exists()
     with noting_creation(store, task) as note:
-        INHERITED.append(note)
-        try:
-            git(repo, "-c", "branch.autoSetupMerge=false", "worktree", "add", "-b", branch,
-                str(worktree), commit)
-        except RoostError as exc:
-            said = "\n".join(line for line in str(exc).splitlines() if not line.startswith("Preparing worktree"))
-            if there or not worktree.exists():
-                # A checkout that failed, as a filter can, leaves the new branch.
-                if not existed:
-                    with contextlib.suppress(RoostError):
-                        delete_branch(repo, branch, commit)
-                raise RoostError(said)
-            # Git made the worktree, then its post-checkout hook failed.
-            with store.locked():
-                store.save(task)
-                abandon(store, task)
-            raise RoostError("The repository's post-checkout hook failed in the task's new worktree, so the task "
-                             "didn't start%s: %s" % ("; its worktree is kept, as the hook left files there"
-                                                     if worktree.exists() else "", said))
-        finally:
-            # Not tmux's, whose server would hold it for as long as it runs.
-            INHERITED.remove(note)
+        # Not to tmux, whose server would hold it for as long as it runs.
+        with handing_on(note):
+            try:
+                git(repo, "-c", "branch.autoSetupMerge=false", "worktree", "add", "-b", branch,
+                    str(worktree), commit)
+            except RoostError as exc:
+                said = "\n".join(line for line in str(exc).splitlines() if not line.startswith("Preparing worktree"))
+                if there or not worktree.exists():
+                    # A checkout that failed, as a filter can, leaves the new branch.
+                    if not existed:
+                        with contextlib.suppress(RoostError):
+                            delete_branch(repo, branch, commit)
+                    raise RoostError(said)
+                # Git made the worktree, then its post-checkout hook failed.
+                with store.locked():
+                    store.save(task)
+                    abandon(store, task)
+                raise RoostError("The repository's post-checkout hook failed in the task's new worktree, so the task "
+                                 "didn't start%s: %s" % ("; its worktree is kept, as the hook left files there"
+                                                         if worktree.exists() else "", said))
         # `git worktree add` leaves them out. Its runner checks them out, in
         # its terminal, as that fetches.
         if (worktree / ".gitmodules").is_file():
@@ -5315,11 +5335,8 @@ def holding_worktree(store, task, operation, refusal):
             fcntl.flock(lock, operation | fcntl.LOCK_NB)
         except BlockingIOError:
             raise RoostError(refusal)
-        INHERITED.append(lock.fileno())
-        try:
+        with handing_on(lock.fileno()):
             yield
-        finally:
-            INHERITED.remove(lock.fileno())
 
 
 def worktree_holder(store, task):
