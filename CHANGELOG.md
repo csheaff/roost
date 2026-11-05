@@ -4,6 +4,9 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A damaged `.repository` file beside a project's worktrees no longer stops
+  starting tasks in that project or searching on that host. It is written
+  anew with the next task. Nothing to do when upgrading.
 - Merging or retiring a task whose repository is gone, or whose worktree
   Git can no longer read, says so and offers to bring it back or forget
   the task. Roost said the worktree was on a detached HEAD, and to check out

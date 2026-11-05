@@ -286,6 +286,19 @@ class Records(unittest.TestCase):
         self.assertEqual([task["id"] for task in listed], [self.other["id"]])
 
 
+class Marker(unittest.TestCase):
+    def test_a_damaged_note_of_the_repository_stops_nothing(self):
+        box = Box()
+        self.addCleanup(box.close)
+        task = box.create()
+        marker = next((box.state / "worktrees").glob("*/.repository"))
+        marker.write_bytes(b"\xff\xfe")
+        self.assertTrue(box.helper("search", query="x")["ok"])
+        second = box.create("second")
+        # Noted again.
+        self.assertEqual(marker.read_text(), second["repo"] + "\n")
+
+
 class FullDisk(unittest.TestCase):
     def setUp(self):
         self.box = Box()

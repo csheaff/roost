@@ -4838,8 +4838,9 @@ def remember_repository(store, repo):
 
 def read_repository(marker):
     """The repository noted in MARKER: its text but the newline written after
-    it, since a directory's name may end in a space."""
-    return marker.read_text().removesuffix("\n")
+    it, since a directory's name may end in a space. A damaged one stops
+    nothing: it just names no repository."""
+    return marker.read_text(errors="replace").removesuffix("\n")
 
 SEARCH_TASK_LIMIT = 50
 SEARCH_HITS_PER_TASK = 10
