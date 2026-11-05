@@ -34,6 +34,17 @@ What each release changes, and what to do when upgrading. Newest first.
   to do when upgrading.
 - A lone surrogate in what an agent reports, which failed a host's reply or
   lost the event, is replaced. Nothing to do when upgrading.
+- A review note on a line of a file that isn't UTF-8 is saved, and keeps
+  the line as Magit shows it, with `\351` for a byte. Saving it failed
+  with `Wrong type argument: json-value-p`, and so did saving every note
+  after it, for any task, which a restart then lost. A prompt or pull
+  request holding such a byte is refused in words, like a control
+  character: Roost says which and on what line, and sends nothing.
+  Nothing to do when upgrading.
+- A task or pull request draft stopped before anything reached its host,
+  as when you quit the question about a project's setup command, can be
+  created again. It said "Already creating" until you killed it. Nothing
+  to do when upgrading.
 - Roost refuses to send a prompt holding a control character, other than
   a line or page break or a tab, as the agent's terminal would take it as
   a key. It says which and on what line, and sends nothing. A draft stays
