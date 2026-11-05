@@ -323,6 +323,7 @@ but for a reply's question."
             (inhibit-message t)
             (message-log-max t)
             (roost-sweep-late--requests nil) (roost-sweep-late--records nil) (roost-sweep-late--found nil)
+            (roost-sweep-late--answer-questions t)
             (roost-sweep-late--asked nil) (roost-sweep-late--delivering nil) (roost-sweep-late--pump nil)
             (roost-sweep-late--place nil) (roost-sweep-late--clock 0)
             (roost-sweep-late--timers (append timer-list timer-idle-list))
@@ -1244,13 +1245,8 @@ Return their problems, each (TEXT PLACE...), as `roost-sweep--report' takes them
     problems))
 
 (defconst roost-sweep-late--known
-  '("\\`stale: a task that went is back"
-    "\\`stale: a task of a forgotten host is back"
-    "\\`stale: a forgotten host shows an error"
+  '("\\`stale: a forgotten host shows an error"
     "\\`stale: a reply to an older run changes"
-    "\\`question: asks .* about a task that went"
-    "\\`question: asks .* inside the minibuffer"
-    "\\`lisp-error: the reply to retire signals (user-error"
     "\\`lisp-error: the \\(?:command signals\\|question ends in\\) (wrong-type-argument"
     "\\`words: says .* 2 times"
     "\\`moved: the selected window shows \\*late \\(?:terminal\\|magit\\|diff\\|dired\\)"
@@ -1404,6 +1400,53 @@ COMMAND, INTERRUPTER and FORM keeps RULE until FUNCTION is REPLACEMENT.")
         (should-not (roost-sweep-late--mine))
         (should (eq (window-buffer (selected-window)) here))
         (should (string-match-p "no longer listed" (roost-sweep-late--messages 1)))))))
+
+(ert-deftest roost-sweep-late-a-reply-asks-nothing-in-a-minibuffer-you-are-typing-in ()
+  (dolist (case `((,(lambda () (roost-update (roost-sweep-late--mine))) "update"
+                   (refused . ,roost-sweep-late--uncommitted-update))
+                  (,(lambda () (roost-retire (roost-sweep-late--mine))) "retire"
+                   (refused . ,roost-sweep-late--unmerged))))
+    (roost-sweep-late--world
+      (roost-sweep-late--populate '((ahead . 0)) nil)
+      (roost-sweep-late--lay-out 'here)
+      (let ((roost-sweep-late--answer-questions t))
+        (funcall (car case)))
+      (setq roost-sweep-late--answer-questions nil
+            roost-sweep-late--delivering t)
+      (roost-sweep-late--in-minibuffer
+       (lambda ()
+         (roost-sweep-late--answer (roost-sweep-late--take (cadr case)) (caddr case))))
+      (should-not roost-sweep-late--asked)
+      ;; Asked once you are done there.
+      (roost-sweep-late--settle)
+      (should (= (length roost-sweep-late--asked) 1))
+      (should (= (cdar roost-sweep-late--asked) 0)))))
+
+(ert-deftest roost-sweep-late-a-reply-asks-nothing-about-a-task-that-went ()
+  (roost-sweep-late--world
+    (roost-sweep-late--populate nil nil)
+    (roost-sweep-late--lay-out 'here)
+    (roost-update (roost-sweep-late--mine))
+    (let ((reply (roost-sweep-late--take "update")))
+      (roost-sweep-late--go roost-sweep-late--mine)
+      (setq roost-sweep-late--delivering t)
+      (roost-sweep-late--answer reply `(refused . ,roost-sweep-late--uncommitted-update)))
+    (roost-sweep-late--settle)
+    (should-not roost-sweep-late--asked)))
+
+(ert-deftest roost-sweep-late-discarding-says-the-task-went-while-its-host-replied ()
+  (roost-sweep-late--world
+    (roost-sweep-late--populate nil nil)
+    (roost-sweep-late--lay-out 'here)
+    (setq roost-sweep-late--delivering t
+          roost-sweep-late--pump
+          (lambda ()
+            (let ((reply (roost-sweep-late--take "discard")))
+              (roost-sweep-late--go roost-sweep-late--mine)
+              (roost-sweep-late--answer reply 'good))))
+    (should (equal (cadr (should-error (roost-discard (roost-sweep-late--mine)) :type 'user-error))
+                   "mine is no longer listed"))
+    (should-not roost-sweep-late--asked)))
 
 (provide 'roost-sweep-late)
 

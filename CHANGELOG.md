@@ -4,6 +4,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- What Roost asks once a host replies waits until you are out of the
+  minibuffer, and goes no further if the task went meanwhile: whether to
+  have the agent resolve what `u` left, or to discard what `x` refused to
+  retire. It landed in the question you were typing in, where the next
+  `y` or `n` answered it. Nothing to do when upgrading.
 - A task that went stays gone when a reply about it comes late. A reply
   read before the task was retired, or before you forgot its host, used
   to list it again, for good in the case of a forgotten host, and could

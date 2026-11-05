@@ -2249,6 +2249,20 @@ asked for the task is quit first, by `roost--quit-questions-left-open'."
                      (run-at-time 0 nil #'roost--when-out-of-minibuffer function))))
       (add-hook 'minibuffer-exit-hook done))))
 
+(defun roost--ask-after-reply (key listed function)
+  "Call FUNCTION, which asks about the task with KEY, once out of a host's reply.
+That is from a timer, and once the minibuffer you are in is done, as a
+reply can come while you write there: a question asked from it lands in
+that minibuffer, and the next key you press answers it.  Not if the task
+went by then, LISTED being as for `roost--went-p'.  A `user-error' from
+FUNCTION is said as a command's is."
+  (run-at-time 0 nil #'roost--when-out-of-minibuffer
+               (lambda ()
+                 (unless (roost--went-p key listed)
+                   (condition-case err
+                       (funcall function)
+                     (user-error (message "%s" (error-message-string err))))))))
+
 (defun roost--questions-left-open ()
   "How many questions you left open in the minibuffer, by going to another window.
 A completion popup, such as vertico-posframe's, hides a question you
@@ -6128,53 +6142,64 @@ conflicts, or changes not yet committed, offer to have the task's
 agent do it."
   (interactive)
   (setq task (roost--choose task))
-  (roost--act
-   task "update" nil
-   (lambda (updated)
-     (let* ((result (roost--field updated 'update))
-            (conflicts (alist-get 'conflicts result))
-            (resolved (alist-get 'resolved result))
-            (name (roost--field updated 'name))
-            (branch (roost--field updated 'integrationBranch)))
-       (roost--refresh-host (roost--field updated 'host) nil)
-       (cond (conflicts
-              (if (y-or-n-p (format "%s conflicts with %s in %s.  Ask its agent to resolve them? "
-                                       name branch (string-join conflicts ", ")))
-                  (roost-send updated
-                              (format "I merged %s into this branch and Git reports conflicts in: %s.%s Resolve the conflicts so the changes from both sides keep working, run the tests, and commit the merge."
-                                      branch (string-join conflicts ", ")
-                                      (if resolved
-                                          (format " It resolved those in %s as they were resolved before (rerere); check them too."
-                                                  (string-join resolved ", "))
-                                        "")))
-                (message "The merge is in progress in %s's worktree; resolve it in Magit (r) and commit"
-                         name)))
-             ;; Git resolved them as you did before (rerere), and left the
-             ;; merge to commit.
-             (resolved
-              (if (y-or-n-p (format "%s conflicts with %s in %s, which Git resolved as you resolved them before.  Ask its agent to check them and commit the merge? "
-                                    name branch (string-join resolved ", ")))
-                  (roost-send updated
-                              (format "I merged %s into this branch. Git reports conflicts in: %s, and resolved them as they were resolved before (rerere), so the merge is staged but not committed. Check that those resolutions keep the changes from both sides working, run the tests, and commit the merge."
-                                      branch (string-join resolved ", ")))
-                (message "The merge is in progress in %s's worktree; check it in Magit (r) and commit"
-                         name)))
-             ((alist-get 'changed result)
-              (message "%s now includes the latest %s" name branch))
-             (t (message "%s is already up to date with %s" name branch)))))
-   (lambda (err)
-     (if (not (string-prefix-p "Commit the task's changes before updating" err))
-         (message "Roost %s: %s" (roost--host-label (roost--field task 'host)) err)
-       (let ((name (roost--field task 'name))
-             (branch (roost--field task 'integrationBranch)))
-         (if (y-or-n-p (format "%s has changes not yet committed.  Ask its agent to commit them and merge %s? "
-                                  name branch))
-             (roost-send task
-                         (format "Commit your changes, then merge %s into this branch. If that conflicts, resolve the conflicts so the changes from both sides keep working. Run the tests, and commit the merge."
-                                 branch))
-           (message "%s" (substitute-command-keys
-                          (format "Commit %s's changes in Magit (\\<roost-task-info-mode-map>\\[roost-review]), then update it again"
-                             name)))))))))
+  (let* ((key (roost--key task))
+         (listed (gethash key roost--tasks)))
+    (roost--act
+     task "update" nil
+     (lambda (updated)
+       (let* ((result (roost--field updated 'update))
+              (conflicts (alist-get 'conflicts result))
+              (resolved (alist-get 'resolved result))
+              (name (roost--field updated 'name))
+              (branch (roost--field updated 'integrationBranch)))
+         (roost--refresh-host (roost--field updated 'host) nil)
+         (cond (conflicts
+                (roost--ask-after-reply
+                 key listed
+                 (lambda ()
+                   (if (y-or-n-p (format "%s conflicts with %s in %s.  Ask its agent to resolve them? "
+                                         name branch (string-join conflicts ", ")))
+                       (roost-send updated
+                                   (format "I merged %s into this branch and Git reports conflicts in: %s.%s Resolve the conflicts so the changes from both sides keep working, run the tests, and commit the merge."
+                                           branch (string-join conflicts ", ")
+                                           (if resolved
+                                               (format " It resolved those in %s as they were resolved before (rerere); check them too."
+                                                       (string-join resolved ", "))
+                                             "")))
+                     (message "The merge is in progress in %s's worktree; resolve it in Magit (r) and commit"
+                              name)))))
+               ;; Git resolved them as you did before (rerere), and left the
+               ;; merge to commit.
+               (resolved
+                (roost--ask-after-reply
+                 key listed
+                 (lambda ()
+                   (if (y-or-n-p (format "%s conflicts with %s in %s, which Git resolved as you resolved them before.  Ask its agent to check them and commit the merge? "
+                                         name branch (string-join resolved ", ")))
+                       (roost-send updated
+                                   (format "I merged %s into this branch. Git reports conflicts in: %s, and resolved them as they were resolved before (rerere), so the merge is staged but not committed. Check that those resolutions keep the changes from both sides working, run the tests, and commit the merge."
+                                           branch (string-join resolved ", ")))
+                     (message "The merge is in progress in %s's worktree; check it in Magit (r) and commit"
+                              name)))))
+               ((alist-get 'changed result)
+                (message "%s now includes the latest %s" name branch))
+               (t (message "%s is already up to date with %s" name branch)))))
+     (lambda (err)
+       (if (not (string-prefix-p "Commit the task's changes before updating" err))
+           (message "Roost %s: %s" (roost--host-label (roost--field task 'host)) err)
+         (let ((name (roost--field task 'name))
+               (branch (roost--field task 'integrationBranch)))
+           (roost--ask-after-reply
+            key listed
+            (lambda ()
+              (if (y-or-n-p (format "%s has changes not yet committed.  Ask its agent to commit them and merge %s? "
+                                    name branch))
+                  (roost-send task
+                              (format "Commit your changes, then merge %s into this branch. If that conflicts, resolve the conflicts so the changes from both sides keep working. Run the tests, and commit the merge."
+                                      branch))
+                (message "%s" (substitute-command-keys
+                               (format "Commit %s's changes in Magit (\\<roost-task-info-mode-map>\\[roost-review]), then update it again"
+                                       name))))))))))))
 
 ;;;; Pull requests
 
@@ -7101,6 +7126,8 @@ won't retire, offer to discard it, which keeps that branch."
   (interactive)
   (setq task (roost--choose task))
   (let* ((name (roost--field task 'name))
+         (key (roost--key task))
+         (listed (gethash key roost--tasks))
          (offer (lambda (&optional branch)
                   (when (y-or-n-p
                          (if branch
@@ -7130,10 +7157,13 @@ won't retire, offer to discard it, which keeps that branch."
                                  ;; Git statistics newer than Roost's.
                                  (cond
                                   ((string-match-p "\\`\\(Task branch has unmerged\\|Uncommitted or untracked\\)" err)
-                                   (funcall offer))
+                                   (roost--ask-after-reply key listed offer))
                                   ((string-match "\\`The task's worktree is on \\(.+?\\), not the task's branch" err)
                                    (let ((branch (match-string 1 err)))
-                                     (funcall offer (if (equal branch "a detached HEAD") "HEAD" branch))))
+                                     (roost--ask-after-reply
+                                      key listed
+                                      (lambda ()
+                                        (funcall offer (if (equal branch "a detached HEAD") "HEAD" branch))))))
                                   (t (message "Roost %s: %s" (roost--host-label (roost--field task 'host)) err))))))))
     (cond
      ((member (roost--field task 'status) '("starting" "running" "permission" "background"))
@@ -7222,10 +7252,14 @@ finished work is merged or retired instead."
   (interactive)
   (setq task (roost--choose task))
   (let* ((name (roost--field task 'name))
+         (listed (gethash (roost--key task) roost--tasks))
          (told (alist-get 'discard
                           (roost--request-wait (roost--field task 'host) "discard"
                                                (list (cons 'id (roost--field task 'id))
                                                      (cons 'dryRun t)))))
+         ;; While its host replied.
+         (_ (when (roost--went-p (roost--key task) listed)
+              (user-error "%s is no longer listed" name)))
          (commits (or (alist-get 'commits told) 0))
          (submodule-commits (or (alist-get 'submoduleCommits told) 0))
          (unread (or (alist-get 'unreadSubmodules told) 0))
