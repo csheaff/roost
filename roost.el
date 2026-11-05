@@ -527,7 +527,10 @@ watching from the start of each session.")
   "Read FIELD from TASK."
   (alist-get field task))
 
-(defconst roost--not-text (rx (any (#xD800 . #xDFFF) (#x110000 . #x3FFFFF)))
+(defconst roost--not-text
+  ;; Raw bytes in a range of their own: one running into them from below
+  ;; matches none of them, and `rx' before Emacs 30 writes it that way.
+  (concat "[" (string #xD800 ?- #xDFFF #x110000 ?- #x3FFF7F #x3FFF80 ?- #x3FFFFF) "]")
   "Matches what a string can hold and JSON can't carry.
 Mostly the bytes of a file that isn't UTF-8, which Emacs keeps and shows
 as \\351.")
