@@ -2992,6 +2992,13 @@ def tab_per_task(qa):
     return workspace
 
 
+def end_tab_per_task(qa, workspace):
+    """Back to one frame's single tab, and `roost-workspace' as WORKSPACE."""
+    qa.emacs.eval("(progn (tab-bar-close-other-tabs) (tab-bar-rename-tab \"\") (tab-bar-mode -1) "
+                  "(setq roost-workspace '%s))" % workspace)
+    qa.settle()
+
+
 @journey("A tab per task")
 def tabs(qa, repo):
     """With tab-bar-mode, each task has a tab of its own, which a task of the
@@ -3055,9 +3062,7 @@ def tabs(qa, repo):
             ("in its tab", lambda s: s["workspace"] == qa.host_label + "/" + untabbed),
             ("its files there", files)])
     finally:
-        qa.emacs.eval("(progn (tab-bar-close-other-tabs) (tab-bar-rename-tab \"\") (tab-bar-mode -1) "
-                      "(setq roost-workspace '%s))" % workspace)
-        qa.settle()
+        end_tab_per_task(qa, workspace)
 
 
 @journey("The sidebar where a task is")
@@ -3069,7 +3074,8 @@ def own_workspace(qa, repo):
     perspective = qa.emacs.eval("(roost--workspace-backend)") == "perspective"
     workspace = None if perspective else tab_per_task(qa)
     mine = "(persp-switch \"main\")" if perspective else "(tab-bar-select-tab 1)"
-    plain = "local/%s/plain" % qa.name
+    plain = "%s/%s/plain" % (qa.host or "local", qa.name)
+    mine_terminal = None
 
     def to_mine():
         qa.emacs.eval("(progn %s (qa-fresh-start))" % mine)
@@ -3102,7 +3108,7 @@ def own_workspace(qa, repo):
         qa.step("Yours again", expect=[("no sidebar", lambda s: not qa_sidebar(s))])
         qa.plain_terminals.add(plain)
         qa.tmux("new-session", "-d", "-s", "plain")
-        qa.emacs.eval("(tmux-control-connect nil %s \"plain\")" % lisp(qa.name))
+        qa.emacs.eval("(tmux-control-connect %s %s \"plain\")" % (lisp(qa.host) if qa.host else "nil", lisp(qa.name)))
         screen = qa.wait("your terminal", lambda s: any(w.get("terminal") == plain for w in s["windows"]))
         mine_terminal = next(w["buffer"] for w in screen["windows"] if w.get("terminal") == plain)
         # The whole of the frame: a panel steps aside for a split.
@@ -3133,12 +3139,14 @@ def own_workspace(qa, repo):
         qa.keys("C-x 5 0")
         qa.wait("one frame", lambda s: len(s.get("frames") or {}) == 1)
     finally:
+        if mine_terminal:
+            qa.emacs.eval("(when (get-buffer %s) (kill-buffer %s))" % (lisp(mine_terminal), lisp(mine_terminal)))
         qa.tmux("kill-session", "-t", "plain")
         qa.plain_terminals.discard(plain)
-        if not perspective:
-            qa.emacs.eval("(progn (tab-bar-close-other-tabs) (tab-bar-rename-tab \"\") (tab-bar-mode -1) "
-                          "(setq roost-workspace '%s))" % workspace)
-        qa.settle()
+        if perspective:
+            qa.settle()
+        else:
+            end_tab_per_task(qa, workspace)
 
 
 @journey("A shell beside the agent")
@@ -3271,9 +3279,7 @@ def rename(qa, repo):
             ("in the tab it had", lambda s: s["workspace"] == qa.host_label + "/Parser fix"),
             ("no tab was added", lambda s: len(s["workspaces"]) == 2)])
     finally:
-        qa.emacs.eval("(progn (tab-bar-close-other-tabs) (tab-bar-rename-tab \"\") (tab-bar-mode -1) "
-                      "(setq roost-workspace '%s))" % workspace)
-        qa.settle()
+        end_tab_per_task(qa, workspace)
 
 
 @journey("Fork a task's commits")

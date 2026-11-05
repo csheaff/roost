@@ -10731,7 +10731,7 @@ Tasks open in the main area, never in the sidebar or the task panel."
 
 ;;;###autoload
 (define-minor-mode roost-sidebar-mode
-  "Keep a compact list of tasks at the left of every frame.
+  "Keep a compact list of tasks at the left of the frame.
 It survives \\[delete-other-windows].  With perspectives or tabs, it
 shows in a task's workspace, or one showing a task's terminal, and not
 in your own, such as perspective.el's main.  Click a task, or press RET
@@ -10743,10 +10743,7 @@ columns go without."
   (roost--watch-layout)
   (when roost-sidebar-mode (roost-watch-mode 1))
   (roost--sync-all-frames)
-  (if roost-sidebar-mode
-      (roost-refresh t)
-    ;; In case the sidebar was selected.
-    (roost--leave-side-window))
+  (when roost-sidebar-mode (roost-refresh t))
   (when (called-interactively-p 'any)
     (message (cond ((not roost-sidebar-mode)
                     (substitute-command-keys

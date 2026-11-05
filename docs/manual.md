@@ -231,7 +231,7 @@ once you've seen it. What you've seen is kept on the task's host, for your
 other machines and the next session.
 
 **Keep them in view.** `b` in the dashboard, or `M-x roost-sidebar-mode`, keeps a
-compact task list at the left of every frame, through `C-x 1`; add
+compact task list at the left of the frame, through `C-x 1`; add
 `(roost-sidebar-mode 1)` to your configuration to have it from the start. With
 perspectives or tabs, it shows in a task's workspace, and in one of your own,
 such as perspective.el's `main`, only while that shows a task's terminal, so a
@@ -249,7 +249,9 @@ projects with no tasks now that you used last on each host, three
 `RET`, drafts a task there; "Other directory…" first asks for a host, then a
 folder there, which after a click is the system's folder dialog for one on
 this machine. `X` on a project, or "Forget" on its menu, stops listing it until
-you start a task there again. `I` docks a panel at the right of an open task's terminal,
+you start a task there again. With perspectives or tabs and no task yet, there
+is no sidebar to click: start the first with `M-x roost-new-task`. `I` docks a
+panel at the right of an open task's terminal,
 kept current as the agent works: what to do next, the start of the task's
 prompt, three lines there, the files it changed, those not yet committed
 first, and what a merge would rest on (below). Once you have sent the agent more, your latest prompt shows
