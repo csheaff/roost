@@ -761,7 +761,8 @@ is the seconds it may take, if not `roost-request-timeout'."
                                                     (concat "…" (substring stderr (- roost--error-limit))))
                                                    (t stderr))))
                                    (error (list failure (error-message-string parse-error))))))
-                           (funcall (car outcome) (cadr outcome)))
+                           (unless (process-get proc 'roost-dropped)
+                             (funcall (car outcome) (cadr outcome))))
                        (kill-buffer buffer)
                        (kill-buffer errors))))))
           (push process roost--requests)
@@ -2334,6 +2335,9 @@ quitting would end that command too."
 (defconst roost--opening-delay 0.5
   "Seconds a task's host can take to reply before Roost says it is opening.")
 
+(defvar roost--opening-timer nil
+  "The timer that says the task you opened last is opening.")
+
 ;;;###autoload
 (defun roost-open-task (&optional task quit-questions describe)
   "Validate TASK's tmux ownership, then restore its perspective and terminal.
@@ -2377,10 +2381,13 @@ says once the terminal shows."
          (opening (format "Roost: opening %s…" name))
          ;; A host slow to reply, as over SSH, looked like a click that
          ;; did nothing.
-         (timer (run-at-time roost--opening-delay nil
-                             (lambda ()
-                               (when (= generation roost--open-generation)
-                                 (message "%s" opening)))))
+         (timer (progn
+                  (when (timerp roost--opening-timer) (cancel-timer roost--opening-timer))
+                  (setq roost--opening-timer
+                        (run-at-time roost--opening-delay nil
+                                     (lambda ()
+                                       (when (= generation roost--open-generation)
+                                         (message "%s" opening)))))))
          ;; Unless you have opened another task since, or shown something
          ;; else, such as tmux-control's pager, or the task went.
          (still-wanted (lambda ()
@@ -10938,7 +10945,11 @@ Beside a terminal, that turns off `roost-task-panel-mode'."
     (roost--task-panel-message)))
 
 (defun roost-unload-function ()
-  "Remove Roost's hooks, advice and side windows for `unload-feature'."
+  "Remove Roost's hooks, advice and side windows for `unload-feature'.
+Requests under way go too, as their replies would find no Roost to take them."
+  (dolist (process (copy-sequence roost--requests))
+    (process-put process 'roost-dropped t)
+    (delete-process process))
   (remove-hook 'tmux-control-switch-session-functions #'roost--switch-session)
   (remove-hook 'after-change-major-mode-hook #'roost--keep-terminal-in-its-workspace)
   (remove-hook 'tmux-control-window-buffer-functions #'roost--gather-task-terminals)
@@ -10951,6 +10962,7 @@ Beside a terminal, that turns off `roost-task-panel-mode'."
   (remove-hook 'window-configuration-change-hook #'roost--layout-changed)
   (remove-hook 'after-delete-frame-functions #'roost--frame-deleted)
   (when (timerp roost--layout-timer) (cancel-timer roost--layout-timer))
+  (when (timerp roost--opening-timer) (cancel-timer roost--opening-timer))
   (remove-hook 'magit-post-refresh-hook #'roost--magit-refreshed)
   (roost--magit-teardown)
   (when roost-watch-mode (roost-watch-mode -1))

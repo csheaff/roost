@@ -4,6 +4,9 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Unloading Roost drops the requests under way: a reply that came after
+  it ended in `error in process sentinel` and left its buffers behind.
+  Nothing to do when upgrading.
 - `g` in the setup check shows what its latest run found: a slower reply
   to the run before, such as the timeout of a host you have since brought
   back, no longer takes its place. Nothing to do when upgrading.

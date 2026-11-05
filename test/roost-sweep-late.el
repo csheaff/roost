@@ -1534,6 +1534,40 @@ COMMAND, INTERRUPTER and FORM keeps RULE until FUNCTION is REPLACEMENT.")
         (should-not (string-search roost-sweep-late--dropped (buffer-string)))
         (should (string-search "Python" (buffer-string)))))))
 
+(ert-deftest roost-sweep-late-unloading-roost-leaves-no-reply-to-come ()
+  ;; A real unload, which leaves no Roost to go on with, so in an Emacs of
+  ;; its own.  In batch, an error in a sentinel ends Emacs.
+  (roost-test--isolated
+   (let* ((state (make-temp-file "roost-unload" t))
+          (script (expand-file-name "unload.el" state))
+          (output (generate-new-buffer " *roost-unload*")))
+     (unwind-protect
+         (progn
+           (with-temp-file script
+             (insert ";;; -*- lexical-binding: t -*-\n")
+             (prin1 `(progn
+                       (require 'roost)
+                       (setq roost-state-directory ,state)
+                       (roost--run nil "import sys,time,json; sys.stdin.read(); time.sleep(0.3); print(json.dumps({'ok': True, 'result': 1}))"
+                                   "{}" #'ignore #'ignore)
+                       ;; Which says it is opening, should its host take a while.
+                       (roost-open-task (roost--cache-task nil '((id . "aaaaaa0000000000") (name . "mine"))))
+                       (unload-feature 'roost t)
+                       (let ((deadline (+ (float-time) 1)))
+                         (while (< (float-time) deadline) (accept-process-output nil 0.05)))
+                       (princ (format "%S" (list (process-list)
+                                                 (seq-filter (lambda (buffer)
+                                                               (string-prefix-p " *roost-rpc" (buffer-name buffer)))
+                                                             (buffer-list))))))
+                    (current-buffer)))
+           (should (eq 0 (call-process (expand-file-name invocation-name invocation-directory) nil output nil
+                                       "-Q" "--batch" "-L" (file-name-directory (locate-library "roost"))
+                                       "-l" script)))
+           (with-current-buffer output
+             (should (equal (string-trim (buffer-string)) "(nil nil)"))))
+       (kill-buffer output)
+       (delete-directory state t)))))
+
 (provide 'roost-sweep-late)
 
 ;;; roost-sweep-late.el ends here
