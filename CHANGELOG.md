@@ -4,6 +4,9 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A merge whose connection dropped just after it deleted the task's branch
+  finishes when you press `m` again. Roost said there was nothing to merge,
+  and the task stayed until you retired it. Nothing to do when upgrading.
 - On a host with `LC_ALL` set to `C` or `POSIX`, tasks work as anywhere else.
   tmux wrote its answers differently there, so Roost could not start a
   task, showed every running agent as `crashed`, and let you resume one

@@ -4350,6 +4350,9 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
         require_nothing_kept(repo, worktree)
     require_agent_work_kept(task)
     squashed = None
+    # Asked again after a request that got as far as deleting the branch,
+    # with the task's work where it belongs: only the record is left.
+    merge = merge and (branch_exists or not task.get("retiringCommit"))
     if merge:
         if not branch_exists:
             raise RoostError("The task branch no longer exists; there is nothing to merge")

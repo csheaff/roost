@@ -26,6 +26,30 @@ class Crashes(unittest.TestCase):
         self.addCleanup(box.close)
         return box
 
+    def test_a_merge_cut_short_once_its_branch_went_finishes_when_asked_again(self):
+        for style in ({}, dict(style="squash")):
+            with self.subTest(style=style):
+                box = self.box()
+                task = box.create()
+                commit = box.commit(task)
+                box.arm("after", match="update-ref -d")
+                self.assertIsNone(box.helper("merge", id=task["id"], **style))
+                box.disarm()
+                reply = box.helper("merge", id=task["id"], **style)
+                self.assertTrue(reply["ok"], reply)
+                self.assertEqual(reply["result"]["retiringCommit"], commit)
+                self.assertEqual(box.helper("list", socket=box.socket)["result"], [])
+                self.assertEqual(len(box.git("log", "--format=%H", "--no-merges", "main", "--", "work").split()), 1)
+
+    def test_merging_a_task_whose_branch_you_deleted_still_says_so(self):
+        box = self.box()
+        task = box.create()
+        box.helper("stop", id=task["id"])
+        box.git("worktree", "remove", "--force", task["worktree"])
+        box.git("branch", "-D", task["branch"])
+        self.assertIn("no longer exists", box.helper("merge", id=task["id"])["error"])
+
+
 class Hosts(unittest.TestCase):
     """Hosts that aren't set up as yours is."""
 
