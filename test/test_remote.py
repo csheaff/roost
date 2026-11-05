@@ -122,6 +122,45 @@ class Lifecycle(unittest.TestCase):
         self.assertFalse(Path(task["worktree"]).exists())
         self.assertEqual(self.request("list")["result"], [])
 
+    def test_a_prompt_no_agent_could_be_started_with_is_refused(self):
+        # A program's argument ends at a NUL: its runner could only fail.
+        reply = self.request("create", directory=str(self.repo), name="nul", socket=self.socket,
+                             prompt="before\0after", command=[sys.executable, str(FAKE)])
+        self.assertEqual(reply["error"], "The prompt holds a NUL character on line 1, which an agent can't "
+                                         "start with; delete it and try again")
+        self.assertEqual(self.task_branches(), [])
+        self.assertEqual(self.request("list")["result"], [])
+
+    def test_a_project_folder_may_hold_a_newline_or_end_in_white_space(self):
+        def project(name):
+            folder = self.root / name
+            roost.git(self.root, "init", "-q", "-b", "main", str(folder))
+            roost.git(folder, "-c", "user.name=T", "-c", "user.email=t@example.invalid",
+                      "commit", "-q", "--allow-empty", "-m", "Start")
+            return folder
+
+        def starts_there(folder):
+            task = self.create(directory=str(folder))
+            self.assertEqual(Path(task["repo"]).resolve(), folder.resolve())
+            self.assertEqual(roost.git(folder, "branch", "--list", "--format=%(refname:short)", "roost/*").stdout.strip(),
+                             task["branch"])
+            self.assertTrue(self.request("stop", id=task["id"])["ok"])
+            retired = self.request("retire", id=task["id"])
+            self.assertTrue(retired["ok"], retired)
+        # What comes before the newline is another repository, not this one.
+        other = project("project")
+        names = ["project\nwith a newline", "ends in a newline\n"] if roost.lists_worktrees_whole() else []
+        for name in names + ["ends in a space "]:
+            starts_there(project(name))
+        self.assertEqual(roost.git(other, "branch", "--list", "roost/*").stdout, "")
+        with patch.object(roost, "lists_worktrees_whole", lambda: False):
+            starts_there(project("ends in a space with an older Git "))
+        # And so may the folder you draft a task from an issue in.
+        with patch.object(roost, "forge_for") as forge:
+            forge.return_value.issues.return_value = []
+            roost.issues(dict(directory=str(project("issues in a space "))))
+            self.assertEqual(Path(forge.call_args[0][0]).name, "issues in a space ")
+
     def test_hostile_values_go_through_as_themselves_and_nothing_runs(self):
         """Names, prompts, branches and paths, as you type them or an issue
         brings them, reach Git, tmux and the agent intact, through creating,
@@ -851,6 +890,19 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(self.request("resume", id=task["id"])["ok"])
         self.wait(task, "ready")
 
+    def test_a_task_whose_submodule_could_not_be_fetched_retires(self):
+        self.add_submodule()
+        (self.root / "library").rename(self.root / "moved")
+        reply = self.request("create", directory=str(self.repo), name="fetch", socket=self.socket,
+                             command=[sys.executable, str(FAKE)])
+        task = self.wait(reply["result"], "failed")
+        self.wait_for_pane_exit(task)
+        # Git left its folder for submodules, with nothing in it.
+        retired = self.request("retire", id=task["id"])
+        self.assertTrue(retired["ok"], retired)
+        self.assertFalse(Path(task["worktree"]).exists())
+        self.assertEqual(self.task_branches(), [])
+
     def test_a_new_task_leaves_out_the_submodules_the_repository_has_not_initialized(self):
         self.add_submodule()
         self.add_submodule(self.library("big"), "big")
@@ -901,6 +953,78 @@ class Lifecycle(unittest.TestCase):
         self.wait(task, "ready")
         for path in ("lib", "big"):
             self.assertEqual(*self.recorded(Path(task["worktree"]), path))
+
+    def test_a_task_started_while_another_fetches_checks_out_every_submodule(self):
+        # Where the repository has initialized none, as in a plain clone. The
+        # first task's fetch of lib, which takes a while, is no sign that
+        # you chose lib alone.
+        self.add_submodule()
+        self.add_submodule(self.library("big"), "big")
+        self.git("submodule", "deinit", "-q", "--all")
+        fetching, go = self.root / "fetching", self.root / "go"
+        template = self.root / "template"
+        (template / "hooks").mkdir(parents=True)
+        hook = template / "hooks" / "post-checkout"
+        hook.write_text("#!/bin/sh\ntouch %s\nuntil [ -e %s ]; do sleep 0.05; done\n"
+                        % (shlex.quote(str(fetching)), shlex.quote(str(go))))
+        hook.chmod(0o755)
+        start = lambda name: self.request("create", directory=str(self.repo), name=name, socket=self.socket,
+                                          command=[sys.executable, str(FAKE)])["result"]
+        # Git makes each submodule's repository from it, in the runners too.
+        with patch.dict(os.environ, {"GIT_TEMPLATE_DIR": str(template)}):
+            first = start("first")
+            deadline = time.monotonic() + 8
+            while not fetching.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertTrue(fetching.exists())
+            second = start("second")
+            time.sleep(1)
+            go.touch()
+        for task in (first, second):
+            self.wait(task, "ready")
+            for path in ("lib", "big"):
+                self.assertEqual(*self.recorded(Path(task["worktree"]), path))
+
+    def test_a_relative_submodule_url_means_what_it_does_in_the_primary_checkout(self):
+        # Git reads one from the remote the branch tracks, and a task's tracks
+        # none; with no origin, from the folder it runs in, the worktree, and
+        # keeps the result in the config the primary checkout shares.
+        self.allow_local_submodules()
+        library = self.library("library")
+        head = roost.git(library, "rev-parse", "HEAD").stdout.strip()
+        (self.repo / ".gitmodules").write_text('[submodule "lib"]\n\tpath = lib\n\turl = ../library\n')
+        self.git("add", ".gitmodules")
+        self.git("update-index", "--add", "--cacheinfo", "160000,%s,lib" % head)
+        self.git("commit", "-qm", "Add lib")
+
+        def checks_out():
+            task = self.create()
+            self.assertEqual(*self.recorded(Path(task["worktree"]), "lib"))
+            self.assertEqual(Path(self.git("config", "submodule.lib.url")).resolve(), library.resolve())
+            self.request("stop", id=task["id"])
+            self.git("config", "--remove-section", "submodule.lib")
+        for remote in ("github", "gitlab"):
+            roost.git(self.root, "init", "-q", "--bare", str(self.root / (remote + ".git")))
+            self.git("remote", "add", remote, str(self.root / (remote + ".git")))
+        self.git("push", "-q", "-u", "github", "main")
+        checks_out()
+        # With no remote at all, from the primary checkout.
+        self.git("remote", "remove", "github")
+        self.git("remote", "remove", "gitlab")
+        checks_out()
+        # With origin elsewhere, from the remote the primary checkout's branch tracks.
+        origin = self.root / "elsewhere" / "fork.git"
+        origin.parent.mkdir()
+        roost.git(self.root, "init", "-q", "--bare", str(origin))
+        roost.git(self.root, "init", "-q", "--bare", str(self.root / "upstream.git"))
+        self.git("remote", "add", "origin", str(origin))
+        self.git("remote", "add", "upstream", str(self.root / "upstream.git"))
+        self.git("push", "-q", "-u", "upstream", "main")
+        checks_out()
+        # The usual case, a clone: only `git submodule` itself reads it.
+        self.git("remote", "remove", "origin")
+        self.git("remote", "rename", "upstream", "origin")
+        checks_out()
 
     def test_git_that_would_run_a_command_gitmodules_names_leaves_submodules_out(self):
         self.add_submodule()
@@ -3614,6 +3738,51 @@ class Lifecycle(unittest.TestCase):
         self.assertNotIn("teardownFailure", reply["result"])
         self.assertEqual(marker.read_text().splitlines(), [str(wt.resolve()), task["repo"]])
         self.assertFalse(wt.exists())
+
+    def test_a_teardown_command_may_remove_the_worktree_itself(self):
+        for teardown in ('cd .. && rm -rf "$OLDPWD"', 'git -C "$ROOST_REPO" worktree remove --force "$PWD"'):
+            for action in ("retire", "merge", "discard"):
+                with self.subTest(teardown=teardown, action=action):
+                    task = self.worked() if action == "merge" else self.create()
+                    self.request("stop", id=task["id"])
+                    told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+                    reply = self.request(action, id=task["id"], teardown=teardown,
+                                         **(dict(expect=told["commit"]) if action == "discard" else {}))
+                    self.assertTrue(reply["ok"], reply)
+                    self.assertNotIn("teardownFailure", reply["result"])
+                    self.assertFalse(Path(task["worktree"]).exists())
+                    self.assertFalse(roost.ref_exists(self.repo, task["branch"]))
+                    self.assertEqual(len(roost.worktree_branches(self.repo)), 1)
+                    self.assertEqual(self.request("list")["result"], [])
+
+    def test_discard_removes_a_worktree_that_lost_its_link_to_the_repository(self):
+        # As when a teardown command or an agent emptied it, or made a
+        # repository of it: Git won't remove one, however forced.
+        def link_gone(wt):
+            (wt / ".git").unlink()
+
+        def repository_instead(wt):
+            link_gone(wt)
+            roost.git(wt, "init", "-q")
+            roost.git(wt, "add", ".")
+            roost.git(wt, "-c", "user.name=A", "-c", "user.email=a@example.com", "commit", "-qm", "Its own")
+        for lose in (link_gone, repository_instead):
+            with self.subTest(lose.__name__):
+                task = self.worked()
+                wt = Path(task["worktree"])
+                self.request("stop", id=task["id"])
+                lose(wt)
+                told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+                # You are told of what Git can't see, before it goes.
+                self.assertEqual(told["changes"], sum(1 for item in wt.rglob("*") if item.is_file()
+                                                      and ".git" not in item.relative_to(wt).parts))
+                self.assertGreater(told["changes"], 0)
+                reply = self.request("discard", id=task["id"], expect=told["commit"])
+                self.assertTrue(reply["ok"], reply)
+                self.assertFalse(wt.exists())
+                self.assertFalse(roost.ref_exists(self.repo, task["branch"]))
+                self.assertEqual(len(roost.worktree_branches(self.repo)), 1)
+                self.assertEqual(self.request("list")["result"], [])
 
     def test_a_failing_teardown_says_so_and_the_worktree_goes_anyway(self):
         task = self.create()
@@ -6413,6 +6582,47 @@ print(json.dumps(dict(data=data)))
         self.assertFalse((self.root / "clean").exists())
         self.assertNotIn("roost/clean-000000", self.task_branches())
         self.assertEqual(list(folder.glob("*")), [])
+
+    def test_what_a_post_checkout_hook_leaves_running_holds_up_no_task(self):
+        hooks = self.root / "hooks"
+        hooks.mkdir()
+        hook = hooks / "post-checkout"
+        hook.write_text("#!/bin/sh\necho watching\nsleep 20 &\n")
+        hook.chmod(0o755)
+        self.git("config", "core.hooksPath", str(hooks))
+        started = time.monotonic()
+        reply = self.request("create", directory=str(self.repo), name="hooked", socket=self.socket,
+                             command=[sys.executable, str(FAKE)])
+        self.assertTrue(reply["ok"], reply)
+        self.assertLess(time.monotonic() - started, 10)
+        self.wait(reply["result"], "ready")
+        # What Git says of a failure still reaches you.
+        hook.write_text("#!/bin/sh\necho said by the hook\nsleep 20 &\nexit 1\n")
+        reply = self.request("create", directory=str(self.repo), name="refused", socket=self.socket,
+                             command=[sys.executable, str(FAKE)])
+        self.assertIn("said by the hook", reply["error"])
+
+    def test_what_a_merges_hooks_leave_running_holds_up_no_task(self):
+        hooks = self.root / "hooks"
+        hooks.mkdir()
+        for name in ("post-merge", "post-commit"):
+            (hooks / name).write_text("#!/bin/sh\nsleep 20 &\n")
+            (hooks / name).chmod(0o755)
+
+        def promptly(action, task, **args):
+            started = time.monotonic()
+            reply = self.request(action, id=task["id"], **args)
+            self.assertTrue(reply["ok"], reply)
+            self.assertLess(time.monotonic() - started, 10, action)
+        first, second = self.worked(name="first"), self.worked(name="second")
+        for task in (first, second):
+            self.request("stop", id=task["id"])
+        (self.repo / "hello").write_text("moved on\n")
+        self.git("commit", "-qam", "Moved on")
+        self.git("config", "core.hooksPath", str(hooks))
+        promptly("update", first)
+        promptly("merge", first)
+        promptly("merge", second, style="squash")
 
     def test_a_failed_creation_is_made_anew_when_asked_for_again(self):
         hooks = self.root / "hooks"
