@@ -1519,7 +1519,7 @@ def by_clicks(qa, repo):
     qa.step("A project with no tasks, below the tasks", expect=[
         ("under Start a task in", offered),
         ("with Other directory… last",
-         lambda s: re.search(r"Start a task in\n(?:.*\n)* Other directory… +\+\n?\Z", sidebar_rows(s)))])
+         lambda s: re.search(r"Start a task in\n(?:.*\n)* Other directory… +\+\n*\Z", sidebar_rows(s)))])
     qa.emacs.eval("(qa-scroll-to-text %s \"roost-sidebar-list-mode\")" % lisp(label))
     qa.click_text(label, "roost-sidebar-list-mode")
     qa.wait("the draft", lambda s: draft(s).get("selected"))
@@ -2907,8 +2907,9 @@ def walk_away(qa, repo):
                           lambda s: (qa.window(s, "roost-compose-mode") or {}).get("selected")
                           and "offered by " + other in qa.window(s, "roost-compose-mode")["text"]))
             elif go is go_other_directory:
-                opens = ("its folder is the one question open",
-                         lambda s: (s["prompt"] or "").startswith("Project checkout")
+                # Where more than one host is known, it asks which first.
+                opens = ("its host or folder is the one question open",
+                         lambda s: (s["prompt"] or "").startswith(("Project checkout", "Host"))
                          and qa.emacs.eval("(minibuffer-depth)") == "1")
             else:
                 opens = ((target + "'s " + ("shell" if shell else "terminal") + " opens", shows(qa, target, shell))
