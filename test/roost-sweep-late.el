@@ -1641,26 +1641,28 @@ COMMAND, INTERRUPTER and FORM keeps RULE until FUNCTION is REPLACEMENT.")
       (should (zerop (hash-table-count roost--tasks))))))
 
 (ert-deftest roost-sweep-late-a-task-listed-after-no-reply-leaves-what-you-chose ()
-  ;; No reply came, a poll finds the task while you choose in the
-  ;; minibuffer, and what you chose opens as it ends.
-  (roost-sweep-late--world
-    (roost-sweep-late--populate nil nil)
-    (roost-sweep-late--lay-out 'compose)
-    (roost-compose-submit)
-    (roost-sweep-late--answer (roost-sweep-late--take "create") 'no-reply)
-    (let* ((asked (buffer-local-value 'roost--compose-asked (get-buffer roost--compose-buffer)))
-           (made (roost-sweep-late--record "cccccc0000000000" "new" (cons 'createId (cadr asked))
-                                           (cons 'repo nil))))
-      (roost--cache-task roost-sweep-late--host (copy-tree made))
-      (roost-sweep-late--in-minibuffer
-       (lambda ()
-         (roost--compose-listed roost-sweep-late--host (list made))
-         ;; As `roost-open-task' does on your choice.
-         (cl-incf roost--open-generation))))
-    (roost-sweep-late--settle)
-    (should-not (get-buffer roost--compose-buffer))
-    ;; Opening a task starts by asking its host.
-    (should-not (roost-sweep-late--request-for "inspect" "cccccc0000000000"))))
+  ;; No reply came, a poll finds the task while you are in the minibuffer,
+  ;; and what you chose there opens as it ends.  With nothing chosen, it opens.
+  (dolist (chose '(nil t))
+    (roost-sweep-late--world
+      (roost-sweep-late--populate nil nil)
+      (roost-sweep-late--lay-out 'compose)
+      (roost-compose-submit)
+      (roost-sweep-late--answer (roost-sweep-late--take "create") 'no-reply)
+      (let* ((asked (buffer-local-value 'roost--compose-asked (get-buffer roost--compose-buffer)))
+             (made (roost-sweep-late--record "cccccc0000000000" "new" (cons 'createId (cadr asked))
+                                             (cons 'repo nil)))
+             opened)
+        (roost--cache-task roost-sweep-late--host (copy-tree made))
+        (cl-letf (((symbol-function 'roost-open-task) (lambda (&rest _) (setq opened t))))
+          (roost-sweep-late--in-minibuffer
+           (lambda ()
+             (roost--compose-listed roost-sweep-late--host (list made))
+             ;; As `roost-open-task' does on your choice.
+             (when chose (cl-incf roost--open-generation))))
+          (roost-sweep-late--settle))
+        (should-not (get-buffer roost--compose-buffer))
+        (should (eq (and opened t) (not chose)))))))
 
 (ert-deftest roost-sweep-late-a-draft-that-closes-ends-what-it-asked ()
   ;; While its task is made, which closes it.
