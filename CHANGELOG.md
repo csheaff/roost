@@ -4,6 +4,12 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Roost refuses to send a prompt holding a control character, other than
+  a line or page break or a tab, as the agent's terminal would take it as
+  a key. It says which and on what line, and sends nothing. A draft stays
+  as you wrote it, so you can delete the character, as the `^[` of colours
+  in a quoted log, and send again. A review note quoting such a line goes
+  the same way: `e` puts it in a draft. Nothing to do when upgrading.
 - With perspectives or tabs, the sidebar shows only in a task's
   workspace, or in one of your own while it shows a task's terminal.
   perspective.el's `main`, with a shell of your own in it, no longer

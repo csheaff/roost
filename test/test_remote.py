@@ -255,6 +255,52 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual([str(path) for folder in (place, self.root) for path in folder.rglob("pwned-*")]
                          + [str(path) for path in Path.home().glob("pwned-*")], [])
 
+    def test_hostile_control_characters_in_a_prompt_are_refused_and_none_reach_the_agent(self):
+        """A prompt reaches the agent as a paste into its terminal, where a
+        control character is a key and not text. Sending one is refused, with
+        a message that names it, and none of that text arrives. What real
+        text holds, as line and page breaks and tabs, arrives as one paste."""
+        task = self.create()
+        keys = self.root / "keys"
+        self.assertTrue(self.request("send", id=task["id"], text="keys " + str(keys))["ok"])
+
+        def screen():
+            return roost.tmux(self.socket, "capture-pane", "-p", "-t", task["paneId"]).stdout
+
+        deadline = time.monotonic() + 8
+        while "KEYS ON" not in screen() and time.monotonic() < deadline:
+            time.sleep(.04)
+        self.assertIn("KEYS ON", screen())
+
+        for code in (*range(0x20), *range(0x7f, 0xa0)):
+            if chr(code) not in "\t\n\r\f":
+                with self.subTest(code="U+%04X" % code):
+                    reply = self.request("send", id=task["id"], text="first\nsecond" + chr(code) + "third")
+                    self.assertFalse(reply["ok"], reply)
+                    self.assertIn("Line 2 of the prompt holds", reply["error"])
+                    self.assertIn("U+%04X" % code, reply["error"])
+                    # Alone, as what Python counts as white space, it is named too.
+                    reply = self.request("send", id=task["id"], text=chr(code))
+                    self.assertFalse(reply["ok"], reply)
+                    self.assertIn("U+%04X" % code, reply["error"])
+        # Confirming the send, as at a menu, or sending notes, changes nothing.
+        for args in (dict(force=True), dict(look=True)):
+            reply = self.request("send", id=task["id"], text="before\x1b[201~\x1b[Zafter", **args)
+            self.assertFalse(reply["ok"], reply)
+            self.assertIn("^[ (U+001B)", reply["error"])
+        # Notes that weren't sent aren't a look at the work.
+        self.assertNotIn("looked", roost.Store(str(self.state)).read(task["id"]))
+
+        # A review note quotes a CRLF file's lines as they are, and a region
+        # of Emacs Lisp can cross a page break. tmux pastes a newline as a
+        # carriage return.
+        self.assertTrue(self.request("send", id=task["id"], text="first\n\tsecond\r\n\f\nthird é漢🙂")["ok"])
+        pasted = "\x1b[200~first\r\tsecond\r\r\f\rthird é漢🙂\x1b[201~\r".encode()
+        deadline = time.monotonic() + 8
+        while len(keys.read_bytes()) < len(pasted) and time.monotonic() < deadline:
+            time.sleep(.04)
+        self.assertEqual(keys.read_bytes(), pasted)
+
     def test_attachments_keep_their_names_and_go_with_the_task(self):
         task = self.create()
         encode = lambda data: base64.b64encode(data).decode()

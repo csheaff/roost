@@ -10,6 +10,7 @@ import subprocess
 import sys
 import termios
 import time
+import tty
 import uuid
 
 if sys.argv[1:] == ["--version"]:
@@ -180,6 +181,16 @@ for line in lines():
         print("MOUSE ON", flush=True)
         event("Stop", last_assistant_message="MOUSE ON")
         status("done")
+    elif line.startswith("keys "):
+        # From here on read the terminal as a full-screen agent does, raw
+        # and with pastes marked, and keep every byte it sends in a file.
+        with open(line[len("keys "):].strip(), "ab", buffering=0) as keys:
+            tty.setraw(0)
+            os.write(1, b"\x1b[?2004hKEYS ON\r\n")
+            event("Stop", last_assistant_message="KEYS ON")
+            status("done")
+            for chunk in iter(lambda: os.read(0, 4096), b""):
+                keys.write(chunk)
     elif line.strip() == "exit":
         break
     else:
