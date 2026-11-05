@@ -696,7 +696,7 @@ with Emacs running only timers and other replies.")
     (shell
      :origin terminal
      :start ,(lambda () (roost-shell (roost-sweep-late--mine)))
-     :action "shell" :opens t
+     :action "shell" :opens t :shows "*late terminal aaaaaa*"
      :refusals (("Task's tmux window is gone; resume the task before opening its shell")))
     (mark-looked
      :start ,(lambda () (roost-mark-looked (roost-sweep-late--mine)))
@@ -728,7 +728,8 @@ with Emacs running only timers and other replies.")
     (resume
      :fields ((status . "stopped") (live))
      :start ,(lambda () (roost-resume (roost-sweep-late--mine)))
-     :action "resume" :opens t :refusals ((,roost-sweep-late--worktree-gone)))
+     :action "resume" :opens t :shows "*late terminal aaaaaa*"
+     :refusals ((,roost-sweep-late--worktree-gone)))
     (resume-opening
      :fields ((status . "stopped") (live))
      :start ,(lambda () (roost-resume (roost-sweep-late--mine)))
@@ -1249,9 +1250,8 @@ Return their problems, each (TEXT PLACE...), as `roost-sweep--report' takes them
     "\\`stale: a reply to an older run changes"
     "\\`lisp-error: the \\(?:command signals\\|question ends in\\) (wrong-type-argument"
     "\\`words: says .* 2 times"
-    "\\`moved: the selected window shows \\*late \\(?:terminal\\|magit\\|diff\\|dired\\)"
-    "\\`moved: the selected window moved"
-    "\\`moved: the task opened last is now")
+    "\\`moved: the selected window shows \\*late terminal cccccc"
+    "\\`moved: the task opened last is now (\"dev\" \"cccccc")
   "What the sweep finds that isn't fixed yet, as regexps of its problems.")
 
 (defun roost-sweep-late--report (problems)
@@ -1447,6 +1447,33 @@ COMMAND, INTERRUPTER and FORM keeps RULE until FUNCTION is REPLACEMENT.")
     (should (equal (cadr (should-error (roost-discard (roost-sweep-late--mine)) :type 'user-error))
                    "mine is no longer listed"))
     (should-not roost-sweep-late--asked)))
+
+(ert-deftest roost-sweep-late-a-reply-shows-nothing-once-you-have-gone-elsewhere ()
+  (pcase-dolist (`(,fields ,action ,command)
+                 `((((status . "stopped") (live)) "resume"
+                    ,(lambda () (roost-resume (roost-sweep-late--mine))))
+                   (nil "shell" ,(lambda () (roost-shell (roost-sweep-late--mine))))))
+    ;; Showing it in the window you stayed in is what you asked for.
+    (dolist (stay '(t nil))
+      (roost-sweep-late--world
+        (roost-sweep-late--populate fields nil)
+        (roost-sweep-late--lay-out 'here)
+        (funcall command)
+        (unless stay (switch-to-buffer "*late elsewhere*"))
+        (roost-sweep-late--answer (roost-sweep-late--take action) 'good)
+        (roost-sweep-late--settle)
+        (should (equal (buffer-name (window-buffer (selected-window)))
+                       (if stay "*late terminal aaaaaa*" "*late elsewhere*")))))))
+
+(ert-deftest roost-sweep-late-a-task-resumed-opens-once-you-are-out-of-the-minibuffer ()
+  (roost-sweep-late--world
+    (roost-sweep-late--populate '((status . "stopped") (live)) nil)
+    (roost-sweep-late--lay-out 'here)
+    (roost-resume (roost-sweep-late--mine))
+    (let ((reply (roost-sweep-late--take "resume")))
+      (roost-sweep-late--in-minibuffer (lambda () (roost-sweep-late--answer reply 'good))))
+    (roost-sweep-late--settle)
+    (should (equal (buffer-name (window-buffer (selected-window))) "*late terminal aaaaaa*"))))
 
 (provide 'roost-sweep-late)
 

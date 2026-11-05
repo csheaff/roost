@@ -4,6 +4,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A task you resume, or a shell you open, shows once its host replies only
+  if you are still where you asked for it. An agent can take seconds to
+  start, and its terminal then took the window you had gone to, with the
+  keys you were typing. It starts all the same, and `RET` opens it.
+  Nothing to do when upgrading.
 - What Roost asks once a host replies waits until you are out of the
   minibuffer, and goes no further if the task went meanwhile: whether to
   have the agent resolve what `u` left, or to discard what `x` refused to

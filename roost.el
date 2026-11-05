@@ -2075,6 +2075,28 @@ pane's buffer, or another window the one you were in."
       (and place (eq (selected-frame) frame)
            (equal (roost--terminal-place (window-buffer (selected-window))) place))))
 
+(defun roost--while-you-stay (&optional task)
+  "Return a function for a command that opens something once its host replies.
+It takes a function that opens it, and calls that once you are out of
+the minibuffer, unless by then you have opened something else, or gone
+to another window or buffer, or TASK, if given, went.  You are where
+you are now until then: a reply that takes more than a moment, as an
+agent's start does, must not take you from where you went."
+  (let* ((generation (cl-incf roost--open-generation))
+         (window (if (window-minibuffer-p) (minibuffer-selected-window) (selected-window)))
+         (shown (window-buffer window))
+         (place (roost--terminal-place shown))
+         (frame (window-frame window))
+         (key (and task (roost--key task)))
+         (listed (and task (gethash key roost--tasks))))
+    (lambda (open)
+      (roost--when-out-of-minibuffer
+       (lambda ()
+         (when (and (= generation roost--open-generation)
+                    (not (roost--went-p key listed))
+                    (roost--still-there-p window shown place frame))
+           (funcall open)))))))
+
 (defun roost--terminal-window-for (task)
   "The window to show TASK's terminal in, or nil for the selected one.
 That is the window showing it already, or else one showing another
@@ -3836,11 +3858,10 @@ resume those too."
         (roost--resume-together task others)
       ;; Now, rather than in its turn among several resuming.
       (setq roost--resuming (delete (roost--key task) roost--resuming))
-      (let ((listed (gethash (roost--key task) roost--tasks)))
+      (let ((open (roost--while-you-stay task)))
         (roost--act task "resume" (roost--resume-parameters task)
                     (lambda (updated)
-                      (unless (roost--went-p (roost--key updated) listed)
-                        (roost-open-task updated))))))))
+                      (funcall open (lambda () (roost-open-task updated)))))))))
 
 (defun roost--resume-parameters (task)
   "What a request to resume TASK says besides which task."
@@ -3873,7 +3894,7 @@ resumed, naming each that didn't and why: one that fails doesn't stop
 the rest.  One you resumed, stopped or forgot meanwhile, or that no
 longer shows as crashed, is passed over."
   (let ((host (roost--field task 'host))
-        (listed (gethash (roost--key task) roost--tasks))
+        (open (roost--while-you-stay task))
         (tried 1)
         failures said)
     ;; Until each replies, opening one of them offers the rest no more.
@@ -3908,8 +3929,7 @@ longer shows as crashed, is passed over."
                     (next others)
                     ;; Said again once its terminal shows, if done by then:
                     ;; opening clears the echo area.
-                    (unless (roost--went-p (roost--key updated) listed)
-                      (roost-open-task updated nil (lambda (_) said))))
+                    (funcall open (lambda () (roost-open-task updated nil (lambda (_) said)))))
                   (lambda (err)
                     (replied task)
                     (push (cons task err) failures)
@@ -6056,18 +6076,15 @@ questions you left open in the minibuffer, as `roost-open-task' does."
       (roost--quit-questions-left-open
        (lambda () (roost-shell (or task (roost--read-task "Task: ")))))))
   (setq task (roost--choose task))
-  (let ((generation (cl-incf roost--open-generation))
-        (listed (gethash (roost--key task) roost--tasks)))
+  (let ((open (roost--while-you-stay task)))
     (roost--act task "shell" nil
                 (lambda (updated)
-                  (roost--when-out-of-minibuffer
-                   (lambda ()
-                     (when (and (= generation roost--open-generation)
-                                (not (roost--went-p (roost--key updated) listed)))
-                       (roost--display-task updated (roost--field updated 'shellPaneId))
-                       (with-current-buffer (window-buffer (selected-window))
-                         (unless (tmux-control-tiled-p) (tmux-control-tile))
-                         (roost--focus-shell updated generation)))))))))
+                  (funcall open
+                           (lambda ()
+                             (roost--display-task updated (roost--field updated 'shellPaneId))
+                             (with-current-buffer (window-buffer (selected-window))
+                               (unless (tmux-control-tiled-p) (tmux-control-tile))
+                               (roost--focus-shell updated roost--open-generation))))))))
 
 (defun roost--focus-shell (task generation)
   "Focus TASK's shell after queued tiling replies, unless GENERATION changed."
