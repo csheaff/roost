@@ -1839,6 +1839,13 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(reply["result"]["update"]["conflicts"], [name])
         self.assertEqual(self.request("list", full=True)["result"][0]["merging"], dict(conflicts=[name]))
 
+    def test_a_moved_file_says_where_from(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        self.git("mv", "hello", "greeting", cwd=wt)
+        self.assertEqual(self.request("list", full=True)["result"][0]["files"],
+                         [{"path": "greeting", "from": "hello", "added": 0, "deleted": 0, "uncommitted": True}])
+
     def test_a_full_listing_names_the_changed_files(self):
         task = self.create()
         wt = Path(task["worktree"])
@@ -4453,6 +4460,46 @@ sys.exit(status)
         (self.gh_dir / "list.json").write_text(json.dumps([dict(number=7, state="MERGED", headRefOid=tip)]))
         self.assertTrue(self.request("retire", id=task["id"])["ok"])
 
+    def test_retire_leaves_the_remote_branch_of_a_pull_request_still_open(self):
+        # Merged into one branch and open for another: deleting it would close that one.
+        self.github()
+        url = "https://github.com/octo/repo/pull/%d"
+        (self.gh_dir / "reviews.json").write_text("{}")
+        # Whether or not a poll saw it open: `x` may come first.
+        for polled in (True, False):
+            with self.subTest(polled=polled):
+                task = self.create(name="open-%s" % polled)
+                tip = self.commit_in(task)
+                self.push(task)
+                (self.gh_dir / "list.json").write_text(json.dumps([
+                    dict(number=11, url=url % 11, state="OPEN", headRefOid=tip, baseRefName="main"),
+                    dict(number=10, url=url % 10, state="MERGED", headRefOid=tip, baseRefName="release")]))
+                if polled:
+                    self.assertIs(self.request("list", full=True)["result"][0]["landed"], True)
+                self.assertTrue(self.request("retire", id=task["id"])["ok"])
+                self.assertEqual(self.git("branch", "--list", task["branch"]), "")
+                self.assertEqual(self.git("rev-parse", "refs/heads/" + task["branch"], cwd=self.origin), tip)
+
+    def test_retire_leaves_a_remote_branch_with_commits_pushed_since_the_merge(self):
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.assertTrue(self.request("pr", id=task["id"], title="Squash")["ok"])
+        # From another clone, after the merge, so this one never fetched it.
+        other = self.root / "other"
+        self.git("clone", "-q", "-b", task["branch"], str(self.origin), str(other))
+        (other / "later").write_text("later\n")
+        self.git("add", ".", cwd=other)
+        self.git("-c", "user.name=Other", "-c", "user.email=other@example.invalid", "commit", "-qm", "Later", cwd=other)
+        self.git("push", "-q", "origin", task["branch"], cwd=other)
+        later = self.git("rev-parse", "HEAD", cwd=other)
+        self.git("merge", "--squash", task["branch"])
+        self.git("commit", "-qm", "Squash (#7)")
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(number=7, state="MERGED", headRefOid=tip)]))
+        self.assertTrue(self.request("retire", id=task["id"])["ok"])
+        self.assertEqual(self.git("branch", "--list", task["branch"]), "")
+        self.assertEqual(self.git("rev-parse", "refs/heads/" + task["branch"], cwd=self.origin), later)
+
     def push(self, task):
         self.git("push", "-q", "-u", "origin", task["branch"], cwd=Path(task["worktree"]))
 
@@ -4631,7 +4678,7 @@ sys.exit(status)
         listed = self.request("list", full=True)["result"][0]
         self.assertNotIn("pr", listed)
         self.assertIs(listed["landed"], False)
-        self.assertIsNone(roost.merged_pull_request_head(roost.Store(str(self.state)).read(task["id"])))
+        self.assertIsNone(roost.merged_pull_request_head(roost.Store(str(self.state)).read(task["id"]))[0])
 
     def test_a_pull_request_is_a_tasks_only_at_a_commit_it_made(self):
         # Brought up to main's M, then committing T: another fork's PR at M is not its.
@@ -4686,7 +4733,7 @@ sys.exit(status)
         # Retiring trusts it too when gh can't say.
         (self.gh_dir / "gh").unlink()
         with patch.object(roost, "agent_path", lambda inherited: str(self.gh_dir)):
-            self.assertEqual(roost.merged_pull_request_head(roost.Store(str(self.state)).read(task["id"])), tip)
+            self.assertEqual(roost.merged_pull_request_head(roost.Store(str(self.state)).read(task["id"]))[0], tip)
 
     def test_a_merge_at_the_tip_stays_when_a_later_lookup_lists_it_no_more(self):
         # A branch with more than a page of pull requests.
@@ -4700,7 +4747,7 @@ sys.exit(status)
                                                            for n in range(20, 10, -1)]))
         listed = self.request("list", full=True)["result"][0]
         self.assertEqual((listed["pr"]["mergedHead"], listed["landed"]), (tip, True))
-        self.assertEqual(roost.merged_pull_request_head(roost.Store(str(self.state)).read(task["id"])), tip)
+        self.assertEqual(roost.merged_pull_request_head(roost.Store(str(self.state)).read(task["id"]))[0], tip)
 
     def test_a_worktree_on_another_branch_shows_that_branchs_pull_request(self):
         # Its agent made a branch to follow a team's naming, pushed it and
@@ -5023,6 +5070,69 @@ print(json.dumps(dict(data=data)))
         return dict(call[i + 1].split("=", 1) for i in range(len(call) - 1)
                     if call[i] == "-f" and not call[i + 1].startswith("query="))
 
+    def test_pr_opens_one_of_its_own_beside_a_forks_of_the_same_branch_name(self):
+        self.github()
+        self.git("remote", "set-url", "origin", "https://github.com/Octo/repo.git")
+        self.git("config", "remote.origin.pushurl", str(self.origin))
+        task = self.create()
+        self.commit_in(task)
+        url = "https://github.com/octo/repo/pull/%d"
+        listed = self.gh_dir / "list.json"
+        listed.write_text(json.dumps([dict(number=3, url=url % 3, headRefName=task["branch"],
+                                           isCrossRepository=True, headRepositoryOwner=dict(login="stranger"))]))
+        reply = self.request("pr", id=task["id"], title="Mine")
+        self.assertEqual(reply["result"]["pr"], dict(number=7, url=url % 7))
+        # One from the project itself is the task's, as GitHub writes its owner.
+        store = roost.Store(str(self.state))
+        record = store.read(task["id"])
+        del record["pr"]
+        store.save(record)
+        listed.write_text(json.dumps([dict(number=3, url=url % 3, headRefName=task["branch"],
+                                           isCrossRepository=True, headRepositoryOwner=dict(login="stranger")),
+                                      dict(number=5, url=url % 5, headRefName=task["branch"],
+                                           isCrossRepository=True, headRepositoryOwner=dict(login="octo"))]))
+        reply = self.request("pr", id=task["id"], title="Mine")
+        self.assertEqual(reply["result"]["pr"], dict(number=5, url=url % 5))
+        # So is one from the repository itself, though origin's URL still
+        # names the owner it had before it was renamed, as GitHub lets it.
+        record = store.read(task["id"])
+        del record["pr"]
+        store.save(record)
+        listed.write_text(json.dumps([dict(number=6, url=url % 6, headRefName=task["branch"],
+                                           isCrossRepository=False, headRepositoryOwner=dict(login="renamed"))]))
+        reply = self.request("pr", id=task["id"], title="Mine")
+        self.assertEqual(reply["result"]["pr"], dict(number=6, url=url % 6))
+
+    def test_pr_opens_a_merge_request_of_its_own_beside_a_forks_of_the_same_branch_name(self):
+        self.gitlab()
+        task = self.create()
+        self.commit_in(task)
+        url = self.GITLAB_URL + "/-/merge_requests/%d"
+        listed = self.glab_dir / "list.json"
+        project = dict(fullPath="group/sub/project")
+        theirs = dict(iid="9", webUrl=url % 9, state="opened", sourceBranch=task["branch"],
+                      sourceProject=dict(fullPath="stranger/project"), targetProject=project)
+        # One whose fork has since gone names no source.
+        gone = dict(theirs, iid="8", webUrl=url % 8, sourceProject=None)
+        listed.write_text(json.dumps([theirs, gone]))
+        reply = self.request("pr", id=task["id"], title="Mine")
+        self.assertEqual(reply["result"]["pr"]["number"], 4)
+        store = roost.Store(str(self.state))
+        record = store.read(task["id"])
+        del record["pr"]
+        store.save(record)
+        listed.write_text(json.dumps([theirs, gone, dict(theirs, iid="3", webUrl=url % 3, sourceProject=project)]))
+        reply = self.request("pr", id=task["id"], title="Mine")
+        self.assertEqual(reply["result"]["pr"]["number"], 3)
+        # So is one in a project moved since origin's URL, which GitLab follows.
+        record = store.read(task["id"])
+        del record["pr"]
+        store.save(record)
+        moved = dict(fullPath="moved/project")
+        listed.write_text(json.dumps([dict(theirs, iid="5", webUrl=url % 5, sourceProject=moved, targetProject=moved)]))
+        reply = self.request("pr", id=task["id"], title="Mine")
+        self.assertEqual(reply["result"]["pr"]["number"], 5)
+
     def test_pr_opens_a_merge_request_on_gitlab(self):
         self.gitlab()
         task = self.create()
@@ -5167,6 +5277,67 @@ print(json.dumps(dict(data=data)))
         status = self.request("list", full=True)["result"][0]["prStatus"]
         self.assertEqual(set(status), {"state", "draft", "review", "checks", "head", "base"})
         self.assertEqual(status["state"], "MERGED")
+
+    def test_a_merge_request_gitlab_is_merging_is_not_closed(self):
+        self.gitlab()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        (self.glab_dir / "list.json").write_text(json.dumps([dict(
+            iid="4", webUrl=self.GITLAB_URL + "/-/merge_requests/4", state="locked", diffHeadSha=tip,
+            sourceBranch=task["branch"], detailedMergeStatus="NOT_OPEN")]))
+        listed = self.request("list", full=True)["result"][0]
+        self.assertEqual((listed["prStatus"]["state"], listed["pr"]["state"]), ("OPEN", "OPEN"))
+
+    def test_a_merge_request_gitlab_holds_for_what_roost_cant_show_is_not_to_merge(self):
+        self.gitlab()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        for merge_status, mergeable in (("NEED_REBASE", "UNKNOWN"), ("BLOCKED_STATUS", "UNKNOWN"),
+                                        ("STATUS_CHECKS_MUST_PASS", "UNKNOWN"), ("LOCKED_PATHS", "UNKNOWN"),
+                                        # Each of these it shows otherwise, or says goes.
+                                        ("MERGEABLE", "MERGEABLE"), ("DRAFT_STATUS", "MERGEABLE"),
+                                        ("NOT_APPROVED", "MERGEABLE"), ("REQUESTED_CHANGES", "MERGEABLE"),
+                                        ("DISCUSSIONS_NOT_RESOLVED", "MERGEABLE"), ("CI_STILL_RUNNING", "MERGEABLE")):
+            with self.subTest(merge_status=merge_status):
+                (self.glab_dir / "list.json").write_text(json.dumps([dict(
+                    iid="4", webUrl=self.GITLAB_URL + "/-/merge_requests/4", state="opened", diffHeadSha=tip,
+                    sourceBranch=task["branch"], detailedMergeStatus=merge_status)]))
+                self.assertEqual(self.request("list", full=True)["result"][0]["prStatus"]["mergeable"], mergeable)
+
+    def test_a_pipeline_that_lists_no_jobs_says_how_it_went_itself(self):
+        self.gitlab()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        # As one GitLab refused for its configuration, or another CI reports to.
+        for pipeline, counts in (("FAILED", dict(passing=0, failing=1, pending=0)),
+                                 ("RUNNING", dict(passing=0, failing=0, pending=1)),
+                                 ("SUCCESS", dict(passing=1, failing=0, pending=0))):
+            with self.subTest(pipeline=pipeline):
+                (self.glab_dir / "list.json").write_text(json.dumps([dict(
+                    iid="4", webUrl=self.GITLAB_URL + "/-/merge_requests/4", state="opened", diffHeadSha=tip,
+                    sourceBranch=task["branch"], detailedMergeStatus="MERGEABLE",
+                    headPipeline=dict(status=pipeline, jobs=dict(nodes=[])))]))
+                self.assertEqual(self.request("list", full=True)["result"][0]["prStatus"]["checks"], counts)
+
+    def test_list_goes_on_past_an_answer_it_cant_read(self):
+        self.gitlab()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        answer = self.root / "answer.json"
+        (self.glab_dir / "glab").write_text("#!/bin/sh\ncat %s\n" % shlex.quote(str(answer)))
+        for project in (dict(mergeRequests=None), dict(mergeRequests=dict(nodes=None)), {},
+                        dict(mergeRequests=dict(nodes=[dict(iid="4", state="opened", reviewers=["fox"])])),
+                        dict(mergeRequests=dict(nodes=[dict(iid="4", state="opened", diffHeadSha=tip, webUrl=4)]))):
+            with self.subTest(project=project):
+                answer.write_text(json.dumps(dict(data=dict(project=project))))
+                reply = self.request("list", full=True)
+                self.assertTrue(reply["ok"], reply)
+                self.assertEqual([listed["id"] for listed in reply["result"]], [task["id"]])
+                self.assertIn("unmerged commits", self.request("retire", id=task["id"])["error"])
 
     def test_retire_accepts_a_merge_request_gitlab_squashed(self):
         self.gitlab()
