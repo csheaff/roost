@@ -10106,6 +10106,37 @@ ssh: connect to host dev port 22: Operation timed out"
                 (should-not reconnected))
             (kill-buffer terminal))))))))
 
+(ert-deftest roost-a-terminal-comes-back-when-resuming-is-refused ()
+  ;; The agent exited, and you started it by hand in the task's shell, which
+  ;; shares its session: the host refuses to start a second one on the
+  ;; conversation, and says to exit that one, in the terminal Roost closed
+  ;; to resume.
+  (roost-test--isolated
+   (let* ((task (roost--cache-task "dev" (append '((session . "roost-p-012345") (live))
+                                                 (roost-test--task "0123456789abcdef" "exited"))))
+          (terminal (with-current-buffer (generate-new-buffer " *terminal*")
+                      (setq-local roost-test--tmux '(:host "dev" :socket "main" :session "roost-p-012345"))
+                      (current-buffer)))
+          reconnected refusal)
+     (roost-test--with-tmux-buffers
+      (cl-letf (((symbol-function 'tmux-control-buffer-session)
+                 (lambda () (plist-get roost-test--tmux :session)))
+                ((symbol-function 'tmux-control-disconnect) #'ignore)
+                ((symbol-function 'tmux-control-reconnect)
+                 (lambda () (push (current-buffer) reconnected)))
+                ((symbol-function 'roost--request)
+                 (lambda (_host action _parameters success failure)
+                   (if (equal action "inspect")
+                       (funcall success task)
+                     (funcall failure "The agent is running outside Roost in the task's shell")))))
+        (unwind-protect
+            (save-window-excursion
+              (set-window-buffer (selected-window) terminal)
+              (roost--act task "resume" nil nil (lambda (err) (setq refusal err)))
+              (should (equal refusal "The agent is running outside Roost in the task's shell"))
+              (should (equal reconnected (list terminal))))
+          (kill-buffer terminal)))))))
+
 (ert-deftest roost-the-sidebar-highlights-the-row-its-keys-act-on ()
   ;; It has no mode line, so nothing said you were in it, or which task
   ;; `s' would resume.
