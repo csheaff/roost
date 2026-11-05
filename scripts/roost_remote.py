@@ -96,6 +96,20 @@ def git(repo, *args, check=True, env=None):
     return execute(["git", "-C", str(repo), *args], check=check, env=env)
 
 
+def run_merge(repo, *args):
+    """Run `git merge ARGS` in REPO to its end, even if this helper dies
+    meanwhile, as when its connection drops. What it says goes to files:
+    told to a pipe with no reader, it would stop Git at its report, with a
+    merge committed and still marked as under way, or a conflict in the
+    files and no merge under way to say why."""
+    with tempfile.TemporaryFile("w+", errors="replace") as said, tempfile.TemporaryFile("w+", errors="replace") as errors:
+        code = subprocess.run(["git", "-C", str(repo), "merge", *args], stdout=said, stderr=errors,
+                              pass_fds=tuple(INHERITED)).returncode
+        said.seek(0)
+        errors.seek(0)
+        return subprocess.CompletedProcess(args, code, said.read(), errors.read())
+
+
 @functools.lru_cache(maxsize=None)
 def gits_own_fsmonitor(repo):
     """Whether REPO's config turns on Git's own file system monitor, a
@@ -3943,7 +3957,8 @@ def integration_branch(task):
     require_not_rebasing(repo, branch)
     if current_branch(repo) == branch:
         if git(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0:
-            raise RoostError("The primary repository already has a merge in progress")
+            raise RoostError("The primary repository %s already has a merge in progress; finish it with git commit, "
+                             "or undo it with git merge --abort, then try again" % repo)
         return branch, True
     if not ref_exists(repo, branch):
         raise RoostError("The integration branch %s no longer exists" % branch)
@@ -4244,7 +4259,7 @@ def squash_merge(task, integration, here):
         # --ff, whatever your config's merge.ff says: Git refuses a squash
         # with --no-ff, and one that isn't a fast-forward with --ff-only,
         # though a squash makes no merge commit either way.
-        result = git(repo, "merge", "--squash", "--ff", tip, check=False)
+        result = run_merge(repo, "--squash", "--ff", tip)
         if result.returncode:
             conflicts = conflicted_files(repo) or resolved_before(repo, "HEAD", tip)
             # A squash leaves no MERGE_HEAD to abort; this undoes it alike.
@@ -4381,7 +4396,7 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
             message = execute(["git", "-C", repo, "fmt-merge-msg"],
                               input="%s\t\tbranch '%s' of .\n" % (tip, branch)).stdout.strip()
             untracked = untracked_here(repo)
-            result = git(repo, "merge", "--no-ff", "--no-edit", "-m", message, "refs/heads/" + branch, check=False)
+            result = run_merge(repo, "--no-ff", "--no-edit", "-m", message, "refs/heads/" + branch)
         if result is not None and result.returncode:
             conflicts = conflicted_files(repo)
             merging = git(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0
@@ -4630,9 +4645,8 @@ def update(store, task):
     # and the message a merge of the short one has. A fast-forward where it
     # can be, as Git's default, whatever your config's merge.ff says: with
     # --ff-only, a task with commits of its own could never be updated.
-    result = git(worktree, "merge", "--ff", "--no-edit", "-m",
-                 "Merge branch '%s' into %s" % (integration, task["branch"]),
-                 "refs/heads/" + integration, check=False)
+    result = run_merge(worktree, "--ff", "--no-edit", "-m", "Merge branch '%s' into %s" % (integration, task["branch"]),
+                      "refs/heads/" + integration)
     conflicts = conflicted_files(worktree)
     merging = git(worktree, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0
     # Conflicts Git resolved as you resolved them before, staged: the merge

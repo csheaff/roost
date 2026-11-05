@@ -41,6 +41,49 @@ class Crashes(unittest.TestCase):
                 self.assertEqual(box.helper("list", socket=box.socket)["result"], [])
                 self.assertEqual(len(box.git("log", "--format=%H", "--no-merges", "main", "--", "work").split()), 1)
 
+    def test_a_merge_goes_on_to_its_end_once_its_helper_is_gone(self):
+        box = self.box()
+        task = box.create()
+        box.commit(task)
+        box.arm("orphan", match="--no-ff --no-edit")
+        self.assertIsNone(box.helper("merge", id=task["id"]))
+        box.wait_for_orphan()
+        box.disarm()
+        self.assertFalse((box.repo / ".git/MERGE_HEAD").exists())
+        self.assertEqual(box.git("status", "--porcelain"), "")
+        reply = box.helper("merge", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(len(box.git("log", "--merges", "--format=%H").split()), 1)
+
+    def test_an_update_goes_on_to_its_conflict_once_its_helper_is_gone(self):
+        box = self.box()
+        task = box.create()
+        box.commit(task)
+        (box.repo / "work").write_text("other\n")
+        box.git("add", ".")
+        box.git("commit", "-qm", "Clash with the task")
+        box.helper("stop", id=task["id"])
+        box.arm("orphan", match=" --ff --no-edit")
+        self.assertIsNone(box.helper("update", id=task["id"]))
+        box.wait_for_orphan()
+        box.disarm()
+        # A merge under way, to resolve or abort, not changes to commit.
+        self.assertIn("abort it", box.helper("update", id=task["id"])["error"])
+        box.git("merge", "--abort", cwd=task["worktree"])
+        self.assertEqual(Path(task["worktree"], "work").read_text(), "work\n")
+
+    def test_a_merge_stopped_under_way_in_the_primary_checkout_says_how_to_go_on(self):
+        box = self.box()
+        task = box.create()
+        box.commit(task)
+        # As a reboot leaves it, just before Git commits the merge.
+        box.git("merge", "-q", "--no-ff", "--no-commit", task["branch"])
+        error = box.helper("merge", id=task["id"])["error"]
+        self.assertIn("git commit", error)
+        self.assertIn("git merge --abort", error)
+        box.git("merge", "--abort")
+        self.assertTrue(box.helper("merge", id=task["id"])["ok"])
+
     def test_merging_a_task_whose_branch_you_deleted_still_says_so(self):
         box = self.box()
         task = box.create()

@@ -4,6 +4,14 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A merge or update whose connection dropped while Git ran it goes on to
+  its end. Git stopped as it reported to the helper that had gone: a merge
+  stayed marked as under way in the primary checkout, though committed,
+  and an update that conflicted left the file with its markers and no
+  merge under way, so that `u` said to commit it. If a merge in the primary
+  checkout is left under way, as by a reboot, `m` now says to finish it with
+  `git commit` or undo it with `git merge --abort`. Nothing to do when
+  upgrading.
 - A merge whose connection dropped just after it deleted the task's branch
   finishes when you press `m` again. Roost said there was nothing to merge,
   and the task stayed until you retired it. Nothing to do when upgrading.
