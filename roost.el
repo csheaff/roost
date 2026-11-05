@@ -8434,7 +8434,9 @@ untracked file, with nothing to compare, is opened instead."
                   (dolist (buffer (buffer-list))
                     (with-current-buffer buffer
                       (when (and roost--file-diff
-                                 (equal magit-buffer-diff-files paths)
+                                 ;; By where it is now: updating past a
+                                 ;; move leaves it no old path.
+                                 (equal (car (last magit-buffer-diff-files)) path)
                                  (not (equal magit-buffer-diff-range rev))
                                  (roost--task-in-directory default-directory (list task)))
                         (kill-buffer buffer))))

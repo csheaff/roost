@@ -11990,7 +11990,17 @@ note after, for any task, so a restart lost them all."
       (should (eq major-mode 'magit-diff-mode))
       (goto-char (point-min))
       (should (re-search-forward "^renamed +a\\.txt -> b\\.txt" nil t))
-      (should-not (string-search "new file" (buffer-string))))))
+      (should-not (string-search "new file" (buffer-string))))
+    ;; Updated past the move, the file has no origin now, and the diff of
+    ;; it from before is one to close like any other.
+    (call-process "git" nil nil nil "commit" "-qm" "Move")
+    (setq task (roost--cache-task nil (append `((baseCommit . ,(car (process-lines "git" "rev-parse" "HEAD"))))
+                                              task)))
+    (roost-test--write-lines "b.txt" (number-sequence 1 10) "new line\n")
+    (cl-letf (((symbol-function 'roost--activate-workspace) #'ignore))
+      (save-current-buffer (roost--diff-file task '((path . "b.txt")))))
+    (should (= 1 (seq-count (lambda (buffer) (buffer-local-value 'roost--file-diff buffer))
+                            (buffer-list))))))
 
 ;;;; Workload
 
