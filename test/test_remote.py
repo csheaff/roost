@@ -3755,6 +3755,66 @@ class Lifecycle(unittest.TestCase):
                     self.assertEqual(len(roost.worktree_branches(self.repo)), 1)
                     self.assertEqual(self.request("list")["result"], [])
 
+    def test_a_task_folder_made_a_link_is_refused_and_its_neighbours_stay(self):
+        task, neighbour = self.create(name="linked"), self.create(name="neighbour")
+        wt = Path(task["worktree"])
+        kept = Path(neighbour["worktree"]) / "kept"
+        kept.write_text("work\n")
+        self.request("stop", id=task["id"])
+        shutil.rmtree(wt)
+        wt.symlink_to(wt.parent)
+        for action, fields in (("discard", dict(dryRun=True)), ("discard", dict(expect=task["baseCommit"])),
+                               ("retire", {})):
+            reply = self.request(action, id=task["id"], **fields)
+            self.assertFalse(reply["ok"], reply)
+            self.assertIn("is a link", reply["error"])
+        self.assertEqual(kept.read_text(), "work\n")
+
+    def test_discard_leaves_what_git_keeps_of_a_worktree_that_lost_its_link(self):
+        self.add_submodule()
+        task = self.worked()
+        wt = Path(task["worktree"])
+        self.check_out_submodules(wt)
+        self.commit_in_submodule(wt)
+        self.request("stop", id=task["id"])
+        (wt / ".git").unlink()
+        reply = self.request("discard", id=task["id"], dryRun=True)
+        self.assertFalse(reply["ok"], reply)
+        self.assertIn("the repositories of its submodules", reply["error"])
+        self.assertIn("worktree repair", reply["error"])
+        # As it says.
+        self.git("worktree", "repair")
+        self.assertTrue((wt / ".git").is_file())
+        self.assertTrue(self.request("discard", id=task["id"], dryRun=True)["ok"])
+
+    def test_a_teardown_that_removes_the_worktree_leaves_what_git_keeps(self):
+        self.add_submodule()
+        task = self.create()
+        wt = Path(task["worktree"])
+        self.check_out_submodules(wt)
+        modules = Path(self.git("rev-parse", "--path-format=absolute", "--git-path", "modules", cwd=wt))
+        self.request("stop", id=task["id"])
+        # What it committed there is left only in what Git keeps.
+        reply = self.request("retire", id=task["id"], teardown=(
+            'git -C lib -c user.name=T -c user.email=t@example.invalid commit -q --allow-empty -m Late; '
+            'cd .. && rm -rf "$OLDPWD"'))
+        self.assertFalse(reply["ok"], reply)
+        self.assertIn("the repositories of its submodules", reply["error"])
+        self.assertTrue(any(modules.iterdir()))
+
+    def test_a_submodule_init_that_fails_fetches_none(self):
+        self.add_submodule()
+        self.add_submodule(path="other")
+        self.git("config", "-f", ".gitmodules", "--unset", "submodule.lib.url")
+        self.git("add", ".gitmodules")
+        self.git("-c", "user.name=T", "-c", "user.email=t@example.invalid", "commit", "-qm", "No URL")
+        # With none initialized, it takes them all.
+        self.git("submodule", "deinit", "-q", "-f", "--all")
+        reply = self.request("create", directory=str(self.repo), name="no-url", socket=self.socket,
+                             command=[sys.executable, str(FAKE)])
+        task = self.wait(reply["result"], "failed")
+        self.assertFalse((Path(task["worktree"]) / "other" / ".git").exists())
+
     def test_discard_removes_a_worktree_that_lost_its_link_to_the_repository(self):
         # As when a teardown command or an agent emptied it, or made a
         # repository of it: Git won't remove one, however forced.
@@ -3766,7 +3826,13 @@ class Lifecycle(unittest.TestCase):
             roost.git(wt, "init", "-q")
             roost.git(wt, "add", ".")
             roost.git(wt, "-c", "user.name=A", "-c", "user.email=a@example.com", "commit", "-qm", "Its own")
-        for lose in (link_gone, repository_instead):
+
+        def history_alone(wt):
+            repository_instead(wt)
+            for item in wt.iterdir():
+                if item.name != ".git":
+                    item.unlink()
+        for lose in (link_gone, repository_instead, history_alone):
             with self.subTest(lose.__name__):
                 task = self.worked()
                 wt = Path(task["worktree"])
@@ -3774,8 +3840,7 @@ class Lifecycle(unittest.TestCase):
                 lose(wt)
                 told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
                 # You are told of what Git can't see, before it goes.
-                self.assertEqual(told["changes"], sum(1 for item in wt.rglob("*") if item.is_file()
-                                                      and ".git" not in item.relative_to(wt).parts))
+                self.assertEqual(told["changes"], sum(1 for item in wt.rglob("*") if item.is_file()))
                 self.assertGreater(told["changes"], 0)
                 reply = self.request("discard", id=task["id"], expect=told["commit"])
                 self.assertTrue(reply["ok"], reply)

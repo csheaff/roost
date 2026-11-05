@@ -508,6 +508,10 @@ def check_worktree(store, task, branch=True):
     refuse one no longer on the task's branch, as after an agent made a
     branch of its own: merging, pushing or removing would then act on the
     wrong commits. Running an agent or shell there needs no such check."""
+    # Before resolving it: a link to its parent resolves to a folder that
+    # would pass, and holds every task beside it.
+    if Path(task["worktree"]).is_symlink():
+        raise RoostError("The task's worktree is a link to another folder; put its folder back, or forget the task")
     worktree = Path(task["worktree"]).resolve()
     if not worktree.is_relative_to((store.root / "worktrees").resolve()):
         raise RoostError("Task worktree is outside Roost's worktree directory")
@@ -4105,12 +4109,16 @@ def kept_of_gone(repo, worktree):
     return None
 
 
-def require_nothing_kept(repo, worktree):
-    """Refuse to finish a task whose worktree folder is missing while what
-    Git keeps of it holds what may be work no branch has: the repositories
-    of its submodules, or commits on its detached HEAD. Forgetting it would
-    delete them, uncounted."""
-    gitdir = kept_of_gone(repo, worktree) if Path(repo).is_dir() else None
+def require_nothing_kept(repo, worktree, unlinked=False):
+    """Refuse to finish a task whose worktree folder is missing, or with
+    UNLINKED there but no longer linked to REPO, while what Git keeps of it
+    holds what may be work no branch has: the repositories of its
+    submodules, or commits on its detached HEAD. Forgetting it would delete
+    them, uncounted."""
+    gitdir = None
+    if Path(repo).is_dir():
+        gitdir = (next((place for place, path in linked_worktrees(repo) if Path(path).resolve() == worktree), None)
+                  if unlinked else kept_of_gone(repo, worktree))
     if not gitdir:
         return
     held = []
@@ -4147,6 +4155,10 @@ def require_nothing_kept(repo, worktree):
                      check=False, env=dict(os.environ, GIT_INDEX_FILE=str(gitdir / "index")))
         if staged.returncode:
             held.append("changes staged in its index")
+    if held and unlinked:
+        raise RoostError("The task's worktree has lost its link to the repository, and Git keeps what may be work "
+                         "with it: %s. Restore the link with git -C %s worktree repair, then try again"
+                         % (" and ".join(held), shlex.quote(str(repo))))
     if held:
         raise RoostError("The task's worktree folder is missing, and Git keeps what may be work with it: %s. Restore "
                          "the folder, or delete it all with git worktree remove --force --force %s, then try again"
@@ -4717,8 +4729,9 @@ def discard(store, task, expect=None, dry_run=False, teardown=None):
     branch_exists = ref_exists(repo, branch)
     ref = "refs/heads/" + branch
     commit = git(repo, "rev-parse", ref + "^{commit}").stdout.strip() if branch_exists else None
-    if not worktree_exists:
-        require_nothing_kept(repo, worktree)
+    unlinked = worktree_exists and not (worktree / ".git").is_file()
+    if unlinked or not worktree_exists:
+        require_nothing_kept(repo, worktree, unlinked)
     # The worktrees its agent made go with it.
     work = agent_work(task)
     if dry_run:
@@ -5358,11 +5371,11 @@ def run_teardown(task, worktree, command):
 
 def unlinked_files(worktree):
     """How many files WORKTREE holds if it has lost its link to the
-    repository, which Git can't count, and removing it deletes; else 0."""
+    repository, which Git can't count, and removing it deletes; else 0.
+    Those of a repository made there count too: its history goes with it."""
     if (Path(worktree) / ".git").is_file():
         return 0
-    return sum(len(files) for folder, folders, files in os.walk(worktree)
-               if ".git" not in Path(folder).relative_to(worktree).parts)
+    return sum(len(files) for folder, folders, files in os.walk(worktree))
 
 
 def remove_worktrees(store, task, worktree, agents, force=False, teardown=None):
@@ -5390,6 +5403,8 @@ def remove_worktrees(store, task, worktree, agents, force=False, teardown=None):
                 if worktree and not os.path.lexists(worktree):
                     # The teardown command took it, as it may: Git may yet
                     # keep it, which would hold on to its branch.
+                    if not force:
+                        require_nothing_kept(task["repo"], worktree)
                     unregister_gone(task["repo"], worktree)
                 elif worktree and force and not (worktree / ".git").is_file():
                     # Git removes no worktree that has lost its link to the
@@ -6226,8 +6241,12 @@ def check_out_submodules(worktree, env, every=None, decided=lambda every: None):
     # starting meanwhile would take those so far for your choice. As itself,
     # not a pattern that could name others.
     if every and chosen:
-        git(worktree, *relative_url_options(worktree), "submodule", "init", "--",
-            *[":(literal)" + path for path in chosen], check=False, env=env)
+        started = git(worktree, *relative_url_options(worktree), "submodule", "init", "--",
+                      *[":(literal)" + path for path in chosen], check=False, env=env)
+        if started.returncode:
+            # `update --init` would read a relative URL from here instead.
+            raise RoostError("Could not check out the submodules: %s; resuming the task tries again"
+                             % started.stderr.strip())
     for path in chosen:
         if subprocess.run(["git", "-C", str(worktree), "submodule", "update", "--init", "--recursive", "--",
                            ":(literal)" + path], env=env).returncode:

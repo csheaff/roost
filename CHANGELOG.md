@@ -34,7 +34,10 @@ What each release changes, and what to do when upgrading. Newest first.
   after a teardown command or an agent emptied it, and counts its files
   among what it asks you about. Git refused, each time, and only
   forgetting the task was left, which keeps the folder and the branch.
-  Nothing to do when upgrading.
+  Where Git keeps work beside it, as its submodules' repositories, Roost
+  says so and how to restore the link. A task folder replaced with a link
+  is refused, for every action that would act through it. Nothing to do
+  when upgrading.
 - A teardown command may remove the task's worktree itself. Merging or
   retiring then said the worktree had files left in it, of a worktree that
   was gone, and discarding failed if Git no longer knew it; each worked
