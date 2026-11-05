@@ -4004,7 +4004,8 @@ draft's Send button, says which draft."
   (let ((text (replace-regexp-in-string "\\`\\([ \t]*\n\\)+" "" (string-trim-right (buffer-string))))
         (task roost--send-task)
         (notes roost--send-notes)
-        (buffer (current-buffer)))
+        (buffer (current-buffer))
+        (written (buffer-chars-modified-tick)))
     (when (string-empty-p (string-trim text))
       (user-error "Write a prompt first"))
     (let ((states (roost--attachment-states)))
@@ -4035,10 +4036,12 @@ draft's Send button, says which draft."
              (with-current-buffer buffer
                (setq roost--send-sending nil)
                ;; The blank lines above it weren't sent, and the host counts
-               ;; the lines it names from what was.
-               (delete-region (point-min) (save-excursion (goto-char (point-min))
-                                                          (skip-chars-forward " \t\n")
-                                                          (line-beginning-position)))
+               ;; the lines it names from what was.  Anything written since
+               ;; stays, and its lines were never counted.
+               (when (= written (buffer-chars-modified-tick))
+                 (delete-region (point-min) (save-excursion (goto-char (point-min))
+                                                            (skip-chars-forward " \t\n")
+                                                            (line-beginning-position))))
                (roost--draft-error "Could not send" err 'roost-send-submit))))
          ;; You have looked at what your notes are about.
          (and notes t))
