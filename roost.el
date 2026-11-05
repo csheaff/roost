@@ -3449,21 +3449,32 @@ above the project used last on the host, or at its home."
                              (roost--host-directory host (if last (file-name-directory last) "~"))
                              nil t)))))
 
+(defun roost--back-in-draft (draft)
+  "Make DRAFT, the buffer you asked something from, current again.
+Say so if it has gone: a host can reply while you answer, and the draft
+closes once its task is made."
+  (unless (buffer-live-p draft)
+    (user-error "The task's draft has closed"))
+  (set-buffer draft))
+
 (defun roost-compose-set-project ()
   "Choose the draft's project from known checkouts, or any directory.
 The checkouts are those Roost has used, then those project.el knows.
 \"Other directory…\" asks for a host, unless only one is known, and
 then for a folder there, starting above the project used last on it."
   (interactive)
-  (let* ((projects (mapcar (lambda (dir) (cons (roost--project-label dir) dir))
+  (let* ((draft (current-buffer))
+         (projects (mapcar (lambda (dir) (cons (roost--project-label dir) dir))
                            (roost--project-choices)))
          ;; Under the project used last, which RET still takes, and on
          ;; screen however many projects there are.
          (choices (append (seq-take projects 1) (list (cons "Other directory…" 'other))
                           (seq-drop projects 1)))
          (choice (roost--choose-from "Project: " choices)))
+    (roost--back-in-draft draft)
     (when (eq choice 'other)
-      (setq choice (roost--read-project-directory)))
+      (setq choice (roost--read-project-directory))
+      (roost--back-in-draft draft))
     (when choice
       (let* ((directory (file-name-as-directory (expand-file-name choice)))
              (base (plist-get roost--compose-fields :base)))
@@ -3478,9 +3489,11 @@ then for a folder there, starting above the project used last on it."
 (defun roost-compose-set-agent ()
   "Choose the draft's agent."
   (interactive)
-  (when-let* ((agent (roost--choose-from "Agent: " (mapcar (lambda (agent) (cons agent agent))
+  (when-let* ((draft (current-buffer))
+              (agent (roost--choose-from "Agent: " (mapcar (lambda (agent) (cons agent agent))
                                                            roost--agents)
                                          roost-default-agent)))
+    (roost--back-in-draft draft)
     (setq roost--compose-fields (plist-put roost--compose-fields :agent agent))
     (roost--compose-render)))
 
@@ -3515,7 +3528,8 @@ As the helper decides it, or nil for the primary checkout's."
   "Choose the draft's starting Git ref; empty means the primary branch.
 A branch is also the one the task merges into."
   (interactive)
-  (let* ((directory (plist-get roost--compose-fields :directory))
+  (let* ((draft (current-buffer))
+         (directory (plist-get roost--compose-fields :directory))
          ;; Git runs on the project's host.
          (refs (when directory
                  (split-string (or (roost--git-in directory "for-each-ref" "--format=%(refname:short)"
@@ -3525,6 +3539,7 @@ A branch is also the one the task merges into."
          (ref (string-trim (completing-read "Start from ref (empty = primary checkout's branch): "
                                             (cons "HEAD" refs) nil nil)))
          (base (unless (string-empty-p ref) ref)))
+    (roost--back-in-draft draft)
     (setq roost--compose-fields
           (thread-first roost--compose-fields
                         (plist-put :base base)
@@ -3536,8 +3551,10 @@ A branch is also the one the task merges into."
 (defun roost-compose-set-name ()
   "Name the draft; empty derives the name from the prompt."
   (interactive)
-  (let ((name (string-trim (read-string "Task name (empty = from the prompt): "
-                                        (plist-get roost--compose-fields :name)))))
+  (let* ((draft (current-buffer))
+         (name (string-trim (read-string "Task name (empty = from the prompt): "
+                                         (plist-get roost--compose-fields :name)))))
+    (roost--back-in-draft draft)
     (setq roost--compose-fields
           (plist-put roost--compose-fields :name (unless (string-empty-p name) name)))
     (roost--compose-render)))
@@ -3567,16 +3584,18 @@ Atlassian's Teamwork Graph CLI, signed in on this machine, the Jira
 work items `roost-jira-query' finds are listed too, and the task's
 branch leads with the key of the one you choose."
   (interactive)
-  (let* ((directory (or (plist-get roost--compose-fields :directory)
+  (let* ((draft (current-buffer))
+         (directory (or (plist-get roost--compose-fields :directory)
                         (user-error "Choose a project first (%s)"
                                     (substitute-command-keys "\\[roost-compose-set-project]"))))
          (host (roost--directory-host directory))
          (jql (roost--project-value directory 'roost-jira-query))
          (outcomes (progn (message "Roost: listing open issues on %s…" (roost--host-label host))
-                          (roost--requests-wait
-                           (cons (list host "issues" (list (cons 'directory (file-local-name directory))))
-                                 ;; twg's sign-in is yours, here, wherever the project is.
-                                 (when jql (list (list nil "jira-issues" (list (cons 'jql jql)))))))))
+                          (prog1 (roost--requests-wait
+                                  (cons (list host "issues" (list (cons 'directory (file-local-name directory))))
+                                        ;; twg's sign-in is yours, here, wherever the project is.
+                                        (when jql (list (list nil "jira-issues" (list (cons 'jql jql)))))))
+                            (roost--back-in-draft draft))))
          (forge (car outcomes))
          ;; nil when twg isn't installed.
          (jira (cadr outcomes))
@@ -3614,6 +3633,7 @@ branch leads with the key of the one you choose."
                                  (_ "Issue: "))
                                (roost--in-order choices) nil t)
                               choices)))
+           (_ (roost--back-in-draft draft))
            ;; The prompt the last issue gave, text and all, which the
            ;; task's record leaves out.
            (previous (plist-get roost--compose-fields :issue-prompt))

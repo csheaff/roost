@@ -998,6 +998,8 @@ elsewhere."
                 ;; You have moved on from it.
                 ((not (and (plist-get spec :opens)
                            (or (plist-get interrupter :left) (plist-get interrupter :gone)))))
+                ;; The draft it was for has gone, which it says.
+                ((not (and (plist-get spec :wait) (not (buffer-live-p roost-sweep-late--origin-buffer)))))
                 ((not (cdr-safe (assoc words (plist-get spec :refusals)))))
                 (count (roost-sweep-late--count (car (split-string words "\n")) said))
                 ((/= count 1)))
@@ -1263,7 +1265,6 @@ Return their problems, each (TEXT PLACE...), as `roost-sweep--report' takes them
 (defconst roost-sweep-late--known
   '("\\`stale: a forgotten host shows an error"
     "\\`stale: a reply to an older run changes"
-    "\\`lisp-error: the \\(?:command signals\\|question ends in\\) (wrong-type-argument"
     "\\`words: says .* 2 times")
   "What the sweep finds that isn't fixed yet, as regexps of its problems.")
 
@@ -1502,6 +1503,17 @@ COMMAND, INTERRUPTER and FORM keeps RULE until FUNCTION is REPLACEMENT.")
       (should (equal (buffer-name (window-buffer (selected-window)))
                      (if stay "*late terminal cccccc*" "*late elsewhere*")))
       (should (string-match-p "Roost created" (roost-sweep-late--messages 1))))))
+
+(ert-deftest roost-sweep-late-a-draft-that-closes-ends-what-it-asked ()
+  ;; While its task is made, which closes it.
+  (let ((submit (cdr (assq 'compose-submit roost-sweep-late--commands))))
+    (dolist (question '(draft-name draft-folder draft-agent draft-start))
+      (should-not (roost-sweep-late--question-case
+                   submit (cdr (assq question roost-sweep-late--questions)) 'good))))
+  ;; While it waits for the project's issues.
+  (should-not (car (roost-sweep-late--case (cdr (assq 'issues roost-sweep-late--commands))
+                                           (cdr (assq 'kill-origin roost-sweep-late--interrupters))
+                                           'good t))))
 
 (provide 'roost-sweep-late)
 

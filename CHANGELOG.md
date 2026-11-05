@@ -4,6 +4,10 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Answering a question of a task's draft once its task has been made says
+  the draft has closed, rather than `Wrong type argument`: the name, agent,
+  project, starting ref or issue you were choosing while it was made.
+  Nothing to do when upgrading.
 - A task you create opens only if you are still where you asked for it.
   Making one can take minutes, and its terminal then took the window you
   had gone to, with the keys you were typing. The echo area says it was
