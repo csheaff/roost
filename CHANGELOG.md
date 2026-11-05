@@ -4,6 +4,12 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- With perspectives or tabs, the sidebar shows only in a task's
+  workspace, or in one of your own while it shows a task's terminal.
+  perspective.el's `main`, with a shell of your own in it, no longer
+  looks like a task. Without workspaces, every frame keeps it. Its
+  buffer is now hidden, ` *roost sidebar*`: a rule of yours naming it
+  needs the new name.
 - A task panel that `i` showed beside a terminal closes when its task
   opens there and the panel docks at the right, rather than showing
   twice. The window goes back to what it showed before, or closes if `i`
