@@ -41,8 +41,8 @@ happened in a section below:
   of failure had no test: a helper killed partway, and a reply that comes
   after you have moved on.
 - **What found what.** Five read and tested an area each: forges, how a
-  task starts and ends, what Emacs draws, crashes, and late replies. 51
-  bugs, in #207 to #212, each with a test that fails without its fix.
+  task starts and ends, what Emacs draws, crashes, and late replies. 52
+  bugs, in #207 to #214, each with a test that fails without its fix.
 - **Late replies.** `test/roost-sweep-late.el` holds back the reply to each
   of 51 commands, does one of 23 things you might do meanwhile, then
   delivers it good, refused, dropped or timed out: about 5,000 cases in
@@ -50,10 +50,11 @@ happened in a section below:
   the minibuffer you were typing in, and a task taking your window minutes
   after you left it (#211).
 - **Crashes.** `make crash` kills the helper at each step of each action,
-  in 31 task states, and recovers as you would (#212). It has yet to finish
-  as one whole run: its pieces ran apart, some before the last fixes. 17
-  flags remain, below. `test/test_crash.py` keeps what went wrong for
-  `make test`.
+  in 31 task states, and recovers as you would (#212). A whole run takes
+  39 minutes. Its first flagged 4 scenarios: `Create` and
+  `CreateFromRemote`, a worktree Git stopped making, fixed in #214, and
+  `Update` and `UpdateConflict`, whose 7 flags are below.
+  `test/test_crash.py` keeps what went wrong for `make test`.
 - **A false crash.** `make qa QA_FLAGS=--remote` failed its whole runs on a running
   agent reading `crashed` for nine seconds, then back, which read as
   unseen and waited on you. The host's history showed it, once the task's
@@ -76,9 +77,9 @@ happened in a section below:
     `m` refuses, and following its advice reverts the bump. New since #189.
   - After Git dies mid-merge, refusals say "uncommitted changes" without
     naming the half-done merge, and following the one on `u` would commit
-    it. 7 of `make crash`'s flags.
-  - A ref deletion that fails during undo leaves an empty branch with no
-    task. The other 10 flags.
+    it: `make crash`'s 7 flags.
+  - A ref deletion that fails during undo, as with a lock left by a
+    reboot, leaves an empty branch with no task.
   - A pull request that branch rules block or that needs updating reads
     `to merge` on GitHub: Roost asks only for `mergeable`.
   - A damaged record is hidden, so its worktree and branch can't be
