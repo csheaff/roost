@@ -372,11 +372,11 @@ but for a reply's question."
                   (lambda (&rest _)
                     (if-let* ((pump roost-sweep-late--pump))
                         (progn (setq roost-sweep-late--pump nil) (funcall pump))
-                      (if roost-sweep-late--requests
-                          (roost-sweep-late--answer (car roost-sweep-late--requests) 'good)
-                        (signal 'quit nil))))))
+                      (when roost-sweep-late--requests
+                        (roost-sweep-late--answer (car roost-sweep-late--requests) 'good))))))
          (setq roost--remembered-hosts (list roost-sweep-late--host))
-         (puthash (list roost-sweep-late--host roost-state-directory) (car (roost--helper)) roost--installed)
+         (dolist (host (list roost-sweep-late--host nil))
+           (puthash (list host roost-state-directory) (car (roost--helper)) roost--installed))
          (save-window-excursion
            (let ((existing (buffer-list)))
              (unwind-protect
@@ -404,29 +404,27 @@ FIELDS are the one acted on's, and OTHERS the other's."
     (current-buffer)))
 
 (defun roost-sweep-late--origin (origin)
-  "Make the buffer of ORIGIN, the place a command starts from.
-Return it, shown in the selected window."
+  "Show the buffer of ORIGIN, the place a command starts from, as Roost shows it.
+Return it, selected: quitting a window goes by how it came to show its buffer."
   (let* ((task (roost-sweep-late--task roost-sweep-late--mine))
+         (display-buffer-overriding-action '(display-buffer-same-window))
          (buffer
           (pcase origin
-            ('here (get-buffer-create "*late here*"))
-            ('terminal (roost-sweep-late--terminal roost-sweep-late--mine))
-            ('other-terminal (roost-sweep-late--terminal roost-sweep-late--other))
-            ('panel (roost--task-info-buffer task))
-            ('dashboard (roost-sweep-late--dashboard))
-            ('send-draft (save-window-excursion
-                           (roost--send-draft task)
-                           (insert "Make it add up.")
-                           (current-buffer)))
-            ('pr-draft (save-window-excursion
-                         (roost--pr-draft task)
-                         (current-buffer)))
-            ('compose (save-window-excursion
-                        (cl-letf (((symbol-function 'roost--compose-default-directory)
-                                   (lambda (&rest _) "/ssh:dev:/home/user/ledger/")))
-                          (roost--compose nil (cons "Add the totals." nil)))
-                        (current-buffer))))))
-    (set-window-buffer (selected-window) buffer)
+            ('here (switch-to-buffer "*late here*"))
+            ('terminal (switch-to-buffer (roost-sweep-late--terminal roost-sweep-late--mine)))
+            ('other-terminal (switch-to-buffer (roost-sweep-late--terminal roost-sweep-late--other)))
+            ('sidebar (window-buffer (select-window (get-buffer-window roost--sidebar-buffer))))
+            ('panel (pop-to-buffer (roost--task-info-buffer task)))
+            ('dashboard (switch-to-buffer (roost-sweep-late--dashboard)))
+            ('send-draft (roost--send-draft task)
+                         (insert "Make it add up.")
+                         (current-buffer))
+            ('pr-draft (roost--pr-draft task)
+                       (current-buffer))
+            ('compose (cl-letf (((symbol-function 'roost--compose-default-directory)
+                                 (lambda (&rest _) "/ssh:dev:/home/user/ledger/")))
+                        (roost--compose nil (cons "Add the totals." nil)))
+                      (current-buffer)))))
     (set-buffer buffer)
     buffer))
 
@@ -489,9 +487,18 @@ with nothing to do with any task."
                                                        (window-list))
                                 :bystanders (roost-sweep-late--fingerprint))))
 
-(defun roost-sweep-late--in-minibuffer (function)
-  "Call FUNCTION from a minibuffer you are typing in, then leave it."
-  (let ((unread-command-events (list ?\r))
+(defun roost-sweep-late--back-in-minibuffer ()
+  "Note a reply that took the selection out of the minibuffer, and go back to it.
+The keys you go on typing would go to some other window."
+  (unless (eq (selected-window) (active-minibuffer-window))
+    (roost-sweep-late--problem 'moved "a reply took you out of the minibuffer, to %s"
+                               (window-buffer (selected-window)))
+    (select-window (active-minibuffer-window))))
+
+(defun roost-sweep-late--in-minibuffer (function &optional key)
+  "Call FUNCTION from a minibuffer you are typing in, then leave it with KEY.
+That is RET unless given."
+  (let ((unread-command-events (list (or key ?\r)))
         ;; Otherwise, in batch, it reads standard input.
         (executing-kbd-macro t))
     (minibuffer-with-setup-hook
@@ -500,9 +507,10 @@ with nothing to do with any task."
           (funcall function)
           ;; Timers run while you type.
           (roost-sweep-late--fire-timers)
+          (roost-sweep-late--back-in-minibuffer)
           (unless (equal (minibuffer-contents) "half a thought")
             (roost-sweep-late--problem 'wrong-buffer "the minibuffer now says %S" (minibuffer-contents))))
-      (read-from-minibuffer "Anything else? "))))
+      (roost-sweep-late--guarded "leaving the minibuffer" #'read-from-minibuffer "Anything else? "))))
 
 (defun roost-sweep-late--go (id)
   "Have the task with ID go, as another reply says it did."
@@ -596,6 +604,13 @@ with nothing to do with any task."
              (roost--refresh-host roost-sweep-late--host t)
              (roost-sweep-late--answer (roost-sweep-late--take "list") 'good)
              (funcall deliver)))
+    (newer-reply
+     :newer t :while-waiting t :stays t :when :list
+     :run ,(lambda (deliver)
+             (roost-sweep-late--move-on)
+             (roost-open-task (roost-sweep-late--mine))
+             (roost-sweep-late--answer (roost-sweep-late--take "inspect") 'good)
+             (funcall deliver)))
     (forget-host
      :gone t :host-gone t
      :run ,(lambda (deliver)
@@ -612,6 +627,13 @@ with nothing to do with any task."
      :run ,(lambda (deliver)
              (roost-sweep-late--note-place)
              (roost-sweep-late--in-minibuffer deliver)))
+    (minibuffer-quit
+     :stays t
+     :run ,(lambda (deliver)
+             (roost-sweep-late--note-place)
+             (condition-case nil
+                 (roost-sweep-late--in-minibuffer deliver ?\C-g)
+               (quit nil))))
     (watch-off
      :off t :stays t
      :run ,(lambda (deliver) (roost-watch-mode -1) (funcall deliver)))
@@ -658,6 +680,16 @@ with Emacs running only timers and other replies.")
      :start ,(lambda () (roost-open-task (roost-sweep-late--mine)))
      :action "inspect" :opens t :shows "*late terminal aaaaaa*"
      :refusals ((,roost-sweep-late--no-window . asks) (,roost-sweep-late--retired)))
+    (open-from-the-panel
+     :origin panel
+     :start ,(lambda () (roost-open-task (roost-sweep-late--mine)))
+     :action "inspect" :opens t :shows "*late terminal aaaaaa*"
+     :refusals ((,roost-sweep-late--no-window . asks)))
+    (open-from-the-sidebar
+     :origin sidebar :sides-only t
+     :start ,(lambda () (roost-open-task (roost-sweep-late--mine)))
+     :action "inspect" :opens t :shows "*late terminal aaaaaa*"
+     :refusals ((,roost-sweep-late--no-window . asks)))
     (open-from-dashboard
      :origin dashboard
      :start ,(lambda () (roost-open-task (roost-sweep-late--mine)))
@@ -772,6 +804,16 @@ with Emacs running only timers and other replies.")
      :action "retire"
      :refusals ((,roost-sweep-late--unmerged . asks) (,roost-sweep-late--uncommitted . asks)
                 (,roost-sweep-late--other-branch . asks) ("The agent is active; stop it or wait before retiring this task")))
+    (retire-from-the-panel
+     :origin panel :closes t
+     :fields ((ahead . 0))
+     :start ,(lambda () (roost-retire (roost-sweep-late--mine)))
+     :action "retire")
+    (retire-teardown-failed
+     :fields ((ahead . 0))
+     :start ,(lambda () (roost-retire (roost-sweep-late--mine)))
+     :action "retire"
+     :reply ,(lambda (reply) (append '((teardownFailure . "exited with status 1") (teardownOutput . "no")) reply)))
     (merge
      :start ,(lambda () (roost-merge-retire (roost-sweep-late--mine)))
      :action "merge"
@@ -823,12 +865,25 @@ with Emacs running only timers and other replies.")
     (issues
      :origin compose :start ,#'roost-compose-set-issue
      :action "issues" :wait t)
+    (issues-and-work-items
+     :origin compose
+     :start ,(lambda ()
+               (cl-letf (((symbol-function 'roost--project-value)
+                          (lambda (_directory variable) (when (eq variable 'roost-jira-query) "project = X"))))
+                 (roost-compose-set-issue)))
+     ;; A project in Jira needn't be on a forge, so its work items are enough.
+     :action "issues" :wait t :background t)
     (poll
      :start ,(lambda () (roost-refresh t))
-     :action "list" :background t)
+     :action "list" :background t :list t)
     (poll-full
      :start ,#'roost-refresh
-     :action "list" :background t)
+     :action "list" :background t :list t)
+    (poll-then-a-full-one
+     :start ,(lambda ()
+               (roost-refresh t)
+               (roost-refresh))
+     :action "list" :background t :list t)
     (notice
      :fields ((status . "running"))
      :start ,(lambda ()
@@ -857,7 +912,9 @@ task's fields.  :watches that it starts `roost-watch-mode', and :makes
 that it makes a task of its own, and uses its host, so remembers it.
 :again that it
 shows what a run of it found, so that a late reply to an older run must
-change nothing.  :not names interrupters that can't follow it.")
+change nothing.  :list that it asks for the tasks.  :sides-only that it
+starts from the sidebar, so needs one.  :not names interrupters that
+can't follow it.")
 
 ;;;; Rules
 
@@ -966,6 +1023,8 @@ the reply came."
     (roost-sweep-late--problem 'left-behind "%d held for a minibuffer long gone" roost--held-for-minibuffer))
   (when (gethash roost-sweep-late--host roost--refreshing)
     (roost-sweep-late--problem 'left-behind "the host counts as being refreshed still"))
+  (when (gethash roost-sweep-late--host roost--full-refresh-pending)
+    (roost-sweep-late--problem 'left-behind "a full refresh waits on with nothing to set it off"))
   (when roost--resuming
     (roost-sweep-late--problem 'left-behind "tasks count as resuming still"))
   (when minibuffer-exit-hook
@@ -1063,7 +1122,8 @@ Return what broke, a list of (RULE . TEXT)."
               (lambda ()
                 (unless delivered
                   (setq delivered t roost-sweep-late--delivering t)
-                  (roost-sweep-late--answer request form)))
+                  (roost-sweep-late--answer request form)
+                  (roost-sweep-late--back-in-minibuffer)))
             (with-current-buffer roost-sweep-late--origin-buffer
               (condition-case err
                   (funcall (plist-get question :ask))
@@ -1244,6 +1304,7 @@ Return their problems, each (TEXT PLACE...), as `roost-sweep--report' takes them
           (let ((interrupter (cdr (assq name roost-sweep-late--interrupters))))
             (unless (or (equal (plist-get interrupter :unless) (plist-get spec :action))
                         (memq name (plist-get spec :not))
+                        (and (plist-get spec :sides-only) (not roost-sweep-late--sides))
                         (and (plist-get interrupter :sides-off) (not roost-sweep-late--sides))
                         (and (plist-get interrupter :when)
                              (not (plist-get spec (plist-get interrupter :when))))
@@ -1280,7 +1341,7 @@ Return their problems, each (TEXT PLACE...), as `roost-sweep--report' takes them
    (roost-sweep-late--sweep (mapcar #'car roost-sweep-late--commands) '(delete-frame))))
 
 (defconst roost-sweep-late--beside-side-windows
-  '(open review shell compose-submit stop rename retire merge poll-full)
+  '(open open-from-the-sidebar review shell compose-submit stop rename retire merge poll-full)
   "Commands to try with the sidebar and task panel on: what shows, closes or redraws them.")
 
 (ert-deftest roost-sweep-late-replies-beside-the-sidebar-and-panel ()
@@ -1348,7 +1409,8 @@ COMMAND, INTERRUPTER and FORM keeps RULE until FUNCTION is REPLACEMENT.")
   ;; The sweep holds replies back above `roost--run'.  Through a real
   ;; process and sentinel, however it ends, a reply leaves no process,
   ;; timer, buffer or file of its input.
-  (roost-test--isolated
+  (dlet ((native-comp-enable-subr-trampolines nil))
+   (roost-test--isolated
    (let* ((temporary-file-directory (file-name-as-directory (make-temp-file "roost-late" t)))
           (timers (copy-sequence timer-list))
           (buffers (buffer-list))
@@ -1374,7 +1436,7 @@ COMMAND, INTERRUPTER and FORM keeps RULE until FUNCTION is REPLACEMENT.")
                (should-not (seq-difference timer-list timers))
                (should-not (seq-difference (buffer-list) buffers))
                (should-not (directory-files temporary-file-directory nil "\\`roost-input-")))))
-       (delete-directory temporary-file-directory t)))))
+       (delete-directory temporary-file-directory t))))))
 
 ;;;; What the sweep found
 
@@ -1537,7 +1599,8 @@ COMMAND, INTERRUPTER and FORM keeps RULE until FUNCTION is REPLACEMENT.")
 (ert-deftest roost-sweep-late-unloading-roost-leaves-no-reply-to-come ()
   ;; A real unload, which leaves no Roost to go on with, so in an Emacs of
   ;; its own.  In batch, an error in a sentinel ends Emacs.
-  (roost-test--isolated
+  (dlet ((native-comp-enable-subr-trampolines nil))
+   (roost-test--isolated
    (let* ((state (make-temp-file "roost-unload" t))
           (script (expand-file-name "unload.el" state))
           (output (generate-new-buffer " *roost-unload*")))
@@ -1566,7 +1629,7 @@ COMMAND, INTERRUPTER and FORM keeps RULE until FUNCTION is REPLACEMENT.")
            (with-current-buffer output
              (should (equal (string-trim (buffer-string)) "(nil nil)"))))
        (kill-buffer output)
-       (delete-directory state t)))))
+       (delete-directory state t))))))
 
 (provide 'roost-sweep-late)
 
