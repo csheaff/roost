@@ -133,7 +133,7 @@ BUG_WORDS = re.compile(r"\b(KeyError|TypeError|AttributeError|IndexError|NameErr
 # What a refusal after a crash has to do: say what to do next.
 SAYS_WHAT_TO_DO = re.compile(r"try again|merge again|commit or stash|git merge --abort|abort it there|in a moment|"
                              r"merge, retire, discard or forget|lock file may be stale|merge it \(m\) first|"
-                             r"open the existing task")
+                             r"open the existing task|Please move or remove them")
 
 
 class Stuck(Exception):
