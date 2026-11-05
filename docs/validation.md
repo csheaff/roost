@@ -54,7 +54,7 @@ happened in a section below:
   as one whole run: its pieces ran apart, some before the last fixes. 17
   flags remain, below. `test/test_crash.py` keeps what went wrong for
   `make test`.
-- **A false crash.** `make qa --remote` failed its whole runs on a running
+- **A false crash.** `make qa QA_FLAGS=--remote` failed its whole runs on a running
   agent reading `crashed` for nine seconds, then back, which read as
   unseen and waited on you. The host's history showed it, once the task's
   `seen` and `updatedAt` had been compared. It reproduced twice without
@@ -66,7 +66,7 @@ happened in a section below:
   worktree counted as nothing lost. Asking a test to fail first caught two
   of mine that passed either way.
 - **Runs.** `make test compile` passes with real Magit and perspective.el.
-  Whole `make qa`: 386 steps, no problems. `make qa --remote`, before and
+  Whole `make qa`: 386 steps, no problems. `make qa QA_FLAGS=--remote`, before and
   after: 21 problems, then 3, all in the `shell` journey's split panes, the
   history above a terminal noted on 2026-10-26.
 - **Emacs 29.** `rx` before Emacs 30 leaves a range running into raw bytes
