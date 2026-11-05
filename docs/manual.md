@@ -664,6 +664,10 @@ answers with the one it made, or makes it, never a second. A creation cut
 short, as when Emacs stops one on this machine, leaves no worktree or
 branch behind.
 
+The new task opens if you are still where you created it. If you have gone to
+another buffer, window or task by then, you stay there: the echo area says it
+was made, and `RET` on it in the sidebar or dashboard opens it.
+
 `C-c C-p` lists the projects Roost has used, the last first, then those
 `project.el` knows. "Other directory…", second in the list, asks for a host,
 of those Roost knows or another from `~/.ssh/config`, starting on the draft's,
@@ -1269,6 +1273,37 @@ in Org entries, agenda lines and narrowed Magit diffs, and fails on a Lisp
 error, a connection to a host TRAMP isn't connected to, a file or lines that
 aren't where the quoted text is in the whole file, quoted text that isn't the
 region's, or a change to your buffer.
+
+Emacs talks to each host asynchronously, and the sweep above answers at once.
+`test/roost-sweep-late.el` holds the reply to each command back, does what you
+might do meanwhile, then delivers it good, refused in the host's words, dropped
+by the connection, or timed out, as a process sentinel would. What you might do
+is kill the buffer the command started from or the task's terminal, delete its
+window or frame, go to another buffer, window or task, start another action on
+the task, have the task go through another reply or a poll, have a newer poll
+come first, forget the host, quit, leave a question open in the minibuffer, or
+turn watching or the side windows off. Then it fails on:
+
+- a Lisp error, in a reply or a timer, where Emacs would only log it;
+- a reply that writes into a buffer that isn't its own;
+- the selected window, its buffer or the task opened last moving, unless the
+  command was to open something and you stayed;
+- a reply that overwrites what is newer, or brings back a task that went or a
+  host you forgot;
+- something left busy or waiting: a draft that says it is sending, a host that
+  counts as being refreshed, a hook, a timer;
+- a row in a view that offers a task that went;
+- a question landing in a minibuffer you are typing in, or one about a task
+  that went;
+- the failure of a command you gave not said in words, once.
+
+Windows, buffers, timers and minibuffers are real, and a held reply says what
+its host knew when it was asked; `roost--run` is stubbed. One test takes each
+way a reply can end through a real process, and another unloads Roost with
+requests under way, in an Emacs of its own. Each rule has a way to break Roost
+that it must catch, in `roost-sweep-late--breakages`. A new command that
+waits on a host needs an entry in `roost-sweep-late--commands`, and a new
+question in the minibuffer one in `roost-sweep-late--questions`.
 
 `make qa` uses Roost as you would, in a GUI Emacs of its own: a plain
 configuration with its own server, state directory and tmux socket, and

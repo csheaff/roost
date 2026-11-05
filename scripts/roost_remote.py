@@ -102,6 +102,22 @@ def git(repo, *args, check=True, env=None):
     return execute(["git", "-C", str(repo), *args], check=check, env=env)
 
 
+def git_with_hooks(repo, *args, check=True, input=None):
+    """`git` for what runs the repository's hooks, with INPUT, text, on its
+    stdin. It says what it says to files: what a hook leaves running,
+    holding a pipe, would keep this waiting for as long as that runs."""
+    argv = ["git", "-C", str(repo), *args]
+    with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
+        result = subprocess.run(argv, input=None if input is None else input.encode(), stdout=output, stderr=errors,
+                                pass_fds=tuple(INHERITED))
+        # Read without moving the offset what it left running still writes at.
+        result.stdout, result.stderr = (os.pread(file.fileno(), os.fstat(file.fileno()).st_size, 0)
+                                        .decode(errors="replace") for file in (output, errors))
+    if check and result.returncode:
+        raise RoostError(result.stderr.strip() or result.stdout.strip() or "Command failed: " + shlex.join(argv))
+    return result
+
+
 @functools.lru_cache(maxsize=None)
 def gits_own_fsmonitor(repo):
     """Whether REPO's config turns on Git's own file system monitor, a
@@ -500,6 +516,10 @@ def check_worktree(store, task, branch=True):
     refuse one no longer on the task's branch, as after an agent made a
     branch of its own: merging, pushing or removing would then act on the
     wrong commits. Running an agent or shell there needs no such check."""
+    # Before resolving it: a link to its parent resolves to a folder that
+    # would pass, and holds every task beside it.
+    if Path(task["worktree"]).is_symlink():
+        raise RoostError("The task's worktree is a link to another folder; put its folder back, or forget the task")
     worktree = Path(task["worktree"]).resolve()
     if not worktree.is_relative_to((store.root / "worktrees").resolve()):
         raise RoostError("Task worktree is outside Roost's worktree directory")
@@ -1958,11 +1978,15 @@ def make_task(store, request, create_id):
     """Create a worktree and agent window. Preparation and `git worktree add`
     run without the registry lock; only the tmux spawn is serialized."""
     directory = str(Path(request["directory"]).expanduser().resolve())
-    checkout = git(directory, "rev-parse", "--show-toplevel").stdout.strip()
+    # A folder's name may end in a space, or hold a newline.
+    checkout = git(directory, "rev-parse", "--show-toplevel").stdout.removesuffix("\n")
     # Git lists the main worktree first. Creating from an existing task must
     # still use the primary checkout for integration and repository identity.
-    # Plain --porcelain: `-z` needs Git 2.36, and hosts often ship older Git.
-    primary = git(checkout, "worktree", "list", "--porcelain").stdout.split("\n\n", 1)[0].split("\n")
+    # Apart by NULs, which keeps its path whole, where Git can: `-z` needs
+    # Git 2.36, and hosts often ship older Git.
+    end = "\0" if lists_worktrees_whole() else "\n"
+    primary = git(checkout, "worktree", "list", "--porcelain", *(["-z"] if end == "\0" else [])
+                  ).stdout.split(end * 2, 1)[0].split(end)
     if not primary[0].startswith("worktree "):
         raise RoostError("Roost needs a primary working checkout")
     if "bare" in primary:
@@ -2017,6 +2041,9 @@ def make_task(store, request, create_id):
         raise RoostError("The prompt is %d KB, and an agent can start with at most %d KB; start it with less "
                          "and send the rest once it runs" % (-(-len(prompt.encode()) // 1024),
                                                              PROMPT_ARGUMENT_LIMIT // 1024))
+    if prompt and "\0" in prompt:
+        raise RoostError("The prompt holds a NUL character on line %d, which an agent can't start with; "
+                         "delete it and try again" % (prompt.count("\n", 0, prompt.index("\0")) + 1))
     setup = text(request.get("setup"))
     task = dict(id=task_id, name=name, task=prompt or name, repo=repo,
                 # Shown by its short name, as a branch asked for in full is.
@@ -2052,8 +2079,8 @@ def make_task(store, request, create_id):
     with noting_creation(store, task) as note:
         INHERITED.append(note)
         try:
-            git(repo, "-c", "branch.autoSetupMerge=false", "worktree", "add", "-b", branch,
-                str(worktree), commit)
+            git_with_hooks(repo, "-c", "branch.autoSetupMerge=false", "worktree", "add", "-b", branch,
+                           str(worktree), commit)
         except RoostError as exc:
             said = "\n".join(line for line in str(exc).splitlines() if not line.startswith("Preparing worktree"))
             if there or not worktree.exists():
@@ -2117,7 +2144,7 @@ def issues(request):
     """Open issues of the repository holding DIRECTORY, newest first, on
     the forge its origin is on, as gh or glab on this host sees them."""
     directory = str(Path(text(request.get("directory")) or ".").expanduser())
-    checkout = git(directory, "rev-parse", "--show-toplevel").stdout.strip()
+    checkout = git(directory, "rev-parse", "--show-toplevel").stdout.removesuffix("\n")
     forge = forge_for(checkout)
     result = []
     for issue in forge.issues(checkout):
@@ -4443,7 +4470,10 @@ def require_submodules_kept(worktree, where="its worktree"):
         return "%d %s%s" % (number, what, "" if number == 1 else ("es" if what.endswith("sh") else "s"))
     work = submodule_work(worktree)
     if not work:
-        return False
+        # A clone that failed leaves their folder, empty, which is enough
+        # for Git to refuse.
+        modules = read_git(worktree, "rev-parse", "--git-path", "modules").stdout.strip()
+        return bool(modules) and (Path(worktree) / modules).is_dir()
     lost = ["%s is checked out at a commit the task doesn't record" % entry[3:]
             for entry in git(worktree, *measuring(worktree), "status", "--porcelain", "-z",
                              "--untracked-files=no", "--ignore-submodules=dirty")
@@ -4603,12 +4633,16 @@ def kept_of_gone(repo, worktree):
     return None
 
 
-def require_nothing_kept(repo, worktree):
-    """Refuse to finish a task whose worktree folder is missing while what
-    Git keeps of it holds what may be work no branch has: the repositories
-    of its submodules, or commits on its detached HEAD. Forgetting it would
-    delete them, uncounted."""
-    gitdir = kept_of_gone(repo, worktree) if Path(repo).is_dir() else None
+def require_nothing_kept(repo, worktree, unlinked=False):
+    """Refuse to finish a task whose worktree folder is missing, or with
+    UNLINKED there but no longer linked to REPO, while what Git keeps of it
+    holds what may be work no branch has: the repositories of its
+    submodules, or commits on its detached HEAD. Forgetting it would delete
+    them, uncounted."""
+    gitdir = None
+    if Path(repo).is_dir():
+        gitdir = (next((place for place, path in linked_worktrees(repo) if Path(path).resolve() == worktree), None)
+                  if unlinked else kept_of_gone(repo, worktree))
     if not gitdir:
         return
     held = []
@@ -4645,6 +4679,10 @@ def require_nothing_kept(repo, worktree):
                      check=False, env=dict(os.environ, GIT_INDEX_FILE=str(gitdir / "index")))
         if staged.returncode:
             held.append("changes staged in its index")
+    if held and unlinked:
+        raise RoostError("The task's worktree has lost its link to the repository, and Git keeps what may be work "
+                         "with it: %s. Restore the link with git -C %s worktree repair, then try again"
+                         % (" and ".join(held), shlex.quote(str(repo))))
     if held:
         raise RoostError("The task's worktree folder is missing, and Git keeps what may be work with it: %s. Restore "
                          "the folder, or delete it all with git worktree remove --force --force %s, then try again"
@@ -4792,7 +4830,7 @@ def squash_merge(task, integration, here):
         # --ff, whatever your config's merge.ff says: Git refuses a squash
         # with --no-ff, and one that isn't a fast-forward with --ff-only,
         # though a squash makes no merge commit either way.
-        result = git(repo, "merge", "--squash", "--ff", tip, check=False)
+        result = git_with_hooks(repo, "merge", "--squash", "--ff", tip, check=False)
         if result.returncode:
             conflicts = conflicted_files(repo) or resolved_before(repo, "HEAD", tip)
             # A squash leaves no MERGE_HEAD to abort; this undoes it alike.
@@ -4803,7 +4841,7 @@ def squash_merge(task, integration, here):
             raise RoostError("Merge failed; task retained: " + (result.stderr.strip() or result.stdout.strip()))
         if not git(repo, "diff", "--cached", "--quiet", check=False).returncode:
             return tip  # The task's work was there already.
-        result = execute(["git", "-C", repo, "commit", "-q", "-F", "-"], input=message, check=False)
+        result = git_with_hooks(repo, "commit", "-q", "-F", "-", input=message, check=False)
         if result.returncode:
             said = result.stderr.strip() or result.stdout.strip()
             # Git exits 1 when a hook refuses, and 128 when it can't commit.
@@ -4928,7 +4966,8 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
             message = execute(["git", "-C", repo, "fmt-merge-msg"],
                               input="%s\t\tbranch '%s' of .\n" % (tip, branch)).stdout.strip()
             untracked = untracked_here(repo)
-            result = git(repo, "merge", "--no-ff", "--no-edit", "-m", message, "refs/heads/" + branch, check=False)
+            result = git_with_hooks(repo, "merge", "--no-ff", "--no-edit", "-m", message, "refs/heads/" + branch,
+                                    check=False)
         if result is not None and result.returncode:
             conflicts = conflicted_files(repo)
             merging = git(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0
@@ -5179,9 +5218,9 @@ def update(store, task):
     # and the message a merge of the short one has. A fast-forward where it
     # can be, as Git's default, whatever your config's merge.ff says: with
     # --ff-only, a task with commits of its own could never be updated.
-    result = git(worktree, "merge", "--ff", "--no-edit", "-m",
-                 "Merge branch '%s' into %s" % (integration, task["branch"]),
-                 "refs/heads/" + integration, check=False)
+    result = git_with_hooks(worktree, "merge", "--ff", "--no-edit", "-m",
+                            "Merge branch '%s' into %s" % (integration, task["branch"]),
+                            "refs/heads/" + integration, check=False)
     conflicts = conflicted_files(worktree)
     merging = git(worktree, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0
     # Conflicts Git resolved as you resolved them before, staged: the merge
@@ -5214,8 +5253,9 @@ def discard(store, task, expect=None, dry_run=False, teardown=None):
     branch_exists = ref_exists(repo, branch)
     ref = "refs/heads/" + branch
     commit = git(repo, "rev-parse", ref + "^{commit}").stdout.strip() if branch_exists else None
-    if not worktree_exists:
-        require_nothing_kept(repo, worktree)
+    unlinked = worktree_exists and not (worktree / ".git").is_file()
+    if unlinked or not worktree_exists:
+        require_nothing_kept(repo, worktree, unlinked)
     # The worktrees its agent made go with it.
     work = agent_work(task)
     if dry_run:
@@ -5223,7 +5263,7 @@ def discard(store, task, expect=None, dry_run=False, teardown=None):
         branches = ([branch] if branch_exists else []) + [entry["branch"] for entry in work if entry["branch"]]
         # Commits on a detached HEAD there, too; another branch keeps its own.
         heads = [head for head in [read_git(path, "rev-parse", "-q", "--verify", "HEAD").stdout.strip()
-                                   for path in paths] if head]
+                                   for path in paths if (Path(path) / ".git").is_file()] if head]
         tips = ["refs/heads/" + name for name in branches] + heads
         # --exclude applies to the --branches that follows it, by short name.
         commits = int(git(repo, "rev-list", "--count", *tips, "--not",
@@ -5232,8 +5272,8 @@ def discard(store, task, expect=None, dry_run=False, teardown=None):
         # Removing the worktrees deletes their submodules' repositories,
         # whose changes are counted there; here, which commits they're at.
         submodules = [entry for path in paths for entry in submodule_work(path)]
-        changes = sum(len(read_git(path, "status", "--porcelain", "--untracked-files=normal",
-                                   "--ignore-submodules=dirty").stdout.splitlines())
+        changes = sum(unlinked_files(path) or len(read_git(path, "status", "--porcelain", "--untracked-files=normal",
+                                                           "--ignore-submodules=dirty").stdout.splitlines())
                       for path in paths) + sum(entry["changes"] for entry in submodules)
         return dict(task, discard=dict(
             commits=commits, changes=changes, commit=commit, agentWorktrees=len(work),
@@ -5853,6 +5893,16 @@ def run_teardown(task, worktree, command):
         return "could not run (%s)" % exc, ""
 
 
+def unlinked_files(worktree):
+    """How many files WORKTREE holds if it has lost its link to the
+    repository, which Git can't count, and removing it deletes; else 0.
+    Those of a repository made there count too: its history goes with it."""
+    if (Path(worktree) / ".git").is_file():
+        return 0
+    return sum(len(files) + sum(os.path.islink(os.path.join(folder, name)) for name in folders)
+               for folder, folders, files in os.walk(worktree))
+
+
 def remove_worktrees(store, task, worktree, agents, force=False, teardown=None):
     """Remove TASK's WORKTREE, if any, and AGENTS, entries of `agent_work`.
     Without the registry lock: a worktree with dependencies installed can
@@ -5875,7 +5925,18 @@ def remove_worktrees(store, task, worktree, agents, force=False, teardown=None):
                 if failure:
                     task["teardownFailure"], task["teardownOutput"] = failure
                 remove_agent_worktrees(task, agents)
-                if worktree and force:
+                if worktree and not os.path.lexists(worktree):
+                    # The teardown command took it, as it may: Git may yet
+                    # keep it, which would hold on to its branch.
+                    if not force:
+                        require_nothing_kept(task["repo"], worktree)
+                    unregister_gone(task["repo"], worktree)
+                elif worktree and force and not (worktree / ".git").is_file():
+                    # Git removes no worktree that has lost its link to the
+                    # repository, however forced.
+                    shutil.rmtree(worktree)
+                    unregister_gone(task["repo"], worktree)
+                elif worktree and force:
                     # Twice: also a worktree its agent locked.
                     git(task["repo"], "worktree", "remove", "--force", "--force", str(worktree))
                 elif worktree:
@@ -6649,6 +6710,19 @@ def copy_included(repo, worktree):
 SUBMODULE_GIT = (2, 24, 1)
 
 
+def relative_url_options(worktree):
+    """Git's options for `git submodule init` in WORKTREE, a task's, to read
+    a relative URL as the primary checkout would, as what it makes of one
+    goes in the config they share. Git reads it from the remote the branch
+    tracks, and a task's tracks none: from origin, then, or with no such
+    remote, from the folder it runs in."""
+    repo = worktree_entries(worktree)[0][0]
+    here, there = (git(place, "ls-remote", "--get-url", check=False).stdout.strip() for place in (worktree, repo))
+    if there and there == here:
+        return []
+    return ["-c", "remote.origin.url=" + (there or repo)]
+
+
 def check_out_submodules(worktree, env, every=None, decided=lambda every: None):
     """Check out the submodules of WORKTREE, a new task's, at the commits
     its branch records, nested ones too, with `git submodule update` in
@@ -6693,9 +6767,18 @@ def check_out_submodules(worktree, env, every=None, decided=lambda every: None):
         every = not any(name in initialized for name in paths.values())
         decided(every)
     failed = []
-    for path in [path for path, name in paths.items()
-                 if name not in off and (every or name in initialized)]:
-        # As itself, not a pattern that could name others.
+    chosen = [path for path, name in paths.items() if name not in off and (every or name in initialized)]
+    # All at once, before Git fetches any, which takes a while: a task
+    # starting meanwhile would take those so far for your choice. As itself,
+    # not a pattern that could name others.
+    if every and chosen:
+        started = git(worktree, *relative_url_options(worktree), "submodule", "init", "--",
+                      *[":(literal)" + path for path in chosen], check=False, env=env)
+        if started.returncode:
+            # `update --init` would read a relative URL from here instead.
+            raise RoostError("Could not check out the submodules: %s; resuming the task tries again"
+                             % started.stderr.strip())
+    for path in chosen:
         if subprocess.run(["git", "-C", str(worktree), "submodule", "update", "--init", "--recursive", "--",
                            ":(literal)" + path], env=env).returncode:
             head = git(worktree / path, "rev-parse", "-q", "--verify", "HEAD",

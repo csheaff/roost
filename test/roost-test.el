@@ -4415,6 +4415,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
      (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
                ((symbol-function 'y-or-n-p) (lambda (&rest _) t))
                ((symbol-function 'roost-discard) (lambda (task) (setq discarded (roost--field task 'id))))
+               ((symbol-function 'roost--ask-after-reply) (lambda (_key _listed ask) (funcall ask)))
                ((symbol-function 'roost--request)
                 (lambda (_host _action _params _success failure)
                   (funcall failure "Task branch has unmerged commits; merge it (m) first, discard it, or forget the task to keep its branch"))))
@@ -4488,6 +4489,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
    (let ((own "codex/roost/fix-auth-123456") asked discarded)
      (cl-letf (((symbol-function 'y-or-n-p) (lambda (prompt &rest _) (push prompt asked) t))
                ((symbol-function 'roost-discard) (lambda (task) (setq discarded (roost--field task 'id))))
+               ((symbol-function 'roost--ask-after-reply) (lambda (_key _listed ask) (funcall ask)))
                ((symbol-function 'roost--request) (lambda (&rest _) (error "Asked its host"))))
        (roost-retire (roost--cache-task "dev" (append '((ahead . 1) (dirty) (worktreeBranch . "feat"))
                                                       (roost-test--task nil "ready"))))
@@ -7123,6 +7125,7 @@ With FAILING, it prints it on stderr and exits with status 1."
                                              (integrationBranch . "main"))
                                            (roost-test--task)))))
                ((symbol-function 'roost--refresh-host) #'ignore)
+               ((symbol-function 'roost--ask-after-reply) (lambda (_key _listed ask) (funcall ask)))
                ((symbol-function 'y-or-n-p) (lambda (_) t))
                ((symbol-function 'roost-send) (lambda (_task text) (setq sent text))))
        (roost-update task)
@@ -7139,6 +7142,7 @@ With FAILING, it prints it on stderr and exits with status 1."
                                              (integrationBranch . "main"))
                                            (roost-test--task)))))
                ((symbol-function 'roost--refresh-host) #'ignore)
+               ((symbol-function 'roost--ask-after-reply) (lambda (_key _listed ask) (funcall ask)))
                ((symbol-function 'y-or-n-p) (lambda (prompt) (setq asked prompt) nil))
                ((symbol-function 'roost-send) (lambda (_task text) (setq sent text))))
        (roost-update task)
@@ -10153,6 +10157,37 @@ ssh: connect to host dev port 22: Operation timed out"
                 (should-not reconnected))
             (kill-buffer terminal))))))))
 
+(ert-deftest roost-a-terminal-comes-back-when-resuming-is-refused ()
+  ;; The agent exited, and you started it by hand in the task's shell, which
+  ;; shares its session: the host refuses to start a second one on the
+  ;; conversation, and says to exit that one, in the terminal Roost closed
+  ;; to resume.
+  (roost-test--isolated
+   (let* ((task (roost--cache-task "dev" (append '((session . "roost-p-012345") (live))
+                                                 (roost-test--task "0123456789abcdef" "exited"))))
+          (terminal (with-current-buffer (generate-new-buffer " *terminal*")
+                      (setq-local roost-test--tmux '(:host "dev" :socket "main" :session "roost-p-012345"))
+                      (current-buffer)))
+          reconnected refusal)
+     (roost-test--with-tmux-buffers
+      (cl-letf (((symbol-function 'tmux-control-buffer-session)
+                 (lambda () (plist-get roost-test--tmux :session)))
+                ((symbol-function 'tmux-control-disconnect) #'ignore)
+                ((symbol-function 'tmux-control-reconnect)
+                 (lambda () (push (current-buffer) reconnected)))
+                ((symbol-function 'roost--request)
+                 (lambda (_host action _parameters success failure)
+                   (if (equal action "inspect")
+                       (funcall success task)
+                     (funcall failure "The agent is running outside Roost in the task's shell")))))
+        (unwind-protect
+            (save-window-excursion
+              (set-window-buffer (selected-window) terminal)
+              (roost--act task "resume" nil nil (lambda (err) (setq refusal err)))
+              (should (equal refusal "The agent is running outside Roost in the task's shell"))
+              (should (equal reconnected (list terminal))))
+          (kill-buffer terminal)))))))
+
 (ert-deftest roost-the-sidebar-highlights-the-row-its-keys-act-on ()
   ;; It has no mode line, so nothing said you were in it, or which task
   ;; `s' would resume.
@@ -10731,6 +10766,7 @@ answered with `answer'."
                   (if (equal action "update")
                       (funcall failure "Commit the task's changes before updating it from main")
                     (setq sent (alist-get 'text params)))))
+               ((symbol-function 'roost--ask-after-reply) (lambda (_key _listed ask) (funcall ask)))
                ((symbol-function 'y-or-n-p) (lambda (_) answer))
                ((symbol-function 'message)
                 (lambda (format &rest args) (setq shown (apply #'format-message format args)))))

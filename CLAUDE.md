@@ -23,6 +23,13 @@ The [manual](docs/manual.md#how-it-works) says how it fits together.
   `roost-sweep--buffers`, and checks the file and lines they name. Give a
   new kind of buffer a state there.
   To check a new rule, break Roost the way it should catch and watch it fail.
+- `test/roost-sweep-late.el` holds the reply to each asynchronous command
+  back, does what you might do meanwhile, then delivers it good, refused,
+  dropped or timed out, and checks rules any late reply must keep. Give a new
+  command that waits on a host an entry in `roost-sweep-late--commands`, and a
+  new question in the minibuffer one in `roost-sweep-late--questions`. A new
+  rule goes in `roost-sweep-late--breakages` too, with the way to break Roost
+  that it catches.
 - Tests hold Roost to what it says about security. Every ERT test fails if
   Roost starts a program not in `roost-test--programs`; the helper's
   `Subprocesses` test allows a shell only for the project's own setup and
@@ -30,7 +37,7 @@ The [manual](docs/manual.md#how-it-works) says how it fits together.
   through each action against real Git and tmux. A new program, or a new
   way to start one, goes on those lists on purpose.
 - One ERT test, or those matching a regexp:
-  `emacs -Q --batch -L . -L test -l test/roost-test.el -l test/roost-sweep.el --eval '(ert-run-tests-batch-and-exit "REGEXP")'`.
+  `emacs -Q --batch -L . -L test -l test/roost-test.el -l test/roost-sweep.el -l test/roost-sweep-late.el --eval '(ert-run-tests-batch-and-exit "REGEXP")'`.
   Python: `python3 -m unittest discover -s test -p 'test_remote.py' -k PATTERN`.
 - The tests of Roost in Magit, its Evil keys and real perspective.el are
   skipped unless Magit, Evil, evil-collection and perspective.el are on
