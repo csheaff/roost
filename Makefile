@@ -4,12 +4,13 @@ EMACS ?= emacs
 # without Magit, the tests of Roost in Magit are skipped.
 TEST_LOAD_PATH ?=
 
-# Elisp protocol/UI tests, the sweep of every view's buttons and keys,
-# plus real isolated Git/tmux lifecycle tests.
+# Elisp protocol/UI tests, the sweep of every view's buttons and keys, the
+# sweep of late replies, plus real isolated Git/tmux lifecycle tests.
 .PHONY: test
 test:
 	$(EMACS) -Q --batch -L . -L test $(TEST_LOAD_PATH) \
-	  -l test/roost-test.el -l test/roost-sweep.el -f ert-run-tests-batch-and-exit
+	  -l test/roost-test.el -l test/roost-sweep.el -l test/roost-sweep-late.el \
+	  -f ert-run-tests-batch-and-exit
 	python3 -m unittest discover -s test -p 'test_*.py' -v
 
 # Roost used as you would, in a GUI Emacs of its own with a fake agent,

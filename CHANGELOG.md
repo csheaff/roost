@@ -4,6 +4,46 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A draft or task panel that closes as a host replies leaves you where you
+  are. On Emacs 30 it took you to the window it was in, from wherever you
+  had gone, out of the minibuffer too, where your next keys went elsewhere;
+  and a question asked from a buffer that closed ended in `Selecting
+  deleted buffer`. They now close once the minibuffer is done. Nothing to
+  do when upgrading.
+- Unloading Roost drops the requests under way: a reply that came after
+  it ended in `error in process sentinel` and left its buffers behind.
+  Nothing to do when upgrading.
+- `g` in the setup check shows what its latest run found: a slower reply
+  to the run before, such as the timeout of a host you have since brought
+  back, no longer takes its place. Nothing to do when upgrading.
+- A poll that fails after you forgot its host says nothing of it, and
+  leaves no error for the host's next use. Nothing to do when upgrading.
+- A draft whose task can't be made says why once, in the echo area and its
+  header line, not twice in `*Messages*`. Nothing to do when upgrading.
+- Answering a question of a task's draft once its task has been made says
+  the draft has closed, rather than `Wrong type argument`: the name, agent,
+  project, starting ref or issue you were choosing while it was made.
+  Nothing to do when upgrading.
+- A task you create opens only if you are still where you asked for it.
+  Making one can take minutes, and its terminal then took the window you
+  had gone to, with the keys you were typing. The echo area says it was
+  made, it shows in the sidebar and dashboard, and `RET` there opens it.
+  Nothing to do when upgrading.
+- A task you resume, or a shell you open, shows once its host replies only
+  if you are still where you asked for it. An agent can take seconds to
+  start, and its terminal then took the window you had gone to, with the
+  keys you were typing. It starts all the same, and `RET` opens it.
+  Nothing to do when upgrading.
+- What Roost asks once a host replies waits until you are out of the
+  minibuffer, and goes no further if the task went meanwhile: whether to
+  have the agent resolve what `u` left, or to discard what `x` refused to
+  retire. It landed in the question you were typing in, where the next
+  `y` or `n` answered it. Nothing to do when upgrading.
+- A task that went stays gone when a reply about it comes late. A reply
+  read before the task was retired, or before you forgot its host, used
+  to list it again, for good in the case of a forgotten host, and could
+  open its terminal or Magit. Roost now says it didn't open it, as it is
+  no longer listed. Nothing to do when upgrading.
 - A review note on a line of a file that isn't UTF-8 is saved, and keeps
   the line as Magit shows it, with `\351` for a byte. Saving it failed
   with `Wrong type argument: json-value-p`, and so did saving every note

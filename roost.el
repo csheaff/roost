@@ -794,7 +794,8 @@ is the seconds it may take, if not `roost-request-timeout'."
                                                     (concat "…" (substring stderr (- roost--error-limit))))
                                                    (t stderr))))
                                    (error (list failure (error-message-string parse-error))))))
-                           (funcall (car outcome) (cadr outcome)))
+                           (unless (process-get proc 'roost-dropped)
+                             (funcall (car outcome) (cadr outcome))))
                        (kill-buffer buffer)
                        (kill-buffer errors))))))
           (push process roost--requests)
@@ -1122,6 +1123,25 @@ must a reply with a newer look lose it for an older agent event."
         (roost--report-merge task (car merge) (cdr merge) (not old))))
     task))
 
+(defun roost--went-p (key listed)
+  "Whether the task with KEY went since Roost asked its host about it.
+LISTED is what Roost listed then: nil for a task it didn't list, which
+is yet to come rather than gone."
+  (and listed (not (gethash key roost--tasks))))
+
+(defun roost--cache-reply (host task listed)
+  "Cache TASK, as HOST replied about it, and return it, unless it went meanwhile.
+LISTED is as for `roost--went-p'.  A reply its host read before the task
+went can come after: to opening it while another Emacs retired it, or
+after you forgot its host, whose tasks no list would ever take away
+again.  The task then stays gone, and what Roost returns goes no further
+than the command that asked.  A reply that says it went is taken in as
+ever."
+  (if (and (roost--went-p (list host (roost--field task 'id)) listed)
+           (not (member (roost--field task 'status) '("retired" "forgotten" "discarded"))))
+      (cons (cons 'host host) (assq-delete-all 'host task))
+    (roost--cache-task host task)))
+
 (defun roost--pr-merges (task)
   "Where TASK's pull requests merged, as a list of (HEAD . BRANCH).
 HEAD is nil when not known, and BRANCH a pull request's base, which an
@@ -1198,7 +1218,7 @@ notifies of itself."
       (roost--request
        host "inspect" (list (cons 'id (roost--field task 'id)))
        (lambda (current)
-         (setq current (roost--cache-task host current))
+         (setq current (roost--cache-reply host current t))
          (roost--redraw)
          (funcall send current
                   (if-let* ((reply (or (roost--permission-request current)
@@ -1377,7 +1397,9 @@ those tasks."
       (let ((failed
              (lambda (err)
                (unwind-protect
-                   (progn
+                   ;; Not for a host forgotten meanwhile, which is no longer
+                   ;; yours to hear about.
+                   (when (member host (roost--hosts))
                      ;; Once per outage: ssh words a sleeping host's failure differently
                      ;; from one poll to the next, and the sidebar shows it meanwhile.
                      ;; Its last line says what failed; ssh's earlier ones say less, such
@@ -2096,6 +2118,41 @@ pane's buffer, or another window the one you were in."
       (and place (eq (selected-frame) frame)
            (equal (roost--terminal-place (window-buffer (selected-window))) place))))
 
+(defun roost--window-you-are-in ()
+  "The selected window, or the one you asked a question from in the minibuffer."
+  (or (and (window-minibuffer-p) (minibuffer-selected-window))
+      (selected-window)))
+
+(defun roost--you-stay ()
+  "Return a function that says whether you are still where you are now.
+That is, whether you have opened nothing since, and are in the same
+window and buffer, or a minibuffer you asked from there.  For a command
+that opens something once its host replies: a reply that takes more than
+a moment, as an agent's start does, must not take you from where you went."
+  (let* ((generation (cl-incf roost--open-generation))
+         (window (roost--window-you-are-in))
+         (shown (window-buffer window))
+         (place (roost--terminal-place shown))
+         (frame (window-frame window)))
+    (lambda ()
+      (and (= generation roost--open-generation)
+           (with-selected-window (roost--window-you-are-in)
+             (roost--still-there-p window shown place frame))))))
+
+(defun roost--while-you-stay (task)
+  "Return a function for a command that opens something of TASK's.
+It takes a function that opens it, and calls that once you are out of
+the minibuffer, unless by then you have gone elsewhere, as
+`roost--you-stay' says, or TASK went."
+  (let* ((stayed (roost--you-stay))
+         (key (roost--key task))
+         (listed (gethash key roost--tasks)))
+    (lambda (open)
+      (roost--when-out-of-minibuffer
+       (lambda ()
+         (when (and (funcall stayed) (not (roost--went-p key listed)))
+           (funcall open)))))))
+
 (defun roost--terminal-window-for (task)
   "The window to show TASK's terminal in, or nil for the selected one.
 That is the window showing it already, or else one showing another
@@ -2268,7 +2325,49 @@ asked for the task is quit first, by `roost--quit-questions-left-open'."
                      (remove-hook 'minibuffer-exit-hook done)
                      ;; Once its window has given the selection back.
                      (run-at-time 0 nil #'roost--when-out-of-minibuffer function))))
-      (add-hook 'minibuffer-exit-hook done))))
+      ;; In turn: a terminal that goes, then the one that takes its place.
+      (add-hook 'minibuffer-exit-hook done t))))
+
+(defun roost--close-buffer (buffer)
+  "Close BUFFER, as a host's reply says it is done, and the windows made for it.
+You stay where you are: on Emacs 30, quitting a window selects the one
+you were in as it came to show BUFFER, from wherever you have gone
+since, out of the minibuffer too.  Done once you are out of the
+minibuffer, which there fails as it ends if the buffer you asked from
+is gone."
+  (roost--when-out-of-minibuffer
+   (lambda ()
+     (when (buffer-live-p buffer)
+       (let ((selected (selected-window)))
+         ;; Before Emacs 31 this kills only a buffer that shows.
+         (quit-windows-on buffer t)
+         (when (buffer-live-p buffer) (kill-buffer buffer))
+         (when (and (window-live-p selected) (not (eq selected (selected-window))))
+           (select-window selected)))))))
+
+(defun roost--open-once-out (generation key listed open)
+  "Call OPEN once you are out of the minibuffer, if it is still wanted.
+Not if you opened something since GENERATION, as what you chose there,
+or the task with KEY went, LISTED being as for `roost--went-p'."
+  (roost--when-out-of-minibuffer
+   (lambda ()
+     (when (and (= generation roost--open-generation)
+                (not (roost--went-p key listed)))
+       (funcall open)))))
+
+(defun roost--ask-after-reply (key listed function)
+  "Call FUNCTION, which asks about the task with KEY, once out of a host's reply.
+That is from a timer, and once the minibuffer you are in is done, as a
+reply can come while you write there: a question asked from it lands in
+that minibuffer, and the next key you press answers it.  Not if the task
+went by then, LISTED being as for `roost--went-p'.  A `user-error' from
+FUNCTION is said as a command's is."
+  (run-at-time 0 nil #'roost--when-out-of-minibuffer
+               (lambda ()
+                 (unless (roost--went-p key listed)
+                   (condition-case err
+                       (funcall function)
+                     (user-error (message "%s" (error-message-string err))))))))
 
 (defun roost--questions-left-open ()
   "How many questions you left open in the minibuffer, by going to another window.
@@ -2303,6 +2402,9 @@ quitting would end that command too."
 
 (defconst roost--opening-delay 0.5
   "Seconds a task's host can take to reply before Roost says it is opening.")
+
+(defvar roost--opening-timer nil
+  "The timer that says the task you opened last is opening.")
 
 ;;;###autoload
 (defun roost-open-task (&optional task quit-questions describe)
@@ -2342,17 +2444,25 @@ says once the terminal shows."
          (place (roost--terminal-place shown))
          (frame (window-frame window))
          (name (roost--field task 'name))
+         (key (roost--key task))
+         (listed (gethash key roost--tasks))
          (opening (format "Roost: opening %s…" name))
          ;; A host slow to reply, as over SSH, looked like a click that
          ;; did nothing.
-         (timer (run-at-time roost--opening-delay nil
-                             (lambda ()
-                               (when (= generation roost--open-generation)
-                                 (message "%s" opening)))))
+         (timer (progn
+                  (when (timerp roost--opening-timer) (cancel-timer roost--opening-timer))
+                  (setq roost--opening-timer
+                        (run-at-time roost--opening-delay nil
+                                     (lambda ()
+                                       (when (= generation roost--open-generation)
+                                         (message "%s" opening)))))))
          ;; Unless you have opened another task since, or shown something
-         ;; else, such as tmux-control's pager.
+         ;; else, such as tmux-control's pager, or the task went.
          (still-wanted (lambda ()
                          (and (= generation roost--open-generation)
+                              (not (when (roost--went-p key listed)
+                                     (message "Roost: didn't open %s, as it is no longer listed" name)
+                                     t))
                               (or (roost--still-there-p window shown place frame)
                                   (progn
                                     (message "Roost: didn't open %s, as you went to another window or buffer while its host replied"
@@ -2362,7 +2472,7 @@ says once the terminal shows."
                     (list (cons 'id (roost--field task 'id)))
                     (lambda (current)
                       (cancel-timer timer)
-                      (setq current (roost--cache-task (roost--field task 'host) current))
+                      (setq current (roost--cache-reply (roost--field task 'host) current listed))
                       ;; The reply can be newer than what is shown, as when
                       ;; you answered the agent meanwhile: show it everywhere,
                       ;; the task's panel too, not only where the task opens.
@@ -2398,8 +2508,11 @@ says once the terminal shows."
                                (run-at-time
                                 0 nil #'roost--when-out-of-minibuffer
                                 (lambda ()
-                                  (when (= generation roost--open-generation)
-                                    (let* ((current (or (gethash (roost--key task) roost--tasks) task))
+                                  ;; Nor about a task that went, whose window
+                                  ;; is gone for good.
+                                  (when (and (= generation roost--open-generation)
+                                             (not (roost--went-p key listed)))
+                                    (let* ((current (or (gethash key roost--tasks) task))
                                            ;; As after its host restarted: one
                                            ;; question for all of them.
                                            (others (roost--crashed-with current))
@@ -2622,7 +2735,8 @@ EXTRA is an alist of further request fields, such as the issue."
   (unless (member agent roost--agents)
     (user-error "Unsupported Roost agent: %s" agent))
   (let ((host (roost--directory-host directory))
-        (setup (roost--project-value directory 'roost-setup-command)))
+        (setup (roost--project-value directory 'roost-setup-command))
+        (stayed (roost--you-stay)))
     (roost--request
      host "create"
      `(,(cons 'directory (file-local-name directory))
@@ -2641,23 +2755,33 @@ EXTRA is an alist of further request fields, such as the issue."
            . ,extra)
      (lambda (task)
        (cl-incf (gethash host roost--revisions 0))
-       (roost--task-made host task name on-success))
+       (roost--task-made host task name on-success stayed))
      (lambda (err)
        (message "Roost could not create %s: %s" name err)
        (when on-failure (funcall on-failure err)))
      (+ roost-request-timeout roost--create-seconds))
     (message "Roost: creating %s…" name)))
 
-(defun roost--task-made (host task name &optional on-success)
-  "Cache and open TASK, which HOST made as NAME, first calling ON-SUCCESS with it."
+(defun roost--task-made (host task name on-success stayed)
+  "Cache TASK, which HOST made as NAME, and call ON-SUCCESS, if any, with it.
+Then open it, if STAYED, called once you are out of the minibuffer and
+before ON-SUCCESS moves anything, says you are still where you asked for
+it: making a task can take minutes."
   (roost--remember-host host)
   (when (roost--field task 'repo)
     (roost--remember-project (roost--project-directory (cons (cons 'host host) task))))
   (setq task (roost--cache-task host task))
-  (when on-success (funcall on-success task))
   (roost-watch-mode 1)
-  (roost--redraw)
-  (roost-open-task task)
+  ;; It opens where the draft closes.
+  (roost--when-out-of-minibuffer
+   (lambda ()
+     (let ((stayed (funcall stayed)))
+       (when on-success (funcall on-success task))
+       (roost--redraw)
+       ;; Unless it went while you were in the minibuffer: opening it
+       ;; would bring it back.
+       (when (and stayed (gethash (roost--key task) roost--tasks))
+         (roost-open-task task)))))
   (message "Roost created %s on %s from %s; it merges into %s"
            name (roost--host-label host)
            (roost--field task 'baseRef) (roost--field task 'integrationBranch)))
@@ -3414,21 +3538,32 @@ above the project used last on the host, or at its home."
                              (roost--host-directory host (if last (file-name-directory last) "~"))
                              nil t)))))
 
+(defun roost--back-in-draft (draft)
+  "Make DRAFT, the buffer you asked something from, current again.
+Say so if it has gone: a host can reply while you answer, and the draft
+closes once its task is made."
+  (unless (buffer-live-p draft)
+    (user-error "The task's draft has closed"))
+  (set-buffer draft))
+
 (defun roost-compose-set-project ()
   "Choose the draft's project from known checkouts, or any directory.
 The checkouts are those Roost has used, then those project.el knows.
 \"Other directory…\" asks for a host, unless only one is known, and
 then for a folder there, starting above the project used last on it."
   (interactive)
-  (let* ((projects (mapcar (lambda (dir) (cons (roost--project-label dir) dir))
+  (let* ((draft (current-buffer))
+         (projects (mapcar (lambda (dir) (cons (roost--project-label dir) dir))
                            (roost--project-choices)))
          ;; Under the project used last, which RET still takes, and on
          ;; screen however many projects there are.
          (choices (append (seq-take projects 1) (list (cons "Other directory…" 'other))
                           (seq-drop projects 1)))
          (choice (roost--choose-from "Project: " choices)))
+    (roost--back-in-draft draft)
     (when (eq choice 'other)
-      (setq choice (roost--read-project-directory)))
+      (setq choice (roost--read-project-directory))
+      (roost--back-in-draft draft))
     (when choice
       (let* ((directory (file-name-as-directory (expand-file-name choice)))
              (base (plist-get roost--compose-fields :base)))
@@ -3443,9 +3578,11 @@ then for a folder there, starting above the project used last on it."
 (defun roost-compose-set-agent ()
   "Choose the draft's agent."
   (interactive)
-  (when-let* ((agent (roost--choose-from "Agent: " (mapcar (lambda (agent) (cons agent agent))
+  (when-let* ((draft (current-buffer))
+              (agent (roost--choose-from "Agent: " (mapcar (lambda (agent) (cons agent agent))
                                                            roost--agents)
                                          roost-default-agent)))
+    (roost--back-in-draft draft)
     (setq roost--compose-fields (plist-put roost--compose-fields :agent agent))
     (roost--compose-render)))
 
@@ -3480,7 +3617,8 @@ As the helper decides it, or nil for the primary checkout's."
   "Choose the draft's starting Git ref; empty means the primary branch.
 A branch is also the one the task merges into."
   (interactive)
-  (let* ((directory (plist-get roost--compose-fields :directory))
+  (let* ((draft (current-buffer))
+         (directory (plist-get roost--compose-fields :directory))
          ;; Git runs on the project's host.
          (refs (when directory
                  (split-string (or (roost--git-in directory "for-each-ref" "--format=%(refname:short)"
@@ -3490,6 +3628,7 @@ A branch is also the one the task merges into."
          (ref (string-trim (completing-read "Start from ref (empty = primary checkout's branch): "
                                             (cons "HEAD" refs) nil nil)))
          (base (unless (string-empty-p ref) ref)))
+    (roost--back-in-draft draft)
     (setq roost--compose-fields
           (thread-first roost--compose-fields
                         (plist-put :base base)
@@ -3501,8 +3640,10 @@ A branch is also the one the task merges into."
 (defun roost-compose-set-name ()
   "Name the draft; empty derives the name from the prompt."
   (interactive)
-  (let ((name (string-trim (read-string "Task name (empty = from the prompt): "
-                                        (plist-get roost--compose-fields :name)))))
+  (let* ((draft (current-buffer))
+         (name (string-trim (read-string "Task name (empty = from the prompt): "
+                                         (plist-get roost--compose-fields :name)))))
+    (roost--back-in-draft draft)
     (setq roost--compose-fields
           (plist-put roost--compose-fields :name (unless (string-empty-p name) name)))
     (roost--compose-render)))
@@ -3532,16 +3673,18 @@ Atlassian's Teamwork Graph CLI, signed in on this machine, the Jira
 work items `roost-jira-query' finds are listed too, and the task's
 branch leads with the key of the one you choose."
   (interactive)
-  (let* ((directory (or (plist-get roost--compose-fields :directory)
+  (let* ((draft (current-buffer))
+         (directory (or (plist-get roost--compose-fields :directory)
                         (user-error "Choose a project first (%s)"
                                     (substitute-command-keys "\\[roost-compose-set-project]"))))
          (host (roost--directory-host directory))
          (jql (roost--project-value directory 'roost-jira-query))
          (outcomes (progn (message "Roost: listing open issues on %s…" (roost--host-label host))
-                          (roost--requests-wait
-                           (cons (list host "issues" (list (cons 'directory (file-local-name directory))))
-                                 ;; twg's sign-in is yours, here, wherever the project is.
-                                 (when jql (list (list nil "jira-issues" (list (cons 'jql jql)))))))))
+                          (prog1 (roost--requests-wait
+                                  (cons (list host "issues" (list (cons 'directory (file-local-name directory))))
+                                        ;; twg's sign-in is yours, here, wherever the project is.
+                                        (when jql (list (list nil "jira-issues" (list (cons 'jql jql)))))))
+                            (roost--back-in-draft draft))))
          (forge (car outcomes))
          ;; nil when twg isn't installed.
          (jira (cadr outcomes))
@@ -3579,6 +3722,7 @@ branch leads with the key of the one you choose."
                                  (_ "Issue: "))
                                (roost--in-order choices) nil t)
                               choices)))
+           (_ (roost--back-in-draft draft))
            ;; The prompt the last issue gave, text and all, which the
            ;; task's record leaves out.
            (previous (plist-get roost--compose-fields :issue-prompt))
@@ -3671,9 +3815,7 @@ EVENT, a click on the draft's Create button, says which draft."
                (with-current-buffer buffer
                  (setq roost--compose-submitting nil)
                  (if (not (get-text-property 0 'roost-no-reply err))
-                     (progn (message "Roost could not create the task: %s" err)
-                            (roost--draft-error "Could not create the task" err
-                                                'roost-compose-submit))
+                     (roost--draft-error "Could not create the task" err 'roost-compose-submit)
                    ;; It may yet be made: then a poll of its host lists it.
                    (roost--remember-host host)
                    (roost-watch-mode 1)
@@ -3700,14 +3842,12 @@ EVENT, a click on the draft's Create button, says which draft."
 An Org entry it was drafted from links to TASK."
   (when-let* ((marker (plist-get fields :org)))
     (roost--org-link marker task))
-  (when (buffer-live-p buffer)
-    (quit-windows-on buffer t)
-    (when (buffer-live-p buffer) (kill-buffer buffer))))
+  (roost--close-buffer buffer))
 
 (defun roost--compose-listed (host tasks)
-  "Open the drafted task if TASKS, which HOST listed, hold it.
+  "Close the draft of the task TASKS, which HOST listed, hold, and open it.
 That is once the draft's request got no reply in time, and the host
-made the task anyway."
+made the task anyway.  It opens where the draft is, if you are there."
   (when-let* ((buffer (get-buffer roost--compose-buffer))
               ((not (buffer-local-value 'roost--compose-submitting buffer)))
               (asked (buffer-local-value 'roost--compose-asked buffer))
@@ -3717,9 +3857,13 @@ made the task anyway."
                       (car asked)))
               (made (seq-find (lambda (task) (equal (roost--field task 'createId) (cadr asked))) tasks))
               (task (gethash (list host (roost--field made 'id)) roost--tasks)))
-    (let ((fields (buffer-local-value 'roost--compose-fields buffer)))
+    (let ((fields (buffer-local-value 'roost--compose-fields buffer))
+          (generation roost--open-generation))
       (roost--task-made host task (roost--field task 'name)
-                        (lambda (task) (roost--compose-made buffer fields task))))))
+                        (lambda (task) (roost--compose-made buffer fields task))
+                        (lambda ()
+                          (and (= generation roost--open-generation)
+                               (eq (window-buffer (roost--window-you-are-in)) buffer)))))))
 
 ;;;; Task commands
 
@@ -3771,12 +3915,14 @@ empty one.  Opening the task reconnects the rest."
   "Kill TERMINALS, whose session ended, rather than leave them blank.
 The windows showing them go back to what they showed before, but not to
 another task's terminal: nobody asked for that task."
-  (let ((kill-buffer-query-functions nil)
-        (switch-to-prev-buffer-skip
-         (lambda (_window buffer _bury-or-kill) (roost--terminal-task buffer))))
-    (dolist (buffer terminals)
-      (when (buffer-live-p buffer)
-        (kill-buffer buffer)))))
+  (roost--when-out-of-minibuffer
+   (lambda ()
+     (let ((kill-buffer-query-functions nil)
+           (switch-to-prev-buffer-skip
+            (lambda (_window buffer _bury-or-kill) (roost--terminal-task buffer))))
+       (dolist (buffer terminals)
+         (when (buffer-live-p buffer)
+           (kill-buffer buffer)))))))
 
 (defconst roost--action-messages
   '(("send" . "Sent to %s") ("stop" . "Stopped %s") ("resume" . "Resumed %s")
@@ -3784,10 +3930,13 @@ another task's terminal: nobody asked for that task."
   "What `roost--act' says once each action is done, for a task's name.
 The other actions say more themselves when they finish.")
 
-(defun roost--act (task action &optional parameters callback failure)
+(defun roost--act (task action &optional parameters callback failure replied)
   "Run ACTION on TASK with PARAMETERS, then CALLBACK with the updated task.
-FAILURE, if given, receives the error message instead of Roost reporting it."
+FAILURE, if given, receives the error message instead of Roost reporting it.
+REPLIED, if given, is called as the host replies well, before the
+terminal the action ended closes."
   (let* ((host (roost--field task 'host))
+         (listed (gethash (roost--key task) roost--tasks))
          ;; What removes the worktree runs the project's teardown first.
          (teardown (when (and (member action '("retire" "merge" "discard"))
                               (roost--field task 'repo))
@@ -3801,13 +3950,14 @@ FAILURE, if given, receives the error message instead of Roost reporting it."
                                                 (when teardown (list (cons 'teardown teardown)))
                                                 parameters)
            (lambda (updated)
+             (when replied (funcall replied))
              (roost--discard-terminal terminals)
              (cl-incf (gethash host roost--revisions 0))
              ;; `pushed' is transient: the callback sees it, the cache does not.
              (let ((pushed (assq 'pushed updated))
                    (torn (alist-get 'teardownFailure updated))
                    (output (alist-get 'teardownOutput updated)))
-               (setq updated (roost--cache-task host updated))
+               (setq updated (roost--cache-reply host updated listed))
                (roost--redraw)
                (when-let* ((said (cdr (assoc action roost--action-messages))))
                  (message said (roost--field task 'name)))
@@ -3848,7 +3998,19 @@ resume those too."
         (roost--resume-together task others)
       ;; Now, rather than in its turn among several resuming.
       (setq roost--resuming (delete (roost--key task) roost--resuming))
-      (roost--act task "resume" (roost--resume-parameters task) #'roost-open-task))))
+      (let* ((listed (gethash (roost--key task) roost--tasks))
+             (stayed (roost--you-stay))
+             (generation roost--open-generation)
+             there)
+        (roost--act task "resume" (roost--resume-parameters task)
+                    (lambda (updated)
+                      (when there
+                        ;; After its old terminal, which waits for that too.
+                        (roost--open-once-out generation (roost--key updated) listed
+                                              (lambda () (roost-open-task updated)))))
+                    nil
+                    ;; Its terminal, which you may be in, is about to go.
+                    (lambda () (setq there (funcall stayed))))))))
 
 (defun roost--resume-parameters (task)
   "What a request to resume TASK says besides which task."
@@ -3880,9 +4042,12 @@ OTHERS' terminals stay closed.  Once all have replied, say how many
 resumed, naming each that didn't and why: one that fails doesn't stop
 the rest.  One you resumed, stopped or forgot meanwhile, or that no
 longer shows as crashed, is passed over."
-  (let ((host (roost--field task 'host))
-        (tried 1)
-        failures said)
+  (let* ((host (roost--field task 'host))
+         (listed (gethash (roost--key task) roost--tasks))
+         (stayed (roost--you-stay))
+         (generation roost--open-generation)
+         (tried 1)
+         there failures said)
     ;; Until each replies, opening one of them offers the rest no more.
     (setq roost--resuming (append (mapcar #'roost--key (cons task others)) roost--resuming))
     (cl-labels ((replied (task)
@@ -3915,11 +4080,14 @@ longer shows as crashed, is passed over."
                     (next others)
                     ;; Said again once its terminal shows, if done by then:
                     ;; opening clears the echo area.
-                    (roost-open-task updated nil (lambda (_) said)))
+                    (when there
+                      (roost--open-once-out generation (roost--key updated) listed
+                                            (lambda () (roost-open-task updated nil (lambda (_) said))))))
                   (lambda (err)
                     (replied task)
                     (push (cons task err) failures)
-                    (next others))))))
+                    (next others))
+                  (lambda () (setq there (funcall stayed)))))))
 
 (defun roost--resumed-message (host total failures)
   "What resuming TOTAL agents on HOST did, with FAILURES, each (TASK . ERROR)."
@@ -4087,9 +4255,7 @@ draft's Send button, says which draft."
          (lambda (_task)
            (when (roost--remove-notes (lambda (note) (member (alist-get 'id note) notes)))
              (roost--redraw))
-           (when (buffer-live-p buffer)
-             (quit-windows-on buffer t)
-             (when (buffer-live-p buffer) (kill-buffer buffer))))
+           (roost--close-buffer buffer))
          (lambda (err)
            (message "Roost could not send to %s: %s" (roost--field task 'name) err)
            (when (buffer-live-p buffer)
@@ -5966,17 +6132,22 @@ says changed since: see `roost--since-looked'."
          (shown (window-buffer window))
          (place (roost--terminal-place shown))
          (frame (window-frame window))
+         (key (roost--key task))
+         (listed (gethash key roost--tasks))
          (open (lambda (&rest _)
                  (roost--when-out-of-minibuffer
                   (lambda ()
                     (when (= generation roost--open-generation)
                       ;; As it is now: renamed meanwhile, as from another
                       ;; Emacs, its workspace has the new name.
-                      (let ((task (gethash (roost--key task) roost--tasks task)))
-                        (if (not (roost--still-there-p window shown place frame))
-                            (message "Roost: didn't open %s for %s, as you went to another window or buffer while its host replied"
-                                     what (roost--field task 'name))
-                          (funcall show task)))))))))
+                      (let ((task (gethash key roost--tasks task)))
+                        (cond ((roost--went-p key listed)
+                               (message "Roost: didn't open %s for %s, as it is no longer listed"
+                                        what (roost--field task 'name)))
+                              ((not (roost--still-there-p window shown place frame))
+                               (message "Roost: didn't open %s for %s, as you went to another window or buffer while its host replied"
+                                        what (roost--field task 'name)))
+                              (t (funcall show task))))))))))
     (if (gethash (roost--field task 'host) roost--errors)
         (funcall open)
       (roost--look task parameters open))))
@@ -6067,16 +6238,15 @@ questions you left open in the minibuffer, as `roost-open-task' does."
       (roost--quit-questions-left-open
        (lambda () (roost-shell (or task (roost--read-task "Task: ")))))))
   (setq task (roost--choose task))
-  (let ((generation (cl-incf roost--open-generation)))
+  (let ((open (roost--while-you-stay task)))
     (roost--act task "shell" nil
                 (lambda (updated)
-                  (roost--when-out-of-minibuffer
-                   (lambda ()
-                     (when (= generation roost--open-generation)
-                       (roost--display-task updated (roost--field updated 'shellPaneId))
-                       (with-current-buffer (window-buffer (selected-window))
-                         (unless (tmux-control-tiled-p) (tmux-control-tile))
-                         (roost--focus-shell updated generation)))))))))
+                  (funcall open
+                           (lambda ()
+                             (roost--display-task updated (roost--field updated 'shellPaneId))
+                             (with-current-buffer (window-buffer (selected-window))
+                               (unless (tmux-control-tiled-p) (tmux-control-tile))
+                               (roost--focus-shell updated roost--open-generation))))))))
 
 (defun roost--focus-shell (task generation)
   "Focus TASK's shell after queued tiling replies, unless GENERATION changed."
@@ -6151,53 +6321,64 @@ conflicts, or changes not yet committed, offer to have the task's
 agent do it."
   (interactive)
   (setq task (roost--choose task))
-  (roost--act
-   task "update" nil
-   (lambda (updated)
-     (let* ((result (roost--field updated 'update))
-            (conflicts (alist-get 'conflicts result))
-            (resolved (alist-get 'resolved result))
-            (name (roost--field updated 'name))
-            (branch (roost--field updated 'integrationBranch)))
-       (roost--refresh-host (roost--field updated 'host) nil)
-       (cond (conflicts
-              (if (y-or-n-p (format "%s conflicts with %s in %s.  Ask its agent to resolve them? "
-                                       name branch (string-join conflicts ", ")))
-                  (roost-send updated
-                              (format "I merged %s into this branch and Git reports conflicts in: %s.%s Resolve the conflicts so the changes from both sides keep working, run the tests, and commit the merge."
-                                      branch (string-join conflicts ", ")
-                                      (if resolved
-                                          (format " It resolved those in %s as they were resolved before (rerere); check them too."
-                                                  (string-join resolved ", "))
-                                        "")))
-                (message "The merge is in progress in %s's worktree; resolve it in Magit (r) and commit"
-                         name)))
-             ;; Git resolved them as you did before (rerere), and left the
-             ;; merge to commit.
-             (resolved
-              (if (y-or-n-p (format "%s conflicts with %s in %s, which Git resolved as you resolved them before.  Ask its agent to check them and commit the merge? "
-                                    name branch (string-join resolved ", ")))
-                  (roost-send updated
-                              (format "I merged %s into this branch. Git reports conflicts in: %s, and resolved them as they were resolved before (rerere), so the merge is staged but not committed. Check that those resolutions keep the changes from both sides working, run the tests, and commit the merge."
-                                      branch (string-join resolved ", ")))
-                (message "The merge is in progress in %s's worktree; check it in Magit (r) and commit"
-                         name)))
-             ((alist-get 'changed result)
-              (message "%s now includes the latest %s" name branch))
-             (t (message "%s is already up to date with %s" name branch)))))
-   (lambda (err)
-     (if (not (string-prefix-p "Commit the task's changes before updating" err))
-         (message "Roost %s: %s" (roost--host-label (roost--field task 'host)) err)
-       (let ((name (roost--field task 'name))
-             (branch (roost--field task 'integrationBranch)))
-         (if (y-or-n-p (format "%s has changes not yet committed.  Ask its agent to commit them and merge %s? "
-                                  name branch))
-             (roost-send task
-                         (format "Commit your changes, then merge %s into this branch. If that conflicts, resolve the conflicts so the changes from both sides keep working. Run the tests, and commit the merge."
-                                 branch))
-           (message "%s" (substitute-command-keys
-                          (format "Commit %s's changes in Magit (\\<roost-task-info-mode-map>\\[roost-review]), then update it again"
-                             name)))))))))
+  (let* ((key (roost--key task))
+         (listed (gethash key roost--tasks)))
+    (roost--act
+     task "update" nil
+     (lambda (updated)
+       (let* ((result (roost--field updated 'update))
+              (conflicts (alist-get 'conflicts result))
+              (resolved (alist-get 'resolved result))
+              (name (roost--field updated 'name))
+              (branch (roost--field updated 'integrationBranch)))
+         (roost--refresh-host (roost--field updated 'host) nil)
+         (cond (conflicts
+                (roost--ask-after-reply
+                 key listed
+                 (lambda ()
+                   (if (y-or-n-p (format "%s conflicts with %s in %s.  Ask its agent to resolve them? "
+                                         name branch (string-join conflicts ", ")))
+                       (roost-send updated
+                                   (format "I merged %s into this branch and Git reports conflicts in: %s.%s Resolve the conflicts so the changes from both sides keep working, run the tests, and commit the merge."
+                                           branch (string-join conflicts ", ")
+                                           (if resolved
+                                               (format " It resolved those in %s as they were resolved before (rerere); check them too."
+                                                       (string-join resolved ", "))
+                                             "")))
+                     (message "The merge is in progress in %s's worktree; resolve it in Magit (r) and commit"
+                              name)))))
+               ;; Git resolved them as you did before (rerere), and left the
+               ;; merge to commit.
+               (resolved
+                (roost--ask-after-reply
+                 key listed
+                 (lambda ()
+                   (if (y-or-n-p (format "%s conflicts with %s in %s, which Git resolved as you resolved them before.  Ask its agent to check them and commit the merge? "
+                                         name branch (string-join resolved ", ")))
+                       (roost-send updated
+                                   (format "I merged %s into this branch. Git reports conflicts in: %s, and resolved them as they were resolved before (rerere), so the merge is staged but not committed. Check that those resolutions keep the changes from both sides working, run the tests, and commit the merge."
+                                           branch (string-join resolved ", ")))
+                     (message "The merge is in progress in %s's worktree; check it in Magit (r) and commit"
+                              name)))))
+               ((alist-get 'changed result)
+                (message "%s now includes the latest %s" name branch))
+               (t (message "%s is already up to date with %s" name branch)))))
+     (lambda (err)
+       (if (not (string-prefix-p "Commit the task's changes before updating" err))
+           (message "Roost %s: %s" (roost--host-label (roost--field task 'host)) err)
+         (let ((name (roost--field task 'name))
+               (branch (roost--field task 'integrationBranch)))
+           (roost--ask-after-reply
+            key listed
+            (lambda ()
+              (if (y-or-n-p (format "%s has changes not yet committed.  Ask its agent to commit them and merge %s? "
+                                    name branch))
+                  (roost-send task
+                              (format "Commit your changes, then merge %s into this branch. If that conflicts, resolve the conflicts so the changes from both sides keep working. Run the tests, and commit the merge."
+                                      branch))
+                (message "%s" (substitute-command-keys
+                               (format "Commit %s's changes in Magit (\\<roost-task-info-mode-map>\\[roost-review]), then update it again"
+                                       name))))))))))))
 
 ;;;; Pull requests
 
@@ -6404,9 +6585,7 @@ Create button, says which draft."
         (roost--act
          task "pr" `((title . ,title) (body . ,body) (draft . ,(and draft t)))
          (lambda (updated)
-           (when (buffer-live-p buffer)
-             (quit-windows-on buffer t)
-             (when (buffer-live-p buffer) (kill-buffer buffer)))
+           (roost--close-buffer buffer)
            (message "Roost: opened pull request %s %s"
                     (roost--pr-number (roost--field updated 'pr))
                     (alist-get 'url (roost--field updated 'pr))))
@@ -7129,6 +7308,8 @@ won't retire, offer to discard it, which keeps that branch."
   (interactive)
   (setq task (roost--choose task))
   (let* ((name (roost--field task 'name))
+         (key (roost--key task))
+         (listed (gethash key roost--tasks))
          (offer (lambda (&optional branch)
                   (when (y-or-n-p
                          (if branch
@@ -7158,10 +7339,13 @@ won't retire, offer to discard it, which keeps that branch."
                                  ;; Git statistics newer than Roost's.
                                  (cond
                                   ((string-match-p "\\`\\(Task branch has unmerged\\|Uncommitted or untracked\\)" err)
-                                   (funcall offer))
+                                   (roost--ask-after-reply key listed offer))
                                   ((string-match "\\`The task's worktree is on \\(.+?\\), not the task's branch" err)
                                    (let ((branch (match-string 1 err)))
-                                     (funcall offer (if (equal branch "a detached HEAD") "HEAD" branch))))
+                                     (roost--ask-after-reply
+                                      key listed
+                                      (lambda ()
+                                        (funcall offer (if (equal branch "a detached HEAD") "HEAD" branch))))))
                                   (t (message "Roost %s: %s" (roost--host-label (roost--field task 'host)) err))))))))
     (cond
      ((member (roost--field task 'status) '("starting" "running" "permission" "background"))
@@ -7250,10 +7434,14 @@ finished work is merged or retired instead."
   (interactive)
   (setq task (roost--choose task))
   (let* ((name (roost--field task 'name))
+         (listed (gethash (roost--key task) roost--tasks))
          (told (alist-get 'discard
                           (roost--request-wait (roost--field task 'host) "discard"
                                                (list (cons 'id (roost--field task 'id))
                                                      (cons 'dryRun t)))))
+         ;; While its host replied.
+         (_ (when (roost--went-p (roost--key task) listed)
+              (user-error "%s is no longer listed" name)))
          (commits (or (alist-get 'commits told) 0))
          (submodule-commits (or (alist-get 'submoduleCommits told) 0))
          (unread (or (alist-get 'unreadSubmodules told) 0))
@@ -7303,9 +7491,7 @@ to.  File buffers stay, since they may hold unsaved edits."
                (with-current-buffer buffer
                  (and (derived-mode-p 'magit-mode 'dired-mode)
                       (roost--task-in-directory default-directory (list task)))))
-      ;; Before Emacs 31 this kills only a buffer that shows.
-      (quit-windows-on buffer t)
-      (when (buffer-live-p buffer) (kill-buffer buffer)))))
+      (roost--close-buffer buffer))))
 
 (defun roost--revert-merged-files (task)
   "Revert the buffers of files a merge of TASK changed in its primary checkout.
@@ -7337,10 +7523,7 @@ which restores a window configuration of that frame, selects it."
     (dolist (buffer (buffer-list))
       (when (and (equal (buffer-local-value 'roost--buffer-task-key buffer) key)
                  (eq (buffer-local-value 'major-mode buffer) 'roost-task-info-mode))
-        ;; Before Emacs 31 this kills only a panel that shows, so kill the
-        ;; rest too.
-        (quit-windows-on buffer t)
-        (when (buffer-live-p buffer) (kill-buffer buffer))))
+        (roost--close-buffer buffer)))
     ;; Each frame has tabs of its own, or perspectives, which may have
     ;; any name the task had.
     (dolist (frame (frame-list))
@@ -10899,7 +11082,11 @@ Beside a terminal, that turns off `roost-task-panel-mode'."
     (roost--task-panel-message)))
 
 (defun roost-unload-function ()
-  "Remove Roost's hooks, advice and side windows for `unload-feature'."
+  "Remove Roost's hooks, advice and side windows for `unload-feature'.
+Requests under way go too, as their replies would find no Roost to take them."
+  (dolist (process (copy-sequence roost--requests))
+    (process-put process 'roost-dropped t)
+    (delete-process process))
   (remove-hook 'tmux-control-switch-session-functions #'roost--switch-session)
   (remove-hook 'after-change-major-mode-hook #'roost--keep-terminal-in-its-workspace)
   (remove-hook 'tmux-control-window-buffer-functions #'roost--gather-task-terminals)
@@ -10912,6 +11099,7 @@ Beside a terminal, that turns off `roost-task-panel-mode'."
   (remove-hook 'window-configuration-change-hook #'roost--layout-changed)
   (remove-hook 'after-delete-frame-functions #'roost--frame-deleted)
   (when (timerp roost--layout-timer) (cancel-timer roost--layout-timer))
+  (when (timerp roost--opening-timer) (cancel-timer roost--opening-timer))
   (remove-hook 'magit-post-refresh-hook #'roost--magit-refreshed)
   (roost--magit-teardown)
   (when roost-watch-mode (roost-watch-mode -1))
@@ -11203,6 +11391,9 @@ here: see `roost--away'."
   "Alist of (HOST . RESULT) for `roost-doctor'.
 RESULT is `pending', a list of checks, or (error . MESSAGE).")
 
+(defvar roost--doctor-generation 0
+  "Counts runs of `roost-doctor', so that replies to earlier ones are ignored.")
+
 (defvar-keymap roost-doctor-mode-map
   :doc "Keys for the Roost setup check."
   "g" #'roost-doctor)
@@ -11422,23 +11613,25 @@ With a prefix argument, read a HOST to check (empty for this machine)."
              (if (string-empty-p host) nil host)))))
   (let ((hosts (if (or host current-prefix-arg) (list host) (roost--hosts)))
         (commands (mapcar (lambda (agent) (cons (intern agent) (vconcat (roost--agent-command agent))))
-                          roost--agents)))
+                          roost--agents))
+        (generation (cl-incf roost--doctor-generation)))
     (setq roost--doctor-results (mapcar (lambda (host) (cons host 'pending)) hosts))
     (with-current-buffer (get-buffer-create "*roost doctor*")
       (unless (derived-mode-p 'roost-doctor-mode) (roost-doctor-mode)))
     (roost--render-doctor)
     (pop-to-buffer "*roost doctor*")
     (dolist (host hosts)
-      (let ((host host))
+      (let* ((host host)
+             (done (lambda (result)
+                     ;; A host down for the last run, say, may be up for this one.
+                     (when (= generation roost--doctor-generation)
+                       (setf (alist-get host roost--doctor-results nil nil #'equal) result)
+                       (roost--render-doctor)))))
         (roost--request
          host "doctor" (list (cons 'commands commands)
                              (cons 'projects (vconcat (roost--host-projects host))))
-         (lambda (checks)
-           (setf (alist-get host roost--doctor-results nil nil #'equal) checks)
-           (roost--render-doctor))
-         (lambda (err)
-           (setf (alist-get host roost--doctor-results nil nil #'equal) (cons 'error err))
-           (roost--render-doctor)))))))
+         done
+         (lambda (err) (funcall done (cons 'error err))))))))
 
 ;;;###autoload
 (defcustom roost-mode-line-count t
