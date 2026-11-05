@@ -3124,6 +3124,18 @@ terminal's, on a pty.  Skips the test where it can't be made."
            (push-button (1- (point))))
          (should (string-suffix-p ":dev:/srv/ledger/" started)))))))
 
+(ert-deftest roost-reads-a-state-file-holding-no-list-as-empty ()
+  ;; Damaged, a file of projects, hosts or notes is as good as missing,
+  ;; whatever is left in it, rather than an error the first time it's read.
+  (roost-test--isolated
+   (dolist (text '("5" "true" "\"text\"" "[\"/tmp/a/\"" "" "null"))
+     (with-temp-file roost-projects-file (insert text))
+     (setq roost--projects-loaded nil roost--remembered-projects nil)
+     (should-not (roost--known-projects)))
+   (with-temp-file roost-projects-file (insert "[1,null,\"/tmp/a/\"]"))
+   (setq roost--projects-loaded nil)
+   (should (equal (roost--known-projects) '("/tmp/a/")))))
+
 (ert-deftest roost-sidebar-offers-the-projects-you-used-lately ()
   ;; Below the tasks, projects with none: the latest few on each host
   ;; Roost watches, each a click from a new task's draft.
@@ -3153,7 +3165,15 @@ terminal's, on a pty.  Skips the test where it can't be made."
              (roost--render-sidebar)
              (should (equal (cdr (member "Start a task in" (split-string (buffer-string) "\n")))
                             (list (funcall row "dev · a") (funcall row "dev · b") (funcall row "dev · c")
-                                  (funcall row "local · notes") (funcall row "Other directory…") "")))
+                                  (funcall row "local · notes") (funcall row "Other directory…") "" "")))
+             ;; A click on the space below the rows is on none of them.
+             (should-not (memq (key-binding [mouse-1] t nil (point-max))
+                               '(roost-sidebar-new-task roost-dashboard-mouse-open)))
+             (let ((roost-sidebar-recent-projects 0))
+               (roost--render-sidebar)
+               (should-not (memq (key-binding [mouse-1] t nil (point-max))
+                                 '(roost-sidebar-new-task roost-dashboard-mouse-open))))
+             (roost--render-sidebar)
              (goto-char (point-min))
              (search-forward "dev · b")
              (should (string-match-p "New task in dev · /srv/b" (get-text-property (point) 'help-echo)))
@@ -3193,7 +3213,12 @@ terminal's, on a pty.  Skips the test where it can't be made."
                    (roost-sidebar-new-task))
                  (should-not drafted)))
              (should-error (call-interactively #'roost-forget-project) :type 'user-error)
-             (search-backward "dev · b")
+             ;; Its menu doesn't offer what it refuses.
+             (let ((forget (lambda ()
+                             (eval (plist-get (nthcdr 4 (assq 'Forget roost-project-menu)) :enable) t))))
+               (should-not (funcall forget))
+               (search-backward "dev · b")
+               (should (funcall forget)))
              ;; Forgotten, the next most recent takes its place.
              (call-interactively #'roost-forget-project)
              (should-not (member "/ssh:dev:/srv/b/" roost--remembered-projects))
@@ -3221,10 +3246,38 @@ terminal's, on a pty.  Skips the test where it can't be made."
              (roost--render-sidebar)
              (should (string-match-p "No tasks\\." (buffer-string)))
              (should (string-match-p (regexp-quote (funcall row "dev · ledger")) (buffer-string)))
-             (let ((roost-sidebar-recent-projects 0))
-               (roost--render-sidebar)
-               (should-not (string-match-p "Start a task in" (buffer-string)))))
+             (dolist (none '(0 nil))
+               (let ((roost-sidebar-recent-projects none))
+                 (roost--render-sidebar)
+                 (should-not (string-match-p "Start a task in" (buffer-string))))))
          (kill-buffer "*sidebar test*"))))))
+
+(ert-deftest roost-header-lines-show-percent-signs-as-written ()
+  ;; A header line reads %- as dashes to its end, over the buttons, and
+  ;; drops a % before a space, so what it shows of a task's name, an
+  ;; error or a file doubles them.
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let ((task (roost--cache-task "dev" (append '((name . "fix 50%-off coupon")) (roost-test--task))))
+           (xterm-mouse-mode t))
+       (roost--send-draft task)
+       (unwind-protect
+           (cl-flet ((shows (expected)
+                       (should (string-search expected (eval (cadr header-line-format) t)))))
+             (shows "Send to fix 50%%-off coupon")
+             ;; Beside its buttons or not, and cut short.
+             (setq roost--send-sending t)
+             (shows "Send to fix 50%%-off coupon")
+             (setq roost--send-sending nil)
+             (roost--draft-error "Could not send" "disk 100% full" 'roost-send-submit)
+             (shows "disk 100%% full")
+             (cl-letf (((symbol-function 'window-max-chars-per-line) (lambda (&rest _) 40)))
+               (setq roost--draft-note " 100% of the disk is full, and more besides that")
+               (shows "100%% of")))
+         (kill-buffer)))
+     (let ((roost--note-box '(:buffer nil :place ((file . "50%-off.py") (line . 3) (end . 3)))))
+       (should (string-search "50%%-off.py:3" (roost--note-box-header)))))))
 
 (ert-deftest roost-draft-buttons-create-or-cancel-it ()
   ;; A click on Create or Cancel acts on the draft, whichever window you
@@ -3748,6 +3801,56 @@ terminal's, on a pty.  Skips the test where it can't be made."
          ;; Named for two tasks of a name, which later tests aren't.
          (mapc #'kill-buffer (list code old draft (roost--task-info-buffer a) (roost--task-info-buffer b))))))))
 
+(ert-deftest roost-a-panel-docking-gives-back-its-own-terminal ()
+  ;; The panel took the place of its task's terminal, as `i' does from
+  ;; the window beside it: docking, it gives the terminal back, though
+  ;; not a second window on it.
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let* ((a (roost--cache-task "dev" (roost-test--task)))
+            (roost-workspace nil) (roost-task-panel-mode nil)
+            (terminal (get-buffer-create "*roost-test a's terminal*"))
+            (code (get-buffer-create "*roost-test code*"))
+            (panel (roost--task-info-buffer a)))
+       (unwind-protect
+           (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 160))
+                     ((symbol-function 'roost--refresh-host) #'ignore)
+                     ((symbol-function 'roost--terminal-task) (lambda (buffer) (and (eq buffer terminal) a))))
+             (set-frame-parameter nil 'roost-task (roost--key a))
+             (cl-flet ((dock ()
+                         (let ((roost-task-panel-mode t)) (roost--sync-side-windows)))
+                       (undock ()
+                         (delete-window (roost--task-panel-window))))
+               ;; As the frame's only main window.
+               (switch-to-buffer terminal)
+               (display-buffer panel '(display-buffer-same-window))
+               (dock)
+               (should (window-live-p (get-buffer-window terminal)))
+               ;; You were there, and stay, to talk to its agent.
+               (should (eq (window-buffer) terminal))
+               (undock)
+               ;; Beside a window of yours, as the one that goes.
+               (switch-to-buffer code)
+               (let ((other (split-window-right)))
+                 (set-window-buffer other terminal)
+                 (with-selected-window other
+                   (display-buffer panel '(display-buffer-same-window)))
+                 (dock)
+                 (should (window-live-p other))
+                 (should (eq (window-buffer other) terminal))
+                 (undock)
+                 ;; Shown beside the panel's window too, it isn't shown twice.
+                 (with-selected-window other
+                   (switch-to-buffer code)
+                   (switch-to-buffer terminal)
+                   (display-buffer panel '(display-buffer-same-window)))
+                 (set-window-buffer (selected-window) terminal)
+                 (dock)
+                 (should-not (window-live-p other))
+                 (should (equal (get-buffer-window-list terminal 'nomini) (list (selected-window)))))))
+         (mapc #'kill-buffer (list panel terminal code)))))))
+
 (ert-deftest roost-task-panel-needs-room-in-the-widest-main-window ()
   (roost-test--isolated
    (save-window-excursion
@@ -3876,6 +3979,39 @@ terminal's, on a pty.  Skips the test where it can't be made."
                                                                    (line-end-position))))
              (should (equal (buffer-substring (line-beginning-position) (point)) "Line 30 ")))
          (kill-buffer buffer))))))
+(ert-deftest roost-opens-a-file-under-a-folder-named-tilde-in-the-worktree ()
+  ;; An agent can leave a folder named ~: its files aren't yours.
+  (roost-test--isolated
+   (let ((task (roost--cache-task nil (append '((worktree . "/tmp/roost-worktree")) (roost-test--task))))
+         opened)
+     (cl-letf (((symbol-function 'roost--activate-workspace) #'ignore)
+               ((symbol-function 'find-file) (lambda (file &rest _) (setq opened file)))
+               ((symbol-function 'find-file-other-window) (lambda (file &rest _) (setq opened file))))
+       (roost--diff-file task '((path . "~/.ssh/config") (untracked . t)))
+       (should (equal opened "/tmp/roost-worktree/~/.ssh/config"))
+       (setq opened nil)
+       (with-temp-buffer
+         (roost--visit-review-thread task '((path . "~/.ssh/config") (line . 1)))
+         (should (equal opened "/tmp/roost-worktree/~/.ssh/config")))))))
+
+(ert-deftest roost-task-panel-lists-no-files-of-a-worktree-gone ()
+  ;; A host says nothing of the files of a worktree gone, so Emacs still
+  ;; has those of its last full refresh: no diff can show them.
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (append '((worktreeMissing . t) (diff . "1 file +1 −0")
+                                                  (files ((path . "notes.py") (added . 1) (deleted . 0))))
+                                                (roost-test--task)))))
+     (with-temp-buffer
+       (roost-task-info-mode)
+       (setq roost--buffer-task-key (roost--key task))
+       (roost--render-task-info)
+       (should (string-search "The worktree is gone" (buffer-string)))
+       (should-not (string-search "notes.py" (buffer-string))))
+     ;; A pull request's thread on the whole file says so too.
+     (should (string-search "worktree is gone"
+                            (cadr (should-error (roost--visit-review-thread task '((path . "notes.py")))
+                                                :type 'user-error)))))))
+
 (ert-deftest roost-task-panel-lists-changed-files-that-open-their-diffs ()
   (let* ((files '(((path . "notes.py") (added . 10) (deleted . 3) (uncommitted . t))
                   ((path . "docs/a/very/long/path/to/the/guide.md") (added . 1) (deleted . 0))
@@ -11840,6 +11976,31 @@ note after, for any task, so a restart lost them all."
             (should (equal (shown) '("a.txt" "a.txt" "b.txt")))
             (funcall diff "b.txt")
             (should (equal (shown) '("a.txt" "b.txt")))))))))
+
+(ert-deftest roost-a-moved-files-diff-shows-the-move ()
+  ;; With its new path alone, Git would show every line of it as new,
+  ;; beside the panel's +0 −0.
+  (roost-test--with-magit-task
+    (setq task (roost--cache-task nil (append `((baseCommit . ,(car (process-lines "git" "rev-parse" "HEAD"))))
+                                              task)))
+    (call-process "git" nil nil nil "mv" "a.txt" "b.txt")
+    (cl-letf (((symbol-function 'roost--activate-workspace) #'ignore))
+      (save-current-buffer (roost--diff-file task '((path . "b.txt") (from . "a.txt")))))
+    (with-current-buffer (window-buffer (selected-window))
+      (should (eq major-mode 'magit-diff-mode))
+      (goto-char (point-min))
+      (should (re-search-forward "^renamed +a\\.txt -> b\\.txt" nil t))
+      (should-not (string-search "new file" (buffer-string))))
+    ;; Updated past the move, the file has no origin now, and the diff of
+    ;; it from before is one to close like any other.
+    (call-process "git" nil nil nil "commit" "-qm" "Move")
+    (setq task (roost--cache-task nil (append `((baseCommit . ,(car (process-lines "git" "rev-parse" "HEAD"))))
+                                              task)))
+    (roost-test--write-lines "b.txt" (number-sequence 1 10) "new line\n")
+    (cl-letf (((symbol-function 'roost--activate-workspace) #'ignore))
+      (save-current-buffer (roost--diff-file task '((path . "b.txt")))))
+    (should (= 1 (seq-count (lambda (buffer) (buffer-local-value 'roost--file-diff buffer))
+                            (buffer-list))))))
 
 ;;;; Workload
 
