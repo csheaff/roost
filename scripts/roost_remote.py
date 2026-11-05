@@ -4104,8 +4104,9 @@ def require_nothing_kept(repo, worktree):
         held.append("a merge under way")
     if (gitdir / "MERGE_AUTOSTASH").exists():
         held.append("changes a merge set aside")
-    # What was staged there, kept in its index, and in no commit.
-    if (gitdir / "index").is_file():
+    # What was staged there, kept in its index, and in no commit. Without
+    # HEAD, Git was deleting all this, and there's nothing to compare it to.
+    if head and (gitdir / "index").is_file():
         commit = git(repo, "rev-parse", "--verify", "-q", (head[len("ref:"):].strip() if head.startswith("ref:")
                                                           else head) + "^{commit}", check=False).stdout.strip()
         staged = git(repo, "--no-optional-locks", "diff-index", "--cached", "--quiet", commit or EMPTY_TREE,
@@ -4116,6 +4117,27 @@ def require_nothing_kept(repo, worktree):
         raise RoostError("The task's worktree folder is missing, and Git keeps what may be work with it: %s. Restore "
                          "the folder, or delete it all with git worktree remove --force --force %s, then try again"
                          % (" and ".join(held), shlex.quote(str(worktree))))
+
+
+def put_back_removed(task):
+    """Put back what a removal cut short took from TASK's worktree: Git
+    deletes a worktree file by file, and its link to the repository may go
+    among them. Otherwise it looks like changes of yours, which committing
+    would make real, or isn't a worktree at all. Roost began that removal
+    with nothing uncommitted there, and with its tracked files back,
+    Git says what is there since, as for any task, and nothing is forced."""
+    worktree = Path(task["worktree"]).resolve()
+    if not (task.get("removing") and worktree.is_dir() and Path(task["repo"]).is_dir()):
+        return
+    if not os.path.lexists(worktree / ".git"):
+        gitdir = next((gitdir for gitdir, path in linked_worktrees(task["repo"]) if Path(path).resolve() == worktree), None)
+        if gitdir is None:
+            return
+        atomic_text(worktree / ".git", "gitdir: %s\n" % gitdir)
+    gone = git_fields(worktree, "ls-files", "--deleted", "-z")
+    if gone:
+        git_fields(worktree, "checkout-index", "-f", "-z", "--stdin",
+                   input=b"".join(os.fsencode(path) + b"\0" for path in gone))
 
 
 def unregister_gone(repo, worktree):
@@ -4348,6 +4370,7 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
         raise RoostError("Task's tmux ownership changed; stop or forget the task instead")
     repo = task["repo"]
     branch = task["branch"]
+    put_back_removed(task)
     worktree = check_worktree(store, task)
     worktree_exists = worktree.exists()
     branch_exists = ref_exists(repo, branch)
@@ -4673,6 +4696,7 @@ def discard(store, task, expect=None, dry_run=False, teardown=None):
     worktree before it is removed."""
     repo = task["repo"]
     branch = task["branch"]
+    put_back_removed(task)
     # Whatever branch its agent left the worktree on: that goes too.
     worktree = check_worktree(store, task, branch=False)
     worktree_exists = worktree.exists()

@@ -4,6 +4,13 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A merge, retirement or discard stopped while Git deleted the task's
+  worktree finishes when you ask again. Roost said files were uncommitted,
+  and to commit them, which would have committed the deletion of the task's
+  work; or, once Git had deleted the worktree's link to the repository,
+  that the worktree was on a detached HEAD, and even discarding failed.
+  Roost now puts back what Git deleted and carries on. Nothing to do when
+  upgrading.
 - A merge or update whose connection dropped while Git ran it goes on to
   its end. Git stopped as it reported to the helper that had gone: a merge
   stayed marked as under way in the primary checkout, though committed,

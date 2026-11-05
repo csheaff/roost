@@ -84,6 +84,76 @@ class Crashes(unittest.TestCase):
         box.git("merge", "--abort")
         self.assertTrue(box.helper("merge", id=task["id"])["ok"])
 
+    def cut_short_removing(self, box, task, action, **args):
+        """Stop ACTION at the removal of TASK's worktree."""
+        box.arm("before", match="worktree remove")
+        self.assertIsNone(box.helper(action, id=task["id"], **args))
+        box.disarm()
+        return Path(task["worktree"])
+
+    def assert_finished(self, box, task):
+        self.assertEqual(box.helper("list", socket=box.socket)["result"], [])
+        self.assertFalse(Path(task["worktree"]).exists())
+        self.assertEqual(box.worktrees(), [str(box.repo)])
+        self.assertEqual(box.branches(), ["main"])
+
+    def test_a_worktree_half_removed_is_finished_off_as_asked(self):
+        def tracked(worktree):
+            (worktree / "work").unlink()
+
+        def link(worktree):
+            (worktree / ".git").unlink()
+
+        def nearly_all(worktree):
+            for path in worktree.iterdir():
+                if path.name != "hello":
+                    path.unlink()
+
+        for action, args in (("merge", {}), ("merge", dict(style="squash"))):
+            for gone in (tracked, link, nearly_all):
+                with self.subTest(action=action, args=args, gone=gone.__name__):
+                    box = self.box()
+                    task = box.create()
+                    box.commit(task)
+                    gone(self.cut_short_removing(box, task, action, **args))
+                    reply = box.helper(action, id=task["id"], **args)
+                    self.assertTrue(reply["ok"], reply)
+                    self.assert_finished(box, task)
+                    self.assertEqual(box.git("show", "main:work"), "work")
+
+    def test_what_a_removal_put_back_is_no_change_of_yours(self):
+        box = self.box()
+        task = box.create()
+        box.commit(task)
+        worktree = self.cut_short_removing(box, task, "merge")
+        (worktree / ".git").unlink()
+        (worktree / "work").unlink()
+        told = box.helper("discard", id=task["id"], dryRun=True)["result"]["discard"]
+        self.assertEqual((told["changes"], told["commits"]), (0, 0))
+        self.assertTrue(box.helper("discard", id=task["id"], expect=told["commit"])["ok"])
+        self.assert_finished(box, task)
+
+    def test_a_file_in_a_worktree_half_removed_is_still_refused(self):
+        box = self.box()
+        task = box.create()
+        box.commit(task)
+        worktree = self.cut_short_removing(box, task, "merge")
+        (worktree / "work").unlink()
+        (worktree / "written since").write_text("mine\n")
+        self.assertIn("Uncommitted or untracked", box.helper("merge", id=task["id"])["error"])
+        self.assertEqual((worktree / "written since").read_text(), "mine\n")
+
+    def test_a_removal_cut_short_in_what_git_keeps_is_finished_off(self):
+        box = self.box()
+        task = box.create()
+        box.commit(task)
+        worktree = self.cut_short_removing(box, task, "merge")
+        shutil.rmtree(worktree)
+        (box.repo / ".git/worktrees" / worktree.name / "HEAD").unlink()
+        reply = box.helper("merge", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assert_finished(box, task)
+
     def test_merging_a_task_whose_branch_you_deleted_still_says_so(self):
         box = self.box()
         task = box.create()
