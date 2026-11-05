@@ -909,7 +909,9 @@ change nothing.  :not names interrupters that can't follow it.")
   "Note what became of the tasks that shouldn't have, after INTERRUPTER.
 SPEC's command is the one acted on.  OTHER is how the other task was as
 the reply came."
-  (when (plist-get interrupter :gone)
+  ;; Making a task on a host you forgot watches it again, with its tasks.
+  (when (and (plist-get interrupter :gone)
+             (not (and (plist-get interrupter :host-gone) (plist-get spec :makes))))
     (when (roost-sweep-late--mine)
       (roost-sweep-late--problem 'stale "a task that went is back, %s" (roost--field (roost-sweep-late--mine) 'status))))
   (when (and (plist-get interrupter :host-gone) (not (plist-get spec :makes)))
@@ -1376,6 +1378,32 @@ COMMAND, INTERRUPTER and FORM keeps RULE until FUNCTION is REPLACEMENT.")
                (should-not (seq-difference (buffer-list) buffers))
                (should-not (directory-files temporary-file-directory nil "\\`roost-input-")))))
        (delete-directory temporary-file-directory t)))))
+
+;;;; What the sweep found
+
+(ert-deftest roost-sweep-late-a-reply-brings-back-no-task-of-a-forgotten-host ()
+  ;; No list would take it away again: its host is no longer asked.
+  (roost-sweep-late--world
+    (roost-sweep-late--populate nil nil)
+    (roost--act (roost-sweep-late--mine) "send" '((text . "Go on.")))
+    (roost-forget-host roost-sweep-late--host)
+    (should-not (roost-tasks))
+    (roost-sweep-late--answer (roost-sweep-late--take "send") 'good)
+    (should-not (roost-tasks))))
+
+(ert-deftest roost-sweep-late-a-reply-opens-nothing-of-a-task-that-went ()
+  (dolist (command '((lambda () (roost-open-task (roost-sweep-late--mine)))
+                     (lambda () (roost-review (roost-sweep-late--mine)))))
+    (roost-sweep-late--world
+      (roost-sweep-late--populate nil nil)
+      (let ((here (roost-sweep-late--lay-out 'here)))
+        (funcall command)
+        (let ((reply (car roost-sweep-late--requests)))
+          (roost-sweep-late--go roost-sweep-late--mine)
+          (roost-sweep-late--answer reply 'good))
+        (should-not (roost-sweep-late--mine))
+        (should (eq (window-buffer (selected-window)) here))
+        (should (string-match-p "no longer listed" (roost-sweep-late--messages 1)))))))
 
 (provide 'roost-sweep-late)
 

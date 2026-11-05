@@ -4,6 +4,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A task that went stays gone when a reply about it comes late. A reply
+  read before the task was retired, or before you forgot its host, used
+  to list it again, for good in the case of a forgotten host, and could
+  open its terminal or Magit. Roost now says it didn't open it, as it is
+  no longer listed. Nothing to do when upgrading.
 - Roost refuses to send a prompt holding a control character, other than
   a line or page break or a tab, as the agent's terminal would take it as
   a key. It says which and on what line, and sends nothing. A draft stays

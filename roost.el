@@ -1087,6 +1087,25 @@ must a reply with a newer look lose it for an older agent event."
         (roost--report-merge task (car merge) (cdr merge) (not old))))
     task))
 
+(defun roost--went-p (key listed)
+  "Whether the task with KEY went since Roost asked its host about it.
+LISTED is what Roost listed then: nil for a task it didn't list, which
+is yet to come rather than gone."
+  (and listed (not (gethash key roost--tasks))))
+
+(defun roost--cache-reply (host task listed)
+  "Cache TASK, as HOST replied about it, and return it, unless it went meanwhile.
+LISTED is as for `roost--went-p'.  A reply its host read before the task
+went can come after: to opening it while another Emacs retired it, or
+after you forgot its host, whose tasks no list would ever take away
+again.  The task then stays gone, and what Roost returns goes no further
+than the command that asked.  A reply that says it went is taken in as
+ever."
+  (if (and (roost--went-p (list host (roost--field task 'id)) listed)
+           (not (member (roost--field task 'status) '("retired" "forgotten" "discarded"))))
+      (cons (cons 'host host) (assq-delete-all 'host task))
+    (roost--cache-task host task)))
+
 (defun roost--pr-merges (task)
   "Where TASK's pull requests merged, as a list of (HEAD . BRANCH).
 HEAD is nil when not known, and BRANCH a pull request's base, which an
@@ -1163,7 +1182,7 @@ notifies of itself."
       (roost--request
        host "inspect" (list (cons 'id (roost--field task 'id)))
        (lambda (current)
-         (setq current (roost--cache-task host current))
+         (setq current (roost--cache-reply host current t))
          (roost--redraw)
          (funcall send current
                   (if-let* ((reply (or (roost--permission-request current)
@@ -2302,6 +2321,8 @@ says once the terminal shows."
          (place (roost--terminal-place shown))
          (frame (window-frame window))
          (name (roost--field task 'name))
+         (key (roost--key task))
+         (listed (gethash key roost--tasks))
          (opening (format "Roost: opening %s…" name))
          ;; A host slow to reply, as over SSH, looked like a click that
          ;; did nothing.
@@ -2310,9 +2331,12 @@ says once the terminal shows."
                                (when (= generation roost--open-generation)
                                  (message "%s" opening)))))
          ;; Unless you have opened another task since, or shown something
-         ;; else, such as tmux-control's pager.
+         ;; else, such as tmux-control's pager, or the task went.
          (still-wanted (lambda ()
                          (and (= generation roost--open-generation)
+                              (not (when (roost--went-p key listed)
+                                     (message "Roost: didn't open %s, as it is no longer listed" name)
+                                     t))
                               (or (roost--still-there-p window shown place frame)
                                   (progn
                                     (message "Roost: didn't open %s, as you went to another window or buffer while its host replied"
@@ -2322,7 +2346,7 @@ says once the terminal shows."
                     (list (cons 'id (roost--field task 'id)))
                     (lambda (current)
                       (cancel-timer timer)
-                      (setq current (roost--cache-task (roost--field task 'host) current))
+                      (setq current (roost--cache-reply (roost--field task 'host) current listed))
                       ;; The reply can be newer than what is shown, as when
                       ;; you answered the agent meanwhile: show it everywhere,
                       ;; the task's panel too, not only where the task opens.
@@ -2358,8 +2382,11 @@ says once the terminal shows."
                                (run-at-time
                                 0 nil #'roost--when-out-of-minibuffer
                                 (lambda ()
-                                  (when (= generation roost--open-generation)
-                                    (let* ((current (or (gethash (roost--key task) roost--tasks) task))
+                                  ;; Nor about a task that went, whose window
+                                  ;; is gone for good.
+                                  (when (and (= generation roost--open-generation)
+                                             (not (roost--went-p key listed)))
+                                    (let* ((current (or (gethash key roost--tasks) task))
                                            ;; As after its host restarted: one
                                            ;; question for all of them.
                                            (others (roost--crashed-with current))
@@ -3735,6 +3762,7 @@ The other actions say more themselves when they finish.")
   "Run ACTION on TASK with PARAMETERS, then CALLBACK with the updated task.
 FAILURE, if given, receives the error message instead of Roost reporting it."
   (let* ((host (roost--field task 'host))
+         (listed (gethash (roost--key task) roost--tasks))
          ;; What removes the worktree runs the project's teardown first.
          (teardown (when (and (member action '("retire" "merge" "discard"))
                               (roost--field task 'repo))
@@ -3754,7 +3782,7 @@ FAILURE, if given, receives the error message instead of Roost reporting it."
              (let ((pushed (assq 'pushed updated))
                    (torn (alist-get 'teardownFailure updated))
                    (output (alist-get 'teardownOutput updated)))
-               (setq updated (roost--cache-task host updated))
+               (setq updated (roost--cache-reply host updated listed))
                (roost--redraw)
                (when-let* ((said (cdr (assoc action roost--action-messages))))
                  (message said (roost--field task 'name)))
@@ -3794,7 +3822,11 @@ resume those too."
         (roost--resume-together task others)
       ;; Now, rather than in its turn among several resuming.
       (setq roost--resuming (delete (roost--key task) roost--resuming))
-      (roost--act task "resume" (roost--resume-parameters task) #'roost-open-task))))
+      (let ((listed (gethash (roost--key task) roost--tasks)))
+        (roost--act task "resume" (roost--resume-parameters task)
+                    (lambda (updated)
+                      (unless (roost--went-p (roost--key updated) listed)
+                        (roost-open-task updated))))))))
 
 (defun roost--resume-parameters (task)
   "What a request to resume TASK says besides which task."
@@ -3827,6 +3859,7 @@ resumed, naming each that didn't and why: one that fails doesn't stop
 the rest.  One you resumed, stopped or forgot meanwhile, or that no
 longer shows as crashed, is passed over."
   (let ((host (roost--field task 'host))
+        (listed (gethash (roost--key task) roost--tasks))
         (tried 1)
         failures said)
     ;; Until each replies, opening one of them offers the rest no more.
@@ -3861,7 +3894,8 @@ longer shows as crashed, is passed over."
                     (next others)
                     ;; Said again once its terminal shows, if done by then:
                     ;; opening clears the echo area.
-                    (roost-open-task updated nil (lambda (_) said)))
+                    (unless (roost--went-p (roost--key updated) listed)
+                      (roost-open-task updated nil (lambda (_) said))))
                   (lambda (err)
                     (replied task)
                     (push (cons task err) failures)
@@ -5902,17 +5936,22 @@ says changed since: see `roost--since-looked'."
          (shown (window-buffer window))
          (place (roost--terminal-place shown))
          (frame (window-frame window))
+         (key (roost--key task))
+         (listed (gethash key roost--tasks))
          (open (lambda (&rest _)
                  (roost--when-out-of-minibuffer
                   (lambda ()
                     (when (= generation roost--open-generation)
                       ;; As it is now: renamed meanwhile, as from another
                       ;; Emacs, its workspace has the new name.
-                      (let ((task (gethash (roost--key task) roost--tasks task)))
-                        (if (not (roost--still-there-p window shown place frame))
-                            (message "Roost: didn't open %s for %s, as you went to another window or buffer while its host replied"
-                                     what (roost--field task 'name))
-                          (funcall show task)))))))))
+                      (let ((task (gethash key roost--tasks task)))
+                        (cond ((roost--went-p key listed)
+                               (message "Roost: didn't open %s for %s, as it is no longer listed"
+                                        what (roost--field task 'name)))
+                              ((not (roost--still-there-p window shown place frame))
+                               (message "Roost: didn't open %s for %s, as you went to another window or buffer while its host replied"
+                                        what (roost--field task 'name)))
+                              (t (funcall show task))))))))))
     (if (gethash (roost--field task 'host) roost--errors)
         (funcall open)
       (roost--look task parameters open))))
@@ -6003,12 +6042,14 @@ questions you left open in the minibuffer, as `roost-open-task' does."
       (roost--quit-questions-left-open
        (lambda () (roost-shell (or task (roost--read-task "Task: ")))))))
   (setq task (roost--choose task))
-  (let ((generation (cl-incf roost--open-generation)))
+  (let ((generation (cl-incf roost--open-generation))
+        (listed (gethash (roost--key task) roost--tasks)))
     (roost--act task "shell" nil
                 (lambda (updated)
                   (roost--when-out-of-minibuffer
                    (lambda ()
-                     (when (= generation roost--open-generation)
+                     (when (and (= generation roost--open-generation)
+                                (not (roost--went-p (roost--key updated) listed)))
                        (roost--display-task updated (roost--field updated 'shellPaneId))
                        (with-current-buffer (window-buffer (selected-window))
                          (unless (tmux-control-tiled-p) (tmux-control-tile))
