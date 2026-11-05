@@ -4,6 +4,10 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Merging or retiring a task whose repository is gone, or whose worktree
+  Git can no longer read, says so and offers to bring it back or forget
+  the task. Roost said the worktree was on a detached HEAD, and to check out
+  the task's branch there, which can't be done. Nothing to do when upgrading.
 - With `core.fsmonitor` set to `true`, Git's monitor no longer starts while
   Roost holds a lock it hands on to Git. It went on holding that lock for as
   long as it ran, which is until you stop it: merging, retiring or

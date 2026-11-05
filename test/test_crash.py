@@ -171,6 +171,18 @@ class Crashes(unittest.TestCase):
         box.wait_for(task, "ready")
         self.assertEqual(len(box.windows()), 1)
 
+    def test_a_task_whose_repository_went_says_so(self):
+        box = self.box()
+        task = box.create()
+        box.helper("stop", id=task["id"])
+        box.repo.rename(box.repo.with_name("moved"))
+        self.addCleanup(lambda: box.repo.with_name("moved").rename(box.repo))
+        for action in ("merge", "retire"):
+            error = box.helper(action, id=task["id"])["error"]
+            self.assertIn("Git can't read the task's worktree", error)
+            self.assertIn("forget the task", error)
+        self.assertTrue(box.helper("forget", id=task["id"])["ok"])
+
     def test_merging_a_task_whose_branch_you_deleted_still_says_so(self):
         box = self.box()
         task = box.create()

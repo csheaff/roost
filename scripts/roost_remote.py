@@ -587,7 +587,12 @@ def check_worktree(store, task, branch=True):
             raise RoostError(under_way)
         # In full, as in `other_branch`: a tag of the branch's name would
         # make the short one heads/….
-        current = git(worktree, "symbolic-ref", "-q", "HEAD", check=False).stdout.strip()
+        head = git(worktree, "symbolic-ref", "-q", "HEAD", check=False)
+        # 1 says only that HEAD is detached.
+        if head.returncode > 1:
+            raise RoostError("Git can't read the task's worktree (%s); bring back what is missing, then try again, "
+                             "or forget the task" % head.stderr.strip())
+        current = head.stdout.strip()
         short = current.removeprefix("refs/heads/")
         if (short != task["branch"] and current.startswith("refs/heads/")
                 and not ref_exists(task["repo"], task["branch"])):
