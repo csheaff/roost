@@ -2778,7 +2778,10 @@ it: making a task can take minutes."
      (let ((stayed (funcall stayed)))
        (when on-success (funcall on-success task))
        (roost--redraw)
-       (when stayed (roost-open-task task)))))
+       ;; Unless it went while you were in the minibuffer: opening it
+       ;; would bring it back.
+       (when (and stayed (gethash (roost--key task) roost--tasks))
+         (roost-open-task task)))))
   (message "Roost created %s on %s from %s; it merges into %s"
            name (roost--host-label host)
            (roost--field task 'baseRef) (roost--field task 'integrationBranch)))
@@ -3854,10 +3857,13 @@ made the task anyway.  It opens where the draft is, if you are there."
                       (car asked)))
               (made (seq-find (lambda (task) (equal (roost--field task 'createId) (cadr asked))) tasks))
               (task (gethash (list host (roost--field made 'id)) roost--tasks)))
-    (let ((fields (buffer-local-value 'roost--compose-fields buffer)))
+    (let ((fields (buffer-local-value 'roost--compose-fields buffer))
+          (generation roost--open-generation))
       (roost--task-made host task (roost--field task 'name)
                         (lambda (task) (roost--compose-made buffer fields task))
-                        (lambda () (eq (window-buffer (roost--window-you-are-in)) buffer))))))
+                        (lambda ()
+                          (and (= generation roost--open-generation)
+                               (eq (window-buffer (roost--window-you-are-in)) buffer)))))))
 
 ;;;; Task commands
 

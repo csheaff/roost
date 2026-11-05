@@ -329,7 +329,7 @@ but for a reply's question."
             (roost-sweep-late--requests nil) (roost-sweep-late--records nil) (roost-sweep-late--found nil)
             (roost-sweep-late--answer-questions t)
             (roost-sweep-late--asked nil) (roost-sweep-late--delivering nil) (roost-sweep-late--pump nil)
-            (roost-sweep-late--place nil) (roost-sweep-late--clock 0)
+            (roost-sweep-late--place nil) (roost-sweep-late--clock 0) (roost-sweep-late--newer nil)
             (roost-sweep-late--timers (append timer-list timer-idle-list))
             (roost-hosts nil)
             (roost-workspace nil)
@@ -472,8 +472,10 @@ Their text and point, as (TEXT POINT), or nil once one is gone."
 (defvar roost-sweep-late--after-quit nil
   "What delivers the reply of a case that quit while it waited.")
 
-(defconst roost-sweep-late--newer "2026-11-01T11:00:00+00:00"
-  "When the agent last did something, for a host that has moved on.")
+(defvar roost-sweep-late--newer nil
+  "When the agent last did something, for a host that has moved on.
+From the host's clock: later than any reply held before it, which a
+fixed time needn't be, and earlier than what its host does next.")
 
 (defvar roost-sweep-late--spec nil
   "The command of the case under way.")
@@ -533,6 +535,7 @@ That is RET unless given."
 
 (defun roost-sweep-late--move-on ()
   "Have the agent of the task acted on move on, as its host alone knows."
+  (setq roost-sweep-late--newer (roost-sweep-late--now))
   (setf (alist-get roost-sweep-late--mine roost-sweep-late--records nil nil #'equal)
         (roost-sweep-late--record roost-sweep-late--mine "mine" '(status . "running")
                             `(updatedAt . ,roost-sweep-late--newer))))
@@ -914,7 +917,7 @@ with Emacs running only timers and other replies.")
                (setq roost-notify t)
                (roost--cache-task roost-sweep-late--host
                                   (roost-sweep-late--record roost-sweep-late--mine "mine"
-                                                      `(updatedAt . ,roost-sweep-late--newer))))
+                                                      `(updatedAt . ,(roost-sweep-late--now)))))
      :action "inspect" :background t)
     (turn
      :fields ((landed) (dirty) (ahead . 1) (behind . 0) (conflicts "a.py") (seen . "2026-11-01T10:00:00+00:00"))
@@ -1018,7 +1021,7 @@ the reply came."
       (roost-sweep-late--problem 'stale "a forgotten host shows an error")))
   (when (plist-get interrupter :newer)
     (let ((updated (roost--field (roost-sweep-late--mine) 'updatedAt)))
-      (unless (or (null updated) (not (string< updated roost-sweep-late--newer)))
+      (when (and updated roost-sweep-late--newer (string< updated roost-sweep-late--newer))
         (roost-sweep-late--problem 'stale "an older reply overwrites a newer one: %s" updated))))
   (when (plist-get interrupter :off)
     (when (and roost-watch-mode (not (plist-get spec :watches)))
@@ -1619,17 +1622,45 @@ COMMAND, INTERRUPTER and FORM keeps RULE until FUNCTION is REPLACEMENT.")
       (should-not (equal (buffer-name (window-buffer (selected-window))) shown)))))
 
 (ert-deftest roost-sweep-late-a-task-that-went-while-you-answered-opens-nothing ()
+  (pcase-dolist (`(,fields ,place ,command ,action ,shown)
+                 `((nil compose ,#'roost-compose-submit "create" "*late terminal cccccc*")
+                   (((status . "stopped") (live)) here
+                    ,(lambda () (roost-resume (roost-sweep-late--mine))) "resume" "*late terminal aaaaaa*")))
+    (roost-sweep-late--world
+      (roost-sweep-late--populate fields nil)
+      (roost-sweep-late--lay-out place)
+      (funcall command)
+      (let ((reply (roost-sweep-late--take action)))
+        (roost-sweep-late--in-minibuffer
+         (lambda ()
+           (roost-sweep-late--answer reply 'good)
+           (clrhash roost--tasks))))
+      (roost-sweep-late--settle)
+      (should-not (equal (buffer-name (window-buffer (selected-window))) shown))
+      ;; Nor does opening it bring it back.
+      (should (zerop (hash-table-count roost--tasks))))))
+
+(ert-deftest roost-sweep-late-a-task-listed-after-no-reply-leaves-what-you-chose ()
+  ;; No reply came, a poll finds the task while you choose in the
+  ;; minibuffer, and what you chose opens as it ends.
   (roost-sweep-late--world
-    (roost-sweep-late--populate '((status . "stopped") (live)) nil)
-    (roost-sweep-late--lay-out 'here)
-    (roost-resume (roost-sweep-late--mine))
-    (let ((reply (roost-sweep-late--take "resume")))
+    (roost-sweep-late--populate nil nil)
+    (roost-sweep-late--lay-out 'compose)
+    (roost-compose-submit)
+    (roost-sweep-late--answer (roost-sweep-late--take "create") 'no-reply)
+    (let* ((asked (buffer-local-value 'roost--compose-asked (get-buffer roost--compose-buffer)))
+           (made (roost-sweep-late--record "cccccc0000000000" "new" (cons 'createId (cadr asked))
+                                           (cons 'repo nil))))
+      (roost--cache-task roost-sweep-late--host (copy-tree made))
       (roost-sweep-late--in-minibuffer
        (lambda ()
-         (roost-sweep-late--answer reply 'good)
-         (clrhash roost--tasks))))
+         (roost--compose-listed roost-sweep-late--host (list made))
+         ;; As `roost-open-task' does on your choice.
+         (cl-incf roost--open-generation))))
     (roost-sweep-late--settle)
-    (should-not (equal (buffer-name (window-buffer (selected-window))) "*late terminal aaaaaa*"))))
+    (should-not (get-buffer roost--compose-buffer))
+    ;; Opening a task starts by asking its host.
+    (should-not (roost-sweep-late--request-for "inspect" "cccccc0000000000"))))
 
 (ert-deftest roost-sweep-late-a-draft-that-closes-ends-what-it-asked ()
   ;; While its task is made, which closes it.
