@@ -791,6 +791,13 @@ with Emacs running only timers and other replies.")
      :start ,(lambda () (roost-resume (roost-sweep-late--mine)))
      :action "resume" :opens t :shows "*late terminal aaaaaa*"
      :refusals ((,roost-sweep-late--worktree-gone)))
+    (resume-from-its-terminal
+     :origin terminal
+     :fields ((status . "stopped") (live))
+     :start ,(lambda () (roost-resume (roost-sweep-late--mine)))
+     ;; You can't be told from the reply, which closes it too.
+     :action "resume" :opens t :shows "*late terminal aaaaaa*" :closes t :not (kill-origin kill-terminal)
+     :refusals ((,roost-sweep-late--worktree-gone)))
     (resume-opening
      :fields ((status . "stopped") (live))
      :start ,(lambda () (roost-resume (roost-sweep-late--mine)))
@@ -1554,6 +1561,17 @@ COMMAND, INTERRUPTER and FORM keeps RULE until FUNCTION is REPLACEMENT.")
         (roost-sweep-late--settle)
         (should (equal (buffer-name (window-buffer (selected-window)))
                        (if stay "*late terminal aaaaaa*" "*late elsewhere*")))))))
+
+(ert-deftest roost-sweep-late-a-task-resumed-from-its-terminal-opens-there ()
+  ;; The reply closes the terminal you asked from.
+  (roost-sweep-late--world
+    (roost-sweep-late--populate '((status . "stopped") (live)) nil)
+    (let ((terminal (roost-sweep-late--lay-out 'terminal)))
+      (roost-resume (roost-sweep-late--mine))
+      (roost-sweep-late--answer (roost-sweep-late--take "resume") 'good)
+      (should-not (buffer-live-p terminal))
+      (roost-sweep-late--settle)
+      (should (equal (buffer-name (window-buffer (selected-window))) "*late terminal aaaaaa*")))))
 
 (ert-deftest roost-sweep-late-a-task-resumed-opens-once-you-are-out-of-the-minibuffer ()
   (roost-sweep-late--world

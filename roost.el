@@ -3860,9 +3860,11 @@ another task's terminal: nobody asked for that task."
   "What `roost--act' says once each action is done, for a task's name.
 The other actions say more themselves when they finish.")
 
-(defun roost--act (task action &optional parameters callback failure)
+(defun roost--act (task action &optional parameters callback failure replied)
   "Run ACTION on TASK with PARAMETERS, then CALLBACK with the updated task.
-FAILURE, if given, receives the error message instead of Roost reporting it."
+FAILURE, if given, receives the error message instead of Roost reporting it.
+REPLIED, if given, is called as the host replies well, before the
+terminal the action ended closes."
   (let* ((host (roost--field task 'host))
          (listed (gethash (roost--key task) roost--tasks))
          ;; What removes the worktree runs the project's teardown first.
@@ -3878,6 +3880,7 @@ FAILURE, if given, receives the error message instead of Roost reporting it."
                                                 (when teardown (list (cons 'teardown teardown)))
                                                 parameters)
            (lambda (updated)
+             (when replied (funcall replied))
              (roost--discard-terminal terminals)
              (cl-incf (gethash host roost--revisions 0))
              ;; `pushed' is transient: the callback sees it, the cache does not.
@@ -3924,10 +3927,17 @@ resume those too."
         (roost--resume-together task others)
       ;; Now, rather than in its turn among several resuming.
       (setq roost--resuming (delete (roost--key task) roost--resuming))
-      (let ((open (roost--while-you-stay task)))
+      (let ((listed (gethash (roost--key task) roost--tasks))
+            (stayed (roost--you-stay))
+            there)
         (roost--act task "resume" (roost--resume-parameters task)
                     (lambda (updated)
-                      (funcall open (lambda () (roost-open-task updated)))))))))
+                      (when (and there (not (roost--went-p (roost--key updated) listed)))
+                        ;; After its old terminal, which waits for that too.
+                        (roost--when-out-of-minibuffer (lambda () (roost-open-task updated)))))
+                    nil
+                    ;; Its terminal, which you may be in, is about to go.
+                    (lambda () (setq there (funcall stayed))))))))
 
 (defun roost--resume-parameters (task)
   "What a request to resume TASK says besides which task."
@@ -3960,9 +3970,10 @@ resumed, naming each that didn't and why: one that fails doesn't stop
 the rest.  One you resumed, stopped or forgot meanwhile, or that no
 longer shows as crashed, is passed over."
   (let ((host (roost--field task 'host))
-        (open (roost--while-you-stay task))
+        (listed (gethash (roost--key task) roost--tasks))
+        (stayed (roost--you-stay))
         (tried 1)
-        failures said)
+        there failures said)
     ;; Until each replies, opening one of them offers the rest no more.
     (setq roost--resuming (append (mapcar #'roost--key (cons task others)) roost--resuming))
     (cl-labels ((replied (task)
@@ -3995,11 +4006,14 @@ longer shows as crashed, is passed over."
                     (next others)
                     ;; Said again once its terminal shows, if done by then:
                     ;; opening clears the echo area.
-                    (funcall open (lambda () (roost-open-task updated nil (lambda (_) said)))))
+                    (when (and there (not (roost--went-p (roost--key updated) listed)))
+                      (roost--when-out-of-minibuffer
+                       (lambda () (roost-open-task updated nil (lambda (_) said))))))
                   (lambda (err)
                     (replied task)
                     (push (cons task err) failures)
-                    (next others))))))
+                    (next others))
+                  (lambda () (setq there (funcall stayed)))))))
 
 (defun roost--resumed-message (host total failures)
   "What resuming TOTAL agents on HOST did, with FAILURES, each (TASK . ERROR)."
