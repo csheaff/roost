@@ -203,7 +203,9 @@ def tool(name, cwd, args, timeout, missing, said=lambda result: None):
 
 
 def tmux(socket, *args, check=True, input=None):
-    return execute(["tmux", "-L", socket, *args], check=check, input=input)
+    # As a UTF-8 client, whatever the locale: under LC_ALL=C or POSIX tmux
+    # prints the tabs between fields, and what isn't ASCII, as underscores.
+    return execute(["tmux", "-u", "-L", socket, *args], check=check, input=input)
 
 
 def enable_extended_keys(socket):

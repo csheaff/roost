@@ -26,6 +26,27 @@ class Crashes(unittest.TestCase):
         self.addCleanup(box.close)
         return box
 
+class Hosts(unittest.TestCase):
+    """Hosts that aren't set up as yours is."""
+
+    def box(self, **env):
+        box = Box()
+        self.addCleanup(box.close)
+        box.env = dict({key: value for key, value in box.env.items() if not key.startswith("LC_") and key != "LANG"},
+                       **env)
+        return box
+
+    def test_tmux_is_read_the_same_under_lc_all_c(self):
+        for locale in ("C", "POSIX"):
+            with self.subTest(locale=locale):
+                box = self.box(LC_ALL=locale)
+                task = box.create("é")
+                listed = box.helper("list", socket=box.socket)["result"]
+                self.assertEqual([(t["id"], t["status"], t["live"]) for t in listed], [(task["id"], "ready", True)])
+                # Its agent is still there to refuse these.
+                self.assertIn("still running", box.helper("resume", id=task["id"])["error"])
+                self.assertIn("stop the task", box.helper("forget", id=task["id"])["error"])
+
 @unittest.skipUnless(SWEEP, "A sweep takes a while: make crash")
 class Sweep(unittest.TestCase):
     workers = int(os.environ.get("ROOST_CRASH_WORKERS", "6"))

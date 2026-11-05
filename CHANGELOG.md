@@ -4,6 +4,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- On a host with `LC_ALL` set to `C` or `POSIX`, tasks work as anywhere else.
+  tmux wrote its answers differently there, so Roost could not start a
+  task, showed every running agent as `crashed`, and let you resume one
+  beside itself or forget it while it ran. Nothing to do when upgrading; a
+  running agent shown as `crashed` shows as it is at the next refresh.
 - Roost refuses to send a prompt holding a control character, other than
   a line or page break or a tab, as the agent's terminal would take it as
   a key. It says which and on what line, and sends nothing. A draft stays
