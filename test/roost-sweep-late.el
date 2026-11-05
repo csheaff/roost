@@ -1631,6 +1631,34 @@ COMMAND, INTERRUPTER and FORM keeps RULE until FUNCTION is REPLACEMENT.")
        (kill-buffer output)
        (delete-directory state t))))))
 
+(ert-deftest roost-sweep-late-what-a-reply-closes-leaves-you-where-you-are ()
+  ;; Quitting a window selects the one you were in as it came to show its
+  ;; buffer: before Emacs 31, from wherever you are.
+  (pcase-dolist (`(,origin ,action ,command)
+                 `((send-draft "send" ,#'roost-send-submit)
+                   (pr-draft "pr" ,#'roost-pr-submit)
+                   (compose "create" ,#'roost-compose-submit)))
+    (roost-sweep-late--world
+      (roost-sweep-late--populate nil nil)
+      (let ((draft (roost-sweep-late--lay-out origin)))
+        (funcall command)
+        (let ((elsewhere (get-buffer-window "*late code*")))
+          (select-window elsewhere)
+          (roost-sweep-late--answer (roost-sweep-late--take action) 'good)
+          (roost-sweep-late--settle)
+          (should (eq (selected-window) elsewhere))
+          (should-not (buffer-live-p draft))))))
+  ;; And from a minibuffer you asked from there, which closes it after.
+  (roost-sweep-late--world
+    (roost-sweep-late--populate nil nil)
+    (let ((draft (roost-sweep-late--lay-out 'send-draft)))
+      (roost-send-submit)
+      (let ((reply (roost-sweep-late--take "send")))
+        (roost-sweep-late--in-minibuffer (lambda () (roost-sweep-late--answer reply 'good))))
+      (should-not roost-sweep-late--found)
+      (roost-sweep-late--settle)
+      (should-not (buffer-live-p draft)))))
+
 (provide 'roost-sweep-late)
 
 ;;; roost-sweep-late.el ends here

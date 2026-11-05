@@ -2085,10 +2085,10 @@ pane's buffer, or another window the one you were in."
 
 (defun roost--you-stay ()
   "Return a function that says whether you are still where you are now.
-That is, whether you have opened nothing since, nor gone to another
-window or buffer, or out of the minibuffer to one.  For a command that
-opens something once its host replies: a reply that takes more than a
-moment, as an agent's start does, must not take you from where you went."
+That is, whether you have opened nothing since, and are in the same
+window and buffer, or a minibuffer you asked from there.  For a command
+that opens something once its host replies: a reply that takes more than
+a moment, as an agent's start does, must not take you from where you went."
   (let* ((generation (cl-incf roost--open-generation))
          (window (roost--window-you-are-in))
          (shown (window-buffer window))
@@ -2285,7 +2285,25 @@ asked for the task is quit first, by `roost--quit-questions-left-open'."
                      (remove-hook 'minibuffer-exit-hook done)
                      ;; Once its window has given the selection back.
                      (run-at-time 0 nil #'roost--when-out-of-minibuffer function))))
-      (add-hook 'minibuffer-exit-hook done))))
+      ;; In turn: a terminal that goes, then the one that takes its place.
+      (add-hook 'minibuffer-exit-hook done t))))
+
+(defun roost--close-buffer (buffer)
+  "Close BUFFER, as a host's reply says it is done, and the windows made for it.
+You stay where you are: on Emacs 30, quitting a window selects the one
+you were in as it came to show BUFFER, from wherever you have gone
+since, out of the minibuffer too.  Done once you are out of the
+minibuffer, which there fails as it ends if the buffer you asked from
+is gone."
+  (roost--when-out-of-minibuffer
+   (lambda ()
+     (when (buffer-live-p buffer)
+       (let ((selected (selected-window)))
+         ;; Before Emacs 31 this kills only a buffer that shows.
+         (quit-windows-on buffer t)
+         (when (buffer-live-p buffer) (kill-buffer buffer))
+         (when (and (window-live-p selected) (not (eq selected (selected-window))))
+           (select-window selected)))))))
 
 (defun roost--ask-after-reply (key listed function)
   "Call FUNCTION, which asks about the task with KEY, once out of a host's reply.
@@ -2703,10 +2721,13 @@ still where you asked for it: making a task can take minutes."
     (roost--remember-project (roost--project-directory (cons (cons 'host host) task))))
   (setq task (roost--cache-task host task))
   (let ((stayed (funcall stayed)))
-    (when on-success (funcall on-success task))
     (roost-watch-mode 1)
-    (roost--redraw)
-    (when stayed (roost-open-task task)))
+    ;; It opens where the draft closes.
+    (roost--when-out-of-minibuffer
+     (lambda ()
+       (when on-success (funcall on-success task))
+       (roost--redraw)
+       (when stayed (roost-open-task task)))))
   (message "Roost created %s on %s from %s; it merges into %s"
            name (roost--host-label host)
            (roost--field task 'baseRef) (roost--field task 'integrationBranch)))
@@ -3754,9 +3775,7 @@ EVENT, a click on the draft's Create button, says which draft."
 An Org entry it was drafted from links to TASK."
   (when-let* ((marker (plist-get fields :org)))
     (roost--org-link marker task))
-  (when (buffer-live-p buffer)
-    (quit-windows-on buffer t)
-    (when (buffer-live-p buffer) (kill-buffer buffer))))
+  (roost--close-buffer buffer))
 
 (defun roost--compose-listed (host tasks)
   "Close the draft of the task TASKS, which HOST listed, hold, and open it.
@@ -3826,12 +3845,14 @@ empty one.  Opening the task reconnects the rest."
   "Kill TERMINALS, whose session ended, rather than leave them blank.
 The windows showing them go back to what they showed before, but not to
 another task's terminal: nobody asked for that task."
-  (let ((kill-buffer-query-functions nil)
-        (switch-to-prev-buffer-skip
-         (lambda (_window buffer _bury-or-kill) (roost--terminal-task buffer))))
-    (dolist (buffer terminals)
-      (when (buffer-live-p buffer)
-        (kill-buffer buffer)))))
+  (roost--when-out-of-minibuffer
+   (lambda ()
+     (let ((kill-buffer-query-functions nil)
+           (switch-to-prev-buffer-skip
+            (lambda (_window buffer _bury-or-kill) (roost--terminal-task buffer))))
+       (dolist (buffer terminals)
+         (when (buffer-live-p buffer)
+           (kill-buffer buffer)))))))
 
 (defconst roost--action-messages
   '(("send" . "Sent to %s") ("stop" . "Stopped %s") ("resume" . "Resumed %s")
@@ -4142,9 +4163,7 @@ draft's Send button, says which draft."
          (lambda (_task)
            (when (roost--remove-notes (lambda (note) (member (alist-get 'id note) notes)))
              (roost--redraw))
-           (when (buffer-live-p buffer)
-             (quit-windows-on buffer t)
-             (when (buffer-live-p buffer) (kill-buffer buffer))))
+           (roost--close-buffer buffer))
          (lambda (err)
            (message "Roost could not send to %s: %s" (roost--field task 'name) err)
            (when (buffer-live-p buffer)
@@ -6467,9 +6486,7 @@ Create button, says which draft."
     (roost--act
      task "pr" `((title . ,title) (body . ,body) (draft . ,(and draft t)))
      (lambda (updated)
-       (when (buffer-live-p buffer)
-         (quit-windows-on buffer t)
-         (when (buffer-live-p buffer) (kill-buffer buffer)))
+       (roost--close-buffer buffer)
        (message "Roost: opened pull request %s %s"
                 (roost--pr-number (roost--field updated 'pr))
                 (alist-get 'url (roost--field updated 'pr))))
@@ -7371,9 +7388,7 @@ to.  File buffers stay, since they may hold unsaved edits."
                (with-current-buffer buffer
                  (and (derived-mode-p 'magit-mode 'dired-mode)
                       (roost--task-in-directory default-directory (list task)))))
-      ;; Before Emacs 31 this kills only a buffer that shows.
-      (quit-windows-on buffer t)
-      (when (buffer-live-p buffer) (kill-buffer buffer)))))
+      (roost--close-buffer buffer))))
 
 (defun roost--revert-merged-files (task)
   "Revert the buffers of files a merge of TASK changed in its primary checkout.
@@ -7405,10 +7420,7 @@ which restores a window configuration of that frame, selects it."
     (dolist (buffer (buffer-list))
       (when (and (equal (buffer-local-value 'roost--buffer-task-key buffer) key)
                  (eq (buffer-local-value 'major-mode buffer) 'roost-task-info-mode))
-        ;; Before Emacs 31 this kills only a panel that shows, so kill the
-        ;; rest too.
-        (quit-windows-on buffer t)
-        (when (buffer-live-p buffer) (kill-buffer buffer))))
+        (roost--close-buffer buffer)))
     ;; Each frame has tabs of its own, or perspectives, which may have
     ;; any name the task had.
     (dolist (frame (frame-list))

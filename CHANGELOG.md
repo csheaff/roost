@@ -4,6 +4,12 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A draft or task panel that closes as a host replies leaves you where you
+  are. On Emacs 30 it took you to the window it was in, from wherever you
+  had gone, out of the minibuffer too, where your next keys went elsewhere;
+  and a question asked from a buffer that closed ended in `Selecting
+  deleted buffer`. They now close once the minibuffer is done. Nothing to
+  do when upgrading.
 - Unloading Roost drops the requests under way: a reply that came after
   it ended in `error in process sentinel` and left its buffers behind.
   Nothing to do when upgrading.

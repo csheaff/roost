@@ -1220,9 +1220,10 @@ turn watching or the side windows off. Then it fails on:
 - the failure of a command you gave not said in words, once.
 
 Windows, buffers, timers and minibuffers are real, and a held reply says what
-its host knew when it was asked; `roost--run` is stubbed, and one test takes
-each way a reply can end through a real process. Each rule has a way to break
-Roost that it must catch, in `roost-sweep-late--breakages`. A new command that
+its host knew when it was asked; `roost--run` is stubbed. One test takes each
+way a reply can end through a real process, and another unloads Roost with
+requests under way, in an Emacs of its own. Each rule has a way to break Roost
+that it must catch, in `roost-sweep-late--breakages`. A new command that
 waits on a host needs an entry in `roost-sweep-late--commands`, and a new
 question in the minibuffer one in `roost-sweep-late--questions`.
 
