@@ -466,10 +466,22 @@ class Store:
         except ValueError:
             task = None
         if not own_record(task, task_id):
-            raise RoostError("The record of this task, %s, is damaged, so Roost no longer lists it. Its worktree and "
-                             "branch are as they were: move the record aside, and finish them with Git" % path)
+            raise self.damaged(task_id)
         # An older helper's record may name its integration branch heads/X.
         recorded_integration(task)
+        return task
+
+    def damaged(self, task_id):
+        return RoostError("The record of this task, %s, is damaged, so Roost no longer lists it. Its worktree and "
+                          "branch are as they were: move the record aside, and finish them with Git"
+                          % self.path(task_id))
+
+    def read_to_act_on(self, task_id):
+        """TASK_ID's record, for an action asked for by name: listing hides
+        one without what it takes for granted, as actions take it too."""
+        task = self.read(task_id)
+        if not listable(task):
+            raise self.damaged(task_id)
         return task
 
     def recorded(self, task_id):
@@ -4187,12 +4199,13 @@ def kept_of_gone(repo, worktree):
     return None
 
 
-def require_nothing_kept(repo, worktree, unlinked=False):
+def require_nothing_kept(repo, worktree, unlinked=False, removing=False):
     """Refuse to finish a task whose worktree folder is missing, or with
     UNLINKED there but no longer linked to REPO, while what Git keeps of it
     holds what may be work no branch has: the repositories of its
     submodules, or commits on its detached HEAD. Forgetting it would delete
-    them, uncounted."""
+    them, uncounted. REMOVING says a removal of Roost's was cut short, which
+    began with nothing uncommitted, and can leave it without its HEAD."""
     gitdir = None
     if Path(repo).is_dir():
         gitdir = (next((place for place, path in linked_worktrees(repo) if Path(path).resolve() == worktree), None)
@@ -4226,8 +4239,9 @@ def require_nothing_kept(repo, worktree, unlinked=False):
     if (gitdir / "MERGE_AUTOSTASH").exists():
         held.append("changes a merge set aside")
     # What was staged there, kept in its index, and in no commit. Without
-    # HEAD, Git was deleting all this, and there's nothing to compare it to.
-    if head and (gitdir / "index").is_file():
+    # HEAD, which only a removal of Roost's explains, there's nothing to
+    # compare it to, and all of it counts.
+    if (head or not removing) and (gitdir / "index").is_file():
         commit = git(repo, "rev-parse", "--verify", "-q", (head[len("ref:"):].strip() if head.startswith("ref:")
                                                           else head) + "^{commit}", check=False).stdout.strip()
         staged = git(repo, "--no-optional-locks", "diff-index", "--cached", "--quiet", commit or EMPTY_TREE,
@@ -4244,15 +4258,18 @@ def require_nothing_kept(repo, worktree, unlinked=False):
                          % (" and ".join(held), shlex.quote(str(worktree))))
 
 
-def put_back_removed(task):
+def put_back_removed(store, task):
     """Put back what a removal cut short took from TASK's worktree: Git
     deletes a worktree file by file, and its link to the repository may go
     among them. Otherwise it looks like changes of yours, which committing
     would make real, or isn't a worktree at all. Roost began that removal
     with nothing uncommitted there, and with its tracked files back,
     Git says what is there since, as for any task, and nothing is forced."""
-    worktree = Path(task["worktree"]).resolve()
-    if not (task.get("removing") and worktree.is_dir() and Path(task["repo"]).is_dir()):
+    if not task.get("removing"):
+        return
+    # Its own folder, and no other checkout a link in its place leads to.
+    worktree = check_worktree(store, task, branch=False)
+    if not (worktree.is_dir() and Path(task["repo"]).is_dir()):
         return
     if not os.path.lexists(worktree / ".git"):
         gitdir = next((gitdir for gitdir, path in linked_worktrees(task["repo"]) if Path(path).resolve() == worktree), None)
@@ -4497,7 +4514,7 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
         raise RoostError("Task's tmux ownership changed; stop or forget the task instead")
     repo = task["repo"]
     branch = task["branch"]
-    put_back_removed(task)
+    put_back_removed(store, task)
     worktree = check_worktree(store, task)
     worktree_exists = worktree.exists()
     branch_exists = ref_exists(repo, branch)
@@ -4512,7 +4529,7 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
                          % (" (%s)" % lock if lock else "", "" if worktree_exists else ", and its folder is missing",
                             "" if worktree_exists else "reconnect it, or ", shlex.quote(str(worktree))))
     if not worktree_exists:
-        require_nothing_kept(repo, worktree)
+        require_nothing_kept(repo, worktree, removing=bool(task.get("removing")))
     require_agent_work_kept(task)
     squashed = None
     # Asked again after a request that got as far as deleting the branch,
@@ -4827,7 +4844,7 @@ def discard(store, task, expect=None, dry_run=False, teardown=None):
     worktree before it is removed."""
     repo = task["repo"]
     branch = task["branch"]
-    put_back_removed(task)
+    put_back_removed(store, task)
     # Whatever branch its agent left the worktree on: that goes too.
     worktree = check_worktree(store, task, branch=False)
     worktree_exists = worktree.exists()
@@ -4836,7 +4853,7 @@ def discard(store, task, expect=None, dry_run=False, teardown=None):
     commit = git(repo, "rev-parse", ref + "^{commit}").stdout.strip() if branch_exists else None
     unlinked = worktree_exists and not (worktree / ".git").is_file()
     if unlinked or not worktree_exists:
-        require_nothing_kept(repo, worktree, unlinked)
+        require_nothing_kept(repo, worktree, unlinked, bool(task.get("removing")))
     # The worktrees its agent made go with it.
     work = agent_work(task)
     if dry_run:
@@ -6553,7 +6570,7 @@ def rpc(request):
             return {"ok": True, "result": search(store, request)}
         if action == "pr":
             with store.locked():
-                task = store.read(request["id"])
+                task = store.read_to_act_on(request["id"])
                 if task["status"] == "retired":
                     raise RoostError("Task is retired")
                 require_not_removing(store, task, action)
@@ -6568,7 +6585,7 @@ def rpc(request):
                         return {"ok": True, "result": outgoing(dict(store.read(request["id"]), pushed=pushed))}
                     with store.released():
                         pr = pull_request(store, task, request)
-                    task = store.read(request["id"])
+                    task = store.read_to_act_on(request["id"])
                     task["pr"] = pr
                     store.save(task)
             return {"ok": True, "result": outgoing(task)}
@@ -6587,14 +6604,14 @@ def rpc(request):
         if action in ("retire", "merge"):
             # Ask GitHub without the lock; retire then trusts only this answer.
             with store.locked():
-                task = store.read(request["id"])
+                task = store.read_to_act_on(request["id"])
             merged_head, still_open = merged_pull_request_head(task)
             request = dict(request, mergedHead=merged_head, stillOpen=still_open)
         with store.locked():
             if action == "list":
                 result = list_tasks(store, request)
             elif action in TASK_ACTIONS:
-                task = store.read(request["id"])
+                task = store.read_to_act_on(request["id"])
                 if task["status"] == "retired":
                     raise RoostError("Task is retired")
                 require_not_removing(store, task, action)

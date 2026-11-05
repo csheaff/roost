@@ -154,6 +154,40 @@ class Crashes(unittest.TestCase):
         self.assertTrue(reply["ok"], reply)
         self.assert_finished(box, task)
 
+    def test_what_is_staged_stops_a_task_whose_folder_and_head_went_otherwise(self):
+        # Without a removal of Roost's to explain them, what Git keeps may be
+        # all there is of it.
+        box = self.box()
+        task = box.create()
+        worktree = Path(task["worktree"])
+        (worktree / "staged").write_text("work\n")
+        box.git("add", "staged", cwd=worktree)
+        box.helper("stop", id=task["id"])
+        shutil.rmtree(worktree)
+        (box.repo / ".git/worktrees" / worktree.name / "HEAD").unlink()
+        for action in ("retire", "discard"):
+            reply = box.helper(action, id=task["id"])
+            self.assertFalse(reply["ok"], reply)
+            self.assertIn("changes staged in its index", reply["error"])
+        self.assertTrue((box.repo / ".git/worktrees" / worktree.name / "index").is_file())
+
+    def test_a_link_in_a_folders_place_gets_nothing_put_back(self):
+        box = self.box()
+        task = box.create()
+        box.commit(task)
+        worktree = self.cut_short_removing(box, task, "merge")
+        # Another checkout, with a file of its own deleted.
+        other = box.root / "other"
+        box.git("worktree", "add", "-q", "--detach", str(other))
+        (other / "hello").unlink()
+        shutil.rmtree(worktree)
+        worktree.symlink_to(other)
+        for action, args in (("merge", {}), ("discard", dict(dryRun=True))):
+            reply = box.helper(action, id=task["id"], **args)
+            self.assertFalse(reply["ok"], reply)
+            self.assertIn("is a link", reply["error"])
+            self.assertFalse((other / "hello").exists())
+
     def test_a_window_nothing_knows_of_closes(self):
         box = self.box()
         task = box.create()
@@ -286,6 +320,14 @@ class Records(unittest.TestCase):
                     error = self.box.helper(action, id=self.task["id"])["error"]
                     self.assertIn("is damaged", error)
                     self.assertIsNone(harness.BUG_WORDS.search(error), error)
+
+    def test_a_record_missing_what_listing_needs_says_so_when_asked_about(self):
+        record = json.loads(self.good)
+        for field in ("status", "repo", "worktree", "branch", "baseCommit", "socket"):
+            with self.subTest(field=field):
+                self.path.write_text(json.dumps({key: value for key, value in record.items() if key != field}))
+                self.assert_the_other_task_stays()
+                self.assertIn("is damaged", self.box.helper("inspect", id=self.task["id"])["error"])
 
     def test_a_field_of_the_wrong_type_leaves_the_others_listed(self):
         record = json.loads(self.good)
