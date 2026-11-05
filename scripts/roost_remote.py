@@ -3841,6 +3841,16 @@ def inspect(store, task):
     return task
 
 
+def control_character(value, kept="\n\r\t\f"):
+    """The first character of VALUE that a terminal takes as a key, or None.
+    What real text holds is left, and does nothing in a paste: newlines and
+    tabs; carriage returns, which tmux pastes for each newline and which end
+    the lines quoted from a CRLF file's diff; and form feeds, which divide
+    the pages of much Emacs Lisp, so a quoted region can cross one. KEPT
+    names those, for text with less reason to hold them."""
+    return next((c for c in value if unicodedata.category(c) == "Cc" and c not in kept), None)
+
+
 def send(task, text, force=False):
     pane = owned_pane(task, inventory_for(task))
     if not pane or pane["dead"]:
@@ -3850,7 +3860,19 @@ def send(task, text, force=False):
     # may confirm with the user and force the send.
     if task["status"] in ("starting", "permission") and not force:
         raise RoostError("Open the task to finish startup or answer its permission prompt")
-    if not isinstance(text, str) or not text.strip():
+    if not isinstance(text, str):
+        raise RoostError("Empty prompt")
+    # A paste only marks text for the agent; its terminal still acts on
+    # these. Refused, as your text isn't ours to change.
+    control = control_character(text)
+    if control:
+        name = "U+%04X" % ord(control)
+        if ord(control) < 0x80:
+            # As Emacs shows it in the draft.
+            name = "^%s (%s)" % (chr(ord(control) ^ 0x40), name)
+        raise RoostError("Line %d of the prompt holds %s, a control character the agent's terminal would take "
+                         "as a key; nothing was sent" % (text.count("\n", 0, text.index(control)) + 1, name))
+    if not text.strip():
         raise RoostError("Empty prompt")
     buffer = "roost-" + uuid.uuid4().hex
     tmux(task["socket"], "load-buffer", "-b", buffer, "-", input=text)
@@ -4026,12 +4048,6 @@ def set_offers(task, offers):
     task["offersAt"] = now()
 
 
-def control_character(value):
-    """The first character of VALUE that a terminal takes as a key, other
-    than a line break or a tab, or None."""
-    return next((c for c in value if unicodedata.category(c) == "Cc" and c not in "\n\t"), None)
-
-
 def propose_task(store, task_id, title, brief):
     """Offer the task TITLE, with BRIEF, as TASK_ID's agent asks: it waits
     under that task in Roost for you, and its agent goes on meanwhile."""
@@ -4044,7 +4060,7 @@ def propose_task(store, task_id, title, brief):
     # terminal, where a control character, as Escape, would end the paste
     # and press the rest. And you read it in its draft before it starts
     # anything, where one that draws nothing hides what its new agent gets.
-    hidden = control_character(brief) or hidden_character(brief)
+    hidden = control_character(brief, "\n\t") or hidden_character(brief)
     if hidden:
         raise RoostError("The brief holds U+%04X, a character a terminal takes as a key, or that doesn't "
                          "show in the draft the user reads; write it as plain text" % ord(hidden))

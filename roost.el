@@ -4203,7 +4203,9 @@ Interactively, write the prompt in a draft buffer, which holds your
 review notes for the agent (see `roost-note'); \\<roost-send-mode-map>\\[roost-send-submit] sends it.
 While Roost last saw a startup or permission prompt, ask first: the
 paste could answer that menu, but agents report no event when a
-permission is declined in the terminal."
+permission is declined in the terminal.  TEXT holding a control
+character, other than a line or page break or a tab, is refused: the
+agent's terminal would take it as a key."
   (interactive)
   (setq task (roost--choose task))
   (if (and (not text) (called-interactively-p 'any))
@@ -4320,7 +4322,8 @@ draft's Send button, says which draft."
   (let ((text (replace-regexp-in-string "\\`\\([ \t]*\n\\)+" "" (string-trim-right (buffer-string))))
         (task roost--send-task)
         (notes roost--send-notes)
-        (buffer (current-buffer)))
+        (buffer (current-buffer))
+        (written (buffer-chars-modified-tick)))
     (when (string-empty-p (string-trim text))
       (user-error "Write a prompt first"))
     (let ((states (roost--attachment-states)))
@@ -4350,6 +4353,13 @@ draft's Send button, says which draft."
            (when (buffer-live-p buffer)
              (with-current-buffer buffer
                (setq roost--send-sending nil)
+               ;; The blank lines above it weren't sent, and the host counts
+               ;; the lines it names from what was.  Anything written since
+               ;; stays, and its lines were never counted.
+               (when (= written (buffer-chars-modified-tick))
+                 (delete-region (point-min) (save-excursion (goto-char (point-min))
+                                                            (skip-chars-forward " \t\n")
+                                                            (line-beginning-position))))
                (roost--draft-error "Could not send" err 'roost-send-submit))))
          ;; You have looked at what your notes are about.
          (and notes t))
