@@ -5494,10 +5494,13 @@ def run_teardown(task, worktree, command):
 def linked(worktree):
     """Whether WORKTREE's .git file links it to a Git directory Git accepts.
     Git stopped as it made one leaves that file empty, or its directory
-    without HEAD, and refuses to remove such a worktree, however forced."""
+    without a HEAD it can read, and refuses to remove such a worktree,
+    however forced."""
     with contextlib.suppress(OSError):
         said = (Path(worktree) / ".git").read_bytes()
-        return said.startswith(b"gitdir:") and (Path(worktree) / os.fsdecode(said[7:].strip()) / "HEAD").is_file()
+        if said.startswith(b"gitdir:"):
+            gitdir = Path(worktree) / os.fsdecode(said[len(b"gitdir:"):].strip())
+            return git(worktree, "--git-dir", str(gitdir), "rev-parse", "--git-dir", check=False).returncode == 0
     return False
 
 
