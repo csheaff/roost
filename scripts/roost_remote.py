@@ -6656,7 +6656,8 @@ def main():
     if mode == "rpc":
         # What is not UTF-8, as a file named in a message from Git, would
         # otherwise end the reply here, with nothing said.
-        print(json.dumps(rpc(json.load(sys.stdin)), ensure_ascii=False).encode("utf-8", "replace").decode("utf-8"))
+        sys.stdout.reconfigure(errors="replace")
+        print(json.dumps(rpc(json.load(sys.stdin)), ensure_ascii=False))
     elif mode in ("hook", "hook-env"):
         # Observational hooks never emit decision-control JSON or fail
         # the coding session just because its status dashboard is unavailable.
