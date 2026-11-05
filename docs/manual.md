@@ -1192,6 +1192,18 @@ error, a connection to a host TRAMP isn't connected to, a file or lines that
 aren't where the quoted text is in the whole file, quoted text that isn't the
 region's, or a change to your buffer.
 
+`make crash` kills the host helper partway through each action, as a dropped
+connection or a reboot would: at every Git and tmux command it runs, before
+the command, after it, or leaving it running, and at every hook Git runs,
+with Git dying too; and fails each command that changes something, as a full
+disk would, as `test/crash_harness.py` says. After each, it does what you
+would: looks at the list, asks again, and discards what is left. It fails on
+work lost, a task or worktree that can't be got rid of, a merge done twice or
+left under way, or a refusal that doesn't say what to do. It is slow, so
+`make test` leaves it out; `make crash CRASH_SWEEP=lines` also kills the helper
+at each line it reaches, which is slower still. `test/test_crash.py` keeps the
+crashes that went wrong for `make test`.
+
 `make qa` uses Roost as you would, in a GUI Emacs of its own: a plain
 configuration with its own server, state directory and tmux socket, and
 `test/fake_claude.py` for Claude Code, so Git, tmux and the host helper are
