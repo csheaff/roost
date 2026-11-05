@@ -4,6 +4,7 @@
 """Roost's host-side task manager. Standard library only; JSON over stdin/stdout."""
 
 import base64
+import codecs
 import collections
 import concurrent.futures
 import contextlib
@@ -14,6 +15,7 @@ import functools
 import hashlib
 import heapq
 import json
+import locale
 import os
 from pathlib import Path, PurePosixPath
 import pty
@@ -1549,7 +1551,8 @@ def spawn(store, task, resume=False, size=()):
     script = str(Path(__file__).resolve())
     task["runId"] = uuid.uuid4().hex
     task.pop("shellPaneId", None)
-    argv = [sys.executable, script, "run", str(store.root), task["id"], task["runId"]]
+    # In UTF-8 mode, as `main` would start it, but as the pane's own process.
+    argv = [sys.executable, "-X", "utf8", script, "run", str(store.root), task["id"], task["runId"]]
     if resume:
         argv.append("resume")
     # The runner waits on the registry lock, held here, until its stable pane
@@ -6497,9 +6500,18 @@ def rpc(request):
 
 
 def main():
+    # Emacs, agents and the records speak UTF-8, whatever this host's locale
+    # says: Python would take what they say for it, and fail on a name in
+    # any other script. Its UTF-8 mode goes for what it reads and writes,
+    # files and arguments alike, and isn't handed on to what it starts.
+    if (sys.version_info >= PYTHON_FLOOR and not sys.flags.utf8_mode
+            and codecs.lookup(locale.getpreferredencoding(False)).name != "utf-8"):
+        return subprocess.run([sys.executable, "-I", "-X", "utf8", __file__, *sys.argv[1:]]).returncode
     mode = sys.argv[1]
     if mode == "rpc":
-        print(json.dumps(rpc(json.load(sys.stdin)), ensure_ascii=False))
+        # What is not UTF-8, as a file named in a message from Git, would
+        # otherwise end the reply here, with nothing said.
+        print(json.dumps(rpc(json.load(sys.stdin)), ensure_ascii=False).encode("utf-8", "replace").decode("utf-8"))
     elif mode in ("hook", "hook-env"):
         # Observational hooks never emit decision-control JSON or fail
         # the coding session just because its status dashboard is unavailable.

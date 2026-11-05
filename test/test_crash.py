@@ -252,6 +252,38 @@ class Hosts(unittest.TestCase):
                 self.assertIn("still running", box.helper("resume", id=task["id"])["error"])
                 self.assertIn("stop the task", box.helper("forget", id=task["id"])["error"])
 
+    def test_a_name_in_any_script_goes_through_under_any_locale(self):
+        # Those a host lacks are as C, which is fine.
+        name = "修复 é parser 🙂"
+        for locale in (dict(LC_ALL="en_US.US-ASCII"), dict(LC_ALL="ja_JP.eucJP"), dict(LC_ALL="en_US.ISO8859-1"),
+                       dict(LANG="en_US.US-ASCII")):
+            with self.subTest(locale=locale):
+                box = self.box(**locale)
+                task = box.create(name, prompt=name)
+                self.assertEqual(task["name"], name)
+                self.assertEqual(box.record(task["id"])["name"], name)
+                self.assertEqual(box.helper("list", socket=box.socket)["result"][0]["name"], name)
+                self.assertEqual(box.tmux("display-message", "-p", "-t", task["windowId"], "#{window_name}", u=True), name)
+                box.commit(task, name, "work\n")
+                reply = box.helper("merge", id=task["id"], style="squash")
+                self.assertTrue(reply["ok"], reply)
+                self.assertEqual(box.git("-c", "core.quotePath=false", "ls-files", name), name)
+
+    def test_what_is_not_utf8_in_a_message_leaves_a_reply(self):
+        box = self.box(LC_ALL="en_US.UTF-8")
+        task = box.create()
+        box.commit(task)
+        git = box.root / "bin" / "git"
+        real = git.read_text()
+        git.write_text("#!/bin/sh\ncase \"$*\" in *\"ls-files --others\"*)\n"
+                       "printf 'fatal: cannot read caf\\351\\n' >&2; exit 128 ;; esac\n"
+                       'exec "$ROOST_CRASH_GIT" "$@"\n')
+        reply = box.helper("merge", id=task["id"])
+        git.write_text(real)
+        self.assertFalse(reply.get("traceback"), reply)
+        self.assertIn("cannot read caf", reply["error"])
+
+
 @unittest.skipUnless(SWEEP, "A sweep takes a while: make crash")
 class Sweep(unittest.TestCase):
     workers = int(os.environ.get("ROOST_CRASH_WORKERS", "6"))

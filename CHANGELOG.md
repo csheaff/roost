@@ -4,6 +4,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A host whose locale isn't UTF-8 or C, such as `en_US.US-ASCII` or
+  `ja_JP.eucJP`, takes task names and prompts in any script. The helper
+  stopped on them with a Python traceback, and hooks lost what the agent
+  reported. And a message from Git naming a file that isn't UTF-8 reaches
+  you, rather than ending the reply. Nothing to do when upgrading.
 - With the disk of a host full, its tasks stay listed, and each opens.
   Roost refused to list any of them once one had news to save. Nothing to
   do when upgrading.
