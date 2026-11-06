@@ -883,6 +883,8 @@ OpenCode plugin; with
 Roost never changes your global agent settings or answers prompts.
 
 Each status, and what Roost makes of it, is in [What a task says](#what-a-task-says).
+[State machines](state-machines.md) has every state Roost keeps, what must hold
+of it and each way between them.
 
 The helper notes each change of a task's status, of whether you've seen its
 agent since its last event, and of what of its pull request or work waits on
