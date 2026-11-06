@@ -3498,7 +3498,8 @@ def add_git_stats(tasks):
         task["worktreeBranch"] = None if task["worktreeMissing"] else other_branch(task, worktree)
         if task["worktreeMissing"]:
             # Nothing there to measure: left out, Emacs keeps the last of it.
-            task.update(dirty=False, merging=None, conflicts=None)
+            task.update(dirty=False, merging=None, conflicts=None, worktreeHead=None, sinceLooked=None,
+                        diff="", files=[], size=None)
             continue
         # Where that branch is, for Emacs to tell whether its pull request,
         # as GitHub was last asked, has every commit there.

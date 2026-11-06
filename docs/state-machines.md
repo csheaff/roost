@@ -1265,20 +1265,20 @@ Invariants:
 - I3. A list asked before a mutation's reply never overwrites it: `revision` is read as the list starts and bumped as the reply arrives (`roost--act`, `roost--create-task`). Checked: bumping at the reply is right; at the request would let a list read before the mutation through.
 - I4. A list arriving after its host was forgotten changes nothing (`member host (roost--hosts)`).
 - I5. Any reply clears Offline and Backing off; a stale one too, as the host answered.
-- I6. A refresh asked for while one is in flight happens after it. One that failed, was dropped or couldn't start is owed to the next poll, not to `finish`, so a host that always fails is asked at the pace of polls (`roost--measures-owed`).
+- I6. A refresh asked for while one is in flight happens after it. One that failed, was dropped or couldn't start is owed to the next good poll, not to `finish`, so a host that always fails is asked at the pace of polls (`roost--measures-owed`). Polls stay quiet, and what is owed goes once more, so a list too slow ever to answer holds up no polls.
 - I7. One message per outage (`roost--errors` tested before it's set).
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
-| Idle | `roost--refresh-host` | | Asking | What is owed taken up, so a poll may measure; flag set, counted, revision read, `asked` stamped if asking GitHub | `roost--refresh-host` |
+| Idle | `roost--refresh-host` | | Asking | Flag set, counted, revision read, `asked` stamped if asking GitHub; if not quiet, what is owed goes with it | `roost--refresh-host` |
 | Asking | `roost--request` signals, or a quit | | Idle | What it would have measured is owed, `finish` runs, and the signal reaches the timer or command | `roost--refresh-host` |
 | Asking | Quiet asked | | Asking | Nothing | `roost--refresh-host` |
 | Asking | Full or IDs asked | | Asking, owed | Merged: t beats IDs | `roost--refresh-host` |
-| Asking | Good reply | revision same, host known | Idle or Asking | Snapshot; what changed that it didn't measure is measured next if it was quiet, or owed to the next poll | success lambda |
+| Asking | Good reply | revision same, host known | Idle or Asking | Snapshot; if quiet, what changed and what is owed are measured next; if of some tasks, what changed of others is owed | success lambda |
 | Asking | Good reply | revision moved | Idle or Asking | Whole reply dropped; what it measured is owed, and `asked` put back | success lambda |
 | Asking | Good reply | host forgotten | Idle | Dropped | success lambda |
 | Asking | Reply isn't a task list | | Idle | As a failure | `roost--task-list-p` |
-| Asking | Failure or timeout | host known | Idle, Offline, Backing off | Once per outage a message; backs off up to 60s; what it would have measured is owed, and `asked` put back | `failed` |
+| Asking | Failure or timeout | host known | Idle, Offline, Backing off | Once per outage a message; backs off up to 60s; what it would have measured is owed, unless it was owed already, and `asked` put back | `failed` |
 | Asking | Failure | host forgotten | Idle | Nothing said | `failed` |
 | any end | `finish` | owed | Asking | Flag cleared, then the owed refresh runs | `finish` |
 | Backing off | Quiet poll | before retry time | Backing off | Skipped | `roost-refresh` |
@@ -1291,8 +1291,7 @@ Open: none.
 
 Notes:
 - `roost--pull-requests-asked` is stamped before the request, and put back as it was
-  if the list fails or is dropped, so a poll after an outage asks GitHub. A poll that
-  measures what is owed asks too, or busy agents would keep GitHub from being asked.
+  if the list fails or is dropped, so a poll after an outage asks GitHub.
 - A full list that takes over a minute reads as Offline until the next quiet poll.
 - A stopped tmux server holds the registry lock ([Registry lock](#registry-lock)):
   each poll then times out and the host reads Offline. Over SSH each leaves a helper
@@ -1364,7 +1363,7 @@ Invariants:
 |---|---|---|---|---|---|
 | Quiet | Status becomes ready or permission | unwatched, not just started | Inspecting | Older held one dropped | `roost--notify-attention` |
 | Quiet | Becomes failed, crashed, exited | unwatched | Held | | `roost--notify-attention` |
-| Quiet | First reads `prompt`, past `roost-startup-grace` | unwatched, not so when first seen | Sent | At once: `roost--statuses` holds `prompt` meanwhile, and hooks still get the record's status | `roost--cache-task` |
+| Quiet | First reads `prompt`, past `roost-startup-grace` | unwatched, not so when first seen | Held | Dropped if it moves on: only slow to start. `roost--statuses` holds `prompt` until it stops starting, and hooks still get the record's status | `roost--cache-task` |
 | Quiet | Same status, new `Stop` | | Inspecting | `new-stop` | `roost--cache-task` |
 | Inspecting | Reply or failure | token same, permission | Sent | At once | `send` |
 | Inspecting | Reply or failure | token same, unseen | Held | | `send` |
@@ -1574,16 +1573,17 @@ Invariants:
 - I2. A word goes by what the forge said after the agent's last push:
   `roost--pr-status`'s `checkedAt` test, and `checked = now()` before asking.
 - I3. All forge questions end by `PULL_REQUEST_DEADLINE`, inside Emacs's wait.
-- I4. A status says when its review query failed (`reviewsFailed`). At the same head,
-  what the last one said of reviews stands (`roost--kept-reviews`), so a word doesn't
-  go for a poll and come back as news.
+- I4. A status says when its review query failed (`reviewsFailed`). Of the same pull
+  request, head and base, the last status stands, whole, as when the forge doesn't
+  answer (`roost--kept-reviews`): a word doesn't go for a poll and come back as news,
+  and old reviews beside new checks make no word nobody said.
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
 | never | Quiet poll, first | always, as nothing was asked | whole or partial | | `roost--refresh-host` |
 | whole | Poll every `roost--pull-request-interval`, or a full refresh | | whole | | `roost--refresh-host` |
-| whole | Review query fails or deadline passed | same head | partial | Word and threads stay | `pull_request_status`, `roost--kept-reviews` |
-| whole | Review query fails or deadline passed | another head | partial | Word and threads go until it answers: they are of other commits | same |
+| whole | Review query fails or deadline passed | same pull request, head, base | whole | Last status stands | `pull_request_status`, `roost--kept-reviews` |
+| whole | Review query fails or deadline passed | another | partial | Word and threads go until it answers: they are of other commits | same |
 | whole | Forge list fails: `gh` missing, signed out, slow | | frozen | Emacs keeps it | `task_pull_requests` -> None; `roost--cache-task` |
 | any | Agent event | | stale | Verdict nil until next asked, 30 s on | `roost--pr-status` |
 | any | `pr` changes in a reply without a status | | dropped | | `roost--cache-task` |
@@ -1694,8 +1694,8 @@ say what is no longer so.
 | Owed | Changed since, measurement asked | Its ID is in pending, in a list in flight, or in `roost--measures-owed` |
 
 Invariants:
-- I1. A change any reply brings gets a measurement, unless that reply measured it. Nothing leaves Owed but by being measured: a list dropped, failed or never started owes it to the next poll.
-- I6. Measuring goes at the pace of polls: a quiet poll's changes go right after it, and what a list of some tasks brings of others goes with the next poll, or two busy agents would be measured back to back.
+- I1. A change any reply brings gets a measurement, unless that reply measured it. A list dropped, failed or never started owes it to the next good poll, and one that fails then is given up: the next change, or `g`, asks again.
+- I6. Measuring goes at the pace of polls: a quiet poll's changes go right after it, and what a list of some tasks brings of others goes after the next poll, or two busy agents would be measured back to back.
 - I2. What waits on you isn't told, or reported, until the task is measured (`roost--judged-p`).
 - I3. A stale list reply never overwrites a newer action: `roost--revisions`.
 - I4. An open pull request's conflict is the forge's word, otherwise Git's.
@@ -1708,9 +1708,10 @@ Invariants:
 | Measured | Quiet poll sees its state move | | Owed | ID pended | success lambda |
 | Owed | List with its ID replies | revision same | Measured | | `roost--apply-snapshot` |
 | Owed | That list dropped as stale | | Owed | Into `roost--measures-owed`, for the next poll | success lambda |
-| Owed | That list fails, or can't start | | Owed | Same | `failed`, `roost--refresh-host` |
+| Owed | That list fails, or can't start | not owed before | Owed | Same | `failed`, `roost--refresh-host` |
+| Owed | That list fails | owed before | Measured, in name | Given up, so a list too slow ever to answer holds up no polls | `failed` |
 | Measured | IDs list for another task brings its event | | Owed | Same | success lambda |
-| Owed | Next poll | | Owed | It lists the IDs owed, measuring them | `roost--refresh-host` |
+| Owed | A good quiet poll | | Owed | Asks to measure them, right after | success lambda |
 | Owed | A full refresh | | Owed | It covers them | `roost--refresh-host` |
 
 Conflicts:
@@ -1723,7 +1724,7 @@ Conflicts:
 | Landed | `[]` | same |
 | Git before 2.38, branch gone | null | `merge_conflicts` |
 | One is before the other | `[]` | same |
-| Worktree gone | null, as `merging`, and `dirty` false: left out, Emacs would keep what it had | `add_git_stats` |
+| Worktree gone | null, with what else it measures of the worktree: left out, Emacs would keep what it had | `add_git_stats` |
 
 Stamp: index, `logs/HEAD` of the worktree, and the integration branch's reflog. It
 moves for commits, staging, resets, `m` and a pull in the primary checkout. Edits
@@ -1837,12 +1838,12 @@ Invariants:
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
-| unknown | Cached, not judged | | unknown | Nothing said | `roost--cache-task` |
+| unknown | Cached, not judged, as with a review query failed and no status to keep | | unknown | Nothing said | `roost--cache-task` |
 | unknown | First judged | | known | Nothing said | `roost--cache-task` |
 | known nil | Turn appears | not watched, not just stopped | known turn, held | | same |
 | held | 60 s | still so, unseen, unwatched | gone | Notified | `roost--send-notices` |
 | held | Not so any more | | gone | Dropped | `roost--notice-still-p` |
-| known turn | Turn goes | | known nil | | |
+| known turn | Turn goes, or the pull request changes and is not judged yet | | known nil | So the new one's turn is news | `roost--cache-task` |
 
 `roost--news-turn` ignores `merged`: a task whose tip is in its integration branch
 with a pull request still open and failing notifies `ci failed` and reads `merged`.
@@ -1889,7 +1890,7 @@ grouped by what each view says (234 distinct results).
 | Word | Waits | Inputs | `n` | Mode line, sidebar count | Notified | Dot |
 | --- | --- | --- | --- | --- | --- | --- |
 | `permission` | Yes, first | status | Yes | Yes | At once | Colour |
-| `starting`, held | Yes | past grace | Yes | Yes | At once, as it first reads so | Colour |
+| `starting`, held | Yes | past grace | Yes | Yes | Once, held to go with others, unless it moves on | Colour |
 | `starting` | No | | No | No | No | Dim |
 | `ready` | Until seen | status, unseen | Yes | Yes | Yes | Colour |
 | `interrupted` | Until seen | `lastEvent` | Yes | Yes | Yes | Colour |

@@ -4872,10 +4872,11 @@ sys.exit(status)
         shutil.rmtree(wt)
         listed = self.request("list", full=True)["result"][0]
         self.assertIs(listed["worktreeMissing"], True)
-        for field in ("conflicts", "merging"):
+        for field in ("conflicts", "merging", "sinceLooked", "worktreeHead", "size"):
             self.assertIn(field, listed)
             self.assertIsNone(listed[field])
         self.assertIs(listed["dirty"], False)
+        self.assertEqual((listed["files"], listed["diff"]), ([], ""))
 
     def test_list_learns_the_pull_request_an_agent_opened(self):
         self.github()

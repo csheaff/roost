@@ -452,7 +452,8 @@ can tell that a list asked for after some moment has arrived.")
 (defvar roost--errors (make-hash-table :test 'equal)
   "Last refresh error for each unreachable host.")
 (defvar roost--statuses (make-hash-table :test 'equal)
-  "Last observed status for each task key, for notifications.")
+  "Last observed status for each task key, for notifications.
+\"prompt\" for one held at a startup prompt, once it was told of.")
 (defvar roost--pr-verdicts (make-hash-table :test 'equal)
   "For each task key, what its pull request or work last waited on you for.
 As `roost--news-turn' has it, or nil, for notifications.")
@@ -1134,20 +1135,20 @@ must a reply with a newer look lose it for an older agent event."
         (cons (cons 'looked looked) (assq-delete-all 'looked task))
       task)))
 
-(defconst roost--review-fields '(mergeable requested threads threadAt openThreads)
-  "What of a pull request's status its host's review query says.")
-
 (defun roost--kept-reviews (task old)
-  "TASK, keeping what OLD says of reviews where its host's query for them failed.
-What else the forge says came, but at the same head what it last said of
-reviews stands, or the task's word would go, and come back as news."
+  "TASK, with OLD's pull request status where its host's review query failed.
+Of the same pull request at the same head and base, what the forge last
+said stands, whole, as when it doesn't answer at all: without its reviews
+the task's word would go, and come back as news, and beside newer checks
+they could make a word nobody said."
   (dolist (field '(prStatus worktreePr) task)
     (let ((status (roost--field task field))
           (had (roost--field old field)))
-      (when (and (alist-get 'reviewsFailed status) (equal (alist-get 'head status) (alist-get 'head had)))
-        (setq task (cons (cons field (append (seq-filter (lambda (cell) (memq (car cell) roost--review-fields)) had)
-                                             status))
-                         (assq-delete-all field task)))))))
+      (when (and had (alist-get 'reviewsFailed status)
+                 (equal (alist-get 'number (roost--field task 'pr)) (alist-get 'number (roost--field old 'pr)))
+                 (seq-every-p (lambda (key) (equal (alist-get key status) (alist-get key had)))
+                              '(number head base)))
+        (setq task (cons (cons field had) (assq-delete-all field task)))))))
 
 (defun roost--cache-task (host task)
   "Cache TASK from HOST and notify only on attention transitions."
@@ -1164,7 +1165,8 @@ reviews stands, or the task's word would go, and come back as news."
          (had-merged (and old (roost--pr-merges old)))
          (status (roost--field task 'status))
          ;; Only time shows an agent held at a startup prompt, so what is
-         ;; noted of it is "prompt" for as long as it reads so.
+         ;; noted of it is "prompt", until it is no longer starting: an
+         ;; event that leaves it so makes it read as newly started.
          (noted (gethash key roost--statuses))
          (previous (if (equal noted "prompt") "starting" noted))
          (prompt (and (equal status "starting") (roost--held-starting-p task)))
@@ -1192,7 +1194,8 @@ reviews stands, or the task's word would go, and come back as news."
       (roost--rename-workspace old task)
       (roost--name-panels))
     ;; Record the status before notifying, which may cache this task again.
-    (puthash key (if prompt "prompt" status) roost--statuses)
+    (puthash key (if (or prompt (and (equal status "starting") (equal noted "prompt"))) "prompt" status)
+             roost--statuses)
     (let ((turn (roost--news-turn task))
           (had (gethash key roost--pr-verdicts 'unknown))
           ;; Not when you are looking at it already.
@@ -1204,7 +1207,7 @@ reviews stands, or the task's word would go, and come back as news."
       (cond ((not (gethash key roost--tasks))
              (remhash key roost--pr-verdicts)
              (remhash key roost--agent-news))
-            ((roost--judged-p task) (puthash key turn roost--pr-verdicts)))
+            ((or (roost--judged-p task) (not (eq had 'unknown))) (puthash key turn roost--pr-verdicts)))
       ;; One held about it that is so no longer goes no more, though the
       ;; task may come to be so again before it would go.
       (when-let* ((held (seq-find (lambda (notice) (equal (plist-get notice :key) key)) roost--held-notices)))
@@ -1312,8 +1315,9 @@ a host said, nor the other functions from running."
 (defun roost--notify-attention (host task status)
   "Notify that TASK on HOST became STATUS.
 A permission request goes at once, since its agent can do nothing until
-you answer, as does \"prompt\", for an agent held at a startup prompt; the
-rest are held to go together, by `roost--hold-notice'.
+you answer; the rest are held to go together, by `roost--hold-notice', as
+\"prompt\" is, an agent seemingly held at a startup prompt, which goes no
+more if it was only slow to start.
 A ready agent or one asking permission is inspected first, since quiet
 polls leave out its latest reply, so the notification can say what it
 finished or wants; unless its agent changed again by then, which
@@ -1324,13 +1328,13 @@ notifies of itself."
          (news (puthash key (list status) roost--agent-news))
          (send (lambda (task body)
                  (cond ((not (eq (gethash key roost--agent-news) news)))
-                       ((member status '("permission" "prompt"))
+                       ((equal status "permission")
                         ;; It replaces one held about the task, which is older.
                         (roost--drop-notices key)
                         (roost--notify (roost--notice-title task name) body task))
                        ;; Seen while it was inspected, as when `n' opened it.
                        ((not (roost--seen-p task))
-                        (roost--hold-notice task name body status))))))
+                        (roost--hold-notice task name body (if (equal status "prompt") "starting" status)))))))
     ;; What was held about the task is older, even while it is inspected.
     (roost--drop-notices key)
     (if (not (member status '("ready" "permission")))
@@ -1422,7 +1426,8 @@ It counts the others by status, and a click on it opens that task."
          (notices (and roost-notify
                        (mapcar (lambda (notice)
                                  ;; Named as its task is now.
-                                 (if (not (plist-get notice :recorded))
+                                 (if (or (not (plist-get notice :recorded))
+                                         (equal (plist-get notice :status) "prompt"))
                                      notice
                                    (plist-put (copy-sequence notice) :status
                                               (roost--status-name (gethash (plist-get notice :key) roost--tasks)))))
@@ -1490,11 +1495,12 @@ what changed since is measured against."
 (defvar roost--full-refresh-pending (make-hash-table :test 'equal)
   "Hosts whose full refresh was requested while another request was in flight.")
 (defvar roost--measures-owed (make-hash-table :test 'equal)
-  "What each host's next poll is to measure: t for every task, or their IDs.
+  "What each host is to measure after its next good poll: t for every task, or IDs.
 What a list that failed or was dropped would have measured, and tasks a
-list brought news of without measuring them.  A poll takes it up, rather
-than the end of a list, so that a host that always fails isn't asked in a
-loop, and two busy agents aren't measured back to back.")
+list brought news of without measuring them.  From a poll, rather than
+the end of a list: so a host that always fails isn't asked in a loop,
+two busy agents aren't measured back to back, and a list too slow ever
+to answer holds up no polls.  Taken up once: if that fails too, it goes.")
 (defvar roost--failures (make-hash-table :test 'equal)
   "Consecutive refresh failures per host, as (COUNT . RETRY-AFTER).")
 
@@ -1506,29 +1512,25 @@ loop, and two busy agents aren't measured back to back.")
 (defun roost--refresh-host (host quiet &optional ids)
   "Refresh HOST asynchronously.
 QUIET skips Git statistics; otherwise IDS, if non-nil, limits them to
-those tasks.  What is owed, as `roost--measures-owed' has it, goes too."
+those tasks, and what is owed, as `roost--measures-owed' has it, goes too."
   (if (gethash host roost--refreshing)
       ;; Run the requested full refresh once the in-flight poll returns.
       (unless quiet (roost--owe-measuring roost--full-refresh-pending host ids))
     (puthash host t roost--refreshing)
-    (let* ((poll quiet)
-           (_ (when-let* ((owed (gethash host roost--measures-owed)))
-                (remhash host roost--measures-owed)
-                (when (or quiet ids)
-                  (setq ids (unless (eq owed t) (seq-union ids owed))
-                        quiet nil
-                        poll (and poll ids t)))))
+    (let* ((owed (unless quiet (gethash host roost--measures-owed)))
+           (ids (if (and owed ids) (unless (eq owed t) (seq-union ids owed)) ids))
            (request (puthash host (1+ (gethash host roost--list-requests 0)) roost--list-requests))
            (revision (gethash host roost--revisions 0))
            (last-asked (gethash host roost--pull-requests-asked))
-           ;; Full refreshes ask GitHub too, and polls now and then, those
-           ;; that measure what is owed too: with agents at work, all may.
-           (pull-requests (if poll
+           ;; Full refreshes ask GitHub too, and quiet polls now and then.
+           (pull-requests (if quiet
                               (> (- (float-time) (or last-asked 0)) roost--pull-request-interval)
                             (not ids)))
            ;; Nothing came of this list, so what it was for is still to do.
-           (lost (lambda ()
-                   (unless quiet (roost--owe-measuring roost--measures-owed host ids))
+           ;; UNTRIED, it was no try: its reply was stale, or it never went.
+           (lost (lambda (&optional untried)
+                   (unless (or quiet (and owed (not untried)))
+                     (roost--owe-measuring roost--measures-owed host ids))
                    (when pull-requests
                      (if last-asked
                          (puthash host last-asked roost--pull-requests-asked)
@@ -1542,6 +1544,7 @@ those tasks.  What is owed, as `roost--measures-owed' has it, goes too."
                        (when-let* ((pending (gethash host roost--full-refresh-pending)))
                          (remhash host roost--full-refresh-pending)
                          (roost--refresh-host host nil (unless (eq pending t) pending)))))))
+      (when owed (remhash host roost--measures-owed))
       (when pull-requests (puthash host (float-time) roost--pull-requests-asked))
       (let ((failed
              (lambda (err)
@@ -1572,7 +1575,7 @@ those tasks.  What is owed, as `roost--measures-owed' has it, goes too."
             (progn
               (roost--request
                host "list" `((full . ,(cond (quiet :false) (ids (vconcat ids)) (t t)))
-                             ,@(when (and poll pull-requests) '((pullRequests . t))))
+                             ,@(when (and quiet pull-requests) '((pullRequests . t))))
                ;; Each ends the refresh even if drawing what it found fails, or
                ;; the host would never be asked again.
                (lambda (tasks)
@@ -1586,7 +1589,7 @@ those tasks.  What is owed, as `roost--measures-owed' has it, goes too."
                          ;; forgotten meanwhile stays forgotten.
                          (cond
                           ((not (member host (roost--hosts))))
-                          ((/= revision (gethash host roost--revisions 0)) (funcall lost))
+                          ((/= revision (gethash host roost--revisions 0)) (funcall lost t))
                           (t
                            (let ((before (roost--task-states host)))
                              (roost--apply-snapshot host tasks request)
@@ -1595,24 +1598,26 @@ those tasks.  What is owed, as `roost--measures-owed' has it, goes too."
                              ;; some tasks for the rest.  An agent that reported something,
                              ;; such as finishing an edit, may have changed files, and a
                              ;; commit moves the task's Git stamp: measure those tasks once
-                             ;; this poll is done, or with the next for what a list of
-                             ;; some brought, or two busy agents would keep this going.
-                             (when-let* (((or quiet ids))
-                                         (changed (seq-difference
-                                                   (seq-keep (lambda (state)
-                                                               (unless (equal state (assoc (car state) before))
-                                                                 (car state)))
-                                                             (roost--task-states host))
-                                                   ids)))
-                               (if quiet
-                                   (roost--refresh-host host nil changed)
-                                 (roost--owe-measuring roost--measures-owed host changed))))))
+                             ;; this poll is done, with what is owed.  What a list of some
+                             ;; brought waits for the next: two busy agents would otherwise
+                             ;; keep this going.
+                             (let ((changed (seq-difference
+                                             (seq-keep (lambda (state)
+                                                         (unless (equal state (assoc (car state) before))
+                                                           (car state)))
+                                                       (roost--task-states host))
+                                             ids))
+                                   (owed (gethash host roost--measures-owed)))
+                               (cond ((and quiet (or changed owed))
+                                      (roost--refresh-host host nil (or changed (unless (eq owed t) owed))))
+                                     ((and ids changed)
+                                      (roost--owe-measuring roost--measures-owed host changed)))))))
                          (roost--redraw))
                      (funcall finish))))
                failed)
               (setq asked t))
           (unless asked
-            (funcall lost)
+            (funcall lost t)
             (funcall finish)))))))
 
 (defun roost--task-list-p (tasks)
@@ -6994,10 +6999,12 @@ has it.  Its host notes it, for `roost-workload'."
   "Whether what of TASK waits on you can be told yet.
 That is once its host has measured it, which a list with its pull
 requests but not its Git statistics hasn't, and GitHub has said how its
-open pull request is: the one `roost--pr-view' has."
-  (let ((view (roost--pr-view task)))
+open pull request is, its reviews too: the one `roost--pr-view' has."
+  (let* ((view (roost--pr-view task))
+         (status (roost--field view 'prStatus)))
     (and (assq 'conflicts task)
-         (or (not (memq (roost--pr-state view) '(open draft))) (roost--field view 'prStatus))
+         (or (not (memq (roost--pr-state view) '(open draft)))
+             (and status (not (and (alist-get 'reviewsFailed status) (not (assq 'mergeable status))))))
          t)))
 
 (defun roost--report-turn (task)
