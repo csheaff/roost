@@ -3838,6 +3838,61 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(self.request("resume", id=task["id"])["ok"])
         self.wait(task, "ready")
 
+    def tmux_goes_and_claude_says_so(self, task):
+        """End TASK's tmux server, once its Claude's SessionEnd has landed,
+        which it runs as it goes, as Claude Code does."""
+        captures = self.state / "captures"
+        captures.mkdir(exist_ok=True)
+        roost.tmux(self.socket, "kill-server")
+        file = captures / (task["id"] + ".jsonl")
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            if file.exists() and '"SessionEnd"' in file.read_text():
+                return
+            time.sleep(.04)
+        self.fail("Its SessionEnd never came")
+
+    def test_a_claude_that_says_goodbye_as_tmux_goes_crashed(self):
+        task = self.create()
+        self.tmux_goes_and_claude_says_so(task)
+        self.assertEqual(roost.Store(str(self.state)).read(task["id"])["status"], "ready")
+        listed = self.request("list")["result"][0]
+        self.assertEqual((listed["status"], listed["live"], listed["statusBeforeCrash"]), ("crashed", False, "ready"))
+
+    def test_relayed_or_not_a_task_ends_alike(self):
+        ended = {}
+        for relayed in (False, True):
+            task = self.create(name="relayed" if relayed else "plain", programStatus=relayed)
+            self.tmux_goes_and_claude_says_so(task)
+            ended[relayed] = self.request("list")["result"]
+            ended[relayed] = next(t for t in ended[relayed] if t["id"] == task["id"])["status"]
+        self.assertEqual(ended, {False: "crashed", True: "crashed"})
+        for relayed in (False, True):
+            task = self.create(name="left " + str(relayed), programStatus=relayed)
+            self.request("send", id=task["id"], text="exit")
+            self.wait(task, "exited")
+            self.wait_for_pane_exit(task)
+            self.assertEqual(next(t for t in self.request("list")["result"] if t["id"] == task["id"])["status"], "exited")
+
+    def test_an_agent_killed_in_its_pane_is_for_the_runner_to_record(self):
+        task = self.create()
+        children = roost.processes()
+        pid = roost.pane_inventory(self.socket)[task["paneId"]]["pid"]
+        agent = next(child for child, (parent, _) in children.items() if parent == pid)
+        os.kill(agent, signal.SIGHUP)
+        self.wait_for_pane_exit(task)
+        record = self.wait(task, "failed")
+        self.assertEqual((record["exitCode"], record["lastEvent"]), (129, "SessionStart"))
+        self.assertEqual(self.request("list")["result"][0]["status"], "failed")
+
+    def test_only_an_end_you_asked_for_says_exited(self):
+        reasons = lambda agent, *ends: [(agent.observe(dict(hook_event_name="SessionEnd", reason=end, session_id="s"))
+                                         or {}).get("status") for end in ends]
+        self.assertEqual(reasons(roost.ClaudeAgent(), "prompt_input_exit", "logout"), ["exited", "exited"])
+        self.assertEqual(reasons(roost.ClaudeAgent(), "other", "clear", "resume", None, "new"), [None] * 5)
+        # Codex says "other" for every end.
+        self.assertEqual(reasons(roost.CodexAgent(), "other"), [None])
+
     def test_git_statistics_run_outside_the_registry_lock(self):
         task = self.create()
         wt = Path(task["worktree"])

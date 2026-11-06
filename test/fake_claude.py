@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 import sys
 import termios
@@ -92,6 +93,15 @@ def status(state, msg=None, **fields):
         os.write(1, b"\x1b]7501;" + ":".join(pairs).encode() + b"\x1b\\")
 
 
+def hang_up(*_):
+    """As Claude Code does as its tmux server goes, or it is sent SIGTERM."""
+    try:
+        event("SessionEnd", reason="other")
+    finally:
+        os._exit(129)
+
+
+signal.signal(signal.SIGHUP, hang_up)
 event("SessionStart")
 status("idle")
 print("FAKE_CLAUDE_READY " + session, flush=True)
@@ -199,4 +209,4 @@ for line in lines():
         event("Stop", last_assistant_message="PROMPT " + line.rstrip())
         status("done")
 status("clear")
-event("SessionEnd")
+event("SessionEnd", reason="prompt_input_exit")

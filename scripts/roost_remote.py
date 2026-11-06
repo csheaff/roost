@@ -962,6 +962,11 @@ class ClaudeAgent:
         # same process, which goes on running.
         if event == "SessionEnd" and payload.get("reason") in ("clear", "resume"):
             return None
+        # You left it, by /exit, C-c, C-d or /logout. It says "other" as it
+        # dies by a signal, as when tmux goes: that end is the runner's to
+        # record, or, when the pane goes too, the next listing's.
+        if event == "SessionEnd" and payload.get("reason") not in ("prompt_input_exit", "logout"):
+            return reported or None
         # Compacting the conversation, which Claude also does by itself in the
         # middle of a turn, changes nothing about whether it waits for you.
         if event == "SessionStart" and payload.get("source") == "compact":
@@ -1151,7 +1156,9 @@ class CodexAgent:
 
     def observe(self, payload, current=None):
         event = payload.get("hook_event_name")
-        status = {"SessionStart": "ready", "SessionEnd": "exited", "UserPromptSubmit": "running",
+        # Its SessionEnd says "other" however it ended, so that says nothing:
+        # the runner records its end, or, when the pane goes too, the next listing.
+        status = {"SessionStart": "ready", "UserPromptSubmit": "running",
                   "PreToolUse": "running", "PostToolUse": "running", "PermissionRequest": "permission",
                   "Stop": "ready", "Interrupt": "ready"}.get(event)
         if not status:

@@ -4,6 +4,10 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A task whose tmux server or host went reads `crashed`, as
+  the manual says, whether or not `roost-program-status` is on, and `s`
+  offers to resume the others that crashed with it. Claude's own last word as
+  it was killed made it read `exited`. Nothing to do when upgrading.
 - A Claude or Codex agent that asks goes on showing `permission` while
   a subagent's tools, or tools it called together with the one it asks about,
   run beside it. They made it read `running`, with no notification, and let a
