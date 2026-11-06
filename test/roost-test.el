@@ -7191,6 +7191,23 @@ stopped."
     (should (equal (alist-get 'tip kept) "t2"))
     (should (= (alist-get 'unpushed kept) 1))))
 
+(ert-deftest roost-a-pull-request-made-ready-as-its-reviews-fail-reads-ready ()
+  (let* ((said '((number . 7) (head . "h") (base . "main") (state . "OPEN")))
+         (old `((pr . ((number . 7))) (prStatus . ((draft . t) ,@said))))
+         (new `((pr . ((number . 7))) (prStatus . ((reviewsFailed . t) ,@said)))))
+    (should-not (alist-get 'draft (alist-get 'prStatus (roost--kept-reviews new old))))))
+
+(ert-deftest roost-a-full-refresh-that-took-up-what-was-owed-is-owed-if-it-fails ()
+  ;; Every task but those owed had only that one try.
+  (roost-test--with-held-requests
+   (let ((measuring (roost-test--a-poll-sees-y-commit)))
+     (funcall (plist-get measuring :failure) "ssh: connection reset")
+     (remhash "dev" roost--failures)
+     (should (consp (gethash "dev" roost--measures-owed)))
+     (roost-refresh)
+     (funcall (plist-get (roost-test--take "list") :failure) "ssh: connection reset")
+     (should (eq (gethash "dev" roost--measures-owed) t)))))
+
 (ert-deftest roost-a-pull-request-reopened-as-its-reviews-fail-reads-open ()
   (let* ((said '((number . 7) (head . "h") (base . "main")))
          (old `((pr . ((number . 7))) (prStatus . ((state . "CLOSED") ,@said))))

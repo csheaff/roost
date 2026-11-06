@@ -1149,7 +1149,7 @@ they could make a word nobody said."
                  (or (not (eq field 'prStatus))
                      (equal (alist-get 'number (roost--field task 'pr)) (alist-get 'number (roost--field old 'pr))))
                  (seq-every-p (lambda (key) (equal (alist-get key status) (alist-get key had)))
-                              '(number head base state)))
+                              '(number head base state draft)))
         ;; Of the branch here, this reply is the newer.
         (setq task (cons (cons field (append (seq-filter (lambda (entry) (memq (car entry) '(branch tip unpushed)))
                                                          status)
@@ -1544,7 +1544,11 @@ those tasks, and what is owed, as `roost--measures-owed' has it, goes too."
                    (let ((first-try (if (eq owed t) new (seq-difference new owed))))
                      (cond (quiet)
                            ((or untried (not owed)) (roost--owe-measuring roost--measures-owed host ids))
-                           (first-try (roost--owe-measuring roost--measures-owed host first-try))))
+                           (first-try (roost--owe-measuring roost--measures-owed host first-try))
+                           ;; It asked for every task, which what was owed
+                           ;; was only some of.
+                           ((and (null new) (not (eq owed t)))
+                            (roost--owe-measuring roost--measures-owed host nil))))
                    (when pull-requests
                      (if last-asked
                          (puthash host last-asked roost--pull-requests-asked)
