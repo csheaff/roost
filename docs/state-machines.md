@@ -66,7 +66,8 @@ all the rest, in [The word](#the-word).
 An audit on 2026-11-06, at `c36517d`, found these invalid states and transitions, each
 reached from a valid state through real entry points. Each had a test that failed
 there, with a control that passed, so that a test can't pass for the wrong reason.
-Those tests now live on as regression tests. The linked issue says how to reach each.
+The linked issue says how to reach each. Those tests aren't in this repository until
+a finding is fixed: its fix brings the test into the suite, and its row then names it.
 
 - **S1**: work lost, wrong code merged or deleted, the wrong process steered or killed.
 - **S2**: a task or view stuck with no way back from Roost short of hand edits, or
@@ -78,52 +79,52 @@ Within a severity, they are ranked by what they cost and how often they happen.
 
 | # | Finding | Sev | What goes wrong | Machine | Status |
 | --- | --- | --- | --- | --- | --- |
-| 1 | LC-1 | S1 | Asking again after a cut-short removal deletes the primary checkout's branch | [Agent worktrees](#agent-worktrees) | Open, #221 |
-| 2 | LC-2 | S1 | Finishing a task takes a branch or worktree its agent only used | [Agent worktrees](#agent-worktrees) | Open, #221 |
-| 3 | VIEWS-1 | S1 | "Nothing would be lost" doesn't hold for what is written before you answer | [Asking before acting](#asking-before-acting) | Open, #222 |
-| 4 | REQUESTS-8 | S2 | On this machine, a merge that outlasts the timeout is killed with its Git and hooks, leaving your checkout half-merged | [Host request](#host-request) | Open, #223 |
-| 5 | LC-3 | S2 | What a push or a checkout leaves running holds a task's lock, and refuses every way of finishing it | [Worktree lock](#worktree-lock) | Open, #223 |
+| 1 | LC-1 | S1 | Asking again after a cut-short removal deletes the primary checkout's branch | [Agent worktrees](#agent-worktrees) | Open, [#221](https://github.com/csheaff/roost/issues/221) |
+| 2 | LC-2 | S1 | Finishing a task takes a branch or worktree its agent only used | [Agent worktrees](#agent-worktrees) | Open, [#221](https://github.com/csheaff/roost/issues/221) |
+| 3 | VIEWS-1 | S1 | "Nothing would be lost" doesn't hold for what is written before you answer | [Asking before acting](#asking-before-acting) | Open, [#222](https://github.com/csheaff/roost/issues/222) |
+| 4 | REQUESTS-8 | S2 | On this machine, a merge that outlasts the timeout is killed with its Git and hooks, leaving your checkout half-merged | [Host request](#host-request) | Open, [#223](https://github.com/csheaff/roost/issues/223) |
+| 5 | LC-3 | S2 | What a push or a checkout leaves running holds a task's lock, and refuses every way of finishing it | [Worktree lock](#worktree-lock) | Open, [#223](https://github.com/csheaff/roost/issues/223) |
 | 6 | REQUESTS-1 | S2 | A refresh that can't start leaves its host unasked until Emacs restarts | [Host refresh](#host-refresh) | Fixed, `roost-a-refresh-that-could-not-start-leaves-its-host-asked-again` |
 | 7 | REQUESTS-2 | S2 | An install cut short leaves a broken helper under its real name | [Helper copy](#helper-copy) | Fixed, `roost-an-install-cut-short-leaves-what-was-there` |
-| 8 | STATUS-1 | S2 | A Claude task stopped before anything was said in it can never resume | [The runner's stages](#the-runners-stages) | Open, #224 |
-| 9 | VIEWS-2 | S2 | A retry with an edited draft says it created a task it didn't, and drops the edit | [The creation ID](#the-creation-id) | Open, #226 |
-| 10 | VIEWS-9, FORGE-3 | S2 | A pull request draft says it opened one it only pushed to, and `P` can't open one after a closed one | [Pushing and opening](#pushing-and-opening) | Open, #227 |
+| 8 | STATUS-1 | S2 | A Claude task stopped before anything was said in it can never resume | [The runner's stages](#the-runners-stages) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
+| 9 | VIEWS-2 | S2 | A retry with an edited draft says it created a task it didn't, and drops the edit | [The creation ID](#the-creation-id) | Open, [#226](https://github.com/csheaff/roost/issues/226) |
+| 10 | VIEWS-9, FORGE-3 | S2 | A pull request draft says it opened one it only pushed to, and `P` can't open one after a closed one | [Pushing and opening](#pushing-and-opening) | Open, [#227](https://github.com/csheaff/roost/issues/227) |
 | 11 | REQUESTS-3, VIEWS-8 | S2 | Two Emacs sessions overwrite each other's review notes | [Remembered files](#remembered-files) | Fixed, `roost-a-note-from-another-emacs-stays-as-you-write-yours` |
-| 12 | STATUS-2 | S2 | Roost takes a pane changed by hand for its agent, or for gone | [A run and its pane](#a-run-and-its-pane) | Open, #224 |
-| 13 | LC-4, STATUS-3 | S3 | A merge's hooks hold the registry lock, so other agents' events are lost and they stay `running` | [Registry lock](#registry-lock) | Open, #223 |
-| 14 | FORGE-1 | S3 | A pull request merged with a commit made on the forge reads as not merged, and `m` forks `main` from `origin` | [Landed](#landed) | Open, #227 |
-| 15 | STATUS-4 | S3 | Another tool's event ends a request that still waits, so `send` could answer a menu | [Agent status](#agent-status) | Open, #224 |
-| 16 | VIEWS-5, LC-5 | S3 | A prompt goes twice when its reply was lost | [The prompt draft](#the-prompt-draft) | Open, #226 |
-| 17 | VIEWS-7 | S3 | Merging takes commits made after it asked | [Asking before acting](#asking-before-acting) | Open, #222 |
-| 18 | FORGE-2 | S3 | An agent's pull request goes unfollowed after `git pull --rebase` or a fast-forward | [A task's pull request](#a-tasks-pull-request) | Open, #227 |
-| 19 | FORGE-4, REQUESTS-5 | S3 | A change a poll saw can go unmeasured until something else asks | [Task measurement](#task-measurement) | Open, #228 |
-| 20 | FORGE-5 | S3 | A commit made on the forge holds back all an open pull request says | [What the forge last said](#what-the-forge-last-said) | Open, #227 |
-| 21 | STATUS-6 | S3 | An MCP server's question reads as work | [Agent status](#agent-status) | Open, #224 |
-| 22 | FORGE-6 | S3 | A task held at a startup prompt waits, and no notification says so | [The word](#the-word) | Open, #228 |
-| 23 | VIEWS-3 | S3 | Undo in the new task draft changes the wrong text | [The new task draft](#the-new-task-draft) | Open, #226 |
-| 24 | STATUS-5 | S3 | As tmux goes, a Claude task reads `exited`, not `crashed` | [Who wins](#who-wins-hooks-reports-poll-runner) | Open, #224 |
-| 25 | STATUS-7 | S3 | A report landing after the runner's end turns `exited` into `crashed` | [Agent status](#agent-status) | Open, #224 |
-| 26 | FORGE-8 | S3 | A failed review query takes back what a pull request waits on you for, then notifies again | [What the forge last said](#what-the-forge-last-said) | Open, #228 |
-| 27 | FORGE-9, REQUESTS-4 | S3 | Conflicts there when Roost first saw a task notify after every restart | [News of a turn](#news-of-a-turn) | Open, #228 |
-| 28 | VIEWS-4 | S3 | A prompt draft reads its task as it was when it opened | [The prompt draft](#the-prompt-draft) | Open, #226 |
-| 29 | VIEWS-6 | S3 | A note taken out of a draft is cleared unsent | [A review note](#a-review-note) | Open, #229 |
-| 30 | VIEWS-10 | S3 | A note edited as its draft goes loses the edit | [A review note](#a-review-note) | Open, #229 |
+| 12 | STATUS-2 | S2 | Roost takes a pane changed by hand for its agent, or for gone | [A run and its pane](#a-run-and-its-pane) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
+| 13 | LC-4, STATUS-3 | S3 | A merge's hooks hold the registry lock, so other agents' events are lost and they stay `running` | [Registry lock](#registry-lock) | Open, [#223](https://github.com/csheaff/roost/issues/223) |
+| 14 | FORGE-1 | S3 | A pull request merged with a commit made on the forge reads as not merged, and `m` forks `main` from `origin` | [Landed](#landed) | Open, [#227](https://github.com/csheaff/roost/issues/227) |
+| 15 | STATUS-4 | S3 | Another tool's event ends a request that still waits, so `send` could answer a menu | [Agent status](#agent-status) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
+| 16 | VIEWS-5, LC-5 | S3 | A prompt goes twice when its reply was lost | [The prompt draft](#the-prompt-draft) | Open, [#226](https://github.com/csheaff/roost/issues/226) |
+| 17 | VIEWS-7 | S3 | Merging takes commits made after it asked | [Asking before acting](#asking-before-acting) | Open, [#222](https://github.com/csheaff/roost/issues/222) |
+| 18 | FORGE-2 | S3 | An agent's pull request goes unfollowed after `git pull --rebase` or a fast-forward | [A task's pull request](#a-tasks-pull-request) | Open, [#227](https://github.com/csheaff/roost/issues/227) |
+| 19 | FORGE-4, REQUESTS-5 | S3 | A change a poll saw can go unmeasured until something else asks | [Task measurement](#task-measurement) | Open, [#228](https://github.com/csheaff/roost/issues/228) |
+| 20 | FORGE-5 | S3 | A commit made on the forge holds back all an open pull request says | [What the forge last said](#what-the-forge-last-said) | Open, [#227](https://github.com/csheaff/roost/issues/227) |
+| 21 | STATUS-6 | S3 | An MCP server's question reads as work | [Agent status](#agent-status) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
+| 22 | FORGE-6 | S3 | A task held at a startup prompt waits, and no notification says so | [The word](#the-word) | Open, [#228](https://github.com/csheaff/roost/issues/228) |
+| 23 | VIEWS-3 | S3 | Undo in the new task draft changes the wrong text | [The new task draft](#the-new-task-draft) | Open, [#226](https://github.com/csheaff/roost/issues/226) |
+| 24 | STATUS-5 | S3 | As tmux goes, a Claude task reads `exited`, not `crashed` | [Who wins](#who-wins-hooks-reports-poll-runner) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
+| 25 | STATUS-7 | S3 | A report landing after the runner's end turns `exited` into `crashed` | [Agent status](#agent-status) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
+| 26 | FORGE-8 | S3 | A failed review query takes back what a pull request waits on you for, then notifies again | [What the forge last said](#what-the-forge-last-said) | Open, [#228](https://github.com/csheaff/roost/issues/228) |
+| 27 | FORGE-9, REQUESTS-4 | S3 | Conflicts there when Roost first saw a task notify after every restart | [News of a turn](#news-of-a-turn) | Open, [#228](https://github.com/csheaff/roost/issues/228) |
+| 28 | VIEWS-4 | S3 | A prompt draft reads its task as it was when it opened | [The prompt draft](#the-prompt-draft) | Open, [#226](https://github.com/csheaff/roost/issues/226) |
+| 29 | VIEWS-6 | S3 | A note taken out of a draft is cleared unsent | [A review note](#a-review-note) | Open, [#229](https://github.com/csheaff/roost/issues/229) |
+| 30 | VIEWS-10 | S3 | A note edited as its draft goes loses the edit | [A review note](#a-review-note) | Open, [#229](https://github.com/csheaff/roost/issues/229) |
 | 31 | REQUESTS-6 | S3 | Two Emacs sessions overwrite each other's hosts and projects | [Remembered files](#remembered-files) | Fixed, `roost-a-host-remembered-in-another-emacs-stays-as-you-use-yours` |
-| 32 | LC-6 | S4 | Discarding a task whose repository is gone deletes its worktree and says it failed | [Finishing a task](#finishing-a-task) | Open, #221 |
-| 33 | VIEWS-11 | S4 | An error after a good reply leaves a draft busy | [The new task draft](#the-new-task-draft) | Open, #226 |
-| 34 | VIEWS-12 | S4 | A resumed task covers what you opened from a question | [Resuming](#resuming) | Open, #229 |
-| 35 | VIEWS-13 | S4 | An open held for a question connects to a session since ended | [Opening a task](#opening-a-task) | Open, #229 |
-| 36 | FORGE-10 | S4 | A task whose worktree went keeps waiting on conflicts last measured | [Task measurement](#task-measurement) | Open, #228 |
-| 37 | FORGE-11, REQUESTS-7 | S4 | Two Emacs undo each other's turn for a stopped task, on every poll | [Verdict and turn](#verdict-and-turn) | Open, #228 |
-| 38 | FORGE-12 | S4 | What `P` pushed counts as unpushed until GitHub is next asked | [Pushing and opening](#pushing-and-opening) | Open, #227 |
-| 39 | FORGE-7 | S4 | A failed task you've seen keeps its colour, though the manual says otherwise | [The word](#the-word) | Open, #228 |
-| 40 | STATUS-8 | S4 | `/clear` reads `interrupted` for a relayed Claude | [Agent status](#agent-status) | Open, #224 |
-| 41 | STATUS-9 | S4 | A dialog as a task resumes shows the last run's request | [A task's request](#a-tasks-request) | Open, #224 |
+| 32 | LC-6 | S4 | Discarding a task whose repository is gone deletes its worktree and says it failed | [Finishing a task](#finishing-a-task) | Open, [#221](https://github.com/csheaff/roost/issues/221) |
+| 33 | VIEWS-11 | S4 | An error after a good reply leaves a draft busy | [The new task draft](#the-new-task-draft) | Open, [#226](https://github.com/csheaff/roost/issues/226) |
+| 34 | VIEWS-12 | S4 | A resumed task covers what you opened from a question | [Resuming](#resuming) | Open, [#229](https://github.com/csheaff/roost/issues/229) |
+| 35 | VIEWS-13 | S4 | An open held for a question connects to a session since ended | [Opening a task](#opening-a-task) | Open, [#229](https://github.com/csheaff/roost/issues/229) |
+| 36 | FORGE-10 | S4 | A task whose worktree went keeps waiting on conflicts last measured | [Task measurement](#task-measurement) | Open, [#228](https://github.com/csheaff/roost/issues/228) |
+| 37 | FORGE-11, REQUESTS-7 | S4 | Two Emacs undo each other's turn for a stopped task, on every poll | [Verdict and turn](#verdict-and-turn) | Open, [#228](https://github.com/csheaff/roost/issues/228) |
+| 38 | FORGE-12 | S4 | What `P` pushed counts as unpushed until GitHub is next asked | [Pushing and opening](#pushing-and-opening) | Open, [#227](https://github.com/csheaff/roost/issues/227) |
+| 39 | FORGE-7 | S4 | A failed task you've seen keeps its colour, though the manual says otherwise | [The word](#the-word) | Open, [#228](https://github.com/csheaff/roost/issues/228) |
+| 40 | STATUS-8 | S4 | `/clear` reads `interrupted` for a relayed Claude | [Agent status](#agent-status) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
+| 41 | STATUS-9 | S4 | A dialog as a task resumes shows the last run's request | [A task's request](#a-tasks-request) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
 
 Also open from the hunt of 2026-11-05, and taken up under these issues: refusals that
-don't name a half-done merge, and tmux calls with no timeout (#223); text lost as a
-draft closes, and a click on another project ignored (#226); and a pull request that
-branch rules block reading `to merge` (#227). The rest are under
+don't name a half-done merge, and tmux calls with no timeout ([#223](https://github.com/csheaff/roost/issues/223)); text lost as a
+draft closes, and a click on another project ignored ([#226](https://github.com/csheaff/roost/issues/226)); and a pull request that
+branch rules block reading `to merge` ([#227](https://github.com/csheaff/roost/issues/227)). The rest are under
 [Known and not fixed](#known-and-not-fixed).
 
 ## A task on its host
@@ -411,8 +412,10 @@ Invariants:
   (LC-1).
 - I3. What a removal touches is the task's. **Broken** in `remove_agent_worktrees`
   (LC-1, LC-2).
-- I4. After a step fails past 8, the task is stopped but alive: `resume` works.
-  Holds. It is a surprise only in that the merge has happened; `landed` shows it.
+- I4. After a step fails past 8, the task is stopped, and the merge has happened, as
+  `landed` shows. With its worktree still there, `resume` works. Once removal has
+  gone through, as when `delete_branch` then fails, `resume` refuses for want of a
+  worktree: the way on is to clear what refused it and finish the task again.
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
@@ -423,8 +426,10 @@ Invariants:
 
 Illegal or refused: an agent at work, a task another pane took, a dirty worktree,
 unmerged commits, work in its agent's worktree or submodules, a locked worktree;
-each before anything changes. `discard` refuses only a branch moved since its dry
-run, and what `require_nothing_kept` finds.
+each before anything changes. `discard` refuses what `check_worktree` refuses with
+`branch=False`, a link, a path outside Roost's folder, a moved worktree, and a missing
+one whose branch the primary checkout holds; then a branch moved since its dry run,
+and what `require_nothing_kept` finds.
 Open: LC-1, LC-2, LC-6.
 
 ### The merge
@@ -499,10 +504,13 @@ Invariants:
   action refuses. **Not true of agent worktrees** (LC-1), which lie inside the
   primary checkout.
 
-Illegal or refused: each row above but Good and Gone, for merge, retire, `pr`,
-`update`; `discard` takes all but Link and Elsewhere on disk. Each refusal says
-what to do. Walked through by the Git edge-case matrix (#126) and #212; nothing
-new here.
+Illegal or refused: `check_worktree` refuses every row above but Good, Gone, Locked and
+Unlinked, for merge, retire, `pr` and `update`. With `branch=False`, for `discard`,
+`resume` and a shell, only where it is matters: Link, Elsewhere on disk, Moved, Moved
+with its folder gone, and Taken by primary. Locked refuses only merge and retire, in
+`retire`: `update` and `pr` go on. Gone refuses what needs the folder, as
+[Action by state](#action-by-state) says. Each refusal says what to do. Walked through
+by the Git edge-case matrix ([#126](https://github.com/csheaff/roost/issues/126)) and [#212](https://github.com/csheaff/roost/issues/212).
 Open: none.
 
 ### Agent worktrees
@@ -540,8 +548,9 @@ Invariants, all assumed and none stated:
 | Remnant | merge | primary has commits past the task | refused | names `main` as the agent's, and advice Git refuses | `require_agent_work_kept` |
 
 Illegal or refused: retire with work there, as above; a hook from a stopped task
-records nothing. What Roost never heard of stays where Git put it, as does what
-it can't remove: both safe.
+records nothing. A worktree Roost never heard of stays where Git put it, which is
+safe. One it can't remove isn't: `remove_agent_worktrees` ignores that, and deletes
+the branch all the same (LC-1).
 Open: LC-1, LC-2.
 
 ## What an agent is doing
@@ -2578,12 +2587,14 @@ Open: VIEWS-1, VIEWS-4, VIEWS-7.
 ### Action by state
 
 Rows are what `rpc` does, whatever Emacs offers. `ok` runs; otherwise the
-reply is a refusal that says why. Tmux not answering refuses everything but
-`forget`, which goes on as if no pane were there. Each cell was run on real Git
-and tmux, a fresh repository for each, 128 cells, and none stuck or showed a bug
-word. "Work holds worktree" is on an idle agent; only
-the finishing actions differ from the column beside it. `pr` here means on a task
-with commits; with none it says there is nothing to propose.
+reply is a refusal that says why. With tmux not answering, what asks it for the task's
+pane refuses: `resume`, `stop`, `send`, `shell`, `inspect`, `rename`, `update`, `retire`,
+`merge`, and `discard` once past its dry run. `forget` goes on as if no pane were there,
+and `seen`, `turn`, `attach`, `pr` and `look` don't ask it. Each cell was run on real Git
+and tmux, a fresh repository for each, 128 cells, and none stuck or showed a bug word.
+"Work holds worktree" is on an idle agent; only the finishing actions differ from the
+column beside it. `pr` here means on a task with commits; with none it says there is
+nothing to propose.
 
 | Action | Idle agent | Active agent | Ended | Work holds worktree | Removing | Removal cut short | Worktree gone | Repository gone |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
