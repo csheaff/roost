@@ -1150,7 +1150,12 @@ they could make a word nobody said."
                      (equal (alist-get 'number (roost--field task 'pr)) (alist-get 'number (roost--field old 'pr))))
                  (seq-every-p (lambda (key) (equal (alist-get key status) (alist-get key had)))
                               '(number head base state)))
-        (setq task (cons (cons field had) (assq-delete-all field task)))))))
+        ;; Of the branch here, this reply is the newer.
+        (setq task (cons (cons field (append (seq-filter (lambda (entry) (memq (car entry) '(branch tip unpushed)))
+                                                         status)
+                                             (seq-remove (lambda (entry) (memq (car entry) '(branch tip unpushed)))
+                                                         had)))
+                         (assq-delete-all field task)))))))
 
 (defun roost--cache-task (host task)
   "Cache TASK from HOST and notify only on attention transitions."

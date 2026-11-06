@@ -7181,6 +7181,16 @@ stopped."
          (new `((pr . ((number . 2))) (worktreePr . ((reviewsFailed . t) ,@said)))))
     (should (= (alist-get 'threads (alist-get 'worktreePr (roost--kept-reviews new old))) 2))))
 
+(ert-deftest roost-what-a-failed-review-query-keeps-is-the-forges-alone ()
+  ;; A commit here since: what is to push is as this reply says.
+  (let* ((said '((number . 7) (head . "h") (base . "main") (state . "OPEN")))
+         (old `((pr . ((number . 1))) (worktreePr . ((threads . 2) (tip . "t1") (unpushed . 0) ,@said))))
+         (new `((pr . ((number . 1))) (worktreePr . ((reviewsFailed . t) (tip . "t2") (unpushed . 1) ,@said))))
+         (kept (alist-get 'worktreePr (roost--kept-reviews new old))))
+    (should (= (alist-get 'threads kept) 2))
+    (should (equal (alist-get 'tip kept) "t2"))
+    (should (= (alist-get 'unpushed kept) 1))))
+
 (ert-deftest roost-a-pull-request-reopened-as-its-reviews-fail-reads-open ()
   (let* ((said '((number . 7) (head . "h") (base . "main")))
          (old `((pr . ((number . 7))) (prStatus . ((state . "CLOSED") ,@said))))
