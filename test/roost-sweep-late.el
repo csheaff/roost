@@ -2222,6 +2222,31 @@ A name of its own keeps the fields as long as they are."
       (should (equal (mapcar (lambda (note) (alist-get 'text note)) roost--notes)
                      '("One, and what I just thought of"))))))
 
+(ert-deftest roost-sweep-late-a-task-resumed-leaves-what-you-opened-from-a-question ()
+  ;; As with C-x C-f: the reply comes while you write its name.  Answering
+  ;; with what shows still there, it opens, as the test after this says.
+  (roost-sweep-late--world
+    (roost-sweep-late--populate '((status . "stopped") (live)) nil)
+    (roost-sweep-late--lay-out 'here)
+    (roost-resume (roost-sweep-late--mine))
+    (let ((reply (roost-sweep-late--take "resume")))
+      (roost-sweep-late--in-minibuffer (lambda () (roost-sweep-late--answer reply 'good))))
+    (switch-to-buffer "*late file*")
+    (roost-sweep-late--settle)
+    (should (equal (buffer-name (window-buffer (selected-window))) "*late file*"))))
+
+(ert-deftest roost-sweep-late-a-task-resumed-from-its-terminal-opens-once-out-of-the-minibuffer ()
+  ;; Its terminal goes as you come out: what shows then is no choice of yours.
+  (roost-sweep-late--world
+    (roost-sweep-late--populate '((status . "stopped") (live)) nil)
+    (let ((terminal (roost-sweep-late--lay-out 'terminal)))
+      (roost-resume (roost-sweep-late--mine))
+      (let ((reply (roost-sweep-late--take "resume")))
+        (roost-sweep-late--in-minibuffer (lambda () (roost-sweep-late--answer reply 'good))))
+      (roost-sweep-late--settle)
+      (should-not (buffer-live-p terminal))
+      (should (equal (buffer-name (window-buffer (selected-window))) "*late terminal aaaaaa*")))))
+
 (ert-deftest roost-sweep-late-a-poll-that-fails-says-nothing-of-a-host-you-forgot ()
   (roost-sweep-late--world
     (roost-sweep-late--populate nil nil)

@@ -2349,12 +2349,20 @@ is gone."
 (defun roost--open-once-out (generation key listed open)
   "Call OPEN once you are out of the minibuffer, if it is still wanted.
 Not if you opened something since GENERATION, as what you chose there,
-or the task with KEY went, LISTED being as for `roost--went-p'."
-  (roost--when-out-of-minibuffer
-   (lambda ()
-     (when (and (= generation roost--open-generation)
-                (not (roost--went-p key listed)))
-       (funcall open)))))
+or something of another kind, as a file, or the task with KEY went,
+LISTED being as for `roost--went-p'.  What shows now may go as its task
+restarts, and what takes its place then is no choice of yours."
+  (let* ((window (roost--window-you-are-in))
+         (shown (window-buffer window))
+         (place (roost--terminal-place shown))
+         (frame (window-frame window)))
+    (roost--when-out-of-minibuffer
+     (lambda ()
+       (when (and (= generation roost--open-generation)
+                  (not (roost--went-p key listed))
+                  (or (not (buffer-live-p shown))
+                      (roost--still-there-p window shown place frame)))
+         (funcall open))))))
 
 (defun roost--ask-after-reply (key listed function)
   "Call FUNCTION, which asks about the task with KEY, once out of a host's reply.
