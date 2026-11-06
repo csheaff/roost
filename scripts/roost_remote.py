@@ -4013,7 +4013,7 @@ def submodule_work(worktree):
                       "--not", "--remotes", "--tags")
         # Each level's own files, and which commits its submodules are
         # at; what is in those is counted there.
-        status = (read_git(checkout, "status", "--porcelain", "--untracked-files=normal",
+        status = (read_git(checkout, "status", "--porcelain", "--untracked-files=all",
                            "--ignore-submodules=dirty") if checkout else None)
         # A stash ref, whether or not Git can read what it names.
         stashed = run("rev-parse", "-q", "--verify", "refs/stash").returncode == 0
@@ -4338,15 +4338,14 @@ def worktree_lock(repo, worktree):
     return next((lock for path, _, lock in worktree_entries(repo) if Path(path).resolve() == worktree), None)
 
 
-def merge_without_checkout(task, integration):
-    """Merge the task's branch into INTEGRATION, which no worktree has
-    checked out, as `git merge --no-ff` would, without a working tree: the
-    branch moves only if it is still where it was, and a conflict changes
-    nothing."""
+def merge_without_checkout(task, integration, tip):
+    """Merge TIP, the task branch's commit, into INTEGRATION, which no
+    worktree has checked out, as `git merge --no-ff` would, without a
+    working tree: the branch moves only if it is still where it was, and a
+    conflict changes nothing."""
     repo = task["repo"]
     ref = "refs/heads/" + integration
     old = git(repo, "rev-parse", ref + "^{commit}").stdout.strip()
-    tip = git(repo, "rev-parse", "refs/heads/" + task["branch"] + "^{commit}").stdout.strip()
     if git(repo, "merge-base", "--is-ancestor", tip, old, check=False).returncode == 0:
         return  # Already there.
     result = git(repo, "merge-tree", "--write-tree", "--name-only", "--no-messages", "-z", old, tip, check=False)
@@ -4445,15 +4444,15 @@ def refused_by_hook(repo, said, merged, untracked):
     return RoostError("A commit hook in %s refused the merge, which is undone%s" % (repo, said))
 
 
-def squash_merge(task, integration, here):
-    """Put the task's work onto INTEGRATION as one commit. HERE says the
-    primary checkout has INTEGRATION checked out; otherwise no working tree
-    is involved. A conflict changes nothing. Return the task branch's tip,
-    which the new commit stands for, or None when there was nothing to add."""
+def squash_merge(task, integration, here, tip):
+    """Put the task's work up to TIP, its branch's commit, onto INTEGRATION
+    as one commit. HERE says the primary checkout has INTEGRATION checked
+    out; otherwise no working tree is involved. A conflict changes nothing.
+    Return TIP, which the new commit stands for, or None when there was
+    nothing to add."""
     repo = task["repo"]
     ref = "refs/heads/" + integration
     old = git(repo, "rev-parse", ref + "^{commit}").stdout.strip()
-    tip = git(repo, "rev-parse", "refs/heads/" + task["branch"] + "^{commit}").stdout.strip()
     if git(repo, "merge-base", "--is-ancestor", tip, old, check=False).returncode == 0:
         return None  # Already there.
     message = squash_message(task, old, tip)
@@ -4591,24 +4590,24 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
             overwritten = overwritten_ignored(repo, "refs/heads/" + branch)
             if overwritten:
                 raise RoostError(ignored_refusal("Merging", overwritten, "the primary checkout " + repo, "merge"))
-        # Last, as the checks above can take a while.
-        if expect and branch_tip(task) != expect:
+        # Last, as the checks above can take a while, by its full name, which
+        # a tag of the same name would otherwise shadow. What merges from here
+        # is this commit, wherever the branch goes meanwhile.
+        tip = git(repo, "rev-parse", "refs/heads/" + branch + "^{commit}").stdout.strip()
+        if expect and tip != expect:
             raise RoostError("The task's branch has moved since you were asked; look at it again before merging")
         if squash:
-            squashed = squash_merge(task, integration, here)
+            squashed = squash_merge(task, integration, here, tip)
             result = None
         elif not here:
-            merge_without_checkout(task, integration)
+            merge_without_checkout(task, integration, tip)
             result = None
         else:
-            # By its full name, which a tag of the same name would otherwise
-            # shadow, with the message a merge of the short one has.
-            tip = git(repo, "rev-parse", "refs/heads/" + branch + "^{commit}").stdout.strip()
+            # With the message a merge of the branch's short name has.
             message = execute(["git", "-C", repo, "fmt-merge-msg"],
                               input="%s\t\tbranch '%s' of .\n" % (tip, branch)).stdout.strip()
             untracked = untracked_here(repo)
-            result = git_with_hooks(repo, "merge", "--no-ff", "--no-edit", "-m", message, "refs/heads/" + branch,
-                                    check=False)
+            result = git_with_hooks(repo, "merge", "--no-ff", "--no-edit", "-m", message, tip, check=False)
         if result is not None and result.returncode:
             conflicts = conflicted_files(repo)
             merging = git(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0
@@ -4896,10 +4895,8 @@ def discard_losses(repo, branch, branch_exists, worktree, worktree_exists, work)
     # Removing the worktrees deletes their submodules' repositories,
     # whose changes are counted there; here, which commits they're at.
     submodules = [entry for path in paths for entry in submodule_work(path)]
-    # Each file, not a new folder as one: more in it is more to lose.
-    changes = sum(unlinked_files(path) or len(read_git(path, "status", "--porcelain", "--untracked-files=all",
-                                                       "--ignore-submodules=dirty").stdout.splitlines())
-                  for path in paths) + sum(entry["changes"] for entry in submodules)
+    changes = sum(unlinked_files(path) or uncommitted_files(path) for path in paths) \
+        + sum(entry["changes"] for entry in submodules)
     return dict(
         commits=commits, changes=changes, agentWorktrees=len(work),
         # A stash is commits too, and one Git can't read may hold any.
@@ -5563,14 +5560,26 @@ def linked(worktree):
     return False
 
 
+def files_in(folder):
+    """How many files FOLDER holds, those of a repository made there too:
+    its history goes with it."""
+    return sum(len(files) + sum(os.path.islink(os.path.join(parent, name)) for name in folders)
+               for parent, folders, files in os.walk(folder))
+
+
 def unlinked_files(worktree):
     """How many files WORKTREE holds if it has lost its link to the
-    repository, which Git can't count, and removing it deletes; else 0.
-    Those of a repository made there count too: its history goes with it."""
-    if linked(worktree):
-        return 0
-    return sum(len(files) + sum(os.path.islink(os.path.join(folder, name)) for name in folders)
-               for folder, folders, files in os.walk(worktree))
+    repository, which Git can't count, and removing it deletes; else 0."""
+    return 0 if linked(worktree) else files_in(worktree)
+
+
+def uncommitted_files(worktree):
+    """How many files removing WORKTREE would lose that nothing has
+    committed, each in a new folder too. When Git can't say, as with a
+    damaged index, every file there: nothing would be a promise it can't
+    keep, and discarding is the way out of such a worktree."""
+    status = read_git(worktree, "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=dirty")
+    return files_in(worktree) if status.returncode else len(status.stdout.splitlines())
 
 
 def remove_worktrees(store, task, worktree, agents, force=False, teardown=None):

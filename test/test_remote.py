@@ -1170,6 +1170,22 @@ class Lifecycle(unittest.TestCase):
         told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
         self.assertEqual((told["changes"], told["submoduleCommits"]), (1, 0))
 
+    def test_more_files_in_a_submodules_new_folder_stop_a_discard(self):
+        # Each file counts, as in the task's own worktree, nested or not.
+        self.add_submodule()
+        task = self.create()
+        wt = Path(task["worktree"])
+        self.check_out_submodules(wt)
+        (wt / "lib" / "out").mkdir()
+        (wt / "lib" / "out" / "one").write_text("one\n")
+        told = dict(self.request("discard", id=task["id"], dryRun=True)["result"]["discard"])
+        commit = told.pop("commit")
+        self.assertEqual(told["changes"], 1)
+        (wt / "lib" / "out" / "two").write_text("two\n")
+        reply = self.request("discard", id=task["id"], expect=commit, told=told)
+        self.assertIn("more than you were told", reply["error"])
+        self.assertTrue((wt / "lib" / "out" / "two").exists())
+
     def test_retire_names_a_kept_submodule_repository_that_lost_its_head(self):
         # Beside a clean one, which would otherwise let --force remove both.
         self.add_submodule()
@@ -1389,10 +1405,10 @@ class Lifecycle(unittest.TestCase):
         self.git("checkout", "-q", "-b", "mine")
         record = dict(repo=os.path.realpath(self.repo), branch=task["branch"], name=task["name"])
         tip = self.git("rev-parse", "HEAD", cwd=wt)
-        self.assertEqual(roost.squash_merge(record, "main", False), tip)
+        self.assertEqual(roost.squash_merge(record, "main", False, tip), tip)
         squashed = self.git("rev-parse", "main")
         # As when the merge went through but retiring the task did not.
-        self.assertEqual(roost.squash_merge(record, "main", False), tip)
+        self.assertEqual(roost.squash_merge(record, "main", False, tip), tip)
         self.assertEqual(self.git("rev-parse", "main"), squashed)
 
     def test_a_conflicting_squash_merge_changes_nothing(self):
@@ -3132,6 +3148,21 @@ class Lifecycle(unittest.TestCase):
             self.assertTrue(reply["ok"], reply)
             self.assertFalse(wt.exists())
 
+    def test_a_worktree_git_cant_read_counts_every_file_a_discard_would_lose(self):
+        # Not none: a damaged index says nothing of what is there, and
+        # discarding is still the way out of such a worktree.
+        task = self.create()
+        wt = Path(task["worktree"])
+        commit, told = self.told(task)
+        self.assertEqual(told["changes"], 0)
+        (wt / self.git("rev-parse", "--git-path", "index", cwd=wt)).write_bytes(b"damaged")
+        self.assertNotEqual(roost.read_git(wt, "status").returncode, 0)
+        self.assert_not_discarded(task, self.request("discard", id=task["id"], expect=commit, told=told))
+        commit, told = self.told(task)
+        self.assertGreater(told["changes"], 0)
+        self.assertTrue(self.request("discard", id=task["id"], expect=commit, told=told)["ok"])
+        self.assertFalse(wt.exists())
+
     def test_a_discard_that_says_only_where_the_branch_was_goes_as_before(self):
         task = self.create()
         commit, _ = self.told(task)
@@ -4212,6 +4243,34 @@ elif args[:2] == ["auth", "status"]:
             reply = self.request("merge", id=task["id"], expect=asked)
         self.assertIn("moved since you were asked", reply["error"])
         self.assertEqual(self.git("rev-parse", "main"), before)
+
+    def test_a_commit_made_as_a_merge_begins_stays_out_of_it(self):
+        # Past the check, each way of merging takes what was checked, and
+        # the task stays, as its branch has work the merge left out.
+        for style, away, name in ((None, False, "plain"), ("squash", False, "squash"),
+                                  (None, True, "away"), ("squash", True, "squash-away")):
+            with self.subTest(style=style, away=away):
+                task = self.create(name=name)
+                asked = self.commit_in(task, "asked-" + name)
+                if away:
+                    self.git("switch", "-q", "-c", "elsewhere-" + name)
+                late = "late-" + name
+                where = ("merge_without_checkout" if away and not style
+                         else "squash_merge" if style else "untracked_here")
+                merging = getattr(roost, where)
+
+                def committing(*args):
+                    self.commit_in(task, late)
+                    return merging(*args)
+
+                with patch.object(roost, where, committing):
+                    reply = self.request("merge", id=task["id"], expect=asked, **({"style": style} if style else {}))
+                self.assertIn("unmerged commits", reply["error"])
+                merged = self.git("ls-tree", "--name-only", "main")
+                self.assertIn("asked-" + name, merged)
+                self.assertNotIn(late, merged)
+                if away:
+                    self.git("switch", "-q", "main")
 
     def test_a_merge_that_says_nothing_of_the_branch_goes_as_before(self):
         # As from an older Emacs, or one that has yet to measure the task.

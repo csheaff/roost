@@ -2545,6 +2545,12 @@ Invariants:
   with nothing done. A count that went down isn't more than you were told. What an
   agent writes between that count and `stop` goes with the task: a moment, not the
   time you take to answer.
+- I3. A merge takes the commit it checked, by all three ways of merging, whatever the
+  branch does after. A commit made past that check stays out, and the task stays, as
+  `safe_to_delete` then finds its branch has work unmerged.
+- I4. A count Git can't give isn't nothing: with a damaged index, a discard counts
+  every file in the worktree (`uncommitted_files`), so it wants the name. A new folder
+  counts file by file, in a submodule too.
 
 | Question | From | Pins | The host checks again | Changes it misses |
 |---|---|---|---|---|
