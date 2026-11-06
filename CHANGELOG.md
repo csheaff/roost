@@ -12,8 +12,10 @@ What each release changes, and what to do when upgrading. Newest first.
   switched to in its own worktree, and removed a worktree the agent had only
   gone to. Now only a worktree the task's agent made goes, with the branch
   Claude made for it, and Roost says what it left in place. Those of a task
-  started before this update stay, as Roost can't tell its agent made them:
-  remove them with `git worktree remove` if you don't want them.
+  started before this update still show and still keep it from retiring
+  while they hold work, but stay once it finishes, as Roost can't tell its
+  agent made them: remove them with `git worktree remove` if you don't want
+  them.
 - Discarding a task whose repository is gone says it went. It deleted the
   task's worktree, then said the repository wasn't one, and the task stayed
   until you asked again. Nothing to do when upgrading.

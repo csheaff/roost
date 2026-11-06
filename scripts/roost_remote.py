@@ -890,13 +890,21 @@ class ClaudeAgent:
     def made_worktree(self, payload, path):
         """Whether hook PAYLOAD, from inside the worktree at PATH under
         .claude/worktrees, says this agent made it: its EnterWorktree tool
-        just did, without `path`, which names one already there, or an
-        isolated subagent of its works there, whose ID names the folder."""
+        says it created one, rather than that it entered, reused or
+        resumed one that was there; or an isolated subagent of its works
+        there, in a folder Claude names after it, or after a workflow."""
         if payload.get("tool_name") == "EnterWorktree":
-            arguments = payload.get("tool_input")
-            return (payload.get("hook_event_name") == "PostToolUse"
-                    and not (isinstance(arguments, dict) and arguments.get("path")))
-        return bool(payload.get("agent_id")) and Path(path).name == "agent-%s" % payload["agent_id"]
+            reply = payload.get("tool_response")
+            said = reply.get("message") if isinstance(reply, dict) else None
+            return (payload.get("hook_event_name") == "PostToolUse" and isinstance(said, str)
+                    and said.startswith("Created worktree"))
+        agent = payload.get("agent_id")
+        folder = re.fullmatch(r"agent-(a[0-9a-f]{16}|a[0-9a-f]{7})|wf_[0-9a-f]{8}-[0-9a-f]{3}-\d+", Path(path).name)
+        return bool(folder and isinstance(agent, str) and agent.startswith(folder.group(1) or ""))
+
+    def worktree_branch(self, path):
+        """The branch Claude makes for its worktree at PATH."""
+        return "worktree-" + Path(path).name
 
     def observe(self, payload, current=None):
         """Status updates for hook PAYLOAD, given the task's CURRENT status."""
@@ -1949,7 +1957,7 @@ def make_task(store, request, create_id):
                 integrationRef="refs/heads/" + integration if integration else None,
                 session=session_name(repo, task_id),
                 agent=agent_name, command=command, setup=setup, prompt=prompt,
-                status="starting", startedAt=now(), updatedAt=now(), claudeSession=None)
+                status="starting", startedAt=now(), updatedAt=now(), claudeSession=None, agentMade=[])
     if create_id:
         task["createId"] = create_id
     issue = request.get("issue")
@@ -3490,7 +3498,7 @@ def add_git_stats(tasks):
         reply = last_message(task)
         if reply:
             task["lastMessage"] = reply
-        if task.get("agentMade"):
+        if task.get("agentWorktrees"):
             task["agentWork"] = agent_work(task)
         tip = branch_tip(task)
         task["landed"] = landed(task, tip)
@@ -4652,7 +4660,7 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
     stop(store, task, inventory)
     # With worktrees its agent made that hold nothing beyond the task's branch.
     remove_worktrees(store, task, worktree if worktree_exists else None,
-                     [entry for entry in agent_work(task) if entry["ahead"] == 0 and not entry["dirty"]],
+                     [entry for entry in agent_work(task) if entry["made"] and entry["ahead"] == 0 and not entry["dirty"]],
                      teardown=teardown)
     # What a copy stopped partway left, which may hold a secret.
     shutil.rmtree(copy_staging(task["worktree"]), ignore_errors=True)
@@ -4660,8 +4668,9 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
         if not worktree_exists:
             unregister_gone(repo, worktree)
         delete_branch(repo, branch, commit)
+    left = agent_left(task)
     store.remove(task["id"])
-    task.update(status="retired", updatedAt=now(), leftBehind=agent_left(task))
+    task.update(status="retired", updatedAt=now(), leftBehind=left)
     # Not with one open from there as well: deleting the branch would close it.
     if commit and merged_head == commit and not still_open:
         task["remoteCleanup"] = True
@@ -4904,11 +4913,11 @@ def discard(store, task, expect=None, dry_run=False, teardown=None):
     if unlinked or not worktree_exists:
         require_nothing_kept(repo, worktree, unlinked, bool(task.get("removing")))
     # The worktrees its agent made go with it.
-    work = agent_work(task)
+    work = [entry for entry in agent_work(task) if entry["made"]]
     if dry_run:
         paths = ([worktree] if worktree_exists else []) + [entry["path"] for entry in work]
         branches = ([branch] if branch_exists else []) + [entry["branch"] for entry in work
-                                                          if entry["branch"] == claude_branch(entry["path"])]
+                                                          if entry["branch"] == agent_branch(task, entry["path"])]
         # Commits on a detached HEAD there, too; another branch keeps its own.
         heads = [head for head in [read_git(path, "rev-parse", "-q", "--verify", "HEAD").stdout.strip()
                                    for path in paths if linked(path)] if head]
@@ -4937,8 +4946,9 @@ def discard(store, task, expect=None, dry_run=False, teardown=None):
         if not worktree_exists:
             unregister_gone(repo, worktree)
         delete_branch(repo, branch, commit)
+    left = agent_left(task)
     store.remove(task["id"])
-    task.update(status="discarded", updatedAt=now(), live=False, leftBehind=agent_left(task))
+    task.update(status="discarded", updatedAt=now(), live=False, leftBehind=left)
     return task
 
 
@@ -5428,7 +5438,7 @@ def permission_request(payload, worktree=None):
 def agent_worktree(task, cwd):
     """The folder in .claude/worktrees that CWD, from TASK's agent, is in, or
     None. Claude makes them in the primary checkout's .claude/worktrees,
-    for --worktree, its EnterWorktree tool and isolated subagents."""
+    for its EnterWorktree tool and isolated subagents."""
     if not isinstance(cwd, str) or not cwd:
         return None
     try:
@@ -5461,24 +5471,29 @@ def made_since(gitdir, started):
     return False
 
 
-def claude_branch(path):
-    """The branch Claude makes for its worktree at PATH."""
-    return "worktree-" + Path(path).name
+def agent_branch(task, path):
+    """The branch TASK's agent's program makes for its worktree at PATH, or None."""
+    named = getattr(agent_for(task), "worktree_branch", None)
+    return named(path) if named else None
 
 
 def agent_work(task):
     """The worktrees TASK's agent made, as it left them: branch, commits not
     on the task's branch, and whether anything is uncommitted. These are
     those its hooks said it made, since the task started, that are
-    worktrees yet: finishing the task leaves any other."""
+    worktrees yet: finishing the task leaves any other. A task from before
+    `agentMade` says only where its agent went, so each of those that is a
+    worktree comes with `made` false: what it holds still keeps the task
+    from retiring, but it isn't removed."""
     work = []
-    for path in task.get("agentMade") or []:
+    known = "agentMade" in task
+    for path in (task["agentMade"] if known else task.get("agentWorktrees")) or []:
         gitdir = worktree_at(task["repo"], path) if isinstance(path, str) else None
-        if not (gitdir and made_since(gitdir, task.get("startedAt"))):
+        if not gitdir or known and not made_since(gitdir, task.get("startedAt")):
             continue
         branch = read_git(path, "symbolic-ref", "--short", "-q", "HEAD").stdout.strip()
         ahead = read_git(path, "rev-list", "--count", "refs/heads/" + task["branch"] + "..HEAD", "--")
-        work.append(dict(path=path, branch=branch or None,
+        work.append(dict(path=path, branch=branch or None, made=known,
                          ahead=int(ahead.stdout) if ahead.returncode == 0 else None,
                          dirty=bool(read_git(path, "status", "--porcelain",
                                              "--untracked-files=normal").stdout.strip())))
@@ -5492,10 +5507,11 @@ def agent_left(task):
     left = []
     for path in task.get("agentWorktrees") or []:
         if isinstance(path, str):
+            branch = agent_branch(task, path)
             if os.path.lexists(path):
                 left.append("worktree " + path)
-            if ref_exists(task["repo"], claude_branch(path)):
-                left.append("branch " + claude_branch(path))
+            if ref_exists(task["repo"], branch):
+                left.append("branch " + branch)
     return left
 
 
@@ -5508,7 +5524,7 @@ def remove_agent_worktrees(task, entries):
     for entry in entries:
         commit = read_git(entry["path"], "rev-parse", "HEAD").stdout.strip()
         removed = git(task["repo"], "worktree", "remove", "--force", "--force", entry["path"], check=False)
-        if removed.returncode == 0 and commit and entry["branch"] == claude_branch(entry["path"]):
+        if removed.returncode == 0 and commit and entry["branch"] == agent_branch(task, entry["path"]):
             with contextlib.suppress(RoostError):
                 delete_branch(task["repo"], entry["branch"], commit)
 

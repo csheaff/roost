@@ -535,13 +535,15 @@ Invariants:
 - I1. A path is a worktree only if Git says so at that path: linked, with that path
   its top level, and in Git's list (`worktree_at`). What Git says from a folder
   with no `.git` of its own is the primary checkout's, and counts for nothing.
-- I2. Only what its agent made goes: a hook said so, as EnterWorktree without `path`
-  or a subagent whose ID names the folder, and Git made it since the task started
-  (`made_since`, by the `commondir` Git writes once). A record from before
-  `agentMade` has none, so what its agent made stays.
+- I2. Only what its agent made goes: a hook said so, as EnterWorktree's "Created",
+  not "Entered", "Reused" or "Resumed", or a subagent whose ID names the folder, or
+  in a workflow's folder; and Git made it since the task started (`made_since`, by
+  the `commondir` Git writes once). A record from before `agentMade` has no such
+  key: its worktrees still show and keep the task from retiring, with `made` false,
+  and stay.
 - I3. A branch goes only if `git worktree remove` exited 0, only if it is
-  `worktree-<folder>` (`claude_branch`), which Claude makes, and through
-  `delete_branch`, which refuses one checked out anywhere.
+  `worktree-<folder>` (`ClaudeAgent.worktree_branch`), which Claude makes, and
+  through `delete_branch`, which refuses one checked out anywhere.
 - I4. What stays is said: `agent_left` fills `leftBehind` in the reply, and Emacs
   shows it.
 
@@ -559,7 +561,9 @@ Invariants:
 
 Illegal or refused: retire with work there, as above; a hook from a stopped task
 records nothing. A worktree Roost never heard of stays where Git put it, which is
-safe.
+safe. After a removal stopped with its `.git` still there, the files Git had deleted
+read as uncommitted, so retire refuses, and says to run the `git worktree remove`
+that finishes it.
 Open: none.
 
 ## What an agent is doing

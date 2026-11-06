@@ -3988,7 +3988,9 @@ terminal the action ended closes."
                (when callback
                  (funcall callback (if pushed (cons pushed updated) updated)))
                (when left
-                 (message "Left in place: %s" (string-join left ", ")))
+                 (message "%s" (string-join (delq nil (list (current-message)
+                                                            (concat "left in place: " (string-join left ", "))))
+                                            "; ")))
                (when torn
                  (display-warning
                   'roost (format "%s's teardown command %s; Roost removed its worktree anyway%s"

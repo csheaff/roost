@@ -156,17 +156,18 @@ def static_check():
     report(bool(base), "worktree.baseRef takes \"head\"" if base
            else "worktree.baseRef changed; check claude_hook_settings")
     # Finishing a task removes the worktrees its agent made, told by what
-    # hooks say of EnterWorktree, whose `path` names one already there, or of
-    # a subagent, and the branch Claude makes for each.
-    tool = re.search(rb'path:[\w$]+\(\)\.optional\(\)\.describe\("Path to an existing worktree', data)
-    report(bool(tool), "EnterWorktree takes path, for one already there" if tool
-           else "EnterWorktree's path changed; check ClaudeAgent.made_worktree")
-    subagent = re.search(rb'`agent-\$\{', data)
-    report(bool(subagent), "a subagent's worktree is named agent-ID" if subagent
+    # EnterWorktree says of it, or by a subagent's folder, and the branch
+    # Claude makes for each.
+    tool = re.search(rb'"Entered":[\w$.]+\?"Reused":[\w$.]+\?"Resumed":"Created"', data)
+    report(bool(tool), "EnterWorktree says Created of a worktree it made" if tool
+           else "EnterWorktree's reply changed; check ClaudeAgent.made_worktree")
+    subagent = re.search(rb"/\^agent-a\[0-9a-f\]\{16\}\$/,/\^agent-a\[0-9a-f\]\{7\}\$/,"
+                         rb"/\^wf_\[0-9a-f\]\{8\}-\[0-9a-f\]\{3\}-\\d\+\$/", data)
+    report(bool(subagent), "subagents' worktrees are named as made_worktree expects" if subagent
            else "subagents' worktree names changed; check ClaudeAgent.made_worktree")
     branch = re.search(rb'`worktree-\$\{', data)
     report(bool(branch), "Claude's branches are named worktree-FOLDER" if branch
-           else "Claude's branch naming changed; check claude_branch")
+           else "Claude's branch naming changed; check ClaudeAgent.worktree_branch")
     # A task's attachments are read without asking through --add-dir.
     add_dir = re.search(rb"--add-dir <", data)
     report(bool(add_dir), "--add-dir is an option" if add_dir

@@ -3057,13 +3057,17 @@ class Lifecycle(unittest.TestCase):
             self.report_entered(task, own, dict(name=name))
         return own
 
-    def report_entered(self, task, place, arguments):
+    def report_entered(self, task, place, arguments, verb="Created"):
         """What the hooks of TASK's agent say as it enters the worktree at
-        PLACE, and ends its turn."""
+        PLACE, as Claude 2.1.317 said it, and ends its turn. VERB is as
+        EnterWorktree's reply has it."""
         store = roost.Store(str(self.state))
+        branch = "worktree-" + place.name
+        said = "%s worktree at “%s” on branch “%s”. The session is now working in the worktree." % (
+            verb, place, branch)
         roost.update_hook(store, task["id"],
                           dict(hook_event_name="PostToolUse", tool_name="EnterWorktree", tool_input=arguments,
-                               tool_response=dict(worktreePath=str(place), worktreeBranch="worktree-" + place.name),
+                               tool_response=dict(worktreePath=str(place), worktreeBranch=branch, message=said),
                                cwd=str(place)), task["runId"])
         roost.update_hook(store, task["id"], dict(hook_event_name="Stop", cwd=str(place)), task["runId"])
 
@@ -3081,7 +3085,7 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(store.read(task["id"])["agentWorktrees"], [str(own.resolve())])
         listed = self.request("list", full=True)["result"][0]
         self.assertEqual(listed["agentWork"], [dict(path=str(own.resolve()), branch="worktree-probe",
-                                                    ahead=0, dirty=False)])
+                                                    made=True, ahead=0, dirty=False)])
         (own / "hello").write_text("made there\n")
         self.git("commit", "-qam", "there", cwd=own)
         listed = self.request("list", full=True)["result"][0]
@@ -3141,17 +3145,48 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(reply["result"]["leftBehind"], [])
 
     def test_retiring_removes_an_isolated_subagents_worktree(self):
+        # As Claude names and locks them, for the subagent whose hooks say so.
+        for folder, agent in (("agent-a885dbd82c2f92813", "a885dbd82c2f92813"), ("agent-a885dbd8", "a885dbd82c2f92813"),
+                              ("wf_a885dbd8-2c2-1", "a885dbd82c2f92813")):
+            with self.subTest(folder=folder):
+                task = self.create()
+                store = roost.Store(str(self.state))
+                own = self.agent_worktree(task, folder, report=False)
+                roost.update_hook(store, task["id"], dict(hook_event_name="PreToolUse", tool_name="Bash", cwd=str(own),
+                                                          agent_id=agent), task["runId"])
+                roost.update_hook(store, task["id"], dict(hook_event_name="Stop", cwd=task["worktree"]), task["runId"])
+                reply = self.request("retire", id=task["id"])
+                self.assertTrue(reply["ok"], reply)
+                self.assertFalse(own.exists())
+                self.assertFalse(roost.ref_exists(self.repo, "worktree-" + folder))
+
+    def test_a_subagent_of_another_id_didnt_make_its_folder(self):
         task = self.create()
         store = roost.Store(str(self.state))
-        # As Claude names and locks one, for the subagent whose hooks say so.
-        own = self.agent_worktree(task, "agent-a885dbd82c2f92813", report=False)
-        roost.update_hook(store, task["id"], dict(hook_event_name="PreToolUse", tool_name="Bash", cwd=str(own),
-                                                  agent_id="a885dbd82c2f92813"), task["runId"])
+        other = self.agent_worktree(task, "agent-a885dbd82c2f92813", report=False)
+        roost.update_hook(store, task["id"], dict(hook_event_name="PreToolUse", tool_name="Bash", cwd=str(other),
+                                                  agent_id="a000000000000000f"), task["runId"])
         roost.update_hook(store, task["id"], dict(hook_event_name="Stop", cwd=task["worktree"]), task["runId"])
+        self.assertTrue(self.request("retire", id=task["id"])["ok"])
+        self.assertTrue(other.exists())
+
+    def test_a_task_from_before_it_was_noted_what_its_agent_made(self):
+        """Its record says only where its agent went: what is there still
+        keeps the task from retiring, and shows, but none of it goes."""
+        task = self.create()
+        store = roost.Store(str(self.state))
+        own = self.agent_worktree(task)
+        record = store.read(task["id"])
+        del record["agentMade"]
+        store.save(record)
+        (own / "scratch").write_text("work\n")
+        self.assertEqual(self.request("list", full=True)["result"][0]["agentWork"][0]["made"], False)
+        self.assertIn("left work in its own worktree", self.request("retire", id=task["id"])["error"])
+        (own / "scratch").unlink()
         reply = self.request("retire", id=task["id"])
         self.assertTrue(reply["ok"], reply)
-        self.assertFalse(own.exists())
-        self.assertFalse(roost.ref_exists(self.repo, "worktree-agent-a885dbd82c2f92813"))
+        self.assertTrue(own.exists())
+        self.assertEqual(reply["result"]["leftBehind"], ["worktree %s" % own.resolve(), "branch worktree-probe"])
 
     def test_finishing_a_task_leaves_a_branch_its_agent_only_switched_to(self):
         self.git("branch", "release")
@@ -3192,7 +3227,7 @@ class Lifecycle(unittest.TestCase):
                 roost.update_hook(store, task["id"], dict(hook_event_name="Stop", cwd=str(other / "src")),
                                   task["runId"])
                 self.assertEqual(store.read(task["id"])["agentWorktrees"], [str(other.resolve())])
-                self.assertNotIn("agentWork", self.request("list", full=True)["result"][0])
+                self.assertFalse(self.request("list", full=True)["result"][0].get("agentWork"))
                 told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
                 self.assertEqual((told["agentWorktrees"], told["changes"]), (0, 0))
                 reply = self.request(action, id=task["id"],
@@ -3207,19 +3242,23 @@ class Lifecycle(unittest.TestCase):
         own = self.repo / ".claude" / "worktrees" / "probe"
         self.git("worktree", "add", "-q", "-b", "worktree-probe", str(own))
         task = self.create()
-        # Claude goes back to one of that name, if there is one, as if it made it.
+        # Whatever a hook says.
         self.report_entered(task, own, dict(name="probe"))
         reply = self.request("retire", id=task["id"])
         self.assertTrue(reply["ok"], reply)
         self.assertTrue(own.exists())
         self.assertTrue(roost.ref_exists(self.repo, "worktree-probe"))
 
-    def test_entering_a_worktree_by_its_path_is_not_making_it(self):
-        task = self.create()
-        own = self.agent_worktree(task, report=False)
-        self.report_entered(task, own, dict(path=str(own)))
-        self.assertTrue(self.request("retire", id=task["id"])["ok"])
-        self.assertTrue(own.exists())
+    def test_entering_a_worktree_that_was_there_is_not_making_it(self):
+        for verb, arguments in (("Entered", lambda own: dict(path=str(own))), ("Resumed", lambda own: dict(name=own.name)),
+                                ("Reused", lambda own: dict(name=own.name))):
+            with self.subTest(verb=verb):
+                task = self.create()
+                # Another task's, as Claude goes back to a name in use.
+                own = self.agent_worktree(task, "there-" + verb, report=False)
+                self.report_entered(task, own, arguments(own), verb)
+                self.assertTrue(self.request("retire", id=task["id"])["ok"])
+                self.assertTrue(own.exists())
 
     def test_a_folder_that_is_no_worktree_says_nothing_of_the_primary_checkout(self):
         self.git("config", "core.excludesFile", str(self.root / "ignored"))

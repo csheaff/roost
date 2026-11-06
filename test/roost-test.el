@@ -4563,11 +4563,14 @@ terminal's, on a pty.  Skips the test where it can't be made."
                                              (leftBehind . ,left))
                                            (roost-test--task nil "ready")))))
                ((symbol-function 'message)
-                (lambda (format &rest args) (push (apply #'format-message format args) said))))
+                (lambda (format &rest args) (push (apply #'format-message format args) said)))
+               ((symbol-function 'current-message) (lambda () (car said))))
        (dolist (action '("retire" "merge" "discard"))
          (setq said nil)
-         (roost--act task action)
-         (should (equal (car said) "Left in place: worktree /repo/.claude/worktrees/other, branch worktree-other")))
+         ;; Beside what the action says, which the echo area would lose.
+         (roost--act task action nil (lambda (_) (message "Done")))
+         (should (equal (car said)
+                        "Done; left in place: worktree /repo/.claude/worktrees/other, branch worktree-other")))
        ;; Which says so itself.
        (setq said nil)
        (roost--act task "forget")
@@ -4575,7 +4578,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
        ;; With nothing left, nothing is said of it.
        (setq left nil)
        (roost--act task "retire")
-       (should-not (seq-find (lambda (text) (string-prefix-p "Left in place" text)) said))))))
+       (should-not (seq-find (lambda (text) (string-search "left in place" text)) said))))))
 
 (ert-deftest roost-a-merge-under-way-in-a-task-says-so-until-it-is-done ()
   ;; Declining to have the agent resolve an update's conflicts left them,
