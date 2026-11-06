@@ -4101,6 +4101,53 @@ terminal's, on a pty.  Skips the test where it can't be made."
        60)
       (should (string-match-p "and 3 more" (buffer-string))))))
 
+(ert-deftest roost-merging-says-where-the-branch-was-as-you-were-asked ()
+  (dolist (measured '(nil "abc123"))
+    (roost-test--isolated
+     (let ((task (roost--cache-task "dev" (append (when measured `((branchTip . ,measured)))
+                                                  '((ahead . 1)) (roost-test--task nil "ready"))))
+           (roost-merge-style 'squash)
+           acted)
+       (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t))
+                 ((symbol-function 'roost--act)
+                  (lambda (_task action parameters &rest _) (push (cons action parameters) acted))))
+         (roost-merge-retire task))
+       ;; Not yet measured, its host merges what is there, as it always did.
+       (should (equal acted (list (append '("merge" (style . "squash"))
+                                          (when measured `((expect . ,measured)))))))))))
+
+(ert-deftest roost-a-merge-refused-as-moved-measures-the-task-for-next-time ()
+  ;; Watching or not: the next `m' would say the same otherwise, for good.
+  (dolist (refusal '(("The task's branch has moved since you were asked; look at it again before merging" . t)
+                     ("The integration branch main no longer exists")))
+    (roost-test--isolated
+     (let ((task (roost--cache-task "dev" (append '((branchTip . "abc123") (ahead . 1))
+                                                  (roost-test--task nil "ready"))))
+           measured)
+       (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t))
+                 ((symbol-function 'roost--release-terminal) #'ignore)
+                 ((symbol-function 'roost--refresh-host)
+                  (lambda (host quiet ids) (setq measured (list host quiet ids))))
+                 ((symbol-function 'roost--request)
+                  (lambda (_host _action _parameters _success failure &rest _)
+                    (funcall failure (car refusal)))))
+         (roost-merge-retire task))
+       (should (equal measured (when (cdr refusal)
+                                 (list "dev" nil (list (roost--field task 'id))))))))))
+
+(ert-deftest roost-the-branch-tip-lasts-until-a-host-measures-it-again ()
+  (roost-test--isolated
+   (roost--cache-task "dev" (append '((branchTip . "abc123") (updatedAt . "2026-11-01T10:00:00+00:00"))
+                                    (assq-delete-all 'updatedAt (roost-test--task "a"))))
+   (let ((polled (lambda (&rest fields)
+                   (roost--cache-task "dev" (append fields (assq-delete-all 'updatedAt (roost-test--task "a")))))))
+     ;; A quiet poll leaves out Git's statistics.
+     (should (equal (roost--field (funcall polled '(updatedAt . "2026-11-01T10:00:01+00:00")) 'branchTip) "abc123"))
+     ;; What a host measured holds, however old its record.
+     (should (equal (roost--field (funcall polled '(updatedAt . "2026-11-01T09:00:00+00:00") '(branchTip . "def456"))
+                                  'branchTip)
+                    "def456")))))
+
 (ert-deftest roost-discarding-says-what-is-lost-and-wants-the-name-to-lose-it ()
   (roost-test--isolated
    (let ((task (roost--cache-task "dev" (roost-test--task nil "ready")))
@@ -4117,7 +4164,8 @@ terminal's, on a pty.  Skips the test where it can't be made."
                 (lambda (prompt &rest _) (setq asked prompt) "fix auth")))
        (roost-discard task)
        (should (string-match-p "loses 2 commits no other branch has and 1 uncommitted file" asked))
-       (should (equal acted '(("discard" (expect . "abc123")))))
+       ;; What you were told goes with it, for its host to count again.
+       (should (equal acted '(("discard" (expect . "abc123") (told (commits . 2) (changes . 1))))))
        ;; Another name: nothing happens.
        (setq acted nil)
        (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "fix")))
@@ -4136,14 +4184,15 @@ terminal's, on a pty.  Skips the test where it can't be made."
                                        "remote has, whatever is in 1 submodule repository Git can't read and "
                                        "3 uncommitted files,")
                                asked))
-       (should (equal acted '(("discard" (expect . "abc123")))))
+       (should (equal acted '(("discard" (expect . "abc123")
+                               (told (commits . 1) (submoduleCommits . 2) (unreadSubmodules . 1) (changes . 3))))))
        (setq acted nil)
        ;; Nothing to lose: a plain question.
        (setq told '((commits . 0) (changes . 0) (commit . "abc123")))
        (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t))
                  ((symbol-function 'read-string) (lambda (&rest _) (error "Not asked to type"))))
          (roost-discard task))
-       (should (equal acted '(("discard" (expect . "abc123")))))
+       (should (equal acted '(("discard" (expect . "abc123") (told (commits . 0) (changes . 0))))))
        ;; x on a task holding work merged nowhere offers to discard it.
        (setq acted nil)
        (let ((unmerged (roost--cache-task "dev" (append '((ahead . 1)) (roost-test--task nil "ready"))))
@@ -6115,6 +6164,31 @@ stopped."
      (should (string-search "no longer watches alpha, as another Emacs forgot it"
                             (with-current-buffer "*Messages*" (buffer-string)))))))
 
+(ert-deftest roost-this-machine-forgotten-in-another-emacs-goes-here-too ()
+  ;; Nil names it, so no host in use must not read as this one: as when
+  ;; you forget another host here, which uses none.
+  (let ((roost-hosts nil))
+    (roost-test--two-emacs
+     (roost-test--as-emacs emacs (lambda () (roost--remember-host nil) (roost--remember-host "gamma")))
+     (roost-test--as-emacs other (lambda () (roost--remember-host "beta")))
+     (roost-test--as-emacs other (lambda () (roost-forget-host nil)))
+     (let ((inhibit-message t))
+       (roost--cache-task nil (roost-test--task "2222222222222222" "permission"))
+       (roost-test--as-emacs emacs (lambda () (roost-forget-host "gamma")))
+       (should-not (gethash '(nil "2222222222222222") roost--tasks))
+       (should (string-search "no longer watches local, as another Emacs forgot it"
+                              (with-current-buffer "*Messages*" (buffer-string))))))))
+
+(ert-deftest roost-this-machine-you-use-again-after-another-emacs-forgot-it-is-watched ()
+  (let ((roost-hosts nil))
+    (roost-test--two-emacs
+     (roost-test--as-emacs emacs (lambda () (roost--remember-host nil)))
+     (roost-test--as-emacs other (lambda () (roost--remember-host "beta")))
+     (roost-test--as-emacs other (lambda () (roost-forget-host nil)))
+     (roost--cache-task nil (roost-test--task "2222222222222222" "running"))
+     (roost-test--as-emacs emacs (lambda () (roost--remember-host nil)))
+     (should (gethash '(nil "2222222222222222") roost--tasks)))))
+
 (ert-deftest roost-a-host-you-use-again-after-another-emacs-forgot-it-is-watched ()
   (roost-test--two-emacs
    (roost-test--as-emacs emacs (lambda () (roost--remember-host "alpha")))
@@ -7569,6 +7643,23 @@ the host records, and the host what each sends."
 (ert-deftest roost-two-emacs-that-both-saw-a-stopped-task-agree ()
   (roost-test--isolated
    (should (= (roost-test--turns-of-two-emacs t) 1))))
+(ert-deftest roost-a-turn-you-quit-as-it-went-is-sent-again ()
+  ;; A quit is no error, and it stayed marked as sent for good.
+  (roost-test--isolated
+   (let ((task (roost-test--task "1111111111111111" "stopped")) (asked 0) quitting)
+     (setf (alist-get 'landed task) nil
+           (alist-get 'conflicts task) '("a.txt")
+           (alist-get 'seen task) (alist-get 'updatedAt task))
+     (cl-letf (((symbol-function 'roost--report-turn) roost-test--report-turn)
+               ((symbol-function 'roost--request)
+                (lambda (&rest _) (when quitting (signal 'quit nil)) (cl-incf asked))))
+       (setq quitting t)
+       ;; The quit goes on, as it is yours.
+       (should (eq (condition-case nil (progn (roost--report-turn task) 'finished) (quit 'quit)) 'quit))
+       (should (eq (gethash (roost--key task) roost--turns-sent 'none) 'none))
+       (setq quitting nil)
+       (roost--report-turn task)
+       (should (= asked 1))))))
 
 (ert-deftest roost-dashboard-groups-by-project-and-summarizes-attention ()
   (roost-test--isolated

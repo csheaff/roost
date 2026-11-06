@@ -644,15 +644,15 @@ written, and a write that fails leaves it as it was."
   ;; the remembered ones, which `append' shares as its tail.
   (delete-dups (append roost-hosts roost--remembered-hosts nil)))
 
-(defun roost--hosts-as-on-file (&optional using)
+(defun roost--hosts-as-on-file (&rest using)
   "Take up the hosts `roost-hosts-file' holds, if another Emacs changed them.
 One it forgot goes here too, as no list would take its tasks away; unless
-it is USING, a host you are using again."
+it is among USING, hosts you are using again, where nil is this machine."
   (let ((watched (roost--hosts))
         (hosts (roost--read-again roost-hosts-file)))
     (unless (eq hosts 'same)
       (setq roost--remembered-hosts (seq-filter #'string-or-null-p hosts))
-      (dolist (host (seq-difference watched (cons using (roost--hosts))))
+      (dolist (host (seq-difference watched (append using (roost--hosts))))
         (roost--stop-watching host)
         (message "Roost no longer watches %s, as another Emacs forgot it" (roost--host-label host))))))
 
@@ -1085,7 +1085,7 @@ TASK."
 
 (defconst roost--measured-fields
   '(diff dirty files size ahead behind update worktreeMissing worktreeBranch worktreeHead worktreePr prStatus
-    unpushed gitStamp agentWork merging landed conflicts pr sinceLooked)
+    unpushed gitStamp agentWork merging landed conflicts pr sinceLooked branchTip)
   "A task's fields its host measures for each reply, such as Git statistics.
 They are as new as the reply, whatever its `updatedAt': its pull
 request too, which the host records as it finds one on GitHub.")
@@ -1178,7 +1178,8 @@ they could make a word nobody said."
     ;; Not what GitHub said of a pull request since recorded otherwise, as
     ;; by another Emacs: closed, or another in its place.
     (dolist (field '(diff dirty files size ahead behind worktreeMissing worktreeBranch worktreeHead worktreePr
-                            prStatus unpushed lastMessage gitStamp agentWork merging landed conflicts sinceLooked))
+                            prStatus unpushed lastMessage gitStamp agentWork merging landed conflicts sinceLooked
+                            branchTip))
       (unless (or (assoc field task)
                   (and (eq field 'prStatus)
                        (not (equal (roost--field task 'pr) (roost--field old 'pr)))))
@@ -7036,7 +7037,8 @@ turn it had would seem to end."
                                               roost--tasks)))
                                  ;; Sent again with the task's next news.
                                  (lambda (_) (funcall sent)))
-               (error (funcall sent))))))))
+               (error (funcall sent))
+               (quit (funcall sent) (signal 'quit nil))))))))
 
 (defun roost--reviewer-name (reviewer)
   "How to name REVIEWER, a login or team slug that a review is asked of.
@@ -7612,7 +7614,8 @@ won't retire, offer to discard it, which keeps that branch."
 (defun roost-merge-retire (&optional task)
   "Merge TASK's committed work into its recorded integration branch and retire.
 Dirty worktrees are refused; review and commit in Magit first.  The work
-comes in as one squashed commit, or a merge commit; see `roost-merge-style'."
+comes in as one squashed commit, or a merge commit; see `roost-merge-style'.
+A branch that moved while you were asked isn't merged: you look again."
   (interactive)
   (setq task (roost--choose task))
   (cond
@@ -7632,7 +7635,11 @@ comes in as one squashed commit, or a merge commit; see `roost-merge-style'."
                                 "Merge committed work from %s into %s and retire it? ")
                               (roost--field task 'name)
                               (or (roost--field task 'integrationBranch) "its branch"))))
-    (roost--act task "merge" (when (eq roost-merge-style 'squash) '((style . "squash")))
+    (roost--act task "merge" (append (when (eq roost-merge-style 'squash) '((style . "squash")))
+                                     ;; Where the branch was as you were asked: an
+                                     ;; agent can commit before you answer.
+                                     (when-let* ((tip (roost--field task 'branchTip)))
+                                       (list (cons 'expect tip))))
                 (lambda (merged)
                   (roost--retired-workspace merged)
                   (roost--kill-worktree-buffers merged)
@@ -7646,7 +7653,12 @@ comes in as one squashed commit, or a merge commit; see `roost-merge-style'."
                                "Squashed %s into %s, and removed its worktree and branch"
                              "Merged %s into %s, and removed its worktree and branch")
                            (roost--field task 'name)
-                           (or (roost--field task 'integrationBranch) "its branch")))))))
+                           (or (roost--field task 'integrationBranch) "its branch")))
+                (lambda (err)
+                  (message "Roost %s: %s" (roost--host-label (roost--field task 'host)) err)
+                  ;; So that `m' asks about where it is now, watching or not.
+                  (when (string-prefix-p "The task's branch has moved" err)
+                    (roost--refresh-host (roost--field task 'host) nil (list (roost--field task 'id)))))))))
 
 ;;;###autoload
 (defun roost-forget (&optional task)
@@ -7680,8 +7692,9 @@ running agent is stopped first."
 First says what would be lost, commits no other branch holds, commits in
 submodules no remote has and files not committed, here and in worktrees
 its agent made, which go too; to
-lose any, you type the task's name.  For an experiment you don't want;
-finished work is merged or retired instead."
+lose any, you type the task's name.  A task that holds more by the time
+you answer isn't discarded, and asking again says what.  For an
+experiment you don't want; finished work is merged or retired instead."
   (interactive)
   (setq task (roost--choose task))
   (let* ((name (roost--field task 'name))
@@ -7726,7 +7739,10 @@ finished work is merged or retired instead."
                (y-or-n-p (format "Discard %s, %sdeleting its worktree and branch (nothing in them would be lost)? "
                                  label (if (roost--agent-running-p task) "stopping its agent and " "")))))
         (message "%s was not discarded" name)
-      (roost--act task "discard" (list (cons 'expect (alist-get 'commit told)))
+      (roost--act task "discard" (list (cons 'expect (alist-get 'commit told))
+                                       ;; Its host counts again, as its agent may
+                                       ;; have gone on working while you read.
+                                       (cons 'told (assq-delete-all 'commit (copy-alist told))))
                   (lambda (discarded)
                     (roost--retired-workspace discarded)
                     (roost--kill-worktree-buffers discarded)
