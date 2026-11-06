@@ -4,6 +4,12 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A change a poll saw is measured, however the list measuring it ended. If
+  that list failed, or a reply from another action made it stale, or the
+  change came with a list measuring another task, the row kept its diff,
+  uncommitted files, conflicts and latest reply from before, until `g` or
+  its panel. An agent that has finished sends nothing more to end that.
+  Nothing to do when upgrading.
 - Two Emacs on one machine keep each other's review notes, hosts and
   projects. What you wrote or used in one went when the other next saved,
   and a note you had sent, or a host you had forgotten, came back. Each now

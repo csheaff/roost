@@ -42,6 +42,7 @@
          (roost--list-requests (make-hash-table :test 'equal))
          (roost--pull-requests-asked (make-hash-table :test 'equal))
          (roost--full-refresh-pending (make-hash-table :test 'equal))
+         (roost--measures-owed (make-hash-table :test 'equal))
          (roost--failures (make-hash-table :test 'equal))
          (roost--hosts-loaded t) (roost--remembered-hosts nil)
          (roost-notes-file (expand-file-name "notes.json" (nth 1 ,scratch)))
@@ -6965,6 +6966,247 @@ stopped."
        (roost--report-turn task)
        (should (= asked 1))
        (should (equal (gethash (roost--key task) roost--turns-sent) "conflicts"))))))
+
+;; Requests held back, for a test that says when each is answered.
+
+(defvar roost-test--held nil
+  "Requests `roost--request' was given, oldest first, each a plist.")
+
+(defun roost-test--hold (host action parameters success &optional failure _timeout)
+  "Hold back ACTION for HOST, with PARAMETERS, for `roost--request'."
+  (setq roost-test--held
+        (append roost-test--held
+                (list (list :host host :action action :parameters parameters
+                            :success success :failure failure)))))
+
+(defun roost-test--take (action)
+  "Take the oldest request for ACTION held, or nil."
+  (when-let* ((request (seq-find (lambda (request) (equal (plist-get request :action) action))
+                                 roost-test--held)))
+    (setq roost-test--held (delq request roost-test--held))
+    request))
+
+(defun roost-test--answer (action reply)
+  "Answer the oldest request for ACTION with REPLY, and return it."
+  (let ((request (roost-test--take action)))
+    (should request)
+    (funcall (plist-get request :success) reply)
+    request))
+
+(defun roost-test--full (request)
+  "What REQUEST, a list, asks to measure: a list of IDs, or as it asked."
+  (let ((full (alist-get 'full (plist-get request :parameters))))
+    (if (vectorp full) (append full nil) full)))
+
+(defmacro roost-test--with-held-requests (&rest body)
+  "Run BODY with the host dev watched and requests held back."
+  `(roost-test--isolated
+    (dlet ((roost-test--held nil) (roost-hosts '("dev")))
+      (cl-letf (((symbol-function 'roost--request) #'roost-test--hold))
+        ,@body))))
+
+;; What a poll saw of two tasks, x and y: y's agent has committed.
+
+(defconst roost-test--x "aaaaaa0000000000")
+(defconst roost-test--y "bbbbbb0000000000")
+
+(defun roost-test--listed (id &rest fields)
+  "Task ID as a quiet list gives it, with FIELDS over its own."
+  (append fields '((gitStamp . "s1")) (roost-test--task id "ready")))
+
+(defun roost-test--measured (task &rest fields)
+  "TASK, as a list measuring it gives it, with FIELDS over what it measured."
+  (append fields (copy-tree '((landed) (dirty) (ahead . 1) (behind . 0) (conflicts) (diff . "old"))) task))
+
+(defun roost-test--y-committed ()
+  "Task y as a quiet list gives it once its agent has committed."
+  (roost-test--listed roost-test--y '(gitStamp . "s2") '(updatedAt . "2026-10-03T20:05:00+00:00")))
+
+(defun roost-test--y-measured ()
+  "A list's reply that measured y, with x beside it."
+  (list (roost-test--listed roost-test--x)
+        (roost-test--measured (roost-test--y-committed) '(diff . "new"))))
+
+(defun roost-test--y-diff ()
+  "The diff Roost holds of y."
+  (roost--field (gethash (list "dev" roost-test--y) roost--tasks) 'diff))
+
+(defun roost-test--measure-both ()
+  "Have Roost hold x and y, measured."
+  (roost-refresh)
+  (roost-test--answer "list" (list (roost-test--measured (roost-test--listed roost-test--x))
+                                   (roost-test--measured (roost-test--listed roost-test--y)))))
+
+(defun roost-test--a-poll-sees-y-commit ()
+  "Have a quiet poll see y's commit, and return its list measuring y, in flight."
+  (roost-test--measure-both)
+  (roost-refresh t)
+  (roost-test--answer "list" (list (roost-test--listed roost-test--x) (roost-test--y-committed)))
+  (let ((measuring (roost-test--take "list")))
+    (should (equal (roost-test--full measuring) (list roost-test--y)))
+    measuring))
+
+(defun roost-test--poll-on ()
+  "Poll a few times, answering each list as its host would, and return how many went."
+  (let ((lists 0))
+    (dotimes (_ 4)
+      (remhash "dev" roost--failures)
+      (roost-refresh t)
+      (while-let ((request (roost-test--take "list")))
+        (cl-incf lists)
+        (funcall (plist-get request :success)
+                 (if (member roost-test--y (ensure-list (roost-test--full request)))
+                     (roost-test--y-measured)
+                   (list (roost-test--listed roost-test--x) (roost-test--y-committed))))))
+    lists))
+
+(ert-deftest roost-a-measurement-dropped-as-stale-is-asked-for-again ()
+  ;; You send another task a prompt as a poll's measurement is on its way:
+  ;; its reply is older than the send's, so Roost drops it.  The poll had
+  ;; seen the change already, so nothing asked again, and a finished agent
+  ;; sends nothing more.  Until `g', the row said what was no longer so.
+  (roost-test--with-held-requests
+   (let ((measuring (roost-test--a-poll-sees-y-commit)))
+     (roost--act (gethash (list "dev" roost-test--x) roost--tasks) "send" '((text . "Go on.")))
+     (roost-test--answer "send" (roost-test--listed roost-test--x
+                                                    '(updatedAt . "2026-10-03T20:06:00+00:00")))
+     (funcall (plist-get measuring :success) (roost-test--y-measured))
+     (should (equal (roost-test--y-diff) "old"))
+     (roost-test--poll-on)
+     (should (equal (roost-test--y-diff) "new")))))
+
+(ert-deftest roost-a-measurement-that-failed-is-asked-for-again ()
+  (roost-test--with-held-requests
+   (let ((measuring (roost-test--a-poll-sees-y-commit)))
+     (funcall (plist-get measuring :failure) "ssh: connection reset")
+     (roost-test--poll-on)
+     (should (equal (roost-test--y-diff) "new")))))
+
+(ert-deftest roost-a-full-refresh-that-failed-is-asked-for-again ()
+  ;; After a merge, the others are measured against the branch that moved.
+  (roost-test--with-held-requests
+   (roost-test--measure-both)
+   (roost-refresh)
+   (funcall (plist-get (roost-test--take "list") :failure) "ssh: connection reset")
+   (remhash "dev" roost--failures)
+   (roost-refresh t)
+   (should (eq (roost-test--full (roost-test--take "list")) t))))
+
+(ert-deftest roost-a-change-a-measurement-of-another-task-brings-is-measured ()
+  ;; Only quiet polls compared.  An event of y's its host read for a list
+  ;; measuring x was news here, unmeasured, and the next poll found nothing
+  ;; new: with two agents at work, that could be the last of a turn.
+  (roost-test--with-held-requests
+   (let ((x (roost-test--listed roost-test--x '(gitStamp . "s9")
+                                '(updatedAt . "2026-10-03T20:04:00+00:00"))))
+     (roost-test--measure-both)
+     (roost-refresh t)
+     (roost-test--answer "list" (list x (roost-test--listed roost-test--y)))
+     (let ((measuring (roost-test--take "list")))
+       (should (equal (roost-test--full measuring) (list roost-test--x)))
+       (funcall (plist-get measuring :success)
+                (list (roost-test--measured x '(diff . "x, new")) (roost-test--y-committed))))
+     ;; With the next poll: at once, two busy agents would never rest.
+     (should-not roost-test--held)
+     (should-not (gethash "dev" roost--refreshing))
+     (roost-refresh t)
+     (let ((next (roost-test--take "list")))
+       (should (equal (roost-test--full next) (list roost-test--y)))
+       (funcall (plist-get next :success)
+                (list x (roost-test--measured (roost-test--y-committed) '(diff . "new")))))
+     (should (equal (roost-test--y-diff) "new")))))
+
+(ert-deftest roost-what-a-list-measures-it-owes-nothing-for ()
+  ;; Whatever it brings of a task it measured, as another commit since the
+  ;; poll, it read that as it measured.
+  (roost-test--with-held-requests
+   (let ((measuring (roost-test--a-poll-sees-y-commit))
+         (y (cons '(gitStamp . "s3") (roost-test--y-committed))))
+     (funcall (plist-get measuring :success)
+              (list (roost-test--listed roost-test--x) (roost-test--measured y '(diff . "new"))))
+     (should (equal (roost-test--y-diff) "new"))
+     (should-not (gethash "dev" roost--measures-owed))
+     ;; Nor do polls that find nothing new go on measuring.
+     (roost-refresh t)
+     (let ((poll (roost-test--take "list")))
+       (should (eq (roost-test--full poll) :false))
+       (funcall (plist-get poll :success) (list (roost-test--listed roost-test--x) y)))
+     (should-not roost-test--held))))
+
+(ert-deftest roost-a-host-that-always-fails-is-asked-at-the-pace-of-polls ()
+  ;; What a failed list owes waits for the next poll: from its end it
+  ;; would ask again at once, for as long as the host is down.
+  (roost-test--with-held-requests
+   (let ((measuring (roost-test--a-poll-sees-y-commit)))
+     (funcall (plist-get measuring :failure) "ssh: connection reset")
+     (should-not roost-test--held)
+     (dotimes (_ 3)
+       (remhash "dev" roost--failures)
+       (roost-refresh t)
+       (let ((poll (roost-test--take "list")))
+         (should (equal (roost-test--full poll) (list roost-test--y)))
+         (funcall (plist-get poll :failure) "ssh: connection reset"))
+       (should-not roost-test--held)))))
+
+(ert-deftest roost-a-full-refresh-settles-what-is-owed ()
+  (roost-test--with-held-requests
+   (puthash "dev" (list roost-test--y) roost--measures-owed)
+   (roost-refresh)
+   (should (eq (roost-test--full (roost-test--take "list")) t))
+   (should-not (gethash "dev" roost--measures-owed))))
+
+(ert-deftest roost-a-list-of-some-tasks-takes-up-what-is-owed ()
+  (roost-test--with-held-requests
+   (puthash "dev" (list roost-test--y) roost--measures-owed)
+   (roost--refresh-host "dev" nil (list roost-test--x))
+   (should (equal (sort (copy-sequence (roost-test--full (roost-test--take "list"))) #'string<)
+                  (list roost-test--x roost-test--y)))))
+
+(ert-deftest roost-a-list-that-could-not-start-is-asked-for-again ()
+  ;; Owed after a poll, it is taken from the refresh that ends that poll.
+  (roost-test--isolated
+   (let ((roost-hosts '("dev")) (broken t) asked)
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host _action parameters &rest _)
+                  (when broken (error "No helper"))
+                  (push (alist-get 'full parameters) asked))))
+       (should-error (roost--refresh-host "dev" nil '("1111111111111111")))
+       (setq broken nil)
+       (roost-refresh t)
+       (should (equal asked '(["1111111111111111"])))))))
+
+(ert-deftest roost-a-poll-that-could-not-ask-github-asks-the-next-time ()
+  ;; Noted as asked, the first good poll after an outage left it for two
+  ;; minutes, and what it then found read as news.
+  (roost-test--with-held-requests
+   (roost-refresh t)
+   (let ((poll (roost-test--take "list")))
+     (should (alist-get 'pullRequests (plist-get poll :parameters)))
+     (funcall (plist-get poll :failure) "ssh: connection reset"))
+   (remhash "dev" roost--failures)
+   (roost-refresh t)
+   (should (alist-get 'pullRequests (plist-get (roost-test--answer "list" nil) :parameters)))
+   ;; It was answered, so the next needn't.
+   (roost-refresh t)
+   (should-not (alist-get 'pullRequests (plist-get (roost-test--answer "list" nil) :parameters)))))
+
+(ert-deftest roost-a-poll-that-measures-still-asks-github ()
+  ;; With agents at work, every poll may have something to measure.
+  (roost-test--with-held-requests
+   (puthash "dev" (list roost-test--y) roost--measures-owed)
+   (roost-refresh t)
+   (let ((poll (roost-test--take "list")))
+     (should (equal (roost-test--full poll) (list roost-test--y)))
+     (should (alist-get 'pullRequests (plist-get poll :parameters))))))
+
+(ert-deftest roost-a-poll-dropped-as-stale-asks-github-the-next-time ()
+  (roost-test--with-held-requests
+   (roost-refresh t)
+   (let ((poll (roost-test--take "list")))
+     (cl-incf (gethash "dev" roost--revisions 0))
+     (funcall (plist-get poll :success) nil))
+   (roost-refresh t)
+   (should (alist-get 'pullRequests (plist-get (roost-test--take "list") :parameters)))))
 
 (ert-deftest roost-dashboard-groups-by-project-and-summarizes-attention ()
   (roost-test--isolated

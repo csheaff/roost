@@ -1461,27 +1461,50 @@ what changed since is measured against."
 
 (defvar roost--full-refresh-pending (make-hash-table :test 'equal)
   "Hosts whose full refresh was requested while another request was in flight.")
+(defvar roost--measures-owed (make-hash-table :test 'equal)
+  "What each host's next poll is to measure: t for every task, or their IDs.
+What a list that failed or was dropped would have measured, and tasks a
+list brought news of without measuring them.  A poll takes it up, rather
+than the end of a list, so that a host that always fails isn't asked in a
+loop, and two busy agents aren't measured back to back.")
 (defvar roost--failures (make-hash-table :test 'equal)
   "Consecutive refresh failures per host, as (COUNT . RETRY-AFTER).")
+
+(defun roost--owe-measuring (table host ids)
+  "Note in TABLE that HOST is to measure IDS, or every task if nil."
+  (let ((owed (gethash host table)))
+    (puthash host (if (or (null ids) (eq owed t)) t (seq-union owed ids)) table)))
 
 (defun roost--refresh-host (host quiet &optional ids)
   "Refresh HOST asynchronously.
 QUIET skips Git statistics; otherwise IDS, if non-nil, limits them to
-those tasks."
+those tasks.  What is owed, as `roost--measures-owed' has it, goes too."
   (if (gethash host roost--refreshing)
       ;; Run the requested full refresh once the in-flight poll returns.
-      (unless quiet
-        (let ((pending (gethash host roost--full-refresh-pending)))
-          (puthash host (if (or (null ids) (eq pending t)) t (seq-union pending ids))
-                   roost--full-refresh-pending)))
+      (unless quiet (roost--owe-measuring roost--full-refresh-pending host ids))
     (puthash host t roost--refreshing)
-    (let* ((request (puthash host (1+ (gethash host roost--list-requests 0)) roost--list-requests))
+    (let* ((poll quiet)
+           (_ (when-let* ((owed (gethash host roost--measures-owed)))
+                (remhash host roost--measures-owed)
+                (when (or quiet ids)
+                  (setq ids (unless (eq owed t) (seq-union ids owed))
+                        quiet nil
+                        poll (and poll ids t)))))
+           (request (puthash host (1+ (gethash host roost--list-requests 0)) roost--list-requests))
            (revision (gethash host roost--revisions 0))
-           ;; Full refreshes ask GitHub too, and quiet polls now and then.
-           (pull-requests (if quiet
-                              (> (- (float-time) (gethash host roost--pull-requests-asked 0))
-                                 roost--pull-request-interval)
+           (last-asked (gethash host roost--pull-requests-asked))
+           ;; Full refreshes ask GitHub too, and polls now and then, those
+           ;; that measure what is owed too: with agents at work, all may.
+           (pull-requests (if poll
+                              (> (- (float-time) (or last-asked 0)) roost--pull-request-interval)
                             (not ids)))
+           ;; Nothing came of this list, so what it was for is still to do.
+           (lost (lambda ()
+                   (unless quiet (roost--owe-measuring roost--measures-owed host ids))
+                   (when pull-requests
+                     (if last-asked
+                         (puthash host last-asked roost--pull-requests-asked)
+                       (remhash host roost--pull-requests-asked)))))
            asked finished
            ;; Once: the refresh it starts next has the flag then.
            (finish (lambda ()
@@ -1506,6 +1529,7 @@ those tasks."
                        (message "Roost %s: %s (M-x roost-doctor checks this host)" (roost--host-label host)
                                 (car (last (split-string err "\n" t "[ \t\r]+")))))
                      (puthash host err roost--errors)
+                     (funcall lost)
                      ;; Back off from unreachable hosts, up to a minute between attempts.
                      (let ((count (1+ (or (car (gethash host roost--failures)) 0))))
                        (puthash host (cons count (+ (float-time)
@@ -1520,7 +1544,7 @@ those tasks."
             (progn
               (roost--request
                host "list" `((full . ,(cond (quiet :false) (ids (vconcat ids)) (t t)))
-                             ,@(when (and quiet pull-requests) '((pullRequests . t))))
+                             ,@(when (and poll pull-requests) '((pullRequests . t))))
                ;; Each ends the refresh even if drawing what it found fails, or
                ;; the host would never be asked again.
                (lambda (tasks)
@@ -1532,26 +1556,36 @@ those tasks."
                          (remhash host roost--errors)
                          ;; A newer mutation must win over a stale list reply, and a host
                          ;; forgotten meanwhile stays forgotten.
-                         (when (and (= revision (gethash host roost--revisions 0))
-                                    (member host (roost--hosts)))
+                         (cond
+                          ((not (member host (roost--hosts))))
+                          ((/= revision (gethash host roost--revisions 0)) (funcall lost))
+                          (t
                            (let ((before (roost--task-states host)))
                              (roost--apply-snapshot host tasks request)
                              (with-demoted-errors "Roost: %S" (roost--compose-listed host tasks))
-                             ;; Quiet polls leave out Git statistics.  An agent that reported
-                             ;; something, such as finishing an edit, may have changed files,
-                             ;; and a commit moves the task's Git stamp: measure those tasks
-                             ;; once this poll is done.
-                             (when-let* ((quiet)
-                                         (changed (seq-keep (lambda (state)
-                                                              (unless (equal state (assoc (car state) before))
-                                                                (car state)))
-                                                            (roost--task-states host))))
-                               (roost--refresh-host host nil changed))))
+                             ;; Quiet polls leave out Git statistics, as does a list of
+                             ;; some tasks for the rest.  An agent that reported something,
+                             ;; such as finishing an edit, may have changed files, and a
+                             ;; commit moves the task's Git stamp: measure those tasks once
+                             ;; this poll is done, or with the next for what a list of
+                             ;; some brought, or two busy agents would keep this going.
+                             (when-let* (((or quiet ids))
+                                         (changed (seq-difference
+                                                   (seq-keep (lambda (state)
+                                                               (unless (equal state (assoc (car state) before))
+                                                                 (car state)))
+                                                             (roost--task-states host))
+                                                   ids)))
+                               (if quiet
+                                   (roost--refresh-host host nil changed)
+                                 (roost--owe-measuring roost--measures-owed host changed))))))
                          (roost--redraw))
                      (funcall finish))))
                failed)
               (setq asked t))
-          (unless asked (funcall finish)))))))
+          (unless asked
+            (funcall lost)
+            (funcall finish)))))))
 
 (defun roost--task-list-p (tasks)
   "Whether TASKS, as a host listed them, is a list of tasks, each with an ID."
@@ -1601,6 +1635,7 @@ Hosts in `roost-hosts' are watched until you take them out of it."
       (remhash (roost--key task) roost--turns-sent))
     (remhash host roost--errors)
     (remhash host roost--failures)
+    (remhash host roost--measures-owed)
     (roost--redraw)))
 
 (defun roost-refresh (&optional quiet)
