@@ -5408,6 +5408,18 @@ sys.exit(status)
         self.git("merge", "-q", "--ff-only", "release/1.0", cwd=Path(task["worktree"]))
         self.assertIs(self.listed(full=True)["landed"], False)
 
+    def test_work_fast_forwarded_from_a_branch_named_like_the_integration_branch_is_the_tasks(self):
+        # agent/main is a branch of yours, and no remote's main.
+        task = self.create()
+        wt = Path(task["worktree"])
+        self.git("switch", "-q", "-c", "agent/main", cwd=wt)
+        (wt / "work").write_text("work\n")
+        self.git("add", ".", cwd=wt)
+        self.git("commit", "-qm", "Work", cwd=wt)
+        self.git("switch", "-q", task["branch"], cwd=wt)
+        self.git("merge", "-q", "--ff-only", "agent/main", cwd=wt)
+        self.assertTrue(roost.committed_on(roost.Store(str(self.state)).read(task["id"])))
+
     def test_a_head_two_projects_ask_for_is_fetched_for_each(self):
         task, tip, forge = self.open_then_commit_on_forge()
         # Another project, whose origin hasn't that commit.

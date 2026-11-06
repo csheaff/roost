@@ -3230,7 +3230,7 @@ def own_commits(task, branch=None):
         if (re.match(r"(commit|cherry-pick|revert|am)\b|(merge|pull)\b[^:]*: Merge made by", subject)
                 # By its commit, as Git names one from FETCH_HEAD, it could be anyone's.
                 or forwarded and not re.fullmatch(r"[0-9a-f]+", forwarded.group(1))
-                and integration not in (forwarded.group(1), re.sub(r"^(refs/heads/|refs/remotes/[^/]+/|[^/]+/)", "",
+                and integration not in (forwarded.group(1), re.sub(r"^(refs/heads/|refs/remotes/[^/]+/|origin/)", "",
                                                                    forwarded.group(1)))):
             made.add(commit)
         elif subject.startswith("rebase"):
