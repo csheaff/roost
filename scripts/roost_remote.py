@@ -105,11 +105,16 @@ def handing_on(fd):
             del os.environ["GIT_CONFIG_COUNT"]
 
 
-def execute(argv, cwd=None, check=True, input=None, env=None):
+def execute(argv, cwd=None, check=True, input=None, env=None, timeout=None):
+    """Run ARGV, for at most TIMEOUT seconds if given: then it is killed,
+    and counts as having failed."""
     # A file name that is not UTF-8, possible on Linux, must not fail every
     # listing of the host: undecodable bytes are replaced, here and below.
-    result = subprocess.run(argv, cwd=cwd, input=input, text=True, errors="replace", env=env,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, pass_fds=tuple(INHERITED))
+    try:
+        result = subprocess.run(argv, cwd=cwd, input=input, text=True, errors="replace", env=env, timeout=timeout,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, pass_fds=tuple(INHERITED))
+    except subprocess.TimeoutExpired:
+        result = subprocess.CompletedProcess(argv, 124, "", "%s did not answer in %d seconds" % (argv[0], timeout))
     if check and result.returncode:
         raise RoostError(result.stderr.strip() or result.stdout.strip()
                          or "Command failed: " + shlex.join(argv))
@@ -246,10 +251,14 @@ def tool(name, cwd, args, timeout, missing, said=lambda result: None):
     return result.stdout
 
 
+# A server that doesn't answer, as one stopped, must not hold the registry lock.
+TMUX_SECONDS = 5
+
+
 def tmux(socket, *args, check=True, input=None):
     # As a UTF-8 client, whatever the locale: under LC_ALL=C or POSIX tmux
     # prints the tabs between fields, and what isn't ASCII, as underscores.
-    return execute(["tmux", "-u", "-L", socket, *args], check=check, input=input)
+    return execute(["tmux", "-u", "-L", socket, *args], check=check, input=input, timeout=TMUX_SECONDS)
 
 
 def enable_extended_keys(socket):

@@ -4,6 +4,10 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A tmux server that doesn't answer, as one stopped, holds up nothing: after
+  five seconds its tasks keep the status they last had, and commands say tmux
+  didn't answer. The host's polls and hooks waited for it, for as long as it was
+  stopped. Nothing to do when upgrading.
 - A draft started from a Jira work item has its text when your site keeps
   that in a rich-text custom field. The prompt had only its summary and
   link, as Roost read the description alone. Now, as you pick one with

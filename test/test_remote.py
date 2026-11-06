@@ -2769,6 +2769,32 @@ class Lifecycle(unittest.TestCase):
             time.sleep(0.2)
         self.assertEqual(self.request("list")["result"], [])
 
+    def answered(self, action, **args):
+        """The reply to ACTION, which must not wait on what is under way."""
+        pool = concurrent.futures.ThreadPoolExecutor(1)
+        try:
+            return pool.submit(self.request, action, **args).result(timeout=8)
+        except concurrent.futures.TimeoutError:
+            self.fail("%s waited on what was under way" % action)
+        finally:
+            pool.shutdown(wait=False)
+
+    def test_a_tmux_server_that_doesnt_answer_holds_nothing_up(self):
+        task = self.create()
+        record = self.wait(task, "ready")
+        pid = int(roost.tmux(self.socket, "display-message", "-p", "#{pid}").stdout)
+        os.kill(pid, signal.SIGSTOP)
+        try:
+            with patch.object(roost, "TMUX_SECONDS", 1):
+                listed = self.answered("list", socket=self.socket)
+                self.assertTrue(listed["ok"], listed)
+                self.assertEqual((listed["result"][0]["status"], listed["result"][0]["live"]), ("ready", None))
+                self.assertIn("tmux did not answer", self.answered("merge", id=task["id"])["error"])
+        finally:
+            os.kill(pid, signal.SIGCONT)
+        listed = self.request("list", socket=self.socket)["result"][0]
+        self.assertEqual((listed["status"], listed["live"], listed["updatedAt"]), ("ready", True, record["updatedAt"]))
+
     def test_finishing_a_task_waits_for_its_pull_request(self):
         # Pushing and asking GitHub take seconds without the registry lock.
         # Finishing the task meanwhile would delete the worktree under the
