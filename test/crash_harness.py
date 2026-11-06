@@ -11,7 +11,7 @@ Modes, what becomes of the command at which the helper dies:
 
   before  never runs, as when the connection dropped just before
   after   ran to its end, and the helper never heard the answer
-  orphan  runs on, unattended, as Git does when the connection drops under it
+  orphan  runs on, unattended, as when something kills the helper alone
   racing  the same, while you ask again: a moment later it's still running
   fail    fails, if it changes anything, and the helper lives on to say so,
           as with a full disk
@@ -46,7 +46,11 @@ SHIM = r"""#!/bin/sh
 dir=$ROOST_CRASH_DIR
 name=${0##*/}
 if [ "$name" = git ]; then real=$ROOST_CRASH_GIT; else real=$ROOST_CRASH_TMUX; fi
-if ! read -r helper 2>/dev/null < "$dir/helper" || [ "$PPID" != "$helper" ] || [ ! -f "$dir/armed" ]; then
+if ! read -r helper 2>/dev/null < "$dir/helper" || [ ! -f "$dir/armed" ]; then
+  exec "$real" "$@"
+fi
+# The helper, or the child that a request that changes things goes on in.
+if [ "$PPID" != "$helper" ] && [ "$(ps -o ppid= -p "$PPID" | tr -d ' ')" != "$helper" ]; then
   exec "$real" "$@"
 fi
 read -r at mode < "$dir/armed"

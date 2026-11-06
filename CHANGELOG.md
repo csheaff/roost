@@ -4,6 +4,27 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A merge, update or discard that outlasts Emacs's wait on this machine goes on
+  to its end, as it does over SSH. Emacs killed it, with Git and its hooks: with
+  a `pre-commit` hook over a minute, a squash merge left the task's work staged
+  in your checkout every time, while Roost said it might still finish, and `m`
+  then refused. What only looks, such as a poll, still goes when its time is up.
+  Nothing to do when upgrading.
+- While Git merges or updates a task, its hooks hold up nothing else. Every
+  agent on the host waited at its next event, and every poll, until they
+  ended, and a Pi, Codex or OpenCode agent's event lost after three seconds
+  left its task reading `running` until your next prompt. Commands on that
+  task say a merge is under way, and a second merge in that repository says
+  which one is, at once. Nothing to do when upgrading.
+- Nothing a push or a checkout leaves running keeps a task from finishing. A
+  hook's daemon, or Git's credential cache from your first push, held the
+  task's lock: merging, retiring, discarding and forgetting all said Roost was
+  busy, for as long as it ran, and asking again for a task cut short never
+  returned. Nothing to do when upgrading.
+- A merge or `u` stopped partway, as by a reboot, says so and how to undo it,
+  when you merge, update or open a pull request. It said files were uncommitted,
+  and `u` said to commit them, which would have committed half a merge as your
+  work. Nothing to do when upgrading.
 - A tmux server that doesn't answer, as one stopped, holds up nothing: after
   five seconds its tasks keep the status they last had, and commands say tmux
   didn't answer. The host's polls and hooks waited for it, for as long as it was
