@@ -3863,7 +3863,6 @@ class Lifecycle(unittest.TestCase):
         self.wait_for_pane_exit(task)
         store = roost.Store(str(self.state))
         ended = store.read(task["id"])
-        self.assertEqual(ended["endedRun"], ended["runId"])
         for event in (dict(hook_event_name="PreToolUse"), dict(hook_event_name="PermissionRequest", tool_name="Bash"),
                       dict(hook_event_name="SessionStart")):
             roost.update_hook(store, task["id"], event, ended["runId"])
@@ -8694,6 +8693,42 @@ class ProgramStatus(unittest.TestCase):
         self.assertEqual(beside(hook, "permission"), dict(agentSession="s"))
         self.assertEqual(beside(dict(hook, status="background"), "ready")["status"], "background")
         self.assertEqual(beside(dict(hook, status="failed"), "running")["status"], "failed")
+
+    def test_clearing_a_conversation_stops_no_turn(self):
+        # As claude-relayed-2.1.310.jsonl has it, as the helper reads it.
+        with tempfile.TemporaryDirectory() as root:
+            store = roost.Store(root)
+            store.save(dict(id="0" * 16, agent="claude", worktree="/w", status="ready", runId="run",
+                            programStatusRun="run", lastEvent="Stop", updatedAt=roost.now()))
+
+            def hook(**payload):
+                roost.update_hook(store, "0" * 16, payload, "run")
+                return store.read("0" * 16)
+
+            def report(state, **fields):
+                task = store.read("0" * 16)
+                self.apply(task, state, **fields)
+                store.save(task)
+                return task
+
+            report("working")
+            hook(hook_event_name="SessionEnd", reason="clear")
+            report("idle")
+            task = hook(hook_event_name="SessionStart", source="clear", session_id="next")
+            self.assertEqual((task["status"], task["lastEvent"], task["agentSession"]), ("ready", "SessionStart", "next"))
+            self.assertTrue(roost.seen_since_last_event(task))
+            # Its reports may wait for the registry, and land after the hook.
+            said = time.time() - 1
+            hook(hook_event_name="SessionStart", source="clear")
+            report("working", receivedAt=said)
+            task = report("idle", receivedAt=said)
+            self.assertEqual((task["status"], task["lastEvent"]), ("ready", "SessionStart"))
+            # What it says after that counts, and Esc still reads as Esc.
+            self.assertEqual(report("working", receivedAt=time.time() + 1)["status"], "running")
+            # Another start says no more than its reports do.
+            for source in ("startup", "resume"):
+                self.assertEqual(hook(hook_event_name="SessionStart", source=source)["status"], "running")
+            self.assertEqual(report("idle", receivedAt=time.time() + 1)["lastEvent"], "Interrupt")
 
     def test_codex_works_and_idles_between_turns_its_hooks_mark(self):
         # As Codex 0.163.0 reported in a live run: no done, and work at

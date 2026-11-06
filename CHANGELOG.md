@@ -4,6 +4,8 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- `/clear` no longer reads as `interrupted` with `roost-program-status` on.
+  Nothing to do when upgrading.
 - A Pi or OpenCode agent you quit as it reports something reads `exited`.
   The report could land after its end, and the task then read `crashed`.
   Nothing to do when upgrading.

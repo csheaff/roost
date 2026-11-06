@@ -995,6 +995,10 @@ class ClaudeAgent:
         if not status:
             return None
         updates = dict(status=status, updatedAt=now(), lastEvent=event, error=None)
+        # /clear reports work, then rest, as if you had stopped a turn: only
+        # this says what it was.
+        if event == "SessionStart" and payload.get("source") == "clear":
+            updates["newConversation"] = True
         # A prompt that runs no PermissionRequest, as when a sandboxed
         # command needs a new network host, is named by its notification.
         message = payload.get("message") if isinstance(payload.get("message"), str) else ""
@@ -5769,11 +5773,12 @@ def update_hook(store, task_id, payload, run_id=None):
             asks = updates.get("status", before) == "permission"
             relayed = task.get("programStatusRun") == task.get("runId")
             answers = getattr(agent, "answers", None)
-            if relayed:
+            new_conversation = updates.pop("newConversation", False)
+            if relayed and not new_conversation:
                 updates = beside_program_status(updates, before, agent.reports_turns)
             elif before == "permission" and updates.get("status") == "running" and answers and not answers(task, payload):
                 updates = without_status(updates)
-            if not agent.reports_turns and "status" in updates:
+            if (new_conversation or not agent.reports_turns) and "status" in updates:
                 task["hookAt"] = read_at = time.time()
             # What the agent asks, if its adapter can say better than its payload.
             named = updates.pop("request", None)
@@ -5964,8 +5969,10 @@ def apply_program_status(task, fields, run_id):
     # is news only as the answer to a request, and what it said before the
     # hook that last set its status is older news than that hook's: it runs
     # its hooks before it goes on, but its reports wait for the registry.
+    # So too for what an agent said before a hook whose status counts over
+    # its reports, as for a new conversation.
     turns = agent_for(task).reports_turns
-    if not turns and fields.get("receivedAt", float("inf")) < (task.get("hookAt") or 0):
+    if fields.get("receivedAt", float("inf")) < (task.get("hookAt") or 0):
         return task != before
     changes = None
     if state == "working" and status != "running" and (turns or status == "permission"):
