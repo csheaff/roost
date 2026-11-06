@@ -4336,14 +4336,28 @@ A draft holds the task it was opened for, which goes on changing."
   "What sending the prompt draft would send."
   (replace-regexp-in-string "\\`\\([ \t]*\n\\)+" "" (string-trim-right (buffer-string))))
 
+(defun roost--send-notes-going ()
+  "The draft's review notes that sending it would send, each (ID . TEXT).
+One you took out of it, or changed in it, isn't among them: the agent
+wouldn't read it as it is, so it stays to be sent."
+  (seq-keep (lambda (note)
+              (when (and (member (alist-get 'id note) roost--send-notes)
+                         (save-excursion
+                           (goto-char (point-min))
+                           (let ((case-fold-search nil))
+                             (re-search-forward (roost--note-in-draft note) nil t))))
+                (cons (alist-get 'id note) (alist-get 'text note))))
+            (roost--notes)))
+
 (defun roost--send-kept (task text notes)
   "Keep what the draft says beyond TEXT, which went to TASK with NOTES.
 What went leaves the draft, if it is all still there: sending what is
-left is what you wrote since."
+left is what you wrote since.  NOTES are as `roost--send-notes-going'
+gives them."
   (setq roost--send-sending nil
         roost--send-asked nil
         ;; Those that went, whatever is left of them here.
-        roost--send-notes (seq-difference roost--send-notes notes))
+        roost--send-notes (seq-difference roost--send-notes (mapcar #'car notes)))
   (let* ((start (save-excursion (goto-char (point-min))
                                 (re-search-forward "\\`\\([ \t]*\n\\)*")
                                 (point)))
@@ -4372,7 +4386,7 @@ draft."
   (let ((text (roost--send-draft-text))
         ;; As it is now: it may have come to ask for permission.
         (task (roost--as-listed roost--send-task))
-        (notes roost--send-notes)
+        (notes (roost--send-notes-going))
         (buffer (current-buffer))
         (written (buffer-chars-modified-tick)))
     (when (string-empty-p (string-trim text))
@@ -4403,7 +4417,9 @@ draft."
                (with-current-buffer buffer (roost--send-kept task text notes)))
              ;; The prompt went, whatever becomes of this.
              (condition-case err
-                 (when (roost--remove-notes (lambda (note) (member (alist-get 'id note) notes)))
+                 (when (roost--remove-notes
+                        ;; As you sent it: one edited as it went stays.
+                        (lambda (note) (equal (cdr (assoc (alist-get 'id note) notes)) (alist-get 'text note))))
                    (roost--redraw))
                (error (message "Roost could not save your review notes: %s" (error-message-string err))))
              (unless kept (roost--close-buffer buffer))))
@@ -4873,12 +4889,16 @@ Drafts holding them lose them too."
     (roost--save-notes)
     (roost--update-drafts before note)))
 
+(defun roost--note-in-draft (note)
+  "A regexp for NOTE as a draft holds it, on lines of its own, the first group."
+  (concat "^\\(" (regexp-quote (roost--format-note note)) "\\)\\(?:\n\\|\\'\\)"))
+
 (defun roost--update-drafts (old new)
   "Replace note OLD with NEW in the drafts holding it; nil NEW removes it.
 A draft in which you have changed the note's text keeps your text, and
 no longer counts the note as its own, so sending it leaves the note."
   (let ((id (alist-get 'id old))
-        (before (roost--format-note old))
+        (before (roost--note-in-draft old))
         (case-fold-search nil))
     (dolist (buffer (buffer-list))
       (with-current-buffer buffer
@@ -4886,9 +4906,7 @@ no longer counts the note as its own, so sending it leaves the note."
           (save-excursion
             (goto-char (point-min))
             ;; The note as it was drafted, on lines of its own.
-            (cond ((not (re-search-forward
-                         (concat "^\\(" (regexp-quote before) "\\)\\(?:\n\\|\\'\\)")
-                         nil t))
+            (cond ((not (re-search-forward before nil t))
                    (setq roost--send-notes (delete id roost--send-notes)))
                   (new (replace-match (roost--format-note new) t t nil 1))
                   (t

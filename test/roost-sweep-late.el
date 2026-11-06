@@ -2171,6 +2171,57 @@ A name of its own keeps the fields as long as they are."
         (should-not (buffer-live-p draft))
         (should (eq (and (string-search "could not save" (roost-sweep-late--messages from)) t) full))))))
 
+(ert-deftest roost-sweep-late-a-note-taken-out-of-a-draft-stays ()
+  ;; You delete one of two notes from the draft and send the rest.
+  (roost-sweep-late--world
+    (roost-sweep-late--populate nil nil)
+    (roost-sweep-late--notes "One" "Two")
+    (with-current-buffer (roost-sweep-late--lay-out 'send-draft)
+      (goto-char (point-min))
+      (search-forward "f2.py")
+      (delete-region (line-beginning-position) (point-max))
+      (roost-send-submit)
+      (should-not (string-search "Two" (alist-get 'text (plist-get (roost-sweep-late--take "send") :request))))
+      (roost-sweep-late--answer (roost-sweep-late--take "send") 'good)
+      (should (equal (mapcar (lambda (note) (alist-get 'text note)) roost--notes) '("Two"))))))
+
+(ert-deftest roost-sweep-late-a-note-changed-in-a-draft-stays ()
+  ;; The agent read what you made of it, and the note says otherwise.
+  (roost-sweep-late--world
+    (roost-sweep-late--populate nil nil)
+    (roost-sweep-late--notes "One")
+    (with-current-buffer (roost-sweep-late--lay-out 'send-draft)
+      (goto-char (point-max))
+      (insert ", and more")
+      (roost-send-submit)
+      (roost-sweep-late--answer (roost-sweep-late--take "send") 'good)
+      (should (equal (mapcar (lambda (note) (alist-get 'text note)) roost--notes) '("One"))))))
+
+(ert-deftest roost-sweep-late-notes-sent-in-a-draft-go ()
+  (roost-sweep-late--world
+    (roost-sweep-late--populate nil nil)
+    (roost-sweep-late--notes "One" "Two")
+    (with-current-buffer (roost-sweep-late--lay-out 'send-draft)
+      (roost-send-submit)
+      (let ((request (roost-sweep-late--take "send")))
+        (should (string-search "Two" (alist-get 'text (plist-get request :request))))
+        (should (alist-get 'look (plist-get request :request))))
+      (roost-sweep-late--answer (roost-sweep-late--take "send") 'good)
+      (should-not roost--notes))))
+
+(ert-deftest roost-sweep-late-a-note-edited-as-its-draft-goes-stays ()
+  ;; As for one sent alone, which is the second case.
+  (dolist (send (list (lambda () (roost-sweep-late--lay-out 'send-draft) (roost-send-submit))
+                      (lambda () (roost-note-send (car roost--notes)))))
+    (roost-sweep-late--world
+      (roost-sweep-late--populate nil nil)
+      (roost-sweep-late--notes "One")
+      (funcall send)
+      (roost--edit-note (car roost--notes) "One, and what I just thought of")
+      (roost-sweep-late--answer (roost-sweep-late--take "send") 'good)
+      (should (equal (mapcar (lambda (note) (alist-get 'text note)) roost--notes)
+                     '("One, and what I just thought of"))))))
+
 (ert-deftest roost-sweep-late-a-poll-that-fails-says-nothing-of-a-host-you-forgot ()
   (roost-sweep-late--world
     (roost-sweep-late--populate nil nil)
