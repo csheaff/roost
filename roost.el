@@ -5064,8 +5064,10 @@ Drafts holding them lose them too."
     (roost--update-drafts before note)))
 
 (defun roost--note-in-draft (note)
-  "A regexp for NOTE as a draft holds it, on lines of its own, the first group."
-  (concat "^\\(" (regexp-quote (roost--format-note note)) "\\)\\(?:\n\\|\\'\\)"))
+  "A regexp for NOTE as a draft holds it, a block of its own, the first group.
+A blank line or the end of the draft follows it: a line added to it
+makes it another note."
+  (concat "^\\(" (regexp-quote (roost--format-note note)) "\\)\\(?:\n[ \t]*\n\\|[ \t\n]*\\'\\)"))
 
 (defun roost--update-drafts (old new)
   "Replace note OLD with NEW in the drafts holding it; nil NEW removes it.

@@ -2259,7 +2259,18 @@ A name of its own keeps the fields as long as they are."
       (insert ", and more")
       (roost-send-submit)
       (roost-sweep-late--answer (roost-sweep-late--take "send") 'good)
-      (should (equal (mapcar (lambda (note) (alist-get 'text note)) roost--notes) '("One"))))))
+      (should (equal (mapcar (lambda (note) (alist-get 'text note)) roost--notes) '("One")))))
+  ;; A line added to a note of several, or none, with words of yours after.
+  (pcase-dolist (`(,added ,left) '(("\nThree" ("One\nTwo")) ("\n\nAnd this." nil)))
+    (roost-sweep-late--world
+      (roost-sweep-late--populate nil nil)
+      (roost-sweep-late--notes "One\nTwo")
+      (with-current-buffer (roost-sweep-late--lay-out 'send-draft)
+        (goto-char (point-max))
+        (insert added)
+        (roost-send-submit)
+        (roost-sweep-late--answer (roost-sweep-late--take "send") 'good)
+        (should (equal (mapcar (lambda (note) (alist-get 'text note)) roost--notes) left))))))
 
 (ert-deftest roost-sweep-late-a-note-changed-in-a-draft-still-says-you-looked ()
   (roost-sweep-late--world
