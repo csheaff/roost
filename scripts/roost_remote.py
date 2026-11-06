@@ -50,7 +50,7 @@ ENDED = ("stopped", "exited", "failed", "crashed")
 # Computed per request and never persisted in a task record.
 TRANSIENT = ("live", "diff", "dirty", "files", "size", "ahead", "behind", "update", "worktreeMissing",
              "prStatus", "unpushed", "lastMessage", "gitStamp", "agentWork", "merging", "landed", "conflicts",
-             "sinceLooked", "teardownFailure", "teardownOutput", "worktreePr", "worktreeHead")
+             "sinceLooked", "teardownFailure", "teardownOutput", "worktreePr", "worktreeHead", "leftBehind")
 LAST_MESSAGE_TAIL = 256 * 1024
 LAST_MESSAGE_LIMIT = 2000
 INTERRUPT_TAIL = 64 * 1024
@@ -404,7 +404,7 @@ def listable(task):
     """Whether TASK's record holds what listing it takes for granted."""
     return (all(isinstance(task.get(field), str) for field in RECORD_TEXT)
             and all(isinstance(task.get(field), (str, type(None))) for field in RECORD_OPTIONAL_TEXT)
-            and isinstance(task.get("agentWorktrees"), (list, type(None))))
+            and all(isinstance(task.get(field), (list, type(None))) for field in ("agentWorktrees", "agentMade")))
 
 
 def own_record(record, task_id):
@@ -886,6 +886,17 @@ class ClaudeAgent:
             # Otherwise a prompt starting with -, such as a list, is an option.
             argv += ["--", task["prompt"]]
         return argv
+
+    def made_worktree(self, payload, path):
+        """Whether hook PAYLOAD, from inside the worktree at PATH under
+        .claude/worktrees, says this agent made it: its EnterWorktree tool
+        just did, without `path`, which names one already there, or an
+        isolated subagent of its works there, whose ID names the folder."""
+        if payload.get("tool_name") == "EnterWorktree":
+            arguments = payload.get("tool_input")
+            return (payload.get("hook_event_name") == "PostToolUse"
+                    and not (isinstance(arguments, dict) and arguments.get("path")))
+        return bool(payload.get("agent_id")) and Path(path).name == "agent-%s" % payload["agent_id"]
 
     def observe(self, payload, current=None):
         """Status updates for hook PAYLOAD, given the task's CURRENT status."""
@@ -3479,7 +3490,7 @@ def add_git_stats(tasks):
         reply = last_message(task)
         if reply:
             task["lastMessage"] = reply
-        if task.get("agentWorktrees"):
+        if task.get("agentMade"):
             task["agentWork"] = agent_work(task)
         tip = branch_tip(task)
         task["landed"] = landed(task, tip)
@@ -4650,7 +4661,7 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
             unregister_gone(repo, worktree)
         delete_branch(repo, branch, commit)
     store.remove(task["id"])
-    task.update(status="retired", updatedAt=now())
+    task.update(status="retired", updatedAt=now(), leftBehind=agent_left(task))
     # Not with one open from there as well: deleting the branch would close it.
     if commit and merged_head == commit and not still_open:
         task["remoteCleanup"] = True
@@ -4896,7 +4907,8 @@ def discard(store, task, expect=None, dry_run=False, teardown=None):
     work = agent_work(task)
     if dry_run:
         paths = ([worktree] if worktree_exists else []) + [entry["path"] for entry in work]
-        branches = ([branch] if branch_exists else []) + [entry["branch"] for entry in work if entry["branch"]]
+        branches = ([branch] if branch_exists else []) + [entry["branch"] for entry in work
+                                                          if entry["branch"] == claude_branch(entry["path"])]
         # Commits on a detached HEAD there, too; another branch keeps its own.
         heads = [head for head in [read_git(path, "rev-parse", "-q", "--verify", "HEAD").stdout.strip()
                                    for path in paths if linked(path)] if head]
@@ -4926,7 +4938,7 @@ def discard(store, task, expect=None, dry_run=False, teardown=None):
             unregister_gone(repo, worktree)
         delete_branch(repo, branch, commit)
     store.remove(task["id"])
-    task.update(status="discarded", updatedAt=now(), live=False)
+    task.update(status="discarded", updatedAt=now(), live=False, leftBehind=agent_left(task))
     return task
 
 
@@ -5414,7 +5426,7 @@ def permission_request(payload, worktree=None):
 
 
 def agent_worktree(task, cwd):
-    """The worktree Claude Code made for TASK's agent that CWD is in, or
+    """The folder in .claude/worktrees that CWD, from TASK's agent, is in, or
     None. Claude makes them in the primary checkout's .claude/worktrees,
     for --worktree, its EnterWorktree tool and isolated subagents."""
     if not isinstance(cwd, str) or not cwd:
@@ -5427,12 +5439,42 @@ def agent_worktree(task, cwd):
     return str(root / parts[0]) if parts else None
 
 
+def worktree_at(repo, path):
+    """The Git directory Git keeps for the worktree of REPO at PATH, if Git
+    says it is one at that very path, or None. An agent's folder lies inside
+    the primary checkout: with no link of its own, as when a removal stopped
+    partway, Git asked there answers for the primary checkout."""
+    path = Path(path).resolve()
+    if linked(path) and Path(read_git(path, "rev-parse", "--show-toplevel").stdout.removesuffix("\n")).resolve() == path:
+        with contextlib.suppress(RoostError):
+            return next((gitdir for gitdir, place in linked_worktrees(repo) if Path(place).resolve() == path), None)
+    return None
+
+
+def made_since(gitdir, started):
+    """Whether Git made the worktree it keeps in GITDIR at STARTED or after,
+    a time as in a record. It writes `commondir` there as it makes one, and
+    never again, unlike the rest."""
+    started = parse_time(started)
+    with contextlib.suppress(OSError):
+        return started is not None and (gitdir / "commondir").stat().st_mtime >= started.timestamp()
+    return False
+
+
+def claude_branch(path):
+    """The branch Claude makes for its worktree at PATH."""
+    return "worktree-" + Path(path).name
+
+
 def agent_work(task):
     """The worktrees TASK's agent made, as it left them: branch, commits not
-    on the task's branch, and whether anything is uncommitted."""
+    on the task's branch, and whether anything is uncommitted. These are
+    those its hooks said it made, since the task started, that are
+    worktrees yet: finishing the task leaves any other."""
     work = []
-    for path in task.get("agentWorktrees") or []:
-        if not isinstance(path, str) or not Path(path).is_dir():
+    for path in task.get("agentMade") or []:
+        gitdir = worktree_at(task["repo"], path) if isinstance(path, str) else None
+        if not (gitdir and made_since(gitdir, task.get("startedAt"))):
             continue
         branch = read_git(path, "symbolic-ref", "--short", "-q", "HEAD").stdout.strip()
         ahead = read_git(path, "rev-list", "--count", "refs/heads/" + task["branch"] + "..HEAD", "--")
@@ -5443,16 +5485,32 @@ def agent_work(task):
     return work
 
 
+def agent_left(task):
+    """What stays of the worktrees TASK's agent went to, as `forget` says it:
+    one it didn't make, or that is no worktree, or that Git couldn't remove,
+    and the branch Claude made for it."""
+    left = []
+    for path in task.get("agentWorktrees") or []:
+        if isinstance(path, str):
+            if os.path.lexists(path):
+                left.append("worktree " + path)
+            if ref_exists(task["repo"], claude_branch(path)):
+                left.append("branch " + claude_branch(path))
+    return left
+
+
 def remove_agent_worktrees(task, entries):
     """Remove ENTRIES of `agent_work`, worktrees TASK's agent made, and the
-    branches Claude made for them. Claude locks them, hence --force twice.
-    Best effort: what can't be removed stays where Git put it."""
+    branch Claude made for each, once Git has removed it, if it is still on
+    that one: another its agent switched to may be yours. Claude locks them,
+    hence --force twice. Best effort: what can't be removed stays where Git
+    put it, and `agent_left` says so."""
     for entry in entries:
-        branch = entry.get("branch")
-        commit = read_git(entry["path"], "rev-parse", "HEAD").stdout.strip() if branch else ""
-        git(task["repo"], "worktree", "remove", "--force", "--force", entry["path"], check=False)
-        if branch and commit:
-            git(task["repo"], "update-ref", "-d", "refs/heads/" + branch, commit, check=False)
+        commit = read_git(entry["path"], "rev-parse", "HEAD").stdout.strip()
+        removed = git(task["repo"], "worktree", "remove", "--force", "--force", entry["path"], check=False)
+        if removed.returncode == 0 and commit and entry["branch"] == claude_branch(entry["path"]):
+            with contextlib.suppress(RoostError):
+                delete_branch(task["repo"], entry["branch"], commit)
 
 
 @contextlib.contextmanager
@@ -5671,11 +5729,19 @@ def update_hook(store, task_id, payload, run_id=None):
         # Status reports read before hookAt are older news than this hook;
         # its capture keeps that time, so a replay weighs them alike.
         read_at = None
-        made = agent_worktree(task, payload.get("cwd"))
-        if made and made not in (task.get("agentWorktrees") or []):
-            task["agentWorktrees"] = (task.get("agentWorktrees") or []) + [made]
-            store.save(task)
         agent = agent_for(task)
+        place = agent_worktree(task, payload.get("cwd"))
+        if place:
+            been, made = task.get("agentWorktrees") or [], task.get("agentMade") or []
+            says_made = getattr(agent, "made_worktree", None)
+            new_place = place not in been
+            new_made = place not in made and bool(says_made and says_made(payload, place))
+            if new_place:
+                task["agentWorktrees"] = been + [place]
+            if new_made:
+                task["agentMade"] = made + [place]
+            if new_place or new_made:
+                store.save(task)
         concerns = getattr(agent, "concerns", None)
         updates = agent.observe(payload, before) if not concerns or concerns(task, payload) else None
         if updates:

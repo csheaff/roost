@@ -65,13 +65,15 @@ class MergeAgentWorktree(Merge):
 
     def prepare(self, box):
         path = box.repo / ".claude" / "worktrees" / "agent"
-        box.git("worktree", "add", "-q", "-b", "agent-work", str(path), self.task["branch"])
+        box.git("worktree", "add", "-q", "-b", "worktree-agent", str(path), self.task["branch"])
         record = box.record(self.task["id"])
-        record["agentWorktrees"] = [str(path)]
+        record["agentWorktrees"] = record["agentMade"] = [str(path)]
         (box.state / "tasks" / (self.task["id"] + ".json")).write_text(json.dumps(record))
 
     def holds(self, box, problems):
         Scenario.holds(self, box, problems)
+        if self.final and self.final.get("ok") and "main" not in box.branches():
+            problems.append("the primary checkout's branch went with its agent's worktree")
 
 
 class Retire(Scenario):

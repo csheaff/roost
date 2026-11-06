@@ -3978,13 +3978,17 @@ terminal the action ended closes."
              ;; `pushed' is transient: the callback sees it, the cache does not.
              (let ((pushed (assq 'pushed updated))
                    (torn (alist-get 'teardownFailure updated))
-                   (output (alist-get 'teardownOutput updated)))
+                   (output (alist-get 'teardownOutput updated))
+                   ;; Forgetting says so itself, and always leaves things.
+                   (left (unless (equal action "forget") (alist-get 'leftBehind updated))))
                (setq updated (roost--cache-reply host updated listed))
                (roost--redraw)
                (when-let* ((said (cdr (assoc action roost--action-messages))))
                  (message said (roost--field task 'name)))
                (when callback
                  (funcall callback (if pushed (cons pushed updated) updated)))
+               (when left
+                 (message "Left in place: %s" (string-join left ", ")))
                (when torn
                  (display-warning
                   'roost (format "%s's teardown command %s; Roost removed its worktree anyway%s"

@@ -66,8 +66,8 @@ IGNORED_EVENTS = {
     "TaskCreated": "a task in the session's list was created",
     "TeammateIdle": "a teammate is idle; its permission prompts are notifications",
     "UserPromptExpansion": "a prompt was expanded, as by a slash command",
-    "WorktreeCreate": "Claude's own worktrees: Roost finds them by the cwd other hooks report",
-    "WorktreeRemove": "Claude's own worktrees: Roost finds them by the cwd other hooks report",
+    "WorktreeCreate": "Claude's own worktrees: a hook here makes them, and Roost finds them by what other hooks report",
+    "WorktreeRemove": "Claude's own worktrees: Roost finds them by what other hooks report",
 }
 # Notification types Roost maps, and those it ignores.
 MAPPED_NOTIFICATIONS = ("permission_prompt", "worker_permission_prompt", "agent_needs_input", "idle_prompt")
@@ -80,7 +80,7 @@ SESSION_SOURCES = ("startup", "resume", "clear", "compact", "fork")
 # Payload fields the helper reads.
 PAYLOAD_FIELDS = ("session_id", "transcript_path", "hook_event_name", "last_assistant_message",
                   "background_tasks", "session_crons", "notification_type", "message", "tool_name",
-                  "tool_input", "error", "error_details", "source", "reason", "cwd")
+                  "tool_input", "error", "error_details", "source", "reason", "cwd", "agent_id")
 
 
 def claude_program():
@@ -155,6 +155,18 @@ def static_check():
     base = re.search(rb'baseRef:[\w$]+\(\["fresh","head"\]\)', data)
     report(bool(base), "worktree.baseRef takes \"head\"" if base
            else "worktree.baseRef changed; check claude_hook_settings")
+    # Finishing a task removes the worktrees its agent made, told by what
+    # hooks say of EnterWorktree, whose `path` names one already there, or of
+    # a subagent, and the branch Claude makes for each.
+    tool = re.search(rb'path:[\w$]+\(\)\.optional\(\)\.describe\("Path to an existing worktree', data)
+    report(bool(tool), "EnterWorktree takes path, for one already there" if tool
+           else "EnterWorktree's path changed; check ClaudeAgent.made_worktree")
+    subagent = re.search(rb'`agent-\$\{', data)
+    report(bool(subagent), "a subagent's worktree is named agent-ID" if subagent
+           else "subagents' worktree names changed; check ClaudeAgent.made_worktree")
+    branch = re.search(rb'`worktree-\$\{', data)
+    report(bool(branch), "Claude's branches are named worktree-FOLDER" if branch
+           else "Claude's branch naming changed; check claude_branch")
     # A task's attachments are read without asking through --add-dir.
     add_dir = re.search(rb"--add-dir <", data)
     report(bool(add_dir), "--add-dir is an option" if add_dir

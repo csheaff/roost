@@ -41,6 +41,41 @@ class Crashes(unittest.TestCase):
                 self.assertEqual(box.helper("list", socket=box.socket)["result"], [])
                 self.assertEqual(len(box.git("log", "--format=%H", "--no-merges", "main", "--", "work").split()), 1)
 
+    def test_a_removal_of_an_agents_worktree_cut_short_costs_the_primary_checkout_nothing(self):
+        for action in ("retire", "merge", "discard"):
+            for link_gone in (False, True):
+                with self.subTest(action=action, link_gone=link_gone):
+                    box = self.box()
+                    with (box.repo / ".git" / "info" / "exclude").open("a") as exclude:
+                        exclude.write("/.claude/\n")
+                    task = box.create()
+                    if action == "merge":
+                        box.commit(task)
+                    path = box.repo / ".claude" / "worktrees" / "agent"
+                    box.git("worktree", "add", "-q", "-b", "worktree-agent", str(path), task["branch"])
+                    record = box.record(task["id"])
+                    record["agentWorktrees"] = record["agentMade"] = [str(path)]
+                    (box.state / "tasks" / (task["id"] + ".json")).write_text(json.dumps(record))
+                    box.helper("stop", id=task["id"])
+                    args = dict(id=task["id"])
+                    if action == "discard":
+                        args["expect"] = box.helper("discard", dryRun=True, **args)["result"]["discard"]["commit"]
+                    box.arm("before", match="worktree remove --force --force")
+                    self.assertIsNone(box.helper(action, **args))
+                    box.disarm()
+                    if link_gone:
+                        # Git deletes a worktree file by file, its link among
+                        # them. Git asked there then answers for the primary
+                        # checkout, which holds that folder.
+                        (path / ".git").unlink()
+                    reply = box.helper(action, **args)
+                    self.assertTrue(reply["ok"], reply)
+                    self.assertIn("main", box.branches())
+                    self.assertEqual(path.exists(), link_gone)
+                    self.assertEqual("worktree-agent" in box.branches(), link_gone)
+                    self.assertEqual(reply["result"]["leftBehind"],
+                                     ["worktree %s" % path, "branch worktree-agent"] if link_gone else [])
+
     def test_a_merge_goes_on_to_its_end_once_its_helper_is_gone(self):
         box = self.box()
         task = box.create()
