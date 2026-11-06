@@ -3146,8 +3146,7 @@ class Lifecycle(unittest.TestCase):
 
     def test_retiring_removes_an_isolated_subagents_worktree(self):
         # As Claude names and locks them, for the subagent whose hooks say so.
-        for folder, agent in (("agent-a885dbd82c2f92813", "a885dbd82c2f92813"), ("agent-a885dbd8", "a885dbd82c2f92813"),
-                              ("wf_a885dbd8-2c2-1", "a885dbd82c2f92813")):
+        for folder, agent in (("agent-a885dbd82c2f92813", "a885dbd82c2f92813"), ("agent-a885dbd8", "a885dbd82c2f92813")):
             with self.subTest(folder=folder):
                 task = self.create()
                 store = roost.Store(str(self.state))
@@ -3159,6 +3158,33 @@ class Lifecycle(unittest.TestCase):
                 self.assertTrue(reply["ok"], reply)
                 self.assertFalse(own.exists())
                 self.assertFalse(roost.ref_exists(self.repo, "worktree-" + folder))
+
+    def test_a_workflows_folder_names_no_agent_so_it_stays(self):
+        # Any subagent may visit one of another session's.
+        task = self.create()
+        store = roost.Store(str(self.state))
+        own = self.agent_worktree(task, "wf_a885dbd8-2c2-1", report=False)
+        roost.update_hook(store, task["id"], dict(hook_event_name="PreToolUse", tool_name="Bash", cwd=str(own),
+                                                  agent_id="a0000000000000000"), task["runId"])
+        roost.update_hook(store, task["id"], dict(hook_event_name="Stop", cwd=task["worktree"]), task["runId"])
+        told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+        self.assertTrue(self.request("discard", id=task["id"], expect=told["commit"])["ok"])
+        self.assertTrue(own.exists())
+        self.assertTrue(roost.ref_exists(self.repo, "worktree-wf_a885dbd8-2c2-1"))
+
+    def test_a_worktree_made_later_at_the_same_path_isnt_the_agents(self):
+        # Its agent's went, and another session's took its name.
+        task = self.create()
+        own = self.agent_worktree(task)
+        self.git("worktree", "remove", "--force", "--force", str(own))
+        self.git("branch", "-D", "worktree-probe")
+        time.sleep(0.01)
+        self.git("worktree", "add", "-q", "-b", "worktree-probe", str(own), task["branch"])
+        told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+        self.assertEqual(told["agentWorktrees"], 0)
+        self.assertTrue(self.request("discard", id=task["id"], expect=told["commit"])["ok"])
+        self.assertTrue(own.exists())
+        self.assertTrue(roost.ref_exists(self.repo, "worktree-probe"))
 
     def test_a_subagent_of_another_id_didnt_make_its_folder(self):
         task = self.create()
@@ -3187,6 +3213,19 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(reply["ok"], reply)
         self.assertTrue(own.exists())
         self.assertEqual(reply["result"]["leftBehind"], ["worktree %s" % own.resolve(), "branch worktree-probe"])
+
+    def test_a_task_from_before_it_was_noted_stays_so_as_its_agent_makes_another(self):
+        # Or what it had noted would stop keeping the task from retiring.
+        task = self.create()
+        store = roost.Store(str(self.state))
+        own = self.agent_worktree(task)
+        record = store.read(task["id"])
+        del record["agentMade"]
+        store.save(record)
+        (own / "scratch").write_text("work\n")
+        self.agent_worktree(task, "later")
+        self.assertNotIn("agentMade", store.read(task["id"]))
+        self.assertIn("left work in its own worktree", self.request("retire", id=task["id"])["error"])
 
     def test_finishing_a_task_leaves_a_branch_its_agent_only_switched_to(self):
         self.git("branch", "release")

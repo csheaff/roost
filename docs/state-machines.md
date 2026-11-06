@@ -536,11 +536,12 @@ Invariants:
   its top level, and in Git's list (`worktree_at`). What Git says from a folder
   with no `.git` of its own is the primary checkout's, and counts for nothing.
 - I2. Only what its agent made goes: a hook said so, as EnterWorktree's "Created",
-  not "Entered", "Reused" or "Resumed", or a subagent whose ID names the folder, or
-  in a workflow's folder; and Git made it since the task started (`made_since`, by
-  the `commondir` Git writes once). A record from before `agentMade` has no such
-  key: its worktrees still show and keep the task from retiring, with `made` false,
-  and stay.
+  not "Entered", "Reused" or "Resumed", or a subagent whose ID names the folder; Git
+  made it since the task started (`made_since`, by the `commondir` Git writes once);
+  and it is the one made then, by that stamp in `agentMadeAt`, not another since at
+  that path. A workflow's folder names no agent, so it stays. A record from before
+  `agentMade` has no such key, and is never given one: its worktrees still show and
+  keep the task from retiring, with `made` false, and stay.
 - I3. A branch goes only if `git worktree remove` exited 0, only if it is
   `worktree-<folder>` (`ClaudeAgent.worktree_branch`), which Claude makes, and
   through `delete_branch`, which refuses one checked out anywhere.
