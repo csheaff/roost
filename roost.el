@@ -3297,6 +3297,8 @@ item's key, which Jira finds the branch by."
   "Redraw the draft's fields above the prompt, leaving the prompt untouched."
   (let* ((inhibit-read-only t)
          (inhibit-modification-hooks t)
+         (undo buffer-undo-list)
+         (body (marker-position roost--compose-body))
          (buffer-undo-list t)
          (fields roost--compose-fields)
          (derived (roost--compose-name))
@@ -3353,6 +3355,7 @@ item's key, which Jira finds the branch by."
                            '(read-only "Write the prompt below the fields" rear-nonsticky t
                              front-sticky t))
       (set-marker roost--compose-body (point)))
+    (roost--shift-undo undo (- roost--compose-body body))
     (cond ((not field)
            (goto-char (min (point-max) (+ roost--compose-body offset))))
           (named
@@ -3368,6 +3371,29 @@ item's key, which Jira finds the branch by."
            (goto-char (min (point) roost--compose-body))
            (when (get-text-property (point) 'roost-draft-task)
              (goto-char roost--compose-body))))))
+
+(defun roost--shift-undo (list delta)
+  "Add DELTA to each position in LIST, the draft's undo list.
+Undo goes by position, and the fields above the prompt change length out
+of its sight.  In place: `pending-undo-list', as you undo again and
+again, is a tail of it."
+  (let ((seen (make-hash-table :test 'eq)))
+    (unless (or (zerop delta) (not (listp list)))
+      (while (consp list)
+        (let ((entry (car list)))
+          (unless (gethash entry seen)
+            (when (consp entry) (puthash entry t seen))
+            (pcase entry
+              ((pred integerp) (setcar list (+ entry delta)))
+              (`(,(and (pred integerp) start) . ,(and (pred integerp) end))
+               (setcar entry (+ start delta))
+               (setcdr entry (+ end delta)))
+              ;; Negative when point was at the end of the text deleted.
+              (`(,(pred stringp) . ,(and (pred integerp) position))
+               (setcdr entry (if (< position 0) (- position delta) (+ position delta))))
+              (`(nil ,_ ,_ ,(and (pred integerp) start) . ,(and (pred integerp) end))
+               (setcdr (cddr entry) (cons (+ start delta) (+ end delta)))))))
+        (setq list (cdr list))))))
 
 (defun roost--compose-quoted-files ()
   "The files the draft's prompt quotes, as paths from the top of the checkout.

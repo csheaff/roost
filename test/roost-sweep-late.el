@@ -1700,6 +1700,69 @@ COMMAND, INTERRUPTER and FORM keeps RULE until FUNCTION is REPLACEMENT.")
       (should (= (roost-sweep-late--count "No such ref" (roost-sweep-late--messages 1)) 1))
       (should (string-search "No such ref" roost--draft-note)))))
 
+(defun roost-sweep-late--draft-with-undo (&optional name)
+  "The new task draft, empty and recording undo, with NAME if given.
+A name of its own keeps the fields as long as they are."
+  (when name
+    (setq roost--compose-fields (plist-put roost--compose-fields :name name)))
+  (delete-region roost--compose-body (point-max))
+  (roost--compose-render)
+  (goto-char (point-max))
+  (buffer-enable-undo)
+  (setq buffer-undo-list nil))
+
+(ert-deftest roost-sweep-late-undo-in-a-draft-follows-its-fields ()
+  ;; You write, the name field follows after 0.3 s, and you undo.
+  (dolist (name '(nil "named"))
+    (roost-sweep-late--world
+      (roost-sweep-late--populate nil nil)
+      (with-current-buffer (roost-sweep-late--lay-out 'compose)
+        (roost-sweep-late--draft-with-undo name)
+        (insert "Fix the login bug")
+        (undo-boundary)
+        (insert " now please")
+        (undo-boundary)
+        (roost--compose-render)
+        (setq last-command 'ignore)
+        (undo)
+        (should (equal (roost--compose-prompt) "Fix the login bug"))))))
+
+(ert-deftest roost-sweep-late-undo-brings-back-a-prompt-cut-from-a-draft ()
+  (dolist (name '(nil "named"))
+    (roost-sweep-late--world
+      (roost-sweep-late--populate nil nil)
+      (with-current-buffer (roost-sweep-late--lay-out 'compose)
+        (roost-sweep-late--draft-with-undo name)
+        (insert "Make the report add up across all three ledgers")
+        (roost--compose-render)
+        (undo-boundary)
+        (setq buffer-undo-list nil)
+        (delete-region roost--compose-body (point-max))
+        (undo-boundary)
+        (roost--compose-render)
+        (setq last-command 'ignore)
+        (undo)
+        (roost--compose-render)
+        (should (equal (roost--compose-prompt) "Make the report add up across all three ledgers"))))))
+
+(ert-deftest roost-sweep-late-undoing-again-and-again-goes-on-past-a-redraw ()
+  ;; As you undo, the fields follow, between one undo and the next.
+  (roost-sweep-late--world
+    (roost-sweep-late--populate nil nil)
+    (with-current-buffer (roost-sweep-late--lay-out 'compose)
+      (roost-sweep-late--draft-with-undo)
+      (dolist (words '("Fix" " the login" " bug now"))
+        (insert words)
+        (undo-boundary)
+        (roost--compose-render))
+      (setq last-command 'ignore)
+      (undo)
+      (should (equal (roost--compose-prompt) "Fix the login"))
+      (roost--compose-render)
+      (setq last-command 'undo)
+      (undo-more 1)
+      (should (equal (roost--compose-prompt) "Fix")))))
+
 (ert-deftest roost-sweep-late-a-poll-that-fails-says-nothing-of-a-host-you-forgot ()
   (roost-sweep-late--world
     (roost-sweep-late--populate nil nil)
