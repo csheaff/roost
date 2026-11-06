@@ -10805,6 +10805,20 @@ answered with `answer'."
      (should (equal (nreverse calls) '(("fix auth" "dev" "running" "permission")
                                        ("fix auth" "dev" "permission" "retired")))))))
 
+;; What merged has a head of its own, after the tip its host records.
+(ert-deftest roost-merged-functions-run-once-for-a-merge-with-a-commit-made-on-the-forge ()
+  (roost-test--isolated
+   (let* (merges
+          (roost-task-merged-functions (list (lambda (_task branch) (push branch merges))))
+          (task (lambda (&rest fields) (append fields '((integrationBranch . "main")) (roost-test--task)))))
+     (roost--cache-task "dev" (funcall task '(pr (number . 12) (state . "OPEN") (head . "aaa"))))
+     (let ((merged (funcall task '(pr (number . 12) (state . "MERGED") (head . "forge") (base . "main")
+                                      (mergedHead . "aaa") (mergedBases "main"))
+                            '(prStatus (state . "MERGED") (head . "forge") (base . "main")))))
+       (roost--cache-task "dev" merged)
+       (roost--cache-task "dev" merged))
+     (should (equal merges '("main"))))))
+
 (ert-deftest roost-merged-functions-run-once-a-merge-lands ()
   (roost-test--isolated
    (let* (merges

@@ -2433,6 +2433,9 @@ def first_failure(rollup):
 PULL_REQUEST_FIELDS = "number,url,state,isDraft,reviewDecision,statusCheckRollup,headRefOid,baseRefName"
 # Seconds that asking GitHub about every task's pull requests may take.
 PULL_REQUEST_DEADLINE = 20
+# Seconds of that a poll needs left to fetch a pull request's head: one that
+# doesn't come is not asked for again.
+HEAD_FETCH_SECONDS = 5
 # What `gh pr list` leaves out, for each of a repository's open pull
 # requests: whether it conflicts, who is yet to review it, Copilot among
 # them, and its review threads, the last 100 of them, each with where it
@@ -2910,11 +2913,84 @@ def recorded_pull_request(task):
     return pr if isinstance(pr, dict) and pr.get("number") else {}
 
 
+def has_tip(task, head, tip):
+    """Whether HEAD, a pull request's as its forge named it, has all of TIP,
+    the branch's: it is TIP, or comes after it, as a commit made on the forge
+    does. Commits on the branch since it merged are in no such head. False
+    when HEAD isn't here."""
+    return head == tip or (isinstance(head, str) and bool(re.fullmatch(r"[0-9a-f]{40,64}", head))
+                           and is_ancestor(task["repo"], tip, head))
+
+
+def merged_tip(task, pr, tip):
+    """Whether PR, as its forge lists it, merged all of TIP."""
+    return pr.get("state") == "MERGED" and has_tip(task, pr.get("headRefOid"), tip)
+
+
 def recorded_merge_at(task, tip):
     """Whether GitHub said, as recorded, that one of the task's pull requests
     merged TIP. A merge stays one, whatever later lookups list."""
     pr = recorded_pull_request(task)
-    return bool(tip) and (pr.get("mergedHead") == tip or (pr.get("state") == "MERGED" and pr.get("head") == tip))
+    return bool(tip) and (pr.get("mergedHead") == tip or (pr.get("state") == "MERGED"
+                                                          and has_tip(task, pr.get("head"), tip)))
+
+
+@functools.lru_cache(maxsize=None)
+def fetches_quietly():
+    """Whether this host's Git can fetch and leave FETCH_HEAD as it is."""
+    return (version_of(execute(["git", "--no-optional-locks", "--version"], check=False).stdout)
+            or (0, 0)) >= FETCH_QUIETLY_GIT
+
+
+def head_to_fetch(task, pr, tip):
+    """The head of PR, one of the task's, at TIP, to fetch: when it is open or
+    merged and its head isn't here, as a commit made on the forge isn't,
+    unless a fetch failed to bring it, as one on a fork's branch may. None
+    otherwise."""
+    head = pr.get("headRefOid")
+    if (pr.get("state") not in ("OPEN", "MERGED") or head == tip or not isinstance(head, str)
+            or not re.fullmatch(r"[0-9a-f]{40,64}", head) or recorded_pull_request(task).get("unfetched") == head):
+        return None
+    return head if read_git(task["repo"], "cat-file", "-e", head + "^{commit}").returncode else None
+
+
+def fetch_head(task, head, timeout):
+    """Bring HEAD, a pull request's, here from origin within TIMEOUT seconds,
+    and say whether it came. By its commit, as the forge may have deleted its
+    branch on merging it. In the primary checkout, whose config a sandbox
+    keeps an agent out of, as nobody asked for this. Nothing there changes
+    but what Git has: no ref holds HEAD, so it goes in time, and comes again
+    if it is still wanted. FETCH_HEAD stays as a `git pull` under way left it,
+    so Git before 2.29 fetches nothing."""
+    if not fetches_quietly():
+        return False
+    try:
+        return remote_git(task["repo"], "fetch", "--quiet", "--no-tags", "--no-recurse-submodules",
+                          "--no-auto-maintenance", "--no-write-fetch-head", "origin", head,
+                          check=False, timeout=timeout).returncode == 0
+    except (RoostError, OSError):
+        return False
+
+
+def fetch_heads(asked, answers, deadline):
+    """Fetch the heads to fetch of ANSWERS, the pull requests of the tasks in
+    ASKED, several at once, as long as DEADLINE, as time.monotonic() has it,
+    leaves room. The heads that didn't come, to ask for no more."""
+    wanted = {}
+    for (task, tip, _), prs in zip(asked, answers):
+        for pr in prs or []:
+            head = head_to_fetch(task, pr, tip)
+            if head:
+                wanted[head] = task
+
+    def fetch(entry):
+        left = deadline - time.monotonic()
+        return left >= HEAD_FETCH_SECONDS and not fetch_head(entry[1], entry[0], left) and entry[0]
+
+    if not wanted:
+        return set()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(wanted))) as pool:
+        return {head for head in pool.map(fetch, wanted.items()) if head}
 
 
 def pushed(task, branch=None):
@@ -2966,10 +3042,10 @@ def task_pull_requests(task, tip, timeout=15, branch=None):
                   key=lambda pr: pr["number"], reverse=True)
 
 
-def shown_pull_request(prs, tip):
-    """Which of PRS the task shows: an open one, else one merged at TIP, else the newest."""
+def shown_pull_request(task, prs, tip):
+    """Which of PRS the task shows: an open one, else one that merged TIP, else the newest."""
     return (next((pr for pr in prs if pr.get("state") == "OPEN"), None)
-            or next((pr for pr in prs if pr.get("state") == "MERGED" and pr.get("headRefOid") == tip), None)
+            or next((pr for pr in prs if merged_tip(task, pr, tip)), None)
             or (prs[0] if prs else None))
 
 
@@ -2999,7 +3075,10 @@ def check_pull_requests(store, tasks):
     pushed branch, several at once, and add each one's state, review and
     checks, and for an open one, its review threads, and how many of the
     branch's commits it lacks. Record the one each shows when it changed, as
-    when its agent opened one or it was merged. A task whose worktree is on
+    when its agent opened one or it was merged. Its head is fetched when it
+    isn't here, as a commit made on the forge isn't, which Git can't compare
+    with the branch otherwise: once, as one that fails is recorded. A task
+    whose worktree is on
     a pushed branch of another name, as when its agent made one to follow a
     team's naming, also has that branch's shown as worktreePr, with the
     same, but not recorded: the task's own, its merge and retiring stay its
@@ -3038,9 +3117,14 @@ def check_pull_requests(store, tasks):
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(asked))) as pool:
         answers = list(pool.map(ask, asked))
-    shown = [shown_pull_request(prs or [], tip) for (_, tip, _), prs in zip(asked, answers)]
-    reviews = pull_request_reviews([pr for pr in shown if pr and pr.get("state") == "OPEN"], deadline)
-    for (task, tip, branch), prs, pr in zip(asked, answers, shown):
+
+    def shown():
+        return [shown_pull_request(task, prs or [], tip) for (task, tip, _), prs in zip(asked, answers)]
+
+    reviews = pull_request_reviews([pr for pr in shown() if pr and pr.get("state") == "OPEN"], deadline)
+    # After what every task's words wait on, which a slow fetch would hold up.
+    unfetched = fetch_heads(asked, answers, deadline)
+    for (task, tip, branch), prs, pr in zip(asked, answers, shown()):
         if branch:
             if prs is not None:
                 task["worktreePr"] = pr and dict(pull_request_status(pr, reviews, checked), branch=branch,
@@ -3057,12 +3141,14 @@ def check_pull_requests(store, tasks):
         record = dict(number=pr["number"], url=pr.get("url"), state=pr.get("state"), head=pr.get("headRefOid"))
         if pr.get("forge"):
             record["forge"] = pr["forge"]
+        if record["head"] in unfetched or record["head"] == recorded_pull_request(task).get("unfetched"):
+            record["unfetched"] = record["head"]
         # Where it merges, for views that ask GitHub nothing.
         if pr.get("baseRefName"):
             record["base"] = pr["baseRefName"]
         # Shown or not, as when an open one goes to another base, or listed
         # or not, as when the branch has had more than a page of them.
-        merged = [other for other in prs if other.get("state") == "MERGED" and other.get("headRefOid") == tip]
+        merged = [other for other in prs if merged_tip(task, other, tip)]
         if merged or recorded_merge_at(task, tip):
             record["mergedHead"] = tip
             # And each branch it went to, which the one shown need not say,
@@ -4095,6 +4181,7 @@ def require_submodules_kept(worktree, where="its worktree"):
 
 
 MERGE_TREE_GIT = (2, 38)  # `git merge-tree --write-tree`
+FETCH_QUIETLY_GIT = (2, 29)  # `git fetch --no-write-fetch-head`
 
 
 def recorded_integration(task):
@@ -4511,7 +4598,11 @@ def merged_pull_request_head(task):
         return None, False
     recorded = recorded_pull_request(task)
     prs = task_pull_requests(task, tip) if recorded or pushed(task) else None
-    merged = any(pr.get("state") == "MERGED" and pr.get("headRefOid") == tip for pr in prs or [])
+    for pr in prs or []:
+        head = pr.get("state") == "MERGED" and head_to_fetch(task, pr, tip)
+        if head:
+            fetch_head(task, head, PULL_REQUEST_DEADLINE)
+    merged = any(merged_tip(task, pr, tip) for pr in prs or [])
     still_open = (any(pr.get("state") == "OPEN" for pr in prs) if prs is not None
                   else recorded.get("state") == "OPEN")
     return (tip if merged or recorded_merge_at(task, tip) else None), still_open

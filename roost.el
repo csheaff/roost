@@ -1146,13 +1146,14 @@ ever."
   "Where TASK's pull requests merged, as a list of (HEAD . BRANCH).
 HEAD is nil when not known, and BRANCH a pull request's base, which an
 agent's own can choose, or else TASK's integration branch.  Those that
-merged at the task's tip count while another, open, is the one shown."
+merged at the task's tip count while another, open, is the one shown.
+HEAD is that tip, for one merged with a commit made on the forge after it."
   (let* ((status (roost--field task 'prStatus))
          (pr (roost--field task 'pr))
          (head (alist-get 'mergedHead pr)))
     (delete-dups
      (append (when (eq (roost--pr-state task) 'merged)
-               (list (cons (or (alist-get 'head status) (alist-get 'head pr))
+               (list (cons (or head (alist-get 'head status) (alist-get 'head pr))
                            (or (alist-get 'base status) (alist-get 'base pr)
                                (roost--field task 'integrationBranch)))))
              (when head

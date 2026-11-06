@@ -4,6 +4,15 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A pull request merged with a commit made on GitHub or GitLab, as by the
+  Update branch button or an applied suggestion, says `merged`, and `x`
+  retires it. It read as merged but for commits since, and `m` merged the
+  older commits into your local `main`, apart from `origin/main`. An open one
+  with such a commit says `to merge`, `ci failed` and `comments` again, which
+  it left unsaid until you pressed `P`. Roost fetches that commit, with Git
+  2.29 or newer on the host, once for each head, using the Git credentials
+  there. A merge request GitLab rebases as it merges has no such commit and
+  reads as before. Nothing to do when upgrading.
 - A draft started from a Jira work item has its text when your site keeps
   that in a rich-text custom field. The prompt had only its summary and
   link, as Roost read the description alone. Now, as you pick one with

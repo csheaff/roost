@@ -4837,6 +4837,205 @@ sys.exit(status)
     def push(self, task):
         self.git("push", "-q", "-u", "origin", task["branch"], cwd=Path(task["worktree"]))
 
+    def listing(self, *prs):
+        """What gh lists, each of PRS (NUMBER, STATE, HEAD), newest first."""
+        (self.gh_dir / "list.json").write_text(json.dumps(
+            [dict(number=number, url="https://github.com/octo/repo/pull/%d" % number, state=state, headRefOid=head)
+             for number, state, head in prs]))
+
+    def listed(self, **args):
+        reply = self.request("list", **args)
+        self.assertTrue(reply["ok"], reply)
+        return reply["result"][0]
+
+    def forge_clone(self, name, branch):
+        clone = self.root / name
+        self.git("clone", "-q", "-b", branch, str(self.origin), str(clone))
+        self.git("config", "user.name", "GitHub", cwd=clone)
+        self.git("config", "user.email", "noreply@example.invalid", cwd=clone)
+        return clone
+
+    def commit_on_forge(self, task):
+        """A commit on the task's branch in origin, as GitHub's Update branch
+        button or an applied suggestion makes: not here."""
+        clone = self.forge_clone("on-the-forge", task["branch"])
+        (clone / "suggested").write_text("from the forge\n")
+        self.git("add", ".", cwd=clone)
+        self.git("commit", "-qm", "Apply suggestion", cwd=clone)
+        self.git("push", "-q", "origin", task["branch"], cwd=clone)
+        return self.git("rev-parse", "HEAD", cwd=clone)
+
+    def squash_on_forge(self, task, head):
+        """HEAD, in origin, squashed into origin's main."""
+        clone = self.forge_clone("merging", "main")
+        self.git("fetch", "-q", "origin", task["branch"], cwd=clone)
+        self.git("merge", "-q", "--squash", head, cwd=clone)
+        self.git("commit", "-qm", "Squashed on the forge (#9)", cwd=clone)
+        self.git("push", "-q", "origin", "main", cwd=clone)
+
+    def open_then_commit_on_forge(self):
+        """A task whose pull request #9, known to Roost, has a commit made on
+        the forge that isn't here. The task, the branch's tip and that commit."""
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        self.listing((9, "OPEN", tip))
+        self.listed(full=True)
+        return task, tip, self.commit_on_forge(task)
+
+    def fetches(self):
+        """A stand-in for `remote_git`, and the list it adds each fetch's commit to."""
+        original, fetched = roost.remote_git, []
+
+        def fetching(repo, *args, **kwargs):
+            if args[0] == "fetch":
+                fetched.append(args[-1])
+            return original(repo, *args, **kwargs)
+        return fetching, fetched
+
+    def merged_with_a_commit_made_on_the_forge_is_merged(self, task, tip, forge):
+        self.listing((9, "MERGED", forge))
+        listed = self.listed(full=True)
+        self.assertEqual((listed["pr"]["state"], listed["pr"]["mergedHead"]), ("MERGED", tip))
+        self.assertIs(listed["landed"], True)
+        # Then what was recorded stands, with nothing asked.
+        (self.gh_dir / "list.json").unlink()
+        self.assertIs(self.listed(full=[task["id"]])["landed"], True)
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        self.assertTrue(self.request("retire", id=task["id"])["ok"])
+
+    def test_a_pull_request_merged_with_a_commit_made_on_the_forge_is_merged(self):
+        task, tip, forge = self.open_then_commit_on_forge()
+        self.squash_on_forge(task, forge)
+        self.merged_with_a_commit_made_on_the_forge_is_merged(task, tip, forge)
+
+    def test_so_is_one_whose_branch_the_forge_deleted_on_merging_it(self):
+        task, tip, forge = self.open_then_commit_on_forge()
+        self.squash_on_forge(task, forge)
+        # GitHub keeps the commit under the pull request's own ref.
+        self.git("update-ref", "refs/pull/9/head", forge, cwd=self.origin)
+        self.git("update-ref", "-d", "refs/heads/" + task["branch"], cwd=self.origin)
+        self.merged_with_a_commit_made_on_the_forge_is_merged(task, tip, forge)
+
+    def test_retiring_fetches_what_merged_when_no_poll_has(self):
+        task, tip, forge = self.open_then_commit_on_forge()
+        self.squash_on_forge(task, forge)
+        self.listing((9, "MERGED", forge))
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        retired = self.request("retire", id=task["id"])
+        self.assertTrue(retired["ok"], retired)
+
+    def test_commits_after_a_merge_never_count_as_merged(self):
+        # Retiring deletes on this word. A commit made on the forge and one
+        # made here after it leave the tip outside what merged.
+        task, tip, forge = self.open_then_commit_on_forge()
+        since = self.commit_in(task, "since")
+        self.squash_on_forge(task, forge)
+        self.listing((9, "MERGED", forge))
+        listed = self.listed(full=True)
+        self.assertTrue(roost.is_ancestor(str(self.repo), tip, forge))
+        self.assertIs(listed["landed"], False)
+        self.assertNotIn("mergedHead", listed["pr"])
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        refused = self.request("retire", id=task["id"])
+        self.assertIn("unmerged commits", refused["error"])
+        self.assertEqual(self.git("rev-parse", task["branch"]), since)
+
+    def test_a_merge_at_an_older_head_leaves_commits_since_unmerged(self):
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        self.commit_in(task, "since")
+        self.listing((9, "MERGED", tip))
+        self.assertIs(self.listed(full=True)["landed"], False)
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        self.assertIn("unmerged commits", self.request("retire", id=task["id"])["error"])
+
+    def test_an_open_pull_request_with_a_commit_made_on_the_forge_has_the_branchs_commits(self):
+        task, tip, forge = self.open_then_commit_on_forge()
+        self.listing((9, "OPEN", forge))
+        listed = self.listed(full=True)
+        self.assertEqual((listed["pr"]["head"], listed["unpushed"]), (forge, 0))
+        # A commit here it lacks is one it lacks, as ever: nothing compares them.
+        self.commit_in(task, "more")
+        self.assertIsNone(self.listed(full=[task["id"]])["unpushed"])
+
+    def test_a_head_that_isnt_on_the_remote_is_fetched_once(self):
+        # As one on a fork's branch may not be.
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        self.listing((9, "OPEN", tip))
+        self.listed(full=True)
+        fetching, fetched = self.fetches()
+        heads = ("f" * 40, "e" * 40)
+        with patch.object(roost, "remote_git", fetching):
+            self.listing((9, "OPEN", heads[0]))
+            for _ in range(3):
+                listed = self.listed(full=True)
+                self.assertIsNone(listed["unpushed"])
+            self.assertEqual(fetched, [heads[0]])
+            self.assertEqual(roost.Store(str(self.state)).read(task["id"])["pr"]["unfetched"], heads[0])
+            # Another head is asked for in its turn.
+            self.listing((9, "OPEN", heads[1]))
+            self.listed(full=True)
+            self.listed(full=True)
+            self.assertEqual(fetched, list(heads))
+
+    def test_a_head_here_is_not_fetched(self):
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        self.commit_in(task, "more")
+        self.listing((9, "OPEN", tip))
+        fetching, fetched = self.fetches()
+        with patch.object(roost, "remote_git", fetching):
+            self.assertEqual(self.listed(full=True)["unpushed"], 1)
+        self.assertEqual(fetched, [])
+
+    def test_a_poll_short_of_time_leaves_a_head_for_the_next(self):
+        task, tip, forge = self.open_then_commit_on_forge()
+        self.listing((9, "OPEN", forge))
+        fetching, fetched = self.fetches()
+        with patch.object(roost, "remote_git", fetching), patch.object(roost, "PULL_REQUEST_DEADLINE", 3):
+            self.assertIsNone(self.listed(full=True)["unpushed"])
+        self.assertEqual(fetched, [])
+        self.assertNotIn("unfetched", self.listed()["pr"])
+        self.assertEqual(self.listed(full=True)["unpushed"], 0)
+
+    def test_fetching_a_head_takes_no_lock_changes_no_ref_and_leaves_fetch_head(self):
+        task, tip, forge = self.open_then_commit_on_forge()
+        self.listing((9, "OPEN", forge))
+        fetch_head = self.repo / ".git" / "FETCH_HEAD"
+        fetch_head.write_text("What a `git pull` under way will read\n")
+        refs = self.git("for-each-ref")
+        original, free = roost.remote_git, []
+
+        def probe(repo, *args, **kwargs):
+            with (self.state / "registry.lock").open("a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)  # Raises if held.
+                free.append(str(repo))
+            return original(repo, *args, **kwargs)
+
+        with patch.object(roost, "remote_git", probe):
+            self.assertEqual(self.listed(full=True)["unpushed"], 0)
+        # In the primary checkout, whose config a sandbox keeps its agent out of.
+        self.assertEqual(free, [task["repo"]])
+        self.assertEqual(fetch_head.read_text(), "What a `git pull` under way will read\n")
+        self.assertEqual(self.git("for-each-ref"), refs)
+
+    def test_a_git_too_old_to_fetch_quietly_fetches_nothing(self):
+        task, tip, forge = self.open_then_commit_on_forge()
+        self.listing((9, "OPEN", forge))
+        fetching, fetched = self.fetches()
+        with patch.object(roost, "remote_git", fetching), patch.object(roost, "fetches_quietly", lambda: False):
+            self.assertIsNone(self.listed(full=True)["unpushed"])
+        self.assertEqual(fetched, [])
+
     def test_list_learns_the_pull_request_an_agent_opened(self):
         self.github()
         task = self.create()

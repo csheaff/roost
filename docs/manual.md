@@ -456,7 +456,9 @@ you've seen it. Before that, the task panel says what the pull request waits
 for, such as its checks or Copilot's review. Roost only says when it's your
 turn: `e` tells the agent what to fix. It goes by what GitHub or GitLab said after the
 agent's last push, while the branch has no commits the pull request lacks and
-nothing is left uncommitted or in the agent's own worktrees.
+nothing is left uncommitted or in the agent's own worktrees. A commit made there,
+as by GitHub's Update branch button or an applied suggestion, isn't one it lacks:
+Roost fetches it, once, to compare it with the branch.
 
 ### Work that is merged
 
@@ -465,7 +467,8 @@ merges into, says `merged` in the dashboard and sidebar once you've seen its
 agent's last reply, so you can tell which tasks to retire without opening them.
 Nothing is lost by retiring it with `x`: nothing is left uncommitted, and its
 commits are all in what was merged. Commits made after its pull request merged
-keep it from saying so.
+keep it from saying so. One made on GitHub or GitLab before it merged doesn't, as
+that is in what merged.
 
 ### A worktree on another branch
 
@@ -1059,7 +1062,9 @@ The network:
 
 - Roost reaches other machines only through `ssh`, to the hosts you add,
   and TRAMP over it for a remote task's worktree; `git` on a host, to
-  fetch and push a task's branch for its pull request, to delete that
+  fetch and push a task's branch for its pull request, to fetch a commit
+  made on GitHub or GitLab that a pull request's head is, in the project's
+  primary checkout, once for each such commit, to delete that
   branch once it is merged, and in `roost-doctor` to try a push with
   `--dry-run`; `gh` on a host, for issues, pull requests, their checks
   and comments; and `twg` on this machine, when it is installed, for the
