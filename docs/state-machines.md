@@ -2164,8 +2164,8 @@ Kind: implicit. Lives in: `roost--notes`, `roost--notes-loaded`, `roost-notes-fi
 Invariants:
 - I1. A note leaves only by being sent, discarded by you, or going with its task.
   (Manual, "Review notes".)
-- I2. A note edited while it was being sent stays, with your edit, alone or in a draft.
-  (Docstring of `roost-note-send`.)
+- I2. A note edited while it was being sent stays, with your edit, alone or in a draft,
+  and a draft on its way keeps saying what it sent. (Docstring of `roost-note-send`.)
 - I3. One sent at a time. (`roost--notes-sending`.) Not across machines: a note in a
   draft going, and the same note sent alone, go twice. Seen by reading; the window is
   the reply's flight, so not a finding.
@@ -2324,9 +2324,9 @@ A counter: each navigation bumps it, and a reply compares what it captured.
 Invariants:
 - I1. A navigation made by Roost is seen by every pending open.
 - I2. A navigation Roost didn't make isn't counted, so each opener must also compare
-  window and buffer. `roost--open`, `roost--look-then`, `roost--you-stay`,
-  `roost--while-you-stay` and `roost--open-once-out` do, the last unless what showed
-  went, as a terminal does when its task resumes.
+  window and buffer. `roost--open`, `roost--look-then`, `roost--you-stay` and
+  `roost--while-you-stay` do, and `roost--open-once-out`'s callers through
+  `roost--stayed-as-it-goes`.
 
 Views that take the selection and don't bump (`roost-task-info`, `roost-dashboard`,
 `roost--compose`, the drafts, search, workload, doctor) are caught by I2's window and
@@ -2349,9 +2349,11 @@ Kind: implicit. Lives in: closures on `minibuffer-exit-hook`,
 Invariants:
 - I1. No reply changes windows or asks while you type in the minibuffer.
 - I2. What was true when it was held may not be when it runs. `roost--task-made`,
-  `roost--while-you-stay` and `roost--open-once-out` look again at where you are, and
-  `roost--open` asks its host again. `roost-shell`'s reply goes by what it held, which
-  a session that ended would meet too: rarer, and no finding of its own.
+  `roost--while-you-stay` and `roost--stayed-as-it-goes` look again at where you are,
+  and `roost--open` asks its host again. `roost-shell`'s reply goes by what it held,
+  which a session that ended would meet too: rarer, and no finding of its own. So does
+  a refused open, whose question then asks about what may have changed; its host
+  refuses what no longer applies.
 
 `roost--compose-listed` holds a closure at each poll while a minibuffer is open: the
 first to run closes and opens, and the rest find you gone. Harmless, and it repeats
@@ -2391,16 +2393,17 @@ Kind: implicit. Lives in: `roost--resuming`; closures in `roost-resume` and
 
 Invariants:
 - I1. No key stays in `roost--resuming` once its reply has come. (Sweep's `left-behind`.)
-- I2. A task resumed opens only if you stayed. `there` is read as the reply comes, as
-  its terminal is about to go, and `roost--open-once-out` looks again once you are out
-  of the minibuffer, unless that terminal is what showed.
+- I2. A task resumed opens only if you stayed. `there` is read as the reply comes, and
+  again once you are out of the minibuffer, before its terminal goes: asked after, where
+  you are says nothing (`roost--stayed-as-it-goes`).
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
 | — | `roost-resume` | others crashed, you say yes | Asked + others Waiting | keys added | `roost--resume-together` |
 | — | `roost-resume` | | Asked | key removed | `roost-resume` |
 | Asked | good reply | you stayed | There | | `roost--act`'s `replied` |
-| There | out of the minibuffer | generation, listed, you stayed or what showed went | opens | | `roost--open-once-out` |
+| There | out of the minibuffer | you moved | Done | nothing opens | `roost--stayed-as-it-goes` |
+| There | out of the minibuffer | generation, listed, you stayed | opens | | `roost--open-once-out` |
 | Asked | failure | | Done | counted | `roost--resume-together` |
 | Waiting | its turn | stopped, gone or resumed | Done | passed over | `next` |
 | Waiting | its turn | | Asked | | `next` |

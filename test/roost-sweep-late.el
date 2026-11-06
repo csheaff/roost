@@ -2197,6 +2197,36 @@ A name of its own keeps the fields as long as they are."
       (roost-sweep-late--answer (roost-sweep-late--take "send") 'good)
       (should (equal (mapcar (lambda (note) (alist-get 'text note)) roost--notes) '("One"))))))
 
+(ert-deftest roost-sweep-late-a-note-changed-in-a-draft-still-says-you-looked ()
+  (roost-sweep-late--world
+    (roost-sweep-late--populate nil nil)
+    (roost-sweep-late--notes "One")
+    (with-current-buffer (roost-sweep-late--lay-out 'send-draft)
+      (goto-char (point-max))
+      (insert ", and more")
+      (roost-send-submit)
+      (should (alist-get 'look (plist-get (roost-sweep-late--take "send") :request))))))
+
+(ert-deftest roost-sweep-late-a-draft-that-stays-can-take-back-a-note-taken-out-of-it ()
+  (roost-sweep-late--world
+    (roost-sweep-late--populate nil nil)
+    (roost-sweep-late--notes "One" "Two")
+    (let ((draft (roost-sweep-late--lay-out 'send-draft)))
+      (with-current-buffer draft
+        (goto-char (point-min))
+        (search-forward "f2.py")
+        (delete-region (line-beginning-position) (point-max)))
+      (roost-send-submit)
+      (with-current-buffer draft
+        (goto-char (point-max))
+        (insert "\n\nMore words."))
+      (roost-sweep-late--answer (roost-sweep-late--take "send") 'good)
+      (roost-sweep-late--settle)
+      (roost--send-draft (roost-sweep-late--mine))
+      (with-current-buffer draft
+        (should (string-search "More words." (buffer-string)))
+        (should (string-search "f2.py\nTwo" (buffer-string)))))))
+
 (ert-deftest roost-sweep-late-notes-sent-in-a-draft-go ()
   (roost-sweep-late--world
     (roost-sweep-late--populate nil nil)
@@ -2219,8 +2249,14 @@ A name of its own keeps the fields as long as they are."
       (funcall send)
       (roost--edit-note (car roost--notes) "One, and what I just thought of")
       (roost-sweep-late--answer (roost-sweep-late--take "send") 'good)
+      (roost-sweep-late--settle)
       (should (equal (mapcar (lambda (note) (alist-get 'text note)) roost--notes)
-                     '("One, and what I just thought of"))))))
+                     '("One, and what I just thought of")))
+      ;; The draft sent what it said, and has nothing left to say.
+      (should-not (seq-find (lambda (buffer)
+                              (buffer-local-value 'roost--send-task buffer))
+                            (seq-remove (lambda (buffer) (equal (buffer-name buffer) "*roost send: other*"))
+                                        (buffer-list)))))))
 
 (ert-deftest roost-sweep-late-a-task-resumed-leaves-what-you-opened-from-a-question ()
   ;; As with C-x C-f: the reply comes while you write its name.  Answering
@@ -2229,6 +2265,30 @@ A name of its own keeps the fields as long as they are."
     (roost-sweep-late--populate '((status . "stopped") (live)) nil)
     (roost-sweep-late--lay-out 'here)
     (roost-resume (roost-sweep-late--mine))
+    (let ((reply (roost-sweep-late--take "resume")))
+      (roost-sweep-late--in-minibuffer (lambda () (roost-sweep-late--answer reply 'good))))
+    (switch-to-buffer "*late file*")
+    (roost-sweep-late--settle)
+    (should (equal (buffer-name (window-buffer (selected-window))) "*late file*"))))
+
+(ert-deftest roost-sweep-late-a-task-resumed-from-its-terminal-leaves-what-you-opened-from-a-question ()
+  ;; Its terminal goes after what you chose shows, and says nothing then.
+  (roost-sweep-late--world
+    (roost-sweep-late--populate '((status . "stopped") (live)) nil)
+    (let ((terminal (roost-sweep-late--lay-out 'terminal)))
+      (roost-resume (roost-sweep-late--mine))
+      (let ((reply (roost-sweep-late--take "resume")))
+        (roost-sweep-late--in-minibuffer (lambda () (roost-sweep-late--answer reply 'good))))
+      (switch-to-buffer "*late file*")
+      (roost-sweep-late--settle)
+      (should-not (buffer-live-p terminal))
+      (should (equal (buffer-name (window-buffer (selected-window))) "*late file*")))))
+
+(ert-deftest roost-sweep-late-several-resumed-leave-what-you-opened-from-a-question ()
+  (roost-sweep-late--world
+    (roost-sweep-late--populate '((status . "crashed") (live)) '((status . "crashed") (live)))
+    (roost-sweep-late--lay-out 'here)
+    (roost-resume (roost-sweep-late--mine) t)
     (let ((reply (roost-sweep-late--take "resume")))
       (roost-sweep-late--in-minibuffer (lambda () (roost-sweep-late--answer reply 'good))))
     (switch-to-buffer "*late file*")

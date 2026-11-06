@@ -2349,20 +2349,21 @@ is gone."
 (defun roost--open-once-out (generation key listed open)
   "Call OPEN once you are out of the minibuffer, if it is still wanted.
 Not if you opened something since GENERATION, as what you chose there,
-or something of another kind, as a file, or the task with KEY went,
-LISTED being as for `roost--went-p'.  What shows now may go as its task
-restarts, and what takes its place then is no choice of yours."
-  (let* ((window (roost--window-you-are-in))
-         (shown (window-buffer window))
-         (place (roost--terminal-place shown))
-         (frame (window-frame window)))
-    (roost--when-out-of-minibuffer
-     (lambda ()
-       (when (and (= generation roost--open-generation)
-                  (not (roost--went-p key listed))
-                  (or (not (buffer-live-p shown))
-                      (roost--still-there-p window shown place frame)))
-         (funcall open))))))
+or the task with KEY went, LISTED being as for `roost--went-p'."
+  (roost--when-out-of-minibuffer
+   (lambda ()
+     (when (and (= generation roost--open-generation)
+                (not (roost--went-p key listed)))
+       (funcall open)))))
+
+(defun roost--stayed-as-it-goes (stayed note)
+  "Call NOTE with what STAYED says, now and once out of the minibuffer.
+That is whether you stay, for a task that resumes, as its host replies:
+its terminal, which you may be in, is about to go, and what you chose in
+the minibuffer, as a file, shows by then.  So this goes first: asked
+after the terminal has gone, where you are says nothing."
+  (funcall note (funcall stayed))
+  (roost--when-out-of-minibuffer (lambda () (funcall note (funcall stayed)))))
 
 (defun roost--ask-after-reply (key listed function)
   "Call FUNCTION, which asks about the task with KEY, once out of a host's reply.
@@ -4118,10 +4119,9 @@ resume those too."
                       (when there
                         ;; After its old terminal, which waits for that too.
                         (roost--open-once-out generation (roost--key updated) listed
-                                              (lambda () (roost-open-task updated)))))
+                                              (lambda () (when there (roost-open-task updated))))))
                     nil
-                    ;; Its terminal, which you may be in, is about to go.
-                    (lambda () (setq there (funcall stayed))))))))
+                    (lambda () (roost--stayed-as-it-goes stayed (lambda (still) (setq there still)))))))))
 
 (defun roost--resume-parameters (task)
   "What a request to resume TASK says besides which task."
@@ -4193,12 +4193,13 @@ longer shows as crashed, is passed over."
                     ;; opening clears the echo area.
                     (when there
                       (roost--open-once-out generation (roost--key updated) listed
-                                            (lambda () (roost-open-task updated nil (lambda (_) said))))))
+                                            (lambda ()
+                                              (when there (roost-open-task updated nil (lambda (_) said)))))))
                   (lambda (err)
                     (replied task)
                     (push (cons task err) failures)
                     (next others))
-                  (lambda () (setq there (funcall stayed)))))))
+                  (lambda () (roost--stayed-as-it-goes stayed (lambda (still) (setq there still))))))))
 
 (defun roost--resumed-message (host total failures)
   "What resuming TOTAL agents on HOST did, with FAILURES, each (TASK . ERROR)."
@@ -4261,7 +4262,8 @@ when you ask again after no reply."
 (defvar-local roost--send-sending nil
   "Non-nil while the drafted follow-up is being sent.")
 (defvar-local roost--send-notes nil
-  "Identifiers of the review notes in this draft; sending it clears them.")
+  "Identifiers of the review notes in this draft.
+Sending it clears those it holds as they are.")
 (defvar-local roost--send-asked nil
   "The text this draft last asked to send and the ID it asked with, a cons.
 The ID is the same each time for the same text, so its host pastes it
@@ -4301,7 +4303,7 @@ once, however often you ask: it answers again that it did.")
   "Open a draft buffer for a follow-up to TASK, adding INITIAL.
 An existing draft for TASK is reused and kept as written, with INITIAL
 after it.  TASK's review notes not yet in the draft follow; sending the
-draft clears them (see `roost-note')."
+draft clears those it holds as they are (see `roost-note')."
   (let ((buffer (roost--draft-buffer "send" 'roost--send-task task)))
     (with-current-buffer buffer
       (unless (derived-mode-p 'roost-send-mode) (roost-send-mode))
@@ -4382,6 +4384,8 @@ gives them."
         (goto-char (point-min))
         (skip-chars-forward " \t\n")
         (delete-region (point-min) (point))))
+    ;; One you took out of it is yours to bring back.
+    (setq roost--send-notes (mapcar #'car (roost--send-notes-going)))
     (setq roost--draft-note
           (format (if whole
                       " Sent to %s; this is what you wrote since"
@@ -4391,15 +4395,16 @@ gives them."
 
 (defun roost-send-submit (&optional event)
   "Send the drafted follow-up.  The draft is kept if sending fails.
-Review notes in it are cleared once it is sent.  What you write in it
-meanwhile stays.  EVENT, a click on the draft's Send button, says which
-draft."
+Review notes it holds as they are, and that stay so until it is sent,
+are cleared then.  What you write in it meanwhile stays.  EVENT, a click
+on the draft's Send button, says which draft."
   (interactive (list last-nonmenu-event))
   (roost--draft-clicked event 'roost-send-mode)
   (let ((text (roost--send-draft-text))
         ;; As it is now: it may have come to ask for permission.
         (task (roost--as-listed roost--send-task))
         (notes (roost--send-notes-going))
+        (looked roost--send-notes)
         (buffer (current-buffer))
         (written (buffer-chars-modified-tick)))
     (when (string-empty-p (string-trim text))
@@ -4457,8 +4462,9 @@ draft."
                                (roost--host-label (roost--field task 'host))
                                (substitute-command-keys "\\[roost-send-submit]")))
                  (force-mode-line-update)))))
-         ;; You have looked at what your notes are about.
-         (and notes t)
+         ;; You have looked at what your notes are about, sent as you
+         ;; wrote them or not.
+         (and looked t)
          (cdr roost--send-asked))
       ;; A declined confirmation leaves the draft ready to send again.
       (quit (setq roost--send-sending nil) (signal (car err) (cdr err)))
@@ -4915,7 +4921,11 @@ no longer counts the note as its own, so sending it leaves the note."
         (case-fold-search nil))
     (dolist (buffer (buffer-list))
       (with-current-buffer buffer
-        (when (and (derived-mode-p 'roost-send-mode) (member id roost--send-notes))
+        (when (and (derived-mode-p 'roost-send-mode) (member id roost--send-notes)
+                   ;; On its way: what it says now hasn't gone, so it stays a
+                   ;; note, and what the draft says, what it sent.
+                   (or (not roost--send-sending)
+                       (progn (setq roost--send-notes (delete id roost--send-notes)) nil)))
           (save-excursion
             (goto-char (point-min))
             ;; The note as it was drafted, on lines of its own.
