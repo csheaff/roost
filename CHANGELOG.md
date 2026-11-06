@@ -4,6 +4,27 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Two Emacs agree on what of a stopped task waits on you. Each undid the
+  other's turn at every poll, writing its record and a line of history, and
+  `roost-workload` flickered. Nothing to do when upgrading.
+- A task whose worktree went no longer waits on the conflicts last measured.
+  Nothing to do when upgrading.
+- GitHub's review query failing for a moment no longer takes a pull
+  request's word away. It went until Roost next asked, and came back as
+  news. Nothing to do when upgrading.
+- A task held at a startup prompt, such as folder trust, notifies you, once,
+  as it first reads so. It was the only waiting word that didn't, and it
+  holds its agent up. Nothing to do when upgrading.
+- Conflicts or a pull request that waited on you before Emacs started no
+  longer notify as it starts, when you watch from your configuration, nor a
+  pull request after an outage. A first list says nothing of them, which
+  read as nothing waiting. Nothing to do when upgrading.
+- A change a poll saw is measured, however the list measuring it ended. If
+  that list failed, or a reply from another action made it stale, or the
+  change came with a list measuring another task, the row kept its diff,
+  uncommitted files, conflicts and latest reply from before, until `g` or
+  its panel. An agent that has finished sends nothing more to end that.
+  Nothing to do when upgrading.
 - A draft whose reply was lost does what it says when you ask again. Asked
   again with its prompt changed, a new task's draft said it created the task,
   closed, and opened the one made from what you sent first. Now it stays, as
