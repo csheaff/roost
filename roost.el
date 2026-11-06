@@ -1133,6 +1133,21 @@ must a reply with a newer look lose it for an older agent event."
         (cons (cons 'looked looked) (assq-delete-all 'looked task))
       task)))
 
+(defconst roost--review-fields '(mergeable requested threads threadAt openThreads)
+  "What of a pull request's status its host's review query says.")
+
+(defun roost--kept-reviews (task old)
+  "TASK, keeping what OLD says of reviews where its host's query for them failed.
+What else the forge says came, but at the same head what it last said of
+reviews stands, or the task's word would go, and come back as news."
+  (dolist (field '(prStatus worktreePr) task)
+    (let ((status (roost--field task field))
+          (had (roost--field old field)))
+      (when (and (alist-get 'reviewsFailed status) (equal (alist-get 'head status) (alist-get 'head had)))
+        (setq task (cons (cons field (append (seq-filter (lambda (cell) (memq (car cell) roost--review-fields)) had)
+                                             status))
+                         (assq-delete-all field task)))))))
+
 (defun roost--cache-task (host task)
   "Cache TASK from HOST and notify only on attention transitions."
   (setf (alist-get 'host task) host)
@@ -1140,7 +1155,9 @@ must a reply with a newer look lose it for an older agent event."
   (when-let* ((old (gethash (roost--key task) roost--tasks)))
     ;; Looks and the agent's events move apart: the newer of each counts.
     (let ((looked (roost--newer-look old task)))
-      (setq task (roost--newer-look (roost--newer-name (roost--newer-events task old) old) looked))))
+      (setq task (roost--kept-reviews
+                  (roost--newer-look (roost--newer-name (roost--newer-events task old) old) looked)
+                  old))))
   (let* ((key (roost--key task))
          (old (gethash key roost--tasks))
          (had-merged (and old (roost--pr-merges old)))

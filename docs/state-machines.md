@@ -104,7 +104,7 @@ Within a severity, they are ranked by what they cost and how often they happen.
 | 23 | VIEWS-3 | S3 | Undo in the new task draft changes the wrong text | [The new task draft](#the-new-task-draft) | Open, [#226](https://github.com/csheaff/roost/issues/226) |
 | 24 | STATUS-5 | S3 | As tmux goes, a Claude task reads `exited`, not `crashed` | [Who wins](#who-wins-hooks-reports-poll-runner) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
 | 25 | STATUS-7 | S3 | A report landing after the runner's end turns `exited` into `crashed` | [Agent status](#agent-status) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
-| 26 | FORGE-8 | S3 | A failed review query takes back what a pull request waits on you for, then notifies again | [What the forge last said](#what-the-forge-last-said) | Open, [#228](https://github.com/csheaff/roost/issues/228) |
+| 26 | FORGE-8 | S3 | A failed review query takes back what a pull request waits on you for, then notifies again | [What the forge last said](#what-the-forge-last-said) | Fixed, `roost-a-failed-review-query-takes-back-nothing-that-waits` |
 | 27 | FORGE-9, REQUESTS-4 | S3 | Conflicts there when Roost first saw a task notify after every restart | [News of a turn](#news-of-a-turn) | Fixed, `roost-a-conflict-from-before-a-restart-is-no-news` |
 | 28 | VIEWS-4 | S3 | A prompt draft reads its task as it was when it opened | [The prompt draft](#the-prompt-draft) | Open, [#226](https://github.com/csheaff/roost/issues/226) |
 | 29 | VIEWS-6 | S3 | A note taken out of a draft is cleared unsent | [A review note](#a-review-note) | Open, [#229](https://github.com/csheaff/roost/issues/229) |
@@ -1562,7 +1562,7 @@ on the host (`TRANSIENT`).
 | --- | --- | --- |
 | never | Nothing asked since Emacs started | no `prStatus` |
 | whole | List and review query both answered | `prStatus` has `requested`, `threads`, `mergeable` |
-| partial | List answered, review query didn't | `prStatus` lacks them. **Can't be told from an answer with nothing to say: FORGE-8** |
+| partial | List answered, review query didn't | `prStatus` has `reviewsFailed` |
 | stale | Older than the agent's last event + `roost--pr-settle` | `checkedAt` too early: `roost--pr-status` is nil |
 | frozen | Forge stopped answering | `prStatus` kept, `checkedAt` old, no sign |
 | dropped | The record's `pr` changed without a new status | `roost--cache-task` and `roost--newer-events` drop it |
@@ -1574,14 +1574,16 @@ Invariants:
 - I2. A word goes by what the forge said after the agent's last push:
   `roost--pr-status`'s `checkedAt` test, and `checked = now()` before asking.
 - I3. All forge questions end by `PULL_REQUEST_DEADLINE`, inside Emacs's wait.
-- I4 (assumed). A status with no review fields means a pull request with none.
-  **Broken: FORGE-8.**
+- I4. A status says when its review query failed (`reviewsFailed`). At the same head,
+  what the last one said of reviews stands (`roost--kept-reviews`), so a word doesn't
+  go for a poll and come back as news.
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
 | never | Quiet poll, first | always, as nothing was asked | whole or partial | | `roost--refresh-host` |
 | whole | Poll every `roost--pull-request-interval`, or a full refresh | | whole | | `roost--refresh-host` |
-| whole | Review query fails or deadline passed | | partial | Word and threads go for a poll | `pull_request_reviews` -> `{}`, `pull_request_status` |
+| whole | Review query fails or deadline passed | same head | partial | Word and threads stay | `pull_request_status`, `roost--kept-reviews` |
+| whole | Review query fails or deadline passed | another head | partial | Word and threads go until it answers: they are of other commits | same |
 | whole | Forge list fails: `gh` missing, signed out, slow | | frozen | Emacs keeps it | `task_pull_requests` -> None; `roost--cache-task` |
 | any | Agent event | | stale | Verdict nil until next asked, 30 s on | `roost--pr-status` |
 | any | `pr` changes in a reply without a status | | dropped | | `roost--cache-task` |
@@ -1591,7 +1593,7 @@ goes by what the forge last said, `roost-doctor` reports a signed-out `gh`, and
 nothing unsafe follows, as retiring asks again and otherwise goes by the record.
 With `gh` signed out, though, a `to merge` lasts until it is back, with no sign.
 
-Open: FORGE-8.
+Open: none.
 
 ### Pushing and opening
 
@@ -1810,7 +1812,7 @@ reviews asked, none refused, `mergeable` MERGEABLE.
 No Emacs running, a turn stays in the record; the history counts it, and the time
 away rule covers it.
 
-Open: FORGE-5, FORGE-8, FORGE-11.
+Open: FORGE-5, FORGE-11.
 
 ### News of a turn
 
@@ -1831,7 +1833,7 @@ Invariants:
   verdict.
 - I2. Nor one that comes as you stop its agent, or while you watch it.
 - I3. One that's so no longer doesn't go.
-- I4. The same state isn't news twice. **Broken: FORGE-8.**
+- I4. The same state isn't news twice: a failed review query takes nothing back.
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
@@ -1846,7 +1848,7 @@ Invariants:
 with a pull request still open and failing notifies `ci failed` and reads `merged`.
 That is true of the pull request, and clears when it closes.
 
-Open: FORGE-8.
+Open: none.
 
 ### Merges reported
 

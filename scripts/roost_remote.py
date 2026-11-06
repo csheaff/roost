@@ -2990,7 +2990,10 @@ def pull_request_status(pr, reviews, checked):
                   checks=checks, head=pr.get("headRefOid"), base=pr.get("baseRefName"))
     status.update((key, value) for key, value in names.items() if value)
     if pr.get("state") == "OPEN":
-        status.update(pr.get("reviewState") or reviews.get(pr.get("url"), {}), failedAt=failed, checkedAt=checked)
+        # Marked when GitHub didn't say, so Emacs can tell that from a pull
+        # request with nothing to say, and keep what it last said.
+        status.update(pr.get("reviewState") or reviews.get(pr.get("url")) or dict(reviewsFailed=True),
+                      failedAt=failed, checkedAt=checked)
     return status
 
 

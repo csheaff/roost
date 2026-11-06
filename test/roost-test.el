@@ -7366,6 +7366,70 @@ one past `roost-startup-grace'; or a status."
        (roost--cache-task "dev" (append `((updatedAt . ,now)) (roost-test--task roost-test--x "running")))
        (should (equal seen '(("starting" "running"))))))))
 
+(defun roost-test--review-query-failed (&rest status)
+  "`roost-test--turn-task' as a poll gives it when its review query failed.
+`gh pr list' answered and `gh api graphql' didn't, as for a 502 or the
+deadline, so the status has what the first said.  STATUS goes over that."
+  (apply #'roost-test--turn-task
+         (append status '((reviewsFailed . t) (mergeable . :none) (requested . :none) (threads . :none)))))
+
+(ert-deftest roost-a-failed-review-query-takes-back-nothing-that-waits ()
+  ;; The word went for two minutes, the turn was told to end, and it all
+  ;; came back as news.
+  (roost-test--isolated
+   (roost--cache-task "dev" (roost-test--turn-task))
+   (let ((task (roost--cache-task "dev" (roost-test--review-query-failed))))
+     (should (equal (roost--display-status task) "to merge"))
+     (should (equal (roost--pr-verdict task) "to merge"))
+     (should (equal (alist-get 'checkedAt (roost--field task 'prStatus)) "2026-10-03T20:01:00+00:00")))
+   ;; Nor does a second in a row.
+   (should (equal (roost--display-status (roost--cache-task "dev" (roost-test--review-query-failed)))
+                  "to merge"))))
+
+(ert-deftest roost-a-failed-review-query-is-no-news-when-it-answers-again ()
+  (roost-test--isolated
+   (roost-test--held-notices
+    (let ((roost-notify t) notices)
+      (cl-letf (((symbol-function 'roost--notify) (lambda (title &rest _) (push title notices)))
+                ((symbol-function 'roost--watched-task) #'ignore))
+        (roost--cache-task "dev" (roost-test--turn-task '(checks . ((passing . 2) (failing . 0) (pending . 1)))))
+        (dolist (poll (list (roost-test--turn-task) (roost-test--review-query-failed) (roost-test--turn-task)))
+          (roost--cache-task "dev" poll)
+          (roost-test--a-minute-on))
+        (should (equal notices '("fix auth — to merge"))))))))
+
+(ert-deftest roost-a-failed-review-query-keeps-what-the-checks-say-now ()
+  ;; What the query that answered said is as new as ever.
+  (roost-test--isolated
+   (roost--cache-task "dev" (roost-test--turn-task))
+   (let* ((task (roost--cache-task
+                 "dev" (roost-test--review-query-failed '(checks . ((passing . 2) (failing . 0) (pending . 1))))))
+          (status (roost--field task 'prStatus)))
+     (should (equal (alist-get 'pending (alist-get 'checks status)) 1))
+     (should (equal (alist-get 'mergeable status) "MERGEABLE")))))
+
+(ert-deftest roost-a-failed-review-query-keeps-nothing-of-another-head ()
+  ;; New commits may have answered a thread, or made a conflict.
+  (roost-test--isolated
+   (roost--cache-task "dev" (roost-test--turn-task))
+   (let ((status (roost--field (roost--cache-task "dev" (roost-test--review-query-failed '(head . "b2")))
+                               'prStatus)))
+     (should-not (assq 'mergeable status)))))
+
+(ert-deftest roost-a-review-query-that-answers-replaces-what-it-said ()
+  ;; A thread resolved goes: only one that failed keeps the last word.
+  (roost-test--isolated
+   (roost--cache-task "dev" (roost-test--turn-task '(threads . 2) `(threadAt . ,(roost-test--ago 300))))
+   (should (equal (alist-get 'threads (roost--field (roost--cache-task "dev" (roost-test--turn-task)) 'prStatus))
+                  0))))
+
+(ert-deftest roost-a-failed-review-query-takes-nothing-back-from-the-worktrees-branch ()
+  (roost-test--isolated
+   (roost--cache-task "dev" (roost-test--worktree-pr-task))
+   (let ((task (roost--cache-task "dev" (roost-test--worktree-pr-task '(reviewsFailed . t) '(mergeable . :none)
+                                                                      '(requested . :none) '(threads . :none)))))
+     (should (equal (alist-get 'mergeable (roost--field task 'worktreePr)) "MERGEABLE")))))
+
 (ert-deftest roost-dashboard-groups-by-project-and-summarizes-attention ()
   (roost-test--isolated
    (roost--cache-task "dev" (append '((repo . "/home/user/ledger") (startedAt . "1")
