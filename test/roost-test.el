@@ -3167,6 +3167,48 @@ terminal's, on a pty.  Skips the test where it can't be made."
            (push-button (1- (point))))
          (should (string-suffix-p ":dev:/srv/ledger/" started)))))))
 
+(ert-deftest roost-tasks-an-agent-offered-sit-under-it ()
+  (roost-test--isolated
+   (let ((roost--current-task nil) (roost-watch-mode t)
+         (task (lambda (id name started &optional parent)
+                 (roost--cache-task "dev" (append `((name . ,name) (repo . "/srv/ledger") (startedAt . ,started)
+                                                    ,@(when parent `((parent . ,parent))))
+                                                  (roost-test--task id "running"))))))
+     ;; Started after another task, and before the one it was offered by
+     ;; started its own.
+     (funcall task "1111111111111111" "ledger" "2026-10-01T10:00:00Z")
+     (funcall task "2222222222222222" "budget" "2026-10-01T11:00:00Z")
+     (funcall task "3333333333333333" "docs" "2026-10-01T12:00:00Z" "1111111111111111")
+     (funcall task "4444444444444444" "docs tests" "2026-10-01T13:00:00Z" "3333333333333333")
+     ;; Its parent retired: a task like any other.
+     (funcall task "5555555555555555" "orphan" "2026-10-01T09:00:00Z" "ffffffffffffffff")
+     (with-temp-buffer
+       (roost-sidebar-list-mode)
+       (roost--render-sidebar)
+       (let ((names (seq-keep (lambda (line) (and (string-match "^\\( *[a-z ]*[a-z]\\) +running$" line)
+                                                  (match-string 1 line)))
+                              (split-string (buffer-string) "\n"))))
+         (should (equal names '(" orphan" " ledger" "   docs" "     docs tests" " budget")))))
+     (with-temp-buffer
+       (roost-dashboard-mode)
+       (let ((rows (mapcar (lambda (task) (roost--dashboard-row task (roost--dashboard-layout (roost-tasks) 120) 120))
+                           (cdar (roost--task-groups (roost-tasks))))))
+         (should (equal (mapcar (lambda (row) (and (string-match "\\`  . \\( *[a-z]+\\(?: [a-z]+\\)?\\)" row)
+                                                   (match-string 1 row)))
+                                rows)
+                        '("orphan" "ledger" "  docs" "    docs tests" "budget")))
+         ;; Each status in its column.
+         (should (= (length (delete-dups (mapcar (lambda (row) (string-search "running" row)) rows))) 1))))
+     (with-temp-buffer
+       (roost-task-info-mode)
+       (setq roost--buffer-task-key '("dev" "3333333333333333"))
+       (roost--render-task-info)
+       (should (string-match-p "Started from +ledger" (buffer-string)))
+       (should (string-match-p "Started +docs tests" (buffer-string)))
+       (setq roost--buffer-task-key '("dev" "5555555555555555"))
+       (roost--render-task-info)
+       (should (string-match-p "Started from +a task Roost no longer has" (buffer-string)))))))
+
 (ert-deftest roost-reads-a-state-file-holding-no-list-as-empty ()
   ;; Damaged, a file of projects, hosts or notes is as good as missing,
   ;; whatever is left in it, rather than an error the first time it's read.
@@ -6733,7 +6775,7 @@ With FAILING, it prints it on stderr and exits with status 1."
    (let ((tasks (list (append '((agent . "codex") (diff . "3 files changed, 38 insertions(+), 1 deletion(-)") (dirty . t))
                               (roost-test--task "1111111111111111"))
                       (append '((name . "dedupe-imports")) (roost-test--task "2222222222222222")))))
-     (should (equal (roost--dashboard-layout tasks 150) '(:name 14 :agent t :changes 28 :pr 0)))
+     (should (equal (roost--dashboard-layout tasks 150) '(:name 14 :indent 0 :agent t :changes 28 :pr 0)))
      (should (plist-get (roost--dashboard-layout tasks 75) :agent))
      (should-not (plist-get (roost--dashboard-layout tasks 50) :agent))
      (should (= (plist-get (roost--dashboard-layout tasks 30) :changes) 0))
@@ -6812,7 +6854,16 @@ With FAILING, it prints it on stderr and exits with status 1."
            (should (<= (string-width row) 12))
            (should (string-match-p " 444444 p…\\'" row))
            (should-not (string-match-p "±" row)))
-         (should (string-match-p "fix auth 444444 ± +permission\\'" (roost--sidebar-row twin 30)))))
+         (should (string-match-p "fix auth 444444 ± +permission\\'" (roost--sidebar-row twin 30)))
+         ;; Nor does the indent under the task it was started from, which
+         ;; gives up its columns first.
+         (setq twin (roost--cache-task "dev" (cons (cons 'parent (roost--field task 'id)) twin)))
+         (should (= (roost--nesting twin) 1))
+         (let ((row (roost--sidebar-row twin 12)))
+           (should (<= (string-width row) 12))
+           (should (string-match-p "\\` … 444444 p…\\'" row)))
+         (should (string-match-p "\\`  … 444444 p…\\'" (roost--sidebar-row twin 13)))
+         (should (string-match-p "\\`   fix auth 444444 ± +permission\\'" (roost--sidebar-row twin 32)))))
      ;; The panel says how large, and where.
      (with-temp-buffer
        (roost-task-info-mode)
@@ -11536,6 +11587,651 @@ note after, for any task, so a restart lost them all."
           (setq choice 'discard)
           (funcall click "Fine")
           (should-not roost--notes))))))
+
+(ert-deftest roost-nested-rows-fit-a-narrow-dashboard ()
+  ;; The indent gives way before the name and the columns that always show.
+  (roost-test--isolated
+   (let ((task (lambda (id name &optional parent)
+                 (roost--cache-task "dev" (append `((name . ,name) ,@(when parent `((parent . ,parent))))
+                                                  (roost-test--task id "running"))))))
+     (funcall task "1111111111111111" "ledger")
+     (funcall task "2222222222222222" "docs" "1111111111111111")
+     (funcall task "3333333333333333" "documentation pass" "2222222222222222")
+     ;; And an offer of the deepest, a level further in.
+     (roost--cache-task "dev" (append '((name . "documentation pass") (parent . "2222222222222222")
+                                        (offers ((id . "0a1b2c3d") (title . "Check every link in the docs")
+                                                 (brief . "Some links are dead.") (at . "2026-11-03T10:00:00Z"))))
+                                      (roost-test--task "3333333333333333" "running")))
+     (with-temp-buffer
+       (roost-dashboard-mode)
+       (dolist (width '(45 60 120))
+         (let ((layout (roost--dashboard-layout (roost-tasks) width)))
+           (dolist (task (roost-tasks))
+             (should (<= (string-width (roost--dashboard-row task layout width)) width))
+             (dolist (offer (roost--offers task))
+               (should (<= (string-width (roost--dashboard-offer-row task offer layout width)) width))))))
+       ;; With room, each level indents in full.
+       (should (string-match-p "\\`  .     documentation pass"
+                               (roost--dashboard-row (seq-find (lambda (task)
+                                                                 (equal (roost--field task 'name) "documentation pass"))
+                                                               (roost-tasks))
+                                                     (roost--dashboard-layout (roost-tasks) 120) 120)))))))
+
+(ert-deftest roost-an-offer-waits-under-its-task ()
+  ;; Dim, under the task whose agent made it, where RET or a click opens it.
+  (roost-test--isolated
+   (let ((roost--current-task nil) (roost-watch-mode t) opened later)
+     (roost--cache-task "dev" (append '((name . "budget") (repo . "/srv/ledger")
+                                        (offers ((id . "0a1b2c3d") (title . "Fix add in calc.py")
+                                                 (brief . "add() subtracts.") (at . "2026-11-03T10:00:00Z"))
+                                                ;; Not one Roost can open.
+                                                ((title . "Docs"))))
+                                      (roost-test--task "1111111111111111" "ready")))
+     (roost--cache-task "dev" (append '((name . "tests") (repo . "/srv/ledger") (startedAt . "2099-01-01T00:00:00Z"))
+                                      (roost-test--task "2222222222222222" "running")))
+     (cl-letf (((symbol-function 'roost--compose-offer)
+                (lambda (task offer) (setq opened (list (roost--field task 'name) (alist-get 'id offer))))))
+       (dolist (render '(roost--render-sidebar roost--render-dashboard))
+         (with-temp-buffer
+           (if (eq render 'roost--render-sidebar) (roost-sidebar-list-mode) (roost-dashboard-mode))
+           (funcall render)
+           (goto-char (point-min))
+           (search-forward "budget")
+           (forward-line 1)
+           (should (equal (get-text-property (point) 'roost-offer) '(("dev" "1111111111111111") "0a1b2c3d")))
+           (should (string-match-p "\\` +Fix add in calc\\.py +offer"
+                                   (buffer-substring (line-beginning-position) (line-end-position))))
+           (should (eq (get-text-property (point) 'face) 'roost-dim))
+           (should-not (string-search "Docs" (buffer-string)))
+           ;; Point stays on it as the view is drawn again.
+           (funcall render)
+           (should (get-text-property (point) 'roost-offer))
+           (setq opened nil)
+           (roost-open-offer)
+           (should (equal opened '("budget" "0a1b2c3d")))
+           ;; Not over a question left open, whose windows would come back
+           ;; without it, but once that is quit.
+           (setq opened nil)
+           (cl-letf (((symbol-function 'roost--quit-questions-left-open)
+                      (lambda (then) (setq later then))))
+             (roost-open-offer))
+           (should-not opened)
+           (funcall later)
+           (should (equal opened '("budget" "0a1b2c3d")))
+           ;; Task keys and the mouse's menu act on the task it sits under.
+           (should (equal (roost--field (roost--task-at-point) 'name) "budget"))
+           (should (eq (key-binding [mouse-3] t nil (point)) 'roost-dashboard-mouse-menu))
+           ;; The next task's row follows it.
+           (forward-line 1)
+           (should (equal (roost--field (gethash (get-text-property (point) 'roost-task) roost--tasks) 'name)
+                          "tests"))))
+       ;; A dashboard's n and p stop on it, as on a task.
+       (with-temp-buffer
+         (roost-dashboard-mode)
+         (roost--render-dashboard)
+         (goto-char (point-min))
+         (search-forward "budget")
+         (roost-dashboard-next-task)
+         (should (get-text-property (point) 'roost-offer))
+         (roost-dashboard-next-task)
+         (should (get-text-property (point) 'roost-task))
+         (roost-dashboard-previous-task)
+         (should (get-text-property (point) 'roost-offer)))))))
+
+(ert-deftest roost-point-on-an-offer-no-longer-waiting-goes-to-its-task ()
+  ;; Started or dismissed from the draft its row opened, as much as from
+  ;; another Emacs: you stay by the task, wherever it is in the list.
+  (roost-test--isolated
+   (let ((roost--current-task nil) (roost-watch-mode t)
+         (offer '((id . "0a1b2c3d") (title . "Fix add") (brief . "add() subtracts."))))
+     (dolist (render '(roost--render-sidebar roost--render-dashboard))
+       (clrhash roost--tasks)
+       (dolist (name '("first" "second"))
+         (roost--cache-task "dev" (append `((name . ,name) (repo . "/srv/ledger"))
+                                          (roost-test--task name "ready"))))
+       (roost--cache-task "dev" (append `((name . "third") (repo . "/srv/ledger") (startedAt . "2099-01-01T00:00:00Z")
+                                          (offers ,offer) (offersAt . "2026-11-03T10:00:00+00:00"))
+                                        (roost-test--task "third" "ready")))
+       (with-temp-buffer
+         (if (eq render 'roost--render-sidebar) (roost-sidebar-list-mode) (roost-dashboard-mode))
+         (funcall render)
+         (goto-char (point-min))
+         (search-forward "Fix add")
+         (should (get-text-property (point) 'roost-offer))
+         (roost--cache-task "dev" (append '((name . "third") (repo . "/srv/ledger") (startedAt . "2099-01-01T00:00:00Z")
+                                            (offersAt . "2026-11-03T10:00:01+00:00"))
+                                          (roost-test--task "third" "ready")))
+         (funcall render)
+         (should (equal (get-text-property (point) 'roost-task) '("dev" "third"))))))))
+
+(ert-deftest roost-an-offer-draft-starts-anew ()
+  ;; Nothing of the draft it replaces goes with it: that one's creation ID
+  ;; would be answered with that one's task. An untouched offer's draft
+  ;; holds nothing of yours, and one on its way to its host stays.
+  (roost-test--isolated
+   (let ((default-directory "/tmp/") asked
+         (offer '((id . "0a1b2c3d") (title . "Fix add") (brief . "add() subtracts.")))
+         (another '((id . "1b2c3d4e") (title . "Lint") (brief . "Lint it."))))
+     (save-window-excursion
+       (delete-other-windows)
+       (unwind-protect
+           (cl-letf (((symbol-function 'yes-or-no-p) (lambda (prompt) (setq asked prompt) t)))
+             (let ((task (roost--cache-task "dev" (append `((name . "budget") (repo . "/srv/ledger")
+                                                            (integrationBranch . "main") (offers ,offer ,another))
+                                                          (roost-test--task "1111111111111111" "ready")))))
+               ;; A draft with only a name, that got no reply.
+               (roost--compose nil nil (roost--project-directory task))
+               (with-current-buffer roost--compose-buffer
+                 (setq roost--compose-asked (list (plist-get roost--compose-fields :directory) "feedfacefeedface")
+                       roost--draft-note " No reply"))
+               (roost--compose-offer task offer)
+               (with-current-buffer roost--compose-buffer
+                 (should-not roost--compose-asked)
+                 (should-not roost--draft-note)
+                 (should (plist-get roost--compose-fields :offer)))
+               (should-not asked)
+               ;; Untouched, it asks nothing of the next offer.
+               (roost--compose-offer task another)
+               (should-not asked)
+               (should (equal (plist-get (buffer-local-value 'roost--compose-fields (get-buffer roost--compose-buffer)) :name)
+                              "Lint"))
+               ;; Changed, it does, in its fields as in its prompt.
+               (dolist (change '(:name :agent :base))
+                 (with-current-buffer roost--compose-buffer
+                   (should-not (roost--compose-written-p))
+                   (let ((was (plist-get roost--compose-fields change)))
+                     (setq roost--compose-fields (plist-put roost--compose-fields change "changed"))
+                     (should (roost--compose-written-p))
+                     (setq roost--compose-fields (plist-put roost--compose-fields change was)))))
+               (with-current-buffer roost--compose-buffer
+                 (goto-char (point-max))
+                 (insert " And more."))
+               (roost--compose-offer task offer)
+               (should (string-prefix-p "Put this offer" asked))
+               ;; On its way, it says so and stays.
+               (with-current-buffer roost--compose-buffer
+                 (setq roost--compose-submitting "creating Fix add"))
+               (should (equal (cadr (should-error (roost--compose-offer task another) :type 'user-error))
+                              "Already creating Fix add"))
+               (should (buffer-local-value 'roost--compose-submitting (get-buffer roost--compose-buffer)))))
+         (when (get-buffer roost--compose-buffer)
+           (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-a-draft-header-shows-a-percent-sign-as-it-is ()
+  ;; A header line reads % as its own, in a name or an offer's title.
+  (roost-test--isolated
+   (let ((default-directory "/tmp/") (xterm-mouse-mode t))
+     (save-window-excursion
+       (delete-other-windows)
+       (unwind-protect
+           (progn
+             (roost--compose nil nil "/srv/ledger/")
+             (set-buffer roost--compose-buffer)
+             (setq roost--compose-submitting "creating 90%s"
+                   roost--draft-note " Creating 90%s…")
+             (should (string-search "90%%s" (roost--compose-header)))
+             ;; And beside its buttons, as an error says it.
+             (setq roost--compose-submitting nil)
+             (should (string-search "90%%s" (roost--compose-header))))
+         (when (get-buffer roost--compose-buffer)
+           (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-an-offer-opens-as-a-task-draft ()
+  ;; Filled in from the offer and the task that made it, and started,
+  ;; done there, dismissed or left for later from its buttons.
+  (roost-test--isolated
+   (let ((default-directory "/tmp/") (xterm-mouse-mode t) created acted
+         (offer '((id . "0a1b2c3d") (title . "Fix add in calc.py") (brief . "add() subtracts.\n\nFix it."))))
+     (save-window-excursion
+       (delete-other-windows)
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--create-task)
+                      (lambda (directory name base prompt agent &optional _made _failed extra)
+                        (setq created (list directory name base prompt agent extra))))
+                     ((symbol-function 'roost--act)
+                      (lambda (task action &optional parameters callback _failure)
+                        (setq acted (list (roost--field task 'name) action parameters))
+                        (when callback (funcall callback task)))))
+             (let* ((task (roost--cache-task "dev" (append `((name . "budget") (repo . "/srv/ledger") (agent . "codex")
+                                                            (integrationBranch . "develop")
+                                                            (integrationRef . "refs/heads/develop")
+                                                            (live . t) (offers ,offer))
+                                                          (roost-test--task "1111111111111111" "ready"))))
+                    (open (lambda ()
+                            (roost--compose-offer task offer)
+                            (set-buffer roost--compose-buffer))))
+               (funcall open)
+               (should (string-prefix-p "New task, offered by budget" (buffer-string)))
+               (should (string-match-p "Start +develop .*merges into develop" (buffer-string)))
+               (should (string-match-p "Name +Fix add in calc\\.py" (buffer-string)))
+               (should (equal (roost--compose-prompt) "add() subtracts.\n\nFix it."))
+               (let ((header (roost--compose-header)))
+                 (dolist (label '("Dismiss" "Later" "Do it here" "Create"))
+                   (should (string-search label header)))
+                 (should-not (string-search "Cancel" header)))
+               ;; Created in its project, from where the task merges, by its
+               ;; agent, and from its offer.
+               (roost-compose-submit)
+               (pcase-let ((`(,directory . ,fields) created))
+                 (should (string-suffix-p ":dev:/srv/ledger/" directory))
+                 (should (equal (butlast fields) '("Fix add in calc.py" "refs/heads/develop"
+                                                   "add() subtracts.\n\nFix it." "codex")))
+                 (should (equal (mapcar (lambda (field) (alist-get field (car (last fields)))) '(parent offer))
+                                '("1111111111111111" "0a1b2c3d"))))
+               ;; Once made, it no longer lists the offer.
+               (roost--compose-made (current-buffer) roost--compose-fields task)
+               (should-not (roost--offers (gethash '("dev" "1111111111111111") roost--tasks)))
+               (roost--cache-task "dev" (cons (cons 'offers (list offer)) task))
+               ;; Later, untouched, asks nothing, and leaves the offer.
+               (funcall open)
+               (roost-compose-cancel)
+               (should-not (get-buffer roost--compose-buffer))
+               ;; Changed, it asks first.
+               (funcall open)
+               (goto-char (point-max))
+               (insert " Also the tests.")
+               (cl-letf (((symbol-function 'yes-or-no-p)
+                          (lambda (prompt) (should (equal prompt "Discard your changes to this offer? ")) nil)))
+                 (roost-compose-cancel))
+               (should (get-buffer roost--compose-buffer))
+               ;; Opened again, it is as you left it.
+               (roost--compose-offer task offer)
+               (should (string-suffix-p "Also the tests." (with-current-buffer roost--compose-buffer
+                                                             (roost--compose-prompt))))
+               ;; Done there, as written, which ends the offer.
+               (set-buffer roost--compose-buffer)
+               (roost-compose-here)
+               (should (equal acted '("budget" "send" ((text . "add() subtracts.\n\nFix it. Also the tests.")
+                                                       (offer . "0a1b2c3d")))))
+               (should-not (get-buffer roost--compose-buffer))
+               ;; Dismissed.
+               (funcall open)
+               (roost-compose-dismiss)
+               (should (equal acted '("budget" "dismiss-offer" ((offer . "0a1b2c3d")))))
+               (should-not (get-buffer roost--compose-buffer))
+               ;; A draft of your own, written in, gives way only if you say so.
+               (roost--compose nil nil "/ssh:dev:/repo/")
+               (with-current-buffer roost--compose-buffer
+                 (goto-char (point-max))
+                 (insert "Fix the parser"))
+               (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_) nil)))
+                 (should-error (roost--compose-offer task offer) :type 'user-error))
+               (should (equal (with-current-buffer roost--compose-buffer (roost--compose-prompt)) "Fix the parser"))
+               (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_) t)))
+                 (roost--compose-offer task offer))
+               (should (equal (with-current-buffer roost--compose-buffer (roost--compose-prompt))
+                              "add() subtracts.\n\nFix it."))))
+         (when (get-buffer roost--compose-buffer)
+           (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-an-offer-draft-acts-once-and-stays-its-own ()
+  ;; While its prompt goes to the agent, or the offer is dismissed, nothing
+  ;; else of it can go too, and a failure gives its buttons back; moved
+  ;; to another project, it is a draft of its own there.
+  (roost-test--isolated
+   (let ((default-directory "/tmp/") (xterm-mouse-mode t) pending created
+         (offer '((id . "0a1b2c3d") (title . "Fix add in calc.py") (brief . "add() subtracts."))))
+     (save-window-excursion
+       (delete-other-windows)
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--act)
+                      (lambda (_task action &optional _parameters callback failure)
+                        (setq pending (list action callback failure))))
+                     ((symbol-function 'roost--create-task)
+                      (lambda (&rest args) (setq created args))))
+             (let ((task (roost--cache-task "dev" (append `((name . "budget") (repo . "/srv/ledger")
+                                                            (integrationBranch . "main") (live . t)
+                                                            (offers ,offer))
+                                                          (roost-test--task "1111111111111111" "ready")))))
+               (dolist (command '(roost-compose-here roost-compose-dismiss))
+                 (roost--compose-offer task offer)
+                 (set-buffer roost--compose-buffer)
+                 (funcall command)
+                 (should pending)
+                 ;; Once only, and neither another way nor created meanwhile.
+                 (dolist (again '(roost-compose-here roost-compose-dismiss roost-compose-submit roost-compose-cancel))
+                   (should-error (funcall again) :type 'user-error))
+                 (should-not created)
+                 ;; Failed, it can be tried again, and says why.
+                 (funcall (nth 2 pending) "tmux is gone")
+                 (should-not roost--compose-submitting)
+                 (should (string-match-p "tmux is gone" roost--draft-note))
+                 (setq pending nil)
+                 (kill-buffer roost--compose-buffer))
+               ;; With no reply, the agent may have it, which sending it
+               ;; again would give it twice.
+               (roost--compose-offer task offer)
+               (set-buffer roost--compose-buffer)
+               (roost-compose-here)
+               (funcall (nth 2 pending) (propertize "No reply after 30s" 'roost-no-reply t))
+               (should-not roost--compose-submitting)
+               (should (string-search "see its terminal" roost--draft-note))
+               (kill-buffer roost--compose-buffer)
+               ;; With no reply to Create, its task may yet be made, which
+               ;; nothing else of the offer may cross until it is settled,
+               ;; as asking the same again can.
+               (setq pending nil)
+               (roost--compose-offer task offer)
+               (set-buffer roost--compose-buffer)
+               (cl-letf (((symbol-function 'roost--remember-host) #'ignore)
+                         ((symbol-function 'roost-watch-mode) #'ignore))
+                 (roost-compose-submit)
+                 (funcall (nth 6 created) (propertize "No reply after 660s" 'roost-no-reply t)))
+               (dolist (other '(roost-compose-here roost-compose-dismiss))
+                 (should (string-prefix-p "Its task may yet be made"
+                                          (cadr (should-error (funcall other) :type 'user-error)))))
+               (should-not pending)
+               (let ((first created))
+                 (setq created nil)
+                 (roost-compose-submit)
+                 (should (equal (alist-get 'createId (nth 7 created)) (alist-get 'createId (nth 7 first)))))
+               ;; Answered that it failed, it wasn't made.
+               (funcall (nth 6 created) "No space left")
+               (should-not roost--compose-unsettled)
+               (roost-compose-dismiss)
+               (should pending)
+               (setq pending nil created nil)
+               (kill-buffer roost--compose-buffer)
+               ;; One that fails before it has gone gives the draft back.
+               (cl-letf (((symbol-function 'roost--act) (lambda (&rest _) (error "No helper"))))
+                 (roost--compose-offer task offer)
+                 (set-buffer roost--compose-buffer)
+                 (should-error (roost-compose-dismiss))
+                 (should-not roost--compose-submitting)
+                 (should-not roost--draft-note)
+                 (kill-buffer roost--compose-buffer))
+               ;; In another project, the draft is no longer the offer's.
+               (roost--compose-offer task offer)
+               (set-buffer roost--compose-buffer)
+               (cl-letf (((symbol-function 'roost--choose-from) (lambda (&rest _) "/ssh:other:/srv/notes/"))
+                         ((symbol-function 'roost--compose-integration) (lambda (&rest _) "main")))
+                 (roost-compose-set-project))
+               (should-not (plist-get roost--compose-fields :offer))
+               (should (string-prefix-p "New task\n" (buffer-string)))
+               (should (string-search "Cancel" (roost--compose-header)))
+               (roost-compose-submit)
+               (should-not (assq 'parent (car (last created))))
+               ;; Its offer still waits.
+               (should (roost--offers (gethash '("dev" "1111111111111111") roost--tasks)))))
+         (when (get-buffer roost--compose-buffer)
+           (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-undo-in-a-draft-keeps-to-the-prompt ()
+  ;; The fields above the prompt change length outside undo, as its name
+  ;; fills in, and undo still finds what you did. An offer's brief is where
+  ;; its draft starts, not a change to undo.
+  (roost-test--isolated
+   (let ((default-directory "/tmp/")
+         (offer '((id . "0a1b2c3d") (title . "Fix add") (brief . "add() subtracts."))))
+     (save-window-excursion
+       (delete-other-windows)
+       (unwind-protect
+           (let ((task (roost--cache-task "dev" (append `((name . "budget") (repo . "/srv/ledger")
+                                                          (integrationBranch . "main") (offers ,offer))
+                                                        (roost-test--task "1111111111111111" "ready")))))
+             (roost--compose-offer task offer)
+             (set-buffer roost--compose-buffer)
+             (should-error (undo) :type 'user-error)
+             (should (equal (roost--compose-prompt) "add() subtracts."))
+             (goto-char (point-max))
+             (undo-boundary)
+             (insert " Thanks.")
+             (undo-boundary)
+             (setq roost--compose-fields (plist-put roost--compose-fields :name "A much longer name than it had"))
+             (roost--compose-render)
+             (undo)
+             (should (equal (roost--compose-prompt) "add() subtracts."))
+             (should (string-prefix-p "New task, offered by budget" (buffer-string)))
+             (kill-buffer roost--compose-buffer)
+             ;; What you deleted comes back in its place, with the fields
+             ;; shorter or longer since; undoing an undo too.
+             (roost--compose nil nil "/srv/ledger/")
+             (set-buffer roost--compose-buffer)
+             (goto-char (point-max))
+             (undo-boundary)
+             (insert "Please fix the report totals")
+             (undo-boundary)
+             (roost--compose-render)
+             (delete-region (- (point-max) 7) (point-max))
+             (undo-boundary)
+             (roost--compose-render)
+             (should (equal (roost--compose-prompt) "Please fix the report"))
+             (undo)
+             (roost--compose-render)
+             (should (equal (roost--compose-prompt) "Please fix the report totals"))
+             (undo-boundary)
+             (setq last-command 'ignore)
+             (undo)
+             (should (equal (roost--compose-prompt) "Please fix the report")))
+         (when (get-buffer roost--compose-buffer)
+           (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-an-untouched-offer-draft-makes-way ()
+  ;; Nothing in it is yours, and the offer waits under its task: a new
+  ;; draft takes its place, with what that starts from, and it takes the
+  ;; brief its agent gave last. One you changed stays, as any you wrote in.
+  (roost-test--isolated
+   (let ((default-directory "/tmp/")
+         (offer '((id . "0a1b2c3d") (title . "Fix add") (brief . "add() subtracts.")))
+         (again '((id . "0a1b2c3d") (title . "Fix add") (brief . "add() and sum() subtract."))))
+     (save-window-excursion
+       (delete-other-windows)
+       (unwind-protect
+           (let ((task (roost--cache-task "dev" (append `((name . "budget") (repo . "/srv/ledger")
+                                                          (integrationBranch . "main") (offers ,offer))
+                                                        (roost-test--task "1111111111111111" "ready"))))
+                 (drafted (lambda (field) (plist-get (buffer-local-value 'roost--compose-fields
+                                                                         (get-buffer roost--compose-buffer))
+                                                     field)))
+                 (prompt (lambda () (with-current-buffer roost--compose-buffer (roost--compose-prompt)))))
+             (roost--compose-offer task offer)
+             (roost--compose nil (cons "A quote from my region" nil) "/srv/other/")
+             (should-not (funcall drafted :offer))
+             (should (equal (funcall drafted :directory) "/srv/other/"))
+             (should (equal (funcall prompt) "A quote from my region"))
+             (kill-buffer roost--compose-buffer)
+             ;; Offered again meanwhile.
+             (roost--compose-offer task offer)
+             (roost--compose-offer task again)
+             (should (equal (funcall prompt) "add() and sum() subtract."))
+             (with-current-buffer roost--compose-buffer
+               (should-not (roost--compose-written-p))
+               (goto-char (point-max))
+               (insert " Also the tests."))
+             (roost--compose-offer task offer)
+             (should (string-suffix-p "Also the tests." (funcall prompt)))
+             (roost--compose nil (cons "A quote from my region" nil) "/srv/other/")
+             (should (funcall drafted :offer))
+             (should (string-suffix-p "Also the tests." (funcall prompt))))
+         (when (get-buffer roost--compose-buffer)
+           (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-a-draft-of-an-offer-keeps-its-request-through-later ()
+  ;; Whichever draft of an offer asks, the host answers with one task, and
+  ;; with no reply, Later leaves the draft that knows of its request for
+  ;; the offer's row to open.
+  (roost-test--isolated
+   (let ((default-directory "/tmp/") created acted messages
+         (offer '((id . "0a1b2c3d") (title . "Fix add") (brief . "add() subtracts."))))
+     (save-window-excursion
+       (delete-other-windows)
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--create-task) (lambda (&rest args) (setq created args)))
+                     ((symbol-function 'roost--act) (lambda (&rest args) (setq acted args)))
+                     ((symbol-function 'roost--remember-host) #'ignore)
+                     ((symbol-function 'roost-watch-mode) #'ignore)
+                     ((symbol-function 'message)
+                      (lambda (format &rest args) (push (apply #'format format args) messages))))
+             (let ((task (roost--cache-task "dev" (append `((name . "budget") (repo . "/srv/ledger")
+                                                            (integrationBranch . "main") (offers ,offer))
+                                                          (roost-test--task "1111111111111111" "ready")))))
+               (roost--compose-offer task offer)
+               (set-buffer roost--compose-buffer)
+               (roost-compose-submit)
+               (should (equal (alist-get 'createId (nth 7 created)) "11111111111111110a1b2c3d"))
+               (funcall (nth 6 created) (propertize "No reply after 660s" 'roost-no-reply t))
+               (roost-compose-cancel)
+               (should (string-prefix-p "Its task may yet be made" (car messages)))
+               (should (get-buffer roost--compose-buffer))
+               (roost--compose-offer task offer)
+               (set-buffer roost--compose-buffer)
+               (should roost--compose-unsettled)
+               (should-error (roost-compose-dismiss) :type 'user-error)
+               (should-not acted)
+               ;; Nor does a new draft or another offer take its place unasked.
+               (roost--compose nil nil "/srv/other/")
+               (should (buffer-local-value 'roost--compose-unsettled (get-buffer roost--compose-buffer)))
+               (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_) nil)))
+                 (should-error (roost--compose-offer task '((id . "1b2c3d4e") (title . "Lint") (brief . "Lint it.")))
+                               :type 'user-error))
+               ;; Moved to another project, it is a draft of its own there,
+               ;; and back again, not the offer's request.
+               (kill-buffer roost--compose-buffer)
+               (roost--compose-offer task offer)
+               (set-buffer roost--compose-buffer)
+               (roost-compose-submit)
+               (funcall (nth 6 created) "No space left")
+               (cl-letf (((symbol-function 'roost--choose-from) (lambda (&rest _) "/ssh:other:/srv/notes/"))
+                         ((symbol-function 'roost--compose-integration) (lambda (&rest _) "main")))
+                 (roost-compose-set-project))
+               (should-not roost--compose-asked)
+               (kill-buffer roost--compose-buffer)
+               ;; With its task gone, Later says the offer went with it.
+               (roost--compose-offer task offer)
+               (set-buffer roost--compose-buffer)
+               (remhash '("dev" "1111111111111111") roost--tasks)
+               (roost-compose-cancel)
+               (should (string-prefix-p "The task that offered it is gone" (car messages)))))
+         (when (get-buffer roost--compose-buffer)
+           (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-dismissing-an-offer-asks-about-your-changes ()
+  ;; It takes them with it, and its title can't be offered again.
+  (roost-test--isolated
+   (let ((default-directory "/tmp/") acted asked
+         (offer '((id . "0a1b2c3d") (title . "Fix add") (brief . "add() subtracts."))))
+     (save-window-excursion
+       (delete-other-windows)
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--act)
+                      (lambda (_task action &rest _) (setq acted action))))
+             (let ((task (roost--cache-task "dev" (append `((name . "budget") (repo . "/srv/ledger")
+                                                            (integrationBranch . "main") (offers ,offer))
+                                                          (roost-test--task "1111111111111111" "ready")))))
+               (roost--compose-offer task offer)
+               (set-buffer roost--compose-buffer)
+               (goto-char (point-max))
+               (insert " Also the tests.")
+               (cl-letf (((symbol-function 'yes-or-no-p) (lambda (prompt) (setq asked prompt) nil)))
+                 (roost-compose-dismiss))
+               (should (string-prefix-p "Dismiss this offer" asked))
+               (should-not acted)
+               (should-not roost--compose-submitting)
+               (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_) t)))
+                 (roost-compose-dismiss))
+               (should (equal acted "dismiss-offer"))))
+         (when (get-buffer roost--compose-buffer)
+           (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-an-offer-of-a-task-with-no-agent-field-is-claudes ()
+  ;; As everything else reads a record from before the field.
+  (roost-test--isolated
+   (let ((default-directory "/tmp/") (roost-default-agent "codex")
+         (offer '((id . "0a1b2c3d") (title . "Fix add") (brief . "add() subtracts."))))
+     (save-window-excursion
+       (delete-other-windows)
+       (unwind-protect
+           (let ((task (roost--cache-task "dev" (append `((name . "budget") (repo . "/srv/ledger")
+                                                          (integrationBranch . "main") (offers ,offer))
+                                                        (roost-test--task "1111111111111111" "ready")))))
+             (roost--compose-offer task offer)
+             (should (equal (plist-get (buffer-local-value 'roost--compose-fields (get-buffer roost--compose-buffer))
+                                       :agent)
+                            "claude")))
+         (when (get-buffer roost--compose-buffer)
+           (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-a-draft-says-at-once-what-it-is-doing ()
+  ;; Its header line has no other reason to change.
+  (roost-test--isolated
+   (let ((updated 0))
+     (with-temp-buffer
+       (cl-letf (((symbol-function 'force-mode-line-update) (lambda (&rest _) (cl-incf updated))))
+         (roost--compose-acting "dismissing the offer" " Dismissing the offer…" #'ignore))
+       (should (= updated 1))))))
+
+(ert-deftest roost-a-task-name-is-not-read-for-keys ()
+  ;; An agent chooses the title of a task it offers, and in a string for
+  ;; `substitute-command-keys', \{global-map} is every key there is.
+  (roost-test--isolated
+   (let ((task (append '((name . "\\{global-map}")) (roost-test--task "1111111111111111" "ready"))))
+     (should (string-prefix-p " Send to \\{global-map} · " (roost--send-header task)))
+     (should (string-prefix-p " Pull request for \\{global-map} · " (roost--pr-header task))))))
+
+(ert-deftest roost-a-derived-name-holds-nothing-the-helper-refuses ()
+  ;; Emacs takes these as letters, and you never typed them.
+  (roost-test--isolated
+   (dolist (hidden '(#x34f #x115f #x1160 #x17b4 #x17b5 #x180b #x180f #x2800 #x3164 #xfe00 #xfe0d #xffa0 #xfff0
+                     #xe0001 #xe0100 #xe0fff))
+     (should (equal (roost--name-from-prompt (format "fix%c the parser" hidden)) "fix-parser")))
+   ;; An emoji's selector stays, which the helper keeps too.
+   (should (string-search "️" (roost--name-from-prompt "fix️ parser")))))
+
+(ert-deftest roost-finishing-a-task-names-the-offers-that-go-with-it ()
+  ;; They go with its record, and nothing else would say so.
+  (roost-test--isolated
+   (let* ((offers '(((id . "0a1b2c3d") (title . "Fix add") (brief . "add() subtracts."))
+                    ((id . "1b2c3d4e") (title . "Lint") (brief . "Lint it."))))
+          (task (roost--cache-task "dev" (append `((name . "budget") (repo . "/srv/ledger") (integrationBranch . "main")
+                                                   (offers ,(car offers)))
+                                                 (roost-test--task "1111111111111111" "ready"))))
+          (losses '((commits . 0) (changes . 0) (commit . "abc123")))
+          asked)
+     (cl-letf (((symbol-function 'y-or-n-p) (lambda (prompt) (setq asked prompt) nil))
+               ((symbol-function 'yes-or-no-p) (lambda (prompt) (setq asked prompt) nil))
+               ((symbol-function 'read-string) (lambda (prompt &rest _) (setq asked prompt) ""))
+               ((symbol-function 'roost--request-wait) (lambda (&rest _) `((discard ,@losses)))))
+       (dolist (finish '(roost-retire roost-merge-retire roost-discard roost-forget))
+         (funcall finish task)
+         (should (string-prefix-p "Its offer Fix add goes with it.  " asked)))
+       ;; Where you would type its name, too.
+       (setq losses '((commits . 1) (changes . 0) (commit . "abc123")))
+       (roost-discard task)
+       (should (string-prefix-p "Its offer Fix add goes with it.  Discarding" asked))
+       (setq losses '((commits . 0) (changes . 0) (commit . "abc123")))
+       (setq task (roost--cache-task "dev" (cons (cons 'offers offers) task)))
+       (roost-retire task)
+       (should (string-prefix-p "Its 2 offers go with it.  " asked))
+       ;; With none, the question is as it was.
+       (setq task (roost--cache-task "dev" (append '((name . "budget")) (roost-test--task "1111111111111111" "ready"))))
+       (roost-retire task)
+       (should (string-prefix-p "Retire budget" asked))))))
+
+(ert-deftest roost-a-reply-from-before-an-offer-changed-keeps-it-as-it-is ()
+  ;; An offer is no event of the agent's: the task's updatedAt stays, and
+  ;; its own stamp says which reply knows it better.
+  (roost-test--isolated
+   (let ((offer '((id . "0a1b2c3d") (title . "Fix add") (brief . "add() subtracts."))))
+     (roost--cache-task "dev" (append `((offers ,offer) (offersAt . "2026-11-03T10:00:01.000002+00:00"))
+                                      (roost-test--task "a" "ready")))
+     ;; Read before it was offered.
+     (roost--cache-task "dev" (append '((offersAt . "2026-11-03T10:00:00+00:00")) (roost-test--task "a" "ready")))
+     (should (roost--offers (gethash '("dev" "a") roost--tasks)))
+     ;; Dismissed since.
+     (roost--cache-task "dev" (append '((offersAt . "2026-11-03T10:00:02+00:00")) (roost-test--task "a" "ready")))
+     (should-not (roost--offers (gethash '("dev" "a") roost--tasks)))
+     ;; And a reply read before that brings it back no more.
+     (roost--cache-task "dev" (append `((offers ,offer) (offersAt . "2026-11-03T10:00:01.000002+00:00"))
+                                      (roost-test--task "a" "ready")))
+     (should-not (roost--offers (gethash '("dev" "a") roost--tasks)))
+     ;; Started from here, nor does one as old as the offer: the host's
+     ;; newer stamp hasn't come yet.
+     (let ((task (roost--cache-task "dev" (append `((offers ,offer) (offersAt . "2026-11-03T10:00:03+00:00"))
+                                                  (roost-test--task "b" "ready")))))
+       (roost--compose-made nil (list :offer (list (roost--key task) "0a1b2c3d")) nil)
+       (roost--cache-task "dev" (append `((offers ,offer) (offersAt . "2026-11-03T10:00:03+00:00"))
+                                        (roost-test--task "b" "ready")))
+       (should-not (roost--offers (gethash '("dev" "b") roost--tasks)))))))
 
 (ert-deftest roost-a-note-edited-while-it-is-sent-stays ()
   (roost-test--isolated

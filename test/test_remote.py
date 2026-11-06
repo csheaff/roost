@@ -8,6 +8,7 @@ import fcntl
 import http.server
 import importlib.util
 import hashlib
+import io
 import json
 import os
 import re
@@ -259,6 +260,22 @@ class Lifecycle(unittest.TestCase):
         shell = self.request("shell", id=task["id"])["result"]["shellPaneId"]
         self.assertEqual(tmux_says(shell, "#{pane_current_path}"), worktree)
 
+        # Offered by its agent, under a name and with a brief the agent
+        # chose, through the helper's MCP server, and started from that
+        # offer; another done where it was offered, its brief sent as the
+        # agent's next prompt.
+        title, brief = hostile("offer"), hostile("brief") + "\n" + hostile("brief-second")
+        child = reply_to(self.started(task, title=title, brief=brief, branchPrefix=prefix), brief)
+        self.assertEqual((child["name"], child["prompt"], child["integrationBranch"]), (title, brief, branch))
+        self.assertTrue(child["branch"].startswith(prefix), child["branch"])
+        self.assertEqual(tmux_says(child["windowId"], "#{window_name}"), title)
+        here = self.offered(task, title=hostile("here"), brief=hostile("here-brief"))
+        self.assertTrue(self.request("send", id=task["id"], text=here["brief"], offer=here["id"])["ok"])
+        reply_to(task, here["brief"])
+        self.assertNotIn("offers", roost.Store(str(self.state)).read(task["id"]))
+        told = self.request("discard", id=child["id"], dryRun=True)["result"]["discard"]
+        self.assertTrue(self.request("discard", id=child["id"], expect=told["commit"])["ok"])
+
         # Merged into its branch, as is a second task, squashed, once it is
         # brought up to date.
         second = self.create(directory=str(repo), name=hostile("squash"))
@@ -433,6 +450,64 @@ class Lifecycle(unittest.TestCase):
                                                   message="reviewer needs your input: which branch?"))
         record = store.read(task["id"])
         self.assertEqual((record["status"], record["request"]), ("permission", "reviewer needs your input: which branch?"))
+        # An MCP server's form, once it has waited a few seconds, in Claude Code's words.
+        roost.update_hook(store, task["id"], dict(hook_event_name="Stop"))
+        roost.update_hook(store, task["id"], dict(hook_event_name="Notification", notification_type="elicitation_dialog",
+                                                  message="Claude Code needs your input"))
+        record = store.read(task["id"])
+        self.assertEqual((record["status"], record["request"]), ("permission", "Claude Code needs your input"))
+        # Answered, Claude says so at once, and the task is back as the form
+        # found it: at rest, as for a form a server opens between turns, or
+        # at work, as for one a tool asks with. For one that no longer
+        # waits, it is no news.
+        form = dict(hook_event_name="Notification", notification_type="elicitation_dialog",
+                    message="Claude Code needs your input")
+        answered = dict(hook_event_name="Notification", notification_type="elicitation_response",
+                        message='Elicitation response for server "deploy": accept')
+        roost.update_hook(store, task["id"], answered)
+        record = store.read(task["id"])
+        self.assertEqual((record["status"], record.get("request")), ("ready", None))
+        roost.update_hook(store, task["id"], dict(hook_event_name="PreToolUse", tool_name="mcp__deploy__ship"))
+        roost.update_hook(store, task["id"], form)
+        roost.update_hook(store, task["id"], answered)
+        record = store.read(task["id"])
+        self.assertEqual((record["status"], record.get("request")), ("running", None))
+        roost.update_hook(store, task["id"], dict(hook_event_name="Stop"))
+        roost.update_hook(store, task["id"], dict(hook_event_name="Notification", notification_type="elicitation_complete"))
+        self.assertEqual(store.read(task["id"])["status"], "ready")
+        # Nor a request that came after the form's notice, as a teammate's,
+        # or a sandboxed command's that only its notice names, which still
+        # waits once the form is answered.
+        for after, asked in ((dict(hook_event_name="PermissionRequest", tool_name="Bash", agent_id="a1",
+                                   tool_input=dict(command="make test")), "Asks to run make test"),
+                             (dict(hook_event_name="Notification", notification_type="permission_prompt",
+                                   message="A sandboxed command needs network access"),
+                              "A sandboxed command needs network access")):
+            with self.subTest(after=after["hook_event_name"]):
+                roost.update_hook(store, task["id"], dict(hook_event_name="Stop"))
+                roost.update_hook(store, task["id"], form)
+                roost.update_hook(store, task["id"], after)
+                roost.update_hook(store, task["id"], answered)
+                record = store.read(task["id"])
+                self.assertEqual((record["status"], record["request"]), ("permission", asked))
+        # Two forms a server opens between turns: each answer goes back to
+        # rest, the second's after Claude names it again at the front, and
+        # none is left waiting.
+        roost.update_hook(store, task["id"], dict(hook_event_name="Stop"))
+        for step in (form, dict(form, message="Claude Code needs your input: deploy"), answered, form, answered):
+            roost.update_hook(store, task["id"], step)
+        record = store.read(task["id"])
+        self.assertEqual((record["status"], record.get("request")), ("ready", None))
+        # A turn that failed has failed still once one is answered, and
+        # says why, as nothing else would move it on.
+        roost.update_hook(store, task["id"], dict(hook_event_name="StopFailure", error="rate_limit"))
+        failed = store.read(task["id"])["error"]
+        roost.update_hook(store, task["id"], form)
+        self.assertEqual(store.read(task["id"])["status"], "permission")
+        roost.update_hook(store, task["id"], answered)
+        record = store.read(task["id"])
+        self.assertEqual((record["status"], record["error"]), ("failed", failed))
+        roost.update_hook(store, task["id"], dict(hook_event_name="Stop"))
         # The notification that follows a request of its own keeps the request.
         roost.update_hook(store, task["id"], dict(hook_event_name="PermissionRequest", tool_name="Bash",
                                                   tool_input=dict(command="make")))
@@ -2700,6 +2775,522 @@ class Lifecycle(unittest.TestCase):
             self.assertIn("--add-dir=" + str(folder), argv)
             self.assertTrue(folder.is_dir())
         self.assertEqual(argv[-2:], ["--resume", "recorded-session"])
+
+    def test_claude_and_codex_run_the_helper_as_an_mcp_server(self):
+        store = roost.Store(str(self.state))
+        task = dict(id="1234567890abcdef", command=["claude"], prompt="Look", runId="run")
+        server = [str(SOURCE.resolve()), "mcp", str(store.root), task["id"]]
+        argv = roost.ClaudeAgent().launch(store, task, False)
+        config = json.loads(next(arg for arg in argv if arg.startswith("--mcp-config="))[len("--mcp-config="):])
+        self.assertEqual(config["mcpServers"]["roost"]["command"], sys.executable)
+        self.assertEqual(config["mcpServers"]["roost"]["args"], server)
+        # An offer only waits in Roost, and reading changes nothing; a
+        # message types into another agent's terminal, so it goes by your
+        # permission mode.
+        settings = json.loads(Path(argv[argv.index("--settings") + 1]).read_text())
+        self.assertEqual(settings["permissions"]["allow"], ["mcp__roost__propose_task", "mcp__roost__read_task"])
+        argv = roost.CodexAgent().launch(store, dict(task, command=["codex"]), False)
+        self.assertIn("mcp_servers.roost.args=" + json.dumps(server), argv)
+        self.assertIn("mcp_servers.roost.command=" + json.dumps(sys.executable), argv)
+        # Codex gives a server only a few variables: also where tmux keeps
+        # Roost's server.
+        forwarded = json.loads(next(arg for arg in argv if arg.startswith("mcp_servers.roost.env_vars="))
+                               .split("=", 1)[1])
+        self.assertEqual(forwarded, ["TMUX_TMPDIR"])
+
+    def test_what_the_mcp_server_runs_reads_neither_its_input_nor_its_terminal(self):
+        # The agent's: Git would ask there for a password no one sees, and a
+        # program could read the agent's messages.
+        probe = [sys.executable, "-c", "import os, sys; print(os.getsid(0) == os.getpid(), repr(sys.stdin.read()))"]
+        with patch.object(roost, "DETACHED", True):
+            self.assertEqual(roost.execute(probe).stdout.split(), ["True", "''"])
+            self.assertEqual(roost.execute(probe, input="x").stdout.split(), ["True", "'x'"])
+        self.assertEqual(roost.execute(probe, input="x").stdout.split(), ["False", "'x'"])
+
+    def test_the_mcp_server_runs_as_the_agent_starts_it(self):
+        # As a process of its own, over its standard input and output,
+        # answering a newer protocol's first request as one it doesn't know,
+        # and ending with its input.
+        task = self.create(name="parent")
+        lines = [dict(id="new", method="server/discover"),
+                 dict(id=1, method="initialize", params=dict(protocolVersion="2025-11-25", capabilities={})),
+                 dict(method="notifications/initialized"), dict(id=2, method="tools/list"),
+                 dict(id=3, method="tools/call", params=dict(name="read_task", arguments={})),
+                 dict(id=4, method="ping")]
+        ran = subprocess.run([sys.executable, str(SOURCE), "mcp", str(self.state), task["id"]], timeout=30,
+                             input="".join(json.dumps(dict(line, jsonrpc="2.0")) + "\n" for line in lines),
+                             capture_output=True, text=True)
+        self.assertEqual((ran.returncode, ran.stderr), (0, ""))
+        replies = {reply["id"]: reply for reply in map(json.loads, ran.stdout.splitlines())}
+        self.assertEqual(replies["new"]["error"]["code"], -32601)
+        self.assertEqual(replies[1]["result"]["protocolVersion"], "2025-11-25")
+        self.assertIn("offer it with propose_task", replies[1]["result"]["instructions"])
+        tools = {tool["name"]: tool for tool in replies[2]["result"]["tools"]}
+        self.assertEqual(list(tools), ["propose_task", "read_task"])
+        # Said of each, for an agent that asks before a tool unless told it
+        # changes nothing, as Codex does: an offer only waits for you, and
+        # reading changes nothing.
+        self.assertFalse(tools["propose_task"]["annotations"]["destructiveHint"])
+        self.assertFalse(tools["propose_task"]["annotations"]["openWorldHint"])
+        self.assertTrue(tools["read_task"]["annotations"]["readOnlyHint"])
+        self.assertEqual(replies[3]["result"]["content"][0]["text"],
+                         "No task started from your offers is in Roost now; one merged, retired or discarded is gone.")
+        self.assertEqual(replies[4]["result"], {})
+
+    def test_the_mcp_server_answers_whatever_its_reply_holds(self):
+        # An agent waits for every answer until you stop it: one goes out
+        # as UTF-8 in any locale, and with what none can carry, as a lone
+        # surrogate from a transcript, replaced.
+        task = self.create(name="parent")
+        line = json.dumps(dict(jsonrpc="2.0", id=1, method="tools/call", params=dict(name="caf\u00e9"))) + "\n"
+        ran = subprocess.run([sys.executable, str(SOURCE), "mcp", str(self.state), task["id"]], timeout=30,
+                             input=line.encode(), capture_output=True, env=dict(os.environ, PYTHONIOENCODING="ascii"))
+        self.assertIn("Unknown tool: caf\u00e9", json.loads(ran.stdout.decode())["result"]["content"][0]["text"])
+        child = self.started(task)
+        with patch.object(roost, "last_message", return_value="Done \ud83d now"):
+            said = self.call(task, "read_task", task=child["id"])
+        self.assertIn("Done ? now", said["content"][0]["text"])
+
+    def test_an_opencode_started_from_another_runs_no_server_of_its_own(self):
+        # It inherits the config that names the server, which would offer
+        # tasks as the agent of the task it was started in. The one Roost
+        # started is the one its plugin marked, or none yet.
+        task = self.create(name="parent")
+
+        def run(observer):
+            return subprocess.run([sys.executable, str(SOURCE), "mcp", str(self.state), task["id"], "opencode"],
+                                  input=json.dumps(dict(jsonrpc="2.0", id=1, method="ping")) + "\n", timeout=30,
+                                  capture_output=True, text=True, env=dict(os.environ, ROOST_OPENCODE_OBSERVER=observer))
+
+        self.assertEqual(run("1").stdout, "")
+        for observer in ("", str(os.getpid())):
+            with self.subTest(observer=observer):
+                self.assertEqual(json.loads(run(observer).stdout)["result"], {})
+
+    def serve(self, task, *messages):
+        """Run TASK's MCP server on MESSAGES, after Claude Code's handshake,
+        and return its replies by their IDs."""
+        lines = [dict(id="hello", method="initialize", params=dict(
+            protocolVersion="2025-06-18", capabilities={}, clientInfo=dict(name="claude-code", version="1"))),
+                 dict(method="notifications/initialized")] + list(messages)
+        reader = io.StringIO("".join(json.dumps(dict(line, jsonrpc="2.0")) + "\n" for line in lines))
+        writer = io.BytesIO()
+        roost.McpServer(roost.Store(str(self.state)), task["id"], reader, writer).serve()
+        return {reply["id"]: reply for reply in map(json.loads, writer.getvalue().splitlines())}
+
+    def call(self, caller, tool, **arguments):
+        """What CALLER's agent is told as it calls its TOOL with ARGUMENTS."""
+        return self.serve(caller, dict(id="call", method="tools/call",
+                                       params=dict(name=tool, arguments=arguments)))["call"]["result"]
+
+    def offered(self, parent, title="Document calc", brief="Write the README's section on calc."):
+        """The offer PARENT's agent makes of TITLE with BRIEF, as Emacs has it."""
+        said = self.call(parent, "propose_task", title=title, brief=brief)
+        self.assertNotIn("isError", said, said)
+        return next(offer for offer in self.request("inspect", id=parent["id"])["result"]["offers"]
+                    if offer["title"] == title)
+
+    def started(self, parent, branchPrefix=None, **proposed):
+        """The task PARENT's agent offered as PROPOSED, started as Emacs
+        starts it from the draft the offer opens, with BRANCHPREFIX."""
+        offer = self.offered(parent, **proposed)
+        record = roost.Store(str(self.state)).read(parent["id"])
+        reply = self.request("create", directory=record["repo"], name=offer["title"], prompt=offer["brief"],
+                             base=roost.offered_base(record), parent=parent["id"], offer=offer["id"],
+                             createId=parent["id"] + offer["id"], socket=self.socket, command=record["command"],
+                             **({"branchPrefix": branchPrefix} if branchPrefix else {}))
+        self.assertTrue(reply["ok"], reply)
+        return reply["result"]
+
+    def test_an_offer_waits_under_its_task_while_its_agent_goes_on(self):
+        parent = self.create(name="parent")
+        store = roost.Store(str(self.state))
+        # One you have seen since its agent's last event.
+        record = store.read(parent["id"])
+        store.save(dict(record, seen=record["updatedAt"]))
+        before = store.read(parent["id"])
+        said = self.call(parent, "propose_task", title="Document calc", brief="Write the README's\r\nsection on calc.")
+        self.assertIn("It waits in Roost under this task", said["content"][0]["text"])
+        self.assertIn("you can't start it yourself", said["content"][0]["text"])
+        # Nothing else of the task changes, and nothing starts: an offer is
+        # no event of its agent's, so you have still seen it. Its own stamp
+        # tells Emacs a reply read before it from one read since.
+        record = store.read(parent["id"])
+        self.assertEqual({key: record.get(key) for key in ("status", "request", "lastEvent", "updatedAt", "seen")},
+                         {key: before.get(key) for key in ("status", "request", "lastEvent", "updatedAt", "seen")})
+        self.assertTrue(roost.seen_since_last_event(record))
+        self.assertGreater(record["offersAt"], before["updatedAt"])
+        [offer] = record["offers"]
+        self.assertRegex(offer["id"], r"^[0-9a-f]{8}$")
+        self.assertEqual((offer["title"], offer["brief"]), ("Document calc", "Write the README's\nsection on calc."))
+        listed = self.request("list")["result"]
+        self.assertEqual([(t["id"], t["offers"]) for t in listed], [(parent["id"], [offer])])
+        # Offered again by its title, its brief changes, under the ID a
+        # draft open of it has; a few wait at most.
+        self.offered(parent, brief="Write the README's section on calc, with an example.")
+        self.offered(parent, title="Test calc")
+        self.offered(parent, title="Lint calc")
+        offers = store.read(parent["id"])["offers"]
+        self.assertEqual([o["title"] for o in offers], ["Document calc", "Test calc", "Lint calc"])
+        self.assertEqual((offers[0]["id"], offers[0]["brief"]),
+                         (offer["id"], "Write the README's section on calc, with an example."))
+        said = self.call(parent, "propose_task", title="Type calc", brief="Add type hints.")
+        self.assertTrue(said["isError"])
+        self.assertIn("3 offers of this task already wait", said["content"][0]["text"])
+        # They wait for you through a restart of its agent.
+        self.assertTrue(self.request("stop", id=parent["id"])["ok"])
+        self.assertTrue(self.request("resume", id=parent["id"])["ok"])
+        self.wait(parent, "ready")
+        self.assertEqual(len(store.read(parent["id"])["offers"]), 3)
+        # Only offers this helper wrote are shown, as not an older one's.
+        store.save(dict(store.read(parent["id"]), offers=[dict(title="Docs", lock="/tmp/x.lock")]))
+        self.assertEqual(self.request("list")["result"][0]["offers"], [])
+
+    def test_an_offer_you_start_makes_a_task_under_its_parent(self):
+        parent = self.create(name="parent")
+        other = self.offered(parent, title="Test calc")
+        child = self.started(parent)
+        self.assertEqual((child["parent"], child["name"], child["prompt"], child["command"], child["repo"]),
+                         (parent["id"], "Document calc", "Write the README's section on calc.",
+                          parent["command"], parent["repo"]))
+        self.assertEqual((child["baseRef"], child["integrationBranch"]), ("main", "main"))
+        self.assertNotEqual(child["worktree"], parent["worktree"])
+        self.assertTrue(child["branch"].startswith("roost/"))
+        # The offer you started no longer waits; the others do.
+        self.assertEqual(roost.Store(str(self.state)).read(parent["id"])["offers"], [other])
+        self.wait(child, "ready")
+
+    def test_an_offer_starts_from_the_branch_its_parent_merges_into(self):
+        # Wherever the primary checkout has gone since.
+        self.git("branch", "develop")
+        parent = self.create(name="parent", base="develop")
+        self.git("switch", "-q", "-c", "elsewhere")
+        child = self.started(parent)
+        self.assertEqual((child["baseRef"], child["integrationBranch"]), ("develop", "develop"))
+        self.assertEqual(child["baseCommit"], self.git("rev-parse", "develop"))
+
+    def test_an_offer_merges_where_its_parent_does(self):
+        # Also into another task's branch, for which a task started from it
+        # would otherwise merge where that task does.
+        other = self.create(name="other")
+        parent = self.create(name="parent")
+        store = roost.Store(str(self.state))
+        store.save(dict(store.read(parent["id"]), integrationBranch=other["branch"],
+                        integrationRef="refs/heads/" + other["branch"]))
+        child = self.started(parent)
+        self.assertEqual((child["integrationBranch"], child["baseCommit"]),
+                         (other["branch"], self.git("rev-parse", other["branch"])))
+
+    def test_dismissing_an_offer_drops_only_it(self):
+        parent = self.create(name="parent")
+        first, second = self.offered(parent, title="One"), self.offered(parent, title="Two")
+        store = roost.Store(str(self.state))
+        before = store.read(parent["id"])
+        reply = self.request("dismiss-offer", id=parent["id"], offer=first["id"])
+        self.assertEqual(reply["result"]["offers"], [second])
+        # No event of its agent's, as making it was none.
+        after = store.read(parent["id"])
+        self.assertEqual(after["updatedAt"], before["updatedAt"])
+        self.assertGreater(after["offersAt"], before["offersAt"])
+        # Again, or one that never was: nothing changes.
+        for offer in (first["id"], "ffffffff", None):
+            with self.subTest(offer=offer):
+                self.assertEqual(self.request("dismiss-offer", id=parent["id"], offer=offer)["result"]["offers"],
+                                 [second])
+        self.request("dismiss-offer", id=parent["id"], offer=second["id"])
+        self.assertNotIn("offers", store.read(parent["id"]))
+        self.assertEqual(len(self.request("list")["result"]), 1)
+        # Its agent can't see that you did, so it is told when it offers it
+        # again, and Emacs needn't know.
+        said = self.call(parent, "propose_task", title=first["title"], brief="Once more.")
+        self.assertTrue(said["isError"])
+        self.assertIn("dismissed this offer", said["content"][0]["text"])
+        self.assertNotIn("offers", store.read(parent["id"]))
+        self.assertNotIn("declined", self.request("inspect", id=parent["id"])["result"])
+        # Only the latest are kept.
+        for number in range(roost.DECLINED_LIMIT):
+            self.request("dismiss-offer", id=parent["id"], offer=self.offered(parent, title="Doc %d" % number)["id"])
+        self.assertEqual(len(store.read(parent["id"])["declined"]), roost.DECLINED_LIMIT)
+        self.assertNotIn("isError", self.call(parent, "propose_task", title=first["title"], brief="Once more."))
+
+    def test_an_offer_done_here_or_started_can_be_offered_again(self):
+        # You didn't turn those down.
+        parent = self.create(name="parent")
+        store = roost.Store(str(self.state))
+        offer = self.offered(parent)
+        self.assertTrue(self.request("send", id=parent["id"], text=offer["brief"], offer=offer["id"])["ok"])
+        self.assertNotIn("declined", store.read(parent["id"]))
+        self.started(parent)
+        self.assertNotIn("declined", store.read(parent["id"]))
+
+    def test_a_brief_sent_is_sent_though_its_offer_cant_be_dropped(self):
+        # Its agent has it: a failure now would ask you to send it again.
+        parent = self.create(name="parent")
+        offer = self.offered(parent)
+        stamp = roost.Store(str(self.state)).read(parent["id"])["offersAt"]
+        with patch.object(roost, "send") as sent, patch.object(roost.Store, "save", side_effect=OSError(28, "No space")):
+            reply = self.request("send", id=parent["id"], text=offer["brief"], offer=offer["id"])
+        self.assertTrue(reply["ok"], reply)
+        sent.assert_called_once()
+        # As its record has it, which a later listing has to be able to say.
+        self.assertEqual(reply["result"]["offers"], [offer])
+        self.assertEqual(reply["result"]["offersAt"], stamp)
+
+    def test_an_offer_that_no_longer_waits_starts_nothing(self):
+        # As from a draft of another Emacs, whose row of it is out of date.
+        parent = self.create(name="parent")
+        record = roost.Store(str(self.state)).read(parent["id"])
+
+        def start(offer, create_id):
+            return self.request("create", directory=record["repo"], name=offer["title"], prompt=offer["brief"],
+                                parent=parent["id"], offer=offer["id"], createId=create_id, socket=self.socket,
+                                command=record["command"])
+        offer = self.offered(parent)
+        asked = parent["id"] + offer["id"]
+        made = start(offer, asked)
+        self.assertTrue(made["ok"], made)
+        refused = start(offer, "b" * 16)
+        self.assertFalse(refused["ok"])
+        self.assertIn("no longer waits", refused["error"])
+        with patch.object(roost, "send") as sent:
+            refused = self.request("send", id=parent["id"], text=offer["brief"], offer=offer["id"])
+        self.assertFalse(refused["ok"])
+        sent.assert_not_called()
+        # Asked again by its own ID, it answers with the task it made, as
+        # for a draft opened anew after a request that got no reply.
+        self.assertEqual(start(offer, asked)["result"]["id"], made["result"]["id"])
+        self.assertEqual(len(self.request("list")["result"]), 2)
+        # Dismissed, or done here, it is gone the same way.
+        for title, act in (("Dismissed", lambda offer: self.request("dismiss-offer", id=parent["id"], offer=offer["id"])),
+                           ("Done here", lambda offer: self.request("send", id=parent["id"], text=offer["brief"],
+                                                                    offer=offer["id"]))):
+            offer = self.offered(parent, title=title)
+            with patch.object(roost, "send"):
+                self.assertTrue(act(offer)["ok"])
+            self.assertFalse(start(offer, uuid.uuid4().hex)["ok"])
+
+    def test_two_requests_for_an_offer_make_one_task(self):
+        # By the ID any draft of it asks with, in this Emacs or another: the
+        # second waits while the first is making it, and gets that task.
+        parent = self.create(name="parent")
+        record = roost.Store(str(self.state)).read(parent["id"])
+        offer = self.offered(parent)
+        making, go, made = threading.Event(), threading.Event(), []
+        make_task = roost.make_task
+
+        def make(store, request, create_id):
+            made.append(create_id)
+            making.set()
+            go.wait(10)
+            return make_task(store, request, create_id)
+
+        def start():
+            return roost.create(roost.Store(str(self.state)), dict(
+                directory=record["repo"], name=offer["title"], prompt=offer["brief"], parent=parent["id"],
+                offer=offer["id"], createId=parent["id"] + offer["id"], socket=self.socket,
+                command=record["command"]))
+        with patch.object(roost, "make_task", make), concurrent.futures.ThreadPoolExecutor(2) as pool:
+            first = pool.submit(start)
+            self.assertTrue(making.wait(10))
+            second = pool.submit(start)
+            time.sleep(0.2)
+            go.set()
+            self.assertEqual(second.result(10)["id"], first.result(10)["id"])
+        self.assertEqual(made, [parent["id"] + offer["id"]])
+
+    def test_a_task_made_from_one_offer_leaves_another_waiting(self):
+        # Under its parent too: only the offer it was started from has gone.
+        parent = self.create(name="parent")
+        other = self.offered(parent, title="Fix the other thing")
+        self.started(parent)
+        self.assertEqual(self.request("inspect", id=parent["id"])["result"]["offers"], [other])
+
+    def test_a_draft_of_an_offer_starts_after_its_task_has_gone(self):
+        # Merged with the draft left open: its offer went with the record,
+        # and the draft is all that is left of it.
+        parent = self.create(name="parent")
+        offer = self.offered(parent)
+        record = roost.Store(str(self.state)).read(parent["id"])
+        self.assertTrue(self.request("stop", id=parent["id"])["ok"])
+        self.assertTrue(self.request("retire", id=parent["id"])["ok"])
+        reply = self.request("create", directory=record["repo"], name=offer["title"], prompt=offer["brief"],
+                             base=roost.offered_base(record), parent=parent["id"], offer=offer["id"],
+                             createId=parent["id"] + offer["id"], socket=self.socket, command=record["command"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(reply["result"]["parent"], parent["id"])
+
+    def test_a_name_can_end_as_tmux_ends_a_command(self):
+        # Where a last ; would be the end of the command, or a \\ before it
+        # would stand for it. Its window has the name, and it can start again.
+        def window(task):
+            return roost.tmux(self.socket, "display-message", "-p", "-t", task["paneId"],
+                              "#{window_name}").stdout.rstrip("\n")
+        for name in ("Fix add;", "Fix add\\;", "Fix#;"):
+            with self.subTest(name=name):
+                task = self.create(name=name)
+                self.assertEqual(window(task), name)
+                reply = self.request("rename", id=task["id"], name="Tidy up;")
+                self.assertTrue(reply["ok"], reply)
+                self.assertEqual(window(task), "Tidy up;")
+                self.assertTrue(self.request("stop", id=task["id"])["ok"])
+                reply = self.request("resume", id=task["id"])
+                self.assertTrue(reply["ok"], reply)
+                self.assertEqual(window(reply["result"]), "Tidy up;")
+
+    def test_a_task_that_merges_into_no_branch_offers_none(self):
+        # Started with the primary checkout on no branch, it has none to
+        # give the task it would offer, wherever that checkout is now.
+        self.git("checkout", "-q", "--detach")
+        parent = self.create(name="parent")
+        self.git("checkout", "-q", "main")
+        self.assertFalse(roost.Store(str(self.state)).read(parent["id"]).get("integrationBranch"))
+        said = self.call(parent, "propose_task", title="Docs", brief="Write them.")
+        self.assertTrue(said["isError"])
+        self.assertIn("merges into no branch", said["content"][0]["text"])
+        self.assertNotIn("offers", roost.Store(str(self.state)).read(parent["id"]))
+
+    def test_an_offer_that_cant_start_is_refused_at_once(self):
+        parent = self.create(name="parent")
+        store = roost.Store(str(self.state))
+        # Nor a title a terminal would take as keys, that turns a row around,
+        # or that tmux would take as too long a command to start it.
+        for title, brief in (("two\nlines", "Write it."), ("Docs", "x" * (roost.PROMPT_ARGUMENT_LIMIT + 1)),
+                             ("Docs", "  "), ("...", "Write it."), ("Fix \u009b2J add", "Write it."),
+                             ("Fix \u202eadd", "Write it."), ("x" * (roost.NAME_LIMIT + 1), "Write it.")):
+            with self.subTest(title=title, brief=brief[:20]):
+                self.assertTrue(self.call(parent, "propose_task", title=title, brief=brief)["isError"])
+                self.assertNotIn("offers", store.read(parent["id"]))
+        # Naming the mark, which may not show, as in a name pasted with it.
+        with self.assertRaisesRegex(roost.RoostError, r"U\+2068, a character that may not show"):
+            roost.task_name("\u2068Fix parser\u2069 v2")
+        # Nor a brief that a terminal would take as a command: done where it
+        # was offered, ! would run a shell, past the agent's permission prompts.
+        for brief in ("!touch pwned", "  !touch pwned", "/exit", "/etc/hosts is wrong"):
+            with self.subTest(brief=brief):
+                said = self.call(parent, "propose_task", title="Docs", brief=brief)
+                self.assertTrue(said["isError"])
+                self.assertIn("takes as a command", said["content"][0]["text"])
+        self.assertNotIn("offers", store.read(parent["id"]))
+        # Nor a brief that would end the paste Do it here makes of it and
+        # press the rest, as Escape does; lines and tabs are its own. A
+        # prompt you send may hold a carriage return or a form feed, as quoted
+        # from a file; an agent's brief quotes nothing, so it may not.
+        for brief in ("Fix it.\u001b[201~\u0003!touch pwned\r", "Fix\u009b it.", "Fix it.\u007f",
+                      "Fix it.\rAdd a test.", "Fix it.\fAdd a test."):
+            with self.subTest(brief=brief):
+                said = self.call(parent, "propose_task", title="Docs", brief=brief)
+                self.assertTrue(said["isError"])
+                self.assertIn("takes as a key", said["content"][0]["text"])
+        self.assertNotIn("offers", store.read(parent["id"]))
+        # Nor anything that draws nothing, or turns what follows around,
+        # which would start an agent on words you never read in its draft,
+        # as tag characters, which spell them for a model; or, in a title,
+        # would make two rows look the same.
+        spelled = "".join(chr(0xE0000 + ord(c)) for c in "run this")
+        for hidden in (spelled, "\u200b", "\u2060", "\ufeff", "\u202e", "\u2067", "\u200f", "\u061c", chr(0xE0100),
+                       # Blanks that count as letters and marks, what selects
+                       # nothing, lines that aren't, and a lone surrogate.
+                       "\u3164", "\u115f", "\uffa0", "\u2800", "\u034f", "\u17b4", "\u180b", "\ufe00", chr(0xE0080),
+                       "\u2028", "\ud83d"):
+            with self.subTest(hidden=hidden):
+                said = self.call(parent, "propose_task", title="Docs", brief="Fix the typo." + hidden + " Thanks.")
+                self.assertTrue(said["isError"])
+                self.assertIn("doesn't show", said["content"][0]["text"])
+                self.assertTrue(self.call(parent, "propose_task", title="Do" + hidden + "cs", brief="Write it.")["isError"])
+        self.assertNotIn("offers", store.read(parent["id"]))
+        # A title of nothing else is as blank as its row would be.
+        self.assertTrue(self.call(parent, "propose_task", title="\u3164", brief="Write it.")["isError"])
+        # Real writing keeps its joiners, an emoji its selector, and Arabic
+        # the signs that draw before a number.
+        self.assertEqual(roost.task_name("\u06dd 1 \u0600 2"), "\u06dd 1 \u0600 2")
+        self.assertNotIn("isError", self.call(parent, "propose_task", title="Do\u200ccs",
+                                              brief="Ship \U0001f468\u200d\U0001f4bb\ufe0f."))
+        store.save({key: value for key, value in store.read(parent["id"]).items() if key != "offers"})
+        self.assertNotIn("isError", self.call(parent, "propose_task", title="Docs", brief="One\n\tTwo"))
+        store.save({key: value for key, value in store.read(parent["id"]).items() if key != "offers"})
+        # From a task whose branch to merge into is gone, as one deleted once
+        # merged, there is none to start from.
+        self.git("branch", "develop")
+        merged = self.create(name="merged", base="develop")
+        self.git("branch", "-D", "develop")
+        said = self.call(merged, "propose_task", title="Docs", brief="Write them.")
+        self.assertIn("develop, is gone", said["content"][0]["text"])
+        # Nor from one you stopped as its agent offered.
+        store.save(dict(store.read(parent["id"]), status="stopped"))
+        self.assertTrue(self.call(parent, "propose_task", title="Docs", brief="Write them.")["isError"])
+        self.assertEqual(store.read(parent["id"])["status"], "stopped")
+        self.assertNotIn("offers", store.read(parent["id"]))
+
+    def test_an_agent_is_told_of_a_failure_to_save_its_offer(self):
+        # As any tool's failure, for the agent to work with, not the protocol's.
+        parent = self.create(name="parent")
+        with patch.object(roost, "propose_task", side_effect=OSError("No space left on device")):
+            said = self.call(parent, "propose_task", title="Docs", brief="Write it.")
+        self.assertTrue(said["isError"])
+        self.assertIn("No space left", said["content"][0]["text"])
+
+    def test_a_lone_surrogate_loses_no_event_and_no_reply(self):
+        # As a model can write into JSON. A hook that failed to save would
+        # leave its event unseen, and a reply Emacs got nothing of would
+        # say that the host had failed.
+        task = self.create(name="task")
+        store = roost.Store(str(self.state))
+        roost.update_hook(store, task["id"], dict(hook_event_name="Stop", last_assistant_message="Done \ud83d now"),
+                          store.read(task["id"])["runId"])
+        self.assertEqual(store.read(task["id"])["lastReply"], "Done ? now")
+        process = subprocess.run([sys.executable, str(SOURCE), "rpc"], capture_output=True, text=True,
+                                 input=json.dumps(dict(root=str(self.state), action="\ud83d")))
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertEqual(json.loads(process.stdout), dict(ok=False, error="Unknown action: ?"))
+
+    def test_an_agent_reads_its_tasks_under_the_registry_lock(self):
+        # A task being made has its record before its pane, which outside
+        # it would read as crashed.
+        parent = self.create(name="parent")
+        store = roost.Store(str(self.state))
+        held = []
+        with patch.object(roost, "reconcile",
+                          lambda store, _tasks, save=True: held.append(getattr(store, "lock", None) is not None)):
+            roost.read_tasks(store, parent["id"])
+        self.assertEqual(held, [True])
+
+    def test_an_agent_reads_only_the_tasks_started_from_its_offers(self):
+        parent = self.create(name="parent")
+        other = self.create(name="other")
+        child = self.started(parent)
+        # Once its turn on the brief is over, with its reply.
+        self.wait(child, "ready", "Stop")
+        # All of them, also for an ID left empty, as an agent may send it,
+        # or by the start of its ID.
+        for arguments in ({}, dict(task=""), dict(task=child["id"][:6])):
+            with self.subTest(arguments=arguments):
+                said = self.call(parent, "read_task", **arguments)["content"][0]["text"]
+                self.assertIn("Document calc, ID %s" % child["id"], said)
+                self.assertIn("waiting for a prompt", said)
+                self.assertIn("Its latest reply:\nPROMPT Write the README's section on calc.", said)
+        self.assertTrue(self.call(parent, "read_task", task=other["id"])["isError"])
+        # Nor is there a tool to send it anything.
+        self.assertTrue(self.call(parent, "message_task", task=child["id"], message="Also the tests")["isError"])
+        # Nothing it finds is saved: a startup file can send its agent's
+        # tmux elsewhere, where no server has every task crashed.
+        store = roost.Store(str(self.state))
+        before = store.read(child["id"])
+        with patch.object(roost, "pane_inventory", return_value={}):
+            said = self.call(parent, "read_task", task=child["id"])["content"][0]["text"]
+        self.assertIn("waiting for a prompt", said)
+        # As a listing would have it, also when none has since.
+        roost.tmux(self.socket, "kill-window", "-t", child["windowId"])
+        self.assertIn("crashed", self.call(parent, "read_task", task=child["id"])["content"][0]["text"])
+        self.assertEqual(store.read(child["id"]), before)
+
+    def test_an_agent_offers_through_the_server_its_command_line_names(self):
+        # As Claude Code does it: the agent runs the helper from its
+        # --mcp-config, and its turn goes on to its end.
+        parent = self.create(name="parent", prompt="offer Document calc")
+        record = self.wait(parent, "ready", "Stop")
+        self.assertIn("It waits in Roost under this task", record["lastReply"])
+        self.assertEqual([(o["title"], o["brief"]) for o in record["offers"]],
+                         [("Document calc", "Brief for Document calc")])
 
     def test_adapter_launch_failure_marks_the_task_failed(self):
         task = self.create()
@@ -8634,8 +9225,11 @@ class ProgramStatus(unittest.TestCase):
             plugin = agent.plugin(store).as_uri()
             config = lambda env: json.loads(agent.environment(store, task, env)["OPENCODE_CONFIG_CONTENT"])
             self.assertEqual(config({})["plugin"], [plugin])
-            mine = config(dict(OPENCODE_CONFIG_CONTENT='{"model": "m", "plugin": ["theirs"]}'))
+            mine = config(dict(OPENCODE_CONFIG_CONTENT='{"model": "m", "plugin": ["theirs"], "mcp": {"x": {}}}'))
             self.assertEqual((mine["model"], mine["plugin"]), ("m", ["theirs", plugin]))
+            # Roost's own MCP server, beside yours.
+            self.assertEqual(mine["mcp"], {"x": {}, "roost": dict(type="local", command=[
+                sys.executable, str(SOURCE.resolve()), "mcp", str(store.root), task["id"], "opencode"])})
             for bad in ("{", "[]", '"x"'):
                 with self.assertRaises(roost.RoostError):
                     agent.environment(store, task, dict(OPENCODE_CONFIG_CONTENT=bad))
@@ -8657,7 +9251,7 @@ class ProgramStatus(unittest.TestCase):
             self.assertEqual(env["ROOST_OPENCODE_ATTACHMENTS"], folder)
             # The plugin gives the rule once your config is merged; the inline
             # config Roost writes leaves your permissions alone.
-            self.assertEqual(set(json.loads(env["OPENCODE_CONFIG_CONTENT"])), {"plugin"})
+            self.assertEqual(set(json.loads(env["OPENCODE_CONFIG_CONTENT"])), {"plugin", "mcp"})
 
     @unittest.skipUnless(shutil.which("node"), "needs Node")
     def test_opencode_plugin_allows_attachments_after_your_rules(self):
@@ -8748,7 +9342,7 @@ class ProgramStatus(unittest.TestCase):
             driver.write_text(
                 "const { default: observe } = await import(%s);\n"
                 "const handlers = {};\n"
-                "observe({ on: (name, handler) => { handlers[name] = handler; } });\n"
+                "observe({ on: (name, handler) => { handlers[name] = handler; }, registerTool: () => {} });\n"
                 "const ctx = { sessionManager: { getSessionFile: () => 's' }, isIdle: () => false };\n"
                 "const done = [handlers.ui_prompt_start({ title: 'First' }, ctx),\n"
                 "              handlers.ui_prompt_end({}, ctx),\n"
@@ -8779,7 +9373,7 @@ class ProgramStatus(unittest.TestCase):
             driver.write_text(
                 "const { default: observe } = await import(%s);\n"
                 "const handlers = {};\n"
-                "observe({ on: (name, handler) => { handlers[name] = handler; } });\n"
+                "observe({ on: (name, handler) => { handlers[name] = handler; }, registerTool: () => {} });\n"
                 "const ctx = { sessionManager: { getSessionFile: () => 's' } };\n"
                 "const held = handlers.input({ text: 'Now add a test', source: 'interactive' }, ctx);\n"
                 "if (held !== undefined) throw new Error('input handler returned ' + held);\n"
@@ -8793,6 +9387,71 @@ class ProgramStatus(unittest.TestCase):
                                            source="extension"),
                                       dict(event="agent_start", session="s")])
             self.assertIsNone(roost.PiAgent().observe(events[1]))
+
+    @unittest.skipUnless(shutil.which("node"), "needs Node")
+    def test_pi_offers_a_task_through_its_extension(self):
+        # The same tools as an MCP server gives other agents, through it.
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            repo = root / "repo"
+            subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+            subprocess.run(["git", "-C", str(repo), "-c", "user.name=Roost", "-c", "user.email=roost@example.com",
+                            "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "Start"], check=True)
+            store = roost.Store(str(root / "state"))
+            store.save(dict(id="0" * 16, agent="pi", status="running", runId="run", name="parent", repo=str(repo),
+                            integrationBranch="main", integrationRef="refs/heads/main", updatedAt=roost.now()))
+            roost.PiAgent().launch(store, dict(id="0" * 16, command=["pi"], prompt=None), False)
+            extension = next(store.root.glob("pi-observer-*.mjs"))
+            driver = root / "driver.mjs"
+            driver.write_text(
+                "const { default: observe } = await import(%s);\n"
+                "const tools = {};\n"
+                "observe({ on: () => {}, registerTool: tool => { tools[tool.name] = tool; } });\n"
+                "const offered = await tools.roost_propose_task.execute('1', { title: 'Docs', brief: 'Write them.' });\n"
+                "const read = await tools.roost_read_task.execute('2', {});\n"
+                "let refused;\n"
+                "try { await tools.roost_read_task.execute('3', { task: 'abcd' }); }\n"
+                "catch (error) { refused = error.message; }\n"
+                "// A call stopped before it begins, as one Pi hands on once its run is stopped.\n"
+                "const already = new AbortController();\n"
+                "already.abort();\n"
+                "let skipped;\n"
+                "try { await tools.roost_propose_task.execute('4', { title: 'Tests', brief: 'Write them.' },\n"
+                "                                             already.signal); }\n"
+                "catch (error) { skipped = error.message; }\n"
+                "const offer = tools.roost_propose_task;\n"
+                "console.log(JSON.stringify({ names: Object.keys(tools), offered, read, refused, skipped,\n"
+                "                             description: offer.description, schema: offer.parameters }));\n"
+                % json.dumps(extension.as_uri()))
+            env = dict(os.environ, ROOST_PYTHON=sys.executable, ROOST_HELPER=str(SOURCE),
+                       ROOST_STATE_DIRECTORY=str(store.root), ROOST_TASK_ID="0" * 16, ROOST_RUN_ID="run")
+            said = json.loads(subprocess.run(["node", str(driver)], env=env, check=True, timeout=30,
+                                             capture_output=True, text=True).stdout)
+            # By Roost's names, which another extension's tools are unlikely
+            # to have and Pi refuses two of; their words name them so.
+            self.assertEqual(said["names"], ["roost_propose_task", "roost_read_task"])
+            self.assertIn("offer it with roost_propose_task", said["description"])
+            self.assertNotIn(" propose_task", said["description"])
+            self.assertIn("It waits in Roost under this task", said["offered"]["content"][0]["text"])
+            self.assertIn("is in Roost now", said["read"]["content"][0]["text"])
+            self.assertIn("No task started from your offers", said["refused"])
+            self.assertEqual(said["schema"]["required"], ["title", "brief"])
+            # One stopped before it begins runs nothing.
+            self.assertEqual(said["skipped"], "Stopped")
+            record = store.read("0" * 16)
+            self.assertEqual([offer["title"] for offer in record["offers"]], ["Docs"])
+            self.assertEqual(record["status"], "running")
+            # A tool Pi refuses leaves the rest of the extension loaded.
+            refusing = root / "refusing.mjs"
+            refusing.write_text(
+                "const { default: observe } = await import(%s);\n"
+                "const handlers = {};\n"
+                "observe({ on: (name, handler) => { handlers[name] = handler; },\n"
+                "          registerTool: () => { throw new Error('taken'); } });\n"
+                "console.log(JSON.stringify(Object.keys(handlers).includes('agent_end')));\n"
+                % json.dumps(extension.as_uri()))
+            self.assertEqual(subprocess.run(["node", str(refusing)], env=env, check=True, timeout=30,
+                                            capture_output=True, text=True).stdout.strip(), "true")
 
     @unittest.skipUnless(shutil.which("node"), "needs Node")
     def test_opencode_plugin_reports_what_you_sent_as_a_turn_takes_it_up(self):

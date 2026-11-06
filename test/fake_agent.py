@@ -58,7 +58,7 @@ agent = "pi" if old else agent
 if codex:
     hooks = {}
     for index, arg in enumerate(args):
-        if arg == "-c":
+        if arg == "-c" and args[index + 1].startswith("hooks."):
             setting = args[index + 1]
             event = setting.split("=", 1)[0].removeprefix("hooks.")
             command = json.JSONDecoder().raw_decode(setting.split("command = ", 1)[1])[0]

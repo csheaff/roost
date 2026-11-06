@@ -252,7 +252,18 @@ Larger, or undecided.
   quicker to judge. In ParallelPilot's trial, the developer saw and could
   change the planner's split before any agent started
   ([ParallelPilot](https://arxiv.org/html/2609.33113v1)), so a split here
-  would wait for your yes too.
+  would wait for your yes too. A first step, on the integration branch
+  `agent-offered-tasks`, follows the Claude app's cards for work an agent
+  finds: an offer that waits under its task until you start it, have it
+  done where it was offered, or dismiss it, and a task started from it
+  shown under the one it came from. It waits for daily use before it
+  merges. Open: a finished task's report reaching the agent that offered
+  it unasked, as the app's do; messages from that agent to the task, left
+  out because Roost would type them into a terminal it can't see is at its
+  prompt, and back only if the trial misses them; the server's memory,
+  about 38 MB a task run from source; Codex and OpenCode tried live; and,
+  before it merges, a live run in `docs/validation.md` and `test/captures`
+  of Claude Code's offers and forms.
 - **A map of the agent's work** beside its terminal: the files it reads and
   edits over time, drawn with Emacs 32's canvas images. Prototype on branch
   `work-map`.

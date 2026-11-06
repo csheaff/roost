@@ -4,6 +4,36 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- An agent can offer work it came across outside its task as a task of its
+  own, and goes on with its own work. The offer waits, dim, under its task
+  in the dashboard and sidebar. A click opens it as a new task draft,
+  filled in, whose buttons start it, have the agent do it there, leave it
+  for later or dismiss it. A task you start this way shows under the one
+  it came from, and the agent that offered it can read how it is doing.
+  Roost gives Claude Code, Codex and OpenCode these tools, `propose_task`
+  and `read_task`, as an MCP server of the helper's, and Pi through its
+  extension; the agent starts the server and ends it with itself. Nothing
+  to do when upgrading: a task gets them when its agent next starts.
+- A Claude Code task shows `permission` while an MCP server's form waits
+  on you, a few seconds after it opens, and, once you answer it, goes back
+  to working or to rest, as the form found it, unless a request that came
+  meanwhile still waits. Nothing to do when upgrading.
+- A task's name can't hold characters a terminal takes as keys, that draw
+  nothing, or that turn the rest of a line around, and Roost names the one
+  it found; nor can it run past 1,000 characters. To rename a task whose name
+  holds one, as pasted from a chat, type its name afresh rather than editing
+  the old one.
+- A task's name can end in `;`, which tmux took as the end of a command, so
+  that it didn't start, or resume once renamed. Nothing to do when upgrading.
+- Undo in a new task draft undoes what you did. Once the fields above the
+  prompt had changed length, as when its name filled in, it cut the wrong
+  text. Nothing to do when upgrading.
+- A draft's header line shows a task's name as it is, with its `%` or
+  backslashes, and says at once that it is creating or sending. A draft
+  stays open as it was when a question before its request is quit. Nothing
+  to do when upgrading.
+- A lone surrogate in what an agent reports, which failed a host's reply or
+  lost the event, is replaced. Nothing to do when upgrading.
 - Discarding or merging a task checks again what its question told you, as
   an agent goes on working while you read. A file written before you
   answered went with the task, though Roost had said nothing would be lost

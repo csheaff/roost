@@ -66,7 +66,10 @@ PI_API = (r"isIdle\(\): boolean", r"hasPendingMessages\(\): boolean", r"sessionM
           r"interface AgentSettledEvent \{[^}]*\baborted: boolean",
           r"interface UIPromptStartEvent \{[^}]*\btitle\?: string",
           r"interface InputEvent \{[^}]*\btext: string[^}]*\bsource: InputSource",
-          r"type InputSource = [^;]*\"extension\"")
+          r"type InputSource = [^;]*\"extension\"",
+          # Roost's tools.
+          r"registerTool<[^>]*>\(tool: ToolDefinition",
+          r"execute\(toolCallId: string, params: [^,]+, signal: AbortSignal \| undefined")
 PI_FLAGS = ("--extension", "--session-dir", "--session")
 
 # OpenCode events, of the kinds Roost's plugin reads, that it does not.
