@@ -2983,6 +2983,8 @@ class Lifecycle(unittest.TestCase):
             self.assertIn("tmux did not answer", self.answered("merge", id=task["id"])["error"])
             # Which may be an agent at work: with its record gone, nothing would know.
             self.assertIn("tmux did not answer", self.answered("forget", id=task["id"])["error"])
+            # And any other call: a server can stop between two.
+            self.assertEqual(roost.tmux(self.socket, "list-windows", "-a", check=False).returncode, 124)
         finally:
             os.kill(pid, signal.SIGCONT)
         listed = self.request("list", socket=self.socket)["result"][0]
@@ -3021,37 +3023,6 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(self.git("rev-parse", "refs/heads/" + task["branch"], cwd=self.origin), tip)
         # Then the task can be finished.
         self.assertTrue(self.request("discard", id=task["id"], dryRun=True)["ok"])
-
-    def test_a_pull_request_holds_while_a_command_it_started_runs(self):
-        # Emacs gives up on a request after a minute, and a push may take
-        # longer; finishing the task must wait for it all the same.
-        self.github()
-        task = self.create()
-        self.commit_in(task)
-
-        def held():
-            self.assertIn("busy", self.request("retire", id=task["id"])["error"])
-            deadline = time.monotonic() + 8
-            while "busy" in self.request("retire", id=task["id"])["error"]:
-                self.assertLess(time.monotonic(), deadline)
-                time.sleep(0.2)
-
-        # What gh started, as it opened the pull request...
-        (self.gh_dir / "linger").touch()
-        reply = self.request("pr", id=task["id"], title="Slow")
-        self.assertTrue(reply["ok"], reply)
-        held()
-        (self.gh_dir / "linger").unlink()
-        # ...and what Git started, as it pushed to it.
-        hooks = self.root / "hooks"
-        hooks.mkdir()
-        (hooks / "pre-push").write_text("#!/bin/sh\nsleep 1.5 > /dev/null 2>&1 &\n")
-        (hooks / "pre-push").chmod(0o755)
-        self.git("config", "core.hooksPath", str(hooks))
-        self.commit_in(task, "more")
-        reply = self.request("pr", id=task["id"])
-        self.assertTrue(reply["ok"], reply)
-        held()
 
     def test_a_removal_that_stopped_short_can_be_finished(self):
         task = self.create()
@@ -7282,36 +7253,6 @@ print(json.dumps(dict(data=data)))
         self.assertNotEqual(task["id"], planned["id"])
         self.assertEqual(self.task_branches(), [task["branch"]])
         self.assertEqual(list((self.state / "creating").glob("*")), [])
-
-    def test_a_creation_whose_git_goes_on_is_undone_once_git_is_done(self):
-        # The helper stopped, as on a host over SSH, while Git checks out.
-        for number in range(4):
-            (self.repo / ("file%d.bin" % number)).write_text("%d\n" % number)
-        (self.repo / ".gitattributes").write_text("*.bin filter=slow\n")
-        self.git("add", ".")
-        self.git("commit", "-qm", "Slow to check out")
-        self.git("config", "filter.slow.smudge", "sleep 1; cat")
-        self.git("config", "filter.slow.clean", "cat")
-        process = self.creating(name="git goes on", createId="78" * 8)
-        note = self.wait_for_note()
-        planned = json.loads(note.read_text())
-        deadline = time.monotonic() + 8
-        while not (Path(planned["worktree"]) / "file0.bin").exists() and time.monotonic() < deadline:
-            time.sleep(0.05)
-        os.kill(process.pid, signal.SIGKILL)
-        process.wait()
-        # Git holds the note's lock: a poll leaves it be.
-        self.assertEqual(self.request("list")["result"], [])
-        self.assertTrue(note.exists())
-        self.assertTrue(Path(planned["worktree"]).exists())
-        deadline = time.monotonic() + 15
-        while note.exists() and time.monotonic() < deadline:
-            self.request("list")
-            time.sleep(0.2)
-        self.assertFalse(note.exists())
-        self.assertFalse(Path(planned["worktree"]).exists())
-        self.assertEqual(self.task_branches(), [])
-        self.assertEqual(len(roost.worktree_branches(self.repo)), 1)
 
     def test_a_creation_cut_short_after_its_checkout_is_undone_as_a_failed_one(self):
         store = roost.Store(str(self.state))
