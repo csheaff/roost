@@ -565,39 +565,98 @@ WHAT names it, if it isn't the prompt."
   (json-serialize (mapcar (lambda (entry) (cons (car entry) (or (cdr entry) :null)))
                           alist)))
 
-(defun roost--read-json-list (file)
-  "Return the JSON array in FILE as a list, or nil if it is unreadable.
+(defun roost--read-json-list (file &optional unreadable)
+  "Return the JSON array in FILE as a list, or UNREADABLE if it can't be read.
 JSON null becomes nil."
-  (when (file-readable-p file)
-    (ignore-errors
-      (with-temp-buffer
-        (insert-file-contents file)
-        ;; Older versions wrote the local host as {}; as an alist that
-        ;; reads back as nil, which is the local host.
-        (let ((list (json-parse-buffer :array-type 'list :object-type 'alist :null-object nil)))
-          (and (listp list) list))))))
+  (if (not (file-readable-p file))
+      unreadable
+    (condition-case nil
+        (with-temp-buffer
+          (insert-file-contents file)
+          ;; Older versions wrote the local host as {}; as an alist that
+          ;; reads back as nil, which is the local host.
+          (let ((list (json-parse-buffer :array-type 'list :object-type 'alist :null-object nil)))
+            (if (listp list) list unreadable)))
+      (error unreadable))))
+
+;; Each file of what Roost remembers is read once, and Emacs works from
+;; what it read.  Another Emacs can write it meanwhile, so each change
+;; here first takes up what the file holds now, and goes on that.
+
+(defvar roost--file-stamps (make-hash-table :test 'equal)
+  "How each file of what Roost remembers was when this Emacs last read or wrote it.
+See `roost--file-stamp'.")
+
+(defun roost--file-stamp (file)
+  "What moves when FILE is written: its modification time and inode, or nil.
+Each write makes a new file, so the inode tells two apart in one tick of
+a coarse clock.  Of what FILE leads to, if it is a link."
+  (when-let* ((attributes (file-attributes (file-truename file))))
+    (list (file-attribute-modification-time attributes)
+          (file-attribute-inode-number attributes))))
+
+(defun roost--read-remembered (file)
+  "Return the list in FILE, or nil, noting how FILE is for `roost--read-again'."
+  (puthash file (roost--file-stamp file) roost--file-stamps)
+  (roost--read-json-list file))
+
+(defun roost--read-again (file)
+  "Return the list in FILE if it moved since this Emacs read or wrote it.
+Otherwise `same', as also when it has gone or can't be read: that is no
+other Emacs's doing, which writes it whole, and what this one holds is
+better than nothing."
+  (let ((stamp (roost--file-stamp file)))
+    (if (or (null stamp) (equal stamp (gethash file roost--file-stamps)))
+        'same
+      (let ((list (roost--read-json-list file 'same)))
+        (unless (eq list 'same) (puthash file stamp roost--file-stamps))
+        list))))
 
 (defun roost--write-json-list (file list)
-  "Write LIST to FILE as a private JSON array, with nil as null."
+  "Write LIST to FILE as a private JSON array, with nil as null.
+Through a new file renamed into place, so that nothing reads it half
+written, and a write that fails leaves it as it was."
   (make-directory (file-name-directory file) t)
-  (let ((coding-system-for-write 'utf-8-unix))
-    (with-temp-file file
-      (insert (json-serialize (vconcat (mapcar (lambda (item) (or item :null)) list)))))
-    (set-file-modes file #o600)))
+  (let* ((coding-system-for-write 'utf-8-unix)
+         ;; What a link, as from your dotfiles, leads to stays where it is.
+         (target (file-truename file))
+         (new (make-temp-file (concat target ".")))
+         stamp)
+    (unwind-protect
+        (progn
+          (with-temp-file new
+            (insert (json-serialize (vconcat (mapcar (lambda (item) (or item :null)) list)))))
+          ;; Before it goes: once there, it may already be another Emacs's.
+          (setq stamp (roost--file-stamp new))
+          (rename-file new target t))
+      (when (file-exists-p new) (delete-file new)))
+    (puthash file stamp roost--file-stamps)))
 
 (defun roost--hosts ()
   "Configured and remembered hosts, without network I/O."
   (unless roost--hosts-loaded
     (setq roost--hosts-loaded t
           roost--remembered-hosts (seq-filter #'string-or-null-p
-                                              (roost--read-json-list roost-hosts-file))))
+                                              (roost--read-remembered roost-hosts-file))))
   ;; A copy: `delete-dups' would otherwise drop a configured host from
   ;; the remembered ones, which `append' shares as its tail.
   (delete-dups (append roost-hosts roost--remembered-hosts nil)))
 
+(defun roost--hosts-as-on-file (&rest using)
+  "Take up the hosts `roost-hosts-file' holds, if another Emacs changed them.
+One it forgot goes here too, as no list would take its tasks away; unless
+it is among USING, hosts you are using again, where nil is this machine."
+  (let ((watched (roost--hosts))
+        (hosts (roost--read-again roost-hosts-file)))
+    (unless (eq hosts 'same)
+      (setq roost--remembered-hosts (seq-filter #'string-or-null-p hosts))
+      (dolist (host (seq-difference watched (append using (roost--hosts))))
+        (roost--stop-watching host)
+        (message "Roost no longer watches %s, as another Emacs forgot it" (roost--host-label host))))))
+
 (defun roost--remember-host (host)
   "Remember HOST across restarts."
-  (roost--hosts)
+  (roost--hosts-as-on-file host)
   (unless (member host roost--remembered-hosts)
     (push host roost--remembered-hosts)
     (roost--write-json-list roost-hosts-file roost--remembered-hosts)))
@@ -760,7 +819,9 @@ is the seconds it may take, if not `roost-request-timeout'."
                      (when-let* ((timer (process-get proc 'roost-timer)))
                        (cancel-timer timer))
                      (when input-file (ignore-errors (delete-file input-file)))
-                     (while (accept-process-output stderr-pipe 0 nil t))
+                     ;; An integer runs no timers: one that throws, as
+                     ;; `with-timeout' does, would leave without a callback.
+                     (while (accept-process-output stderr-pipe 0 nil 1))
                      (delete-process stderr-pipe)
                      (unwind-protect
                          (let* ((stdout (with-current-buffer buffer (buffer-string)))
@@ -878,12 +939,49 @@ terminal.  TASK is nil for one not yet created."
               (height . ,(alist-get 'height size)))
           size)))))
 
+(defconst roost--install-code
+  "import json,os,sys,tempfile
+r=os.path.expanduser(%s)
+os.makedirs(r,mode=0o700,exist_ok=True)
+p=os.path.join(r,%s)
+n=%d
+if os.path.isfile(p) and os.path.getsize(p)==n:
+    os.utime(p)
+else:
+    d=sys.stdin.buffer.read()
+    if len(d)!=n:
+        sys.exit('Only %%d of %%d bytes of the helper arrived; nothing was installed'%%(len(d),n))
+    fd,t=tempfile.mkstemp(dir=r)
+    try:
+        with os.fdopen(fd,'wb') as f: f.write(d)
+        os.chmod(t,0o700)
+        os.replace(t,p)
+    except BaseException:
+        os.unlink(t)
+        raise
+print(json.dumps({'ok':True}))"
+  "Python that installs the helper from its input: state directory, name, size.
+The name is a hash of the helper, and agents' hooks call that file, so one
+of the right size stays, as newly used, for `prune_helpers' to go by.  A
+connection that drops ends the input, not this: what comes up short
+replaces nothing.")
+
+(defun roost--helper-unusable-p (err filename)
+  "Whether ERR says the helper FILENAME is gone, or not whole, on its host.
+Python couldn't find it, as another Emacs pruned it or the state directory
+went, or it isn't the size it should be, as an older Roost's install left
+it when cut off.  Either way nothing ran, so asking again can't run an
+action twice."
+  (and (string-match-p "FileNotFoundError\\|Not whole: " err)
+       (string-search filename err)))
+
 (defun roost--request (host action parameters success &optional failure timeout)
   "Run ACTION with PARAMETERS on HOST, installing the versioned helper as needed.
 Call SUCCESS with the result, or FAILURE with an error message.  TIMEOUT
 is the seconds ACTION may take, if not `roost-request-timeout'."
   (let* ((helper (roost--helper))
          (filename (car helper))
+         (size (string-bytes (cdr helper)))
          (root roost-state-directory)
          (installation-key (list host root))
          (failure (or failure
@@ -896,15 +994,14 @@ is the seconds ACTION may take, if not `roost-request-timeout'."
           (lambda (on-failure)
             (roost--run
              host
-             (format "import os,runpy,sys; p=os.path.join(os.path.expanduser(%s),%s); sys.argv=[p,'rpc']; runpy.run_path(p,run_name='__main__')"
-                     (json-serialize root) (json-serialize filename))
+             (format "import os,runpy,sys; p=os.path.join(os.path.expanduser(%s),%s); os.path.getsize(p)==%d or sys.exit('Not whole: '+p); sys.argv=[p,'rpc']; runpy.run_path(p,run_name='__main__')"
+                     (json-serialize root) (json-serialize filename) size)
              input success on-failure timeout)))
          (install-and-invoke
           (lambda ()
             (roost--run
              host
-             (format "import os,sys,tempfile,json\nr=os.path.expanduser(%s)\nos.makedirs(r,mode=0o700,exist_ok=True)\np=os.path.join(r,%s)\nfd,t=tempfile.mkstemp(dir=r)\nwith os.fdopen(fd,'wb') as f: f.write(sys.stdin.buffer.read())\nos.chmod(t,0o700)\nos.replace(t,p)\nprint(json.dumps({'ok':True}))"
-                     (json-serialize root) (json-serialize filename))
+             (format roost--install-code (json-serialize root) (json-serialize filename) size)
              (cdr helper)
              (lambda (_)
                (puthash installation-key filename roost--installed)
@@ -914,11 +1011,8 @@ is the seconds ACTION may take, if not `roost-request-timeout'."
         (funcall install-and-invoke)
       (funcall invoke
                (lambda (err)
-                 ;; Python could not open the helper: another Emacs pruned
-                 ;; it, or the state directory went.  Install it again.
                  ;; Other failures, such as an unreachable host, keep it.
-                 (if (not (and (string-search "FileNotFoundError" err)
-                               (string-search filename err)))
+                 (if (not (roost--helper-unusable-p err filename))
                      (funcall failure err)
                    (remhash installation-key roost--installed)
                    (funcall install-and-invoke)))))))
@@ -1382,18 +1476,22 @@ those tasks."
           (puthash host (if (or (null ids) (eq pending t)) t (seq-union pending ids))
                    roost--full-refresh-pending)))
     (puthash host t roost--refreshing)
-    (let ((request (puthash host (1+ (gethash host roost--list-requests 0)) roost--list-requests))
-          (revision (gethash host roost--revisions 0))
-          ;; Full refreshes ask GitHub too, and quiet polls now and then.
-          (pull-requests (if quiet
-                             (> (- (float-time) (gethash host roost--pull-requests-asked 0))
-                                roost--pull-request-interval)
-                           (not ids)))
-          (finish (lambda ()
-                    (remhash host roost--refreshing)
-                    (when-let* ((pending (gethash host roost--full-refresh-pending)))
-                      (remhash host roost--full-refresh-pending)
-                      (roost--refresh-host host nil (unless (eq pending t) pending))))))
+    (let* ((request (puthash host (1+ (gethash host roost--list-requests 0)) roost--list-requests))
+           (revision (gethash host roost--revisions 0))
+           ;; Full refreshes ask GitHub too, and quiet polls now and then.
+           (pull-requests (if quiet
+                              (> (- (float-time) (gethash host roost--pull-requests-asked 0))
+                                 roost--pull-request-interval)
+                            (not ids)))
+           asked finished
+           ;; Once: the refresh it starts next has the flag then.
+           (finish (lambda ()
+                     (unless finished
+                       (setq finished t)
+                       (remhash host roost--refreshing)
+                       (when-let* ((pending (gethash host roost--full-refresh-pending)))
+                         (remhash host roost--full-refresh-pending)
+                         (roost--refresh-host host nil (unless (eq pending t) pending)))))))
       (when pull-requests (puthash host (float-time) roost--pull-requests-asked))
       (let ((failed
              (lambda (err)
@@ -1416,38 +1514,45 @@ those tasks."
                                 roost--failures))
                      (roost--redraw))
                  (funcall finish)))))
-        (roost--request
-         host "list" `((full . ,(cond (quiet :false) (ids (vconcat ids)) (t t)))
-                       ,@(when (and quiet pull-requests) '((pullRequests . t))))
-         ;; Each ends the refresh even if drawing what it found fails, or
-         ;; the host would never be asked again.
-         (lambda (tasks)
-           (if (not (roost--task-list-p tasks))
-               (funcall failed "Roost can't read the tasks the host helper listed")
-             (unwind-protect
-                 (progn
-                   (remhash host roost--failures)
-                   (remhash host roost--errors)
-                   ;; A newer mutation must win over a stale list reply, and a host
-                   ;; forgotten meanwhile stays forgotten.
-                   (when (and (= revision (gethash host roost--revisions 0))
-                              (member host (roost--hosts)))
-                     (let ((before (roost--task-states host)))
-                       (roost--apply-snapshot host tasks request)
-                       (with-demoted-errors "Roost: %S" (roost--compose-listed host tasks))
-                       ;; Quiet polls leave out Git statistics.  An agent that reported
-                       ;; something, such as finishing an edit, may have changed files,
-                       ;; and a commit moves the task's Git stamp: measure those tasks
-                       ;; once this poll is done.
-                       (when-let* ((quiet)
-                                   (changed (seq-keep (lambda (state)
-                                                        (unless (equal state (assoc (car state) before))
-                                                          (car state)))
-                                                      (roost--task-states host))))
-                         (roost--refresh-host host nil changed))))
-                   (roost--redraw))
-               (funcall finish))))
-         failed)))))
+        ;; Stopped before a callback is in place, as with no helper to read
+        ;; or by a quit, nothing else ends the refresh: the host would
+        ;; never be asked again.
+        (unwind-protect
+            (progn
+              (roost--request
+               host "list" `((full . ,(cond (quiet :false) (ids (vconcat ids)) (t t)))
+                             ,@(when (and quiet pull-requests) '((pullRequests . t))))
+               ;; Each ends the refresh even if drawing what it found fails, or
+               ;; the host would never be asked again.
+               (lambda (tasks)
+                 (if (not (roost--task-list-p tasks))
+                     (funcall failed "Roost can't read the tasks the host helper listed")
+                   (unwind-protect
+                       (progn
+                         (remhash host roost--failures)
+                         (remhash host roost--errors)
+                         ;; A newer mutation must win over a stale list reply, and a host
+                         ;; forgotten meanwhile stays forgotten.
+                         (when (and (= revision (gethash host roost--revisions 0))
+                                    (member host (roost--hosts)))
+                           (let ((before (roost--task-states host)))
+                             (roost--apply-snapshot host tasks request)
+                             (with-demoted-errors "Roost: %S" (roost--compose-listed host tasks))
+                             ;; Quiet polls leave out Git statistics.  An agent that reported
+                             ;; something, such as finishing an edit, may have changed files,
+                             ;; and a commit moves the task's Git stamp: measure those tasks
+                             ;; once this poll is done.
+                             (when-let* ((quiet)
+                                         (changed (seq-keep (lambda (state)
+                                                              (unless (equal state (assoc (car state) before))
+                                                                (car state)))
+                                                            (roost--task-states host))))
+                               (roost--refresh-host host nil changed))))
+                         (roost--redraw))
+                     (funcall finish))))
+               failed)
+              (setq asked t))
+          (unless asked (funcall finish)))))))
 
 (defun roost--task-list-p (tasks)
   "Whether TASKS, as a host listed them, is a list of tasks, each with an ID."
@@ -1476,22 +1581,28 @@ Hosts in `roost-hosts' are watched until you take them out of it."
               (yes-or-no-p (format "%d task%s on %s will no longer show; their agents keep running.  Forget %s? "
                                    (length tasks) (if (cdr tasks) "s" "")
                                    (roost--host-label host) (roost--host-label host))))
+      (roost--hosts-as-on-file)
       (setq roost--remembered-hosts (delete host roost--remembered-hosts))
       (roost--write-json-list roost-hosts-file roost--remembered-hosts)
-      ;; Their terminals, panels and workspaces go too, as a retired
-      ;; task's do; their agents run on, and opening one again connects.
-      (roost--discard-terminal (mapcan #'roost--release-terminal tasks))
-      (mapc #'roost--retired-workspace tasks)
-      (dolist (task tasks)
-        (remhash (roost--key task) roost--tasks)
-        (remhash (roost--key task) roost--statuses)
-        (remhash (roost--key task) roost--pr-verdicts)
-        (remhash (roost--key task) roost--agent-news)
-        (remhash (roost--key task) roost--turns-sent))
-      (remhash host roost--errors)
-      (remhash host roost--failures)
-      (roost--redraw)
+      (roost--stop-watching host)
       (message "Roost no longer watches %s" (roost--host-label host)))))
+
+(defun roost--stop-watching (host)
+  "Drop HOST's tasks from Roost, which no longer asks it about them."
+  (let ((tasks (seq-filter (lambda (task) (equal (roost--field task 'host) host)) (roost-tasks))))
+    ;; Their terminals, panels and workspaces go too, as a retired
+    ;; task's do; their agents run on, and opening one again connects.
+    (roost--discard-terminal (mapcan #'roost--release-terminal tasks))
+    (mapc #'roost--retired-workspace tasks)
+    (dolist (task tasks)
+      (remhash (roost--key task) roost--tasks)
+      (remhash (roost--key task) roost--statuses)
+      (remhash (roost--key task) roost--pr-verdicts)
+      (remhash (roost--key task) roost--agent-news)
+      (remhash (roost--key task) roost--turns-sent))
+    (remhash host roost--errors)
+    (remhash host roost--failures)
+    (roost--redraw)))
 
 (defun roost-refresh (&optional quiet)
   "Refresh hosts asynchronously, including Git statistics.
@@ -2561,7 +2672,7 @@ says once the terminal shows."
 (defun roost--remember-project (directory)
   "Remember project DIRECTORY, most recent first, across restarts."
   (setq directory (file-name-as-directory directory))
-  (roost--known-projects)
+  (roost--projects-as-on-file)
   (setq roost--remembered-projects
         (seq-take (cons directory (delete directory roost--remembered-projects)) 50))
   (roost--write-json-list roost-projects-file roost--remembered-projects))
@@ -2571,11 +2682,18 @@ says once the terminal shows."
   (unless roost--projects-loaded
     (setq roost--projects-loaded t
           roost--remembered-projects
-          (seq-filter #'stringp (roost--read-json-list roost-projects-file))))
+          (seq-filter #'stringp (roost--read-remembered roost-projects-file))))
   (delete-dups (append roost--remembered-projects
                        ;; A record naming no repository names no project.
                        (mapcar #'roost--project-directory
                                (seq-filter (lambda (task) (roost--field task 'repo)) (roost-tasks))))))
+
+(defun roost--projects-as-on-file ()
+  "Take up the projects `roost-projects-file' holds, if another Emacs changed them."
+  (roost--known-projects)
+  (let ((projects (roost--read-again roost-projects-file)))
+    (unless (eq projects 'same)
+      (setq roost--remembered-projects (seq-filter #'stringp projects)))))
 
 ;;;###autoload
 (defun roost-forget-project (directory)
@@ -2594,7 +2712,7 @@ there remembers it again."
                                        roost--remembered-projects)))
                  (unless projects (user-error "Roost remembers no projects"))
                  (cdr (assoc (completing-read "Forget project: " projects nil t) projects)))))))
-  (roost--known-projects)
+  (roost--projects-as-on-file)
   ;; However it was spelled, as by another TRAMP method, which the
   ;; sidebar takes for the same project.
   (let ((place (roost--project-place directory)))
@@ -4690,8 +4808,31 @@ child frames, the box is `:frame', over `:room' pixels left for it.")
   "All review notes not yet sent, read from `roost-notes-file' once."
   (unless roost--notes-loaded
     (setq roost--notes-loaded t
-          roost--notes (seq-filter #'consp (roost--read-json-list roost-notes-file))))
+          roost--notes (seq-filter #'consp (roost--read-remembered roost-notes-file))))
   roost--notes)
+
+(defun roost--notes-as-on-file ()
+  "Take up the notes `roost-notes-file' holds, if another Emacs changed them.
+By ID: a note that is still there stays the same object, as the note box
+or a draft may hold it."
+  (let* ((held (roost--notes))
+         (notes (roost--read-again roost-notes-file))
+         edited)
+    (unless (eq notes 'same)
+      (setq roost--notes
+            (mapcar (lambda (note)
+                      (let* ((id (alist-get 'id note))
+                             (mine (seq-find (lambda (old) (equal (alist-get 'id old) id)) held))
+                             (text (alist-get 'text note)))
+                        (when (and mine (not (equal (alist-get 'text mine) text)))
+                          (push (cons (copy-tree mine) mine) edited)
+                          (setf (alist-get 'text mine) text))
+                        (or mine note)))
+                    (seq-filter #'consp notes)))
+      (pcase-dolist (`(,before . ,note) edited) (roost--update-drafts before note))
+      (dolist (note (seq-difference held roost--notes #'eq))
+        (roost--update-drafts note nil))
+      (roost--show-notes-everywhere))))
 
 (defun roost--save-notes ()
   "Write the review notes to `roost-notes-file'."
@@ -4722,6 +4863,7 @@ child frames, the box is `:frame', over `:room' pixels left for it.")
 (defun roost--remove-notes (predicate)
   "Remove the review notes PREDICATE accepts; return non-nil if any were.
 Drafts holding them lose them too."
+  (roost--notes-as-on-file)
   (when-let* ((removed (seq-filter predicate (roost--notes))))
     (setq roost--notes (seq-difference roost--notes removed #'eq))
     (roost--save-notes)
@@ -5364,6 +5506,7 @@ while you wrote, gets no note."
   (unless (roost--note-task-live-p task)
     (user-error "Roost no longer has %s, so the note can't be kept" (roost--field task 'name)))
   (setq text (string-trim text))
+  (roost--notes-as-on-file)
   ;; OLD may have been sent, or discarded, while you wrote.
   (unless (memq old (roost--notes)) (setq old nil))
   (cond ((and old (string-empty-p text))
@@ -6797,18 +6940,23 @@ it had would seem to end: the one `roost--pr-view' has."
            (let ((sent (lambda ()
                          (when (equal (gethash key roost--turns-sent 'none) turn)
                            (remhash key roost--turns-sent)))))
-             (roost--request (roost--field task 'host) "turn"
-                             (list (cons 'id (roost--field task 'id)) (cons 'turn turn))
-                             ;; What its record says now, which another Emacs
-                             ;; may yet change: the next poll compares again.
-                             (lambda (record)
-                               (funcall sent)
-                               (when-let* ((cached (gethash key roost--tasks)))
-                                 (puthash key (cons (cons 'turn (roost--field record 'turn))
-                                                    (assq-delete-all 'turn (copy-sequence cached)))
-                                          roost--tasks)))
-                             ;; Sent again with the task's next news.
-                             (lambda (_) (funcall sent))))))))
+             ;; Nor must a report stop the reply it came of: not sent at all,
+             ;; as with no helper to read, it is sent again too.
+             (condition-case nil
+                 (roost--request (roost--field task 'host) "turn"
+                                 (list (cons 'id (roost--field task 'id)) (cons 'turn turn))
+                                 ;; What its record says now, which another Emacs
+                                 ;; may yet change: the next poll compares again.
+                                 (lambda (record)
+                                   (funcall sent)
+                                   (when-let* ((cached (gethash key roost--tasks)))
+                                     (puthash key (cons (cons 'turn (roost--field record 'turn))
+                                                        (assq-delete-all 'turn (copy-sequence cached)))
+                                              roost--tasks)))
+                                 ;; Sent again with the task's next news.
+                                 (lambda (_) (funcall sent)))
+               (error (funcall sent))
+               (quit (funcall sent) (signal 'quit nil))))))))
 
 (defun roost--reviewer-name (reviewer)
   "How to name REVIEWER, a login or team slug that a review is asked of.
