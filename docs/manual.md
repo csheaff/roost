@@ -747,6 +747,9 @@ header line. A failed creation keeps the draft.
   `(:lines 400)`; nil marks none.
 - `roost-notes-file`: review notes not yet sent, kept across sessions.
   Faces `roost-note` and `roost-note-button` color the notes and the `+`.
+  Two Emacs on one machine can share this file, `roost-hosts-file` and
+  `roost-projects-file`: what one writes stays, and the other takes it up
+  when it next writes to the file, or starts.
 - `roost-magit-status-sections` (t): whether Magit's status of a task's
   worktree names the task and folds in its agent's latest reply.
 - `roost-branch-prefix`: topic branches are `PREFIX<name>-<id>`; default `roost/`.
