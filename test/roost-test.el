@@ -7430,6 +7430,17 @@ deadline, so the status has what the first said.  STATUS goes over that."
                                                                       '(requested . :none) '(threads . :none)))))
      (should (equal (alist-get 'mergeable (roost--field task 'worktreePr)) "MERGEABLE")))))
 
+(ert-deftest roost-a-task-whose-worktree-went-waits-on-no-conflicts ()
+  ;; As `add_git_stats' now says of it: left out, Roost kept what it last
+  ;; measured, and `n' went on visiting a task with nothing to resolve.
+  (roost-test--isolated
+   (let ((measured (roost-test--conflicted)))
+     (roost--cache-task "dev" measured)
+     (let ((task (roost--cache-task
+                  "dev" (append '((worktreeMissing . t) (conflicts) (merging) (dirty)) (copy-tree measured)))))
+       (should-not (equal (roost--display-status task) "conflicts"))
+       (should (string-prefix-p "Its worktree is gone" (substring-no-properties (roost--next-step task))))))))
+
 (ert-deftest roost-dashboard-groups-by-project-and-summarizes-attention ()
   (roost-test--isolated
    (roost--cache-task "dev" (append '((repo . "/home/user/ledger") (startedAt . "1")

@@ -114,7 +114,7 @@ Within a severity, they are ranked by what they cost and how often they happen.
 | 33 | VIEWS-11 | S4 | An error after a good reply leaves a draft busy | [The new task draft](#the-new-task-draft) | Open, [#226](https://github.com/csheaff/roost/issues/226) |
 | 34 | VIEWS-12 | S4 | A resumed task covers what you opened from a question | [Resuming](#resuming) | Open, [#229](https://github.com/csheaff/roost/issues/229) |
 | 35 | VIEWS-13 | S4 | An open held for a question connects to a session since ended | [Opening a task](#opening-a-task) | Open, [#229](https://github.com/csheaff/roost/issues/229) |
-| 36 | FORGE-10 | S4 | A task whose worktree went keeps waiting on conflicts last measured | [Task measurement](#task-measurement) | Open, [#228](https://github.com/csheaff/roost/issues/228) |
+| 36 | FORGE-10 | S4 | A task whose worktree went keeps waiting on conflicts last measured | [Task measurement](#task-measurement) | Fixed, `test_a_worktree_gone_says_it_no_longer_conflicts` |
 | 37 | FORGE-11, REQUESTS-7 | S4 | Two Emacs undo each other's turn for a stopped task, on every poll | [Verdict and turn](#verdict-and-turn) | Open, [#228](https://github.com/csheaff/roost/issues/228) |
 | 38 | FORGE-12 | S4 | What `P` pushed counts as unpushed until GitHub is next asked | [Pushing and opening](#pushing-and-opening) | Open, [#227](https://github.com/csheaff/roost/issues/227) |
 | 39 | FORGE-7 | S4 | A failed task you've seen keeps its colour, though the manual says otherwise | [The word](#the-word) | Open, [#228](https://github.com/csheaff/roost/issues/228) |
@@ -1723,7 +1723,7 @@ Conflicts:
 | Landed | `[]` | same |
 | Git before 2.38, branch gone | null | `merge_conflicts` |
 | One is before the other | `[]` | same |
-| Worktree gone | **left out, so Emacs keeps it: FORGE-10** | `add_git_stats`'s `continue` |
+| Worktree gone | null, as `merging`, and `dirty` false: left out, Emacs would keep what it had | `add_git_stats` |
 
 Stamp: index, `logs/HEAD` of the worktree, and the integration branch's reflog. It
 moves for commits, staging, resets, `m` and a pull in the primary checkout. Edits
@@ -1736,7 +1736,7 @@ never moves.
 
 Illegal or refused: none.
 
-Open: FORGE-10.
+Open: none.
 
 ### Since you last looked
 
@@ -1927,7 +1927,7 @@ The word goes by inputs, so wrong inputs give a wrong word: see FORGE-1, 2, 4, 5
 10. A review that requests changes with no thread open gives no word; the manual
 promises none, and the next step says only that `P` pushes new commits.
 
-Open: FORGE-7, FORGE-10.
+Open: FORGE-7.
 
 ## What you are doing in Emacs
 

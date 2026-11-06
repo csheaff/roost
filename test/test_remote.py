@@ -4858,6 +4858,25 @@ sys.exit(status)
         self.assertNotIn("mergeable", status)
         self.assertIs(status["reviewsFailed"], True)
 
+    def test_a_worktree_gone_says_it_no_longer_conflicts(self):
+        # Left out, Emacs keeps what it last measured, and the task waits
+        # on a conflict nobody can resolve.
+        task = self.create()
+        wt = Path(task["worktree"])
+        (wt / "hello").write_text("task\n")
+        self.git("commit", "-qam", "task", cwd=wt)
+        (self.repo / "hello").write_text("main\n")
+        self.git("commit", "-qam", "main")
+        self.assertEqual(self.request("list", full=True)["result"][0]["conflicts"], ["hello"])
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        shutil.rmtree(wt)
+        listed = self.request("list", full=True)["result"][0]
+        self.assertIs(listed["worktreeMissing"], True)
+        for field in ("conflicts", "merging"):
+            self.assertIn(field, listed)
+            self.assertIsNone(listed[field])
+        self.assertIs(listed["dirty"], False)
+
     def test_list_learns_the_pull_request_an_agent_opened(self):
         self.github()
         task = self.create()

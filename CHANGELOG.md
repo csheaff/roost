@@ -4,6 +4,8 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A task whose worktree went no longer waits on the conflicts last measured.
+  Nothing to do when upgrading.
 - GitHub's review query failing for a moment no longer takes a pull
   request's word away. It went until Roost next asked, and came back as
   news. Nothing to do when upgrading.
