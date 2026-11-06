@@ -2247,6 +2247,33 @@ A name of its own keeps the fields as long as they are."
       (should-not (buffer-live-p terminal))
       (should (equal (buffer-name (window-buffer (selected-window))) "*late terminal aaaaaa*")))))
 
+(defun roost-sweep-late--open-held (stopped)
+  "Open the task, its reply coming in the minibuffer; return the sessions connected.
+With STOPPED, it stops while you answer there, and its host says so when
+asked again."
+  (let (connected)
+    (cl-letf (((symbol-function 'tmux-control-connect-or-switch)
+               (lambda (host socket session)
+                 (push session connected)
+                 (roost-sweep-late--connect host socket session))))
+      (roost-open-task (roost-sweep-late--mine))
+      (let ((reply (roost-sweep-late--take "inspect")))
+        (roost-sweep-late--in-minibuffer (lambda () (roost-sweep-late--answer reply 'good))))
+      (roost-sweep-late--fire-timers)
+      (roost-sweep-late--answer (roost-sweep-late--take "inspect")
+                                (if stopped (cons 'refused roost-sweep-late--no-window) 'good))
+      (setq roost-sweep-late--answer-questions nil)
+      (roost-sweep-late--settle))
+    connected))
+
+(ert-deftest roost-sweep-late-a-task-stopped-while-you-answer-opens-no-session ()
+  ;; tmux-control connects with `new-session -A', which would make one.
+  (dolist (stopped '(t nil))
+    (roost-sweep-late--world
+      (roost-sweep-late--populate nil nil)
+      (roost-sweep-late--lay-out 'here)
+      (should (equal (roost-sweep-late--open-held stopped) (unless stopped '("roost-aaaaaa")))))))
+
 (ert-deftest roost-sweep-late-a-poll-that-fails-says-nothing-of-a-host-you-forgot ()
   (roost-sweep-late--world
     (roost-sweep-late--populate nil nil)

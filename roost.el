@@ -2486,19 +2486,24 @@ says once the terminal shows."
                       ;; you answered the agent meanwhile: show it everywhere,
                       ;; the task's panel too, not only where the task opens.
                       (roost--redraw)
-                      (roost--when-out-of-minibuffer
-                       (lambda ()
-                         (when (funcall still-wanted)
-                           (when (equal (current-message) opening)
-                             (message nil))
-                           (let ((said (and describe (funcall describe current))))
-                             (roost--display-task current)
-                             (cond (view (funcall view))
-                                   (said (message "%s" said))
-                                   ((and (assq 'live current) (not (roost--field current 'live)))
-                                    (message "%s's agent has %s; its last output is shown. Resume with `s'."
-                                             (roost--field current 'name)
-                                             (roost--field current 'status)))))))))
+                      (let ((held (active-minibuffer-window)))
+                        (roost--when-out-of-minibuffer
+                         (lambda ()
+                           (when (funcall still-wanted)
+                             (if held
+                                 ;; You can take your time there, and connecting
+                                 ;; to a session that ended starts an empty one.
+                                 (roost--open task view describe)
+                               (when (equal (current-message) opening)
+                                 (message nil))
+                               (let ((said (and describe (funcall describe current))))
+                                 (roost--display-task current)
+                                 (cond (view (funcall view))
+                                       (said (message "%s" said))
+                                       ((and (assq 'live current) (not (roost--field current 'live)))
+                                        (message "%s's agent has %s; its last output is shown. Resume with `s'."
+                                                 (roost--field current 'name)
+                                                 (roost--field current 'status)))))))))))
                     (lambda (err)
                       (cancel-timer timer)
                       ;; Stopped, or its tmux server gone, as after a crash:
