@@ -47,7 +47,7 @@ IGNORED_EVENTS = {
     "ConfigChange": "settings changed",
     "CwdChanged": "the shell's directory changed",
     "DirectoryAdded": "a directory was added to the session",
-    "Elicitation": "an MCP server asks a question; rare, not yet shown as waiting",
+    "Elicitation": "an MCP server asks a question; its notification shows it waits",
     "ElicitationResult": "the answer to an MCP server's question",
     "FileChanged": "a watched file changed",
     "InstructionsLoaded": "CLAUDE.md or rules were loaded",
@@ -70,17 +70,39 @@ IGNORED_EVENTS = {
     "WorktreeRemove": "Claude's own worktrees: Roost finds them by what other hooks report",
 }
 # Notification types Roost maps, and those it ignores.
-MAPPED_NOTIFICATIONS = ("permission_prompt", "worker_permission_prompt", "agent_needs_input", "idle_prompt")
+MAPPED_NOTIFICATIONS = ("permission_prompt", "worker_permission_prompt", "agent_needs_input", "idle_prompt",
+                        "elicitation_dialog", "elicitation_url_dialog", "elicitation_response",
+                        "elicitation_complete")
 # plugin_notification (2.1.296) is a plugin's message to you, through its ui.notify.
 IGNORED_NOTIFICATIONS = ("agent_completed", "auth_storage_failure", "auth_success", "computer_use_enter",
-                         "computer_use_exit", "elicitation_complete", "elicitation_response", "plugin_notification",
-                         "push_notification")
+                         "computer_use_exit", "model_refusal_fallback", "plugin_notification", "push_notification",
+                         "quota_auto_resume_disabled",
+                         "quota_auto_resume_fired", "quota_auto_resume_stale")
 # SessionStart sources: compact and clear are handled specially, the rest are a fresh start.
 SESSION_SOURCES = ("startup", "resume", "clear", "compact", "fork")
 # Payload fields the helper reads.
 PAYLOAD_FIELDS = ("session_id", "transcript_path", "hook_event_name", "last_assistant_message",
                   "background_tasks", "session_crons", "notification_type", "message", "tool_name",
                   "tool_input", "error", "error_details", "source", "reason", "cwd", "agent_id")
+
+
+def notification_kinds(data):
+    """The types of notification in DATA, Claude Code's source, as hooks get
+    them: those it sends by name, as notificationType:"x", or in a dialog's
+    notification, as type:"x" or type:y?"x":"z", and all it lets a hook match
+    on, in a list a name may stand in. Empty if it no longer has that list."""
+    kinds = set(re.findall(rb'notificationType:"([a-z_]+)"', data))
+    for match in re.finditer(rb'\bnotification:(?:\{|\(\w+\)=>\(\{)text:[^;{}]{0,160}?\btype:([^,}]{1,120})', data):
+        kinds |= set(re.findall(rb'"([a-z_]+)"', match.group(1)))
+    listed = re.search(rb'fieldToMatch:"notification_type",values:\[([^\]]*)\]', data)
+    if not listed:
+        return set()
+    kinds |= set(re.findall(rb'"([a-z_]+)"', listed.group(1)))
+    for name in re.findall(rb'\.\.\.([\w$]+)', listed.group(1)):
+        spelled = re.search(rb'(?<![\w$.])' + re.escape(name) + rb'=\[([^\]]*)\]', data)
+        if spelled:
+            kinds |= set(re.findall(rb'"([a-z_]+)"', spelled.group(1)))
+    return {kind.decode() for kind in kinds}
 
 
 def claude_program():
@@ -121,12 +143,13 @@ def static_check():
     if events and events <= known and set(roost.CLAUDE_HOOK_EVENTS) <= events:
         report(True, "%d hook events, %d of them Roost's" % (len(events), len(roost.CLAUDE_HOOK_EVENTS)))
 
-    kinds = set(m.group(1).decode() for m in re.finditer(rb'notificationType:"([a-z_]+)"', data))
+    kinds = notification_kinds(data)
     known = set(MAPPED_NOTIFICATIONS) | set(IGNORED_NOTIFICATIONS)
+    if not kinds:
+        report(False, "found no list of notification types; the scan needs updating for this version")
     for kind in sorted(kinds - known):
         report(None, "notification %s: decide whether it means the agent waits for you" % kind)
-    # Some types are passed through variables, so only those named in the source can be missed.
-    missing = sorted(set(MAPPED_NOTIFICATIONS) - kinds - {"permission_prompt", "idle_prompt"})
+    missing = sorted(set(MAPPED_NOTIFICATIONS) - kinds) if kinds else []
     for kind in missing:
         report(False, "notification %s, which Roost maps, is gone" % kind)
     if kinds and kinds <= known and not missing:

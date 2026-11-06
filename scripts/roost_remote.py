@@ -557,9 +557,31 @@ def owned_pane(task, inventory):
     pane = inventory.get(task.get("paneId"))
     # Pane IDs may be reused after a tmux server restart. A per-pane ownership
     # tag prevents steering or killing an unrelated process with the same ID.
-    if pane and pane["task"] == task["id"] and pane["window"] == task.get("windowId"):
+    # The tag goes with the pane wherever you move it, and stays on what tmux
+    # starts in it after the runner, as `respawn-pane` does, which is no agent.
+    # A task from before Roost noted the runner's process is taken as it is.
+    if pane and pane["task"] == task["id"] and task.get("panePid", pane["pid"]) == pane["pid"]:
         return pane
     return None
+
+
+def close_panes(task, inventory, check=True):
+    """Close TASK's agent's pane, if it owns it, and its shell, where they are
+    now: each one's window with it, unless something else is in that window,
+    which stays. INVENTORY may be from before a slow step, as a merge, and a
+    read now says what is there, if tmux answers."""
+    current = pane_inventory(task["socket"])
+    inventory = inventory if current is None else current
+    ours = {pane_id for pane_id in (task.get("paneId") if owned_pane(task, inventory) else None,
+                                    task.get("shellPaneId"))
+            if pane_id in inventory and inventory[pane_id]["task"] == task["id"]}
+    for window in sorted({inventory[pane_id]["window"] for pane_id in ours}):
+        beside = {pane_id for pane_id, pane in inventory.items() if pane["window"] == window}
+        if beside <= ours:
+            tmux(task["socket"], "kill-window", "-t", window, check=check)
+        else:
+            for pane_id in sorted(beside & ours):
+                tmux(task["socket"], "kill-pane", "-t", pane_id, check=check)
 
 
 def check_worktree(store, task, branch=True):
@@ -813,6 +835,55 @@ def later_prompt(task, prompt):
     return said if len(said) <= LAST_MESSAGE_LIMIT else said[:LAST_MESSAGE_LIMIT].rstrip() + "…"
 
 
+# Notifications of an MCP server's question, as a form or a link to open.
+MCP_QUESTIONS = ("elicitation_dialog", "elicitation_url_dialog")
+
+
+def forget_request(task):
+    """TASK's agent asks nothing any more."""
+    for field in ("request", "requestCommand", "requestFrom", "requestCall", "requestQuestion"):
+        task.pop(field, None)
+
+
+def tool_call(payload):
+    """Which tool call hook PAYLOAD is about: the subagent that made it, none
+    for the main agent, its tool, and a digest of each argument, as one can
+    be a whole file."""
+    arguments = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+    return dict(agent=text(payload.get("agent_id")), tool=text(payload.get("tool_name")),
+                arguments={name: hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()[:16]
+                           for name, value in arguments.items()})
+
+
+def tool_answers(task, payload):
+    """Whether hook PAYLOAD, of a tool's start or end while TASK's agent asks,
+    says it no longer does. Subagents go on working beside one that asks, and
+    tools called together beside the one that asked, so a tool's event counts
+    only from the agent that asked, and only as the end of what it asked for,
+    however it adds to or leaves out of its arguments, or as its next tool. A
+    request a notification named doesn't say who asks: the main agent's event
+    counts, unless it said that another asks. Only word that it was answered
+    ends an MCP server's question with nothing else asked beside it, as no
+    tool's event says which question it was about. Unsure, it stands: as the
+    manual says, it may show until the agent moves on."""
+    asked = task.get("requestCall")
+    if payload.get("hook_event_name") == "Notification":
+        return task.get("requestQuestion") is True
+    if payload.get("hook_event_name") not in ("PreToolUse", "PostToolUse"):
+        return True
+    if task.get("requestQuestion"):
+        return False
+    call = tool_call(payload)
+    if not isinstance(asked, dict):
+        return not call["agent"]
+    if call["agent"] != asked.get("agent"):
+        return False
+    arguments = asked.get("arguments") or {}
+    return (payload["hook_event_name"] == "PreToolUse"
+            or call["tool"] == asked.get("tool")
+            and all(arguments.get(name, digest) == digest for name, digest in call["arguments"].items()))
+
+
 CLAUDE_FOLDER_LIMIT = 200
 
 
@@ -847,6 +918,7 @@ class ClaudeAgent:
     # Its status reports, which the runner reads for a task that asks,
     # say when a turn ends and how.
     reports_turns = True
+    answers = staticmethod(tool_answers)
 
     def validate(self, command):
         validate_command(command, "Claude")
@@ -864,12 +936,19 @@ class ClaudeAgent:
         argv = task["command"] + ["--settings", claude_hook_settings(store, task),
                                   "--add-dir=" + str(attachments)]
         session = task.get("agentSession") or task.get("claudeSession")
-        if resume_conversation and session:
+        if resume_conversation and session and self.has_conversation(task):
             argv += ["--resume", session]
         elif text(task.get("prompt")):
             # Otherwise a prompt starting with -, such as a list, is an option.
             argv += ["--", task["prompt"]]
         return argv
+
+    def has_conversation(self, task):
+        """Whether Claude has a conversation to resume. It names a session as
+        it starts, and where its transcript will be, and writes nothing there
+        until something is said in it; --resume of one it hasn't written
+        fails, each time. One it never said this of is left to --resume."""
+        return not isinstance(task.get("transcript"), str) or Path(task["transcript"]).is_file()
 
     def made_worktree(self, payload, path):
         """Whether hook PAYLOAD, from inside the worktree at PATH under
@@ -904,6 +983,11 @@ class ClaudeAgent:
         # same process, which goes on running.
         if event == "SessionEnd" and payload.get("reason") in ("clear", "resume"):
             return None
+        # You left it, by /exit, C-c, C-d or /logout. It says "other" as it
+        # dies by a signal, as when tmux goes: that end is the runner's to
+        # record, or, when the pane goes too, the next listing's.
+        if event == "SessionEnd" and payload.get("reason") not in ("prompt_input_exit", "logout"):
+            return reported or None
         # Compacting the conversation, which Claude also does by itself in the
         # middle of a turn, changes nothing about whether it waits for you.
         if event == "SessionStart" and payload.get("source") == "compact":
@@ -923,17 +1007,27 @@ class ClaudeAgent:
             # agent you have seen as waiting again, or forget why it failed.
             if kind == "idle_prompt" and current not in ("starting", "running"):
                 return None
-            # A teammate's permission prompt, and a background agent of this
-            # session blocked on you, also wait in this terminal.
+            # Its answer, or, for a link, the server saying it's done.
+            if kind in ("elicitation_response", "elicitation_complete") and current != "permission":
+                return None
+            # A teammate's permission prompt, a background agent of this
+            # session blocked on you, and an MCP server's question, as a form
+            # or a link to open, also wait in this terminal.
             status = {"permission_prompt": "permission", "worker_permission_prompt": "permission",
-                      "agent_needs_input": "permission", "idle_prompt": "ready"}.get(kind)
+                      "agent_needs_input": "permission", "elicitation_dialog": "permission",
+                      "elicitation_url_dialog": "permission", "elicitation_response": "running",
+                      "elicitation_complete": "running", "idle_prompt": "ready"}.get(kind)
         if not status:
             return None
         updates = dict(status=status, updatedAt=now(), lastEvent=event, error=None)
+        # /clear reports work, then rest, as if you had stopped a turn: only
+        # this says what it was.
+        if event == "SessionStart" and payload.get("source") == "clear":
+            updates["newConversation"] = True
         # A prompt that runs no PermissionRequest, as when a sandboxed
         # command needs a new network host, is named by its notification.
         message = payload.get("message") if isinstance(payload.get("message"), str) else ""
-        if (event == "Notification" and payload.get("notification_type") == "permission_prompt"
+        if (event == "Notification" and payload.get("notification_type") in ("permission_prompt", *MCP_QUESTIONS)
                 and current != "permission" and one_line(message)):
             updates["request"] = one_line(message)[:REQUEST_LIMIT]
         if event == "StopFailure":
@@ -1055,6 +1149,7 @@ class CodexAgent:
     # runs or a server starts. Its hooks, which it runs before it goes on,
     # say when a turn starts and how it ends.
     reports_turns = False
+    answers = staticmethod(tool_answers)
 
     def validate(self, command):
         validate_command(command, "Codex")
@@ -1092,7 +1187,9 @@ class CodexAgent:
 
     def observe(self, payload, current=None):
         event = payload.get("hook_event_name")
-        status = {"SessionStart": "ready", "SessionEnd": "exited", "UserPromptSubmit": "running",
+        # Its SessionEnd says "other" however it ended, so that says nothing:
+        # the runner records its end, or, when the pane goes too, the next listing.
+        status = {"SessionStart": "ready", "UserPromptSubmit": "running",
                   "PreToolUse": "running", "PostToolUse": "running", "PermissionRequest": "permission",
                   "Stop": "ready", "Interrupt": "ready"}.get(event)
         if not status:
@@ -1606,6 +1703,9 @@ def spawn(store, task, resume=False, size=()):
     script = str(Path(__file__).resolve())
     task["runId"] = uuid.uuid4().hex
     task.pop("shellPaneId", None)
+    # What the last run's agent asked and did: this one has yet to say.
+    forget_request(task)
+    task.pop("activity", None)
     # In UTF-8 mode, as `main` would start it, but as the pane's own process.
     argv = [sys.executable, "-X", "utf8", script, "run", str(store.root), task["id"], task["runId"]]
     if resume:
@@ -1613,7 +1713,7 @@ def spawn(store, task, resume=False, size=()):
     # The runner waits on the registry lock, held here, until its stable pane
     # ID is saved, so the agent starts only after this is done. tmux reads
     # the name and the directory as formats, where # starts one.
-    window_options = ["-P", "-F", "#{window_id}\t#{pane_id}\t#{window_index}\t#{session_name}",
+    window_options = ["-P", "-F", "#{window_id}\t#{pane_id}\t#{window_index}\t#{pane_pid}\t#{session_name}",
                       "-n", task["name"].replace("#", "##"), "-c", task["worktree"].replace("#", "##"),
                       shlex.join(argv)]
     if tmux(socket, "has-session", "-t", "=" + session, check=False).returncode:
@@ -1628,8 +1728,8 @@ def spawn(store, task, resume=False, size=()):
         result = tmux(socket, "new-window", "-d", "-t", session + ":", *window_options)
     # Noted at once, so a failure from here on closes the window. tmux may
     # have changed the session's name, as it does ":" and ".".
-    window, pane, index, session = result.stdout.strip().split("\t", 3)
-    task.update(windowId=window, paneId=pane, windowIndex=int(index), session=session,
+    window, pane, index, pid, session = result.stdout.strip().split("\t", 4)
+    task.update(windowId=window, paneId=pane, windowIndex=int(index), session=session, panePid=int(pid),
                 status="starting", updatedAt=now(), error=None)
     # Before the agent starts, which is when it asks.
     enable_extended_keys(socket)
@@ -2354,8 +2454,9 @@ def list_tasks(store, request):
             continue
         pane = owned_pane(task, inventory)
         changed = False
-        if pane and (task.get("session"), task.get("windowIndex")) != (pane["session_name"], pane["index"]):
-            task.update(session=pane["session_name"], windowIndex=pane["index"])
+        if pane and ((task.get("session"), task.get("windowIndex"), task.get("windowId"))
+                     != (pane["session_name"], pane["index"], pane["window"])):
+            task.update(session=pane["session_name"], windowIndex=pane["index"], windowId=pane["window"])
             changed = True
         task["live"] = bool(pane and not pane["dead"])
         # An agent that reports its status to its terminal needs no guessing.
@@ -2375,16 +2476,14 @@ def list_tasks(store, request):
         elif guess and task["status"] in ("running", "permission") and was_interrupted(task):
             # Stopped by you, so waiting for you; it reports no event of its own.
             task.update(status="ready", updatedAt=now(), lastEvent="Interrupt")
-            task.pop("request", None)
-            task.pop("requestCommand", None)
+            forget_request(task)
             changed = True
         elif guess and task["status"] == "permission" and task.get("requestCommand"):
             if table is None:
                 table = processes()
             if approved_command_running(task, pane, table):
                 task.update(status="running", updatedAt=now(), lastEvent="Approved")
-                task.pop("request", None)
-                task.pop("requestCommand", None)
+                forget_request(task)
                 changed = True
         if changed:
             store.note(task)
@@ -3666,10 +3765,9 @@ def add_git_stats(tasks):
 
 
 def stop(store, task, inventory=None):
-    """Kill the task's window if Roost still owns it. Work is kept."""
+    """Close the agent's pane and shell, as `close_panes` does. Work is kept."""
     inventory = inventory if inventory is not None else inventory_for(task)
-    if owned_pane(task, inventory):
-        tmux(task["socket"], "kill-window", "-t", task["windowId"])
+    close_panes(task, inventory)
     # Stopping says nothing new: an agent you had seen stays seen.
     was_seen = seen_since_last_event(task)
     # A pane ID owned by something else means ours is gone (for example after a
@@ -3678,6 +3776,7 @@ def stop(store, task, inventory=None):
     if was_seen:
         task["seen"] = task["updatedAt"]
     task.pop("shellPaneId", None)
+    task.pop("panePid", None)
     store.save(task)
     task["live"] = False
     return task
@@ -3764,8 +3863,7 @@ def resume(store, task, program_status=None, size=()):
     check_worktree(store, task, branch=False)
     if not Path(task["worktree"]).is_dir():
         raise RoostError("Task worktree is gone; forget the task to remove it from Roost")
-    if pane:
-        tmux(task["socket"], "kill-window", "-t", task["windowId"])
+    close_panes(task, inventory)
     # A task begun in a shared session, as before each had its own, moves to
     # its own on resume.
     task["session"] = session_name(task["repo"], task["id"])
@@ -3932,7 +4030,7 @@ def inspect(store, task):
     pane = owned_pane(task, inventory_for(task))
     if not pane:
         raise RoostError("The agent's tmux window is gone; resume the task")
-    task.update(windowIndex=pane["index"], session=pane["session_name"])
+    task.update(windowIndex=pane["index"], session=pane["session_name"], windowId=pane["window"])
     put_right_prompt(task)
     store.note(task)
     task["live"] = not pane["dead"]
@@ -4092,25 +4190,25 @@ def attach(store, task, files):
 def shell(store, task):
     """Reuse one supporting shell in the task's tmux window and worktree."""
     inventory = inventory_for(task)
-    if not owned_pane(task, inventory):
+    owner = owned_pane(task, inventory)
+    if not owner:
         raise RoostError("Task's tmux window is gone; resume the task before opening its shell")
     pane = inventory.get(task.get("shellPaneId"))
-    if pane and (pane["task"] != task["id"] or pane["window"] != task["windowId"]):
+    if pane and pane["task"] != task["id"]:
         raise RoostError("Task's shell ownership changed; inspect the window in tmux")
-    if not pane or pane["dead"]:
+    # One the agent's pane was moved away from stays as it is.
+    if not pane or pane["dead"] or pane["window"] != owner["window"]:
         check_worktree(store, task, branch=False)
         if not Path(task["worktree"]).is_dir():
             raise RoostError("Task worktree is gone")
-        if pane:
+        if pane and pane["dead"]:
             tmux(task["socket"], "kill-pane", "-t", task["shellPaneId"])
         # tmux reads the directory as a format, where # starts one.
         pane_id = tmux(task["socket"], "split-window", "-h", "-d", "-P", "-F", "#{pane_id}",
                        "-t", task["paneId"], "-c", task["worktree"].replace("#", "##")).stdout.strip()
         tmux(task["socket"], "set-option", "-p", "-t", pane_id, "@roost_task_id", task["id"])
         task["shellPaneId"] = pane_id
-    owner = inventory[task["paneId"]]
-    task["session"] = owner["session_name"]
-    task["windowIndex"] = owner["index"]
+    task.update(session=owner["session_name"], windowIndex=owner["index"], windowId=owner["window"])
     store.save(task)
     return task
 
@@ -5166,8 +5264,8 @@ def forget(store, task):
     pane = owned_pane(task, inventory) if inventory else None
     if pane and not pane["dead"]:
         raise RoostError("The agent is running; stop the task before forgetting it")
-    if pane:
-        tmux(task["socket"], "kill-window", "-t", task["windowId"], check=False)
+    if inventory:
+        close_panes(task, inventory, check=False)
     left = []
     if Path(task["worktree"]).exists():
         left.append("worktree " + task["worktree"])
@@ -5578,6 +5676,10 @@ def shown_command(command, worktree):
     return command
 
 
+# Notifications of what an agent other than the one you talk to asks.
+ANOTHER_AGENT_ASKS = ("worker_permission_prompt", "agent_needs_input")
+
+
 def permission_request(payload, worktree=None):
     """What a permission request asks, as a sentence: "Asks to run python3
     -m pytest", "Asks to edit notes.py", "Asks: Which color do you prefer?".
@@ -5588,7 +5690,7 @@ def permission_request(payload, worktree=None):
 
     # Another agent's request names no tool, but says who asks for what, as
     # "reviewer needs permission for Bash".
-    if (payload.get("notification_type") in ("worker_permission_prompt", "agent_needs_input")
+    if (payload.get("notification_type") in ANOTHER_AGENT_ASKS
             and isinstance(payload.get("message"), str) and payload["message"].strip()):
         return clip(payload["message"])
     tool = payload.get("tool_name")
@@ -6056,10 +6158,18 @@ def beside_program_status(updates, before, reports_turns=True):
         kept = status == "failed" or status == "background" and before in ("running", "ready")
     else:
         kept = not (status == "running" and before == "permission")
-    if kept:
-        return updates
+    return updates if kept else without_status(updates)
+
+
+def without_status(updates):
+    """What a hook's UPDATES report beside the agent's status."""
     return {key: value for key, value in updates.items()
             if key not in ("status", "updatedAt", "lastEvent", "error")}
+
+
+def run_ended(task):
+    """Whether TASK's runner recorded the end of its current run."""
+    return bool(task.get("endedRun")) and task["endedRun"] == task.get("runId")
 
 
 def capture(store, task_id, entry, at=None):
@@ -6103,12 +6213,21 @@ def update_hook(store, task_id, payload, run_id=None):
                 store.save(task)
         concerns = getattr(agent, "concerns", None)
         updates = agent.observe(payload, before) if not concerns or concerns(task, payload) else None
+        # News that the agent's end overtook, as Pi and OpenCode don't wait
+        # for their reports, says no more what it does, though what it replied
+        # is its last word.
+        if updates and run_ended(task):
+            updates = without_status(updates)
         if updates:
             asks = updates.get("status", before) == "permission"
             relayed = task.get("programStatusRun") == task.get("runId")
-            if relayed:
+            answers = getattr(agent, "answers", None)
+            new_conversation = updates.pop("newConversation", False)
+            if relayed and not new_conversation:
                 updates = beside_program_status(updates, before, agent.reports_turns)
-            if not agent.reports_turns and "status" in updates:
+            elif before == "permission" and updates.get("status") == "running" and answers and not answers(task, payload):
+                updates = without_status(updates)
+            if (new_conversation or not agent.reports_turns) and "status" in updates:
                 task["hookAt"] = read_at = time.time()
             # What the agent asks, if its adapter can say better than its payload.
             named = updates.pop("request", None)
@@ -6123,17 +6242,38 @@ def update_hook(store, task_id, payload, run_id=None):
                 # identifies it, and a heredoc can be long.
                 arguments = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
                 command = arguments.get("command") if payload.get("tool_name") == "Bash" else None
-                if isinstance(command, str) and command.strip():
+                # Not a subagent's: the poll can't tell whose process it sees.
+                if isinstance(command, str) and command.strip() and not payload.get("agent_id"):
                     task["requestCommand"] = command[:APPROVAL_MARKER_LIMIT]
                 else:
                     task.pop("requestCommand", None)
-            elif ((not relayed or not agent.reports_turns)
+                # What will say that it is over.
+                if payload.get("tool_name"):
+                    task["requestCall"] = tool_call(payload)
+                else:
+                    task.pop("requestCall", None)
+            elif ((new_conversation or not relayed or not agent.reports_turns)
                   and (task["status"] != "permission" or before != "permission")):
                 # The notification that follows a request names no tool:
                 # keep the request it follows, and only that one. The agent's
-                # status reports clear it, for one whose reports end its turns.
-                task.pop("request", None)
-                task.pop("requestCommand", None)
+                # status reports clear it, for one whose reports end its turns,
+                # but for a new conversation, whose earlier reports don't count.
+                forget_request(task)
+            # Reports say what waits, for an agent that sends them. Otherwise,
+            # with another agent asking, or a new ask beside a request, no one
+            # event can say that all of them are over: no tool's event, answer
+            # or approval ends this, only the turn. A `permission_prompt` is
+            # the notification that follows a request, but for a question's.
+            kind = payload.get("notification_type")
+            if not relayed and (payload.get("hook_event_name") == "PermissionRequest"
+                                or kind in ANOTHER_AGENT_ASKS or kind in MCP_QUESTIONS
+                                or kind == "permission_prompt" and task.get("requestQuestion")):
+                if before == "permission" or kind in ANOTHER_AGENT_ASKS:
+                    task["requestCall"] = dict(agent="another agent")
+                    task.pop("requestCommand", None)
+                    task.pop("requestQuestion", None)
+                elif kind in MCP_QUESTIONS:
+                    task["requestQuestion"] = True
             store.save(task)
         capture(store, task_id, {"hook": payload}, read_at)
 
@@ -6295,8 +6435,10 @@ def apply_program_status(task, fields, run_id):
     # is news only as the answer to a request, and what it said before the
     # hook that last set its status is older news than that hook's: it runs
     # its hooks before it goes on, but its reports wait for the registry.
+    # So too for what an agent said before a hook whose status counts over
+    # its reports, as for a new conversation.
     turns = agent_for(task).reports_turns
-    if not turns and fields.get("receivedAt", float("inf")) < (task.get("hookAt") or 0):
+    if fields.get("receivedAt", float("inf")) < (task.get("hookAt") or 0):
         return task != before
     changes = None
     if state == "working" and status != "running" and (turns or status == "permission"):
@@ -6336,9 +6478,7 @@ def apply_program_status(task, fields, run_id):
                 del task["request"], task["requestFrom"]
     elif status == "permission" or task["status"] != "running":
         # A hook may name a request just before the agent says it waits.
-        task.pop("request", None)
-        task.pop("requestCommand", None)
-        task.pop("requestFrom", None)
+        forget_request(task)
     if task["status"] == "running" and state == "working" and fields.get("msg"):
         task["activity"] = fields["msg"][:REQUEST_LIMIT]
     else:
@@ -6369,7 +6509,7 @@ def program_status_recorder(store, task_id, run_id):
                 continue
             with contextlib.suppress(OSError, ValueError, RoostError), store.locked():
                 task = store.read(task_id)
-                if task.get("runId") == run_id and task["status"] not in ("stopped", "retired"):
+                if task.get("runId") == run_id and task["status"] not in ("stopped", "retired") and not run_ended(task):
                     for fields in batch:
                         capture(store, task_id, {"report": fields})
                     if any([apply_program_status(task, fields, run_id) for fields in batch]):
@@ -6941,13 +7081,15 @@ def runner(root, task_id, run_id, resume_conversation=False):
             current = store.read(task_id)
             if current.get("runId") == run_id and current["status"] not in ("stopped", "retired"):
                 current.update(status="exited" if code == 0 else "failed", updatedAt=now(),
-                               exitCode=code, error=error)
+                               exitCode=code, error=error, endedRun=run_id)
                 store.save(current)
                 ended = current
         # On the dead pane for as long as it is shown, where starting the
         # agent again from a shell would leave Roost's hooks out.
         if ended and not error:
-            again = "go back to this conversation" if ended.get("agentSession") else "start it again"
+            check = getattr(agent_for(ended), "has_conversation", None)
+            again = ("go back to this conversation" if ended.get("agentSession") and (not check or check(ended))
+                     else "start it again")
             with contextlib.suppress(OSError):
                 print("\nRoost: the agent exited. Resume the task to %s." % again, flush=True)
     return code
@@ -6989,7 +7131,8 @@ def require_not_removing(store, task, action):
 
 
 # Kept in task records for the helper's own use, and not sent to Emacs.
-PRIVATE = ("lastReply", "transcript", "requestFrom", "hookAt", "integrating")
+PRIVATE = ("lastReply", "transcript", "requestFrom", "requestCall", "requestQuestion", "hookAt", "panePid",
+           "endedRun", "integrating")
 
 
 def outgoing(result):
