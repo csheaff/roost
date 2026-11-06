@@ -87,31 +87,31 @@ Within a severity, they are ranked by what they cost and how often they happen.
 | 6 | REQUESTS-1 | S2 | A refresh that can't start leaves its host unasked until Emacs restarts | [Host refresh](#host-refresh) | Fixed, `roost-a-refresh-that-could-not-start-leaves-its-host-asked-again` |
 | 7 | REQUESTS-2 | S2 | An install cut short leaves a broken helper under its real name | [Helper copy](#helper-copy) | Fixed, `roost-an-install-cut-short-leaves-what-was-there` |
 | 8 | STATUS-1 | S2 | A Claude task stopped before anything was said in it can never resume | [The runner's stages](#the-runners-stages) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
-| 9 | VIEWS-2 | S2 | A retry with an edited draft says it created a task it didn't, and drops the edit | [The creation ID](#the-creation-id) | Open, [#226](https://github.com/csheaff/roost/issues/226) |
+| 9 | VIEWS-2 | S2 | A retry with an edited draft says it created a task it didn't, and drops the edit | [The creation ID](#the-creation-id) | Fixed, [#226](https://github.com/csheaff/roost/issues/226), `roost-sweep-late-a-retry-with-another-prompt-keeps-the-draft` |
 | 10 | VIEWS-9, FORGE-3 | S2 | A pull request draft says it opened one it only pushed to, and `P` can't open one after a closed one | [Pushing and opening](#pushing-and-opening) | Open, [#227](https://github.com/csheaff/roost/issues/227) |
 | 11 | REQUESTS-3, VIEWS-8 | S2 | Two Emacs sessions overwrite each other's review notes | [Remembered files](#remembered-files) | Fixed, `roost-a-note-from-another-emacs-stays-as-you-write-yours` |
 | 12 | STATUS-2 | S2 | Roost takes a pane changed by hand for its agent, or for gone | [A run and its pane](#a-run-and-its-pane) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
 | 13 | LC-4, STATUS-3 | S3 | A merge's hooks hold the registry lock, so other agents' events are lost and they stay `running` | [Registry lock](#registry-lock) | Fixed, [#223](https://github.com/csheaff/roost/issues/223): `test_every_agent_and_poll_goes_on_while_a_merges_hook_runs`, `test_every_agent_and_poll_goes_on_while_an_updates_hook_runs` |
 | 14 | FORGE-1 | S3 | A pull request merged with a commit made on the forge reads as not merged, and `m` forks `main` from `origin` | [Landed](#landed) | Open, [#227](https://github.com/csheaff/roost/issues/227) |
 | 15 | STATUS-4 | S3 | Another tool's event ends a request that still waits, so `send` could answer a menu | [Agent status](#agent-status) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
-| 16 | VIEWS-5, LC-5 | S3 | A prompt goes twice when its reply was lost | [The prompt draft](#the-prompt-draft) | Open, [#226](https://github.com/csheaff/roost/issues/226) |
+| 16 | VIEWS-5, LC-5 | S3 | A prompt goes twice when its reply was lost | [The prompt draft](#the-prompt-draft) | Fixed, [#226](https://github.com/csheaff/roost/issues/226), `test_a_prompt_queued_behind_the_first_is_pasted_once` |
 | 17 | VIEWS-7 | S3 | Merging takes commits made after it asked | [Asking before acting](#asking-before-acting) | Fixed, [#222](https://github.com/csheaff/roost/issues/222), `test_a_commit_made_since_you_were_asked_stops_a_merge` |
 | 18 | FORGE-2 | S3 | An agent's pull request goes unfollowed after `git pull --rebase` or a fast-forward | [A task's pull request](#a-tasks-pull-request) | Open, [#227](https://github.com/csheaff/roost/issues/227) |
 | 19 | FORGE-4, REQUESTS-5 | S3 | A change a poll saw can go unmeasured until something else asks | [Task measurement](#task-measurement) | Open, [#228](https://github.com/csheaff/roost/issues/228) |
 | 20 | FORGE-5 | S3 | A commit made on the forge holds back all an open pull request says | [What the forge last said](#what-the-forge-last-said) | Open, [#227](https://github.com/csheaff/roost/issues/227) |
 | 21 | STATUS-6 | S3 | An MCP server's question reads as work | [Agent status](#agent-status) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
 | 22 | FORGE-6 | S3 | A task held at a startup prompt waits, and no notification says so | [The word](#the-word) | Open, [#228](https://github.com/csheaff/roost/issues/228) |
-| 23 | VIEWS-3 | S3 | Undo in the new task draft changes the wrong text | [The new task draft](#the-new-task-draft) | Open, [#226](https://github.com/csheaff/roost/issues/226) |
+| 23 | VIEWS-3 | S3 | Undo in the new task draft changes the wrong text | [The new task draft](#the-new-task-draft) | Fixed, [#226](https://github.com/csheaff/roost/issues/226), `roost-sweep-late-undo-in-a-draft-follows-its-fields` |
 | 24 | STATUS-5 | S3 | As tmux goes, a Claude task reads `exited`, not `crashed` | [Who wins](#who-wins-hooks-reports-poll-runner) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
 | 25 | STATUS-7 | S3 | A report landing after the runner's end turns `exited` into `crashed` | [Agent status](#agent-status) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
 | 26 | FORGE-8 | S3 | A failed review query takes back what a pull request waits on you for, then notifies again | [What the forge last said](#what-the-forge-last-said) | Open, [#228](https://github.com/csheaff/roost/issues/228) |
 | 27 | FORGE-9, REQUESTS-4 | S3 | Conflicts there when Roost first saw a task notify after every restart | [News of a turn](#news-of-a-turn) | Open, [#228](https://github.com/csheaff/roost/issues/228) |
-| 28 | VIEWS-4 | S3 | A prompt draft reads its task as it was when it opened | [The prompt draft](#the-prompt-draft) | Open, [#226](https://github.com/csheaff/roost/issues/226) |
+| 28 | VIEWS-4 | S3 | A prompt draft reads its task as it was when it opened | [The prompt draft](#the-prompt-draft) | Fixed, [#226](https://github.com/csheaff/roost/issues/226), `roost-sweep-late-a-prompt-draft-asks-as-its-task-is-now` |
 | 29 | VIEWS-6 | S3 | A note taken out of a draft is cleared unsent | [A review note](#a-review-note) | Open, [#229](https://github.com/csheaff/roost/issues/229) |
 | 30 | VIEWS-10 | S3 | A note edited as its draft goes loses the edit | [A review note](#a-review-note) | Open, [#229](https://github.com/csheaff/roost/issues/229) |
 | 31 | REQUESTS-6 | S3 | Two Emacs sessions overwrite each other's hosts and projects | [Remembered files](#remembered-files) | Fixed, `roost-a-host-remembered-in-another-emacs-stays-as-you-use-yours` |
 | 32 | LC-6 | S4 | Discarding a task whose repository is gone deletes its worktree and says it failed | [Finishing a task](#finishing-a-task) | Open, [#221](https://github.com/csheaff/roost/issues/221) |
-| 33 | VIEWS-11 | S4 | An error after a good reply leaves a draft busy | [The new task draft](#the-new-task-draft) | Open, [#226](https://github.com/csheaff/roost/issues/226) |
+| 33 | VIEWS-11 | S4 | An error after a good reply leaves a draft busy | [The new task draft](#the-new-task-draft) | Fixed, [#226](https://github.com/csheaff/roost/issues/226), `roost-sweep-late-an-org-entry-that-cant-take-the-link-closes-the-draft` |
 | 34 | VIEWS-12 | S4 | A resumed task covers what you opened from a question | [Resuming](#resuming) | Open, [#229](https://github.com/csheaff/roost/issues/229) |
 | 35 | VIEWS-13 | S4 | An open held for a question connects to a session since ended | [Opening a task](#opening-a-task) | Open, [#229](https://github.com/csheaff/roost/issues/229) |
 | 36 | FORGE-10 | S4 | A task whose worktree went keeps waiting on conflicts last measured | [Task measurement](#task-measurement) | Open, [#228](https://github.com/csheaff/roost/issues/228) |
@@ -366,9 +366,9 @@ Invariants:
   registry lock has no timeout. It is why the "may still finish" message in
   `roost--run` is true. A reply nobody reads ends quietly.
 - I2. A retry must be safe beside the original. True where an ID or a record
-  makes it so (`create`, finishing actions, `stop`, `rename`, `update`); not for
-  `send` (LC-5), `attach` (a second copy under a new name, harmless), or the
-  teardown command (runs again).
+  makes it so (`create`, `send` from a draft or a note, finishing actions, `stop`,
+  `rename`, `update`); not for `attach` (a second copy under a new name, harmless), or
+  the teardown command (runs again).
 - I3. No lock is handed to what the helper starts. What must outlast Emacs's wait
   does so by the helper outlasting it.
 
@@ -385,7 +385,7 @@ and a merge's hooks as long as they like: past the default 60 s, Emacs says no r
 came, and the request ends by itself.
 
 Illegal or refused: nothing refuses a request for being old.
-Open: LC-5.
+Open: none.
 
 ### Finishing a task
 
@@ -1977,20 +1977,26 @@ Invariants:
 - I1. A flag says Creating only while a request is in flight or a question is open.
   (`left-behind` rule of `test/roost-sweep-late.el`.)
 - I2. A draft is kept if creation fails. (Docstring of `roost-compose-submit`.)
-- I3. What the draft closes for is what it holds now: it closes on what you sent, and
-  anything since is yours. **Stated nowhere; broken.** See "Known since 2026-11-05" below.
-- I4. The prompt is what you wrote: Roost's redraws of the fields leave it alone.
-  (Docstring of `roost--compose-render`.) **Broken by undo:** VIEWS-3.
-- I5. An untouched draft follows the context; a written one is kept.
-  (Comment in `roost--compose`.)
-- I6. "Roost created NAME" names a task made from this draft. **Stated nowhere;
-  broken** by VIEWS-2.
+- I3. A draft closes only for what it says now: what the request that made the task
+  said, as `roost--compose-what` has it. That is this request, or, when its host says
+  an earlier one made it (`alreadyMade`) or a poll finds it, what it first asked with
+  that ID. Anything else is yours. A draft that was refused, changed, then lost a
+  reply, can stay though it says what was made: it says so, and costs a `C-c C-k`.
+- I4. The prompt is what you wrote: Roost's redraws of the fields leave it alone, and
+  undo goes on working, as they shift each position it holds by what they moved
+  (`roost--shift-undo`).
+- I5. An untouched draft follows the context; a written one keeps its text, and its
+  project unless you click another and nothing ties it there: files it quotes, a task
+  it forks, an issue it starts from (`roost--compose-tied`). (Comment in `roost--compose`.)
+- I6. "Roost created NAME" names the task as made, by its own name. A draft that says
+  otherwise says what was made from what.
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
 | Absent | `roost--compose` | | Editing | buffer, fields, seed | `roost--compose` |
 | Editing | `roost--compose` | prompt empty, or fork | Editing | fields replaced | `roost--compose` |
-| Editing | `roost--compose` | prompt written | Editing | fields kept; a seed or DIRECTORY is dropped | `roost--compose` |
+| Editing | `roost--compose` | prompt written | Editing | fields kept; a seed is dropped, and a DIRECTORY with it | `roost--compose` |
+| Editing | `roost--compose`, a DIRECTORY and no seed, as a click on a project | prompt written | Editing | moves there, or says why it stays | `roost--compose`, `roost--compose-tied` |
 | Editing | edit | | Editing | idle timer redraws fields | `roost--compose-changed` |
 | Editing | a poll changes who touches a quoted file | | Editing | redraw | `roost--compose-redraw-changing` |
 | Editing | `C-c C-c` | no project or name | Editing | user-error | `roost-compose-submit` |
@@ -2000,43 +2006,25 @@ Invariants:
 | Asking | answered | | Creating | request | `roost--create-task` |
 | Asking | `C-g` or error | | Editing | flag and note cleared | `condition-case` in `roost-compose-submit` |
 | Creating | `C-c C-c` | | Creating | user-error "Already creating" | `roost-compose-submit` |
-| Creating | good reply | no minibuffer | Absent | Org link, close, redraw, open if you stayed | `roost--task-made` |
+| Creating | good reply | no minibuffer, says what the task does | Absent | Org link, close, redraw, open if you stayed | `roost--task-made`, `roost--compose-made` |
+| Creating | good reply | no minibuffer, says otherwise now | Editing | Org link, note says what was made; ID forgotten, nothing opens | `roost--compose-made` |
 | Creating | good reply | minibuffer open | Closing | task cached | `roost--when-out-of-minibuffer` |
-| Closing | minibuffer ends | | Absent | as above | `roost--task-made` |
-| Creating | good reply, Org link signals | | **Creating, for good** | no close, no open | VIEWS-11 |
+| Closing | minibuffer ends | | Absent or Editing | as above | `roost--task-made` |
+| Creating, Closing | Org link signals | | as if it hadn't | says so | `roost--compose-made` |
 | Creating | failure | not `roost-no-reply` | Refused | note | `roost--draft-error` |
 | Creating | failure | `roost-no-reply` | NoReply | remember host, watch, note | `roost-compose-submit` |
 | Creating | draft killed | | Absent | request goes on; task made, not opened | `roost--task-made` |
 | Refused, NoReply | `C-c C-c` | same project | Creating | same ID | `roost-compose-submit` |
 | Refused, NoReply | `C-c C-c` | project changed | Creating | new ID | `roost-compose-submit` |
-| Refused, NoReply | poll lists the ID | same project | Absent | closes whatever it holds; opens if you are in it | `roost--compose-listed` |
+| Refused, NoReply | poll lists the ID | says what it first asked | Absent | closes; opens if you are in it | `roost--compose-listed` |
+| Refused, NoReply | poll lists the ID | says otherwise now, its project too | Editing | note says what was made; ID forgotten | `roost--compose-listed`, `roost--compose-made` |
 | any | `C-c C-k` | prompt empty or yes | Absent | `quit-window t` | `roost-compose-cancel` |
 
 Illegal or refused: `C-c C-c` in Creating. While busy the header has no buttons, so a
 hand on the mouse has no Cancel; `C-c C-k` works. Fields can still be changed in
 Creating and text typed there; neither is refused.
 
-**Known since 2026-11-05, and reached by more than the words said.**
-
-*"Text typed in a draft after sending it goes when the good reply closes the draft."*
-It is any draft, and two transitions more than the words say:
-
-- `Creating → Absent` in `roost--compose-made`, `Sending → Absent` in
-  `roost-send-submit`'s success callback, and the same in `roost-pr-submit`. Each ends
-  in `roost--close-buffer` with no look at what the buffer holds now.
-- `NoReply → Absent` and `Refused → Absent` in `roost--compose-listed`, from a poll. No
-  reply to the request comes at all, so the draft looks yours, and says so ("C-c C-c
-  retries").
-- `NoReply → Creating → Absent` with an edited draft is the worst of them: VIEWS-2.
-
-*"A click on another project with a written draft keeps the old project."* It is the row
-`Editing → Editing`, `roost--compose` with a written prompt, in the guard
-`(or fresh fork (string-empty-p (roost--compose-prompt)))`: DIRECTORY is ignored, and
-nothing says so. Callers that pass DIRECTORY: `roost-sidebar-new-task` (the click),
-`roost-draft-task`, `roost-new-task-from-file`. A seed is dropped the same way, which
-`roost-draft-task` documents.
-
-Open: VIEWS-2, VIEWS-3, VIEWS-11, and the two above.
+Open: none.
 
 ### The creation ID
 
@@ -2057,13 +2045,16 @@ Invariants:
   `test_asking_again_for_a_task_returns_the_one_made`.)
 - I2. A second request waits for the first. (`asking_for`.)
 - I3. A failed creation can be asked for again. (`abandon` pops `createId`.)
-- I4. The ID stands for what was asked. **Stated nowhere: it is keyed by directory
-  alone, so prompt, name, base and agent can all change under it.** VIEWS-2.
+- I4. The ID is kept while the project is the same, so the task it finds may have been
+  made from what the draft said first. Its host says so (`alreadyMade`, of one reply),
+  the draft compares that with what it says now, and an ID that found something else
+  is forgotten: asked again, it is another task.
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
 | None | submit | | Asked | new ID | `roost-compose-submit` |
-| Asked | submit | project same | Asked | same ID, whatever else changed | `roost-compose-submit` |
+| Asked | submit | project same | Asked | same ID, whatever else changed; the draft then compares what comes | `roost-compose-submit` |
+| Asked | task comes, draft says otherwise | | None | | `roost--compose-made` |
 | Asked | submit | project differs | Asked | new ID; a task from the old one stays | `roost-compose-submit` |
 | Asked | host: not seen | | Being made | `make_task` | `create` in the helper |
 | Asked | host: seen | | Made | answers with the old task, ignoring the request | `made_for` |
@@ -2075,12 +2066,51 @@ Invariants:
 Checked: `random` is seeded differently at each start, so IDs don't repeat across
 restarts. A refused create records nothing, so retrying with a fixed base works.
 
-Open: VIEWS-2.
+Open: none.
+
+### The send ID
+
+Kind: implicit. Lives in: `roost--send-asked` (TEXT . ID) in a draft, a hash of a note's
+ID and text for a note sent alone, the record's `sendIds`.
+It lets a prompt be asked for again without reaching its agent twice.
+
+| State | Meaning | How you can tell |
+|---|---|---|
+| None | Never asked | `roost--send-asked` nil |
+| Asked, unknown | Emacs doesn't know what became of it | draft Failed |
+| Pasted | Its host pasted it | record's `sendIds` holds this ID |
+
+Invariants:
+- I1. One ID pastes once: `send` reads the record and writes it under the registry lock,
+  so a retry queued behind the first finds it. Written after the paste: a kill between
+  the two pastes again, and a prompt never pasted is never said to have gone.
+- I2. A record holds the last 16 IDs (`SEND_IDS_KEPT`), as a note or a draft can go
+  between a lost reply and asking again. A record from an older helper has none, and
+  sends.
+- I3. Another text is another prompt: a new ID. `roost--send-asked` goes when a draft
+  keeps what you wrote since.
+- I4. Refused, nothing is recorded, so the same ID goes once it can.
+
+| From | Event | Guard | To | Effect | Code |
+|---|---|---|---|---|---|
+| None | submit | | Asked | new ID | `roost-send-submit` |
+| Asked | submit | same text | Asked | same ID | `roost-send-submit` |
+| Asked | submit | text changed | Asked | new ID | `roost-send-submit` |
+| Asked | host: not among its IDs | | Pasted | pastes, records | `send` in the helper |
+| Asked | host: among its IDs | | Pasted | pastes nothing, `alreadySent`; records no look | `send`, `rpc` in the helper |
+| Asked | host refuses | | Asked | nothing recorded | `send` in the helper |
+| any | draft closes | | None | | |
+
+`alreadySent` is of one reply: `roost--act` says "Already sent to X", and the cache
+leaves it out. What `roost-send` sends from code, as for conflicts, has no ID.
+
+Open: none.
 
 ### The prompt draft
 
 Kind: implicit. Lives in: a buffer per task, found by `roost--draft-buffer`;
-`roost--send-task`, `roost--send-sending`, `roost--send-notes`, `roost--draft-note`.
+`roost--send-task`, `roost--send-sending`, `roost--send-notes`, `roost--send-asked`,
+`roost--draft-note`.
 
 | State | Meaning | How you can tell |
 |---|---|---|
@@ -2094,29 +2124,33 @@ Kind: implicit. Lives in: a buffer per task, found by `roost--draft-buffer`;
 Invariants:
 - I1. A draft is kept if sending fails. (Docstring of `roost-send-submit`.)
 - I2. While the agent may be at a prompt, Roost asks first. (Docstring of `roost-send`.)
-  **Broken for a draft:** the status it reads is the one in `roost--send-task`, a copy
-  from when the draft last opened. VIEWS-4.
+  `roost--send-task` is a copy from when the draft last opened, so each reader takes
+  the task as listed now (`roost--as-listed`).
 - I3. Notes in the draft are cleared once it is sent. (Docstring.) **Broken two ways:**
   a note no longer in the draft is cleared too (VIEWS-6), and so is one edited as it
   goes (VIEWS-10).
-- I4. A prompt reaches the agent once. **Stated nowhere; broken** by asking again after
-  a lost reply: VIEWS-5.
-- I5. "· C-c C-c retries" is advice that can work. **Broken** for a refusal that a stale
-  status keeps causing: VIEWS-4.
+- I4. A prompt reaches the agent once: [The send ID](#the-send-id).
+- I5. What the header says of asking again holds. After no reply it says the prompt may
+  have gone, that unchanged, asking again sends it only if it didn't, and that edited it
+  goes as a new prompt, with an ID of its own.
+- I6. A draft closes only for what it sent, all of it, though you have narrowed it, as
+  it is once you are out of the minibuffer. What you wrote since stays, without what
+  went if that is all still there.
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
 | Absent | `roost--send-draft` | | Editing | notes follow | `roost--send-draft` |
 | Editing | `roost--send-draft` | | Editing | `roost--send-task` taken up again, new notes added | `roost--send-draft` |
-| Sending | `roost--send-draft` | | Sending | note cleared, text added, then lost on a good reply | `roost--send-draft` |
+| Sending | `roost--send-draft` | | Sending | note cleared, text added, which then stays | `roost--send-draft` |
 | Editing, Failed | `C-c C-c` | empty, or attachment copying, failed or stale | same | user-error | `roost-send-submit` |
-| Editing, Failed | `C-c C-c` | status starting or permission, as the copy says | Asking | yes-or-no-p | `roost--send-text` |
+| Editing, Failed | `C-c C-c` | status starting or permission, as listed now | Asking | yes-or-no-p | `roost--send-text` |
 | Editing, Failed | `C-c C-c` | | Sending | request | `roost--send-text` |
 | Asking | yes | | Sending | `force` | `roost--send-text` |
 | Asking | no, `C-g` | | Editing | flag cleared | `condition-case` |
 | Sending | `C-c C-c` | | Sending | user-error "Already sending" | `roost-send-submit` |
-| Sending | good reply | | Absent | notes removed, close | `roost-send-submit` |
-| Sending | good reply, saving notes signals | | **Sending, for good** | no close | VIEWS-11 |
+| Sending | good reply | says what it sent | Absent | notes removed, close | `roost-send-submit` |
+| Sending | good reply | says more or otherwise now | Editing | what went leaves it, if whole; notes removed; note says so | `roost--send-kept` |
+| Sending | saving notes signals | | as if it hadn't | says so | `roost-send-submit` |
 | Sending | failure | | Failed | blank lines trimmed unless edited since; note | `roost-send-submit` |
 | Sending | killed | | Absent | notes stay until a good reply | |
 | any | `C-c C-k` | empty or yes | Absent | `quit-window t` | `roost-send-cancel` |
@@ -2125,7 +2159,7 @@ Invariants:
 Illegal or refused: as in the table. The host refuses a task gone, an agent not
 running, a control character, and `starting` or `permission` without `force`.
 
-Open: VIEWS-4, VIEWS-5, VIEWS-6, VIEWS-10, VIEWS-11, and text typed after sending.
+Open: VIEWS-6, VIEWS-10.
 
 ### The pull request draft
 
@@ -2694,6 +2728,7 @@ registry lock.
 | `retiringCommit` | `retire` | yes; never cleared |
 | `agentWorktrees` | `update_hook` | yes; never pruned |
 | `createId` | `make_task`, `abandon` (pops) | yes |
+| `sendIds` | `send` | yes |
 | `pr` | `pr` action, `check_pull_requests` | re-read after the release; compared with what it asked about |
 | `looked` | `record_look` | re-read, compared with the look it measured from |
 | `seen` | `seen`, `stop`, `list_tasks` | yes (a late `seen` can set an older value: [Seen, on the host](#seen-on-the-host)) |
