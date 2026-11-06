@@ -5117,6 +5117,56 @@ sys.exit(status)
                 self.assertNotIn("pr", listed)
                 self.assertIs(listed["landed"], False)
 
+    def test_p_opens_another_after_a_closed_pull_request(self):
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        self.listing((5, "CLOSED", tip))
+        self.assertEqual(self.listed(full=True)["pr"]["state"], "CLOSED")
+        reply = self.request("pr", id=task["id"], title="Try again", body="")
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual([call[:2] for call in self.gh_calls() if call[:2] == ["pr", "create"]], [["pr", "create"]])
+        self.assertNotIn("pushed", reply["result"])
+        self.assertEqual(reply["result"]["pr"], dict(number=7, url="https://github.com/octo/repo/pull/7"))
+
+    def test_p_opens_another_for_commits_after_a_merge(self):
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        self.listing((5, "MERGED", tip))
+        self.listed(full=True)
+        since = self.commit_in(task, "since")
+        self.assertIs(self.listed(full=True)["landed"], False)
+        reply = self.request("pr", id=task["id"], title="And the rest", body="")
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(reply["result"]["pr"]["number"], 7)
+        self.assertEqual(self.git("rev-parse", "refs/heads/" + task["branch"], cwd=self.origin), since)
+
+    def test_a_title_for_a_task_with_a_pull_request_open_pushes_and_says_so(self):
+        # A draft written as its agent opened one: Emacs keeps the draft.
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        self.listing((9, "OPEN", tip))
+        self.listed(full=True)
+        reply = self.request("pr", id=task["id"], title="Mine", body="")
+        self.assertEqual(reply["result"]["pushed"], 0)
+        self.assertEqual([call for call in self.gh_calls() if call[:2] == ["pr", "create"]], [])
+
+    def test_a_title_for_a_task_whose_agent_opened_one_pushes_and_says_so(self):
+        # Before any poll has recorded it.
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.listing((9, "OPEN", tip))
+        reply = self.request("pr", id=task["id"], title="Mine", body="")["result"]
+        self.assertIn("pushed", reply)
+        self.assertEqual(reply["pr"]["number"], 9)
+        self.assertEqual([call for call in self.gh_calls() if call[:2] == ["pr", "create"]], [])
+
     def test_list_learns_the_pull_request_an_agent_opened(self):
         self.github()
         task = self.create()

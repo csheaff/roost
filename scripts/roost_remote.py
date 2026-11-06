@@ -4793,8 +4793,9 @@ def push_pull_request(store, task):
 
 def pull_request(store, task, request):
     """Push the task branch and open a pull request on the forge its origin
-    is on. Runs without the registry lock, because pushing and talking to
-    the forge are slow."""
+    is on, and return its record, and whether this opened it: one open
+    already, as its agent's, is pushed to. Runs without the registry lock,
+    because pushing and talking to the forge are slow."""
     integration = task.get("integrationBranch")
     if not integration:
         raise RoostError("The task has no integration branch (it was created from a detached HEAD) to open a pull request against")
@@ -4814,10 +4815,10 @@ def pull_request(store, task, request):
     existing = forge.open_pull_request(worktree, branch)
     remote_git(worktree, "push", "-u", "origin", branch)
     if existing:
-        return existing
+        return existing, False
     return forge.create(worktree, integration, branch, title,
                         request.get("body") if isinstance(request.get("body"), str) else "",
-                        request.get("draft") is True)
+                        request.get("draft") is True), True
 
 
 def conflicted_files(repo):
@@ -6730,16 +6731,19 @@ def rpc(request):
                 # request is saved in, until done: finishing the task waits.
                 with holding_worktree(store, task, fcntl.LOCK_SH,
                                       "Roost is still removing this task's worktree; refresh in a moment"):
-                    if isinstance(task.get("pr"), dict) and task["pr"].get("number"):
+                    recorded = recorded_pull_request(task)
+                    # One closed or merged takes no more commits: a title asks for another.
+                    if recorded and not (text(request.get("title")) and recorded.get("state") in ("CLOSED", "MERGED")):
                         with store.released():
                             pushed = push_pull_request(store, task)
                         return {"ok": True, "result": outgoing(dict(store.read(request["id"]), pushed=pushed))}
                     with store.released():
-                        pr = pull_request(store, task, request)
+                        pr, opened = pull_request(store, task, request)
                     task = store.read_to_act_on(request["id"])
                     task["pr"] = pr
                     store.save(task)
-            return {"ok": True, "result": outgoing(task)}
+            # One found open was pushed to, as above, though nothing counted how much.
+            return {"ok": True, "result": outgoing(task if opened else dict(task, pushed=None))}
         if action == "look":
             return {"ok": True, "result": outgoing(look(store, request["id"], tracked=request.get("tracked") is True))}
         if action == "list":

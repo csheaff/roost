@@ -4,6 +4,13 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- `P` drafts another pull request after one closed, or for commits made after
+  one merged. It opened the old one in your browser, though the next step said
+  it opens a pull request. Nothing to do when upgrading.
+- A pull request draft whose task has one by the time you create yours, as its
+  agent opened, stays open with your text, and says it pushed to that one. It
+  closed, saying it had opened one, and your text was lost. Nothing to do when
+  upgrading.
 - A pull request its agent opened after `git pull --rebase`, or of work that
   came to the task's branch as a fast-forward, as from a worktree of its own,
   shows in Roost, with its checks, and `merged` once it is. Roost took those

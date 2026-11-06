@@ -6547,11 +6547,13 @@ Write the title on the first line and the body below it;
 \\<roost-pr-mode-map>\\[roost-pr-submit] pushes the branch and creates it.
 For a task with a pull request, push its new commits and open it in the
 browser; with prefix argument SKIP-PUSH, or once it is merged or closed,
-only open it."
+only open it.  One merged or closed that leaves commits to propose takes
+no more of them: draft another, unless SKIP-PUSH says only to open it."
   (interactive (list nil current-prefix-arg))
   (setq task (roost--choose task))
   (if-let* ((pr (roost--field task 'pr))
-            (url (alist-get 'url pr)))
+            (url (alist-get 'url pr))
+            ((or skip-push (not (roost--pr-spent-p task)))))
       (if (or skip-push (memq (roost--pr-state task) '(merged closed)))
           (browse-url url)
         (roost--act
@@ -6567,6 +6569,13 @@ only open it."
                         pushed (if (= pushed 1) "" "s") number since)))
            (browse-url url))))
     (roost--pr-draft task)))
+
+(defun roost--pr-spent-p (task)
+  "Whether TASK's commits need another pull request than the one it has.
+That one is closed, with commits of its own, or merged, with commits since."
+  (pcase (roost--pr-state task)
+    ('closed (not (eql (roost--field task 'ahead) 0)))
+    ('merged (not (roost--landed task)))))
 
 (defun roost-pr-cancel (&optional event)
   "Discard the pull request draft, or the one whose Cancel button EVENT clicked."
@@ -6608,10 +6617,21 @@ Create button, says which draft."
         (roost--act
          task "pr" `((title . ,title) (body . ,body) (draft . ,(and draft t)))
          (lambda (updated)
-           (roost--close-buffer buffer)
-           (message "Roost: opened pull request %s %s"
-                    (roost--pr-number (roost--field updated 'pr))
-                    (alist-get 'url (roost--field updated 'pr))))
+           (if (not (assq 'pushed updated))
+               (progn
+                 (roost--close-buffer buffer)
+                 (message "Roost: opened pull request %s %s"
+                          (roost--pr-number (roost--field updated 'pr))
+                          (alist-get 'url (roost--field updated 'pr))))
+             ;; It had one by then, as its agent opened, with words of its own.
+             (let ((said (format "%s already has %s; pushed to it, and your text stays here"
+                                 (roost--field task 'name) (roost--pr-number (roost--field updated 'pr)))))
+               (message "Roost: %s" said)
+               (when (buffer-live-p buffer)
+                 (with-current-buffer buffer
+                   (setq roost--pr-sending nil
+                         roost--draft-note (concat " " said))
+                   (force-mode-line-update))))))
          (lambda (err)
            (message "Roost could not create the pull request: %s" err)
            (when (buffer-live-p buffer)
@@ -9005,7 +9025,8 @@ where RET would pick the agent's default answer, so no key is named."
      ;; As for one you haven't looked at since its agent finished.
      ((roost--landed task) (funcall retire))
      ((consp (roost--conflicts task)) (roost--conflict-next-step task key))
-     (merged (concat "Its pull request is merged, but not its commits since: " (funcall key "m") " merges them"))
+     (merged (concat "Its pull request is merged, but not its commits since: " (funcall key "m") " merges them, or "
+                     (funcall key "P") " opens a pull request"))
      ((memq state '(open draft)) (roost--pr-next-step task key))
      ((and (numberp (roost--field task 'ahead)) (> (roost--field task 'ahead) 0))
       (concat (funcall key "m") " merges it, or " (funcall key "P") " opens a pull request")))))

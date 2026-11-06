@@ -8132,6 +8132,80 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
        (roost-pr task)
        (should (equal opened "https://github.com/o/r/pull/12"))))))
 
+(ert-deftest roost-pr-drafts-another-once-the-one-it-has-takes-no-more-commits ()
+  (roost-test--isolated
+   (roost-test--with-pr-buffers
+    (let* ((closed '(prStatus . ((state . "CLOSED"))))
+           (merged '(prStatus . ((state . "MERGED"))))
+           opened
+           (press (lambda (skip-push &rest fields)
+                    "Whether P with SKIP-PUSH, for a task with FIELDS, drafts one."
+                    (let ((task (roost--cache-task "dev" (apply #'roost-test--pr-task fields))))
+                      (setq opened nil)
+                      (with-temp-buffer
+                        (roost-pr task skip-push)
+                        (prog1 (derived-mode-p 'roost-pr-mode)
+                          (when (derived-mode-p 'roost-pr-mode) (kill-buffer))))))))
+      (cl-letf (((symbol-function 'browse-url) (lambda (url &rest _) (setq opened url)))
+                ((symbol-function 'pop-to-buffer) #'set-buffer)
+                ((symbol-function 'roost--pr-commits) (lambda (_) nil))
+                ((symbol-function 'roost--request) (lambda (&rest _) (ert-fail "should not push"))))
+        ;; Closed, with commits to propose: as the next step says.
+        (should (funcall press nil closed '(ahead . 2) '(landed) '(dirty)))
+        (should-not opened)
+        (should (equal (roost--next-step (gethash '("dev" "0123456789abcdef") roost--tasks))
+                       "m merges it, or P opens a pull request"))
+        ;; Commits since one merged too.
+        (should (funcall press nil merged '(ahead . 2) '(landed) '(dirty)))
+        (should-not opened)
+        (should (string-suffix-p "m merges them, or P opens a pull request"
+                                 (roost--next-step (gethash '("dev" "0123456789abcdef") roost--tasks))))
+        ;; With no commits to propose, or all of them merged, it opens the one it has.
+        (should-not (funcall press nil closed '(ahead . 0) '(landed) '(dirty)))
+        (should opened)
+        (should-not (funcall press nil merged '(ahead . 2) '(landed . t) '(dirty)))
+        (should opened)
+        ;; As C-u always does.
+        (should-not (funcall press t closed '(ahead . 2) '(landed) '(dirty)))
+        (should opened)
+        (should-not (funcall press t merged '(ahead . 2) '(landed) '(dirty)))
+        (should opened))))))
+
+(ert-deftest roost-pr-draft-says-what-became-of-it-when-the-task-has-one-by-then ()
+  ;; Its agent opened one while you wrote: the helper pushes to that, which
+  ;; keeps its own words, so yours stay here, and it opened nothing.
+  (roost-test--isolated
+   (roost-test--with-pr-buffers
+    (let ((task (roost--cache-task "dev" (roost-test--task))) reply said)
+      (cl-letf (((symbol-function 'pop-to-buffer) #'set-buffer)
+                ((symbol-function 'roost--pr-commits) (lambda (_) nil))
+                ((symbol-function 'roost--redraw) #'ignore)
+                ((symbol-function 'message)
+                 (lambda (format &rest args) (when format (push (apply #'format-message format args) said))))
+                ((symbol-function 'roost--request)
+                 (lambda (_host _action _params success &rest _) (funcall success reply))))
+        (roost-pr task)
+        (let ((draft (current-buffer)))
+          (erase-buffer)
+          (insert "A title\n\nWritten with care.\n")
+          (roost--cache-task "dev" (roost-test--pr-task))
+          ;; Recorded, it counts what it pushed; found open, it doesn't.
+          (dolist (pushed '((pushed . 1) (pushed)))
+            (setq reply (cons pushed (roost-test--pr-task)) said nil)
+            (roost-pr-submit)
+            (should (buffer-live-p draft))
+            (should-not roost--pr-sending)
+            (should (equal (buffer-string) "A title\n\nWritten with care.\n"))
+            (should (string-search "fix auth already has #12; pushed to it, and your text stays here"
+                                   (roost-test--header)))
+            (should (member "Roost: fix auth already has #12; pushed to it, and your text stays here" said))
+            (should-not (seq-find (lambda (line) (string-search "opened pull request" line)) said)))
+          ;; Created in earnest, as when that one was closed, it goes, and says so.
+          (setq reply (roost-test--pr-task) said nil)
+          (roost-pr-submit)
+          (should-not (buffer-live-p draft))
+          (should (member "Roost: opened pull request #12 https://github.com/o/r/pull/12" said))))))))
+
 (ert-deftest roost-pr-markers-show-state-checks-and-review ()
   (let ((marker (lambda (&rest fields)
                   (let ((m (roost--pr-marker (apply #'roost-test--pr-task fields))))
@@ -8288,7 +8362,8 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
      (should (equal (roost--display-status dirty) "ready"))
      ;; Commits since its pull request merged are not merged.
      (should (equal (roost--display-status later) "ready"))
-     (should (equal (roost--next-step later) "Its pull request is merged, but not its commits since: m merges them"))
+     (should (equal (roost--next-step later)
+                    "Its pull request is merged, but not its commits since: m merges them, or P opens a pull request"))
      (should (roost--action-applies-p later 'roost-merge-retire))
      (should-not (roost--action-applies-p merged 'roost-merge-retire))
      ;; Merged into its branch without GitHub, by an agent that has stopped:

@@ -326,8 +326,10 @@ The dashboard then shows `#12` with its checks and review, as it does for a pull
 request the agent opened itself from the task's branch. Send review feedback
 to the agent with `e`; when it has committed, `P` pushes the new commits and
 opens the pull request. Once it is merged, `x` retires the task and deletes the
-branch. Needs `gh` on the task's host, or `glab` for a project on GitLab, and
-Git credentials there that can push.
+branch. After one closed, or merged with commits since, `P` drafts another. If
+the task has one by the time you create yours, as its agent opened, `C-c C-c`
+pushes to that, and your text stays in the draft. Needs `gh` on the task's host,
+or `glab` for a project on GitLab, and Git credentials there that can push.
 
 **On GitLab.** Roost asks GitLab, through `glab`, when the host of the
 project's `origin` says so by name, as `gitlab.com` and `gitlab.example.com`
@@ -548,7 +550,7 @@ counted once you stop and resume it (`K`, then `s`).
 | `b` | `roost-sidebar-mode` | Keep the task list at the left of the frame |
 | `I` | `roost-task-panel-mode` | Dock the open task's panel beside its terminal |
 | `u` | `roost-update` | Bring the task up to date: merge the branch it merges into, such as `main`, into it; for uncommitted changes or conflicts, offers to have its agent do it |
-| `P` | `roost-pr` | Draft a pull request for the task; if it has one, push new commits and open it (`C-u`: open only) |
+| `P` | `roost-pr` | Draft a pull request for the task; if it has one, push new commits and open it (`C-u`: open only); after one closed, or merged with commits since, draft another |
 | `m` | `roost-merge-retire` | Merge committed work as one commit, then retire the task (a merge commit with `roost-merge-style` set to `merge`) |
 | `x` | `roost-retire` | Finish with a task: retire it when its work is merged or it has none, otherwise offer to discard it (`roost-discard`), first saying what would be lost; to lose commits or files you type its name |
 | `X` | `roost-forget` | Drop the task from Roost, leaving its worktree and branch as they are |
