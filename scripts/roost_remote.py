@@ -4324,8 +4324,9 @@ def unregister_gone(repo, worktree):
     the branch it held can be deleted: what Git keeps of it goes, as
     `git worktree prune` removes it, but never a folder, which may be back
     meanwhile, as when a drive is mounted again. Retiring refuses a locked
-    one first, and both retiring and discarding one that keeps submodules."""
-    gitdir = kept_of_gone(repo, worktree)
+    one first, and both retiring and discarding one that keeps submodules.
+    With REPO gone, nothing keeps it any more."""
+    gitdir = kept_of_gone(repo, worktree) if Path(repo).is_dir() else None
     if gitdir:
         shutil.rmtree(gitdir)
 

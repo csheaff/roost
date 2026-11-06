@@ -3091,6 +3091,15 @@ class Lifecycle(unittest.TestCase):
         self.assertFalse(wt.exists())
         self.assertTrue(roost.ref_exists(self.repo, "agent-idea"))
 
+    def test_discard_a_task_whose_repository_is_gone(self):
+        task = self.create()
+        shutil.rmtree(self.repo)
+        told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+        reply = self.request("discard", id=task["id"], expect=told["commit"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertFalse(Path(task["worktree"]).exists())
+        self.assertEqual(self.request("list")["result"], [])
+
     def test_discard_takes_the_agents_own_worktrees_with_it(self):
         task = self.create()
         store = roost.Store(str(self.state))

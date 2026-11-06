@@ -4,6 +4,9 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Discarding a task whose repository is gone says it went. It deleted the
+  task's worktree, then said the repository wasn't one, and the task stayed
+  until you asked again. Nothing to do when upgrading.
 - A draft started from a Jira work item has its text when your site keeps
   that in a rich-text custom field. The prompt had only its summary and
   link, as Roost read the description alone. Now, as you pick one with
