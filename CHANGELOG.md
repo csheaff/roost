@@ -4,6 +4,10 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Two Emacs on one machine keep each other's review notes, hosts and
+  projects. What you wrote or used in one went when the other next saved,
+  and a note you had sent, or a host you had forgotten, came back. Each now
+  takes up what the file holds as it writes. Nothing to do when upgrading.
 - A connection that drops while Roost installs its helper on a host changes
   nothing there. What had arrived replaced the helper, which agents' hooks
   call, so their statuses stopped moving, and the host could read offline

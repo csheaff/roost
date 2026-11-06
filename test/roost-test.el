@@ -22,7 +22,9 @@
 (defmacro roost-test--isolated-in (scratch &rest body)
   "Run BODY with Roost's state isolated, its files in the directories SCRATCH."
   `(let ((roost--tasks (make-hash-table :test 'equal))
+         (roost-hosts-file (expand-file-name "hosts.json" (nth 0 ,scratch)))
          (roost-projects-file (expand-file-name "projects.json" (nth 0 ,scratch)))
+         (roost--file-stamps (make-hash-table :test 'equal))
          (roost--projects-loaded t) (roost--remembered-projects nil)
          (user-login-name "user")
          (roost--statuses (make-hash-table :test 'equal))
@@ -6063,6 +6065,95 @@ stopped."
                 (should (equal (roost--hosts) '(nil "dev"))))
        (delete-directory root t)))))
 
+(defun roost-test--hosts-on-file ()
+  "The hosts a new Emacs would remember, sorted."
+  (sort (copy-sequence (roost-test--as-emacs (roost-test--new-emacs)
+                                             (lambda () (let ((roost-hosts nil)) (roost--hosts)))))
+        #'string<))
+
+(defun roost-test--projects-on-file ()
+  "The projects a new Emacs would remember, sorted."
+  (roost-test--as-emacs (roost-test--new-emacs) #'roost--known-projects)
+  (sort (seq-filter #'stringp (roost--read-json-list roost-projects-file)) #'string<))
+
+(ert-deftest roost-a-host-remembered-in-another-emacs-stays-as-you-use-yours ()
+  ;; A host you used in one Emacs was no longer watched after a restart.
+  (roost-test--two-emacs
+   (roost-test--as-emacs emacs (lambda () (roost--remember-host "alpha")))
+   (roost-test--as-emacs other (lambda () (roost--remember-host "beta")))
+   (should (equal (roost-test--hosts-on-file) '("alpha" "beta")))))
+
+(ert-deftest roost-a-host-forgotten-in-another-emacs-stays-forgotten-as-you-use-yours ()
+  (roost-test--two-emacs
+   (roost-test--as-emacs emacs (lambda () (roost--remember-host "alpha")))
+   (roost-test--as-emacs other (lambda () (roost--remember-host "beta")))
+   (roost-test--as-emacs emacs (lambda () (roost--remember-host "gamma")))
+   (roost-test--as-emacs other (lambda () (roost-forget-host "alpha")))
+   (roost-test--as-emacs emacs (lambda () (roost--remember-host "delta")))
+   (should (equal (roost-test--hosts-on-file) '("beta" "delta" "gamma")))))
+
+(ert-deftest roost-a-host-you-use-again-after-another-emacs-forgot-it-is-watched ()
+  (roost-test--two-emacs
+   (roost-test--as-emacs emacs (lambda () (roost--remember-host "alpha")))
+   (roost-test--as-emacs other (lambda () (roost--remember-host "beta")))
+   (roost-test--as-emacs other (lambda () (roost-forget-host "alpha")))
+   (roost-test--as-emacs emacs (lambda () (roost--remember-host "alpha")))
+   (should (equal (roost-test--hosts-on-file) '("alpha" "beta")))))
+
+(ert-deftest roost-the-local-host-stays-remembered-across-two-emacs ()
+  ;; It is null on file, which must not read as nothing there.
+  (roost-test--two-emacs
+   (roost-test--as-emacs emacs (lambda () (roost--remember-host nil)))
+   (roost-test--as-emacs other (lambda () (roost--remember-host "beta")))
+   (should (member nil (roost-test--as-emacs (roost-test--new-emacs)
+                                             (lambda () (let ((roost-hosts nil)) (roost--hosts))))))))
+
+(ert-deftest roost-a-project-remembered-in-another-emacs-stays-as-you-use-yours ()
+  (roost-test--two-emacs
+   (roost-test--as-emacs emacs (lambda () (roost--remember-project "/home/user/alpha/")))
+   (roost-test--as-emacs other (lambda () (roost--remember-project "/home/user/beta/")))
+   (should (equal (roost-test--projects-on-file) '("/home/user/alpha/" "/home/user/beta/")))))
+
+(ert-deftest roost-a-project-forgotten-in-another-emacs-stays-forgotten-as-you-use-yours ()
+  (roost-test--two-emacs
+   (roost-test--as-emacs emacs (lambda () (roost--remember-project "/home/user/alpha/")))
+   (roost-test--as-emacs other (lambda () (roost--remember-project "/home/user/beta/")))
+   (roost-test--as-emacs emacs (lambda () (roost--remember-project "/home/user/gamma/")))
+   (roost-test--as-emacs other (lambda () (roost-forget-project "/home/user/alpha/")))
+   (roost-test--as-emacs emacs (lambda () (roost--remember-project "/home/user/delta/")))
+   (should (equal (roost-test--projects-on-file)
+                  '("/home/user/beta/" "/home/user/delta/" "/home/user/gamma/")))))
+
+(ert-deftest roost-what-is-remembered-is-written-whole ()
+  ;; Another Emacs reading the file as it was written found it empty, and
+  ;; its next write lost the lot.
+  (roost-test--isolated
+   (let ((directory (file-name-directory roost-hosts-file)))
+     (roost--write-json-list roost-hosts-file '("old"))
+     (let ((before (file-attribute-inode-number (file-attributes roost-hosts-file))))
+       (roost--write-json-list roost-hosts-file '("new"))
+       (should-not (= (file-attribute-inode-number (file-attributes roost-hosts-file)) before)))
+     (should (equal (roost--read-json-list roost-hosts-file) '("new")))
+     (should (= (file-modes roost-hosts-file) #o600))
+     (should (equal (directory-files directory nil "hosts") '("hosts.json")))
+     ;; A write that fails leaves it, and nothing of its own.
+     (cl-letf (((symbol-function 'rename-file) (lambda (&rest _) (error "Disk full"))))
+       (should-error (roost--write-json-list roost-hosts-file '("lost"))))
+     (should (equal (roost--read-json-list roost-hosts-file) '("new")))
+     (should (equal (directory-files directory nil "hosts") '("hosts.json"))))))
+
+(ert-deftest roost-what-is-remembered-is-written-through-a-link ()
+  ;; As from your dotfiles: the link stays, and what it leads to changes.
+  (roost-test--isolated
+   (let* ((directory (file-name-directory roost-hosts-file))
+          (real (expand-file-name "kept/hosts.json" directory)))
+     (make-directory (file-name-directory real))
+     (write-region "[]" nil real nil 'silent)
+     (make-symbolic-link real roost-hosts-file)
+     (roost--write-json-list roost-hosts-file '("dev"))
+     (should (file-symlink-p roost-hosts-file))
+     (should (equal (roost--read-json-list real) '("dev"))))))
+
 (ert-deftest roost-local-host-survives-restart-and-legacy-files-are-repaired ()
   (roost-test--isolated
    (let* ((root (make-temp-file "roost-hosts" t))
@@ -11142,6 +11233,158 @@ answered with `answer'."
      (roost--save-notes)
      (setq roost--notes nil roost--notes-loaded nil)
      (should (equal (roost--notes) notes)))))
+
+;; Two Emacs on one machine: each reads a file of what Roost remembers once,
+;; and each write went from what it held, so what the other wrote went.
+
+(defun roost-test--new-emacs ()
+  "What a new Emacs holds of the files of what Roost remembers: nothing yet."
+  (list nil nil nil nil nil nil (make-hash-table :test 'equal)))
+
+(defun roost-test--as-emacs (emacs function)
+  "Call FUNCTION as EMACS, one from `roost-test--new-emacs', and keep what it holds."
+  (pcase-let ((`(,hosts-loaded ,hosts ,projects-loaded ,projects ,notes-loaded ,notes ,stamps) emacs))
+    (let ((roost--hosts-loaded hosts-loaded) (roost--remembered-hosts hosts)
+          (roost--projects-loaded projects-loaded) (roost--remembered-projects projects)
+          (roost--notes-loaded notes-loaded) (roost--notes notes)
+          (roost--file-stamps stamps))
+      (unwind-protect (funcall function)
+        (setcar emacs roost--hosts-loaded)
+        (setcar (nthcdr 1 emacs) roost--remembered-hosts)
+        (setcar (nthcdr 2 emacs) roost--projects-loaded)
+        (setcar (nthcdr 3 emacs) roost--remembered-projects)
+        (setcar (nthcdr 4 emacs) roost--notes-loaded)
+        (setcar (nthcdr 5 emacs) roost--notes)))))
+
+(defun roost-test--note-text (notes)
+  "The text of NOTES, sorted."
+  (sort (mapcar (lambda (note) (alist-get 'text note)) notes) #'string<))
+
+(defun roost-test--notes-on-file ()
+  "The text of the notes a new Emacs would read."
+  (roost-test--note-text (roost-test--as-emacs (roost-test--new-emacs) #'roost--notes)))
+
+(defun roost-test--save-note (emacs task text &optional old)
+  "Have EMACS save TEXT as a note on TASK, or as note OLD's new text."
+  (roost-test--as-emacs emacs (lambda () (roost--note-save task '((file . "a.txt")) old text))))
+
+(defmacro roost-test--two-emacs (&rest body)
+  "Run BODY with a task on host dev, and EMACS and OTHER, each having read the files."
+  `(roost-test--isolated
+    (let ((task (roost--cache-task "dev" (roost-test--task)))
+          (emacs (roost-test--new-emacs))
+          (other (roost-test--new-emacs)))
+      (dolist (each (list emacs other))
+        (roost-test--as-emacs each (lambda () (roost--hosts) (roost--known-projects) (roost--notes))))
+      ,@body)))
+
+(ert-deftest roost-a-note-from-another-emacs-stays-as-you-write-yours ()
+  (roost-test--two-emacs
+   (roost-test--save-note emacs task "Mine.")
+   (roost-test--save-note other task "Yours.")
+   (should (equal (roost-test--notes-on-file) '("Mine." "Yours.")))
+   ;; This Emacs takes it up at its next write, not before.
+   (should (equal (roost-test--note-text (roost-test--as-emacs emacs #'roost--notes)) '("Mine.")))
+   (roost-test--save-note emacs task "And mine.")
+   (should (equal (roost-test--note-text (roost-test--as-emacs emacs #'roost--notes))
+                  '("And mine." "Mine." "Yours.")))
+   (should (equal (roost-test--notes-on-file) '("And mine." "Mine." "Yours.")))))
+
+(ert-deftest roost-a-note-gone-from-another-emacs-stays-gone-as-you-write ()
+  ;; Sent there, it came back here, and could go twice.
+  (roost-test--two-emacs
+   (roost-test--save-note emacs task "Sent.")
+   ;; One that starts now holds it.
+   (let ((late (roost-test--new-emacs)))
+     (roost-test--as-emacs late #'roost--notes)
+     (roost-test--as-emacs emacs (lambda ()
+                                   (roost--remove-notes (lambda (note)
+                                                          (equal (alist-get 'text note) "Sent.")))))
+     (roost-test--save-note late task "Later.")
+     (should (equal (roost-test--notes-on-file) '("Later.")))
+     (should (equal (roost-test--note-text (roost-test--as-emacs late #'roost--notes))
+                    '("Later."))))))
+
+(ert-deftest roost-a-note-removed-here-stays-removed-as-another-emacs-writes ()
+  (roost-test--two-emacs
+   (roost-test--save-note emacs task "One.")
+   (roost-test--save-note other task "Two.")
+   ;; This one holds them both, and removes one as the other writes.
+   (roost-test--save-note emacs task "Three.")
+   (roost-test--save-note other task "Four.")
+   (roost-test--as-emacs emacs (lambda ()
+                                 (roost--remove-notes (lambda (note)
+                                                        (equal (alist-get 'text note) "One.")))))
+   (should (equal (roost-test--notes-on-file) '("Four." "Three." "Two.")))))
+
+(ert-deftest roost-a-note-edited-in-another-emacs-stays-the-note-you-hold ()
+  ;; By ID: the note box and drafts here hold the note itself, and an
+  ;; edit they save must reach it.
+  (roost-test--two-emacs
+   (roost-test--save-note emacs task "First.")
+   (roost-test--save-note other task "Beside it.")
+   (let* ((theirs (seq-find (lambda (note) (equal (alist-get 'text note) "First."))
+                            (roost-test--as-emacs other #'roost--notes)))
+          (mine (car (roost-test--as-emacs emacs #'roost--notes))))
+     (roost-test--save-note emacs task "Edited there." mine)
+     (roost-test--save-note other task "Later.")
+     (should (memq theirs (roost-test--as-emacs other #'roost--notes)))
+     (should (equal (alist-get 'text theirs) "Edited there."))
+     (should (equal (roost-test--notes-on-file) '("Beside it." "Edited there." "Later."))))))
+
+(ert-deftest roost-a-note-you-edit-that-went-elsewhere-is-kept-as-a-new-one ()
+  ;; As for one sent here while you wrote.
+  (roost-test--two-emacs
+   (roost-test--save-note emacs task "Going.")
+   (roost-test--save-note other task "Beside it.")
+   (let ((held (seq-find (lambda (note) (equal (alist-get 'text note) "Going."))
+                         (roost-test--as-emacs other #'roost--notes))))
+     (roost-test--as-emacs emacs (lambda ()
+                                   (roost--remove-notes (lambda (note)
+                                                          (equal (alist-get 'text note) "Going.")))))
+     (roost-test--save-note other task "Rewritten." held)
+     (should (equal (roost-test--notes-on-file) '("Beside it." "Rewritten."))))))
+
+(ert-deftest roost-a-draft-follows-a-note-changed-in-another-emacs ()
+  (roost-test--isolated
+   (roost-test--with-send-buffers
+    (let* ((task (roost--cache-task "dev" (roost-test--task)))
+           (id (roost--field task 'id))
+           (write (lambda (notes)
+                    (roost--write-json-list
+                     roost-notes-file
+                     (mapcar (lambda (note) (append note nil)) notes))
+                    ;; Written as by another Emacs: this one hasn't read it.
+                    (remhash roost-notes-file roost--file-stamps))))
+      (setq roost--notes (list (roost-test--note "1" id '(file . "a.py") '(text . "One"))
+                               (roost-test--note "2" id '(file . "b.py") '(text . "Two"))
+                               (roost-test--note "3" id '(file . "c.py") '(text . "Three"))))
+      (cl-letf (((symbol-function 'pop-to-buffer) #'set-buffer)
+                ((symbol-function 'roost--refresh-host) #'ignore)
+                ((symbol-function 'roost--redraw) #'ignore))
+        (roost--send-draft task)
+        (funcall write (list (roost-test--note "1" id '(file . "a.py") '(text . "One, edited"))
+                             (roost-test--note "3" id '(file . "c.py") '(text . "Three"))))
+        (roost--notes-as-on-file)
+        (should (equal (buffer-string) "\n\na.py\nOne, edited\n\nc.py\nThree")))))))
+
+(ert-deftest roost-a-note-a-failed-write-left-here-goes-with-the-next ()
+  ;; The file hasn't moved, so what is held here is newer than it: taking
+  ;; the file's word would lose the note.
+  (roost-test--two-emacs
+   (roost-test--save-note emacs task "Saved.")
+   (cl-letf (((symbol-function 'rename-file) (lambda (&rest _) (error "Disk full"))))
+     (should-error (roost-test--save-note emacs task "Failed.")))
+   (roost-test--save-note emacs task "Next.")
+   (should (equal (roost-test--notes-on-file) '("Failed." "Next." "Saved.")))))
+
+(ert-deftest roost-notes-outlast-a-file-that-can-t-be-read ()
+  ;; No other Emacs leaves it so, and what is held here is all there is.
+  (roost-test--two-emacs
+   (roost-test--save-note emacs task "Held.")
+   (with-temp-file roost-notes-file (insert "[{\"id\":"))
+   (roost-test--save-note emacs task "Next.")
+   (should (equal (roost-test--notes-on-file) '("Held." "Next.")))))
 
 (ert-deftest roost-a-sent-draft-delivers-and-clears-its-notes ()
   (roost-test--isolated

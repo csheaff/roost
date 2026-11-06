@@ -565,39 +565,90 @@ WHAT names it, if it isn't the prompt."
   (json-serialize (mapcar (lambda (entry) (cons (car entry) (or (cdr entry) :null)))
                           alist)))
 
-(defun roost--read-json-list (file)
-  "Return the JSON array in FILE as a list, or nil if it is unreadable.
+(defun roost--read-json-list (file &optional unreadable)
+  "Return the JSON array in FILE as a list, or UNREADABLE if it can't be read.
 JSON null becomes nil."
-  (when (file-readable-p file)
-    (ignore-errors
-      (with-temp-buffer
-        (insert-file-contents file)
-        ;; Older versions wrote the local host as {}; as an alist that
-        ;; reads back as nil, which is the local host.
-        (let ((list (json-parse-buffer :array-type 'list :object-type 'alist :null-object nil)))
-          (and (listp list) list))))))
+  (if (not (file-readable-p file))
+      unreadable
+    (condition-case nil
+        (with-temp-buffer
+          (insert-file-contents file)
+          ;; Older versions wrote the local host as {}; as an alist that
+          ;; reads back as nil, which is the local host.
+          (let ((list (json-parse-buffer :array-type 'list :object-type 'alist :null-object nil)))
+            (if (listp list) list unreadable)))
+      (error unreadable))))
+
+;; Each file of what Roost remembers is read once, and Emacs works from
+;; what it read.  Another Emacs can write it meanwhile, so each change
+;; here first takes up what the file holds now, and goes on that.
+
+(defvar roost--file-stamps (make-hash-table :test 'equal)
+  "How each file of what Roost remembers was when this Emacs last read or wrote it.
+See `roost--file-stamp'.")
+
+(defun roost--file-stamp (file)
+  "What moves when FILE is written: its modification time and inode, or nil.
+Each write makes a new file, so the inode tells two apart in one tick of
+a coarse clock."
+  (when-let* ((attributes (file-attributes file)))
+    (list (file-attribute-modification-time attributes)
+          (file-attribute-inode-number attributes))))
+
+(defun roost--read-remembered (file)
+  "Return the list in FILE, or nil, noting how FILE is for `roost--read-again'."
+  (puthash file (roost--file-stamp file) roost--file-stamps)
+  (roost--read-json-list file))
+
+(defun roost--read-again (file)
+  "Return the list in FILE if it moved since this Emacs read or wrote it.
+Otherwise `same', as also when it has gone or can't be read: that is no
+other Emacs's doing, which writes it whole, and what this one holds is
+better than nothing."
+  (let ((stamp (roost--file-stamp file)))
+    (if (or (null stamp) (equal stamp (gethash file roost--file-stamps)))
+        'same
+      (let ((list (roost--read-json-list file 'same)))
+        (unless (eq list 'same) (puthash file stamp roost--file-stamps))
+        list))))
 
 (defun roost--write-json-list (file list)
-  "Write LIST to FILE as a private JSON array, with nil as null."
+  "Write LIST to FILE as a private JSON array, with nil as null.
+Through a new file renamed into place, so that nothing reads it half
+written, and a write that fails leaves it as it was."
   (make-directory (file-name-directory file) t)
-  (let ((coding-system-for-write 'utf-8-unix))
-    (with-temp-file file
-      (insert (json-serialize (vconcat (mapcar (lambda (item) (or item :null)) list)))))
-    (set-file-modes file #o600)))
+  (let* ((coding-system-for-write 'utf-8-unix)
+         ;; What a link, as from your dotfiles, leads to stays where it is.
+         (target (file-truename file))
+         (new (make-temp-file (concat target "."))))
+    (unwind-protect
+        (progn
+          (with-temp-file new
+            (insert (json-serialize (vconcat (mapcar (lambda (item) (or item :null)) list)))))
+          (rename-file new target t))
+      (when (file-exists-p new) (delete-file new))))
+  (puthash file (roost--file-stamp file) roost--file-stamps))
 
 (defun roost--hosts ()
   "Configured and remembered hosts, without network I/O."
   (unless roost--hosts-loaded
     (setq roost--hosts-loaded t
           roost--remembered-hosts (seq-filter #'string-or-null-p
-                                              (roost--read-json-list roost-hosts-file))))
+                                              (roost--read-remembered roost-hosts-file))))
   ;; A copy: `delete-dups' would otherwise drop a configured host from
   ;; the remembered ones, which `append' shares as its tail.
   (delete-dups (append roost-hosts roost--remembered-hosts nil)))
 
+(defun roost--hosts-as-on-file ()
+  "Take up the hosts `roost-hosts-file' holds, if another Emacs changed them."
+  (roost--hosts)
+  (let ((hosts (roost--read-again roost-hosts-file)))
+    (unless (eq hosts 'same)
+      (setq roost--remembered-hosts (seq-filter #'string-or-null-p hosts)))))
+
 (defun roost--remember-host (host)
   "Remember HOST across restarts."
-  (roost--hosts)
+  (roost--hosts-as-on-file)
   (unless (member host roost--remembered-hosts)
     (push host roost--remembered-hosts)
     (roost--write-json-list roost-hosts-file roost--remembered-hosts)))
@@ -1522,6 +1573,7 @@ Hosts in `roost-hosts' are watched until you take them out of it."
               (yes-or-no-p (format "%d task%s on %s will no longer show; their agents keep running.  Forget %s? "
                                    (length tasks) (if (cdr tasks) "s" "")
                                    (roost--host-label host) (roost--host-label host))))
+      (roost--hosts-as-on-file)
       (setq roost--remembered-hosts (delete host roost--remembered-hosts))
       (roost--write-json-list roost-hosts-file roost--remembered-hosts)
       ;; Their terminals, panels and workspaces go too, as a retired
@@ -2607,7 +2659,7 @@ says once the terminal shows."
 (defun roost--remember-project (directory)
   "Remember project DIRECTORY, most recent first, across restarts."
   (setq directory (file-name-as-directory directory))
-  (roost--known-projects)
+  (roost--projects-as-on-file)
   (setq roost--remembered-projects
         (seq-take (cons directory (delete directory roost--remembered-projects)) 50))
   (roost--write-json-list roost-projects-file roost--remembered-projects))
@@ -2617,11 +2669,18 @@ says once the terminal shows."
   (unless roost--projects-loaded
     (setq roost--projects-loaded t
           roost--remembered-projects
-          (seq-filter #'stringp (roost--read-json-list roost-projects-file))))
+          (seq-filter #'stringp (roost--read-remembered roost-projects-file))))
   (delete-dups (append roost--remembered-projects
                        ;; A record naming no repository names no project.
                        (mapcar #'roost--project-directory
                                (seq-filter (lambda (task) (roost--field task 'repo)) (roost-tasks))))))
+
+(defun roost--projects-as-on-file ()
+  "Take up the projects `roost-projects-file' holds, if another Emacs changed them."
+  (roost--known-projects)
+  (let ((projects (roost--read-again roost-projects-file)))
+    (unless (eq projects 'same)
+      (setq roost--remembered-projects (seq-filter #'stringp projects)))))
 
 ;;;###autoload
 (defun roost-forget-project (directory)
@@ -2640,7 +2699,7 @@ there remembers it again."
                                        roost--remembered-projects)))
                  (unless projects (user-error "Roost remembers no projects"))
                  (cdr (assoc (completing-read "Forget project: " projects nil t) projects)))))))
-  (roost--known-projects)
+  (roost--projects-as-on-file)
   ;; However it was spelled, as by another TRAMP method, which the
   ;; sidebar takes for the same project.
   (let ((place (roost--project-place directory)))
@@ -4736,8 +4795,29 @@ child frames, the box is `:frame', over `:room' pixels left for it.")
   "All review notes not yet sent, read from `roost-notes-file' once."
   (unless roost--notes-loaded
     (setq roost--notes-loaded t
-          roost--notes (seq-filter #'consp (roost--read-json-list roost-notes-file))))
+          roost--notes (seq-filter #'consp (roost--read-remembered roost-notes-file))))
   roost--notes)
+
+(defun roost--notes-as-on-file ()
+  "Take up the notes `roost-notes-file' holds, if another Emacs changed them.
+By ID: a note that is still there stays the same object, as the note box
+or a draft may hold it."
+  (let* ((held (roost--notes))
+         (notes (roost--read-again roost-notes-file)))
+    (unless (eq notes 'same)
+      (setq roost--notes
+            (mapcar (lambda (note)
+                      (let* ((id (alist-get 'id note))
+                             (mine (seq-find (lambda (old) (equal (alist-get 'id old) id)) held))
+                             (text (alist-get 'text note)))
+                        (when (and mine (not (equal (alist-get 'text mine) text)))
+                          (let ((before (copy-tree mine)))
+                            (setf (alist-get 'text mine) text)
+                            (roost--update-drafts before mine)))
+                        (or mine note)))
+                    (seq-filter #'consp notes)))
+      (dolist (note (seq-difference held roost--notes #'eq))
+        (roost--update-drafts note nil)))))
 
 (defun roost--save-notes ()
   "Write the review notes to `roost-notes-file'."
@@ -4768,6 +4848,7 @@ child frames, the box is `:frame', over `:room' pixels left for it.")
 (defun roost--remove-notes (predicate)
   "Remove the review notes PREDICATE accepts; return non-nil if any were.
 Drafts holding them lose them too."
+  (roost--notes-as-on-file)
   (when-let* ((removed (seq-filter predicate (roost--notes))))
     (setq roost--notes (seq-difference roost--notes removed #'eq))
     (roost--save-notes)
@@ -5410,6 +5491,7 @@ while you wrote, gets no note."
   (unless (roost--note-task-live-p task)
     (user-error "Roost no longer has %s, so the note can't be kept" (roost--field task 'name)))
   (setq text (string-trim text))
+  (roost--notes-as-on-file)
   ;; OLD may have been sent, or discarded, while you wrote.
   (unless (memq old (roost--notes)) (setq old nil))
   (cond ((and old (string-empty-p text))
