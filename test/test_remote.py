@@ -3100,11 +3100,7 @@ class Lifecycle(unittest.TestCase):
         task = self.create()
         commit, told = self.told(task)
         self.assertEqual(told["agentWorktrees"], 0)
-        record = roost.Store(str(self.state)).read(task["id"])
-        made = self.root / "its own"
-        self.git("worktree", "add", "-q", "-b", "its-own", str(made))
-        record["agentWorktrees"] = [str(made)]
-        roost.Store(str(self.state)).save(record)
+        self.agent_worktree(task)
         self.assertEqual(self.told(task)[1]["agentWorktrees"], 1)
         self.assert_not_discarded(task, self.request("discard", id=task["id"], expect=commit, told=told))
 
