@@ -107,13 +107,13 @@ Within a severity, they are ranked by what they cost and how often they happen.
 | 26 | FORGE-8 | S3 | A failed review query takes back what a pull request waits on you for, then notifies again | [What the forge last said](#what-the-forge-last-said) | Fixed, `roost-a-failed-review-query-takes-back-nothing-that-waits` |
 | 27 | FORGE-9, REQUESTS-4 | S3 | Conflicts there when Roost first saw a task notify after every restart | [News of a turn](#news-of-a-turn) | Fixed, `roost-a-conflict-from-before-a-restart-is-no-news` |
 | 28 | VIEWS-4 | S3 | A prompt draft reads its task as it was when it opened | [The prompt draft](#the-prompt-draft) | Fixed, [#226](https://github.com/csheaff/roost/issues/226), `roost-sweep-late-a-prompt-draft-asks-as-its-task-is-now` |
-| 29 | VIEWS-6 | S3 | A note taken out of a draft is cleared unsent | [A review note](#a-review-note) | Open, [#229](https://github.com/csheaff/roost/issues/229) |
-| 30 | VIEWS-10 | S3 | A note edited as its draft goes loses the edit | [A review note](#a-review-note) | Open, [#229](https://github.com/csheaff/roost/issues/229) |
+| 29 | VIEWS-6 | S3 | A note taken out of a draft is cleared unsent | [A review note](#a-review-note) | Fixed, [#229](https://github.com/csheaff/roost/issues/229), `roost-sweep-late-a-note-taken-out-of-a-draft-stays` |
+| 30 | VIEWS-10 | S3 | A note edited as its draft goes loses the edit | [A review note](#a-review-note) | Fixed, [#229](https://github.com/csheaff/roost/issues/229), `roost-sweep-late-a-note-edited-as-its-draft-goes-stays` |
 | 31 | REQUESTS-6 | S3 | Two Emacs sessions overwrite each other's hosts and projects | [Remembered files](#remembered-files) | Fixed, `roost-a-host-remembered-in-another-emacs-stays-as-you-use-yours` |
 | 32 | LC-6 | S4 | Discarding a task whose repository is gone deletes its worktree and says it failed | [Finishing a task](#finishing-a-task) | Open, [#221](https://github.com/csheaff/roost/issues/221) |
 | 33 | VIEWS-11 | S4 | An error after a good reply leaves a draft busy | [The new task draft](#the-new-task-draft) | Fixed, [#226](https://github.com/csheaff/roost/issues/226), `roost-sweep-late-an-org-entry-that-cant-take-the-link-closes-the-draft` |
-| 34 | VIEWS-12 | S4 | A resumed task covers what you opened from a question | [Resuming](#resuming) | Open, [#229](https://github.com/csheaff/roost/issues/229) |
-| 35 | VIEWS-13 | S4 | An open held for a question connects to a session since ended | [Opening a task](#opening-a-task) | Open, [#229](https://github.com/csheaff/roost/issues/229) |
+| 34 | VIEWS-12 | S4 | A resumed task covers what you opened from a question | [Resuming](#resuming) | Fixed, [#229](https://github.com/csheaff/roost/issues/229), `roost-sweep-late-a-task-resumed-leaves-what-you-opened-from-a-question` |
+| 35 | VIEWS-13 | S4 | An open held for a question connects to a session since ended | [Opening a task](#opening-a-task) | Fixed, [#229](https://github.com/csheaff/roost/issues/229), `roost-sweep-late-a-task-stopped-while-you-answer-opens-no-session` |
 | 36 | FORGE-10 | S4 | A task whose worktree went keeps waiting on conflicts last measured | [Task measurement](#task-measurement) | Fixed, `test_a_worktree_gone_says_it_no_longer_conflicts` |
 | 37 | FORGE-11, REQUESTS-7 | S4 | Two Emacs undo each other's turn for a stopped task, on every poll | [Verdict and turn](#verdict-and-turn) | Fixed, `roost-two-emacs-settle-on-a-stopped-tasks-turn` |
 | 38 | FORGE-12 | S4 | What `P` pushed counts as unpushed until GitHub is next asked | [Pushing and opening](#pushing-and-opening) | Fixed, [#227](https://github.com/csheaff/roost/issues/227): `test_what_p_pushed_is_no_longer_unpushed` |
@@ -2148,9 +2148,8 @@ Invariants:
 - I2. While the agent may be at a prompt, Roost asks first. (Docstring of `roost-send`.)
   `roost--send-task` is a copy from when the draft last opened, so each reader takes
   the task as listed now (`roost--as-listed`).
-- I3. Notes in the draft are cleared once it is sent. (Docstring.) **Broken two ways:**
-  a note no longer in the draft is cleared too (VIEWS-6), and so is one edited as it
-  goes (VIEWS-10).
+- I3. Notes in the draft are cleared once it is sent, if the draft held them as they
+  are and they are as they went (`roost--send-notes-going`).
 - I4. A prompt reaches the agent once: [The send ID](#the-send-id).
 - I5. What the header says of asking again holds. After no reply it says the prompt may
   have gone, that unchanged, asking again sends it only if it didn't, and that edited it
@@ -2181,7 +2180,7 @@ Invariants:
 Illegal or refused: as in the table. The host refuses a task gone, an agent not
 running, a control character, and `starting` or `permission` without `force`.
 
-Open: VIEWS-6, VIEWS-10.
+Open: none.
 
 ### The pull request draft
 
@@ -2223,9 +2222,9 @@ Kind: implicit. Lives in: `roost--notes`, `roost--notes-loaded`, `roost-notes-fi
 
 Invariants:
 - I1. A note leaves only by being sent, discarded by you, or going with its task.
-  (Manual, "Review notes".) **Broken** by VIEWS-6 and VIEWS-10.
-- I2. A note edited while it was being sent stays, with your edit. (Docstring of
-  `roost-note-send`.) True of one sent alone; **broken** in a draft: VIEWS-10.
+  (Manual, "Review notes".)
+- I2. A note edited while it was being sent stays, with your edit, alone or in a draft,
+  and a draft on its way keeps saying what it sent. (Docstring of `roost-note-send`.)
 - I3. One sent at a time. (`roost--notes-sending`.) Not across machines: a note in a
   draft going, and the same note sent alone, go twice. Seen by reading; the window is
   the reply's flight, so not a finding.
@@ -2236,11 +2235,13 @@ Invariants:
 | — | save in the box | task listed | Unsent | saved to file | `roost--note-save` |
 | Unsent | `roost--send-draft` | | In a draft | text added | `roost--send-draft` |
 | In a draft | text deleted by hand | whole draft empty | Unsent | comes back on reopening | `roost--send-draft` |
-| In a draft | text deleted by hand | rest of the draft stays | In a draft | **stays counted** | VIEWS-6 |
+| In a draft | text deleted or changed by hand | rest of the draft stays | In a draft | counted, but sending passes it over | `roost--send-notes-going` |
 | In a draft | note edited in the box | draft's text unchanged | In a draft | draft follows | `roost--update-drafts` |
 | In a draft | note edited in the box | you changed it there | Unsent | draft keeps yours | `roost--update-drafts` |
-| In a draft | draft sent | | Going in a draft | | `roost-send-submit` |
-| Going in a draft | good reply | | Gone | by ID, whatever its text now | `roost-send-submit` |
+| In a draft | draft sent | draft holds it as it is | Going in a draft | | `roost-send-submit` |
+| In a draft | draft sent | draft doesn't | Unsent | | `roost--send-notes-going` |
+| Going in a draft | good reply | text as sent | Gone | | `roost-send-submit` |
+| Going in a draft | good reply | edited since | Unsent | | `roost-send-submit` |
 | Going in a draft | failure | | In a draft | | |
 | Unsent | `roost-note-send` | | Going alone | | `roost-note-send` |
 | Going alone | good reply | text as sent | Gone | | `roost-note-send` |
@@ -2251,7 +2252,7 @@ Invariants:
 
 Illegal or refused: saving for a task Roost no longer has, with the box left open so
 the text isn't lost.
-Open: VIEWS-6, VIEWS-10.
+Open: none.
 
 ### The note box
 
@@ -2343,7 +2344,8 @@ Invariants:
 - I2. It shows only if you are still where you asked. (`roost--still-there-p`.)
 - I3. A task that went doesn't come back. (`roost--went-p`, `roost--cache-reply`.)
 - I4. Connecting to an ended session starts an empty one, so Roost asks its host first.
-  (Comment in `roost--restore-terminal`.) **Broken by Held:** VIEWS-13.
+  (Comment in `roost--restore-terminal`.) A reply that was held is old by the time you
+  are out, however long you took, so it asks again.
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
@@ -2351,7 +2353,7 @@ Invariants:
 | Asking the host | 0.5 s | generation current | same | "opening…" | `roost--open` |
 | Asking the host | good reply | no minibuffer, wanted | Shown | | `roost--open` |
 | Asking the host | good reply | minibuffer | Held | reply cached | `roost--when-out-of-minibuffer` |
-| Held | minibuffer ends | wanted | Shown, from the reply it held | | VIEWS-13 |
+| Held | minibuffer ends | wanted | Asking the host | anew, from where you are then | `roost--open` |
 | Held, Asking | newer open | | Dropped | silently | `still-wanted` |
 | Held, Asking | you moved | | Dropped | "didn't open…" | `still-wanted` |
 | Held, Asking | task went | | Dropped | "didn't open…" | `still-wanted` |
@@ -2382,13 +2384,14 @@ Invariants:
 - I1. A navigation made by Roost is seen by every pending open.
 - I2. A navigation Roost didn't make isn't counted, so each opener must also compare
   window and buffer. `roost--open`, `roost--look-then`, `roost--you-stay` and
-  `roost--while-you-stay` do. **`roost--open-once-out` doesn't:** VIEWS-12.
+  `roost--while-you-stay` do, and `roost--open-once-out`'s callers through
+  `roost--stayed-as-it-goes`.
 
 Views that take the selection and don't bump (`roost-task-info`, `roost-dashboard`,
 `roost--compose`, the drafts, search, workload, doctor) are caught by I2's window and
-buffer check, except in `roost--open-once-out`.
+buffer check.
 
-Open: VIEWS-12.
+Open: none.
 
 ### Held for the minibuffer
 
@@ -2404,15 +2407,18 @@ Kind: implicit. Lives in: closures on `minibuffer-exit-hook`,
 
 Invariants:
 - I1. No reply changes windows or asks while you type in the minibuffer.
-- I2. What was true when it was held may not be when it runs. **Stated nowhere.**
-  `roost--task-made` and `roost--while-you-stay` ask again; `roost--open-once-out` and
-  `roost--open`'s reply don't, in part: VIEWS-12, VIEWS-13.
+- I2. What was true when it was held may not be when it runs. `roost--task-made`,
+  `roost--while-you-stay` and `roost--stayed-as-it-goes` look again at where you are,
+  and `roost--open` asks its host again. `roost-shell`'s reply goes by what it held,
+  which a session that ended would meet too: rarer, and no finding of its own. So does
+  a refused open, whose question then asks about what may have changed; its host
+  refuses what no longer applies.
 
 `roost--compose-listed` holds a closure at each poll while a minibuffer is open: the
 first to run closes and opens, and the rest find you gone. Harmless, and it repeats
 "Roost created".
 
-Open: VIEWS-12, VIEWS-13.
+Open: none.
 
 ### Questions left open
 
@@ -2446,16 +2452,17 @@ Kind: implicit. Lives in: `roost--resuming`; closures in `roost-resume` and
 
 Invariants:
 - I1. No key stays in `roost--resuming` once its reply has come. (Sweep's `left-behind`.)
-- I2. A task resumed opens only if you stayed. **Half true:** `there` is read as the
-  reply comes, as its terminal is about to go, and not again once you are out of the
-  minibuffer. VIEWS-12.
+- I2. A task resumed opens only if you stayed. `there` is read as the reply comes, and
+  again once you are out of the minibuffer, before its terminal goes: asked after, where
+  you are says nothing (`roost--stayed-as-it-goes`).
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
 | — | `roost-resume` | others crashed, you say yes | Asked + others Waiting | keys added | `roost--resume-together` |
 | — | `roost-resume` | | Asked | key removed | `roost-resume` |
 | Asked | good reply | you stayed | There | | `roost--act`'s `replied` |
-| There | out of the minibuffer | generation, listed | opens | | `roost--open-once-out` |
+| There | out of the minibuffer | you moved | Done | nothing opens | `roost--stayed-as-it-goes` |
+| There | out of the minibuffer | generation, listed, you stayed | opens | | `roost--open-once-out` |
 | Asked | failure | | Done | counted | `roost--resume-together` |
 | Waiting | its turn | stopped, gone or resumed | Done | passed over | `next` |
 | Waiting | its turn | | Asked | | `next` |
@@ -2463,7 +2470,7 @@ Invariants:
 A synchronous error from `roost--act` on the first task would leave every key in
 `roost--resuming`; nothing in it signals on real input, so this is no finding.
 
-Open: VIEWS-12.
+Open: none.
 
 ### A terminal's connection
 
