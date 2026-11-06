@@ -2798,10 +2798,10 @@ class Lifecycle(unittest.TestCase):
             yield process
         finally:
             release.touch()
+            hook.unlink()
         if not process.stdout.closed:
             process.wait(timeout=30)
             self.replied = json.loads(process.stdout.read())
-        hook.unlink()
 
     def answered(self, action, **args):
         """The reply to ACTION, which must not wait on what is under way."""
@@ -2984,7 +2984,10 @@ class Lifecycle(unittest.TestCase):
             # Which may be an agent at work: with its record gone, nothing would know.
             self.assertIn("tmux did not answer", self.answered("forget", id=task["id"])["error"])
             # And any other call: a server can stop between two.
-            self.assertEqual(roost.tmux(self.socket, "list-windows", "-a", check=False).returncode, 124)
+            pool = concurrent.futures.ThreadPoolExecutor(1)
+            asked = pool.submit(roost.tmux, self.socket, "list-windows", "-a", check=False)
+            pool.shutdown(wait=False)
+            self.assertEqual(asked.result(timeout=8).returncode, 124)
         finally:
             os.kill(pid, signal.SIGCONT)
         listed = self.request("list", socket=self.socket)["result"][0]
