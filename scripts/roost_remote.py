@@ -573,9 +573,26 @@ def owned_pane(task, inventory):
     pane = inventory.get(task.get("paneId"))
     # Pane IDs may be reused after a tmux server restart. A per-pane ownership
     # tag prevents steering or killing an unrelated process with the same ID.
-    if pane and pane["task"] == task["id"] and pane["window"] == task.get("windowId"):
+    # The tag goes with the pane wherever you move it, and stays on what tmux
+    # starts in it after the runner, as `respawn-pane` does, which is no agent.
+    # A task from before Roost noted the runner's process is taken as it is.
+    if pane and pane["task"] == task["id"] and task.get("panePid", pane["pid"]) == pane["pid"]:
         return pane
     return None
+
+
+def close_panes(task, inventory, check=True):
+    """Close TASK's agent's pane and its shell, where they are now: each one's
+    window with it, unless something else is in that window, which stays."""
+    ours = {pane_id for pane_id in (task.get("paneId"), task.get("shellPaneId"))
+            if pane_id in inventory and inventory[pane_id]["task"] == task["id"]}
+    for window in sorted({inventory[pane_id]["window"] for pane_id in ours}):
+        beside = {pane_id for pane_id, pane in inventory.items() if pane["window"] == window}
+        if beside <= ours:
+            tmux(task["socket"], "kill-window", "-t", window, check=check)
+        else:
+            for pane_id in sorted(beside & ours):
+                tmux(task["socket"], "kill-pane", "-t", pane_id, check=check)
 
 
 def check_worktree(store, task, branch=True):
@@ -1615,7 +1632,7 @@ def spawn(store, task, resume=False, size=()):
     # The runner waits on the registry lock, held here, until its stable pane
     # ID is saved, so the agent starts only after this is done. tmux reads
     # the name and the directory as formats, where # starts one.
-    window_options = ["-P", "-F", "#{window_id}\t#{pane_id}\t#{window_index}\t#{session_name}",
+    window_options = ["-P", "-F", "#{window_id}\t#{pane_id}\t#{window_index}\t#{pane_pid}\t#{session_name}",
                       "-n", task["name"].replace("#", "##"), "-c", task["worktree"].replace("#", "##"),
                       shlex.join(argv)]
     if tmux(socket, "has-session", "-t", "=" + session, check=False).returncode:
@@ -1630,8 +1647,8 @@ def spawn(store, task, resume=False, size=()):
         result = tmux(socket, "new-window", "-d", "-t", session + ":", *window_options)
     # Noted at once, so a failure from here on closes the window. tmux may
     # have changed the session's name, as it does ":" and ".".
-    window, pane, index, session = result.stdout.strip().split("\t", 3)
-    task.update(windowId=window, paneId=pane, windowIndex=int(index), session=session,
+    window, pane, index, pid, session = result.stdout.strip().split("\t", 4)
+    task.update(windowId=window, paneId=pane, windowIndex=int(index), session=session, panePid=int(pid),
                 status="starting", updatedAt=now(), error=None)
     # Before the agent starts, which is when it asks.
     enable_extended_keys(socket)
@@ -2354,8 +2371,9 @@ def list_tasks(store, request):
             continue
         pane = owned_pane(task, inventory)
         changed = False
-        if pane and (task.get("session"), task.get("windowIndex")) != (pane["session_name"], pane["index"]):
-            task.update(session=pane["session_name"], windowIndex=pane["index"])
+        if pane and ((task.get("session"), task.get("windowIndex"), task.get("windowId"))
+                     != (pane["session_name"], pane["index"], pane["window"])):
+            task.update(session=pane["session_name"], windowIndex=pane["index"], windowId=pane["window"])
             changed = True
         task["live"] = bool(pane and not pane["dead"])
         # An agent that reports its status to its terminal needs no guessing.
@@ -3539,10 +3557,11 @@ def add_git_stats(tasks):
 
 
 def stop(store, task, inventory=None):
-    """Kill the task's window if Roost still owns it. Work is kept."""
+    """Close the agent's pane, as `close_panes` does, if Roost still owns it.
+    Work is kept."""
     inventory = inventory if inventory is not None else inventory_for(task)
     if owned_pane(task, inventory):
-        tmux(task["socket"], "kill-window", "-t", task["windowId"])
+        close_panes(task, inventory)
     # Stopping says nothing new: an agent you had seen stays seen.
     was_seen = seen_since_last_event(task)
     # A pane ID owned by something else means ours is gone (for example after a
@@ -3551,6 +3570,7 @@ def stop(store, task, inventory=None):
     if was_seen:
         task["seen"] = task["updatedAt"]
     task.pop("shellPaneId", None)
+    task.pop("panePid", None)
     store.save(task)
     task["live"] = False
     return task
@@ -3638,7 +3658,7 @@ def resume(store, task, program_status=None, size=()):
     if not Path(task["worktree"]).is_dir():
         raise RoostError("Task worktree is gone; forget the task to remove it from Roost")
     if pane:
-        tmux(task["socket"], "kill-window", "-t", task["windowId"])
+        close_panes(task, inventory)
     # A task begun in a shared session, as before each had its own, moves to
     # its own on resume.
     task["session"] = session_name(task["repo"], task["id"])
@@ -3805,7 +3825,7 @@ def inspect(store, task):
     pane = owned_pane(task, inventory_for(task))
     if not pane:
         raise RoostError("The agent's tmux window is gone; resume the task")
-    task.update(windowIndex=pane["index"], session=pane["session_name"])
+    task.update(windowIndex=pane["index"], session=pane["session_name"], windowId=pane["window"])
     put_right_prompt(task)
     store.note(task)
     task["live"] = not pane["dead"]
@@ -3948,10 +3968,11 @@ def attach(store, task, files):
 def shell(store, task):
     """Reuse one supporting shell in the task's tmux window and worktree."""
     inventory = inventory_for(task)
-    if not owned_pane(task, inventory):
+    owner = owned_pane(task, inventory)
+    if not owner:
         raise RoostError("Task's tmux window is gone; resume the task before opening its shell")
     pane = inventory.get(task.get("shellPaneId"))
-    if pane and (pane["task"] != task["id"] or pane["window"] != task["windowId"]):
+    if pane and (pane["task"] != task["id"] or pane["window"] != owner["window"]):
         raise RoostError("Task's shell ownership changed; inspect the window in tmux")
     if not pane or pane["dead"]:
         check_worktree(store, task, branch=False)
@@ -3964,9 +3985,7 @@ def shell(store, task):
                        "-t", task["paneId"], "-c", task["worktree"].replace("#", "##")).stdout.strip()
         tmux(task["socket"], "set-option", "-p", "-t", pane_id, "@roost_task_id", task["id"])
         task["shellPaneId"] = pane_id
-    owner = inventory[task["paneId"]]
-    task["session"] = owner["session_name"]
-    task["windowIndex"] = owner["index"]
+    task.update(session=owner["session_name"], windowIndex=owner["index"], windowId=owner["window"])
     store.save(task)
     return task
 
@@ -4944,7 +4963,7 @@ def forget(store, task):
     if pane and not pane["dead"]:
         raise RoostError("The agent is running; stop the task before forgetting it")
     if pane:
-        tmux(task["socket"], "kill-window", "-t", task["windowId"], check=False)
+        close_panes(task, inventory, check=False)
     left = []
     if Path(task["worktree"]).exists():
         left.append("worktree " + task["worktree"])
@@ -6557,7 +6576,7 @@ def require_not_removing(store, task, action):
 
 
 # Kept in task records for the helper's own use, and not sent to Emacs.
-PRIVATE = ("lastReply", "transcript", "requestFrom", "hookAt")
+PRIVATE = ("lastReply", "transcript", "requestFrom", "hookAt", "panePid")
 
 
 def outgoing(result):

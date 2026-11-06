@@ -889,7 +889,11 @@ a task's pull request or conflicts come to wait on you, or stop.
 
 A task's identity is its host and ID. A per-pane ownership tag keeps Roost from
 steering or killing an unrelated pane after a tmux restart, and hooks from an
-earlier run cannot overwrite a resumed one. Merging needs the task's worktree
+earlier run cannot overwrite a resumed one. The tag goes with the pane, so a
+pane you move in tmux is still the agent's, wherever it is; what you start in
+it with `respawn-pane` is not. Stopping a task closes the agent's pane and its
+shell, and their window if nothing else is in it: a pane of your own stays.
+Merging needs the task's worktree
 clean. With the primary checkout on the task's integration branch, the merge
 happens there and needs nothing uncommitted (untracked files stay); with it on
 another branch, Git merges into the integration branch without touching your

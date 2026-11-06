@@ -2926,6 +2926,133 @@ class Lifecycle(unittest.TestCase):
         self.request("stop", id=task["id"])
         self.assertIn(task["paneId"], roost.pane_inventory(self.socket))
 
+    def test_a_pane_id_used_again_after_tmux_restarts_is_someone_elses(self):
+        task = self.create()
+        roost.tmux(self.socket, "kill-server")
+        time.sleep(.3)  # A client that comes too soon meets the server as it ends.
+        # The new server numbers panes and windows afresh, so the task's IDs
+        # are those of this one, which isn't the task's.
+        result = roost.tmux(self.socket, "new-session", "-d", "-P", "-F", "#{pane_id}\t#{window_id}", "-s", "yours",
+                            "sleep 30")
+        self.assertEqual(result.stdout.strip().split("\t"), [task["paneId"], task["windowId"]])
+        # Only its tag tells it apart, for a task from before the runner was noted.
+        store = roost.Store(str(self.state))
+        record = store.read(task["id"])
+        del record["panePid"]
+        store.save(record)
+        listed = self.request("list")["result"][0]
+        self.assertEqual((listed["status"], listed["live"]), ("crashed", False))
+        self.assertIn("not running", self.request("send", id=task["id"], text="hello")["error"])
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        self.assertIn(task["paneId"], roost.pane_inventory(self.socket))
+        self.assertTrue(self.request("resume", id=task["id"])["ok"])
+        self.assertNotEqual(self.wait(task, "ready")["paneId"], task["paneId"])
+        self.assertIn(task["paneId"], roost.pane_inventory(self.socket))
+
+    def test_a_pane_you_move_is_still_the_agents(self):
+        task = self.create()
+        self.assertTrue(self.request("shell", id=task["id"])["ok"])
+        roost.tmux(self.socket, "break-pane", "-d", "-s", task["paneId"])
+        pane = roost.pane_inventory(self.socket)[task["paneId"]]
+        self.assertNotEqual(pane["window"], task["windowId"])
+        listed = self.request("list")["result"][0]
+        self.assertEqual((listed["status"], listed["live"], listed["windowId"], listed["windowIndex"]),
+                         ("ready", True, pane["window"], pane["index"]))
+        self.assertEqual(roost.Store(str(self.state)).read(task["id"])["windowId"], pane["window"])
+        self.assertTrue(self.request("send", id=task["id"], text="hello")["ok"])
+        self.wait(task, "ready", "Stop")
+        # So resuming starts no second agent, and stopping stops this one.
+        self.assertIn("still running", self.request("resume", id=task["id"])["error"])
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        self.assertNotIn(task["paneId"], roost.pane_inventory(self.socket))
+        self.assertEqual(roost.pane_inventory(self.socket), {})
+
+    def test_stopping_leaves_what_you_keep_beside_the_agent(self):
+        split = lambda target: roost.tmux(self.socket, "split-window", "-d", "-P", "-F", "#{pane_id}", "-t", target,
+                                          "sleep 30").stdout.strip()
+        # A pane of your own in its window, with its shell there too.
+        task = self.create(name="split")
+        shell = self.request("shell", id=task["id"])["result"]["shellPaneId"]
+        yours = split(task["paneId"])
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        panes = roost.pane_inventory(self.socket)
+        self.assertNotIn(task["paneId"], panes)
+        self.assertNotIn(shell, panes)
+        self.assertIn(yours, panes)
+        # The agent's pane moved in beside one of yours.
+        task = self.create(name="joined")
+        yours = roost.tmux(self.socket, "new-window", "-d", "-P", "-F", "#{pane_id}", "-t", task["session"] + ":",
+                           "sleep 30").stdout.strip()
+        roost.tmux(self.socket, "join-pane", "-d", "-s", task["paneId"], "-t", yours)
+        self.assertEqual(next(t for t in self.request("list")["result"] if t["id"] == task["id"])["status"], "ready")
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        panes = roost.pane_inventory(self.socket)
+        self.assertNotIn(task["paneId"], panes)
+        self.assertIn(yours, panes)
+        # With only its shell beside it, its window goes, and with it the session.
+        task = self.create(name="alone")
+        self.request("shell", id=task["id"])
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        self.assertEqual(roost.tmux(self.socket, "has-session", "-t", "=" + task["session"], check=False).returncode, 1)
+
+    def test_resuming_and_forgetting_leave_what_you_keep_beside_a_dead_agent(self):
+        task = self.create()
+        yours = roost.tmux(self.socket, "split-window", "-d", "-P", "-F", "#{pane_id}", "-t", task["paneId"],
+                           "sleep 30").stdout.strip()
+        self.request("send", id=task["id"], text="exit")
+        self.wait(task, "exited")
+        self.wait_for_pane_exit(task)
+        self.assertTrue(self.request("resume", id=task["id"])["ok"])
+        resumed = self.wait(task, "ready")
+        panes = roost.pane_inventory(self.socket)
+        self.assertNotIn(task["paneId"], panes)
+        self.assertIn(yours, panes)
+        self.request("send", id=task["id"], text="exit")
+        self.wait(task, "exited")
+        self.wait_for_pane_exit(resumed)
+        roost.tmux(self.socket, "join-pane", "-d", "-s", resumed["paneId"], "-t", yours)
+        self.assertTrue(self.request("forget", id=task["id"])["ok"])
+        panes = roost.pane_inventory(self.socket)
+        self.assertNotIn(resumed["paneId"], panes)
+        self.assertIn(yours, panes)
+
+    def test_what_tmux_starts_in_the_agents_pane_is_not_the_agent(self):
+        task = self.create()
+        self.assertTrue(self.request("send", id=task["id"], text="exit")["ok"])
+        self.wait(task, "exited")
+        self.wait_for_pane_exit(task)
+        self.assertIn("not running", self.request("send", id=task["id"], text="hello")["error"])
+        marker = self.root / "ran as a command"
+        roost.tmux(self.socket, "respawn-pane", "-t", task["paneId"], "/bin/sh")
+        reply = self.request("send", id=task["id"], text="touch '%s'" % marker)
+        self.assertIn("not running", reply["error"])
+        time.sleep(.3)
+        self.assertFalse(marker.exists())
+        listed = self.request("list")["result"][0]
+        self.assertEqual((listed["status"], listed["live"]), ("exited", False))
+        self.assertNotIn("panePid", listed)
+        # Resuming starts one beside it, which it leaves, as stopping does.
+        self.assertTrue(self.request("resume", id=task["id"])["ok"])
+        self.wait(task, "ready")
+        self.assertFalse(roost.pane_inventory(self.socket)[task["paneId"]]["dead"])
+        # Respawned under a working agent, the agent is gone.
+        other = self.create(name="working")
+        roost.tmux(self.socket, "respawn-pane", "-k", "-t", other["paneId"], "/bin/sh")
+        self.assertEqual(next(t for t in self.request("list")["result"] if t["id"] == other["id"])["status"], "crashed")
+        self.assertTrue(self.request("stop", id=other["id"])["ok"])
+        self.assertIn(other["paneId"], roost.pane_inventory(self.socket))
+
+    def test_a_task_from_before_the_runner_was_noted_stays_its_agents(self):
+        task = self.create()
+        store = roost.Store(str(self.state))
+        record = store.read(task["id"])
+        self.assertTrue(record["panePid"])
+        del record["panePid"]
+        store.save(record)
+        listed = self.request("list")["result"][0]
+        self.assertEqual((listed["status"], listed["live"]), ("ready", True))
+        self.assertTrue(self.request("send", id=task["id"], text="hello")["ok"])
+
     def test_old_hooks_cannot_overwrite_resumed_run_or_retirement(self):
         task = self.create()
         old = self.wait(task, "ready")

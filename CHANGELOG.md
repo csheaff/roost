@@ -4,6 +4,15 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A pane you move with tmux, as with `break-pane`, stays the task's. The task
+  read as `crashed`, `s` started a second agent beside the first, and `K`
+  said it had stopped while it ran on. Nothing to do when upgrading.
+- `K`, `s` and forgetting a task leave a pane of your own beside its agent.
+  It went with the agent's window. Nothing to do when upgrading.
+- A prompt for a task whose pane you started something else in, as with
+  `respawn-pane`, is refused, and the task reads as `crashed` if its agent
+  was at work. The prompt ran as a command in that shell. A task started
+  before upgrading is covered once you resume it.
 - A Claude task stopped before anything was said in it starts again on `s`.
   Claude had no conversation to go back to, so `s` failed, each time.
   Nothing to do when upgrading.
