@@ -332,8 +332,10 @@ The dashboard then shows `#12` with its checks and review, as it does for a pull
 request the agent opened itself from the task's branch. Send review feedback
 to the agent with `e`; when it has committed, `P` pushes the new commits and
 opens the pull request. Once it is merged, `x` retires the task and deletes the
-branch. Needs `gh` on the task's host, or `glab` for a project on GitLab, and
-Git credentials there that can push.
+branch. After one closed, or merged with commits since, `P` drafts another. If
+the task has one by the time you create yours, as its agent opened, `C-c C-c`
+pushes to that, and your text stays in the draft. Needs `gh` on the task's host,
+or `glab` for a project on GitLab, and Git credentials there that can push.
 
 **On GitLab.** Roost asks GitLab, through `glab`, when the host of the
 project's `origin` says so by name, as `gitlab.com` and `gitlab.example.com`
@@ -372,7 +374,7 @@ an error, which keeps its colour once you've seen it.
 | `failed`, `exited` | Until you've seen it | The agent's CLI failed, or it exited; `RET` shows its last output, and `s` resumes its conversation. An agent you start again from a shell sends Roost nothing, so `s` waits until it has exited |
 | `crashed` | Until you've seen it | Its tmux pane went, as when the host or its tmux server restarted; `RET` or `s` resumes its conversation, and asks once to resume every other agent that crashed on that host. Those stopped, exited or failed stay as they are |
 | `conflicts` | Once you've seen its reply | Merging its commits into the branch it merges into would conflict; `u` brings that branch in |
-| `to merge` | Once you've seen its reply | Its pull request passed its checks and review, and GitHub or GitLab finds no conflicts; `P` opens it |
+| `to merge` | Once you've seen its reply | Its pull request passed its checks and review, and GitHub or GitLab finds nothing else in its way; `P` opens it |
 | `ci failed` | Once you've seen its reply | A check of its pull request failed |
 | `comments` | Once you've seen its reply | A review thread on its pull request is unresolved, Copilot's too |
 | `running` | No | The agent works on a prompt |
@@ -451,7 +453,8 @@ the task counts as waiting: `n` visits it, the mode line counts it, and the
 sidebar and dashboard say why:
 
 - `to merge`: every check passed, no review is asked for or unresolved, and
-  GitHub or GitLab finds no conflicts. `P` opens it.
+  GitHub or GitLab finds no conflicts, nor does GitHub say that branch rules
+  block it or that it needs updating. `P` opens it.
 - `ci failed`: a check failed.
 - `comments`: a review thread is unresolved, Copilot's too, even one the agent
   answered and left open.
@@ -463,7 +466,9 @@ you've seen it. Before that, the task panel says what the pull request waits
 for, such as its checks or Copilot's review. Roost only says when it's your
 turn: `e` tells the agent what to fix. It goes by what GitHub or GitLab said after the
 agent's last push, while the branch has no commits the pull request lacks and
-nothing is left uncommitted or in the agent's own worktrees.
+nothing is left uncommitted or in the agent's own worktrees. A commit made there,
+as by GitHub's Update branch button or an applied suggestion, isn't one it lacks:
+Roost fetches it, once, to compare it with the branch.
 
 ### Work that is merged
 
@@ -472,7 +477,8 @@ merges into, says `merged` in the dashboard and sidebar once you've seen its
 agent's last reply, so you can tell which tasks to retire without opening them.
 Nothing is lost by retiring it with `x`: nothing is left uncommitted, and its
 commits are all in what was merged. Commits made after its pull request merged
-keep it from saying so.
+keep it from saying so. One made on GitHub or GitLab before it merged doesn't, as
+that is in what merged.
 
 ### A worktree on another branch
 
@@ -552,7 +558,7 @@ counted once you stop and resume it (`K`, then `s`).
 | `b` | `roost-sidebar-mode` | Keep the task list at the left of the frame |
 | `I` | `roost-task-panel-mode` | Dock the open task's panel beside its terminal |
 | `u` | `roost-update` | Bring the task up to date: merge the branch it merges into, such as `main`, into it; for uncommitted changes or conflicts, offers to have its agent do it |
-| `P` | `roost-pr` | Draft a pull request for the task; if it has one, push new commits and open it (`C-u`: open only) |
+| `P` | `roost-pr` | Draft a pull request for the task; if it has one, push new commits and open it (`C-u`: open only); after one closed, or merged with commits since, draft another |
 | `m` | `roost-merge-retire` | Merge committed work as one commit, then retire the task (a merge commit with `roost-merge-style` set to `merge`) |
 | `x` | `roost-retire` | Finish with a task: retire it when its work is merged or it has none, otherwise offer to discard it (`roost-discard`), first saying what would be lost; to lose commits or files you type its name |
 | `X` | `roost-forget` | Drop the task from Roost, leaving its worktree and branch as they are |
@@ -1073,7 +1079,9 @@ The network:
 
 - Roost reaches other machines only through `ssh`, to the hosts you add,
   and TRAMP over it for a remote task's worktree; `git` on a host, to
-  fetch and push a task's branch for its pull request, to delete that
+  fetch and push a task's branch for its pull request, to fetch a commit
+  made on GitHub or GitLab that a pull request's head is, in the project's
+  primary checkout, once for each such commit, to delete that
   branch once it is merged, and in `roost-doctor` to try a push with
   `--dry-run`; `gh` on a host, for issues, pull requests, their checks
   and comments; and `twg` on this machine, when it is installed, for the
