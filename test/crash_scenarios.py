@@ -233,7 +233,7 @@ class Turn(KeepsTask):
 
 class Send(KeepsTask):
     action = "send"
-    args = dict(text="hello")
+    args = dict(text="hello", sendId="ab" * 8)
 
 
 class Shell(KeepsTask):
