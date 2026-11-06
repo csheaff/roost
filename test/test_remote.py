@@ -4423,7 +4423,8 @@ sys.exit(status)
         # Nothing Jira didn't give as a key reaches twg's command line.
         directory = self.fake_twg(dict(data=dict(issues=[])))
         calls = (directory / "log").read_text()
-        for key in ("proj-7", "PROJ-7; rm -rf ~", '" OR project = X', "--output-file=/tmp/x", "", None, 7):
+        for key in ("proj-7", "PROJ-7; rm -rf ~", '" OR project = X', "--output-file=/tmp/x", "A" * 256 + "-1",
+                    "PROJ-" + "1" * 20, "", None, 7):
             self.assertIn("no Jira work item's key", self.request("jira-issue", key=key)["error"])
         self.assertEqual((directory / "log").read_text(), calls)
         # Jira finding none is an error here, where a list would be empty.

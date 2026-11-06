@@ -2037,7 +2037,8 @@ def issues(request):
 
 
 # A Jira work item's key: its project's, then its number, as in PROJ-123.
-JIRA_KEY = re.compile(r"[A-Z][A-Z0-9_]*-[1-9][0-9]*")
+# Jira allows at most 255 characters for the first, and a long for the second.
+JIRA_KEY = re.compile(r"[A-Z][A-Z0-9_]{0,254}-[1-9][0-9]{0,18}")
 
 
 def jira_issues(request):
