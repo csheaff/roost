@@ -1136,7 +1136,8 @@ must a reply with a newer look lose it for an older agent event."
 (defun roost--cache-task (host task)
   "Cache TASK from HOST and notify only on attention transitions."
   (setf (alist-get 'host task) host)
-  (setq task (assq-delete-all 'pushed task))
+  (dolist (field '(pushed alreadySent alreadyMade))
+    (setq task (assq-delete-all field task)))
   (when-let* ((old (gethash (roost--key task) roost--tasks)))
     ;; Looks and the agent's events move apart: the newer of each counts.
     (let ((looked (roost--newer-look old task)))
@@ -2883,26 +2884,30 @@ EXTRA is an alist of further request fields, such as the issue."
 
 (defun roost--task-made (host task name on-success stayed)
   "Cache TASK, which HOST made as NAME, and call ON-SUCCESS, if any, with it.
-Then open it, if STAYED, called once you are out of the minibuffer and
-before ON-SUCCESS moves anything, says you are still where you asked for
-it: making a task can take minutes."
+ON-SUCCESS also gets whether an earlier request made it, which its host
+says.  Then open it, if STAYED, called once you are out of the minibuffer
+and before ON-SUCCESS moves anything, says you are still where you asked
+for it: making a task can take minutes.  Not if ON-SUCCESS returns
+non-nil, as for a draft that stays, which you are writing in."
   (roost--remember-host host)
   (when (roost--field task 'repo)
     (roost--remember-project (roost--project-directory (cons (cons 'host host) task))))
-  (setq task (roost--cache-task host task))
-  (roost-watch-mode 1)
-  ;; It opens where the draft closes.
-  (roost--when-out-of-minibuffer
-   (lambda ()
-     (let ((stayed (funcall stayed)))
-       (when on-success (funcall on-success task))
-       (roost--redraw)
-       ;; Unless it went while you were in the minibuffer: opening it
-       ;; would bring it back.
-       (when (and stayed (gethash (roost--key task) roost--tasks))
-         (roost-open-task task)))))
+  (let ((found (roost--field task 'alreadyMade)))
+    (setq task (roost--cache-task host task))
+    (roost-watch-mode 1)
+    ;; It opens where the draft closes.
+    (roost--when-out-of-minibuffer
+     (lambda ()
+       (let* ((stayed (funcall stayed))
+              (kept (when on-success (funcall on-success task found))))
+         (roost--redraw)
+         ;; Unless it went while you were in the minibuffer: opening it
+         ;; would bring it back.
+         (when (and stayed (not kept) (gethash (roost--key task) roost--tasks))
+           (roost-open-task task))))))
+  ;; By the name it has: asked again, its host answers with the task it made.
   (message "Roost created %s on %s from %s; it merges into %s"
-           name (roost--host-label host)
+           (or (roost--field task 'name) name) (roost--host-label host)
            (roost--field task 'baseRef) (roost--field task 'integrationBranch)))
 
 ;;;###autoload
@@ -3042,9 +3047,10 @@ Nil too on another host, where reading it would hold up the draft."
 
 (defvar-local roost--compose-asked nil
   "The project directory and the ID the draft last asked to create its task with.
-A list.  The ID is the same each time for the same project, so its host
-makes the task once, however often you ask: it answers again with the
-task it made.")
+A list, with what it said as it first asked with that ID, from
+`roost--compose-what'.  The ID is the same each time for the same
+project, so its host makes the task once, however often you ask: it
+answers again with the task it made.")
 
 (defvar-keymap roost-compose-mode-map
   :doc "Keys for drafting a new Roost task."
@@ -3313,16 +3319,21 @@ Planning lines and drawers are left out."
 (defun roost--compose (&optional fork seed directory)
   "Open the new task buffer.  FORK defaults to the current task's HEAD.
 SEED, as `roost--compose-seed' makes one, starts the prompt in place of
-what is at point, and DIRECTORY is its project in place of where you are."
+what is at point, and DIRECTORY is its project in place of where you are.
+Given with no SEED, DIRECTORY moves a written draft there too, unless
+`roost--compose-tied' says otherwise."
   (let* ((task (roost--task-at-point))
          (fork (and fork task))
          (given seed)
+         (project directory)
          (seed (or seed (roost--compose-seed)))
          (org (and seed (not given) (not (use-region-p)) (roost--org-marker)))
          ;; Where you are, before the draft becomes the current buffer.
          (directory (or directory (roost--compose-default-directory task fork)))
          (buffer (get-buffer roost--compose-buffer))
-         (fresh (not buffer)))
+         (fresh (not buffer))
+         ;; Given with no text to add, as by a click on a project.
+         (chosen (and project (not given))))
     (setq buffer (or buffer (get-buffer-create roost--compose-buffer)))
     (with-current-buffer buffer
       (when fresh
@@ -3339,6 +3350,12 @@ what is at point, and DIRECTORY is its project in place of where you are."
                     :base (when fork "HEAD")
                     :integration (when fork (roost--compose-integration directory "HEAD"))
                     :source (when fork (roost--field task 'name)))))
+      (let ((here (plist-get roost--compose-fields :directory)))
+        ;; However it is spelled.
+        (when (and chosen (not (and here (equal (roost--project-place here) (roost--project-place project)))))
+          (if-let* ((tied (and here (roost--compose-tied))))
+              (message "The draft stays in %s, as %s" (roost--project-label here) tied)
+            (roost--compose-move project))))
       (roost--compose-render)
       (goto-char (point-max))
       (if (not (and seed (string-empty-p (roost--compose-prompt))))
@@ -3416,6 +3433,8 @@ item's key, which Jira finds the branch by."
   "Redraw the draft's fields above the prompt, leaving the prompt untouched."
   (let* ((inhibit-read-only t)
          (inhibit-modification-hooks t)
+         (undo buffer-undo-list)
+         (body (marker-position roost--compose-body))
          (buffer-undo-list t)
          (fields roost--compose-fields)
          (derived (roost--compose-name))
@@ -3472,6 +3491,7 @@ item's key, which Jira finds the branch by."
                            '(read-only "Write the prompt below the fields" rear-nonsticky t
                              front-sticky t))
       (set-marker roost--compose-body (point)))
+    (roost--shift-undo undo (- roost--compose-body body))
     (cond ((not field)
            (goto-char (min (point-max) (+ roost--compose-body offset))))
           (named
@@ -3487,6 +3507,26 @@ item's key, which Jira finds the branch by."
            (goto-char (min (point) roost--compose-body))
            (when (get-text-property (point) 'roost-draft-task)
              (goto-char roost--compose-body))))))
+
+(defun roost--shift-undo (list delta)
+  "Add DELTA to each position in LIST, the draft's undo list.
+Undo goes by position, and the fields above the prompt change length out
+of its sight.  In place: `pending-undo-list', as you undo again and
+again, is a tail of it."
+  (unless (zerop delta)
+    (while (consp list)
+      (let ((entry (car list)))
+        (pcase entry
+          ((pred integerp) (setcar list (+ entry delta)))
+          (`(,(and (pred integerp) start) . ,(and (pred integerp) end))
+           (setcar entry (+ start delta))
+           (setcdr entry (+ end delta)))
+          ;; Negative when point was at the end of the text deleted.
+          (`(,(pred stringp) . ,(and (pred integerp) position))
+           (setcdr entry (if (< position 0) (- position delta) (+ position delta))))
+          (`(nil ,_ ,_ ,(and (pred integerp) start) . ,(and (pred integerp) end))
+           (setcdr (cddr entry) (cons (+ start delta) (+ end delta))))))
+      (setq list (cdr list)))))
 
 (defun roost--compose-quoted-files ()
   "The files the draft's prompt quotes, as paths from the top of the checkout.
@@ -3684,15 +3724,25 @@ then for a folder there, starting above the project used last on it."
       (setq choice (roost--read-project-directory))
       (roost--back-in-draft draft))
     (when choice
-      (let* ((directory (file-name-as-directory (expand-file-name choice)))
-             (base (plist-get roost--compose-fields :base)))
-        ;; The starting ref now names a ref of this project, not the task's.
-        (setq roost--compose-fields
-              (thread-first roost--compose-fields
-                            (plist-put :directory directory)
-                            (plist-put :integration (and base (roost--compose-integration directory base)))
-                            (plist-put :source nil))))
+      (roost--compose-move (file-name-as-directory (expand-file-name choice)))
       (roost--compose-render))))
+
+(defun roost--compose-tied ()
+  "What ties the draft to its project, as words, or nil.
+It says nothing of the project otherwise, and can go to another."
+  (cond ((roost--compose-quoted-files) "it quotes that project's files")
+        ((plist-get roost--compose-fields :source) "it forks a task there")
+        ((plist-get roost--compose-fields :issue) "it starts from an issue there")))
+
+(defun roost--compose-move (directory)
+  "Make DIRECTORY the draft's project."
+  (let ((base (plist-get roost--compose-fields :base)))
+    ;; The starting ref now names a ref of this project, not the task's.
+    (setq roost--compose-fields
+          (thread-first roost--compose-fields
+                        (plist-put :directory directory)
+                        (plist-put :integration (and base (roost--compose-integration directory base)))
+                        (plist-put :source nil)))))
 
 (defun roost-compose-set-agent ()
   "Choose the draft's agent."
@@ -3939,18 +3989,21 @@ EVENT, a click on the draft's Create button, says which draft."
     ;; The project's setup command can be asked about.
     (roost--quit-questions-here #'roost-compose-submit)
     (let* ((directory (plist-get fields :directory))
-           (host (roost--directory-host directory)))
-      ;; Asked again in the same project, as after no reply came, the host
-      ;; answers with the task it made, if it did.
-      (unless (equal (car roost--compose-asked) directory)
-        (setq roost--compose-asked (list directory (roost--random-id))))
+           (host (roost--directory-host directory))
+           (what (roost--compose-what))
+           ;; Asked again in the same project, as after no reply came, the
+           ;; host answers with the task it made, if it did.
+           (first (progn (unless (equal (car roost--compose-asked) directory)
+                           (setq roost--compose-asked (list directory (roost--random-id) what)))
+                         (nth 2 roost--compose-asked))))
       (setq roost--compose-submitting t
             roost--draft-note (format " Creating %s…" name))
       (condition-case err
           (roost--create-task
            (plist-get fields :directory) name (plist-get fields :base) prompt
            (plist-get fields :agent)
-           (lambda (task) (roost--compose-made buffer fields task))
+           (lambda (task &optional found)
+             (roost--compose-made buffer fields task (if found first what)))
            (lambda (err)
              (when (buffer-live-p buffer)
                (with-current-buffer buffer
@@ -3978,12 +4031,40 @@ EVENT, a click on the draft's Create button, says which draft."
                roost--draft-note nil)
          (signal (car err) (cdr err)))))))
 
-(defun roost--compose-made (buffer fields task)
-  "Close BUFFER, the draft with FIELDS that TASK was made from.
-An Org entry it was drafted from links to TASK."
+(defun roost--compose-what ()
+  "What the draft asks for, to tell whether it says that still.
+All of it, though you have narrowed it to some."
+  (save-restriction
+    (widen)
+    (list (roost--compose-prompt)
+          (mapcar (lambda (field) (plist-get roost--compose-fields field))
+                  '(:directory :agent :base :name :issue)))))
+
+(defun roost--compose-made (buffer fields task what)
+  "Close BUFFER, the draft with FIELDS, as its host made TASK from WHAT.
+WHAT is as `roost--compose-what' gives it.  An Org entry it was drafted
+from links to TASK, if it can.  A draft that says something else now is
+yours, as when you wrote on after asking, or changed it after no reply:
+it stays, saying what was made, and this returns non-nil."
   (when-let* ((marker (plist-get fields :org)))
-    (roost--org-link marker task))
-  (roost--close-buffer buffer))
+    (condition-case err
+        (roost--org-link marker task)
+      (error (message "Roost could not record %s in its Org entry: %s"
+                      (roost--field task 'name) (error-message-string err)))))
+  (if (not (and (buffer-live-p buffer)
+                (with-current-buffer buffer (not (equal (roost--compose-what) what)))))
+      (progn (roost--close-buffer buffer) nil)
+    (with-current-buffer buffer
+      ;; Whatever you ask for from here on is another task.
+      (setq roost--compose-submitting nil
+            roost--compose-asked nil
+            roost--compose-fields (plist-put roost--compose-fields :org nil)
+            roost--draft-note
+            (format " Made %s from what you sent first; this draft is as you left it · %s makes another task"
+                    (roost--field task 'name)
+                    (substitute-command-keys "\\[roost-compose-submit]")))
+      (force-mode-line-update))
+    t))
 
 (defun roost--compose-listed (host tasks)
   "Close the draft of the task TASKS, which HOST listed, hold, and open it.
@@ -3993,15 +4074,12 @@ made the task anyway.  It opens where the draft is, if you are there."
               ((not (buffer-local-value 'roost--compose-submitting buffer)))
               (asked (buffer-local-value 'roost--compose-asked buffer))
               ((equal (roost--directory-host (car asked)) host))
-              ;; Not once you have turned the draft to another project.
-              ((equal (plist-get (buffer-local-value 'roost--compose-fields buffer) :directory)
-                      (car asked)))
               (made (seq-find (lambda (task) (equal (roost--field task 'createId) (cadr asked))) tasks))
               (task (gethash (list host (roost--field made 'id)) roost--tasks)))
     (let ((fields (buffer-local-value 'roost--compose-fields buffer))
           (generation roost--open-generation))
       (roost--task-made host task (roost--field task 'name)
-                        (lambda (task) (roost--compose-made buffer fields task))
+                        (lambda (task &rest _) (roost--compose-made buffer fields task (nth 2 asked)))
                         (lambda ()
                           (and (= generation roost--open-generation)
                                (eq (window-buffer (roost--window-you-are-in)) buffer)))))))
@@ -4096,6 +4174,7 @@ terminal the action ended closes."
              (cl-incf (gethash host roost--revisions 0))
              ;; `pushed' is transient: the callback sees it, the cache does not.
              (let ((pushed (assq 'pushed updated))
+                   (already (alist-get 'alreadySent updated))
                    (torn (alist-get 'teardownFailure updated))
                    (output (alist-get 'teardownOutput updated))
                    ;; Forgetting says so itself, and always leaves things.
@@ -4103,7 +4182,7 @@ terminal the action ended closes."
                (setq updated (roost--cache-reply host updated listed))
                (roost--redraw)
                (when-let* ((said (cdr (assoc action roost--action-messages))))
-                 (message said (roost--field task 'name)))
+                 (message (if already "Already sent to %s" said) (roost--field task 'name)))
                (when callback
                  (funcall callback (if pushed (cons pushed updated) updated)))
                (when left
@@ -4267,11 +4346,12 @@ agent's terminal would take it as a key."
       (roost--send-draft task)
     (roost--send-text task (or text (read-string (format "Send to %s: " (roost--field task 'name)))))))
 
-(defun roost--send-text (task text &optional callback failure look)
+(defun roost--send-text (task text &optional callback failure look id)
   "Send TEXT to TASK's agent, confirming first if it may be at a prompt.
 CALLBACK and FAILURE are passed to `roost--act'.  With LOOK, as for
 your notes, its host first records where the task stands as where you
-last looked at it."
+last looked at it.  With ID, its host pastes TEXT once for that ID, as
+when you ask again after no reply."
   (let* ((problem (roost--text-problem text))
          (status (roost--field task 'status))
          (force (when (and (not problem) (member status '("starting" "permission")))
@@ -4283,7 +4363,8 @@ last looked at it."
     (cond ((not problem)
            (roost--act task "send" (append (list (cons 'text text))
                                            (when force (list (cons 'force t)))
-                                           (when look (list (cons 'look t))))
+                                           (when look (list (cons 'look t)))
+                                           (when id (list (cons 'sendId id))))
                        callback failure))
           (failure (funcall failure problem))
           (t (user-error "%s" problem)))))
@@ -4296,6 +4377,10 @@ last looked at it."
   "Non-nil while the drafted follow-up is being sent.")
 (defvar-local roost--send-notes nil
   "Identifiers of the review notes in this draft; sending it clears them.")
+(defvar-local roost--send-asked nil
+  "The text this draft last asked to send and the ID it asked with, a cons.
+The ID is the same each time for the same text, so its host pastes it
+once, however often you ask: it answers again that it did.")
 
 (defvar-keymap roost-send-mode-map
   :doc "Keys for drafting a follow-up prompt."
@@ -4338,7 +4423,7 @@ draft clears them (see `roost-note')."
       (setq roost--send-task task
             ;; What became of sending it last is over.
             roost--draft-note nil
-            header-line-format '(:eval (roost--draft-header (roost--send-header roost--send-task)
+            header-line-format '(:eval (roost--draft-header (roost--send-header (roost--as-listed roost--send-task))
                                                             roost--send-buttons roost--send-sending)))
       (let* ((empty (string-blank-p (buffer-string)))
              (notes (progn
@@ -4370,14 +4455,54 @@ draft clears them (see `roost-note')."
             (yes-or-no-p "Discard this prompt? "))
     (quit-window t)))
 
+(defun roost--as-listed (task)
+  "TASK as Roost last heard of it.
+A draft holds the task it was opened for, which goes on changing."
+  (or (gethash (roost--key task) roost--tasks) task))
+
+(defun roost--send-draft-text ()
+  "What sending the prompt draft would send."
+  (replace-regexp-in-string "\\`\\([ \t]*\n\\)+" "" (string-trim-right (buffer-string))))
+
+(defun roost--send-kept (task text notes)
+  "Keep what the draft says beyond TEXT, which went to TASK with NOTES.
+What went leaves the draft, if it is all still there: sending what is
+left is what you wrote since."
+  (setq roost--send-sending nil
+        roost--send-asked nil
+        ;; Those that went, whatever is left of them here.
+        roost--send-notes (seq-difference roost--send-notes notes))
+  ;; Narrowed to some of it, what is left could be out of sight.
+  (widen)
+  (let* ((start (save-excursion (goto-char (point-min))
+                                (re-search-forward "\\`\\([ \t]*\n\\)*")
+                                (point)))
+         (end (+ start (length text)))
+         (whole (and (<= end (point-max)) (equal (buffer-substring-no-properties start end) text))))
+    (when whole
+      (delete-region (point-min) end)
+      ;; Blank lines alone: the indentation of what you wrote is yours.
+      (save-excursion
+        (goto-char (point-min))
+        (re-search-forward "\\`\\([ \t]*\n\\)*")
+        (delete-region (point-min) (point))))
+    (setq roost--draft-note
+          (format (if whole
+                      " Sent to %s; this is what you wrote since"
+                    " Sent to %s before you changed it; all of it is still here")
+                  (roost--field task 'name))))
+  (force-mode-line-update))
+
 (defun roost-send-submit (&optional event)
   "Send the drafted follow-up.  The draft is kept if sending fails.
-Review notes in it are cleared once it is sent.  EVENT, a click on the
-draft's Send button, says which draft."
+Review notes in it are cleared once it is sent.  What you write in it
+meanwhile stays.  EVENT, a click on the draft's Send button, says which
+draft."
   (interactive (list last-nonmenu-event))
   (roost--draft-clicked event 'roost-send-mode)
-  (let ((text (replace-regexp-in-string "\\`\\([ \t]*\n\\)+" "" (string-trim-right (buffer-string))))
-        (task roost--send-task)
+  (let ((text (roost--send-draft-text))
+        ;; As it is now: it may have come to ask for permission.
+        (task (roost--as-listed roost--send-task))
         (notes roost--send-notes)
         (buffer (current-buffer))
         (written (buffer-chars-modified-tick)))
@@ -4394,15 +4519,31 @@ draft's Send button, says which draft."
       (user-error "Already sending"))
     ;; Sending while its agent may be at a prompt asks first.
     (roost--quit-questions-here #'roost-send-submit)
+    (unless (equal (car roost--send-asked) text)
+      (setq roost--send-asked (cons text (roost--random-id))))
     (setq roost--send-sending t
           roost--draft-note nil)
     (condition-case err
         (roost--send-text
          task text
          (lambda (_task)
-           (when (roost--remove-notes (lambda (note) (member (alist-get 'id note) notes)))
-             (roost--redraw))
-           (roost--close-buffer buffer))
+           ;; Closing waits for the minibuffer, so looking at what it says
+           ;; does too: a question of the draft's own can add to it.
+           (roost--when-out-of-minibuffer
+            (lambda ()
+              (let ((kept (and (buffer-live-p buffer)
+                               (with-current-buffer buffer
+                                 (save-restriction
+                                   (widen)
+                                   (not (equal (roost--send-draft-text) text)))))))
+                (when kept
+                  (with-current-buffer buffer (roost--send-kept task text notes)))
+                ;; The prompt went, whatever becomes of this.
+                (condition-case err
+                    (when (roost--remove-notes (lambda (note) (member (alist-get 'id note) notes)))
+                      (roost--redraw))
+                  (error (message "Roost could not save your review notes: %s" (error-message-string err))))
+                (unless kept (roost--close-buffer buffer))))))
          (lambda (err)
            (message "Roost could not send to %s: %s" (roost--field task 'name) err)
            (when (buffer-live-p buffer)
@@ -4415,9 +4556,18 @@ draft's Send button, says which draft."
                  (delete-region (point-min) (save-excursion (goto-char (point-min))
                                                             (skip-chars-forward " \t\n")
                                                             (line-beginning-position))))
-               (roost--draft-error "Could not send" err 'roost-send-submit))))
+               (if (not (get-text-property 0 'roost-no-reply err))
+                   (roost--draft-error "Could not send" err 'roost-send-submit)
+                 ;; "Retries" would say too little, and the words of a
+                 ;; request of any kind too much.
+                 (setq roost--draft-note
+                       (format " No reply from %s, and it may have gone · unchanged, %s sends it only if it didn't; edited, it goes as a new prompt"
+                               (roost--host-label (roost--field task 'host))
+                               (substitute-command-keys "\\[roost-send-submit]")))
+                 (force-mode-line-update)))))
          ;; You have looked at what your notes are about.
-         (and notes t))
+         (and notes t)
+         (cdr roost--send-asked))
       ;; A declined confirmation leaves the draft ready to send again.
       (quit (setq roost--send-sending nil) (signal (car err) (cdr err)))
       (error (setq roost--send-sending nil) (signal (car err) (cdr err))))))
@@ -6190,7 +6340,9 @@ sent once at a time."
            (setq roost--notes-sending (delete id roost--notes-sending))
            (message "Roost could not send the note to %s: %s" (roost--field task 'name) err))
          ;; You have looked at what it is about.
-         t)
+         t
+         ;; The same for the same note, and another once you edit it.
+         (substring (secure-hash 'sha256 (encode-coding-string (concat id "\0" text) 'utf-8)) 0 16))
       ;; A declined confirmation leaves the note ready to send again.
       ((quit error)
        (setq roost--notes-sending (delete id roost--notes-sending))

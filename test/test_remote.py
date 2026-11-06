@@ -122,6 +122,121 @@ class Lifecycle(unittest.TestCase):
         self.assertFalse(Path(task["worktree"]).exists())
         self.assertEqual(self.request("list")["result"], [])
 
+    def pastes(self, task, words):
+        """How many times its agent's terminal shows it was sent WORDS."""
+        screen = roost.tmux(self.socket, "capture-pane", "-p", "-J", "-t", task["paneId"]).stdout
+        return screen.count("PROMPT " + words)
+
+    def wait_for_pastes(self, task, words, count):
+        deadline = time.monotonic() + 5
+        while self.pastes(task, words) < count and time.monotonic() < deadline:
+            time.sleep(0.05)
+
+    def sending(self, task, **args):
+        """A send request running as over SSH: its own process, not told
+        when Emacs gives up on it."""
+        request = dict(root=str(self.state), action="send", id=task["id"], **args)
+        process = subprocess.Popen([sys.executable, str(SOURCE), "rpc"], stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, start_new_session=True)
+        process.stdin.write(json.dumps(request).encode())
+        process.stdin.close()
+        self.addCleanup(process.stdout.close)
+        return process
+
+    def test_a_prompt_asked_for_again_is_pasted_once(self):
+        task = self.create()
+        first = self.request("send", id=task["id"], text="once please", sendId="ab" * 8)
+        self.assertTrue(first["ok"], first)
+        self.assertNotIn("alreadySent", first["result"])
+        self.wait_for_pastes(task, "once please", 1)
+        again = self.request("send", id=task["id"], text="once please", sendId="ab" * 8)
+        self.assertTrue(again["ok"], again)
+        self.assertIs(again["result"]["alreadySent"], True)
+        self.assertNotIn("alreadySent", roost.Store(str(self.state)).read(task["id"]))
+        time.sleep(0.3)
+        self.assertEqual(self.pastes(task, "once please"), 1)
+        # Another ID is another prompt, and with none it goes as it always did.
+        self.assertTrue(self.request("send", id=task["id"], text="once please", sendId="cd" * 8)["ok"])
+        self.assertTrue(self.request("send", id=task["id"], text="once please")["ok"])
+        self.wait_for_pastes(task, "once please", 3)
+        self.assertEqual(self.pastes(task, "once please"), 3)
+
+    def test_a_prompt_queued_behind_the_first_is_pasted_once(self):
+        # Emacs gave up on the first, which went on waiting for the lock.
+        for same, count in ((True, 1), (False, 2)):
+            task = self.create(name="same" if same else "another")
+            store = roost.Store(str(self.state))
+            with store.locked():
+                requests = [self.sending(task, text="queued please", sendId=("ab" if same else id) * 8)
+                            for id in ("cd", "ef")]
+                # Each is waiting on the lock.
+                time.sleep(0.5)
+            for process in requests:
+                self.assertTrue(json.loads(process.stdout.read())["ok"])
+                process.wait()
+            self.wait_for_pastes(task, "queued please", count)
+            time.sleep(0.3)
+            self.assertEqual(self.pastes(task, "queued please"), count)
+
+    def test_a_prompt_refused_is_pasted_when_asked_for_again(self):
+        task = self.create()
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        refused = self.request("send", id=task["id"], text="once resumed", sendId="ab" * 8)
+        self.assertIn("not running", refused["error"])
+        self.assertNotIn("sendIds", roost.Store(str(self.state)).read(task["id"]))
+        self.assertTrue(self.request("resume", id=task["id"])["ok"])
+        resumed = self.wait(task, "ready")
+        reply = self.request("send", id=task["id"], text="once resumed", sendId="ab" * 8)
+        self.assertNotIn("alreadySent", reply["result"])
+        self.wait_for_pastes(resumed, "once resumed", 1)
+        self.assertEqual(self.pastes(resumed, "once resumed"), 1)
+
+    def test_a_prompt_that_went_is_known_whatever_became_of_the_agent(self):
+        task = self.create()
+        self.assertTrue(self.request("send", id=task["id"], text="said", sendId="ab" * 8)["ok"])
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        reply = self.request("send", id=task["id"], text="said", sendId="ab" * 8)
+        self.assertTrue(reply["ok"], reply)
+        self.assertTrue(reply["result"]["alreadySent"])
+
+    def test_a_prompt_asked_for_again_after_others_is_pasted_once(self):
+        # A note's reply lost, then another note, then the first again.
+        task = self.create()
+        for words, number in (("first note", "ab"), ("second note", "cd"), ("first note", "ab")):
+            self.assertTrue(self.request("send", id=task["id"], text=words, sendId=number * 8)["ok"])
+        self.wait_for_pastes(task, "second note", 1)
+        time.sleep(0.3)
+        self.assertEqual(self.pastes(task, "first note"), 1)
+        # The record keeps a few, and goes on working past them.
+        for number in range(roost.SEND_IDS_KEPT + 2):
+            self.assertTrue(self.request("send", id=task["id"], text="more", sendId="%016x" % number)["ok"])
+        kept = roost.Store(str(self.state)).read(task["id"])["sendIds"]
+        self.assertEqual(len(kept), roost.SEND_IDS_KEPT)
+        self.assertEqual(kept[-1], "%016x" % (roost.SEND_IDS_KEPT + 1))
+
+    def test_a_prompt_asked_for_again_leaves_where_you_last_looked(self):
+        # What the agent did about your notes is what you have yet to see.
+        task = self.create()
+        args = dict(id=task["id"], text="my notes", look=True, sendId="ab" * 8)
+        self.assertTrue(self.request("send", **args)["ok"])
+        store = roost.Store(str(self.state))
+        looked = store.read(task["id"])["looked"]
+        self.commit_in(task, "its-answer")
+        reply = self.request("send", **args)
+        self.assertTrue(reply["result"]["alreadySent"])
+        self.assertEqual(store.read(task["id"])["looked"], looked)
+
+    def test_a_prompt_asked_with_an_odd_id_is_refused(self):
+        task = self.create()
+        reply = self.request("send", id=task["id"], text="odd", sendId="../x")
+        self.assertEqual(reply["error"], "Invalid send ID")
+
+    def test_a_full_disk_doesnt_say_a_prompt_that_went_failed(self):
+        task = self.create()
+        with patch.object(roost, "atomic_json", side_effect=OSError(errno.ENOSPC, "No space left")):
+            reply = self.request("send", id=task["id"], text="full", sendId="ab" * 8)
+        self.assertTrue(reply["ok"], reply)
+
     def test_a_prompt_no_agent_could_be_started_with_is_refused(self):
         # A program's argument ends at a NUL: its runner could only fail.
         reply = self.request("create", directory=str(self.repo), name="nul", socket=self.socket,
@@ -7247,6 +7362,9 @@ print(json.dumps(dict(data=data)))
         self.assertTrue(again["ok"], again)
         self.assertEqual(again["result"]["id"], task["id"])
         self.assertEqual(again["result"]["name"], "once")
+        self.assertIs(again["result"]["alreadyMade"], True)
+        self.assertNotIn("alreadyMade", task)
+        self.assertNotIn("alreadyMade", roost.Store(str(self.state)).read(task["id"]))
         self.assertEqual([record["id"] for record in roost.Store(str(self.state)).all()], [task["id"]])
         self.assertEqual(self.task_branches(), [task["branch"]])
         self.assertEqual(list((self.state / "creating").glob("*")), [])
