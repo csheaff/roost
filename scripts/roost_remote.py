@@ -3213,6 +3213,16 @@ def landed(task, tip):
     return bool(integration) and is_ancestor(task["repo"], tip, "refs/heads/" + integration) and committed_on(task)
 
 
+def branch_names(repo, name):
+    """What NAME, as Git's reflog has it, may call a branch: as it is, and
+    less `refs/heads/` or a remote's name. Only one of REPO's remotes: a
+    branch of yours may be named agent/main."""
+    names = {name, re.sub(r"^refs/(heads/|remotes/[^/]+/)", "", name)}
+    names.update(name[len(remote) + 1:] for remote in read_git(repo, "remote").stdout.split()
+                 if name.startswith(remote + "/"))
+    return names
+
+
 def own_commits(task, branch=None):
     """The commits made on the task's branch, or on BRANCH, as its reflog
     has them, merge commits among them, rather than brought in from its
@@ -3232,8 +3242,7 @@ def own_commits(task, branch=None):
         if (re.match(r"(commit|cherry-pick|revert|am)\b|(merge|pull)\b[^:]*: Merge made by", subject)
                 # By its commit, as Git names one from FETCH_HEAD, it could be anyone's.
                 or forwarded and not re.fullmatch(r"[0-9a-f]+", forwarded.group(1))
-                and integration not in (forwarded.group(1), re.sub(r"^(refs/heads/|refs/remotes/[^/]+/|origin/)", "",
-                                                                   forwarded.group(1)))):
+                and integration not in branch_names(task["repo"], forwarded.group(1))):
             made.add(commit)
         elif subject.startswith("rebase"):
             rebased.add(commit)
