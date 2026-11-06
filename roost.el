@@ -381,8 +381,9 @@ to show all of it in that font.")
   "A task waiting for your next prompt.")
 (defface roost-status-running '((t :inherit shadow))
   "The light of a task whose agent is working.
-Dim, as the dot of any task that waits for nothing: a light in colour
-means the task needs you, and a plain one would stand out more.")
+Dim, as the dot of a task that waits for nothing, but for one that failed:
+a light in colour means the task needs you, or something went wrong, and
+a plain one would stand out more.")
 (defface roost-status-failed '((t :inherit error))
   "A task whose agent failed or disappeared.")
 (defface roost-status-inactive '((t :inherit shadow))

@@ -117,7 +117,7 @@ Within a severity, they are ranked by what they cost and how often they happen.
 | 36 | FORGE-10 | S4 | A task whose worktree went keeps waiting on conflicts last measured | [Task measurement](#task-measurement) | Fixed, `test_a_worktree_gone_says_it_no_longer_conflicts` |
 | 37 | FORGE-11, REQUESTS-7 | S4 | Two Emacs undo each other's turn for a stopped task, on every poll | [Verdict and turn](#verdict-and-turn) | Fixed, `roost-two-emacs-settle-on-a-stopped-tasks-turn` |
 | 38 | FORGE-12 | S4 | What `P` pushed counts as unpushed until GitHub is next asked | [Pushing and opening](#pushing-and-opening) | Open, [#227](https://github.com/csheaff/roost/issues/227) |
-| 39 | FORGE-7 | S4 | A failed task you've seen keeps its colour, though the manual says otherwise | [The word](#the-word) | Open, [#228](https://github.com/csheaff/roost/issues/228) |
+| 39 | FORGE-7 | S4 | A failed task you've seen keeps its colour, though the manual says otherwise | [The word](#the-word) | Fixed, in the manual |
 | 40 | STATUS-8 | S4 | `/clear` reads `interrupted` for a relayed Claude | [Agent status](#agent-status) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
 | 41 | STATUS-9 | S4 | A dialog as a task resumes shows the last run's request | [A task's request](#a-tasks-request) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
 
@@ -1893,7 +1893,7 @@ grouped by what each view says (234 distinct results).
 | `starting` | No | | No | No | No | Dim |
 | `ready` | Until seen | status, unseen | Yes | Yes | Yes | Colour |
 | `interrupted` | Until seen | `lastEvent` | Yes | Yes | Yes | Colour |
-| `error`, `failed`, `crashed` | Until seen | status | Yes | Yes | Yes | **Colour after too: FORGE-7** |
+| `error`, `failed`, `crashed` | Until seen | status | Yes | Yes | Yes | Colour, after too |
 | `exited` | Until seen | status | Yes | Yes | Yes | Dim |
 | `conflicts` | Once seen | see 5 | Yes | Yes | Yes | Colour |
 | `to merge`, `ci failed`, `comments` | Once seen | see 7 | Yes | Yes | Yes | Colour |
@@ -1914,20 +1914,20 @@ Invariants:
   `prompt`, which `roost--history-spans` handles, and offline.
 - I5. `roost--turn` is the word whenever the word is a turn. Holds.
 - I6. The manual's "a notification announces" holds for each waiting word.
-- I7. The manual's "the dot ... is dim when the task waits for nothing". **Broken:
-  FORGE-7**, though the changelog of that change says an error keeps its colour.
-  The reverse isn't promised: an `exited` agent you haven't seen waits on a dim dot.
+- I7. The manual's "the dot ... is dim when the task waits for nothing", but for one
+  that failed, crashed or hit an error, which keeps its colour once seen. The reverse
+  isn't promised: an `exited` agent you haven't seen waits on a dim dot.
 
 Words the manual doesn't quite cover, all as designed by comments in the code:
 a stopped task you hadn't seen stays `stopped`, not `merged` or `to merge`, until
 you open it, and a failed or crashed agent you've seen stays so rather than
 `conflicts` or `merged`, though it does show `ci failed`.
 
-The word goes by inputs, so wrong inputs give a wrong word: see FORGE-1, 2, 4, 5, 8,
-10. A review that requests changes with no thread open gives no word; the manual
+The word goes by inputs, so wrong inputs give a wrong word: see FORGE-1, 2 and 5. A
+review that requests changes with no thread open gives no word; the manual
 promises none, and the next step says only that `P` pushes new commits.
 
-Open: FORGE-7.
+Open: none.
 
 ## What you are doing in Emacs
 
