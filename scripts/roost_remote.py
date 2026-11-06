@@ -5588,10 +5588,11 @@ def remove_agent_worktrees(task, entries):
         if not gitdir or not is_as_made(task, entry["path"], gitdir):
             continue
         commit = read_git(entry["path"], "rev-parse", "HEAD").stdout.strip()
+        branch = read_git(entry["path"], "symbolic-ref", "--short", "-q", "HEAD").stdout.strip()
         removed = git(task["repo"], "worktree", "remove", "--force", "--force", entry["path"], check=False)
-        if removed.returncode == 0 and commit and entry["branch"] == agent_branch(task, entry["path"]):
+        if removed.returncode == 0 and commit and branch == agent_branch(task, entry["path"]):
             with contextlib.suppress(RoostError):
-                delete_branch(task["repo"], entry["branch"], commit)
+                delete_branch(task["repo"], branch, commit)
 
 
 @contextlib.contextmanager

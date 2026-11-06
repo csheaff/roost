@@ -982,7 +982,9 @@ Things to know:
   the branch Claude made for each. A worktree its agent only went to, one that
   was there before the task, and a folder that is no longer a worktree stay,
   as does a branch of yours its agent switched to there, and Roost says what it
-  left in place.
+  left in place. So does a `/batch` worktree: its folder names no agent, so
+  Roost can't tell it from another session's, doesn't list it or check it
+  before merging, and leaves it for you to remove.
 - Claude and Codex each ask once per repository to trust it; every task worktree
   of that repository is trusted after that.
 - Codex asks you to review Roost's observer hooks the first time. The hook

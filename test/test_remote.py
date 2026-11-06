@@ -3450,6 +3450,18 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(self.request("discard", id=task["id"], expect=told["commit"])["ok"])
         self.assertTrue(own.exists())
 
+    def test_a_branch_a_teardown_command_leaves_is_kept(self):
+        # It switched the worktree away, so what it was on may be yours now.
+        task = self.create()
+        own = self.agent_worktree(task)
+        self.git("branch", "release", task["branch"])
+        leave = 'git -C %s switch -q release' % shlex.quote(str(own))
+        reply = self.request("retire", id=task["id"], teardown=leave)
+        self.assertTrue(reply["ok"], reply)
+        self.assertFalse(own.exists())
+        self.assertTrue(roost.ref_exists(self.repo, "worktree-probe"))
+        self.assertTrue(roost.ref_exists(self.repo, "release"))
+
     def test_a_worktree_another_session_made_during_teardown_stays(self):
         task = self.create()
         own = self.agent_worktree(task)
