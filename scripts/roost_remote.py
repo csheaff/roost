@@ -3084,7 +3084,10 @@ def pull_request_status(pr, reviews, checked):
                   checks=checks, head=pr.get("headRefOid"), base=pr.get("baseRefName"))
     status.update((key, value) for key, value in names.items() if value)
     if pr.get("state") == "OPEN":
-        status.update(pr.get("reviewState") or reviews.get(pr.get("url"), {}), failedAt=failed, checkedAt=checked)
+        # Marked when GitHub didn't say, so Emacs can tell that from a pull
+        # request with nothing to say, and keep what it last said.
+        status.update(pr.get("reviewState") or reviews.get(pr.get("url")) or dict(reviewsFailed=True),
+                      failedAt=failed, checkedAt=checked)
     return status
 
 
@@ -3617,6 +3620,9 @@ def add_git_stats(tasks):
         # Null on the task's branch, so Emacs forgets one it was on.
         task["worktreeBranch"] = None if task["worktreeMissing"] else other_branch(task, worktree)
         if task["worktreeMissing"]:
+            # Nothing there to measure: left out, Emacs keeps the last of it.
+            task.update(dirty=False, merging=None, conflicts=None, worktreeHead=None, sinceLooked=None,
+                        diff="", files=[], size=None)
             continue
         # Where that branch is, for Emacs to tell whether its pull request,
         # as GitHub was last asked, has every commit there.

@@ -4838,7 +4838,7 @@ sys.exit(status)
         # GitHub didn't say what it has of reviews (reviews.json is missing).
         self.assertEqual(listed["prStatus"], dict(
             state="OPEN", draft=True, review="APPROVED", head=tip, base="release",
-            checks=dict(passing=3, failing=1, pending=2), failedAt=None))
+            checks=dict(passing=3, failing=1, pending=2), failedAt=None, reviewsFailed=True))
         self.assertEqual(listed["unpushed"], 0)
         self.assertEqual(self.gh_calls()[-2],
                          ["pr", "list", "--head", task["branch"], "--state", "all", "--limit", "10", "--json",
@@ -5741,6 +5741,46 @@ sys.exit(status)
         status = self.listed(full=True)["prStatus"]
         self.assertEqual(status["mergeable"], "MERGEABLE")
         self.assertNotIn("mergeState", status)
+    def test_a_status_says_when_github_didnt_answer_about_reviews(self):
+        # `gh pr list` got through and `gh api graphql` didn't, as for a 502:
+        # nothing told that from a pull request with nothing to say.
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        (self.gh_dir / "list.json").write_text(json.dumps([dict(
+            number=9, url="https://github.com/octo/repo/pull/9", state="OPEN", headRefOid=tip,
+            statusCheckRollup=[])]))
+        (self.gh_dir / "reviews.json").write_text(json.dumps({"9": dict(
+            mergeable="MERGEABLE", reviewRequests=dict(nodes=[]), reviewThreads=dict(totalCount=0, nodes=[]))}))
+        status = self.request("list", full=True)["result"][0]["prStatus"]
+        self.assertEqual(status["mergeable"], "MERGEABLE")
+        self.assertNotIn("reviewsFailed", status)
+        (self.gh_dir / "reviews.json").unlink()
+        status = self.request("list", full=True)["result"][0]["prStatus"]
+        self.assertEqual(status["state"], "OPEN")
+        self.assertNotIn("mergeable", status)
+        self.assertIs(status["reviewsFailed"], True)
+
+    def test_a_worktree_gone_says_it_no_longer_conflicts(self):
+        # Left out, Emacs keeps what it last measured, and the task waits
+        # on a conflict nobody can resolve.
+        task = self.create()
+        wt = Path(task["worktree"])
+        (wt / "hello").write_text("task\n")
+        self.git("commit", "-qam", "task", cwd=wt)
+        (self.repo / "hello").write_text("main\n")
+        self.git("commit", "-qam", "main")
+        self.assertEqual(self.request("list", full=True)["result"][0]["conflicts"], ["hello"])
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        shutil.rmtree(wt)
+        listed = self.request("list", full=True)["result"][0]
+        self.assertIs(listed["worktreeMissing"], True)
+        for field in ("conflicts", "merging", "sinceLooked", "worktreeHead", "size"):
+            self.assertIn(field, listed)
+            self.assertIsNone(listed[field])
+        self.assertIs(listed["dirty"], False)
+        self.assertEqual((listed["files"], listed["diff"]), ([], ""))
 
     def test_list_learns_the_pull_request_an_agent_opened(self):
         self.github()

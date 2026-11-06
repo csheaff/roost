@@ -360,7 +360,8 @@ sidebar, their word is in its colour, and an agent you've seen that waits
 for nothing has none; the dashboard shows every task's word, and counts
 them by those words at its top, what can't go on without you first. In
 the dashboard and the task panel, the dot before a task's word is dim
-when the task waits for nothing.
+when the task waits for nothing, but for one that failed, crashed or hit
+an error, which keeps its colour once you've seen it.
 
 | Word | Waits for you | What it means |
 | --- | --- | --- |
