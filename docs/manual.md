@@ -296,7 +296,8 @@ Staging doubles as approval: stage what you have checked, and whatever the
 agent changes after that shows up as unstaged, on its own. To ask for changes,
 put point on a line and press `;` to write a note for the agent there (on the
 region's lines, or on a file's name for the whole file). Notes show under their
-lines, and `@` drafts a prompt holding all of them; sending it clears them. `=`
+lines, and `@` drafts a prompt holding all of them; sending it clears those it
+still holds as they were, and one you took out or changed stays. `=`
 on a file shows the whole file with its changes marked, and you can still
 stage there.
 

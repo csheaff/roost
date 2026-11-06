@@ -33,6 +33,18 @@ What each release changes, and what to do when upgrading. Newest first.
   before upgrading is covered once you resume it.
 - A Claude task stopped before anything was said in it starts again on `s`.
   Claude had no conversation to go back to, so `s` failed, each time.
+- A review note you take out of a prompt draft, or change there, stays once
+  the draft is sent, as the agent didn't read it as it is. It was cleared. So
+  does one you edit in the note box as the draft goes, which lost your edit.
+  Nothing to do when upgrading.
+- A task you resume leaves what you open from a question meanwhile, as a file
+  with `C-x C-f`. Its terminal took the window. Nothing to do when upgrading.
+- A task that stops while its open waits for a question doesn't open. Roost
+  connected all the same, which left an empty tmux session named for it, with
+  a shell in it, that no Roost command closes. Now it asks the task's host
+  again once you answer, and says so if the agent has gone. Nothing to do when
+  upgrading; a session like that left earlier goes when you end tmux on that
+  host.
 - Two Emacs agree on what of a stopped task waits on you. Each undid the
   other's turn at every poll, writing its record and a line of history, and
   `roost-workload` flickered. Nothing to do when upgrading.
