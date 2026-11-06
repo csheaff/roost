@@ -4,6 +4,18 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A review note you take out of a prompt draft, or change there, stays once
+  the draft is sent, as the agent didn't read it as it is. It was cleared. So
+  does one you edit in the note box as the draft goes, which lost your edit.
+  Nothing to do when upgrading.
+- A task you resume leaves what you open from a question meanwhile, as a file
+  with `C-x C-f`. Its terminal took the window. Nothing to do when upgrading.
+- A task that stops while its open waits for a question doesn't open. Roost
+  connected all the same, which left an empty tmux session named for it, with
+  a shell in it, that no Roost command closes. Now it asks the task's host
+  again once you answer, and says so if the agent has gone. Nothing to do when
+  upgrading; a session like that left earlier goes when you end tmux on that
+  host.
 - A draft whose reply was lost does what it says when you ask again. Asked
   again with its prompt changed, a new task's draft said it created the task,
   closed, and opened the one made from what you sent first. Now it stays, as
