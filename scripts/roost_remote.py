@@ -846,6 +846,44 @@ def later_prompt(task, prompt):
     return said if len(said) <= LAST_MESSAGE_LIMIT else said[:LAST_MESSAGE_LIMIT].rstrip() + "…"
 
 
+def forget_request(task):
+    """TASK's agent asks nothing any more."""
+    for field in ("request", "requestCommand", "requestFrom", "requestCall"):
+        task.pop(field, None)
+
+
+def tool_call(payload):
+    """Which tool call hook PAYLOAD is about: the subagent that made it, none
+    for the main agent, its tool, and a digest of each argument, as one can
+    be a whole file."""
+    arguments = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+    return dict(agent=text(payload.get("agent_id")), tool=text(payload.get("tool_name")),
+                arguments={name: hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()[:16]
+                           for name, value in arguments.items()})
+
+
+def tool_answers(task, payload):
+    """Whether hook PAYLOAD, of a tool's start or end while TASK's agent asks,
+    says it no longer does. Subagents go on working beside one that asks, and
+    tools called together beside the one that asked, so a tool's event counts
+    only from the agent that asked, and only as the end of what it asked for,
+    however it adds to or leaves out of its arguments, or as its next tool. A
+    request a notification named doesn't say who asks: the main agent's event
+    counts. Unsure, it stands: as the manual says, it may show until the agent
+    moves on."""
+    if payload.get("hook_event_name") not in ("PreToolUse", "PostToolUse"):
+        return True
+    call, asked = tool_call(payload), task.get("requestCall")
+    if not isinstance(asked, dict):
+        return not call["agent"]
+    if call["agent"] != asked.get("agent"):
+        return False
+    arguments = asked.get("arguments") or {}
+    return (payload["hook_event_name"] == "PreToolUse"
+            or call["tool"] == asked.get("tool")
+            and all(arguments.get(name, digest) == digest for name, digest in call["arguments"].items()))
+
+
 CLAUDE_FOLDER_LIMIT = 200
 
 
@@ -880,6 +918,7 @@ class ClaudeAgent:
     # Its status reports, which the runner reads for a task that asks,
     # say when a turn ends and how.
     reports_turns = True
+    answers = staticmethod(tool_answers)
 
     def validate(self, command):
         validate_command(command, "Claude")
@@ -1074,6 +1113,7 @@ class CodexAgent:
     # runs or a server starts. Its hooks, which it runs before it goes on,
     # say when a turn starts and how it ends.
     reports_turns = False
+    answers = staticmethod(tool_answers)
 
     def validate(self, command):
         validate_command(command, "Codex")
@@ -2393,16 +2433,14 @@ def list_tasks(store, request):
         elif guess and task["status"] in ("running", "permission") and was_interrupted(task):
             # Stopped by you, so waiting for you; it reports no event of its own.
             task.update(status="ready", updatedAt=now(), lastEvent="Interrupt")
-            task.pop("request", None)
-            task.pop("requestCommand", None)
+            forget_request(task)
             changed = True
         elif guess and task["status"] == "permission" and task.get("requestCommand"):
             if table is None:
                 table = processes()
             if approved_command_running(task, pane, table):
                 task.update(status="running", updatedAt=now(), lastEvent="Approved")
-                task.pop("request", None)
-                task.pop("requestCommand", None)
+                forget_request(task)
                 changed = True
         if changed:
             store.note(task)
@@ -5669,8 +5707,11 @@ def beside_program_status(updates, before, reports_turns=True):
         kept = status == "failed" or status == "background" and before in ("running", "ready")
     else:
         kept = not (status == "running" and before == "permission")
-    if kept:
-        return updates
+    return updates if kept else without_status(updates)
+
+
+def without_status(updates):
+    """What a hook's UPDATES report beside the agent's status."""
     return {key: value for key, value in updates.items()
             if key not in ("status", "updatedAt", "lastEvent", "error")}
 
@@ -5706,8 +5747,11 @@ def update_hook(store, task_id, payload, run_id=None):
         if updates:
             asks = updates.get("status", before) == "permission"
             relayed = task.get("programStatusRun") == task.get("runId")
+            answers = getattr(agent, "answers", None)
             if relayed:
                 updates = beside_program_status(updates, before, agent.reports_turns)
+            elif before == "permission" and updates.get("status") == "running" and answers and not answers(task, payload):
+                updates = without_status(updates)
             if not agent.reports_turns and "status" in updates:
                 task["hookAt"] = read_at = time.time()
             # What the agent asks, if its adapter can say better than its payload.
@@ -5727,13 +5771,17 @@ def update_hook(store, task_id, payload, run_id=None):
                     task["requestCommand"] = command[:APPROVAL_MARKER_LIMIT]
                 else:
                     task.pop("requestCommand", None)
+                # What will say that it is over.
+                if payload.get("tool_name"):
+                    task["requestCall"] = tool_call(payload)
+                else:
+                    task.pop("requestCall", None)
             elif ((not relayed or not agent.reports_turns)
                   and (task["status"] != "permission" or before != "permission")):
                 # The notification that follows a request names no tool:
                 # keep the request it follows, and only that one. The agent's
                 # status reports clear it, for one whose reports end its turns.
-                task.pop("request", None)
-                task.pop("requestCommand", None)
+                forget_request(task)
             store.save(task)
         capture(store, task_id, {"hook": payload}, read_at)
 
@@ -5936,9 +5984,7 @@ def apply_program_status(task, fields, run_id):
                 del task["request"], task["requestFrom"]
     elif status == "permission" or task["status"] != "running":
         # A hook may name a request just before the agent says it waits.
-        task.pop("request", None)
-        task.pop("requestCommand", None)
-        task.pop("requestFrom", None)
+        forget_request(task)
     if task["status"] == "running" and state == "working" and fields.get("msg"):
         task["activity"] = fields["msg"][:REQUEST_LIMIT]
     else:
@@ -6576,7 +6622,7 @@ def require_not_removing(store, task, action):
 
 
 # Kept in task records for the helper's own use, and not sent to Emacs.
-PRIVATE = ("lastReply", "transcript", "requestFrom", "hookAt", "panePid")
+PRIVATE = ("lastReply", "transcript", "requestFrom", "requestCall", "hookAt", "panePid")
 
 
 def outgoing(result):

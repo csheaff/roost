@@ -921,8 +921,9 @@ Things to know:
   task shows `interrupted`, read from its transcript. Codex's hooks say when
   you decline or press Esc. Claude Code's other tools, and Codex, may keep
   showing `permission` until the agent moves on, and `e` asks before sending
-  to a task in that state. With `roost-program-status` on, both say so
-  themselves, at once.
+  to a task in that state. What a subagent does beside one that asks doesn't
+  count as moving on. With `roost-program-status` on, both say so themselves,
+  at once.
 - In auto mode, Claude Code refuses some commands without asking: the
   task stays `running`, and Claude's reply says what it refused. A
   dangerous `rm` asks for two minutes, and is refused if you don't

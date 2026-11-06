@@ -4,6 +4,10 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A Claude or Codex agent that asks goes on showing `permission` while
+  a subagent's tools, or tools it called together with the one it asks about,
+  run beside it. They made it read `running`, with no notification, and let a
+  prompt through to its menu. Nothing to do when upgrading.
 - A pane you move with tmux, as with `break-pane`, stays the task's. The task
   read as `crashed`, `s` started a second agent beside the first, and `K`
   said it had stopped while it ran on. Nothing to do when upgrading.

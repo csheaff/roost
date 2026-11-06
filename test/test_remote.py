@@ -744,7 +744,7 @@ class Lifecycle(unittest.TestCase):
         # The notification that follows names no tool, and keeps it.
         hook(hook_event_name="Notification", notification_type="permission_prompt")
         self.assertEqual(store.read(task["id"])["request"], "Asks to run cd sub && make test")
-        hook(hook_event_name="PostToolUse", tool_name="Bash", tool_input=dict(command="make test"))
+        hook(hook_event_name="PostToolUse", tool_name="Bash", tool_input=dict(command="cd sub &&\n  make test"))
         self.assertNotIn("request", store.read(task["id"]))
         # A prompt reported only by a notification says what its words say,
         # as a sandboxed command's network request does.
@@ -766,6 +766,95 @@ class Lifecycle(unittest.TestCase):
         hook(hook_event_name="PermissionRequest", tool_name="Write",
              tool_input=dict(file_path=str(Path(task["worktree"]) / "docs" / "notes.md")))
         self.assertEqual(self.request("list")["result"][0]["request"], "Asks to write docs/notes.md")
+
+    def test_only_the_agent_that_asked_says_its_request_is_over(self):
+        store = roost.Store(str(self.state))
+        task = self.create()
+        hook = lambda **payload: roost.update_hook(store, task["id"], payload) or store.read(task["id"])
+        asked = dict(tool_name="Bash", tool_input=dict(command="make deploy", description="Deploy"))
+        mine = dict(tool_name="Read", tool_input=dict(file_path="notes.md"))
+        theirs = dict(mine, agent_id="a1", agent_type="Explore")
+
+        def asks(**payload):
+            hook(hook_event_name="UserPromptSubmit", prompt="go")
+            record = hook(hook_event_name="PermissionRequest", **dict(asked, **payload))
+            self.assertEqual((record["status"], record["request"]), ("permission", "Asks to run make deploy"))
+
+        def stands():
+            record = store.read(task["id"])
+            self.assertEqual((record["status"], record["lastEvent"], record["request"], record["requestCommand"]),
+                             ("permission", "PermissionRequest", "Asks to run make deploy", "make deploy"))
+
+        def over(record):
+            self.assertEqual(record["status"], "running")
+            self.assertFalse({"request", "requestCommand", "requestCall"} & set(record))
+
+        # A subagent's tools, beside the one that asks.
+        asks()
+        for event in ("PreToolUse", "PostToolUse"):
+            hook(hook_event_name=event, **theirs)
+            stands()
+        self.assertIn("Open the task", self.request("send", id=task["id"], text="also the docs")["error"])
+        self.assertNotIn("requestCall", self.request("list")["result"][0])
+        over(hook(hook_event_name="PostToolUse", **asked))
+        # A tool called together with the one that asks ends beside it.
+        asks()
+        hook(hook_event_name="PostToolUse", tool_name="Bash", tool_input=dict(command="ls"))
+        stands()
+        hook(hook_event_name="PostToolUse", **mine)
+        stands()
+        # Its next tool: the one that asked failed, which runs no hook of ours.
+        over(hook(hook_event_name="PreToolUse", **mine))
+        # What asked may say more or less of its arguments as it ends, as
+        # Codex and the answers to a question do.
+        asks()
+        over(hook(hook_event_name="PostToolUse", tool_name="Bash", tool_input=dict(command="make deploy")))
+        asks()
+        over(hook(hook_event_name="PostToolUse", tool_name="Bash", tool_response="done",
+                  tool_input=dict(asked["tool_input"], answers=dict(which="that one"))))
+        # A subagent's request, as the main agent's tools go on.
+        asks(agent_id="a1")
+        for event in ("PreToolUse", "PostToolUse"):
+            hook(hook_event_name=event, **mine)
+            stands()
+        over(hook(hook_event_name="PostToolUse", agent_id="a1", **asked))
+        # A request a notification named: only the main agent's tools say.
+        hook(hook_event_name="UserPromptSubmit", prompt="go")
+        hook(hook_event_name="Notification", notification_type="permission_prompt", message="Needs network access")
+        self.assertEqual(hook(hook_event_name="PostToolUse", **theirs)["status"], "permission")
+        over(hook(hook_event_name="PostToolUse", **mine))
+        # What ends a turn ends it whoever asked.
+        asks()
+        self.assertEqual(hook(hook_event_name="Stop")["status"], "ready")
+        asks()
+        over(hook(hook_event_name="UserPromptSubmit", prompt="never mind"))
+
+    def test_the_order_of_a_request_and_another_agents_tool_makes_no_difference(self):
+        store = roost.Store(str(self.state))
+        task = self.create()
+        hook = lambda **payload: roost.update_hook(store, task["id"], payload)
+        request = dict(hook_event_name="PermissionRequest", tool_name="Bash", tool_input=dict(command="make"))
+        other = dict(hook_event_name="PostToolUse", tool_name="Read", agent_id="a1")
+        for events in ((request, other), (other, request)):
+            hook(hook_event_name="UserPromptSubmit", prompt="go")
+            for event in events:
+                hook(**event)
+            self.assertEqual(store.read(task["id"])["status"], "permission")
+
+    def test_codex_keeps_a_request_while_a_subagents_tool_runs(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = roost.Store(root)
+            store.save(dict(id="0" * 16, agent="codex", worktree=root, status="running", runId="run"))
+            hook = lambda **payload: roost.update_hook(store, "0" * 16, dict(cwd=root, **payload), "run")
+            # As codex-0.163.0.jsonl has them: the request says more of the
+            # command than its tool's end.
+            hook(hook_event_name="PermissionRequest", tool_name="Bash",
+                 tool_input=dict(command="touch approved.txt", description="May I?"))
+            hook(hook_event_name="PostToolUse", tool_name="Bash", tool_input=dict(command="ls"), agent_id="t2",
+                 agent_type="worker")
+            self.assertEqual(store.read("0" * 16)["status"], "permission")
+            hook(hook_event_name="PostToolUse", tool_name="Bash", tool_input=dict(command="touch approved.txt"))
+            self.assertEqual(store.read("0" * 16)["status"], "running")
 
     def test_dirty_tracked_and_untracked_work_blocks_cleanup(self):
         task = self.create()
