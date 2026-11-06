@@ -4,6 +4,8 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A dialog as a task resumes says what it asks. It showed what the agent
+  had asked before you stopped it. Nothing to do when upgrading.
 - `/clear` no longer reads as `interrupted` with `roost-program-status` on.
   Nothing to do when upgrading.
 - A Pi or OpenCode agent you quit as it reports something reads `exited`.

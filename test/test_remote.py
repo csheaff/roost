@@ -3160,6 +3160,48 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual((listed["status"], listed["live"]), ("ready", True))
         self.assertTrue(self.request("send", id=task["id"], text="hello")["ok"])
 
+    def test_a_dialog_as_a_task_resumes_says_what_it_asks(self):
+        fake = self.root / "asks.py"
+        fake.write_text(textwrap.dedent("""\
+            import json, os, subprocess, sys, time, uuid
+            from pathlib import Path
+            settings = json.loads(Path(sys.argv[sys.argv.index("--settings") + 1]).read_text())
+            session = str(uuid.uuid4())
+
+            def event(name, **fields):
+                payload = dict(hook_event_name=name, session_id=session, **fields)
+                for matcher in settings["hooks"].get(name, []):
+                    for hook in matcher["hooks"]:
+                        subprocess.run(hook["command"], input=json.dumps(payload), text=True, shell=True, check=True)
+
+            def report(fields):
+                os.write(1, b"\\x1b]7501;" + fields.encode() + b"\\x1b\\\\")
+
+            if "--resume" in sys.argv:
+                report("state=blocked:kind=question")
+                time.sleep(60)
+            event("SessionStart")
+            report("state=idle")
+            for line in sys.stdin:
+                report("state=working")
+                event("PermissionRequest", tool_name="Bash", tool_input=dict(command=line.strip()))
+                report("state=blocked:kind=permission")
+            """))
+
+        def asked_again(name, ask):
+            task = self.create(name=name, command=[sys.executable, str(fake)], programStatus=True)
+            if ask:
+                self.assertTrue(self.request("send", id=task["id"], text="make deploy")["ok"])
+                self.assertEqual(self.wait(task, "permission")["request"], "Asks to run make deploy")
+            self.assertTrue(self.request("stop", id=task["id"])["ok"])
+            self.assertTrue(self.request("resume", id=task["id"], programStatus=True)["ok"])
+            return self.wait(task, "permission")
+
+        record = asked_again("asked", True)
+        self.assertEqual(record["request"], "Asks you a question")
+        self.assertFalse({"requestCommand", "requestCall"} & set(record))
+        self.assertEqual(asked_again("quiet", False)["request"], "Asks you a question")
+
     def test_old_hooks_cannot_overwrite_resumed_run_or_retirement(self):
         task = self.create()
         old = self.wait(task, "ready")

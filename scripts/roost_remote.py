@@ -1680,6 +1680,9 @@ def spawn(store, task, resume=False, size=()):
     script = str(Path(__file__).resolve())
     task["runId"] = uuid.uuid4().hex
     task.pop("shellPaneId", None)
+    # What the last run's agent asked and did: this one has yet to say.
+    forget_request(task)
+    task.pop("activity", None)
     # In UTF-8 mode, as `main` would start it, but as the pane's own process.
     argv = [sys.executable, "-X", "utf8", script, "run", str(store.root), task["id"], task["runId"]]
     if resume:
