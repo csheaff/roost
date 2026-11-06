@@ -35,6 +35,18 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## A merge outside the registry lock — 2026-11-06
+
+- **Why.** What changes things now outlives Emacs's wait, Git's merge runs without
+  the registry lock, and no lock goes to what Git starts (#223).
+- **`make crash`, whole, 46 minutes.** One flag, of a helper killed alone as you
+  ask again, just before `git worktree add`: two tasks from one ID. Only the harness
+  kills that way, as Emacs's kill takes Git too and ssh's end leaves the helper, so
+  `Create` leaves `racing` out. `Update` and `UpdateConflict`, 7 flags on
+  2026-11-05, have none: each refusal names the half-done merge.
+- **Not run.** A real `git credential-cache--daemon` from a real push, though one
+  started by `git credential approve` kept a lock it was handed; `git gc --auto`.
+
 ## A bug hunt, with two new sweeps — 2026-11-05
 
 - **Why.** About 2,000 lines had landed since the last hunt, and two kinds

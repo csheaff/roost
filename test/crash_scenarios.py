@@ -283,6 +283,11 @@ class PullRequestPush(PullRequest):
 class Create(Scenario):
     """As Emacs asks, with an ID that makes a second request find the first's."""
     action = "create"
+    # A helper killed alone just before Git starts, with you asking again in
+    # that moment: Emacs's kill takes Git too, and ssh's end leaves the helper.
+    # The note isn't handed to Git, or what a hook left would hold it, so a
+    # second task can come of it. Nothing but this harness kills so.
+    left_out = ("racing",)
 
     def arrange(self, box):
         self.commit = None

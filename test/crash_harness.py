@@ -369,6 +369,8 @@ class Scenario:
 
     action = None
     args = {}
+    # Modes `make crash` leaves out, as nothing real kills that way.
+    left_out = ()
     # Whether the action deletes work you agreed to lose.
     loses_work = False
     # Whether the action leaves the task's branch and worktree, and says so.

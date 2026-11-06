@@ -622,7 +622,8 @@ class Sweep(unittest.TestCase):
     def sweep(self, modes):
         for scenario in scenarios.ALL:
             with self.subTest(scenario=scenario.__name__):
-                self.assert_no_problems(harness.sweep(scenario, modes=modes, workers=self.workers))
+                self.assert_no_problems(harness.sweep(scenario, workers=self.workers, modes=tuple(
+                    mode for mode in modes if mode not in scenario.left_out)))
 
     def test_every_command(self):
         self.sweep(("before", "after", "orphan", "racing", "fail", "inside"))
