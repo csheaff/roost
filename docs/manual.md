@@ -251,9 +251,11 @@ and closing a menu left open. Each project's heading ends with a `+` that
 drafts a task there. Below the tasks, under "Start a task in", are the
 projects with no tasks now that you used last on each host, three
 (`roost-sidebar-recent-projects`), and "Other directory…". A click on one, or
-`RET`, drafts a task there; "Other directory…" first asks for a host, then a
-folder there, which after a click is the system's folder dialog for one on
-this machine. `X` on a project, or "Forget" on its menu, stops listing it until
+`RET`, drafts a task there, taking a draft you have written there too, unless
+it quotes files of its project, forks a task there or starts from an issue
+there; "Other directory…" first asks for a
+host, then a folder there, which after a click is the system's folder dialog
+for one on this machine. `X` on a project, or "Forget" on its menu, stops listing it until
 you start a task there again. With perspectives or tabs and no task yet, there
 is no sidebar to click: start the first with `M-x roost-new-task`. `I` docks a
 panel at the right of an open task's terminal,
@@ -599,9 +601,10 @@ terminal, it opens in a window below.
 `M-x roost-discard-notes` drops a task's notes unsent. In a task's panel, `e`
 also drafts a prompt holding them.
 
-In a prompt draft (`e` or `@`): `C-c C-c` sends, `C-c C-k` cancels, `C-c C-a`
-attaches a file from this machine (or the Send, Cancel and Attach buttons in its
-header line) and `C-c C-v` the image on the clipboard (as does
+In a prompt draft (`e` or `@`): `C-c C-c` sends, and what you write as it goes
+stays there; asked again after no reply, it goes once. `C-c C-k` cancels,
+`C-c C-a` attaches a file from this machine (or the Send, Cancel and Attach
+buttons in its header line) and `C-c C-v` the image on the clipboard (as does
 `M-x yank-media`, where Emacs reads images from the clipboard). Roost copies
 an attachment to the task's host in the background, under `attachments` in its
 state directory there, where the agent can read it. Meanwhile the draft shows
@@ -629,9 +632,10 @@ Emacs waits up to eleven minutes for a new task's worktree, which a
 repository with gigabytes of Git LFS files can take that long to check
 out. With no reply by then, the draft stays and says so, and the task opens
 if the host made it. `C-c C-c` there asks again for the same task: the host
-answers with the one it made, or makes it, never a second. A creation cut
-short, as when Emacs stops one on this machine, leaves no worktree or
-branch behind.
+answers with the one it made, or makes it, never a second. If what the draft
+says by then isn't what that task was made from, the draft stays as you left
+it and says so, and `C-c C-c` makes another. A creation cut short, as when
+Emacs stops one on this machine, leaves no worktree or branch behind.
 
 The new task opens if you are still where you created it. If you have gone to
 another buffer, window or task by then, you stay there: the echo area says it
