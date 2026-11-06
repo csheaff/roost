@@ -81,7 +81,7 @@ Within a severity, they are ranked by what they cost and how often they happen.
 | --- | --- | --- | --- | --- | --- |
 | 1 | LC-1 | S1 | Asking again after a cut-short removal deletes the primary checkout's branch | [Agent worktrees](#agent-worktrees) | Open, [#221](https://github.com/csheaff/roost/issues/221) |
 | 2 | LC-2 | S1 | Finishing a task takes a branch or worktree its agent only used | [Agent worktrees](#agent-worktrees) | Open, [#221](https://github.com/csheaff/roost/issues/221) |
-| 3 | VIEWS-1 | S1 | "Nothing would be lost" doesn't hold for what is written before you answer | [Asking before acting](#asking-before-acting) | Open, [#222](https://github.com/csheaff/roost/issues/222) |
+| 3 | VIEWS-1 | S1 | "Nothing would be lost" doesn't hold for what is written before you answer | [Asking before acting](#asking-before-acting) | Fixed, [#222](https://github.com/csheaff/roost/issues/222), `test_a_file_written_since_you_were_told_stops_a_discard` |
 | 4 | REQUESTS-8 | S2 | On this machine, a merge that outlasts the timeout is killed with its Git and hooks, leaving your checkout half-merged | [Host request](#host-request) | Open, [#223](https://github.com/csheaff/roost/issues/223) |
 | 5 | LC-3 | S2 | What a push or a checkout leaves running holds a task's lock, and refuses every way of finishing it | [Worktree lock](#worktree-lock) | Open, [#223](https://github.com/csheaff/roost/issues/223) |
 | 6 | REQUESTS-1 | S2 | A refresh that can't start leaves its host unasked until Emacs restarts | [Host refresh](#host-refresh) | Fixed, `roost-a-refresh-that-could-not-start-leaves-its-host-asked-again` |
@@ -95,7 +95,7 @@ Within a severity, they are ranked by what they cost and how often they happen.
 | 14 | FORGE-1 | S3 | A pull request merged with a commit made on the forge reads as not merged, and `m` forks `main` from `origin` | [Landed](#landed) | Open, [#227](https://github.com/csheaff/roost/issues/227) |
 | 15 | STATUS-4 | S3 | Another tool's event ends a request that still waits, so `send` could answer a menu | [Agent status](#agent-status) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
 | 16 | VIEWS-5, LC-5 | S3 | A prompt goes twice when its reply was lost | [The prompt draft](#the-prompt-draft) | Open, [#226](https://github.com/csheaff/roost/issues/226) |
-| 17 | VIEWS-7 | S3 | Merging takes commits made after it asked | [Asking before acting](#asking-before-acting) | Open, [#222](https://github.com/csheaff/roost/issues/222) |
+| 17 | VIEWS-7 | S3 | Merging takes commits made after it asked | [Asking before acting](#asking-before-acting) | Fixed, [#222](https://github.com/csheaff/roost/issues/222), `test_a_commit_made_since_you_were_asked_stops_a_merge` |
 | 18 | FORGE-2 | S3 | An agent's pull request goes unfollowed after `git pull --rebase` or a fast-forward | [A task's pull request](#a-tasks-pull-request) | Open, [#227](https://github.com/csheaff/roost/issues/227) |
 | 19 | FORGE-4, REQUESTS-5 | S3 | A change a poll saw can go unmeasured until something else asks | [Task measurement](#task-measurement) | Open, [#228](https://github.com/csheaff/roost/issues/228) |
 | 20 | FORGE-5 | S3 | A commit made on the forge holds back all an open pull request says | [What the forge last said](#what-the-forge-last-said) | Open, [#227](https://github.com/csheaff/roost/issues/227) |
@@ -389,7 +389,7 @@ What each step leaves if it stops there, and what asking again does.
 | 3 | `require_finished`, pane ownership | registry | refused |
 | 4 | `put_back_removed` if `removing` | registry | restores tracked files, its link |
 | 5 | `check_worktree`, clean, submodules, Git lock, agent work | registry | refused, nothing changed |
-| 6 | merge | registry | see next machine; a second merge finds it there |
+| 6 | branch moved from `expect`, then merge | registry | see next machine; a second merge finds it there |
 | 7 | `safe_to_delete`, save `retiringCommit` | registry | |
 | 8 | `stop` | registry | task stopped; agent's window gone |
 | 9 | `remove_worktrees` | released | worktree partly gone; `put_back_removed` restores it |
@@ -398,9 +398,9 @@ What each step leaves if it stops there, and what asking again does.
 | 12 | `delete_remote_branch` | none | remote branch stays; nothing else depends on it |
 
 `discard`: steps 2, 4, then `check_worktree(branch=False)`; the dry run stops
-there. Then `expect` against the branch, `stop`, removal with force, branch,
-record. No checkpoint: `expect` is the guard, and a retry asks Emacs for a new
-dry run.
+there. Then `expect` against the branch, `told` against `discard_losses` counted
+again, `stop`, removal with force, branch, record. No checkpoint: `expect` and
+`told` are the guards, and a retry asks Emacs for a new dry run.
 
 Invariants:
 - I1. No uncommitted work and no unmerged commit is lost by retire: checked
@@ -425,11 +425,12 @@ Invariants:
 | step 10 done, branch gone, `merge` asked | no `retiringCommit` | | refused | "nothing to merge"; retire finishes | `retire` |
 
 Illegal or refused: an agent at work, a task another pane took, a dirty worktree,
-unmerged commits, work in its agent's worktree or submodules, a locked worktree;
-each before anything changes. `discard` refuses what `check_worktree` refuses with
-`branch=False`, a link, a path outside Roost's folder, a moved worktree, and a missing
-one whose branch the primary checkout holds; then a branch moved since its dry run,
-and what `require_nothing_kept` finds.
+unmerged commits, work in its agent's worktree or submodules, a locked worktree,
+and for `merge` a branch moved from `expect`; each before anything changes. `discard`
+refuses what `check_worktree` refuses with `branch=False`, a link, a path outside
+Roost's folder, a moved worktree, and a missing one whose branch the primary checkout
+holds; then a branch moved since its dry run, more to lose than it told you, and what
+`require_nothing_kept` finds.
 Open: LC-1, LC-2, LC-6.
 
 ### The merge
@@ -2545,16 +2546,25 @@ as long as you leave it there.
 
 Invariants:
 - I1. Roost deletes work only when you discard a task and type its name.
-  (CLAUDE.md, Rules; manual.) **Broken by the `y-or-n-p` path:** VIEWS-1.
-- I2. What the question told you holds when you answer it, or the action is refused.
-  True of a discard's branch. **Not of its files, nor of a merge:** VIEWS-1, VIEWS-7.
+  (CLAUDE.md, Rules; manual.) The `y-or-n-p` path has nothing to lose when it asks,
+  and its host counts again before it stops the agent.
+- I2. What the question told you holds when you answer it, or the action is refused,
+  with nothing done. A count that went down isn't more than you were told. What an
+  agent writes between that count and `stop` goes with the task: a moment, not the
+  time you take to answer.
+- I3. A merge takes the commit it checked, by all three ways of merging, whatever the
+  branch does after. A commit made past that check stays out, and the task stays, as
+  `safe_to_delete` then finds its branch has work unmerged.
+- I4. A count Git can't give isn't nothing: with a damaged index, a discard counts
+  every file in the worktree (`uncommitted_files`), so it wants the name. A new folder
+  counts file by file, in a submodule too.
 
 | Question | From | Pins | The host checks again | Changes it misses |
 |---|---|---|---|---|
-| Discard, name typed | dry run | branch commit | branch moved | files, a detached HEAD, agent's worktrees |
-| Discard, y-or-n-p | dry run | branch commit | branch moved | the same, with no name typed: VIEWS-1 |
+| Discard, name typed | dry run | branch commit (`expect`), counts (`told`) | branch moved, any count higher | a change that adds to no count: a file edited, one swapped for another, a commit amended off the branch |
+| Discard, y-or-n-p | dry run | the same, all counts 0 | the same: asked again, it wants the name | none: any new file or commit counts |
 | Retire | cache | nothing | agent, dirty, unmerged | none: it refuses |
-| Merge | cache | nothing | agent, dirty, conflicts | new commits: VIEWS-7 |
+| Merge | cache | branch commit (`branchTip`, as `expect`), once measured | branch moved, just before merging; agent, dirty, conflicts | a commit before it was measured, which is refused too: the question spoke of what was measured |
 | Stop | cache | nothing | | none that matter |
 | Forget | cache | nothing | agent running | none: it refuses |
 | Send anyway | status | nothing | status without `force` | a stale copy: VIEWS-4 |
@@ -2572,15 +2582,21 @@ Commands against what Emacs offers (`roost--action-applies-p`) and what the host
 | resume | worktree, not running | | running |
 | update | worktree | | active, dirty, merge under way |
 | pull request | worktree, and commits or a pull request | | dirty |
-| merge | work unmerged, not active, none left by the agent | another branch; dirty offers Magit | active, dirty, conflicts |
+| merge | work unmerged, not active, none left by the agent | another branch; dirty offers Magit | branch moved, active, dirty, conflicts |
 | retire | not active, none left by the agent | active; else offers discard | active, unmerged, dirty |
 | forget | always | | running: stops it first |
-| discard | always | | branch moved |
+| discard | always | | branch moved; holds more than you were told |
 
 No state has no way out, and nothing offered is always refused: a task on another
 branch has `x`, and a task gone has `X`.
 
-Open: VIEWS-1, VIEWS-4, VIEWS-7.
+A merge refused as moved measures the task, so that the next `m` asks about where it
+is now, watching or not; a removal cut short, which `m` finishes, is measured that far
+too. With no `branchTip` yet, nothing is pinned, and a merge goes as it always did. A
+discard refused while its agent is at work says to stop it first, as each new look
+would find more.
+
+Open: VIEWS-4.
 
 ## Across machines
 
