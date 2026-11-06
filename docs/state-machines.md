@@ -88,17 +88,17 @@ Within a severity, they are ranked by what they cost and how often they happen.
 | 7 | REQUESTS-2 | S2 | An install cut short leaves a broken helper under its real name | [Helper copy](#helper-copy) | Fixed, `roost-an-install-cut-short-leaves-what-was-there` |
 | 8 | STATUS-1 | S2 | A Claude task stopped before anything was said in it can never resume | [The runner's stages](#the-runners-stages) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
 | 9 | VIEWS-2 | S2 | A retry with an edited draft says it created a task it didn't, and drops the edit | [The creation ID](#the-creation-id) | Fixed, [#226](https://github.com/csheaff/roost/issues/226), `roost-sweep-late-a-retry-with-another-prompt-keeps-the-draft` |
-| 10 | VIEWS-9, FORGE-3 | S2 | A pull request draft says it opened one it only pushed to, and `P` can't open one after a closed one | [Pushing and opening](#pushing-and-opening) | Open, [#227](https://github.com/csheaff/roost/issues/227) |
+| 10 | VIEWS-9, FORGE-3 | S2 | A pull request draft says it opened one it only pushed to, and `P` can't open one after a closed one | [Pushing and opening](#pushing-and-opening) | Fixed, [#227](https://github.com/csheaff/roost/issues/227): `roost-pr-draft-says-what-became-of-it-when-the-task-has-one-by-then`, `roost-pr-drafts-another-once-the-one-it-has-takes-no-more-commits`, `test_p_opens_another_after_a_closed_pull_request` |
 | 11 | REQUESTS-3, VIEWS-8 | S2 | Two Emacs sessions overwrite each other's review notes | [Remembered files](#remembered-files) | Fixed, `roost-a-note-from-another-emacs-stays-as-you-write-yours` |
 | 12 | STATUS-2 | S2 | Roost takes a pane changed by hand for its agent, or for gone | [A run and its pane](#a-run-and-its-pane) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
 | 13 | LC-4, STATUS-3 | S3 | A merge's hooks hold the registry lock, so other agents' events are lost and they stay `running` | [Registry lock](#registry-lock) | Open, [#223](https://github.com/csheaff/roost/issues/223) |
-| 14 | FORGE-1 | S3 | A pull request merged with a commit made on the forge reads as not merged, and `m` forks `main` from `origin` | [Landed](#landed) | Open, [#227](https://github.com/csheaff/roost/issues/227) |
+| 14 | FORGE-1 | S3 | A pull request merged with a commit made on the forge reads as not merged, and `m` forks `main` from `origin` | [Landed](#landed) | Fixed, [#227](https://github.com/csheaff/roost/issues/227): `test_a_pull_request_merged_with_a_commit_made_on_the_forge_is_merged`, `test_commits_after_a_merge_never_count_as_merged` |
 | 15 | STATUS-4 | S3 | Another tool's event ends a request that still waits, so `send` could answer a menu | [Agent status](#agent-status) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
 | 16 | VIEWS-5, LC-5 | S3 | A prompt goes twice when its reply was lost | [The prompt draft](#the-prompt-draft) | Fixed, [#226](https://github.com/csheaff/roost/issues/226), `test_a_prompt_queued_behind_the_first_is_pasted_once` |
 | 17 | VIEWS-7 | S3 | Merging takes commits made after it asked | [Asking before acting](#asking-before-acting) | Fixed, [#222](https://github.com/csheaff/roost/issues/222), `test_a_commit_made_since_you_were_asked_stops_a_merge` |
-| 18 | FORGE-2 | S3 | An agent's pull request goes unfollowed after `git pull --rebase` or a fast-forward | [A task's pull request](#a-tasks-pull-request) | Open, [#227](https://github.com/csheaff/roost/issues/227) |
+| 18 | FORGE-2 | S3 | An agent's pull request goes unfollowed after `git pull --rebase` or a fast-forward | [A task's pull request](#a-tasks-pull-request) | Fixed, [#227](https://github.com/csheaff/roost/issues/227): `test_an_agents_pull_request_after_git_pull_rebase_is_followed`, `test_an_agents_pull_request_of_work_fast_forwarded_in_is_followed`, `test_commits_an_update_brought_in_are_still_not_the_tasks` |
 | 19 | FORGE-4, REQUESTS-5 | S3 | A change a poll saw can go unmeasured until something else asks | [Task measurement](#task-measurement) | Fixed, `roost-a-measurement-dropped-as-stale-is-asked-for-again` |
-| 20 | FORGE-5 | S3 | A commit made on the forge holds back all an open pull request says | [What the forge last said](#what-the-forge-last-said) | Open, [#227](https://github.com/csheaff/roost/issues/227) |
+| 20 | FORGE-5 | S3 | A commit made on the forge holds back all an open pull request says | [What the forge last said](#what-the-forge-last-said) | Fixed, [#227](https://github.com/csheaff/roost/issues/227): `test_an_open_pull_request_with_a_commit_made_on_the_forge_has_the_branchs_commits` |
 | 21 | STATUS-6 | S3 | An MCP server's question reads as work | [Agent status](#agent-status) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
 | 22 | FORGE-6 | S3 | A task held at a startup prompt waits, and no notification says so | [The word](#the-word) | Fixed, `roost-an-agent-held-at-a-startup-prompt-notifies-once` |
 | 23 | VIEWS-3 | S3 | Undo in the new task draft changes the wrong text | [The new task draft](#the-new-task-draft) | Fixed, [#226](https://github.com/csheaff/roost/issues/226), `roost-sweep-late-undo-in-a-draft-follows-its-fields` |
@@ -116,15 +116,16 @@ Within a severity, they are ranked by what they cost and how often they happen.
 | 35 | VIEWS-13 | S4 | An open held for a question connects to a session since ended | [Opening a task](#opening-a-task) | Fixed, [#229](https://github.com/csheaff/roost/issues/229), `roost-sweep-late-a-task-stopped-while-you-answer-opens-no-session` |
 | 36 | FORGE-10 | S4 | A task whose worktree went keeps waiting on conflicts last measured | [Task measurement](#task-measurement) | Fixed, `test_a_worktree_gone_says_it_no_longer_conflicts` |
 | 37 | FORGE-11, REQUESTS-7 | S4 | Two Emacs undo each other's turn for a stopped task, on every poll | [Verdict and turn](#verdict-and-turn) | Fixed, `roost-two-emacs-settle-on-a-stopped-tasks-turn` |
-| 38 | FORGE-12 | S4 | What `P` pushed counts as unpushed until GitHub is next asked | [Pushing and opening](#pushing-and-opening) | Open, [#227](https://github.com/csheaff/roost/issues/227) |
+| 38 | FORGE-12 | S4 | What `P` pushed counts as unpushed until GitHub is next asked | [Pushing and opening](#pushing-and-opening) | Fixed, [#227](https://github.com/csheaff/roost/issues/227): `test_what_p_pushed_is_no_longer_unpushed` |
 | 39 | FORGE-7 | S4 | A failed task you've seen keeps its colour, though the manual says otherwise | [The word](#the-word) | Fixed, in the manual |
 | 40 | STATUS-8 | S4 | `/clear` reads `interrupted` for a relayed Claude | [Agent status](#agent-status) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
 | 41 | STATUS-9 | S4 | A dialog as a task resumes shows the last run's request | [A task's request](#a-tasks-request) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
 
 Also open from the hunt of 2026-11-05, and taken up under these issues: refusals that
 don't name a half-done merge, and tmux calls with no timeout ([#223](https://github.com/csheaff/roost/issues/223)); text lost as a
-draft closes, and a click on another project ignored ([#226](https://github.com/csheaff/roost/issues/226)); and a pull request that
-branch rules block reading `to merge` ([#227](https://github.com/csheaff/roost/issues/227)). The rest are under
+draft closes, and a click on another project ignored ([#226](https://github.com/csheaff/roost/issues/226)). A pull request that
+branch rules block reading `to merge` is fixed under [#227](https://github.com/csheaff/roost/issues/227), by
+`roost-a-pull-request-github-holds-up-isnt-to-merge`. The rest are under
 [Known and not fixed](#known-and-not-fixed).
 
 ## A task on its host
@@ -1505,8 +1506,8 @@ requests, as the code does. The word is derived from the rest, so it comes last.
 
 Kind: implicit, over one explicit field. Lives in: the record's `pr`
 (`number`, `url`, `state`, `head`, `base`, `forge`, `mergedHead`,
-`mergedBases`), written by `check_pull_requests` and `rpc`'s `pr` branch; what
-the forge lists; `worktreePr`, never recorded.
+`mergedBases`, `unfetched`), written by `check_pull_requests`, `rpc`'s `pr` branch
+and `record_push`; what the forge lists; `worktreePr`, never recorded.
 
 It says which pull request is the task's, and whether it merged, so that views
 and retiring can go by the record without asking the forge.
@@ -1517,9 +1518,9 @@ and retiring can go by the record without asking the forge.
 | fresh | `P` just opened or found one; nothing asked since | `pr` has `number` and `url`, no `state`. Also every record from an older helper |
 | open | Open as last asked, draft or not | `pr.state == "OPEN"` |
 | closed | Closed unmerged as last asked | `pr.state == "CLOSED"` |
-| merged at tip | Its head is the branch's tip | `recorded_merge_at`: `pr.mergedHead == tip`, or `state == "MERGED"` and `head == tip` |
-| merged, commits since | Merged at a head that isn't the tip | `state == "MERGED"`, `head != tip` |
-| open beside a merge | Another of its pull requests merged at the tip, and an open one is shown | `state == "OPEN"`, `mergedHead == tip` |
+| merged at tip | Its head has all of the branch: it is the tip, or comes after it, as a commit made on the forge does | `recorded_merge_at`: `has_tip` of `pr.mergedHead`, or of `head` with `state == "MERGED"` |
+| merged, commits since | Merged at a head that lacks some of the branch | `state == "MERGED"`, not `has_tip` |
+| open beside a merge | Another of its pull requests merged at the tip, and an open one is shown | `state == "OPEN"`, `has_tip` of `mergedHead` |
 
 Invariants:
 
@@ -1533,31 +1534,54 @@ Invariants:
   (`check_pull_requests`: `stale`, a compare-and-swap under the lock).
 - I4. Only a record says `merged at tip`, and retiring believes only that or an
   answer got for this request (`merged_pull_request_head`, `safe_to_delete`).
-- I5 (assumed, never stated). The reflog of the task's branch records every
-  commit of its own under a subject `own_commits` knows. **Broken: FORGE-2.**
-- I6 (assumed, never stated). The forge's head is a commit here. **Broken:
-  FORGE-1, FORGE-5.**
+- I5. A commit on the branch is the task's own when its reflog says so, by a
+  subject `own_commits` knows, or its integration branch lacks it, here and as last
+  fetched from origin, so no update brought it in. A fast-forward from another
+  branch counts; one from the integration branch, by any remote's name for it, or
+  from a commit or an expression, as Git names one from `FETCH_HEAD`, doesn't. Fixed:
+  FORGE-2.
+- I6. The forge's head can be compared with the branch: one that isn't here is
+  fetched by its commit, outside the lock and within the deadline, in the primary
+  checkout (`fetch_head`, `fetch_heads`), for the recorded pull request only. A
+  refusal is kept in `unfetched`, so a poll tries once for each head, while running
+  out of time is tried again, and so does your `x` or `m`. Such a head, as on a
+  fork's branch, stays unknown, as does one before Git 2.29, which can't leave
+  `FETCH_HEAD` alone. Fixed: FORGE-1, FORGE-5.
+- I7. Commits on the branch after what merged never count as merged: `has_tip`
+  asks whether the tip is in the head, not the other way, and `record_push` leaves
+  a closed or merged one's `head` alone. Retiring deletes on this word.
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
 | none | `P`, none open | commits, clean | fresh | Push, `forge.create`, record | `pull_request`, `rpc` |
-| none | `P`, one open | | fresh | Push, record it, say "opened" | `pull_request` (`existing`) |
+| none | `P`, one open | | fresh | Push, record it, reply with `pushed` | `pull_request` (`existing`) |
 | none | Poll finds one of its own | `pushed` or recorded | open, closed or merged | Record what's shown | `check_pull_requests`, `shown_pull_request` |
 | any | Poll, forge gives no answer or nothing of its own | | same | Nothing; `prStatus` left out | `task_pull_requests` -> None |
 | fresh, open | Poll says OPEN | | open | `head`, `base` recorded | `check_pull_requests` |
 | open | Poll says CLOSED | | closed | Measured whole, as the forge no longer says whether it conflicts | `rpc`'s `was_open` |
 | closed | Poll says OPEN (reopened) | | open | | `check_pull_requests` |
 | closed | Agent opens another | | open | The newer one replaces it | `shown_pull_request` |
+| closed | `P` with a title | | fresh | Another opened, in its place | `rpc`, `pull_request` |
 | open | Poll says MERGED at tip | | merged at tip | `mergedHead`, `mergedBases` | `check_pull_requests` |
-| open | Poll says MERGED, head after tip | | merged, commits since | **Wrong: FORGE-1** | `recorded_merge_at` needs equality |
+| open | Poll says MERGED, head after tip | that head here, or fetched | merged at tip | `mergedHead` is that head | `fetch_heads`, `merged_tip` |
+| open | Poll says MERGED, head not here | it doesn't come | merged, commits since | `unfetched`, tried no more | `fetch_heads` |
+| open, merged | Poll: the forge's head isn't here, and hasn't failed | 5 s left | same | Fetched, or `unfetched`; with less left, the next poll tries | `fetch_heads` |
+| fresh, open | `P` pushes | | same | `head` is what it pushed | `record_push` |
 | merged at tip | Commit on the branch | | merged, commits since | `mergedHead` dropped at the next poll | `check_pull_requests` |
 | merged, commits since | Agent opens another | | open | | `shown_pull_request` |
+| merged, commits since | `P` with a title | | fresh | Another opened, in its place | `rpc`, `pull_request` |
 | merged at tip | Second pull request opened at the tip | | open beside a merge | `mergedHead` kept, the open one shown | `check_pull_requests` |
 | any | `retire`, `merge`, `discard`, `forget` | | gone | Record removed; a lookup in flight fails to read it and shows, not records | `check_pull_requests`' `except` |
 
 `worktreePr` follows the same listing for the branch the worktree is on, is null
 once it leaves, and is never recorded: `roost--pr-view` stands it in for the
-task's own in every view.
+task's own in every view. Its head isn't fetched: only the recorded pull request
+passes `task_pull_requests` with a head not here, so one from that branch with a
+commit made on the forge goes unfollowed until the branch has it.
+
+A merge request GitLab rebases as it merges has a head no commit of the branch
+comes before. Fetching it finds no ancestor, so it reads as merged, commits since.
+By reading: no run against a GitLab server.
 
 Illegal or refused: a lookup while `removing` skips the task. `pr` on a retired
 or removing task is refused (`require_not_removing`).
@@ -1566,7 +1590,7 @@ Branch reuse: Roost's branch names end in six hex digits of the task's ID, so a
 task's own branch can't really be reused. Reuse is possible only for a branch the
 agent made (`worktreePr`), and I1 covers that: `own_commits(task, branch)`.
 
-Open: FORGE-1, FORGE-2, FORGE-5.
+Open: none.
 
 ### What the forge last said
 
@@ -1577,7 +1601,7 @@ on the host (`TRANSIENT`).
 | State | Meaning | How you can tell |
 | --- | --- | --- |
 | never | Nothing asked since Emacs started | no `prStatus` |
-| whole | List and review query both answered | `prStatus` has `requested`, `threads`, `mergeable` |
+| whole | List and review query both answered | `prStatus` has `requested`, `threads`, `mergeable`, and from GitHub `mergeState` |
 | partial | List answered, review query didn't | `prStatus` has `reviewsFailed` |
 | stale | Older than the agent's last event + `roost--pr-settle` | `checkedAt` too early: `roost--pr-status` is nil |
 | frozen | Forge stopped answering | `prStatus` kept, `checkedAt` old, no sign |
@@ -1589,7 +1613,8 @@ Invariants:
   old status goes (`roost--cache-task`).
 - I2. A word goes by what the forge said after the agent's last push:
   `roost--pr-status`'s `checkedAt` test, and `checked = now()` before asking.
-- I3. All forge questions end by `PULL_REQUEST_DEADLINE`, inside Emacs's wait.
+- I3. All forge questions end by `PULL_REQUEST_DEADLINE`, inside Emacs's wait, and
+  so does fetching a head, which comes after them so as to hold none up.
 - I4. A status says when its review query failed (`reviewsFailed`). Of the same pull
   request, head and base, the last status stands, whole, as when the forge doesn't
   answer (`roost--kept-reviews`): a word doesn't go for a poll and come back as news,
@@ -1603,7 +1628,10 @@ Invariants:
 | whole | Review query fails or deadline passed | another | partial | Word and threads go until it answers: they are of other commits | same |
 | whole | Forge list fails: `gh` missing, signed out, slow | | frozen | Emacs keeps it | `task_pull_requests` -> None; `roost--cache-task` |
 | any | Agent event | | stale | Verdict nil until next asked, 30 s on | `roost--pr-status` |
-| any | `pr` changes in a reply without a status | | dropped | | `roost--cache-task` |
+| any | `pr` changes in a reply without a status, as after `P` pushes | | dropped | | `roost--cache-task` |
+
+`unpushed` goes with this: with the forge's head fetched, it compares a commit made
+there with the branch, so such a commit no longer holds back the word (FORGE-5).
 
 Frozen is a design limit rather than a finding: the code and manual say Roost
 goes by what the forge last said, `roost-doctor` reports a signed-out `gh`, and
@@ -1622,8 +1650,8 @@ locals); the worktree lock held `LOCK_SH`; `branch.X.remote`.
 | idle | | no draft |
 | drafting | Draft open | a `roost-pr-mode` buffer, `roost--pr-sending` nil |
 | sending | `pr` request out | `roost--pr-sending` t |
-| pushing to one | `pr` with a recorded number | `push_pull_request` under `store.released()` |
-| opening | `pr` with none recorded | `pull_request` under `store.released()` |
+| pushing to one | `pr` with a recorded number, and no title for one closed or merged | `push_pull_request` under `store.released()` |
+| opening | `pr` with none recorded, or a title and one closed or merged | `pull_request` under `store.released()` |
 
 Invariants:
 
@@ -1632,8 +1660,12 @@ Invariants:
   refused by Git, in Git's words.
 - I3. Opening is idempotent: `existing` is asked first, so a retry after a timeout
   or a killed helper finds it, and a poll records it if the helper died.
-- I4. Create means create: "opened pull request" is said for one opened. **Broken:
-  FORGE-3.**
+- I4. Create means create: "opened pull request" is said for one opened. A reply
+  with `pushed`, a number or null, says it wasn't, and the draft stays. Fixed: FORGE-3.
+- I5. After a push, nothing counts as unpushed that it pushed: `record_push` moves
+  `head` to the commit it pushed by name, and the reply says `unpushed`. Not over a
+  record that moved meanwhile, as for a later push, nor for one closed or merged:
+  see [A task's pull request](#a-tasks-pull-request), I7. Fixed: FORGE-12.
 
 Action against state of the record, in Emacs and on the host:
 
@@ -1643,27 +1675,30 @@ Action against state of the record, in Emacs and on the host:
 | none, ahead > 0 | `m merges it, or P opens a pull request` | Drafts | Pushes, creates |
 | fresh, open, draft | `roost--pr-next-step` | Pushes new commits, opens it | `push_pull_request` |
 | open, branch rewritten by its agent | `P pushes new commits to its pull request` | Git refuses the push | Error in Git's words |
-| open, forge has a commit here lacks | `P pushes new commits to its pull request`; it has none | Fetches, "up to date", opens it | Heals `unpushed` (FORGE-5) |
-| closed | `m merges it, or P opens a pull request` | **Opens the closed one (FORGE-3)** | Would push, and open nothing |
-| merged, commits since | `merged, but not its commits since: m merges them` | Opens the merged one | Would push, and open nothing |
+| open, nothing unpushed, no word | `#12 has every commit of the task's: P opens it`, or what it waits for | Pushes nothing, opens it | `push_pull_request` |
+| open, forge has a commit that didn't come | `P pushes new commits to its pull request`; it has none | Fetches, "up to date", opens it | `unpushed` compares |
+| closed, ahead > 0 | `m merges it, or P opens a pull request` | Drafts another (`C-u`: opens the closed one) | With a title, opens another; without, pushes |
+| closed, ahead 0 or unknown | nothing | Opens the closed one | |
+| merged, commits since | `merged, but not its commits since: m merges them, or P opens a pull request` | Drafts another (`C-u`: opens the merged one) | With a title, opens another; without, pushes |
 | merged at tip | `x retires it` | Opens it | |
 | worktree on another branch | Says so | Refused (`check_worktree`) | Refused |
 | agent at work | nothing | As open | Pushes committed work; refuses uncommitted changes |
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
-| idle | `P` | no recorded PR | drafting | | `roost-pr`, `roost--pr-draft` |
+| idle | `P` | no recorded PR, or `roost--pr-spent-p` | drafting | | `roost-pr`, `roost--pr-draft` |
 | drafting | `C-c C-c` | a title, not sending | sending | | `roost-pr-submit` |
-| sending | Good reply | | idle | Draft closes, "opened pull request" whatever happened | `roost-pr-submit` |
+| sending | Good reply | | idle | Draft closes, "opened pull request" | `roost-pr-submit` |
+| sending | Good reply with `pushed` | | drafting | Text kept, the draft says it pushed to that one | `roost-pr-submit` |
 | sending | Refused, dropped, timed out | | drafting | Text kept, error in the draft | `roost-pr-submit` failure |
 | sending | Nothing reached the host | | drafting | | its `condition-case` |
-| drafting | Poll records a PR meanwhile | | drafting | Create will then push only (FORGE-3) | |
+| drafting | Poll records an open PR meanwhile | | drafting | Create will then push only, and say so | |
 
 Flags: `roost--pr-sending` is cleared on each exit: good reply
-(buffer goes), failure, a signal before the request, quit. A live draft can always
-be cancelled.
+(buffer goes, or stays for a push), failure, a signal before the request, quit. A
+live draft can always be cancelled.
 
-Open: FORGE-3, FORGE-12.
+Open: none.
 
 ### Landed
 
@@ -1681,12 +1716,13 @@ Invariants:
   every tip `landed` does, and also a task that never committed.
 - I2. A task that never committed hasn't landed.
 - I3 (manual, "Work that is merged"). Only commits after the merge keep it from
-  saying so. **Broken: FORGE-1**, where the branch is behind what merged, and
-  FORGE-2, where the merge is never found.
+  saying so. Fixed: FORGE-1, where the branch was behind what merged, and FORGE-2,
+  where the merge was never found. A head that can't be fetched still reads as
+  commits since.
 
 | From | Event | Guard | To | Code |
 | --- | --- | --- | --- | --- |
-| not landed | Poll records a merge at the tip | | landed | `recorded_merge_at` |
+| not landed | Poll records a merge at the tip, or after it | | landed | `recorded_merge_at`, `has_tip` |
 | not landed | Tip reaches the integration branch | `committed_on` | landed | `landed` |
 | landed | New commit, tip moves | | not landed | `landed`, at the next measurement |
 | any | Reflog gone or empty | | not landed unless recorded | `own_commits` -> True |
@@ -1694,7 +1730,11 @@ Invariants:
 `rpc`'s `list` measures a task whole when a merge arrives, so `landed` never comes
 without `dirty` from that path, and `task["landed"] = False` covers the others.
 
-Open: FORGE-1, FORGE-2.
+Retiring fetches a merged head no poll has, as `merged_pull_request_head` asks for
+itself, and tries one a poll gave up on. Its remote branch goes under a lease on the
+head that merged, so commits pushed there since stay.
+
+Open: none.
 
 ### Task measurement
 
@@ -1816,7 +1856,8 @@ Inputs of the verdict, all needed: agent not `starting`, `running`, `background`
 `permission`; `checkedAt` past the last event plus 30 s; status head equal to the
 recorded head; `unpushed == 0`; not dirty; not merging; no agent work left. Then
 failing and due, else threads and due, else all checks passed with no threads, no
-reviews asked, none refused, `mergeable` MERGEABLE.
+reviews asked, none refused, `mergeable` MERGEABLE, and `mergeState`, where GitHub
+gives it, neither BLOCKED nor BEHIND, which the next step names as what it waits for.
 
 | From | Event | Guard | To | Code |
 | --- | --- | --- | --- | --- |
@@ -1830,7 +1871,7 @@ reviews asked, none refused, `mergeable` MERGEABLE.
 No Emacs running, a turn stays in the record; the history counts it, and the time
 away rule covers it.
 
-Open: FORGE-5.
+Open: none.
 
 ### News of a turn
 
@@ -1886,7 +1927,9 @@ Invariants:
 | absent | `m` succeeds | | reported, hook runs | `roost-merge-retire` |
 
 Checked: survives a retire reply, which is why `roost--cache-task` leaves it. Not
-cleared by `roost-forget-host`, which is harmless as IDs aren't reused.
+cleared by `roost-forget-host`, which is harmless as IDs aren't reused. A pull request
+merged with a commit made on the forge is one merge, at its head, whenever that came:
+`mergedHead` is that head, not the tip.
 
 Open: none.
 
@@ -1941,8 +1984,8 @@ a stopped task you hadn't seen stays `stopped`, not `merged` or `to merge`, unti
 you open it, and a failed or crashed agent you've seen stays so rather than
 `conflicts` or `merged`, though it does show `ci failed`.
 
-The word goes by inputs, so wrong inputs give a wrong word: see FORGE-1, 2 and 5. A
-review that requests changes with no thread open gives no word; the manual
+The word goes by inputs, so wrong inputs give a wrong word. A review that requests
+changes with no thread open gives no word; the manual
 promises none, and the next step says only that `P` pushes new commits.
 
 Open: none.
@@ -2162,22 +2205,23 @@ As [The prompt draft](#the-prompt-draft), without the question and the notes.
 
 Invariants:
 - I1. The text is kept if creation fails. (Docstring of `roost-pr-submit`.)
-- I2. "opened pull request" means this draft opened it. **Broken:** the host pushes
-  to one the task has since found, and leaves the title and text. VIEWS-9.
+- I2. "opened pull request" means this draft opened it. A task with one open by
+  then gets a push, and the draft stays, with the text, and says so. Fixed: VIEWS-9.
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
 | Editing | `C-c C-c` | no title | Editing | user-error | `roost-pr-submit` |
 | Editing | `C-c C-c` | | Sending | request | `roost-pr-submit` |
 | Sending | good reply | | Absent | close, "opened pull request" | `roost-pr-submit` |
-| Sending | good reply with `pushed` | | Absent | the same, text dropped | VIEWS-9 |
+| Sending | good reply with `pushed` | | Editing | text kept, the note says it pushed to that one | `roost-pr-submit` |
+| Sending | good reply | text changed since it went | Editing | text kept, the note says it opened one first | `roost-pr-submit` |
 | Sending | failure | | Failed | note | `roost-pr-submit` |
 | Sending | `quit` or error at once | | Editing | flag cleared | `condition-case` |
 
 A retry after a lost reply is safe here: the record has its pull request, so the host
 pushes, or GitHub refuses a second.
 
-Open: VIEWS-9, and text typed after sending.
+Open: none.
 
 ### A review note
 
