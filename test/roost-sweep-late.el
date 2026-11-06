@@ -154,6 +154,7 @@ what its host said when it read it.")
       ("doctor" '(((name . "Python") (ok . t) (detail . "3.13"))))
       ("issues" '(((number . 7) (title . "Off by one") (url . "https://example.com/7") (body . "It is."))))
       ("jira-issues" '((issues ((key . "PROJ-7") (title . "Off by two") (url . "https://example.com/j")))))
+      ("jira-issue" '((body . "It adds two.")))
       ("create" (roost-sweep-late--record "cccccc0000000000" "made" `(createId . ,(alist-get 'createId request))))
       ("attach" (if record '((paths "/home/user/.roost/attachments/a.png")) gone))
       ((guard (null record)) gone)
@@ -900,6 +901,21 @@ with Emacs running only timers and other replies.")
                  (roost-compose-set-issue)))
      ;; A project in Jira needn't be on a forge, so its work items are enough.
      :action "issues" :wait t :background t)
+    (work-item-text
+     :origin compose
+     :start ,(lambda ()
+               ;; The list has come and you have picked: this is the second wait.
+               (let ((wait (symbol-function 'roost--requests-wait)))
+                 (cl-letf (((symbol-function 'roost--project-value)
+                            (lambda (_directory variable) (when (eq variable 'roost-jira-query) "project = X")))
+                           ((symbol-function 'roost--requests-wait)
+                            (lambda (requests &rest arguments)
+                              (if (equal (cadar requests) "issues")
+                                  '((t) (t (issues ((key . "PROJ-7") (title . "Off by two") (body . "")))))
+                                (apply wait requests arguments)))))
+                   (roost-compose-set-issue))))
+     :action "jira-issue" :wait t
+     :refusals (("You're not signed in. Run `twg login --force` to authenticate with your Atlassian account.")))
     (poll
      :start ,(lambda () (roost-refresh t))
      :action "list" :background t :list t)

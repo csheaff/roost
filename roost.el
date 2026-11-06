@@ -3663,6 +3663,26 @@ Its title, its text, then where it is."
                 (format "This is Jira issue %s%s" key (if url (concat ": " url) "."))
               (format "This is %s issue #%s: %s" (roost--forge-name issue) (alist-get 'number issue) url)))))
 
+(defun roost--jira-issue-whole (issue draft)
+  "ISSUE, a Jira work item as listed, with all its text, as twg reads it.
+A list has only its description, and a site can keep the text in a
+rich-text field of its own.  ISSUE stays as it is if twg finds no text,
+or can't read it, which a message says.  DRAFT, the buffer that asked,
+is current again after."
+  (let* ((key (alist-get 'key issue))
+         (whole (condition-case err
+                    (progn (message "Roost: reading %s…" key)
+                           ;; twg's sign-in is yours, here, as for the list.
+                           (prog1 (roost--request-wait nil "jira-issue" (list (cons 'key key)))
+                             (message nil)))
+                  (user-error
+                   (message "Roost: couldn't read all of %s's text: %s"
+                            key (car (split-string (error-message-string err) "\n")))
+                   nil)))
+         (body (alist-get 'body whole)))
+    (roost--back-in-draft draft)
+    (if (string-empty-p (or body "")) issue (cons (cons 'body body) issue))))
+
 (defun roost-compose-set-issue ()
   "Start the draft from one of the project's open issues.
 The issue's title and text become the prompt, unless one is already
@@ -3671,7 +3691,8 @@ listed with gh or glab on the project's host, and the task's pull
 request will close the one you choose.  With twg,
 Atlassian's Teamwork Graph CLI, signed in on this machine, the Jira
 work items `roost-jira-query' finds are listed too, and the task's
-branch leads with the key of the one you choose."
+branch leads with the key of the one you choose.  A work item's text
+is its description and its site's rich-text fields, read as you choose it."
   (interactive)
   (let* ((draft (current-buffer))
          (directory (or (plist-get roost--compose-fields :directory)
@@ -3723,6 +3744,7 @@ branch leads with the key of the one you choose."
                                (roost--in-order choices) nil t)
                               choices)))
            (_ (roost--back-in-draft draft))
+           (issue (if (alist-get 'key issue) (roost--jira-issue-whole issue draft) issue))
            ;; The prompt the last issue gave, text and all, which the
            ;; task's record leaves out.
            (previous (plist-get roost--compose-fields :issue-prompt))

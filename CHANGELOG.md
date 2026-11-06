@@ -4,6 +4,12 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A draft started from a Jira work item has its text when your site keeps
+  that in a rich-text custom field. The prompt had only its summary and
+  link, as Roost read the description alone. Now, as you pick one with
+  `C-c C-t`, Roost makes one more call to twg and takes the description
+  and each rich-text field. If that call fails, a message says so and the
+  prompt has what the list gave. Nothing to do when upgrading.
 - Discarding removes a task's worktree that Git stopped partway through
   making, as in a reboot, with its link to the repository empty or leading
   nowhere. Git refused, each time. Nothing to do when upgrading.
