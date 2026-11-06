@@ -155,7 +155,13 @@ what its host said when it read it.")
       ("issues" '(((number . 7) (title . "Off by one") (url . "https://example.com/7") (body . "It is."))))
       ("jira-issues" '((issues ((key . "PROJ-7") (title . "Off by two") (url . "https://example.com/j")))))
       ("jira-issue" '((body . "It adds two.")))
-      ("create" (roost-sweep-late--record "cccccc0000000000" "made" `(createId . ,(alist-get 'createId request))))
+      ("create" (or (seq-some (lambda (entry)
+                                (and (equal (alist-get 'createId (cdr entry)) (alist-get 'createId request))
+                                     (copy-tree (cdr entry))))
+                              roost-sweep-late--records)
+                    (roost-sweep-late--record "cccccc0000000000" "made"
+                                              `(createId . ,(alist-get 'createId request))
+                                              (cons 'prompt (alist-get 'prompt request)))))
       ("attach" (if record '((paths "/home/user/.roost/attachments/a.png")) gone))
       ((guard (null record)) gone)
       ("stop" (roost-sweep-late--became record "stopped"))
@@ -275,6 +281,17 @@ Those that repeat are left: nothing comes of them that a command waits for."
                            (mapcar (lambda (request) (plist-get request :action)) roost-sweep-late--requests)))))
 
 ;;;; The world
+
+(defun roost-sweep-late--notes (&rest texts)
+  "Give the task acted on a review note on a file of its own for each of TEXTS."
+  (let ((number 0))
+    (setq roost--notes
+          (mapcar (lambda (text)
+                    (cl-incf number)
+                    `((id . ,(format "n%d" number)) (host . ,roost-sweep-late--host)
+                      (task . ,roost-sweep-late--mine) (file . ,(format "f%d.py" number))
+                      (text . ,text)))
+                  texts))))
 
 (defun roost-sweep-late--terminal (id)
   "The terminal of the task with ID, made if need be."
@@ -1801,6 +1818,290 @@ A name of its own keeps the fields as long as they are."
       (delete-region roost--compose-body (point-max))
       (roost--compose nil nil "/ssh:dev:/home/user/other/")
       (should (equal (plist-get roost--compose-fields :directory) "/ssh:dev:/home/user/other/")))))
+
+(defun roost-sweep-late--set-status (status)
+  "Have the task acted on come to be STATUS, as a poll then says."
+  (setf (alist-get roost-sweep-late--mine roost-sweep-late--records nil nil #'equal)
+        (roost-sweep-late--record roost-sweep-late--mine "mine" (cons 'status status)
+                                  `(updatedAt . ,(roost-sweep-late--now))))
+  (roost--refresh-host roost-sweep-late--host t)
+  (roost-sweep-late--answer (roost-sweep-late--take "list") 'good))
+
+(defun roost-sweep-late--made-but-reply-lost (form)
+  "Ask for the draft's task, which its host makes, its reply lost in FORM."
+  (roost-compose-submit)
+  (let ((request (roost-sweep-late--take "create")))
+    (roost-sweep-late--record-replied request)
+    (roost-sweep-late--answer request form)))
+
+(defun roost-sweep-late--rewrite-draft (prompt)
+  "Make PROMPT what the new task draft says."
+  (delete-region roost--compose-body (point-max))
+  (goto-char (point-max))
+  (insert prompt))
+
+(ert-deftest roost-sweep-late-a-retry-with-another-prompt-keeps-the-draft ()
+  ;; The draft says it failed and that C-c C-c retries: you fix the prompt,
+  ;; and retry.  Its host answers with the task it made from the first.
+  (dolist (form '(dropped no-reply))
+    (roost-sweep-late--world
+      (roost-sweep-late--populate nil nil)
+      (let ((draft (roost-sweep-late--lay-out 'compose)))
+        (with-current-buffer draft
+          (roost-sweep-late--made-but-reply-lost form)
+          (roost-sweep-late--rewrite-draft "Something else altogether.")
+          (roost-compose-submit))
+        (let ((asked (plist-get (roost-sweep-late--take "create") :request))
+              (from (with-current-buffer (messages-buffer) (point-max))))
+          (should (equal (alist-get 'prompt asked) "Something else altogether."))
+          (roost-sweep-late--answer (roost-sweep-late--take "create") 'good)
+          (roost-sweep-late--settle)
+          ;; By the name the task has, not the one this draft would give it.
+          (should (string-search "Roost created made on dev" (roost-sweep-late--messages from))))
+        (should (buffer-live-p draft))
+        (with-current-buffer draft
+          (should (equal (roost--compose-prompt) "Something else altogether."))
+          (should (string-search "Made made from what you sent first" roost--draft-note))
+          (should-not roost--compose-submitting)
+          ;; You stay where you were writing.
+          (should (eq (window-buffer (selected-window)) draft))
+          ;; Asked now, it is another task.
+          (let ((first (cadr (assq 'createId (roost-sweep-late--mine)))))
+            (roost-compose-submit)
+            (should-not (equal (alist-get 'createId (plist-get (roost-sweep-late--take "create") :request))
+                               first))))))))
+
+(ert-deftest roost-sweep-late-a-retry-of-the-same-draft-closes-it ()
+  (dolist (form '(dropped no-reply))
+    (roost-sweep-late--world
+      (roost-sweep-late--populate nil nil)
+      (let ((draft (roost-sweep-late--lay-out 'compose)))
+        (with-current-buffer draft
+          (roost-sweep-late--made-but-reply-lost form)
+          (roost-compose-submit))
+        (roost-sweep-late--answer (roost-sweep-late--take "create") 'good)
+        (roost-sweep-late--settle)
+        (should-not (buffer-live-p draft))
+        (should (equal (length (roost-tasks)) 3))
+        (should (equal (buffer-name (window-buffer (selected-window))) "*late terminal cccccc*"))))))
+
+(ert-deftest roost-sweep-late-what-you-change-in-a-new-task-draft-stays ()
+  ;; Any of what it asked with.
+  (dolist (change `(,(lambda () (goto-char (point-max)) (insert "\nA second thought."))
+                    ,(lambda () (setq roost--compose-fields (plist-put roost--compose-fields :agent "codex")))
+                    ,(lambda () (setq roost--compose-fields (plist-put roost--compose-fields :name "Named")))
+                    ,(lambda () (setq roost--compose-fields (plist-put roost--compose-fields :base "feat")))
+                    ,(lambda () (roost--compose-move "/ssh:dev:/home/user/other/"))))
+    (roost-sweep-late--world
+      (roost-sweep-late--populate nil nil)
+      (let ((draft (roost-sweep-late--lay-out 'compose)))
+        (roost-compose-submit)
+        (with-current-buffer draft (funcall change))
+        (roost-sweep-late--answer (roost-sweep-late--take "create") 'good)
+        (roost-sweep-late--settle)
+        (should (buffer-live-p draft))
+        (should (eq (window-buffer (selected-window)) draft))
+        (should (roost-sweep-late--task "cccccc0000000000"))))))
+
+(ert-deftest roost-sweep-late-what-you-write-in-a-prompt-draft-after-sending-stays ()
+  (roost-sweep-late--world
+    (roost-sweep-late--populate nil nil)
+    (roost-sweep-late--notes "One")
+    (let ((draft (roost-sweep-late--lay-out 'send-draft)))
+      (roost-send-submit)
+      (with-current-buffer draft
+        (goto-char (point-max))
+        (insert "\n\nA second thought."))
+      (roost-sweep-late--answer (roost-sweep-late--take "send") 'good)
+      (roost-sweep-late--settle)
+      (should (buffer-live-p draft))
+      (with-current-buffer draft
+        ;; What went has gone, or sending again would send it again.
+        (should (equal (buffer-string) "A second thought."))
+        (should (equal roost--draft-note " Sent to mine; this is what you wrote since"))
+        (should-not roost--send-sending)
+        (should-not roost--send-notes))
+      (should-not roost--notes))))
+
+(ert-deftest roost-sweep-late-a-prompt-draft-changed-after-sending-keeps-it-all ()
+  (roost-sweep-late--world
+    (roost-sweep-late--populate nil nil)
+    (let ((draft (roost-sweep-late--lay-out 'send-draft)))
+      (roost-send-submit)
+      (with-current-buffer draft
+        (goto-char (point-min))
+        (insert "Before that: "))
+      (roost-sweep-late--answer (roost-sweep-late--take "send") 'good)
+      (roost-sweep-late--settle)
+      (with-current-buffer draft
+        (should (equal (buffer-string) "Before that: Make it add up."))
+        (should (string-search "before you changed it" roost--draft-note))))))
+
+(ert-deftest roost-sweep-late-a-draft-sent-as-written-closes ()
+  (pcase-dolist (`(,origin ,action ,command)
+                 `((compose "create" ,#'roost-compose-submit)
+                   (send-draft "send" ,#'roost-send-submit)))
+    (roost-sweep-late--world
+      (roost-sweep-late--populate nil nil)
+      (let ((draft (roost-sweep-late--lay-out origin)))
+        (funcall command)
+        (roost-sweep-late--answer (roost-sweep-late--take action) 'good)
+        (roost-sweep-late--settle)
+        (should-not (buffer-live-p draft))))))
+
+(ert-deftest roost-sweep-late-a-poll-leaves-a-draft-written-in-since ()
+  ;; No reply, or a dropped connection, and the draft is yours again.  A poll
+  ;; finds the task, and no reply comes to close it.
+  (dolist (form '(no-reply dropped))
+    (dolist (written '(nil t))
+      (roost-sweep-late--world
+        (roost-sweep-late--populate nil nil)
+        (let ((draft (roost-sweep-late--lay-out 'compose)))
+          (with-current-buffer draft
+            (roost-sweep-late--made-but-reply-lost form)
+            (when written
+              (goto-char (point-max))
+              (insert "\nA second thought.")))
+          (roost--refresh-host roost-sweep-late--host t)
+          (roost-sweep-late--answer (roost-sweep-late--take "list") 'good)
+          (roost-sweep-late--settle)
+          (should (eq (buffer-live-p draft) written))
+          (when written
+            (with-current-buffer draft
+              (should (string-search "Made made" roost--draft-note))
+              (should (string-search "A second thought." (roost--compose-prompt))))
+            ;; Nor does the next one say it again, nor bring the task's terminal.
+            (with-current-buffer draft (setq roost--draft-note nil))
+            (roost--refresh-host roost-sweep-late--host t)
+            (roost-sweep-late--answer (roost-sweep-late--take "list") 'good)
+            (roost-sweep-late--settle)
+            (should-not (buffer-local-value 'roost--draft-note draft))))))))
+
+(ert-deftest roost-sweep-late-a-prompt-draft-asks-as-its-task-is-now ()
+  ;; Opened before the agent asked for permission.
+  (dolist (reopened '(nil t))
+    (roost-sweep-late--world
+      (roost-sweep-late--populate nil nil)
+      (with-current-buffer (roost-sweep-late--lay-out 'send-draft)
+        (roost-sweep-late--set-status "permission")
+        (when reopened (roost--send-draft (roost-sweep-late--mine)))
+        (setq roost-sweep-late--delivering t)
+        (roost-send-submit)
+        (should roost-sweep-late--asked)
+        (should (alist-get 'force (plist-get (roost-sweep-late--take "send") :request)))))))
+
+(ert-deftest roost-sweep-late-a-prompt-draft-names-its-task-as-it-is-now ()
+  (roost-sweep-late--world
+    (roost-sweep-late--populate nil nil)
+    (with-current-buffer (roost-sweep-late--lay-out 'send-draft)
+      (setf (alist-get roost-sweep-late--mine roost-sweep-late--records nil nil #'equal)
+            (roost-sweep-late--record roost-sweep-late--mine "renamed"
+                                      `(updatedAt . ,(roost-sweep-late--now))))
+      (roost--refresh-host roost-sweep-late--host t)
+      (roost-sweep-late--answer (roost-sweep-late--take "list") 'good)
+      (should (string-search "Send to renamed" (eval (cadr header-line-format) t))))))
+
+(ert-deftest roost-sweep-late-a-prompt-asked-again-has-the-id-it-had ()
+  ;; The helper pasted it, and the reply was lost.
+  (dolist (form '(dropped no-reply (refused . "The agent is not running; resume the task first")))
+    (roost-sweep-late--world
+      (roost-sweep-late--populate nil nil)
+      (with-current-buffer (roost-sweep-late--lay-out 'send-draft)
+        (roost-send-submit)
+        (let ((first (alist-get 'sendId (plist-get (roost-sweep-late--take "send") :request))))
+          (should (stringp first))
+          (roost-sweep-late--answer (roost-sweep-late--take "send") form)
+          (roost-send-submit)
+          (should (equal (alist-get 'sendId (plist-get (roost-sweep-late--take "send") :request)) first))
+          (roost-sweep-late--answer (roost-sweep-late--take "send") form)
+          ;; Another text is another prompt.
+          (goto-char (point-max))
+          (insert " And this.")
+          (roost-send-submit)
+          (should-not (equal (alist-get 'sendId (plist-get (roost-sweep-late--take "send") :request)) first)))))))
+
+(ert-deftest roost-sweep-late-a-draft-after-no-reply-says-what-asking-again-does ()
+  (roost-sweep-late--world
+    (roost-sweep-late--populate nil nil)
+    (with-current-buffer (roost-sweep-late--lay-out 'send-draft)
+      (roost-send-submit)
+      (roost-sweep-late--answer (roost-sweep-late--take "send") 'no-reply)
+      (should (string-search "No reply from dev, and it may have gone" roost--draft-note))
+      (should (string-search "sends it only if it didn't" roost--draft-note)))))
+
+(ert-deftest roost-sweep-late-a-prompt-its-host-has-closes-its-draft ()
+  (roost-sweep-late--world
+    (roost-sweep-late--populate nil nil)
+    (let ((draft (roost-sweep-late--lay-out 'send-draft)))
+      (roost-send-submit)
+      (let ((request (roost-sweep-late--take "send"))
+            (from (with-current-buffer (messages-buffer) (point-max))))
+        (plist-put request :reply (cons '(alreadySent . t) (plist-get request :reply)))
+        (roost-sweep-late--answer request 'good)
+        (roost-sweep-late--settle)
+        (should-not (buffer-live-p draft))
+        (should (string-search "Already sent to mine" (roost-sweep-late--messages from)))
+        (should-not (assq 'alreadySent (roost-sweep-late--mine)))))))
+
+(ert-deftest roost-sweep-late-a-note-asked-again-has-the-id-it-had ()
+  (roost-sweep-late--world
+    (roost-sweep-late--populate nil nil)
+    (roost-sweep-late--notes "One")
+    (let ((note (car roost--notes)) ids)
+      (dotimes (_ 2)
+        (roost-note-send note)
+        (let ((request (roost-sweep-late--take "send")))
+          (push (alist-get 'sendId (plist-get request :request)) ids)
+          (roost-sweep-late--answer request 'no-reply)))
+      (should (stringp (car ids)))
+      (should (equal (car ids) (cadr ids)))
+      (should (string-match-p "\\`[0-9a-f]\\{16\\}\\'" (car ids)))
+      ;; Edited, it is another note.
+      (roost--edit-note note "One, and more")
+      (roost-note-send note)
+      (let ((request (roost-sweep-late--take "send")))
+        (should-not (equal (alist-get 'sendId (plist-get request :request)) (car ids)))
+        (roost-sweep-late--answer request 'no-reply)))))
+
+(ert-deftest roost-sweep-late-an-org-entry-that-cant-take-the-link-closes-the-draft ()
+  ;; Its buffer has gone read-only, as a file does when you view it.
+  (dolist (read-only '(nil t))
+    (roost-sweep-late--world
+      (roost-sweep-late--populate nil nil)
+      (let* ((roost-org-link-tasks t)
+             (org (generate-new-buffer "*late org*"))
+             (marker (with-current-buffer org (insert "* An entry\n") (copy-marker (point-min))))
+             (from (with-current-buffer (messages-buffer) (point-max))))
+        (cl-letf (((symbol-function 'org-entry-put)
+                   (lambda (&rest _) (with-current-buffer org (barf-if-buffer-read-only)))))
+          (with-current-buffer org (setq buffer-read-only read-only))
+          (with-current-buffer (roost-sweep-late--lay-out 'compose)
+            (setq roost--compose-fields (plist-put roost--compose-fields :org marker))
+            (roost-compose-submit)
+            (roost-sweep-late--answer (roost-sweep-late--take "create") 'good)
+            (roost-sweep-late--settle)
+            (should-not roost-sweep-late--found)
+            (should-not (get-buffer roost--compose-buffer))
+            (should (equal (buffer-name (window-buffer (selected-window))) "*late terminal cccccc*"))
+            (should (eq (and (string-search "could not record" (roost-sweep-late--messages from)) t)
+                        read-only))))))))
+
+(ert-deftest roost-sweep-late-notes-that-cant-be-saved-close-the-draft ()
+  ;; A full disk on this machine: the prompt went.
+  (dolist (full '(nil t))
+    (roost-sweep-late--world
+      (roost-sweep-late--populate nil nil)
+      (roost-sweep-late--notes "One")
+      (let ((draft (roost-sweep-late--lay-out 'send-draft))
+            (from (with-current-buffer (messages-buffer) (point-max))))
+        (roost-send-submit)
+        (cl-letf (((symbol-function 'roost--save-notes)
+                   (lambda () (when full (signal 'file-error '("Disk full"))))))
+          (roost-sweep-late--answer (roost-sweep-late--take "send") 'good))
+        (roost-sweep-late--settle)
+        (should-not roost-sweep-late--found)
+        (should-not (buffer-live-p draft))
+        (should (eq (and (string-search "could not save" (roost-sweep-late--messages from)) t) full))))))
 
 (ert-deftest roost-sweep-late-a-poll-that-fails-says-nothing-of-a-host-you-forgot ()
   (roost-sweep-late--world

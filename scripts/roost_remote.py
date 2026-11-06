@@ -3817,7 +3817,16 @@ def control_character(value):
     return next((c for c in value if unicodedata.category(c) == "Cc" and c not in "\n\r\t\f"), None)
 
 
-def send(task, text, force=False):
+def send(store, task, text, force=False, send_id=None):
+    """Paste TEXT to TASK's agent and press Enter. SEND_ID, as `create` has an
+    ID, is the same each time Emacs asks for one text: asked again, as after
+    no reply, or queued behind the first on the registry lock, the task's
+    record says it went, and it isn't pasted twice. A record says only the
+    last, which is enough: one draft asks again before it asks for more."""
+    if send_id is not None and not (isinstance(send_id, str) and CREATE_ID.fullmatch(send_id)):
+        raise RoostError("Invalid send ID")
+    if send_id and task.get("sendId") == send_id:
+        return dict(task, alreadySent=True)
     pane = owned_pane(task, inventory_for(task))
     if not pane or pane["dead"]:
         raise RoostError("The agent is not running; resume the task first")
@@ -3847,6 +3856,10 @@ def send(task, text, force=False):
         tmux(task["socket"], "send-keys", "-t", task["paneId"], "Enter")
     finally:
         tmux(task["socket"], "delete-buffer", "-b", buffer, check=False)
+    if send_id:
+        task["sendId"] = send_id
+        # It went, and a full disk is no reason to say otherwise.
+        store.note(task)
     return task
 
 
@@ -6566,7 +6579,8 @@ TASK_ACTIONS = {
     "resume": lambda store, task, request: resume(store, task, request.get("programStatus"),
                                                         size_options(request)),
     "stop": lambda store, task, request: stop(store, task),
-    "send": lambda store, task, request: send(task, request["text"], request.get("force") is True),
+    "send": lambda store, task, request: send(store, task, request["text"], request.get("force") is True,
+                                              request.get("sendId")),
     "shell": lambda store, task, request: shell(store, task),
     "attach": lambda store, task, request: attach(store, task, request.get("files")),
     "inspect": lambda store, task, request: inspect(store, task),
