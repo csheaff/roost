@@ -4,6 +4,9 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A question from an MCP server, as a form or a link to open, shows as
+  `permission`. A Claude task read `running`, with nothing to tell you it
+  waited. Nothing to do when upgrading.
 - A task whose tmux server or host went reads `crashed`, as
   the manual says, whether or not `roost-program-status` is on, and `s`
   offers to resume the others that crashed with it. Claude's own last word as

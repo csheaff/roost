@@ -986,17 +986,21 @@ class ClaudeAgent:
             # agent you have seen as waiting again, or forget why it failed.
             if kind == "idle_prompt" and current not in ("starting", "running"):
                 return None
-            # A teammate's permission prompt, and a background agent of this
-            # session blocked on you, also wait in this terminal.
+            # A teammate's permission prompt, a background agent of this
+            # session blocked on you, and an MCP server's question, as a form
+            # or a link to open, also wait in this terminal.
             status = {"permission_prompt": "permission", "worker_permission_prompt": "permission",
-                      "agent_needs_input": "permission", "idle_prompt": "ready"}.get(kind)
+                      "agent_needs_input": "permission", "elicitation_dialog": "permission",
+                      "elicitation_url_dialog": "permission", "idle_prompt": "ready"}.get(kind)
         if not status:
             return None
         updates = dict(status=status, updatedAt=now(), lastEvent=event, error=None)
         # A prompt that runs no PermissionRequest, as when a sandboxed
         # command needs a new network host, is named by its notification.
         message = payload.get("message") if isinstance(payload.get("message"), str) else ""
-        if (event == "Notification" and payload.get("notification_type") == "permission_prompt"
+        if (event == "Notification"
+                and payload.get("notification_type") in ("permission_prompt", "elicitation_dialog",
+                                                         "elicitation_url_dialog")
                 and current != "permission" and one_line(message)):
             updates["request"] = one_line(message)[:REQUEST_LIMIT]
         if event == "StopFailure":

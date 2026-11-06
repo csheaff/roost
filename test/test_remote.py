@@ -767,6 +767,24 @@ class Lifecycle(unittest.TestCase):
              tool_input=dict(file_path=str(Path(task["worktree"]) / "docs" / "notes.md")))
         self.assertEqual(self.request("list")["result"][0]["request"], "Asks to write docs/notes.md")
 
+    def test_a_question_of_an_mcp_server_waits_on_you(self):
+        # As Claude Code 2.1.317's source sends them, a form or a link to
+        # open, and as a tool of the main agent's, which ends with it.
+        store = roost.Store(str(self.state))
+        task = self.create()
+        hook = lambda **payload: roost.update_hook(store, task["id"], payload) or store.read(task["id"])
+        for kind in ("elicitation_dialog", "elicitation_url_dialog"):
+            with self.subTest(kind=kind):
+                hook(hook_event_name="UserPromptSubmit", prompt="go")
+                record = hook(hook_event_name="Notification", notification_type=kind,
+                              message="Claude Code needs your input")
+                self.assertEqual((record["status"], record["request"]), ("permission", "Claude Code needs your input"))
+                self.assertIn("Open the task", self.request("send", id=task["id"], text="hello")["error"])
+                self.assertEqual(hook(hook_event_name="PostToolUse", tool_name="mcp__x__ask")["status"], "running")
+        # What it says of its answer changes nothing: its tool's end does.
+        for kind in ("elicitation_complete", "elicitation_response", "auth_success"):
+            self.assertEqual(hook(hook_event_name="Notification", notification_type=kind)["status"], "running")
+
     def test_only_the_agent_that_asked_says_its_request_is_over(self):
         store = roost.Store(str(self.state))
         task = self.create()
