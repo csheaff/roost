@@ -79,8 +79,8 @@ Within a severity, they are ranked by what they cost and how often they happen.
 
 | # | Finding | Sev | What goes wrong | Machine | Status |
 | --- | --- | --- | --- | --- | --- |
-| 1 | LC-1 | S1 | Asking again after a cut-short removal deletes the primary checkout's branch | [Agent worktrees](#agent-worktrees) | Open, [#221](https://github.com/csheaff/roost/issues/221) |
-| 2 | LC-2 | S1 | Finishing a task takes a branch or worktree its agent only used | [Agent worktrees](#agent-worktrees) | Open, [#221](https://github.com/csheaff/roost/issues/221) |
+| 1 | LC-1 | S1 | Asking again after a cut-short removal deletes the primary checkout's branch | [Agent worktrees](#agent-worktrees) | Fixed, [#221](https://github.com/csheaff/roost/issues/221): `test_a_removal_of_an_agents_worktree_cut_short_costs_the_primary_checkout_nothing`, `test_a_folder_that_is_no_worktree_says_nothing_of_the_primary_checkout` |
+| 2 | LC-2 | S1 | Finishing a task takes a branch or worktree its agent only used | [Agent worktrees](#agent-worktrees) | Fixed, [#221](https://github.com/csheaff/roost/issues/221): `test_finishing_a_task_leaves_a_branch_its_agent_only_switched_to`, `test_finishing_a_task_leaves_a_worktree_its_agent_only_went_to` |
 | 3 | VIEWS-1 | S1 | "Nothing would be lost" doesn't hold for what is written before you answer | [Asking before acting](#asking-before-acting) | Fixed, [#222](https://github.com/csheaff/roost/issues/222), `test_a_file_written_since_you_were_told_stops_a_discard` |
 | 4 | REQUESTS-8 | S2 | On this machine, a merge that outlasts the timeout is killed with its Git and hooks, leaving your checkout half-merged | [Host request](#host-request) | Open, [#223](https://github.com/csheaff/roost/issues/223) |
 | 5 | LC-3 | S2 | What a push or a checkout leaves running holds a task's lock, and refuses every way of finishing it | [Worktree lock](#worktree-lock) | Open, [#223](https://github.com/csheaff/roost/issues/223) |
@@ -110,7 +110,7 @@ Within a severity, they are ranked by what they cost and how often they happen.
 | 29 | VIEWS-6 | S3 | A note taken out of a draft is cleared unsent | [A review note](#a-review-note) | Fixed, [#229](https://github.com/csheaff/roost/issues/229), `roost-sweep-late-a-note-taken-out-of-a-draft-stays` |
 | 30 | VIEWS-10 | S3 | A note edited as its draft goes loses the edit | [A review note](#a-review-note) | Fixed, [#229](https://github.com/csheaff/roost/issues/229), `roost-sweep-late-a-note-edited-as-its-draft-goes-stays` |
 | 31 | REQUESTS-6 | S3 | Two Emacs sessions overwrite each other's hosts and projects | [Remembered files](#remembered-files) | Fixed, `roost-a-host-remembered-in-another-emacs-stays-as-you-use-yours` |
-| 32 | LC-6 | S4 | Discarding a task whose repository is gone deletes its worktree and says it failed | [Finishing a task](#finishing-a-task) | Open, [#221](https://github.com/csheaff/roost/issues/221) |
+| 32 | LC-6 | S4 | Discarding a task whose repository is gone deletes its worktree and says it failed | [Finishing a task](#finishing-a-task) | Fixed, [#221](https://github.com/csheaff/roost/issues/221): `test_discard_a_task_whose_repository_is_gone` |
 | 33 | VIEWS-11 | S4 | An error after a good reply leaves a draft busy | [The new task draft](#the-new-task-draft) | Fixed, [#226](https://github.com/csheaff/roost/issues/226), `roost-sweep-late-an-org-entry-that-cant-take-the-link-closes-the-draft` |
 | 34 | VIEWS-12 | S4 | A resumed task covers what you opened from a question | [Resuming](#resuming) | Fixed, [#229](https://github.com/csheaff/roost/issues/229), `roost-sweep-late-a-task-resumed-leaves-what-you-opened-from-a-question` |
 | 35 | VIEWS-13 | S4 | An open held for a question connects to a session since ended | [Opening a task](#opening-a-task) | Fixed, [#229](https://github.com/csheaff/roost/issues/229), `roost-sweep-late-a-task-stopped-while-you-answer-opens-no-session` |
@@ -192,7 +192,7 @@ Invariants:
 Illegal or refused: see [Action by state](#action-by-state).
 Assumed, not stated: a record's `worktree` and `repo` never change; `Store.read`
 takes older records' fields as they come.
-Open: LC-6.
+Open: none.
 
 ### Creation
 
@@ -408,11 +408,11 @@ Invariants:
   before the agent stops (`require_clean`), again after (`remove_worktrees`), and
   the branch is deleted only at the commit verified. Holds, fuzzed against
   commits landing throughout.
-- I2. A second request finds its own partial work and finishes it. Holds for the
-  task's worktree (`put_back_removed`). **Broken** for its agent's worktrees
-  (LC-1).
-- I3. What a removal touches is the task's. **Broken** in `remove_agent_worktrees`
-  (LC-1, LC-2).
+- I2. A second request finds its own partial work and finishes it, for the
+  task's worktree (`put_back_removed`). What a removal left of an agent's isn't
+  a worktree any more, so it stays, and the reply says so.
+- I3. What a removal touches is the task's, as [Agent worktrees](#agent-worktrees)
+  has it. Holds.
 - I4. After a step fails past 8, the task is stopped, and the merge has happened, as
   `landed` shows. With its worktree still there, `resume` works. Once removal has
   gone through, as when `delete_branch` then fails, `resume` refuses for want of a
@@ -431,8 +431,9 @@ and for `merge` a branch moved from `expect`; each before anything changes. `dis
 refuses what `check_worktree` refuses with `branch=False`, a link, a path outside
 Roost's folder, a moved worktree, and a missing one whose branch the primary checkout
 holds; then a branch moved since its dry run, more to lose than it told you, and what
-`require_nothing_kept` finds.
-Open: LC-1, LC-2, LC-6.
+`require_nothing_kept` finds. With the repository gone, nothing keeps a worktree, and
+`unregister_gone` has nothing to do.
+Open: none.
 
 ### The merge
 
@@ -503,8 +504,8 @@ Invariants:
 - I3. Git in a task's worktree is that worktree's. True because it lies outside
   any checkout, unless the state directory lies in a repository, as with a
   `~/.git`; then an unlinked one reads as the outer repository's, and every
-  action refuses. **Not true of agent worktrees** (LC-1), which lie inside the
-  primary checkout.
+  action refuses. Not true of agent worktrees, which lie inside the primary
+  checkout: `worktree_at` asks at the path, and takes no answer from further up.
 
 Illegal or refused: `check_worktree` refuses every row above but Good, Gone, Locked and
 Unlinked, for merge, retire, `pr` and `update`. With `branch=False`, for `discard`,
@@ -517,43 +518,58 @@ Open: none.
 
 ### Agent worktrees
 
-Kind: implicit. Lives in: `agentWorktrees` in the record, folders under
-`<repo>/.claude/worktrees/`, branches.
-Worktrees Claude Code makes for a task's agent.
+Kind: implicit. Lives in: `agentWorktrees` and `agentMade` in the record, folders
+under `<repo>/.claude/worktrees/`, branches.
+Worktrees Claude Code makes for a task's agent. `agentWorktrees` says where its
+agent has been, and `agentMade` which of those its hooks say it made.
 
 | State | Meaning | How you can tell |
 | --- | --- | --- |
 | Unknown | no hook from there yet | not listed |
-| Recorded | a hook's `cwd` lay inside it | listed; the entry never leaves |
-| Holds work | commits past the task's branch, or dirty | `agent_work` |
-| Idle | nothing beyond the task's branch | `ahead == 0`, not dirty |
-| Gone | folder missing | `agent_work` skips it |
-| Remnant | folder there, no `.git` | not told apart: **Git there is the primary checkout's** |
+| Been there | a hook's `cwd` lay inside it, and nothing says the agent made it | in `agentWorktrees` alone; the entry never leaves |
+| Made | a hook says the agent made it | in `agentMade` too: `ClaudeAgent.made_worktree` |
+| Holds work | made, with commits past the task's branch, or dirty | `agent_work` |
+| Idle | made, with nothing beyond the task's branch | `ahead == 0`, not dirty |
+| Gone | folder missing | `agent_left` doesn't name it |
+| Remnant | folder there, no worktree at that path | `worktree_at` says None |
 
-Invariants, all assumed and none stated:
-- I1. A recorded path is a worktree. **Broken**: nothing checks (LC-1).
-- I2. Its agent made it. **Broken**: any `cwd` under the folder counts,
-  another session's too (LC-2).
-- I3. The branch it is on is one Claude made for it. **Broken**: the agent may
-  have switched (LC-2).
-- I4. The branch goes only if its worktree went. **Broken**:
-  `remove_agent_worktrees` deletes it whether or not Git removed the worktree.
+Invariants:
+- I1. A path is a worktree only if Git says so at that path: linked, with that path
+  its top level, and in Git's list (`worktree_at`). What Git says from a folder
+  with no `.git` of its own is the primary checkout's, and counts for nothing.
+- I2. Only what its agent made goes: a hook said so, as EnterWorktree's "Created",
+  not "Entered", "Reused" or "Resumed", or a subagent whose ID names the folder; Git
+  made it since the task started (`made_since`, by the `commondir` Git writes once);
+  and it is the one made then, by that stamp in `agentMadeAt`, not another since at
+  that path, looked at again just before removal, as a teardown command runs first.
+  No stamp says no. A worktree its agent makes again at that name takes a new stamp.
+  A workflow's folder names no agent, so it stays. A record from before
+  `agentMade` has no such key, and is never given one: its worktrees still show and
+  keep the task from retiring, with `made` false, and stay.
+- I3. A branch goes only if `git worktree remove` exited 0, only if it is
+  `worktree-<folder>` (`ClaudeAgent.worktree_branch`), which Claude makes, and
+  through `delete_branch`, which refuses one checked out anywhere.
+- I4. What stays is said: `agent_left` fills `leftBehind` in the reply, and Emacs
+  shows it.
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
-| Unknown | hook | `cwd` under the folder, not `stopped` | Recorded | saved | `update_hook`, `agent_worktree` |
-| Recorded | retire | holds work | refused | names it, says what to do | `require_agent_work_kept` |
-| Recorded | retire | idle | Gone | `git worktree remove --force --force`, `update-ref -d` | `remove_agent_worktrees` |
-| Recorded | discard | | Gone | the same, for all | `remove_agent_worktrees` |
-| Remnant | retire, `ahead` 0 | | **primary's branch deleted** | LC-1 | `remove_agent_worktrees` |
-| Remnant | discard | | **primary's branch deleted** | LC-1 | `remove_agent_worktrees` |
-| Remnant | merge | primary has commits past the task | refused | names `main` as the agent's, and advice Git refuses | `require_agent_work_kept` |
+| Unknown | hook | `cwd` under the folder, not `stopped` | Been there | saved | `update_hook`, `agent_worktree` |
+| Unknown, Been there | hook | says the agent made it | Made | saved | `update_hook`, `ClaudeAgent.made_worktree` |
+| Made | retire | holds work | refused | names it, says what to do | `require_agent_work_kept` |
+| Made | retire | idle | Gone | `git worktree remove --force --force`, then the branch | `remove_agent_worktrees` |
+| Made | discard | | Gone | the same, whatever it holds | `remove_agent_worktrees` |
+| Made | Git can't remove it | | stays | so does its branch; the reply says both | `remove_agent_worktrees`, `agent_left` |
+| Made | on another branch | | Gone | that branch stays, and `worktree-<folder>`, which the reply names | `remove_agent_worktrees`, `agent_left` |
+| Been there | retire, discard | | stays | the reply says so; work there refuses nothing | `agent_left` |
+| Remnant | retire, merge, discard | | stays | the reply says so; Git's entry stays for `git worktree prune` | `agent_work`, `agent_left` |
 
 Illegal or refused: retire with work there, as above; a hook from a stopped task
 records nothing. A worktree Roost never heard of stays where Git put it, which is
-safe. One it can't remove isn't: `remove_agent_worktrees` ignores that, and deletes
-the branch all the same (LC-1).
-Open: LC-1, LC-2.
+safe. After a removal stopped with its `.git` still there, the files Git had deleted
+read as uncommitted, so retire refuses, and says to run the `git worktree remove`
+that finishes it.
+Open: none.
 
 ## What an agent is doing
 
@@ -2718,7 +2734,7 @@ nothing to propose.
 | look | ok | ok | ok | ok | removing | was removing | worktree gone | no commit to look at |
 | retire | ok | active | ok | busy | removing | ok | ok | Git can't read; ok if the folder went too (by reading) |
 | merge | ok | active | ok | busy | removing | ok | ok | Git can't read; nothing to merge if the folder went too (by reading) |
-| discard | ok | ok | ok | busy | removing | ok | ok | deletes the worktree, says it failed (LC-6); ok when asked again |
+| discard | ok | ok | ok | busy | removing | ok | ok | ok |
 | forget | running | running | ok | busy | removing | ok | ok | ok |
 
 No state lacks a way out, but one: a held worktree lock nothing will let go of
@@ -2756,7 +2772,7 @@ registry lock.
 | `status`, `updatedAt` | `make_task`, `spawn`, `stop`, `list_tasks`, `update_hook`, `apply_program_status`, `runner`, `abandon` | yes; `abandon` from `undo_creation` has no record to lose |
 | `removing` | `remove_worktrees` | set in the hold; cleared by re-read and compare |
 | `retiringCommit` | `retire` | yes; never cleared |
-| `agentWorktrees` | `update_hook` | yes; never pruned |
+| `agentWorktrees`, `agentMade` | `update_hook` | yes; never pruned |
 | `createId` | `make_task`, `abandon` (pops) | yes |
 | `sendIds` | `send` | yes |
 | `pr` | `pr` action, `check_pull_requests` | re-read after the release; compared with what it asked about |

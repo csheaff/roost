@@ -986,7 +986,13 @@ Things to know:
   subagents, `/batch`), in the primary checkout's `.claude/worktrees`. In a
   task they start from the task's work, its panel lists them with what they
   hold, each opening in Magit, and the task can't be merged or retired while
-  one holds work not on the task's branch.
+  one holds work not on the task's branch. Finishing the task removes them, with
+  the branch Claude made for each. A worktree its agent only went to, one that
+  was there before the task, and a folder that is no longer a worktree stay,
+  as does a branch of yours its agent switched to there, and Roost says what it
+  left in place. So does a `/batch` worktree: its folder names no agent, so
+  Roost can't tell it from another session's, doesn't list it or check it
+  before merging, and leaves it for you to remove.
 - Claude and Codex each ask once per repository to trust it; every task worktree
   of that repository is trusted after that.
 - Codex asks you to review Roost's observer hooks the first time. The hook

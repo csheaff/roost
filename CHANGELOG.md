@@ -4,6 +4,21 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Merging, retiring or discarding a task deletes nothing that isn't the
+  task's. With a folder in the primary checkout's `.claude/worktrees` that
+  had lost its link to Git, as when removing it stopped partway, it deleted
+  the primary checkout's branch and said all was well: `git log` then said
+  there were no commits yet. It also deleted a branch of yours the agent had
+  switched to in its own worktree, and removed a worktree the agent had only
+  gone to. Now only a worktree the task's agent made goes, with the branch
+  Claude made for it, and Roost says what it left in place. Those of a task
+  started before this update still show and still keep it from retiring
+  while they hold work, but stay once it finishes, as Roost can't tell its
+  agent made them: remove them with `git worktree remove` if you don't want
+  them.
+- Discarding a task whose repository is gone says it went. It deleted the
+  task's worktree, then said the repository wasn't one, and the task stayed
+  until you asked again. Nothing to do when upgrading.
 - A pull request that branch rules block, or that needs updating, no longer
   says `to merge` on GitHub, and the task panel says that is what it waits
   for. Roost asked only whether it conflicts. Nothing to do when upgrading.
