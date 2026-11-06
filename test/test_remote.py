@@ -5220,6 +5220,24 @@ sys.exit(status)
         self.assertIn("unmerged commits", self.request("retire", id=task["id"])["error"])
         self.assertEqual(self.git("rev-parse", task["branch"]), since)
 
+    def test_github_says_what_else_holds_a_pull_request_up(self):
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        self.listing((9, "OPEN", tip))
+        review = dict(mergeable="MERGEABLE", reviewRequests=dict(nodes=[]),
+                      reviewThreads=dict(totalCount=0, nodes=[]))
+        reviews = self.gh_dir / "reviews.json"
+        reviews.write_text(json.dumps({"9": dict(review, mergeStateStatus="BLOCKED")}))
+        self.assertEqual(self.listed(full=True)["prStatus"]["mergeState"], "BLOCKED")
+        self.assertIn("mergeStateStatus", next(arg for arg in self.gh_calls()[-1] if arg.startswith("query=")))
+        # A server without it: as before.
+        reviews.write_text(json.dumps({"9": review}))
+        status = self.listed(full=True)["prStatus"]
+        self.assertEqual(status["mergeable"], "MERGEABLE")
+        self.assertNotIn("mergeState", status)
+
     def test_list_learns_the_pull_request_an_agent_opened(self):
         self.github()
         task = self.create()

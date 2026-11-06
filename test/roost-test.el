@@ -8438,6 +8438,15 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
      '(pr . ((number . 12) (url . "https://github.com/o/r/pull/12") (state . "OPEN") (head . "a1")))
      '(unpushed . 0) '(live . t) '(ahead . 1) '(dirty) '(seen . "2026-10-03T20:00:00+00:00"))))
 
+(ert-deftest roost-a-pull-request-github-holds-up-isnt-to-merge ()
+  (roost-test--isolated
+   (pcase-dolist (`(,state . ,verdict) '(("BLOCKED") ("BEHIND") ("CLEAN" . "to merge") ("UNSTABLE" . "to merge")
+                                         ;; From GitLab, or an older reply.
+                                         (:none . "to merge")))
+     (should (equal (roost--pr-verdict (roost-test--turn-task `(mergeState . ,state))) verdict)))
+   ;; What else waits on you still says so.
+   (should (equal (roost--pr-verdict (roost-test--turn-task '(mergeState . "BLOCKED") '(threads . 1))) "comments"))))
+
 (ert-deftest roost-a-pull-request-waiting-on-you-counts-as-waiting ()
   (roost-test--isolated
    (let ((task (roost--cache-task "dev" (roost-test--turn-task))))

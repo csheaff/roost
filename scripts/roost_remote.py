@@ -2442,7 +2442,7 @@ HEAD_FETCH_SECONDS = 5
 # is and how it starts.
 PULL_REQUEST_REVIEWS = """
   pr%d: pullRequest(number: %d) {
-    mergeable
+    mergeable mergeStateStatus
     reviewRequests(first: 20) { nodes { requestedReviewer { ... on Actor { login } ... on Team { slug } } } }
     reviewThreads(last: 100) { totalCount nodes { isResolved isOutdated path line diffSide
       comments(last: 1) { nodes { createdAt } } opening: comments(first: 1) { nodes { author { login } bodyText } } } }
@@ -2511,6 +2511,8 @@ def review_state(pr):
              for thread in unresolved]
     state = dict(mergeable=pr.get("mergeable"),
                  requested=[reviewer.get("login") or reviewer.get("slug") or "someone" for reviewer in requested])
+    if pr.get("mergeStateStatus"):
+        state["mergeState"] = pr["mergeStateStatus"]
     if threads["totalCount"] <= len(threads["nodes"]):
         state.update(threads=len(unresolved),
                      threadAt=(min(times, key=parse_time) if times and all(parse_time(t) for t in times)

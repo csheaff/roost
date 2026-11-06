@@ -4,6 +4,9 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A pull request that branch rules block, or that needs updating, no longer
+  says `to merge` on GitHub. Roost asked only whether it conflicts. Nothing to
+  do when upgrading.
 - After `P` pushes, the task panel no longer says it has commits to push. It
   did until Roost next asked GitHub or GitLab, up to two minutes. Nothing to do
   when upgrading.

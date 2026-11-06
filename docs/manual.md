@@ -367,7 +367,7 @@ when the task waits for nothing.
 | `failed`, `exited` | Until you've seen it | The agent's CLI failed, or it exited; `RET` shows its last output, and `s` resumes its conversation. An agent you start again from a shell sends Roost nothing, so `s` waits until it has exited |
 | `crashed` | Until you've seen it | Its tmux pane went, as when the host or its tmux server restarted; `RET` or `s` resumes its conversation, and asks once to resume every other agent that crashed on that host. Those stopped, exited or failed stay as they are |
 | `conflicts` | Once you've seen its reply | Merging its commits into the branch it merges into would conflict; `u` brings that branch in |
-| `to merge` | Once you've seen its reply | Its pull request passed its checks and review, and GitHub or GitLab finds no conflicts; `P` opens it |
+| `to merge` | Once you've seen its reply | Its pull request passed its checks and review, and GitHub or GitLab finds nothing else in its way; `P` opens it |
 | `ci failed` | Once you've seen its reply | A check of its pull request failed |
 | `comments` | Once you've seen its reply | A review thread on its pull request is unresolved, Copilot's too |
 | `running` | No | The agent works on a prompt |
@@ -446,7 +446,8 @@ the task counts as waiting: `n` visits it, the mode line counts it, and the
 sidebar and dashboard say why:
 
 - `to merge`: every check passed, no review is asked for or unresolved, and
-  GitHub or GitLab finds no conflicts. `P` opens it.
+  GitHub or GitLab finds no conflicts, nor does GitHub say that branch rules
+  block it or that it needs updating. `P` opens it.
 - `ci failed`: a check failed.
 - `comments`: a review thread is unresolved, Copilot's too, even one the agent
   answered and left open.

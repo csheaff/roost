@@ -6756,7 +6756,8 @@ the pull request lacks are counted from it.  Nil otherwise.  As
 \"ci failed\" when a check failed; \"comments\" when a review thread is
 unresolved, its agent's reply in it or not; \"to merge\" when every check
 passed, no review is still asked for, none requested changes, and GitHub
-finds no conflicts.  Only as `roost--pr-status' has it, and while the
+finds no conflicts, and doesn't say branch rules block it or it needs
+updating.  Only as `roost--pr-status' has it, and while the
 pull request has every commit of the task's, with none left uncommitted
 nor in its agent's own worktrees.  PATIENT leaves a failure or thread to
 the agent for `roost--pr-grace' seconds after it came.  As
@@ -6780,7 +6781,8 @@ is on, while there is one."
             ((and checks (eql failing 0) (eql (alist-get 'pending checks) 0) (eql threads 0)
                   (assq 'requested status) (null (alist-get 'requested status))
                   (not (member (alist-get 'review status) '("CHANGES_REQUESTED" "REVIEW_REQUIRED")))
-                  (equal (alist-get 'mergeable status) "MERGEABLE"))
+                  (equal (alist-get 'mergeable status) "MERGEABLE")
+                  (not (member (alist-get 'mergeState status) '("BLOCKED" "BEHIND"))))
              "to merge")))))
 
 (defun roost--pr-turn (task)
