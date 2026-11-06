@@ -3,6 +3,7 @@ CodexSession.clean_up in test/agent_contract.py."""
 import unittest
 
 import agent_contract
+import claude_contract
 
 REPO = "/home/user/.local/share/roost-contract/repo"
 HOOK = '[hooks.state."/<session-flags>/config.toml:stop:0:0"]\n'
@@ -34,6 +35,22 @@ class CodexConfigTest(unittest.TestCase):
         restored = agent_contract.restore_codex_tables(
             'a = 1\n' + HOOK + 'h = "new"\n[other]\nk = 1', 'a = 1\n' + HOOK + 'h = "old"', REPO)
         self.assertEqual(restored, 'a = 1\n' + HOOK + 'h = "old"\n[other]\nk = 1')
+
+
+class ClaudeNotificationsTest(unittest.TestCase):
+    def test_each_way_claude_writes_a_notifications_type_is_read(self):
+        source = (b'x=e({notificationType:"worker_permission_prompt"});'
+                  b'a={notification:{text:"Teammate setup needs your input",type:"agent_needs_input"}};'
+                  b'b={notification:(h)=>({text:oqe,type:$Wt(h)?"elicitation_url_dialog":"elicitation_dialog"})};'
+                  b'var Kre=["auto","iterm2"],oUi=["permission_prompt","idle_prompt","brand_new"];'
+                  b'c={matcherMetadata:{fieldToMatch:"notification_type",values:[...oUi,"elicitation_complete"]}}')
+        self.assertEqual(claude_contract.notification_kinds(source),
+                         {"worker_permission_prompt", "agent_needs_input", "elicitation_url_dialog",
+                          "elicitation_dialog", "permission_prompt", "idle_prompt", "brand_new",
+                          "elicitation_complete"})
+
+    def test_a_source_that_no_longer_lists_them_says_so(self):
+        self.assertEqual(claude_contract.notification_kinds(b'x=e({notificationType:"idle_prompt"})'), set())
 
 
 if __name__ == "__main__":

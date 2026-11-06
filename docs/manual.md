@@ -909,7 +909,11 @@ a task's pull request or conflicts come to wait on you, or stop.
 
 A task's identity is its host and ID. A per-pane ownership tag keeps Roost from
 steering or killing an unrelated pane after a tmux restart, and hooks from an
-earlier run cannot overwrite a resumed one. Merging needs the task's worktree
+earlier run cannot overwrite a resumed one. The tag goes with the pane, so a
+pane you move in tmux is still the agent's, wherever it is; what you start in
+it with `respawn-pane` is not. Stopping a task closes the agent's pane and its
+shell, and their window if nothing else is in it: a pane of your own stays.
+Merging needs the task's worktree
 clean. With the primary checkout on the task's integration branch, the merge
 happens there and needs nothing uncommitted (untracked files stay); with it on
 another branch, Git merges into the integration branch without touching your
@@ -937,8 +941,9 @@ Things to know:
   task shows `interrupted`, read from its transcript. Codex's hooks say when
   you decline or press Esc. Claude Code's other tools, and Codex, may keep
   showing `permission` until the agent moves on, and `e` asks before sending
-  to a task in that state. With `roost-program-status` on, both say so
-  themselves, at once.
+  to a task in that state. What a subagent does beside one that asks doesn't
+  count as moving on. With `roost-program-status` on, both say so themselves,
+  at once.
 - In auto mode, Claude Code refuses some commands without asking: the
   task stays `running`, and Claude's reply says what it refused. A
   dangerous `rm` asks for two minutes, and is refused if you don't
@@ -949,7 +954,8 @@ Things to know:
   the terminal first. With Claude's sandbox on
   ([Sandboxes](#sandboxes)), a command that needs a new network host
   asks too: the task shows `permission` about six seconds later and,
-  once you allow the host, until the command ends.
+  once you allow the host, until the command ends. An MCP server's question
+  shows the same way, until you answer it.
   With `roost-program-status` on, Claude says at once that it asks,
   naming the host, and that it goes on once answered or refused.
 - Pi has no permission prompts of its own, but an extension can ask, as one
@@ -993,6 +999,9 @@ Things to know:
   left in place. So does a `/batch` worktree: its folder names no agent, so
   Roost can't tell it from another session's, doesn't list it or check it
   before merging, and leaves it for you to remove.
+- Claude Code writes a conversation once something is said in it, so a task
+  stopped before that has none to go back to: `s` starts it anew, with its
+  prompt if it has one.
 - Claude and Codex each ask once per repository to trust it; every task worktree
   of that repository is trusted after that.
 - Codex asks you to review Roost's observer hooks the first time. The hook

@@ -4,6 +4,35 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A dialog as a task resumes says what it asks. It showed what the agent
+  had asked before you stopped it. Nothing to do when upgrading.
+- `/clear` no longer reads as `interrupted` with `roost-program-status` on.
+  Nothing to do when upgrading.
+- A Pi or OpenCode agent you quit as it reports something reads `exited`.
+  The report could land after its end, and the task then read `crashed`.
+  Nothing to do when upgrading.
+- A question from an MCP server, as a form or a link to open, shows as
+  `permission`. A Claude task read `running`, with nothing to tell you it
+  waited. Nothing to do when upgrading.
+- A task whose tmux server or host went reads `crashed`, as
+  the manual says, whether or not `roost-program-status` is on, and `s`
+  offers to resume the others that crashed with it. Claude's own last word as
+  it was killed made it read `exited`. Nothing to do when upgrading.
+- A Claude or Codex agent that asks goes on showing `permission` while
+  a subagent's tools, or tools it called together with the one it asks about,
+  run beside it. They made it read `running`, with no notification, and let a
+  prompt through to its menu. Nothing to do when upgrading.
+- A pane you move with tmux, as with `break-pane`, stays the task's. The task
+  read as `crashed`, `s` started a second agent beside the first, and `K`
+  said it had stopped while it ran on. Nothing to do when upgrading.
+- `K`, `s` and forgetting a task leave a pane of your own beside its agent.
+  It went with the agent's window. Nothing to do when upgrading.
+- A prompt for a task whose pane you started something else in, as with
+  `respawn-pane`, is refused, and the task reads as `crashed` if its agent
+  was at work. The prompt ran as a command in that shell. A task started
+  before upgrading is covered once you resume it.
+- A Claude task stopped before anything was said in it starts again on `s`.
+  Claude had no conversation to go back to, so `s` failed, each time.
 - Merging, retiring or discarding a task deletes nothing that isn't the
   task's. With a folder in the primary checkout's `.claude/worktrees` that
   had lost its link to Git, as when removing it stopped partway, it deleted

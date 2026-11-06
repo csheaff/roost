@@ -86,24 +86,24 @@ Within a severity, they are ranked by what they cost and how often they happen.
 | 5 | LC-3 | S2 | What a push or a checkout leaves running holds a task's lock, and refuses every way of finishing it | [Worktree lock](#worktree-lock) | Open, [#223](https://github.com/csheaff/roost/issues/223) |
 | 6 | REQUESTS-1 | S2 | A refresh that can't start leaves its host unasked until Emacs restarts | [Host refresh](#host-refresh) | Fixed, `roost-a-refresh-that-could-not-start-leaves-its-host-asked-again` |
 | 7 | REQUESTS-2 | S2 | An install cut short leaves a broken helper under its real name | [Helper copy](#helper-copy) | Fixed, `roost-an-install-cut-short-leaves-what-was-there` |
-| 8 | STATUS-1 | S2 | A Claude task stopped before anything was said in it can never resume | [The runner's stages](#the-runners-stages) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
+| 8 | STATUS-1 | S2 | A Claude task stopped before anything was said in it can never resume | [The runner's stages](#the-runners-stages) | Fixed, `test_a_task_stopped_before_anything_was_said_in_it_starts_again` |
 | 9 | VIEWS-2 | S2 | A retry with an edited draft says it created a task it didn't, and drops the edit | [The creation ID](#the-creation-id) | Fixed, [#226](https://github.com/csheaff/roost/issues/226), `roost-sweep-late-a-retry-with-another-prompt-keeps-the-draft` |
 | 10 | VIEWS-9, FORGE-3 | S2 | A pull request draft says it opened one it only pushed to, and `P` can't open one after a closed one | [Pushing and opening](#pushing-and-opening) | Fixed, [#227](https://github.com/csheaff/roost/issues/227): `roost-pr-draft-says-what-became-of-it-when-the-task-has-one-by-then`, `roost-pr-drafts-another-once-the-one-it-has-takes-no-more-commits`, `test_p_opens_another_after_a_closed_pull_request` |
 | 11 | REQUESTS-3, VIEWS-8 | S2 | Two Emacs sessions overwrite each other's review notes | [Remembered files](#remembered-files) | Fixed, `roost-a-note-from-another-emacs-stays-as-you-write-yours` |
-| 12 | STATUS-2 | S2 | Roost takes a pane changed by hand for its agent, or for gone | [A run and its pane](#a-run-and-its-pane) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
+| 12 | STATUS-2 | S2 | Roost takes a pane changed by hand for its agent, or for gone | [A run and its pane](#a-run-and-its-pane) | Fixed, `test_a_pane_you_move_is_still_the_agents`, `test_what_tmux_starts_in_the_agents_pane_is_not_the_agent` |
 | 13 | LC-4, STATUS-3 | S3 | A merge's hooks hold the registry lock, so other agents' events are lost and they stay `running` | [Registry lock](#registry-lock) | Open, [#223](https://github.com/csheaff/roost/issues/223) |
 | 14 | FORGE-1 | S3 | A pull request merged with a commit made on the forge reads as not merged, and `m` forks `main` from `origin` | [Landed](#landed) | Fixed, [#227](https://github.com/csheaff/roost/issues/227): `test_a_pull_request_merged_with_a_commit_made_on_the_forge_is_merged`, `test_commits_after_a_merge_never_count_as_merged` |
-| 15 | STATUS-4 | S3 | Another tool's event ends a request that still waits, so `send` could answer a menu | [Agent status](#agent-status) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
+| 15 | STATUS-4 | S3 | Another tool's event ends a request that still waits, so `send` could answer a menu | [Agent status](#agent-status) | Fixed, `test_only_the_agent_that_asked_says_its_request_is_over` |
 | 16 | VIEWS-5, LC-5 | S3 | A prompt goes twice when its reply was lost | [The prompt draft](#the-prompt-draft) | Fixed, [#226](https://github.com/csheaff/roost/issues/226), `test_a_prompt_queued_behind_the_first_is_pasted_once` |
 | 17 | VIEWS-7 | S3 | Merging takes commits made after it asked | [Asking before acting](#asking-before-acting) | Fixed, [#222](https://github.com/csheaff/roost/issues/222), `test_a_commit_made_since_you_were_asked_stops_a_merge` |
 | 18 | FORGE-2 | S3 | An agent's pull request goes unfollowed after `git pull --rebase` or a fast-forward | [A task's pull request](#a-tasks-pull-request) | Fixed, [#227](https://github.com/csheaff/roost/issues/227): `test_an_agents_pull_request_after_git_pull_rebase_is_followed`, `test_an_agents_pull_request_of_work_fast_forwarded_in_is_followed`, `test_commits_an_update_brought_in_are_still_not_the_tasks` |
 | 19 | FORGE-4, REQUESTS-5 | S3 | A change a poll saw can go unmeasured until something else asks | [Task measurement](#task-measurement) | Fixed, `roost-a-measurement-dropped-as-stale-is-asked-for-again` |
 | 20 | FORGE-5 | S3 | A commit made on the forge holds back all an open pull request says | [What the forge last said](#what-the-forge-last-said) | Fixed, [#227](https://github.com/csheaff/roost/issues/227): `test_an_open_pull_request_with_a_commit_made_on_the_forge_has_the_branchs_commits` |
-| 21 | STATUS-6 | S3 | An MCP server's question reads as work | [Agent status](#agent-status) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
+| 21 | STATUS-6 | S3 | An MCP server's question reads as work | [Agent status](#agent-status) | Fixed, `test_a_question_of_an_mcp_server_waits_on_you` |
 | 22 | FORGE-6 | S3 | A task held at a startup prompt waits, and no notification says so | [The word](#the-word) | Fixed, `roost-an-agent-held-at-a-startup-prompt-notifies-once` |
 | 23 | VIEWS-3 | S3 | Undo in the new task draft changes the wrong text | [The new task draft](#the-new-task-draft) | Fixed, [#226](https://github.com/csheaff/roost/issues/226), `roost-sweep-late-undo-in-a-draft-follows-its-fields` |
-| 24 | STATUS-5 | S3 | As tmux goes, a Claude task reads `exited`, not `crashed` | [Who wins](#who-wins-hooks-reports-poll-runner) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
-| 25 | STATUS-7 | S3 | A report landing after the runner's end turns `exited` into `crashed` | [Agent status](#agent-status) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
+| 24 | STATUS-5 | S3 | As tmux goes, a Claude task reads `exited`, not `crashed` | [Who wins](#who-wins-hooks-reports-poll-runner) | Fixed, `test_a_claude_that_says_goodbye_as_tmux_goes_crashed` |
+| 25 | STATUS-7 | S3 | A report landing after the runner's end turns `exited` into `crashed` | [Agent status](#agent-status) | Fixed, `test_news_after_the_runners_end_leaves_the_agent_ended` |
 | 26 | FORGE-8 | S3 | A failed review query takes back what a pull request waits on you for, then notifies again | [What the forge last said](#what-the-forge-last-said) | Fixed, `roost-a-failed-review-query-takes-back-nothing-that-waits` |
 | 27 | FORGE-9, REQUESTS-4 | S3 | Conflicts there when Roost first saw a task notify after every restart | [News of a turn](#news-of-a-turn) | Fixed, `roost-a-conflict-from-before-a-restart-is-no-news` |
 | 28 | VIEWS-4 | S3 | A prompt draft reads its task as it was when it opened | [The prompt draft](#the-prompt-draft) | Fixed, [#226](https://github.com/csheaff/roost/issues/226), `roost-sweep-late-a-prompt-draft-asks-as-its-task-is-now` |
@@ -118,8 +118,8 @@ Within a severity, they are ranked by what they cost and how often they happen.
 | 37 | FORGE-11, REQUESTS-7 | S4 | Two Emacs undo each other's turn for a stopped task, on every poll | [Verdict and turn](#verdict-and-turn) | Fixed, `roost-two-emacs-settle-on-a-stopped-tasks-turn` |
 | 38 | FORGE-12 | S4 | What `P` pushed counts as unpushed until GitHub is next asked | [Pushing and opening](#pushing-and-opening) | Fixed, [#227](https://github.com/csheaff/roost/issues/227): `test_what_p_pushed_is_no_longer_unpushed` |
 | 39 | FORGE-7 | S4 | A failed task you've seen keeps its colour, though the manual says otherwise | [The word](#the-word) | Fixed, in the manual |
-| 40 | STATUS-8 | S4 | `/clear` reads `interrupted` for a relayed Claude | [Agent status](#agent-status) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
-| 41 | STATUS-9 | S4 | A dialog as a task resumes shows the last run's request | [A task's request](#a-tasks-request) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
+| 40 | STATUS-8 | S4 | `/clear` reads `interrupted` for a relayed Claude | [Agent status](#agent-status) | Fixed, `test_clearing_a_conversation_stops_no_turn` |
+| 41 | STATUS-9 | S4 | A dialog as a task resumes shows the last run's request | [A task's request](#a-tasks-request) | Fixed, `test_a_dialog_as_a_task_resumes_says_what_it_asks` |
 
 Also open from the hunt of 2026-11-05, and taken up under these issues: refusals that
 don't name a half-done merge, and tmux calls with no timeout ([#223](https://github.com/csheaff/roost/issues/223)); text lost as a
@@ -175,7 +175,7 @@ Invariants:
 | None | spawn failed | files there | Failed creation | `abandon` | `make_task` |
 | None | spawn failed | clean | None | `abandon`, `Store.remove` | `make_task` |
 | None | cut short | files there | Failed creation | `undo_creation` | `settle_creation` |
-| Live | stop | | Ended | kill window, status `stopped` | `stop` |
+| Live | stop | | Ended | agent's pane and shell closed, status `stopped` | `stop` |
 | Live | agent exits | | Ended | `exited` or `failed` | `runner` |
 | Live | pane missing | | Ended | `crashed`, with `statusBeforeCrash` | `list_tasks` |
 | Ended | resume | worktree there | Live | new `runId` | `resume`, `spawn` |
@@ -582,7 +582,7 @@ set by the run's first report.
 ### Agent status
 
 Kind: explicit. Lives in: `status` in the task's record, with `lastEvent`,
-`updatedAt`, `error`, `exitCode`, `statusBeforeCrash`, `seenBeforeCrash`.
+`updatedAt`, `error`, `exitCode`, `endedRun`, `statusBeforeCrash`, `seenBeforeCrash`.
 What the agent is doing as far as Roost knows. Emacs names it (`roost--status-name`):
 `failed` with a live pane reads `error`; `ready` with `lastEvent` `Interrupt`
 reads `interrupted`.
@@ -595,7 +595,7 @@ reads `interrupted`.
 | `permission` | Agent asks something | `ACTIVE`; `lastEvent` `Dialog` means it holds up no turn |
 | `background` | Turn ended with work left: Claude's tasks or crons, Pi's queue | `ACTIVE`; never reported by Codex or OpenCode |
 | `stopped` | Stopped with `K` | `ENDED`; `paneId`, `windowId` None |
-| `exited` | Agent's process ended 0, or its adapter said so | `ENDED` |
+| `exited` | Agent's process ended 0, or Claude said you left it | `ENDED` |
 | `failed` | Runner: agent ended non-zero, or setup failed. Hook/report: a turn ended on an error while the agent lives | `ENDED`, though the second meaning has a live agent; `live` tells them apart |
 | `crashed` | Pane gone or dead while the record said otherwise | `ENDED`; only `list_tasks` writes it |
 | `retired` | Only in a reply; older helpers left it in records, which `list_tasks` deletes | |
@@ -611,12 +611,14 @@ Invariants:
   earlier run changes nothing (manual, How it works).
 - I3. `stopped` is final until `spawn`: no source but `spawn` leaves it.
 - I4. `crashed` means the pane went (manual, What a task says), and a live pane
-  never stays `crashed`. Open: STATUS-2, STATUS-5, STATUS-7.
-- I5. `exited`/`failed` from the runner are final for that run. **Assumed, not
-  enforced:** `update_hook` guards only `stopped` and `retired`. Open: STATUS-7.
+  never stays `crashed`. An agent's own word on its end counts only if you ended
+  it: as it dies by a signal, it leaves the end to the runner, or the poll.
+- I5. `exited`/`failed` from the runner are final for that run: it notes `endedRun`,
+  and `update_hook` and the recorder take nothing of that run's status after it.
 - I6. `permission` shows while the agent waits on you, and only then, as far as
   its hooks can say. `send` depends on it: it refuses `permission` because a
-  paste and Enter could answer a menu. Open: STATUS-3, STATUS-4, STATUS-6.
+  paste and Enter could answer a menu. Unsure, it stands, as the manual allows.
+  Open: STATUS-3.
 - I7. Every status change moves `updatedAt`; nothing else does (`turn`, `rename`,
   `seen`, `inspect` keep it).
 - I8. A live agent's status can only be wrong until its next event. **Not
@@ -629,9 +631,9 @@ Invariants:
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
 | (none) | create | | `starting` | record saved, then spawned, under one lock | `make_task` |
-| any | resume | pane not live; no agent elsewhere; worktree there | `starting` | new `runId`, `error` None; `lastEvent`, `request`, `exitCode`, `statusBeforeCrash` left as they were | `resume`, `spawn` |
-| any but `retired` | stop | | `stopped` | window killed if owned; `paneId`, `windowId` None; seen carried over | `stop` |
-| not `stopped`/`retired`, this run | agent's process ended | | `exited` if code 0, else `failed` | `exitCode`, `error`; after `finish()` | `runner` |
+| any | resume | pane not live; no agent elsewhere; worktree there | `starting` | new `runId`, `error` None, request forgotten; `lastEvent`, `exitCode`, `statusBeforeCrash` left as they were | `resume`, `spawn` |
+| any but `retired` | stop | | `stopped` | agent's pane and shell closed if owned; `paneId`, `windowId` None; seen carried over | `stop` |
+| not `stopped`/`retired`, this run | agent's process ended | | `exited` if code 0, else `failed` | `exitCode`, `error`, `endedRun`; after `finish()` | `runner` |
 | same | setup, copy or submodules failed | | `failed` | `error` is the reason; pane shows it | `runner` |
 | not `ENDED` | poll: pane not live | tmux answered | `crashed` | `statusBeforeCrash`, `seenBeforeCrash` | `list_tasks` |
 | `crashed` | poll: pane live | | `statusBeforeCrash`, else `ready` | seen restored | `list_tasks` |
@@ -643,25 +645,46 @@ Invariants:
 
 | From | Event | Guard | To | `lastEvent` | Effect |
 | --- | --- | --- | --- | --- | --- |
-| any | `SessionStart` | `source` not `compact` | `ready` | `SessionStart` | `source=clear` clears `lastReply` |
+| any | `SessionStart` | `source` not `compact` | `ready` | `SessionStart` | `source=clear` clears `lastReply`, and counts over reports |
 | any | `SessionStart` | `source=compact` | unchanged | unchanged | session and transcript noted |
 | any | `SessionEnd` | `reason` `clear`/`resume` | unchanged | unchanged | nothing at all |
-| any | `SessionEnd` | other reason | `exited` | `SessionEnd` | also as tmux goes: STATUS-5 |
+| any | `SessionEnd` | `reason` `prompt_input_exit`, `logout` | `exited` | `SessionEnd` | you left it: `/exit`, C-c, C-d, `/logout` |
+| any | `SessionEnd` | any other, as `other`, for SIGHUP and SIGTERM | unchanged | unchanged | session noted; the end is the runner's, or the poll's |
 | any | `UserPromptSubmit` | | `running` | same | `lastReply` None; `lastPrompt` unless it's Claude's own note |
-| any | `PreToolUse`, `PostToolUse` | none, **even from `permission`** | `running` | same | request cleared: STATUS-4 |
+| not `permission` | `PreToolUse`, `PostToolUse` | | `running` | same | |
+| `permission` | `PostToolUse` | from the agent that asked, of the tool it asked for | `running` | same | request cleared |
+| `permission` | `PreToolUse` | from the agent that asked | `running` | same | request cleared: it went on, as when what it asked for failed |
+| `permission` | `PreToolUse`, `PostToolUse` | named by a notification, not an MCP question's; the main agent's | `running` | same | request cleared |
+| `permission` | `PreToolUse`, `PostToolUse` | any other | unchanged | unchanged | `tool_answers` |
 | any | `PermissionRequest` | | `permission` | same | `request`, `requestCommand` |
 | any | `Stop` | `background_tasks` or `session_crons` | `background` | `Stop` | `lastReply` |
 | any | `Stop` | else | `ready` | `Stop` | `lastReply` |
 | any | `StopFailure` | | `failed` | same | `error`, `lastReply` |
-| any | `Notification` | `permission_prompt`, `worker_permission_prompt`, `agent_needs_input` | `permission` | `Notification` | names the request if none was |
+| any | `Notification` | `permission_prompt`, `worker_permission_prompt`, `agent_needs_input`, `elicitation_dialog`, `elicitation_url_dialog` | `permission` | `Notification` | names the request if none was |
 | `starting`, `running` | `Notification` | `idle_prompt` | `ready` | `Notification` | |
 | others | `Notification` | `idle_prompt` | unchanged | | |
-| any | `Notification` | any other type, as `elicitation_dialog` | unchanged | | STATUS-6 |
+| `permission` | `Notification` | `elicitation_response`, `elicitation_complete`; `requestQuestion`, so an MCP server's question asks, and nothing beside it | `running` | `Notification` | request cleared |
+| any | `Notification` | any other type | unchanged | | |
 
 Claude waits for a hook before it goes on, and the captures show `PreToolUse`,
 `PermissionRequest`, `PostToolUse` in order. Whether it waits for `Notification`,
 which comes on a timer, isn't established. Subagents' tool events come through
-the same hooks, beside the main agent's, with `agent_id`.
+the same hooks, beside the main agent's, with `agent_id`, which the main agent's
+lack; no capture has one yet. As a request waits, a tool called together with
+the one that asked may still end, and is left out by its arguments: a tool's end
+agrees with the request on each argument both name, as a question's end adds its
+answers, and Codex's leaves out a `description`. A next `PreToolUse` from that
+agent counts as going on, though one called together with it could land after
+the request; its notification, six seconds on, then shows `permission` again.
+What stands may stand long: a subagent declined that calls no tool again, and
+another agent's request (`worker_permission_prompt`, `agent_needs_input`), which no
+tool's event ends, each show `permission` until the turn ends.
+
+Between `SessionEnd` and the process's end, a moment: with `prompt_input_exit`, an
+unrelayed task reads `exited` and a relayed one what it was, and with `other`, both
+read what they were, while the pane is live. `send` reaches an agent on its way
+out, and `resume` says it still runs. Then the runner records the end, or the
+pane has gone with it and the poll says `crashed`.
 
 #### Codex, unrelayed (`CodexAgent.observe`, after `concerns`)
 
@@ -671,9 +694,9 @@ agent. No `Notification`; no `background`; `error` isn't reset by hooks.
 | From | Event | To | `lastEvent` | Effect |
 | --- | --- | --- | --- | --- |
 | any | `SessionStart` | `ready` | same | `source=clear` clears `lastReply` |
-| any | `SessionEnd` | `exited` | same | schema's only `reason` is `other` |
+| any | `SessionEnd` | unchanged | unchanged | its schema's only `reason` is `other`: the end is the runner's, or the poll's |
 | any | `UserPromptSubmit` | `running` | same | |
-| any | `PreToolUse`, `PostToolUse` | `running` | same | also from `permission`: STATUS-4 |
+| any | `PreToolUse`, `PostToolUse` | `running` | same | from `permission`, as Claude's above |
 | any | `PermissionRequest` | `permission` | same | |
 | any | `Stop` | `ready` | `Stop` | `lastReply` |
 | any | `Interrupt` | `ready` | `Interrupt` | Esc, or a declined request |
@@ -721,8 +744,9 @@ plugin folds into these.
 #### Reports, relayed (`apply_program_status`)
 
 `T` = the adapter's `reports_turns` (Claude, Pi, OpenCode true; Codex false).
-A report with an `id` is a subagent's, and left out. For Codex, a report read
-before `hookAt` is dropped first. Conditions are tried in this order:
+A report with an `id` is a subagent's, and left out. A report read before `hookAt`
+is dropped first; Codex's hooks set that, and Claude's `SessionStart` with
+`source=clear`. Conditions are tried in this order:
 
 | From | State | Guard | To | `lastEvent` |
 | --- | --- | --- | --- | --- |
@@ -739,13 +763,17 @@ before `hookAt` is dropped first. Conditions are tried in this order:
 `done` and `idle`, and gives way to `working` and `blocked`.
 
 Notes, not findings: `background` then `blocked` then `idle` ends at `ready`, so
-the background work is forgotten until the next turn. An `idle` after a slash
-command's `working` reads `interrupted`: STATUS-8.
+the background work is forgotten until the next turn. `/clear` reports `working`,
+then `idle`, which reads `Interrupt` until its `SessionStart` lands, about 60 ms
+on. Other slash commands that report `working` may read `interrupted` too; no
+capture has one.
 
 Illegal or refused: `update_hook` and the recorder ignore `stopped`, `retired`
-and any other `runId`. Nothing refuses a hook after `exited` or `failed`.
+and any other `runId`. After the runner's end (`run_ended`), the recorder ignores
+that run, and `update_hook` keeps only what a hook says beside the status, as
+its reply.
 
-Open: STATUS-2, 3, 4, 5, 6, 7, 8.
+Open: STATUS-3.
 
 ### Who wins: hooks, reports, poll, runner
 
@@ -757,7 +785,7 @@ Four sources write one field. This says which counts when they disagree.
 | Mode | How you can tell | Status comes from |
 | --- | --- | --- |
 | Unrelayed | `programStatusRun` != `runId` | Hooks, in order of the lock; the poll for Claude's Esc and approvals |
-| Relayed, turns (Claude, Pi) | `programStatusRun` == `runId`, `reports_turns` | Reports. Hooks keep their other fields, and their status only if `failed`, or `background` from `running`/`ready` |
+| Relayed, turns (Claude, Pi) | `programStatusRun` == `runId`, `reports_turns` | Reports. Hooks keep their other fields, and their status only if `failed`, `background` from `running`/`ready`, or Claude's `SessionStart` with `source=clear`, as reports can't say that a new conversation started |
 | Relayed, hooks (Codex) | same, not `reports_turns` | Hooks, but for `running` from `permission`. Reports for what hooks miss: a request, its approval, `idle` after a failed request, `error`. A report read before `hookAt` is older news |
 
 Before a relayed run's first report it counts as unrelayed. The poll's guesses
@@ -777,8 +805,8 @@ Invariants:
 - I3. A hook is recorded before its agent goes on (Claude, Codex), or in order
   with the next (Pi, OpenCode): "it runs its hooks before it goes on" at
   `apply_program_status`. **Broken by timeouts:** an event may never be recorded
-  (STATUS-3). And by subagents, whose hooks aren't ordered with the main
-  agent's (STATUS-4).
+  (STATUS-3). Subagents' hooks aren't ordered with the main agent's, so a tool's
+  event ends a request only from the agent that asked.
 
 Is the outcome the same in any order? Replayed: each capture in
 `test/captures` with each event delivered up to three places late.
@@ -788,7 +816,7 @@ Is the outcome the same in any order? Replayed: each capture in
 | Report later than following hooks (the queue waits for the lock) | Yes | Same end, each step, for all relayed captures: Claude's hooks hold only other fields, and Codex's `hookAt` drops the old report |
 | Report later than another report | No: one queue | |
 | Hook later than the agent's next event | Not for an awaited hook of one agent | Different, and stays so until the next event, for `Stop`, `PermissionRequest` |
-| `PermissionRequest` and another agent's tool event, unrelayed | Yes, with subagents | Last one wins: STATUS-4 |
+| `PermissionRequest` and another agent's tool event, unrelayed | Yes, with subagents | `permission`, either way |
 
 Disagreements, and who wins:
 
@@ -798,26 +826,30 @@ Disagreements, and who wins:
 | Hook `Stop` with work left, report `done`, either order | Hook: `background` | Yes |
 | `StopFailure`, report `done`/`idle`, either order | Hook: `failed` | Yes |
 | Hook `PostToolUse` during `permission`, Codex relayed | Dropped | Yes |
-| The same unrelayed, any agent | Hook | No: STATUS-4 |
-| `SessionEnd` as tmux goes, unrelayed | Hook: `exited` | No: STATUS-5 |
-| The same relayed | Poll: `crashed` | Yes |
-| Hook after the runner's end | Hook, then the poll: `crashed` | No: STATUS-7 |
+| The same unrelayed, Claude or Codex | The request, unless the hook is the agent that asked moving on | Yes |
+| `SessionEnd` as tmux goes, relayed or not | Poll: `crashed` | Yes |
+| Hook after the runner's end | Runner: the hook keeps only what it says beside the status | Yes |
+| Claude's `SessionStart` with `source=clear`, report `idle`, either order | Hook: `ready`, `SessionStart` | Yes |
 | Poll `crashed`, then a hook of a live agent | Hook, and `statusBeforeCrash` goes stale, unused | Yes |
-| Poll `crashed`, then relayed `done` | Neither: the report changes nothing, and recovery brings back `running` | Would be wrong, but needs a false `crashed`: since the C locale fix, only STATUS-2's is known, which never recovers |
+| Poll `crashed`, then relayed `done` | Neither: the report changes nothing, and recovery brings back `running` | Would be wrong, but needs a false `crashed`, and none is known since the C locale fix |
 
-Open: STATUS-3, 4, 5, 7.
+Open: STATUS-3.
 
 ### A task's request
 
-Kind: implicit. Lives in: `request`, `requestCommand`, `requestFrom`, `activity`.
+Kind: implicit. Lives in: `request`, `requestCommand`, `requestFrom`,
+`requestCall`, `requestQuestion`, `activity`.
 What the agent asks, in words; the command to watch start; whether the words are
-the agent's own report; what it says it's doing.
+the agent's own report; which tool call will say it's over; what it says it's doing.
 
 | State | Meaning | How you can tell |
 | --- | --- | --- |
 | None | Nothing asked | no `request` |
 | Named by a hook | From the tool's payload, or a notification's message | `request`, no `requestFrom` |
-| Watching a command | As above, for Bash | `requestCommand`, at most 200 characters |
+| Watching a command | As above, for the main agent's Bash, as the poll can't tell whose process it sees | `requestCommand`, at most 200 characters |
+| Knowing its tool | Named by a hook that names a tool | `requestCall`: who asked, the tool, a digest of each argument |
+| Overlapping | Another agent asks, by `worker_permission_prompt` or `agent_needs_input`, or anything new asks beside a request, unrelayed | `requestCall` names no agent that reports; no `requestCommand` or `requestQuestion` |
+| An MCP question alone | The first thing to ask since the agent last didn't | `requestQuestion` |
 | Named by a report | The agent's words | `requestFrom` = `report` |
 
 Emacs shows `request` only while `status` is `permission`
@@ -828,28 +860,42 @@ Invariants:
 - I1. A request belongs to the question that named it.
 - I2. A report's words give way to a hook's, and to the next report.
 - I3. A notification that follows a request, naming no tool, keeps it.
+- I4. A tool's event ends a request only from the agent that asked: the end of what
+  it asked for, or its next tool (`tool_answers`). Without `requestCall`, a
+  notification named it, and only the main agent's event does. `requestQuestion`
+  is ended by word that it was answered, and by no tool's event. Unsure, it stands.
+- I5. Overlapping requests end together: one answer can't say the other was, so
+  no tool's event, answer or approval ends them. Only the turn's end, as `Stop` or
+  the poll's Esc, a new prompt, or the run's end does. A `permission_prompt`
+  beside a request is taken for the notification that follows it, as it can't be
+  told from one, but for a question's, which has none.
 
 | From | Event | Guard | To | Code |
 | --- | --- | --- | --- | --- |
-| any | hook that asks, naming a tool | | hook-named; `requestFrom` gone; `requestCommand` if Bash | `update_hook` |
+| any | hook that asks, naming a tool | | hook-named; `requestFrom` gone; `requestCommand` if Bash; `requestCall` | `update_hook` |
 | any | adapter names it (`named`) | | same | `update_hook` |
 | any | hook that asks, naming nothing | was `permission` | unchanged | `update_hook` |
-| any | hook that doesn't ask | unrelayed, or Codex; not `permission` to `permission` | None | `update_hook` |
+| any | hook that doesn't ask | unrelayed, Codex, or a new conversation; not `permission` to `permission` | None | `update_hook` |
+| any | a tool's event that isn't an answer | unrelayed | unchanged | `tool_answers`, `update_hook` |
+| An MCP question alone | `elicitation_response`, `elicitation_complete` | | None | `update_hook` |
+| any but Overlapping | `PermissionRequest`, or a notification of an MCP question, while `permission`; a `permission_prompt` beside a question | unrelayed | Overlapping | `update_hook` |
+| any | notification of another agent's request | unrelayed | Overlapping | `update_hook` |
 | None, report-named | report `blocked` | `permission` now | report-named; words from `msg`, or `kind` | `apply_program_status` |
 | hook-named | report `blocked` | | unchanged | `apply_program_status` |
 | any | report leaves `permission`, or anything but `running` | | None | `apply_program_status` |
-| any | poll: Interrupt or Approved | | None, `requestFrom` left | `list_tasks` |
-| any | stop, runner's end, crash, spawn | | **unchanged** | |
+| any | poll: Interrupt or Approved | | None | `list_tasks` |
+| any | stop, runner's end, crash | | unchanged, and shown only while `permission` | |
+| any | spawn | | None, `activity` too | `spawn` |
 
-A hook-named request survives a run's end, and the next run's first `blocked`
-keeps it: STATUS-9. Any first status event of the next run clears it, so only a
-dialog as the agent starts shows it.
+Known, and left: two calls of one tool with the same arguments, one approved and one
+waiting. The first's end reads as the second's, which `tool_answers` can't tell
+apart, as a request carries no ID of its call.
 
-Open: STATUS-9.
+Open: none.
 
 ### A run and its pane
 
-Kind: implicit. Lives in: `runId`, `paneId`, `windowId`, `windowIndex`,
+Kind: implicit. Lives in: `runId`, `paneId`, `panePid`, `windowId`, `windowIndex`,
 `session`, `shellPaneId`, `helper`; the pane option `@roost_task_id`;
 `remain-on-exit`; tmux itself.
 Which process is this task's agent, and whether Roost may touch it.
@@ -857,47 +903,50 @@ Which process is this task's agent, and whether Roost may touch it.
 | State | Meaning | How you can tell |
 | --- | --- | --- |
 | No run | Stopped, or made and never spawned | `paneId` None |
-| Owned, live | The run's pane | `owned_pane`: tag and window match, not dead |
+| Owned, live | The run's pane | `owned_pane`: tag and `panePid` match, not dead |
 | Owned, dead | The runner ended; the pane holds its last output | `owned_pane`, `dead` |
 | Gone | No such pane | not in the inventory |
 | Reused | Another pane has the ID, after tmux restarted | ID there, tag differs |
-| Moved | The run's pane, in another window | ID and tag match, window differs |
-| Respawned | Another process in the run's pane | `owned_pane`, not dead, pane's process isn't the runner |
+| Moved | Owned, in another window or session | `windowId`, `windowIndex` and `session` follow it at the next `list`, `inspect` or `shell` |
+| Respawned | Another process in the run's pane | ID and tag match, `panePid` doesn't: not owned |
 | Unknown | tmux didn't answer | `pane_inventory` None; `live` None |
 
 Invariants:
 
-- I1. Roost steers or kills only a pane it owns: tag and window, "prevents steering
-  or killing an unrelated process with the same ID" (`owned_pane`).
+- I1. Roost steers or kills only a pane it owns: its tag "prevents steering or
+  killing an unrelated process with the same ID" (`owned_pane`), which is all that
+  tells panes apart after tmux restarts, when window IDs start over too.
 - I2. One agent per task. `resume` refuses a live pane, and an agent started by
   hand in the task's session (`agent_elsewhere`).
 - I3. `runId` changes at each `spawn`, before the window starts; the runner waits
   on the lock until it is saved, and closes its window if the record names
   another run.
-- I4. Owned means the agent's runner. **Assumed, never checked:** the tag stays on
-  whatever tmux starts in the pane (STATUS-2).
-- I5. Not owned means not running. **Assumed by `stop`, `resume` and
-  `list_tasks`:** a moved pane runs on (STATUS-2).
+- I4. Owned means the agent's runner: the tag stays on whatever tmux starts in the
+  pane, so `spawn` notes the process tmux started, and only that is owned. A task
+  whose run began before `panePid` is taken as it is, until it resumes.
+- I5. Not owned means the agent isn't in that pane: the tag goes where the pane goes.
+- I6. What Roost closes is the agent's pane and the task's shell, where tmux has
+  them as it closes them, each with its window if nothing else is in it
+  (`close_panes`): a pane of yours beside them stays.
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
-| No run, Gone, Reused, Owned dead | `resume` | | Owned, live | dead window killed; new `runId`; session named for the task; `shellPaneId` gone | `resume`, `spawn` |
+| No run, Gone, Reused, Respawned, Owned dead | `resume` | | Owned, live | dead pane and the task's shell closed; new `runId`; session named for the task; `shellPaneId` gone | `resume`, `spawn` |
 | Owned, live | `resume` | | refused | "still running" | `resume` |
-| Moved | `resume` | | new pane; **the old one goes on** | STATUS-2 | `resume` |
-| Owned | `stop` | | No run | window killed, shell with it | `stop` |
-| Moved, Gone, Reused | `stop` | | No run | nothing killed; IDs forgotten | `stop` |
+| Owned | `stop` | | No run | `close_panes` | `stop` |
+| Gone, Reused, Respawned | `stop` | | No run | only the task's shell closed; IDs forgotten | `stop` |
 | Owned, live | runner ends | | Owned, dead | | `remain-on-exit` |
 | Owned, live | tmux restarts | | Gone or Reused | runner killed by SIGHUP, with no end recorded | |
 | Owned, live | `kill-pane` | | Gone | shell pane, if any, stays in its window | |
-| Owned, live | `break-pane`, `join-pane`, `move-pane` | | Moved | `crashed` at the next poll, hooks flip it back | |
-| Owned, dead | `respawn-pane` | | Respawned | `live` true; `send` pastes there: STATUS-2 | |
+| Owned | `break-pane`, `join-pane`, `move-pane` | | Moved | still owned; a shell it left stays, and `shell` opens one beside it | `list_tasks`, `inspect`, `shell` |
+| Owned | `respawn-pane` | | Respawned | not `live`: `send` refused; a status not in `ENDED` reads `crashed` | `owned_pane` |
 | any | a window a failed request made | `runId` differs | closes | `remain-on-exit` off | `runner` |
 
 What an earlier run can still do. Its hooks and reports return at the `runId`
 check; its runner writes nothing, as each write checks `runId`. Its Claude keeps
 the path of `<id>.settings`, which the next run rewrites, so an old Claude still
-alive would, if it reloads settings, report as the new run. Only STATUS-2 leaves
-one alive.
+alive would, if it reloads settings, report as the new run. None is known to
+stay alive.
 
 `stop`, `resume` and a restart, against each in-flight source:
 
@@ -905,9 +954,9 @@ one alive.
 | --- | --- | --- | --- | --- |
 | `stop` | Dropped: `stopped` | Dropped: `stopped`, or its runner died | No effect: `ENDED` | Killed by SIGHUP, or writes nothing: `stopped` |
 | `resume` | Dropped: `runId` | Dropped: `runId` | Under the lock | The old one has ended; new one waits for the lock |
-| tmux restart | Lands. `SessionEnd` of Claude, unrelayed: `exited` (STATUS-5). Others: then `crashed` | Lost with its runner, which changes nothing | `crashed`, or `{}` for all tasks of the socket | Killed: no end recorded |
+| tmux restart | Lands, and Claude's `SessionEnd`, reason `other`, says nothing of its status | Lost with its runner, which changes nothing | `crashed`, or `{}` for all tasks of the socket | Killed: no end recorded |
 
-Open: STATUS-1, STATUS-2.
+Open: none.
 
 ### The runner's stages
 
@@ -933,10 +982,12 @@ Invariants:
 - I2. Each stage may run again whole. `copy_included` never writes over a file;
   its staging folder is emptied first; setup is the project's to make so.
 - I3. Setup runs on a first run, and on a resume only if it never finished.
-- I4. `resume` of a task that never reached its agent gives it its prompt, as no
-  conversation exists yet: `launch` passes `--resume` only with a session.
-  **Holds only until Claude says its session's ID, which comes before anything
-  is written to it:** STATUS-1.
+- I4. `resume` of a task with no conversation yet gives it its prompt: `launch`
+  passes `--resume` only with a session, and for Claude, which says its session's
+  ID before anything is written to it, only with the transcript it said it would
+  write (`has_conversation`). A session it never said that of is left to `--resume`.
+  Codex and OpenCode name a session only at the first turn, and Pi starts on a
+  session file that isn't there.
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
@@ -951,9 +1002,9 @@ Invariants:
 | any stage | SIGHUP, as `stop` | | gone | flag stays False; next run redoes it | |
 | Agent | ends | this run, not `stopped` | Ended | see [Agent status](#agent-status) | `runner` |
 
-Checked: a stop or kill in each stage, then resume. Sound, but for I4.
+Checked: a stop or kill in each stage, then resume. Sound.
 
-Open: STATUS-1.
+Open: none.
 
 ### The relay and its recorder
 
@@ -1048,7 +1099,8 @@ Invariants:
 - I2. OpenCode: the task works while any root session's turn does, and waits on
   you while any question does.
 - I3. Nothing outlives the agent's exit but a report already started, which dies
-  by SIGHUP as the runner exits, or lands first: STATUS-7.
+  by SIGHUP as the runner exits, or lands first, and then says nothing of the
+  status (`run_ended`).
 
 OpenCode's plugin, per root session:
 
@@ -2758,9 +2810,9 @@ By the agent's status, where `L` is a pane that's live, and `D` one dead or gone
 | `stopped` | Refused | Yes | Yes | Yes | Yes |
 
 `retire` and `merge` stop a live agent as they go; `update` leaves it running.
-`send` to `exited` with a live pane reaches whatever runs there: STATUS-2. A false
-`running` passes `send`'s check, where `permission` would be refused: STATUS-4.
-No state lacks a way out, but for STATUS-1.
+A pane running something else since the runner, as after `respawn-pane`, counts as
+`D`. A false `running` passes `send`'s check, where `permission` would be refused,
+which is why a request stands while unsure. No state lacks a way out.
 
 ### Writers
 
@@ -2779,8 +2831,9 @@ registry lock.
 | `looked` | `record_look` | re-read, compared with the look it measured from |
 | `seen` | `seen`, `stop`, `list_tasks` | yes (a late `seen` can set an older value: [Seen, on the host](#seen-on-the-host)) |
 | `turn` | `turn` | yes |
-| `runId`, `paneId`, `windowId`, `helper` | `spawn`, `stop` | yes |
-| `session`, `windowIndex` | `spawn`, `resume`, `list_tasks`, `shell` | yes |
+| `runId`, `paneId`, `panePid`, `helper` | `spawn`, `stop` | yes |
+| `endedRun` | `runner` | yes |
+| `session`, `windowIndex`, `windowId` | `spawn`, `resume`, `stop`, `list_tasks`, `inspect`, `shell` | yes |
 | `shellPaneId` | `shell`, `spawn`, `stop` | yes |
 | `name`, `task`, `renamedAt` | `rename` | yes |
 | `setupComplete`, `copyComplete`, `submodulesComplete`, `allSubmodules` | `runner` | yes, fresh read each |
