@@ -105,7 +105,7 @@ Within a severity, they are ranked by what they cost and how often they happen.
 | 24 | STATUS-5 | S3 | As tmux goes, a Claude task reads `exited`, not `crashed` | [Who wins](#who-wins-hooks-reports-poll-runner) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
 | 25 | STATUS-7 | S3 | A report landing after the runner's end turns `exited` into `crashed` | [Agent status](#agent-status) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
 | 26 | FORGE-8 | S3 | A failed review query takes back what a pull request waits on you for, then notifies again | [What the forge last said](#what-the-forge-last-said) | Open, [#228](https://github.com/csheaff/roost/issues/228) |
-| 27 | FORGE-9, REQUESTS-4 | S3 | Conflicts there when Roost first saw a task notify after every restart | [News of a turn](#news-of-a-turn) | Open, [#228](https://github.com/csheaff/roost/issues/228) |
+| 27 | FORGE-9, REQUESTS-4 | S3 | Conflicts there when Roost first saw a task notify after every restart | [News of a turn](#news-of-a-turn) | Fixed, `roost-a-conflict-from-before-a-restart-is-no-news` |
 | 28 | VIEWS-4 | S3 | A prompt draft reads its task as it was when it opened | [The prompt draft](#the-prompt-draft) | Open, [#226](https://github.com/csheaff/roost/issues/226) |
 | 29 | VIEWS-6 | S3 | A note taken out of a draft is cleared unsent | [A review note](#a-review-note) | Open, [#229](https://github.com/csheaff/roost/issues/229) |
 | 30 | VIEWS-10 | S3 | A note edited as its draft goes loses the edit | [A review note](#a-review-note) | Open, [#229](https://github.com/csheaff/roost/issues/229) |
@@ -1686,14 +1686,14 @@ say what is no longer so.
 
 | State | Meaning | How you can tell |
 |---|---|---|
-| Unmeasured | Never measured here | No `landed` field |
+| Unmeasured | Never measured here | No `conflicts` field. `landed` isn't enough: a poll that asks GitHub says it of what it asked about, unmeasured |
 | Measured | Fields are as new as its last change | `gitStamp` and `updatedAt` as when measured |
 | Owed | Changed since, measurement asked | Its ID is in pending, in a list in flight, or in `roost--measures-owed` |
 
 Invariants:
 - I1. A change any reply brings gets a measurement, unless that reply measured it. Nothing leaves Owed but by being measured: a list dropped, failed or never started owes it to the next poll.
 - I6. Measuring goes at the pace of polls: a quiet poll's changes go right after it, and what a list of some tasks brings of others goes with the next poll, or two busy agents would be measured back to back.
-- I2. `roost--report-turn` acts only on a measured task (`assq 'landed`). The same guard is missing from notifications: FORGE-9 / REQUESTS-4.
+- I2. What waits on you isn't told, or reported, until the task is measured (`roost--judged-p`).
 - I3. A stale list reply never overwrites a newer action: `roost--revisions`.
 - I4. An open pull request's conflict is the forge's word, otherwise Git's.
 - I5. `conflicts` is left to Git only where it means something: null with the
@@ -1786,7 +1786,7 @@ Invariants:
 - I1. Only Emacs judges; the host only notes (`turn`).
 - I2. `turn` isn't an agent event: `updatedAt` stays.
 - I3. Nothing is told until the task is measured and the forge has spoken
-  (`roost--report-turn`'s guard), or a turn would seem to end at every restart.
+  (`roost--judged-p`), or a turn would seem to end at every restart.
 - I4. `roost--turns-sent` empties on every reply, and if the request can't start, so a failure is sent again.
 - I5 (assumed). Every Emacs on a host works out the same turn. **Broken for a
   stopped task, whose seen lives only in the Emacs that opened it: FORGE-11.**
@@ -1818,22 +1818,24 @@ Kind: implicit. Lives in: `roost--pr-verdicts`; `roost--held-notices`,
 
 | State | Meaning | How you can tell |
 | --- | --- | --- |
-| unknown | Roost hasn't seen the task | `roost--pr-verdicts` has no entry |
+| unknown | Roost can't tell yet: `roost--judged-p` isn't so | `roost--pr-verdicts` has no entry |
 | known nil | | entry nil |
 | known turn | | entry is the turn |
 | held | Gathering for 60 s | a notice with no `:recorded` |
 
 Invariants:
 
-- I1 (comment in `roost--cache-task`). What was there when Roost first saw the
-  task is no news. **Broken: FORGE-9.**
+- I1 (comment in `roost--cache-task`). What was there when Roost first measured the
+  task is no news. A quiet list says nothing of what waits, so what it says is no
+  verdict.
 - I2. Nor one that comes as you stop its agent, or while you watch it.
 - I3. One that's so no longer doesn't go.
 - I4. The same state isn't news twice. **Broken: FORGE-8.**
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
-| unknown | First cached | | known | Nothing said | `roost--cache-task` |
+| unknown | Cached, not judged | | unknown | Nothing said | `roost--cache-task` |
+| unknown | First judged | | known | Nothing said | `roost--cache-task` |
 | known nil | Turn appears | not watched, not just stopped | known turn, held | | same |
 | held | 60 s | still so, unseen, unwatched | gone | Notified | `roost--send-notices` |
 | held | Not so any more | | gone | Dropped | `roost--notice-still-p` |
@@ -1843,7 +1845,7 @@ Invariants:
 with a pull request still open and failing notifies `ci failed` and reads `merged`.
 That is true of the pull request, and clears when it closes.
 
-Open: FORGE-8, FORGE-9.
+Open: FORGE-8.
 
 ### Merges reported
 
@@ -1890,7 +1892,7 @@ grouped by what each view says (234 distinct results).
 | `interrupted` | Until seen | `lastEvent` | Yes | Yes | Yes | Colour |
 | `error`, `failed`, `crashed` | Until seen | status | Yes | Yes | Yes | **Colour after too: FORGE-7** |
 | `exited` | Until seen | status | Yes | Yes | Yes | Dim |
-| `conflicts` | Once seen | see 5 | Yes | Yes | Yes, or at restart: FORGE-9 | Colour |
+| `conflicts` | Once seen | see 5 | Yes | Yes | Yes | Colour |
 | `to merge`, `ci failed`, `comments` | Once seen | see 7 | Yes | Yes | Yes | Colour |
 | `running`, `background` | No | status | No | No | No | Dim |
 | `stopped` | No | status | No | No | No | Dim |

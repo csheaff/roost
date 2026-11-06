@@ -4,6 +4,10 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Conflicts or a pull request that waited on you before Emacs started no
+  longer notify as it starts, when you watch from your configuration, nor a
+  pull request after an outage. A first list says nothing of them, which
+  read as nothing waiting. Nothing to do when upgrading.
 - A change a poll saw is measured, however the list measuring it ended. If
   that list failed, or a reply from another action made it stale, or the
   change came with a list measuring another task, the row kept its diff,

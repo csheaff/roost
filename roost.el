@@ -1177,18 +1177,20 @@ must a reply with a newer look lose it for an older agent event."
           (unwatched (lambda ()
                        (not (when-let* ((watched (roost--watched-task)))
                               (equal (roost--key watched) key))))))
-      (if (gethash key roost--tasks)
-          (puthash key turn roost--pr-verdicts)
-        (remhash key roost--pr-verdicts)
-        (remhash key roost--agent-news))
+      ;; Unknown until measured: a quiet list says nothing of what waits, so
+      ;; what was there all along would read as news from the first that does.
+      (cond ((not (gethash key roost--tasks))
+             (remhash key roost--pr-verdicts)
+             (remhash key roost--agent-news))
+            ((roost--judged-p task) (puthash key turn roost--pr-verdicts)))
       ;; One held about it that is so no longer goes no more, though the
       ;; task may come to be so again before it would go.
       (when-let* ((held (seq-find (lambda (notice) (equal (plist-get notice :key) key)) roost--held-notices)))
         (unless (roost--notice-still-p held (gethash key roost--tasks))
           (roost--drop-notices key)))
       ;; A pull request or work that comes to wait on you is news, whatever
-      ;; its agent last said; one there when Roost first saw the task is
-      ;; not, nor one that comes as you stop its agent.  Before the
+      ;; its agent last said; one there when Roost first measured the task
+      ;; is not, nor one that comes as you stop its agent.  Before the
       ;; agent's news, which replaces it when both come.
       (when (and roost-notify turn (not (eq had 'unknown)) (not (equal had turn))
                  (not (and (equal status "stopped") (not (equal previous "stopped"))))
@@ -6957,19 +6959,26 @@ has it.  Its host notes it, for `roost-workload'."
   (unless (roost--merged-p task)
     (or (roost--pr-turn task) (and (roost--conflict-turn task) "conflicts"))))
 
+(defun roost--judged-p (task)
+  "Whether what of TASK waits on you can be told yet.
+That is once its host has measured it, which a list with its pull
+requests but not its Git statistics hasn't, and GitHub has said how its
+open pull request is: the one `roost--pr-view' has."
+  (let ((view (roost--pr-view task)))
+    (and (assq 'conflicts task)
+         (or (not (memq (roost--pr-state view) '(open draft))) (roost--field view 'prStatus))
+         t)))
+
 (defun roost--report-turn (task)
   "Tell TASK's host when `roost--turn' changes for it, as its record has it.
 Only Emacs asks GitHub, and judges what it says: the host's history
-notes it beside what the agent did.  Not until the host has measured
-the task, and GitHub has said how its open pull request is, or a turn
-it had would seem to end: the one `roost--pr-view' has."
+notes it beside what the agent did.  Not until `roost--judged-p', or a
+turn it had would seem to end."
   (let ((key (roost--key task))
-        (turn (roost--turn task))
-        (view (roost--pr-view task)))
+        (turn (roost--turn task)))
     (cond ((equal turn (roost--field task 'turn)) (remhash key roost--turns-sent))
           ((equal turn (gethash key roost--turns-sent 'none)))
-          ((and (assq 'landed task)
-                (or (not (memq (roost--pr-state view) '(open draft))) (roost--field view 'prStatus)))
+          ((roost--judged-p task)
            (puthash key turn roost--turns-sent)
            (let ((sent (lambda ()
                          (when (equal (gethash key roost--turns-sent 'none) turn)

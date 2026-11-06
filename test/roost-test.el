@@ -7208,6 +7208,109 @@ stopped."
    (roost-refresh t)
    (should (alist-get 'pullRequests (plist-get (roost-test--take "list") :parameters)))))
 
+(defun roost-test--notices-held ()
+  "The status of each notification held."
+  (mapcar (lambda (notice) (plist-get notice :status)) roost--held-notices))
+
+(defun roost-test--conflicting (task)
+  "TASK as a list that measured it gives it, in conflict with its branch."
+  (roost-test--measured task '(conflicts "ledger.py")))
+
+(ert-deftest roost-a-conflict-from-before-a-restart-is-no-news ()
+  ;; Watching from your configuration, the first list is a quiet poll, which
+  ;; measures nothing and has each task new to it measured next.  The
+  ;; turn read as nil, then `conflicts': a notification, at each start, of
+  ;; what you had known for days.
+  (roost-test--with-held-requests
+   (let ((roost-notify t) (task (roost-test--listed roost-test--x)))
+     (roost-refresh t)
+     (roost-test--answer "list" (list task))
+     (roost-test--answer "list" (list (roost-test--conflicting (roost-test--listed roost-test--x))))
+     (should (equal (roost--display-status (gethash (list "dev" roost-test--x) roost--tasks)) "ready"))
+     (should-not roost--held-notices))))
+
+(ert-deftest roost-a-conflict-from-before-a-restart-is-no-news-on-a-pushed-branch ()
+  ;; A poll that asks GitHub says `landed' of what it asked about, with
+  ;; nothing measured: that isn't enough to tell.
+  (roost-test--with-held-requests
+   (let ((roost-notify t))
+     (roost-refresh t)
+     (roost-test--answer "list" (list (roost-test--listed roost-test--x '(landed))))
+     (roost-test--answer "list" (list (roost-test--conflicting (roost-test--listed roost-test--x))))
+     (should-not roost--held-notices))))
+
+(ert-deftest roost-a-conflict-found-by-a-first-full-refresh-is-no-news ()
+  (roost-test--with-held-requests
+   (let ((roost-notify t))
+     (roost-refresh)
+     (roost-test--answer "list" (list (roost-test--conflicting (roost-test--listed roost-test--x))))
+     (should-not roost--held-notices))))
+
+(ert-deftest roost-a-conflict-that-comes-is-news ()
+  ;; After the first measurement, so the tests above would see one.
+  (roost-test--with-held-requests
+   (let ((roost-notify t))
+     (roost-refresh)
+     (roost-test--answer "list" (list (roost-test--measured (roost-test--listed roost-test--x))))
+     (should-not roost--held-notices)
+     (roost-refresh)
+     (roost-test--answer "list" (list (roost-test--conflicting (roost-test--listed roost-test--x))))
+     (should (equal (roost-test--notices-held) '("conflicts"))))))
+
+(defun roost-test--open-pull-request (&rest fields)
+  "Task x, measured and seen, with an open pull request, and FIELDS over those."
+  (apply #'roost-test--measured
+         (roost-test--listed roost-test--x '(seen . "2026-10-03T20:00:00+00:00")
+                             '(pr . ((number . 12) (url . "https://example.com/12") (state . "OPEN") (head . "a1"))))
+         '(unpushed . 0)
+         fields))
+
+(defconst roost-test--to-merge
+  '(prStatus . ((state . "OPEN") (head . "a1") (checks . ((passing . 3) (failing . 0) (pending . 0)))
+                (mergeable . "MERGEABLE") (requested) (threads . 0)
+                (checkedAt . "2026-10-03T20:05:00+00:00")))
+  "What a forge says of a pull request that passed everything.")
+
+(defconst roost-test--checks-pending
+  '(prStatus . ((state . "OPEN") (head . "a1") (checks . ((passing . 2) (failing . 0) (pending . 1)))
+                (mergeable . "MERGEABLE") (requested) (threads . 0)
+                (checkedAt . "2026-10-03T20:05:00+00:00")))
+  "What a forge says of a pull request still checking.")
+
+(ert-deftest roost-a-pull-request-from-before-an-outage-is-no-news ()
+  ;; Measured, but with nothing yet from GitHub, as when it didn't answer:
+  ;; what it then says was there all along.
+  (roost-test--with-held-requests
+   (let ((roost-notify t))
+     (roost-refresh)
+     (roost-test--answer "list" (list (roost-test--open-pull-request)))
+     (roost-refresh)
+     (roost-test--answer "list" (list (roost-test--open-pull-request (copy-tree roost-test--to-merge))))
+     (should (equal (gethash (list "dev" roost-test--x) roost--pr-verdicts) "to merge"))
+     (should-not roost--held-notices))))
+
+(ert-deftest roost-a-pull-request-that-comes-to-wait-is-news ()
+  (roost-test--with-held-requests
+   (let ((roost-notify t))
+     (roost-refresh)
+     (roost-test--answer "list" (list (roost-test--open-pull-request (copy-tree roost-test--checks-pending))))
+     (should-not roost--held-notices)
+     (roost-refresh)
+     (roost-test--answer "list" (list (roost-test--open-pull-request (copy-tree roost-test--to-merge))))
+     (should (equal (roost-test--notices-held) '("to merge"))))))
+
+(ert-deftest roost-a-turn-waits-for-a-measurement-not-for-what-github-was-asked ()
+  ;; A poll that asks GitHub says `landed' with nothing measured: the turn
+  ;; the host records read as ended, and began again a moment after.
+  (roost-test--isolated
+   (let ((task (append '((landed) (turn . "conflicts")) (roost-test--task))) asked)
+     (cl-letf (((symbol-function 'roost--report-turn) roost-test--report-turn)
+               ((symbol-function 'roost--request) (lambda (&rest _) (setq asked t))))
+       (roost--report-turn task)
+       (should-not asked)
+       (roost--report-turn (cons '(conflicts) task))
+       (should asked)))))
+
 (ert-deftest roost-dashboard-groups-by-project-and-summarizes-attention ()
   (roost-test--isolated
    (roost--cache-task "dev" (append '((repo . "/home/user/ledger") (startedAt . "1")
@@ -8942,7 +9045,7 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
      `(prStatus . ,(seq-remove (lambda (field) (eq (cdr field) :none))
                                (seq-uniq fields (lambda (a b) (eq (car a) (car b))))))
      '(pr . ((number . 12) (url . "https://github.com/o/r/pull/12") (state . "OPEN") (head . "a1")))
-     '(unpushed . 0) '(live . t) '(ahead . 1) '(dirty) '(seen . "2026-10-03T20:00:00+00:00"))))
+     '(unpushed . 0) '(live . t) '(ahead . 1) '(dirty) '(conflicts) '(seen . "2026-10-03T20:00:00+00:00"))))
 
 (ert-deftest roost-a-pull-request-waiting-on-you-counts-as-waiting ()
   (roost-test--isolated
@@ -8978,7 +9081,7 @@ field (FIELD . :none) is left out."
                           (requested) (threads . 0) (checkedAt . "2026-10-03T20:01:00+00:00")))))
     (append `((worktreePr . ,(seq-remove (lambda (field) (eq (cdr field) :none))
                                          (seq-uniq fields (lambda (a b) (eq (car a) (car b)))))))
-            '((worktreeBranch . "PROJ-1-fix") (worktreeHead . "b2") (integrationBranch . "main") (live . t)
+            '((conflicts) (worktreeBranch . "PROJ-1-fix") (worktreeHead . "b2") (integrationBranch . "main") (live . t)
               (ahead . 1) (dirty) (diff . "1 file changed, 12 insertions(+), 3 deletions(-)")
               (seen . "2026-10-03T20:00:00+00:00"))
             (roost-test--task))))
@@ -13034,7 +13137,7 @@ it of the same ID's, or nil for the first."
        (let ((conflicting `((seen . "2026-10-03T20:00:00+00:00") (integrationBranch . "main")
                             (landed) (conflicts "ledger.py") ,@(roost-test--task))))
          ;; Not before its host has measured it.
-         (roost--cache-task "dev" (assq-delete-all 'landed (copy-tree conflicting)))
+         (roost--cache-task "dev" (assq-delete-all 'conflicts (copy-tree conflicting)))
          (should-not sent)
          (roost--cache-task "dev" conflicting)
          (roost--cache-task "dev" conflicting)
@@ -13055,12 +13158,12 @@ it of the same ID's, or nil for the first."
          (should (equal sent '(("dev" "turn" "conflicts") ("dev" "turn" "conflicts")))))
        ;; An open pull request waits for what GitHub says.
        (setq sent nil fail nil)
-       (roost--cache-task "dev" `((landed) (pr (number . 12)) ,@(roost-test--task "1111111111111111")))
+       (roost--cache-task "dev" `((landed) (conflicts) (pr (number . 12)) ,@(roost-test--task "1111111111111111")))
        (should-not sent)
        ;; Not the task's own, though, while the worktree's branch has the
        ;; one that waits, as when its own branch is gone, which GitHub is
        ;; asked nothing about.
-       (roost--cache-task "dev" `((id . "2222222222222222") (landed) (pr (number . 4) (state . "OPEN"))
+       (roost--cache-task "dev" `((id . "2222222222222222") (landed) (conflicts) (pr (number . 4) (state . "OPEN"))
                                   ,@(roost-test--worktree-pr-task)))
        (should (equal sent '(("dev" "turn" "to merge"))))))))
 
