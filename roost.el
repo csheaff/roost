@@ -989,7 +989,7 @@ TASK."
 
 (defconst roost--measured-fields
   '(diff dirty files size ahead behind update worktreeMissing worktreeBranch worktreeHead worktreePr prStatus
-    unpushed gitStamp agentWork merging landed conflicts pr sinceLooked)
+    unpushed gitStamp agentWork merging landed conflicts pr sinceLooked branchTip)
   "A task's fields its host measures for each reply, such as Git statistics.
 They are as new as the reply, whatever its `updatedAt': its pull
 request too, which the host records as it finds one on GitHub.")
@@ -1061,7 +1061,8 @@ must a reply with a newer look lose it for an older agent event."
     ;; Not what GitHub said of a pull request since recorded otherwise, as
     ;; by another Emacs: closed, or another in its place.
     (dolist (field '(diff dirty files size ahead behind worktreeMissing worktreeBranch worktreeHead worktreePr
-                            prStatus unpushed lastMessage gitStamp agentWork merging landed conflicts sinceLooked))
+                            prStatus unpushed lastMessage gitStamp agentWork merging landed conflicts sinceLooked
+                            branchTip))
       (unless (or (assoc field task)
                   (and (eq field 'prStatus)
                        (not (equal (roost--field task 'pr) (roost--field old 'pr)))))
@@ -3927,10 +3928,13 @@ EVENT, a click on the draft's Create button, says which draft."
          (signal (car err) (cdr err)))))))
 
 (defun roost--compose-what ()
-  "What the draft asks for, to tell whether it says that still."
-  (list (roost--compose-prompt)
-        (mapcar (lambda (field) (plist-get roost--compose-fields field))
-                '(:directory :agent :base :name :issue))))
+  "What the draft asks for, to tell whether it says that still.
+All of it, though you have narrowed it to some."
+  (save-restriction
+    (widen)
+    (list (roost--compose-prompt)
+          (mapcar (lambda (field) (plist-get roost--compose-fields field))
+                  '(:directory :agent :base :name :issue)))))
 
 (defun roost--compose-made (buffer fields task what)
   "Close BUFFER, the draft with FIELDS, as its host made TASK from WHAT.
@@ -4373,6 +4377,8 @@ gives them."
         roost--send-asked nil
         ;; Those that went, whatever is left of them here.
         roost--send-notes (seq-difference roost--send-notes (mapcar #'car notes)))
+  ;; Narrowed to some of it, what is left could be out of sight.
+  (widen)
   (let* ((start (save-excursion (goto-char (point-min))
                                 (re-search-forward "\\`\\([ \t]*\n\\)*")
                                 (point)))
@@ -4380,9 +4386,10 @@ gives them."
          (whole (and (<= end (point-max)) (equal (buffer-substring-no-properties start end) text))))
     (when whole
       (delete-region (point-min) end)
+      ;; Blank lines alone: the indentation of what you wrote is yours.
       (save-excursion
         (goto-char (point-min))
-        (skip-chars-forward " \t\n")
+        (re-search-forward "\\`\\([ \t]*\n\\)*")
         (delete-region (point-min) (point))))
     ;; One you took out of it is yours to bring back.
     (setq roost--send-notes (mapcar #'car (roost--send-notes-going)))
@@ -4428,19 +4435,25 @@ on the draft's Send button, says which draft."
         (roost--send-text
          task text
          (lambda (_task)
-           (let ((kept (and (buffer-live-p buffer)
-                            (with-current-buffer buffer
-                              (not (equal (roost--send-draft-text) text))))))
-             (when kept
-               (with-current-buffer buffer (roost--send-kept task text notes)))
-             ;; The prompt went, whatever becomes of this.
-             (condition-case err
-                 (when (roost--remove-notes
-                        ;; As you sent it: one edited as it went stays.
-                        (lambda (note) (equal (cdr (assoc (alist-get 'id note) notes)) (alist-get 'text note))))
-                   (roost--redraw))
-               (error (message "Roost could not save your review notes: %s" (error-message-string err))))
-             (unless kept (roost--close-buffer buffer))))
+           ;; Closing waits for the minibuffer, so looking at what it says
+           ;; does too: a question of the draft's own can add to it.
+           (roost--when-out-of-minibuffer
+            (lambda ()
+              (let ((kept (and (buffer-live-p buffer)
+                               (with-current-buffer buffer
+                                 (save-restriction
+                                   (widen)
+                                   (not (equal (roost--send-draft-text) text)))))))
+                (when kept
+                  (with-current-buffer buffer (roost--send-kept task text notes)))
+                ;; The prompt went, whatever becomes of this.
+                (condition-case err
+                    (when (roost--remove-notes
+                           ;; As you sent it: one edited as it went stays.
+                           (lambda (note) (equal (cdr (assoc (alist-get 'id note) notes)) (alist-get 'text note))))
+                      (roost--redraw))
+                  (error (message "Roost could not save your review notes: %s" (error-message-string err))))
+                (unless kept (roost--close-buffer buffer))))))
          (lambda (err)
            (message "Roost could not send to %s: %s" (roost--field task 'name) err)
            (when (buffer-live-p buffer)
@@ -4456,9 +4469,9 @@ on the draft's Send button, says which draft."
                (if (not (get-text-property 0 'roost-no-reply err))
                    (roost--draft-error "Could not send" err 'roost-send-submit)
                  ;; "Retries" would say too little, and the words of a
-                 ;; request of any kind too much.  Changed, it is a new prompt.
+                 ;; request of any kind too much.
                  (setq roost--draft-note
-                       (format " No reply from %s, and it may have gone · as it is, %s sends it only if it didn't"
+                       (format " No reply from %s, and it may have gone · unchanged, %s sends it only if it didn't; edited, it goes as a new prompt"
                                (roost--host-label (roost--field task 'host))
                                (substitute-command-keys "\\[roost-send-submit]")))
                  (force-mode-line-update)))))
@@ -7564,7 +7577,8 @@ won't retire, offer to discard it, which keeps that branch."
 (defun roost-merge-retire (&optional task)
   "Merge TASK's committed work into its recorded integration branch and retire.
 Dirty worktrees are refused; review and commit in Magit first.  The work
-comes in as one squashed commit, or a merge commit; see `roost-merge-style'."
+comes in as one squashed commit, or a merge commit; see `roost-merge-style'.
+A branch that moved while you were asked isn't merged: you look again."
   (interactive)
   (setq task (roost--choose task))
   (cond
@@ -7584,7 +7598,11 @@ comes in as one squashed commit, or a merge commit; see `roost-merge-style'."
                                 "Merge committed work from %s into %s and retire it? ")
                               (roost--field task 'name)
                               (or (roost--field task 'integrationBranch) "its branch"))))
-    (roost--act task "merge" (when (eq roost-merge-style 'squash) '((style . "squash")))
+    (roost--act task "merge" (append (when (eq roost-merge-style 'squash) '((style . "squash")))
+                                     ;; Where the branch was as you were asked: an
+                                     ;; agent can commit before you answer.
+                                     (when-let* ((tip (roost--field task 'branchTip)))
+                                       (list (cons 'expect tip))))
                 (lambda (merged)
                   (roost--retired-workspace merged)
                   (roost--kill-worktree-buffers merged)
@@ -7598,7 +7616,12 @@ comes in as one squashed commit, or a merge commit; see `roost-merge-style'."
                                "Squashed %s into %s, and removed its worktree and branch"
                              "Merged %s into %s, and removed its worktree and branch")
                            (roost--field task 'name)
-                           (or (roost--field task 'integrationBranch) "its branch")))))))
+                           (or (roost--field task 'integrationBranch) "its branch")))
+                (lambda (err)
+                  (message "Roost %s: %s" (roost--host-label (roost--field task 'host)) err)
+                  ;; So that `m' asks about where it is now, watching or not.
+                  (when (string-prefix-p "The task's branch has moved" err)
+                    (roost--refresh-host (roost--field task 'host) nil (list (roost--field task 'id)))))))))
 
 ;;;###autoload
 (defun roost-forget (&optional task)
@@ -7632,8 +7655,9 @@ running agent is stopped first."
 First says what would be lost, commits no other branch holds, commits in
 submodules no remote has and files not committed, here and in worktrees
 its agent made, which go too; to
-lose any, you type the task's name.  For an experiment you don't want;
-finished work is merged or retired instead."
+lose any, you type the task's name.  A task that holds more by the time
+you answer isn't discarded, and asking again says what.  For an
+experiment you don't want; finished work is merged or retired instead."
   (interactive)
   (setq task (roost--choose task))
   (let* ((name (roost--field task 'name))
@@ -7678,7 +7702,10 @@ finished work is merged or retired instead."
                (y-or-n-p (format "Discard %s, %sdeleting its worktree and branch (nothing in them would be lost)? "
                                  label (if (roost--agent-running-p task) "stopping its agent and " "")))))
         (message "%s was not discarded" name)
-      (roost--act task "discard" (list (cons 'expect (alist-get 'commit told)))
+      (roost--act task "discard" (list (cons 'expect (alist-get 'commit told))
+                                       ;; Its host counts again, as its agent may
+                                       ;; have gone on working while you read.
+                                       (cons 'told (assq-delete-all 'commit (copy-alist told))))
                   (lambda (discarded)
                     (roost--retired-workspace discarded)
                     (roost--kill-worktree-buffers discarded)
