@@ -1145,9 +1145,11 @@ they could make a word nobody said."
     (let ((status (roost--field task field))
           (had (roost--field old field)))
       (when (and had (alist-get 'reviewsFailed status)
-                 (equal (alist-get 'number (roost--field task 'pr)) (alist-get 'number (roost--field old 'pr)))
+                 ;; A worktree's says which it is of itself.
+                 (or (not (eq field 'prStatus))
+                     (equal (alist-get 'number (roost--field task 'pr)) (alist-get 'number (roost--field old 'pr))))
                  (seq-every-p (lambda (key) (equal (alist-get key status) (alist-get key had)))
-                              '(number head base)))
+                              '(number head base state)))
         (setq task (cons (cons field had) (assq-delete-all field task)))))))
 
 (defun roost--cache-task (host task)
@@ -1519,6 +1521,7 @@ those tasks, and what is owed, as `roost--measures-owed' has it, goes too."
       (unless quiet (roost--owe-measuring roost--full-refresh-pending host ids))
     (puthash host t roost--refreshing)
     (let* ((owed (unless quiet (gethash host roost--measures-owed)))
+           (new ids)
            (ids (if (and owed ids) (unless (eq owed t) (seq-union ids owed)) ids))
            (request (puthash host (1+ (gethash host roost--list-requests 0)) roost--list-requests))
            (revision (gethash host roost--revisions 0))
@@ -1530,8 +1533,12 @@ those tasks, and what is owed, as `roost--measures-owed' has it, goes too."
            ;; Nothing came of this list, so what it was for is still to do.
            ;; UNTRIED, it was no try: its reply was stale, or it never went.
            (lost (lambda (&optional untried)
-                   (unless (or quiet (and owed (not untried)))
-                     (roost--owe-measuring roost--measures-owed host ids))
+                   ;; What was owed has had its one more try; what this list
+                   ;; added to it hasn't.
+                   (let ((first-try (if (eq owed t) new (seq-difference new owed))))
+                     (cond (quiet)
+                           ((or untried (not owed)) (roost--owe-measuring roost--measures-owed host ids))
+                           (first-try (roost--owe-measuring roost--measures-owed host first-try))))
                    (when pull-requests
                      (if last-asked
                          (puthash host last-asked roost--pull-requests-asked)

@@ -7159,6 +7159,34 @@ stopped."
      (roost-test--poll-on)
      (should (equal (roost-test--y-diff) "new")))))
 
+(ert-deftest roost-a-list-that-failed-gives-up-only-on-what-had-its-try ()
+  ;; It measured y again and x for the first time: x still gets its try.
+  (roost-test--with-held-requests
+   (let ((measuring (roost-test--a-poll-sees-y-commit)))
+     (funcall (plist-get measuring :failure) "ssh: connection reset")
+     (remhash "dev" roost--failures)
+     (roost-refresh t)
+     (roost-test--answer "list" (list (roost-test--listed roost-test--x '(gitStamp . "s9"))
+                                      (roost-test--y-committed)))
+     (let ((both (roost-test--take "list")))
+       (should (equal (sort (copy-sequence (roost-test--full both)) #'string<)
+                      (list roost-test--x roost-test--y)))
+       (funcall (plist-get both :failure) "ssh: connection reset"))
+     (should (equal (gethash "dev" roost--measures-owed) (list roost-test--x))))))
+
+(ert-deftest roost-a-worktrees-pull-request-keeps-what-it-said-beside-a-new-one-of-the-tasks ()
+  ;; It says which it is itself: the task's own says nothing of it.
+  (let* ((said '((number . 7) (head . "h") (base . "main") (state . "OPEN")))
+         (old `((pr . ((number . 1))) (worktreePr . ((threads . 2) ,@said))))
+         (new `((pr . ((number . 2))) (worktreePr . ((reviewsFailed . t) ,@said)))))
+    (should (= (alist-get 'threads (alist-get 'worktreePr (roost--kept-reviews new old))) 2))))
+
+(ert-deftest roost-a-pull-request-reopened-as-its-reviews-fail-reads-open ()
+  (let* ((said '((number . 7) (head . "h") (base . "main")))
+         (old `((pr . ((number . 7))) (prStatus . ((state . "CLOSED") ,@said))))
+         (new `((pr . ((number . 7))) (prStatus . ((state . "OPEN") (reviewsFailed . t) ,@said)))))
+    (should (equal (alist-get 'state (alist-get 'prStatus (roost--kept-reviews new old))) "OPEN"))))
+
 (ert-deftest roost-a-full-refresh-that-failed-is-asked-for-again ()
   ;; After a merge, the others are measured against the branch that moved.
   (roost-test--with-held-requests
