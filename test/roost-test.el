@@ -4607,6 +4607,34 @@ terminal's, on a pty.  Skips the test where it can't be made."
              (should (equal sent '(("retire" nil nil))))))
        (delete-directory project t)))))
 
+(ert-deftest roost-finishing-a-task-says-what-it-left-in-place ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task nil (roost-test--task nil "ready")))
+         (left '("worktree /repo/.claude/worktrees/other" "branch worktree-other"))
+         said)
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host action _parameters success &rest _)
+                  (funcall success (append `((status . ,(if (equal action "forget") "forgotten" "retired"))
+                                             (leftBehind . ,left))
+                                           (roost-test--task nil "ready")))))
+               ((symbol-function 'message)
+                (lambda (format &rest args) (push (apply #'format-message format args) said)))
+               ((symbol-function 'current-message) (lambda () (car said))))
+       (dolist (action '("retire" "merge" "discard"))
+         (setq said nil)
+         ;; Beside what the action says, which the echo area would lose.
+         (roost--act task action nil (lambda (_) (message "Done")))
+         (should (equal (car said)
+                        "Done; left in place: worktree /repo/.claude/worktrees/other, branch worktree-other")))
+       ;; Which says so itself.
+       (setq said nil)
+       (roost--act task "forget")
+       (should-not said)
+       ;; With nothing left, nothing is said of it.
+       (setq left nil)
+       (roost--act task "retire")
+       (should-not (seq-find (lambda (text) (string-search "left in place" text)) said))))))
+
 (ert-deftest roost-a-merge-under-way-in-a-task-says-so-until-it-is-done ()
   ;; Declining to have the agent resolve an update's conflicts left them,
   ;; while the panel still said the integration branch had moved on.

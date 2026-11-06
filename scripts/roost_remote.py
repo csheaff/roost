@@ -50,7 +50,8 @@ ENDED = ("stopped", "exited", "failed", "crashed")
 # Computed per request and never persisted in a task record.
 TRANSIENT = ("live", "diff", "dirty", "files", "size", "ahead", "behind", "update", "worktreeMissing",
              "prStatus", "unpushed", "lastMessage", "gitStamp", "agentWork", "merging", "landed", "conflicts",
-             "sinceLooked", "teardownFailure", "teardownOutput", "worktreePr", "worktreeHead", "branchTip")
+             "sinceLooked", "teardownFailure", "teardownOutput", "worktreePr", "worktreeHead", "branchTip",
+             "leftBehind")
 LAST_MESSAGE_TAIL = 256 * 1024
 LAST_MESSAGE_LIMIT = 2000
 INTERRUPT_TAIL = 64 * 1024
@@ -404,7 +405,7 @@ def listable(task):
     """Whether TASK's record holds what listing it takes for granted."""
     return (all(isinstance(task.get(field), str) for field in RECORD_TEXT)
             and all(isinstance(task.get(field), (str, type(None))) for field in RECORD_OPTIONAL_TEXT)
-            and isinstance(task.get("agentWorktrees"), (list, type(None))))
+            and all(isinstance(task.get(field), (list, type(None))) for field in ("agentWorktrees", "agentMade")))
 
 
 def own_record(record, task_id):
@@ -965,6 +966,27 @@ class ClaudeAgent:
         until something is said in it; --resume of one it hasn't written
         fails, each time. One it never said this of is left to --resume."""
         return not isinstance(task.get("transcript"), str) or Path(task["transcript"]).is_file()
+
+    def made_worktree(self, payload, path):
+        """Whether hook PAYLOAD, from inside the worktree at PATH under
+        .claude/worktrees, says this agent made it: its EnterWorktree tool
+        says it created one, rather than that it entered, reused or
+        resumed one that was there; or an isolated subagent of its works
+        there, in a folder Claude names after it. A workflow's folder names
+        no agent, and any subagent may visit one, so it stays. "new" for a
+        worktree made just now, which may take a name it had before."""
+        if payload.get("tool_name") == "EnterWorktree":
+            reply = payload.get("tool_response")
+            said = reply.get("message") if isinstance(reply, dict) else None
+            return ("new" if payload.get("hook_event_name") == "PostToolUse" and isinstance(said, str)
+                    and said.startswith("Created worktree") else False)
+        agent = payload.get("agent_id")
+        folder = re.fullmatch(r"agent-(a[0-9a-f]{16}|a[0-9a-f]{7})", Path(path).name)
+        return bool(folder and isinstance(agent, str) and agent.startswith(folder.group(1)))
+
+    def worktree_branch(self, path):
+        """The branch Claude makes for its worktree at PATH."""
+        return "worktree-" + Path(path).name
 
     def observe(self, payload, current=None):
         """Status updates for hook PAYLOAD, given the task's CURRENT status."""
@@ -2040,7 +2062,7 @@ def make_task(store, request, create_id):
                 integrationRef="refs/heads/" + integration if integration else None,
                 session=session_name(repo, task_id),
                 agent=agent_name, command=command, setup=setup, prompt=prompt,
-                status="starting", startedAt=now(), updatedAt=now(), claudeSession=None)
+                status="starting", startedAt=now(), updatedAt=now(), claudeSession=None, agentMade=[])
     if create_id:
         task["createId"] = create_id
     issue = request.get("issue")
@@ -4569,8 +4591,9 @@ def unregister_gone(repo, worktree):
     the branch it held can be deleted: what Git keeps of it goes, as
     `git worktree prune` removes it, but never a folder, which may be back
     meanwhile, as when a drive is mounted again. Retiring refuses a locked
-    one first, and both retiring and discarding one that keeps submodules."""
-    gitdir = kept_of_gone(repo, worktree)
+    one first, and both retiring and discarding one that keeps submodules.
+    With REPO gone, nothing keeps it any more."""
+    gitdir = kept_of_gone(repo, worktree) if Path(repo).is_dir() else None
     if gitdir:
         shutil.rmtree(gitdir)
 
@@ -4897,7 +4920,7 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
     stop(store, task, inventory)
     # With worktrees its agent made that hold nothing beyond the task's branch.
     remove_worktrees(store, task, worktree if worktree_exists else None,
-                     [entry for entry in agent_work(task) if entry["ahead"] == 0 and not entry["dirty"]],
+                     [entry for entry in agent_work(task) if entry["made"] and entry["ahead"] == 0 and not entry["dirty"]],
                      teardown=teardown)
     # What a copy stopped partway left, which may hold a secret.
     shutil.rmtree(copy_staging(task["worktree"]), ignore_errors=True)
@@ -4905,8 +4928,9 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
         if not worktree_exists:
             unregister_gone(repo, worktree)
         delete_branch(repo, branch, commit)
+    left = agent_left(task)
     store.remove(task["id"])
-    task.update(status="retired", updatedAt=now())
+    task.update(status="retired", updatedAt=now(), leftBehind=left)
     # Not with one open from there as well: deleting the branch would close it.
     if commit and merged_head == commit and not still_open:
         task["remoteCleanup"] = True
@@ -5150,13 +5174,16 @@ def update(store, task):
     return task
 
 
-def discard_losses(repo, branch, branch_exists, worktree, worktree_exists, work):
+def discard_losses(task, branch_exists, worktree, worktree_exists, work):
     """What discarding a task would lose, as counts: commits on no other
     branch, commits in submodules on no remote of theirs, and uncommitted
     or untracked files, those in submodules too. WORK is what `agent_work`
-    says of the worktrees its agent made."""
+    says of the worktrees its agent made, whose branches go with them only
+    if Claude made them."""
+    repo, branch = task["repo"], task["branch"]
     paths = ([worktree] if worktree_exists else []) + [entry["path"] for entry in work]
-    branches = ([branch] if branch_exists else []) + [entry["branch"] for entry in work if entry["branch"]]
+    branches = ([branch] if branch_exists else []) + [entry["branch"] for entry in work
+                                                      if entry["branch"] == agent_branch(task, entry["path"])]
     # Commits on a detached HEAD there, too; another branch keeps its own.
     heads = [head for head in [read_git(path, "rev-parse", "-q", "--verify", "HEAD").stdout.strip()
                                for path in paths if linked(path)] if head]
@@ -5199,14 +5226,14 @@ def discard(store, task, expect=None, dry_run=False, teardown=None, told=None):
     if unlinked or not worktree_exists:
         require_nothing_kept(repo, worktree, unlinked, bool(task.get("removing")))
     # The worktrees its agent made go with it.
-    work = agent_work(task)
+    work = [entry for entry in agent_work(task) if entry["made"]]
     if dry_run:
-        return dict(task, discard=dict(discard_losses(repo, branch, branch_exists, worktree, worktree_exists, work),
+        return dict(task, discard=dict(discard_losses(task, branch_exists, worktree, worktree_exists, work),
                                        commit=commit))
     if commit != (expect or None):
         raise RoostError("The task's branch has moved since you were asked; look at it again before discarding")
     if isinstance(told, dict):
-        losses = discard_losses(repo, branch, branch_exists, worktree, worktree_exists, work)
+        losses = discard_losses(task, branch_exists, worktree, worktree_exists, work)
         if any(count > (told.get(name) or 0) for name, count in losses.items()):
             # Asking again would only find more.
             raise RoostError("The task holds more than you were told; %slook at it again before discarding"
@@ -5218,8 +5245,9 @@ def discard(store, task, expect=None, dry_run=False, teardown=None, told=None):
         if not worktree_exists:
             unregister_gone(repo, worktree)
         delete_branch(repo, branch, commit)
+    left = agent_left(task)
     store.remove(task["id"])
-    task.update(status="discarded", updatedAt=now(), live=False)
+    task.update(status="discarded", updatedAt=now(), live=False, leftBehind=left)
     return task
 
 
@@ -5711,9 +5739,9 @@ def permission_request(payload, worktree=None):
 
 
 def agent_worktree(task, cwd):
-    """The worktree Claude Code made for TASK's agent that CWD is in, or
+    """The folder in .claude/worktrees that CWD, from TASK's agent, is in, or
     None. Claude makes them in the primary checkout's .claude/worktrees,
-    for --worktree, its EnterWorktree tool and isolated subagents."""
+    for its EnterWorktree tool and isolated subagents."""
     if not isinstance(cwd, str) or not cwd:
         return None
     try:
@@ -5724,32 +5752,105 @@ def agent_worktree(task, cwd):
     return str(root / parts[0]) if parts else None
 
 
+def worktree_at(repo, path):
+    """The Git directory Git keeps for the worktree of REPO at PATH, if Git
+    says it is one at that very path, or None. An agent's folder lies inside
+    the primary checkout: with no link of its own, as when a removal stopped
+    partway, Git asked there answers for the primary checkout."""
+    path = Path(path).resolve()
+    if linked(path) and Path(read_git(path, "rev-parse", "--show-toplevel").stdout.removesuffix("\n")).resolve() == path:
+        with contextlib.suppress(RoostError):
+            return next((gitdir for gitdir, place in linked_worktrees(repo) if Path(place).resolve() == path), None)
+    return None
+
+
+def made_stamp(gitdir):
+    """When Git made the worktree it keeps in GITDIR, in nanoseconds, or None.
+    It writes `commondir` there as it makes one, and never again, unlike the
+    rest, so this tells one from another made later at the same path."""
+    with contextlib.suppress(OSError):
+        return (gitdir / "commondir").stat().st_mtime_ns
+    return None
+
+
+def is_as_made(task, path, gitdir):
+    """Whether the worktree Git keeps in GITDIR is the one TASK's agent made
+    at PATH, not another since, as by another session. A stamp not noted says
+    no: only a hook from inside a worktree that was there notes one."""
+    stamps = task.get("agentMadeAt")
+    made = stamps.get(path) if isinstance(stamps, dict) else None
+    return made is not None and made == made_stamp(gitdir)
+
+
+def made_since(gitdir, started):
+    """Whether Git made the worktree it keeps in GITDIR at STARTED or after,
+    a time as in a record, by `made_stamp`."""
+    started, made = parse_time(started), made_stamp(gitdir)
+    return started is not None and made is not None and made / 1e9 >= started.timestamp()
+
+
+def agent_branch(task, path):
+    """The branch TASK's agent's program makes for its worktree at PATH, or None."""
+    named = getattr(agent_for(task), "worktree_branch", None)
+    return named(path) if named else None
+
+
 def agent_work(task):
     """The worktrees TASK's agent made, as it left them: branch, commits not
-    on the task's branch, and whether anything is uncommitted."""
+    on the task's branch, and whether anything is uncommitted. These are
+    those its hooks said it made, since the task started, that are
+    worktrees yet: finishing the task leaves any other. A task from before
+    `agentMade` says only where its agent went, so each of those that is a
+    worktree comes with `made` false: what it holds still keeps the task
+    from retiring, but it isn't removed."""
     work = []
-    for path in task.get("agentWorktrees") or []:
-        if not isinstance(path, str) or not Path(path).is_dir():
+    known = "agentMade" in task
+    for path in (task["agentMade"] if known else task.get("agentWorktrees")) or []:
+        gitdir = worktree_at(task["repo"], path) if isinstance(path, str) else None
+        # Not one made since at the same path, as by another session.
+        if not gitdir or known and not (made_since(gitdir, task.get("startedAt")) and is_as_made(task, path, gitdir)):
             continue
         branch = read_git(path, "symbolic-ref", "--short", "-q", "HEAD").stdout.strip()
         ahead = read_git(path, "rev-list", "--count", "refs/heads/" + task["branch"] + "..HEAD", "--")
-        work.append(dict(path=path, branch=branch or None,
+        work.append(dict(path=path, branch=branch or None, made=known,
                          ahead=int(ahead.stdout) if ahead.returncode == 0 else None,
                          dirty=bool(read_git(path, "status", "--porcelain",
                                              "--untracked-files=normal").stdout.strip())))
     return work
 
 
+def agent_left(task):
+    """What stays of the worktrees TASK's agent went to, as `forget` says it:
+    one it didn't make, or that is no worktree, or that Git couldn't remove,
+    and the branch Claude made for it."""
+    left = []
+    for path in task.get("agentWorktrees") or []:
+        if isinstance(path, str):
+            branch = agent_branch(task, path)
+            if os.path.lexists(path):
+                left.append("worktree " + path)
+            if ref_exists(task["repo"], branch):
+                left.append("branch " + branch)
+    return left
+
+
 def remove_agent_worktrees(task, entries):
     """Remove ENTRIES of `agent_work`, worktrees TASK's agent made, and the
-    branches Claude made for them. Claude locks them, hence --force twice.
-    Best effort: what can't be removed stays where Git put it."""
+    branch Claude made for each, once Git has removed it, if it is still on
+    that one: another its agent switched to may be yours. Claude locks them,
+    hence --force twice. Best effort: what can't be removed stays where Git
+    put it, and `agent_left` says so."""
     for entry in entries:
-        branch = entry.get("branch")
-        commit = read_git(entry["path"], "rev-parse", "HEAD").stdout.strip() if branch else ""
-        git(task["repo"], "worktree", "remove", "--force", "--force", entry["path"], check=False)
-        if branch and commit:
-            git(task["repo"], "update-ref", "-d", "refs/heads/" + branch, commit, check=False)
+        # As it is now: a teardown command may have run since it was listed.
+        gitdir = worktree_at(task["repo"], entry["path"])
+        if not gitdir or not is_as_made(task, entry["path"], gitdir):
+            continue
+        commit = read_git(entry["path"], "rev-parse", "HEAD").stdout.strip()
+        branch = read_git(entry["path"], "symbolic-ref", "--short", "-q", "HEAD").stdout.strip()
+        removed = git(task["repo"], "worktree", "remove", "--force", "--force", entry["path"], check=False)
+        if removed.returncode == 0 and commit and branch == agent_branch(task, entry["path"]):
+            with contextlib.suppress(RoostError):
+                delete_branch(task["repo"], branch, commit)
 
 
 @contextlib.contextmanager
@@ -5988,11 +6089,24 @@ def update_hook(store, task_id, payload, run_id=None):
         # Status reports read before hookAt are older news than this hook;
         # its capture keeps that time, so a replay weighs them alike.
         read_at = None
-        made = agent_worktree(task, payload.get("cwd"))
-        if made and made not in (task.get("agentWorktrees") or []):
-            task["agentWorktrees"] = (task.get("agentWorktrees") or []) + [made]
-            store.save(task)
         agent = agent_for(task)
+        place = agent_worktree(task, payload.get("cwd"))
+        if place:
+            been, made = task.get("agentWorktrees") or [], task.get("agentMade") or []
+            says_made = getattr(agent, "made_worktree", None)
+            new_place = place not in been
+            # A record from before `agentMade` stays as it is: the key says
+            # that everything of its agent's is noted there.
+            said = "agentMade" in task and says_made and says_made(payload, place)
+            gitdir = worktree_at(task["repo"], place) if said and (place not in made or said == "new") else None
+            new_made = bool(gitdir)
+            if new_place:
+                task["agentWorktrees"] = been + [place]
+            if new_made:
+                task["agentMade"] = made if place in made else made + [place]
+                task["agentMadeAt"] = dict(task.get("agentMadeAt") or {}, **{place: made_stamp(gitdir)})
+            if new_place or new_made:
+                store.save(task)
         concerns = getattr(agent, "concerns", None)
         updates = agent.observe(payload, before) if not concerns or concerns(task, payload) else None
         # News that the agent's end overtook, as Pi and OpenCode don't wait
