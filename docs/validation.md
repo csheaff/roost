@@ -185,9 +185,18 @@ happened in a section below:
   77 with `{"ok": false, "error": {..., "summary": "You're not signed in.
   Run `twg login --force` …"}}` on its output and the same in words on
   its errors, and Roost said that summary.
-- **Not seen:** a real work item. Whether a description comes as Atlassian
-  Document Format or as Markdown, the helper turns either into the
-  prompt's text, but no Jira site was at hand to show which.
+- **A real site, 2026-11-05.** Picking a work item gave the prompt only
+  its summary and link. `twg jira workitem query --jql "key = PROJ-123"
+  --fields summary,description` gave `"description": null`; the same with
+  `--fields "*all"` showed the text in one `customfield_*`, as an Atlassian
+  Document Format doc, and neither `query` nor `get` gave the fields'
+  names. So the helper now asks for one work item's `*all` as you pick it,
+  and takes each field that is such a doc.
+- **Not seen:** the helper's own call, with `--limit 1`, on a real site:
+  only a fake twg has answered it. `twg jira workitem get KEY --fields
+  "*all"`, which the helper doesn't use, as only `query` was seen to give
+  the custom field. A site whose text is in a plain-text field, which
+  stays out.
 
 ## Your own Git and Emacs settings — 2026-10-27
 

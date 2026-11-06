@@ -1383,8 +1383,10 @@ def draft_fields(qa, repo):
     github(qa, issues=[issue])
     (qa.jira / "issues.json").write_text(json.dumps([dict(
         key="PROJ-3", url="https://qa.atlassian.net/browse/PROJ-3",
+        # Its text in a rich-text field of the site's, which a list leaves out.
         fields=dict(summary="Totals round half a cent down", labels=["money"], status=dict(name="To Do"),
-                    description=dict(type="doc", version=1, content=[dict(type="paragraph", content=[
+                    description=None,
+                    customfield_10042=dict(type="doc", version=1, content=[dict(type="paragraph", content=[
                         dict(type="text", text="Half a cent rounds down, not up.")])])))]))
     qa.emacs.eval("(setq qa-agents (cons roost-default-agent roost-agent-commands)"
                   " roost-agent-commands (cons (list \"pi\" %s %s \"pi\") roost-agent-commands))"
@@ -1421,7 +1423,7 @@ def draft_fields(qa, repo):
              lambda s: re.search(r"Issue +PROJ-3 Totals round half a cent down\s+C-c C-t · the branch leads with its key",
                                  draft(s))),
             ("a name that starts with its key", lambda s: re.search(r"Name +PROJ-3-totals-round-half", draft(s))),
-            ("its summary and description as the prompt",
+            ("its summary and the text of its site's rich-text field as the prompt",
              lambda s: "Totals round half a cent down\n\nHalf a cent rounds down, not up.\n\n"
              "This is Jira issue PROJ-3: https://qa.atlassian.net/browse/PROJ-3" in draft(s))])
         # GitHub's issue in its place, the prompt with it.

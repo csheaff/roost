@@ -2241,24 +2241,43 @@ def issues(request):
 
 
 # A Jira work item's key: its project's, then its number, as in PROJ-123.
-JIRA_KEY = re.compile(r"[A-Z][A-Z0-9_]*-[1-9][0-9]*")
+# Jira allows at most 255 characters for the first, and a long for the second.
+JIRA_KEY = re.compile(r"[A-Z][A-Z0-9_]{0,254}-[1-9][0-9]{0,18}")
 
 
 def jira_issues(request):
-    """The Jira work items JQL finds, as twg, Atlassian's Teamwork Graph
-    CLI, on this host lists them for the account it signed in to, under
-    "issues"; None without twg."""
+    """The Jira work items JQL finds, under "issues"; None without twg."""
     if not shutil.which("twg", path=agent_path(os.environ.get("PATH", ""))):
         return None
     jql = text(request.get("jql"))
     # A project's directory-local query, too: none that twg could take for an option.
     if not jql or jql.startswith("-"):
         raise RoostError("roost-jira-query is no JQL to list Jira work items with: %r" % jql)
+    return dict(issues=jira_query(jql, 100, "summary,description,labels,status"))
+
+
+def jira_issue(request):
+    """All the text of the Jira work item KEY, under "body". A site can
+    keep it in a rich-text field of its own, so this asks for every
+    field, which would be slow for each work item of a list."""
+    key = text(request.get("key"))
+    if not key or not JIRA_KEY.fullmatch(key):
+        raise RoostError("%r is no Jira work item's key" % key)
+    found = jira_query("key = " + key, 1, "*all")
+    if not found:
+        raise RoostError("twg finds no Jira work item %s" % key)
+    return dict(body=found[0]["body"])
+
+
+def jira_query(jql, limit, wanted):
+    """The Jira work items JQL finds, at most LIMIT with the fields WANTED,
+    as twg, Atlassian's Teamwork Graph CLI, on this host lists them for
+    the account it signed in to."""
     # Run where it sees an agent, as from an Emacs one started, twg prints
     # a summary and leaves the JSON in a file, but for --output-summary none.
     output = tool("twg", str(Path.home()),
-                  ("jira", "workitem", "query", "--jql", jql, "--limit", "100",
-                   "--fields", "summary,description,labels,status", "-o", "json", "--output-summary", "none"),
+                  ("jira", "workitem", "query", "--jql", jql, "--limit", str(limit),
+                   "--fields", wanted, "-o", "json", "--output-summary", "none"),
                   30, "twg is not installed on this host", said=lambda result: twg_error(result.stdout))
     try:
         payload = json.loads(output)
@@ -2279,17 +2298,33 @@ def jira_issues(request):
             continue
         fields = item.get("fields") if isinstance(item.get("fields"), dict) else item
         status, labels = fields.get("status"), fields.get("labels")
-        try:
-            body = adf_text(fields.get("description"))
-        except RecursionError:
-            body = ""
-        if len(body) > ISSUE_BODY_LIMIT:
-            body = body[:ISSUE_BODY_LIMIT].rstrip() + "\n…"
-        result.append(dict(key=key, title=text(fields.get("summary")) or "", body=body, url=jira_url(item, key),
+        result.append(dict(key=key, title=text(fields.get("summary")) or "", body=jira_body(fields),
+                           url=jira_url(item, key),
                            status=text(status.get("name") if isinstance(status, dict) else status),
                            labels=[label for label in labels if isinstance(label, str) and label]
                            if isinstance(labels, list) else []))
-    return dict(issues=result)
+    return result
+
+
+def jira_body(fields):
+    """A Jira work item's text, from its FIELDS: its description, then
+    each other field that is an Atlassian Document Format document, in
+    twg's order. A plain field, such as a user or a date, isn't one, and
+    neither are comments, which hold theirs a level down: Jira's Slack
+    app can fill them with a whole thread, off-topic replies and all."""
+    documents = [fields.get("description")] + [value for name, value in fields.items()
+                                               if name != "description" and isinstance(value, dict)
+                                               and value.get("type") == "doc"]
+    said = []
+    for document in documents:
+        try:
+            said.append(adf_text(document))
+        except RecursionError:
+            pass
+    body = "\n\n".join(filter(None, said))
+    if len(body) > ISSUE_BODY_LIMIT:
+        body = body[:ISSUE_BODY_LIMIT].rstrip() + "\n…"
+    return body
 
 
 def twg_error(output):
@@ -7107,6 +7142,8 @@ def rpc(request):
             return {"ok": True, "result": issues(request)}
         if action == "jira-issues":
             return {"ok": True, "result": jira_issues(request)}
+        if action == "jira-issue":
+            return {"ok": True, "result": jira_issue(request)}
         if action == "history":
             return {"ok": True, "result": history(store, request)}
         if action == "search":
