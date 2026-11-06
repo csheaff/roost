@@ -3856,6 +3856,75 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(self.request("resume", id=task["id"])["ok"])
         self.wait(task, "ready")
 
+    def test_news_after_the_runners_end_leaves_the_agent_ended(self):
+        task = self.create(programStatus=True)
+        self.assertTrue(self.request("send", id=task["id"], text="exit")["ok"])
+        self.wait(task, "exited")
+        self.wait_for_pane_exit(task)
+        store = roost.Store(str(self.state))
+        ended = store.read(task["id"])
+        self.assertEqual(ended["endedRun"], ended["runId"])
+        for event in (dict(hook_event_name="PreToolUse"), dict(hook_event_name="PermissionRequest", tool_name="Bash"),
+                      dict(hook_event_name="SessionStart")):
+            roost.update_hook(store, task["id"], event, ended["runId"])
+            record = store.read(task["id"])
+            self.assertEqual((record["status"], record["updatedAt"], record.get("request")),
+                             ("exited", ended["updatedAt"], None))
+        # What it replied as it ended is still its last word.
+        roost.update_hook(store, task["id"], dict(hook_event_name="Stop", last_assistant_message="All done"),
+                          ended["runId"])
+        record = store.read(task["id"])
+        self.assertEqual((record["status"], record["lastReply"]), ("exited", "All done"))
+        report, finish = roost.program_status_recorder(store, task["id"], ended["runId"])
+        report(dict(state="working"))
+        finish()
+        self.assertEqual(store.read(task["id"])["status"], "exited")
+        self.assertEqual(self.request("list")["result"][0]["status"], "exited")
+        self.assertNotIn("endedRun", self.request("list")["result"][0])
+        # The next run's events count.
+        self.assertTrue(self.request("resume", id=task["id"], programStatus=False)["ok"])
+        resumed = self.wait(task, "ready")
+        roost.update_hook(store, task["id"], dict(hook_event_name="UserPromptSubmit", prompt="go"), resumed["runId"])
+        self.assertEqual(store.read(task["id"])["status"], "running")
+
+    @unittest.skipUnless(shutil.which("node"), "needs Node")
+    def test_quitting_as_a_report_waits_on_the_registry_says_exited(self):
+        # Roost's real extension, in a program that quits as Pi may, with a
+        # report on its way: with the registry busy, as with a listing, the
+        # report and the runner's end both wait, and flock takes them in no
+        # order. Without the lock held, its helper starts too late to land.
+        driver = self.root / "pi-driver.mjs"
+        driver.write_text(textwrap.dedent("""\
+            import { pathToFileURL } from "node:url";
+            import { existsSync } from "node:fs";
+            const args = process.argv;
+            const { default: observe } = await import(pathToFileURL(args[args.indexOf("--extension") + 1]).href);
+            const handlers = {};
+            observe({ on: (name, handler) => { handlers[name] = handler; } });
+            const ctx = { sessionManager: { getSessionFile: () => "s" }, isIdle: () => true,
+                          hasPendingMessages: () => false };
+            await handlers.session_start({}, ctx);
+            await handlers.agent_start({}, ctx);
+            const tick = () => {
+              if (!existsSync(process.env.PI_QUIT)) return setTimeout(tick, 20);
+              handlers.agent_end({}, ctx);
+              setTimeout(() => process.exit(0), 10);
+            };
+            tick();
+            """))
+        quit_now = self.root / "quit"
+        command = ["/usr/bin/env", "PI_QUIT=" + str(quit_now), shutil.which("node"), str(driver)]
+        reply = self.request("create", directory=str(self.repo), name="pi", socket=self.socket, agent="pi",
+                             command=command)
+        self.assertTrue(reply["ok"], reply)
+        task = self.wait(reply["result"], "running")
+        with roost.Store(str(self.state)).locked():
+            quit_now.touch()
+            time.sleep(.5)
+        self.wait_for_pane_exit(task)
+        time.sleep(.5)
+        self.assertEqual(self.request("list")["result"][0]["status"], "exited")
+
     def tmux_goes_and_claude_says_so(self, task):
         """End TASK's tmux server, once its Claude's SessionEnd has landed,
         which it runs as it goes, as Claude Code does."""

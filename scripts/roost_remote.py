@@ -5727,6 +5727,11 @@ def without_status(updates):
             if key not in ("status", "updatedAt", "lastEvent", "error")}
 
 
+def run_ended(task):
+    """Whether TASK's runner recorded the end of its current run."""
+    return bool(task.get("endedRun")) and task["endedRun"] == task.get("runId")
+
+
 def capture(store, task_id, entry, at=None):
     """Note ENTRY, what TASK_ID's agent reported, read AT or now, in the
     store's captures folder if it has one: test/agent_contract.py makes
@@ -5755,6 +5760,11 @@ def update_hook(store, task_id, payload, run_id=None):
         agent = agent_for(task)
         concerns = getattr(agent, "concerns", None)
         updates = agent.observe(payload, before) if not concerns or concerns(task, payload) else None
+        # News that the agent's end overtook, as Pi and OpenCode don't wait
+        # for their reports, says no more what it does, though what it replied
+        # is its last word.
+        if updates and run_ended(task):
+            updates = without_status(updates)
         if updates:
             asks = updates.get("status", before) == "permission"
             relayed = task.get("programStatusRun") == task.get("runId")
@@ -6026,7 +6036,7 @@ def program_status_recorder(store, task_id, run_id):
                 continue
             with contextlib.suppress(OSError, ValueError, RoostError), store.locked():
                 task = store.read(task_id)
-                if task.get("runId") == run_id and task["status"] not in ("stopped", "retired"):
+                if task.get("runId") == run_id and task["status"] not in ("stopped", "retired") and not run_ended(task):
                     for fields in batch:
                         capture(store, task_id, {"report": fields})
                     if any([apply_program_status(task, fields, run_id) for fields in batch]):
@@ -6598,7 +6608,7 @@ def runner(root, task_id, run_id, resume_conversation=False):
             current = store.read(task_id)
             if current.get("runId") == run_id and current["status"] not in ("stopped", "retired"):
                 current.update(status="exited" if code == 0 else "failed", updatedAt=now(),
-                               exitCode=code, error=error)
+                               exitCode=code, error=error, endedRun=run_id)
                 store.save(current)
                 ended = current
         # On the dead pane for as long as it is shown, where starting the
@@ -6633,7 +6643,7 @@ def require_not_removing(store, task, action):
 
 
 # Kept in task records for the helper's own use, and not sent to Emacs.
-PRIVATE = ("lastReply", "transcript", "requestFrom", "requestCall", "hookAt", "panePid")
+PRIVATE = ("lastReply", "transcript", "requestFrom", "requestCall", "hookAt", "panePid", "endedRun")
 
 
 def outgoing(result):
