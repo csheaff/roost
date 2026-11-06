@@ -851,9 +851,13 @@ def later_prompt(task, prompt):
     return said if len(said) <= LAST_MESSAGE_LIMIT else said[:LAST_MESSAGE_LIMIT].rstrip() + "…"
 
 
+# Notifications of an MCP server's question, as a form or a link to open.
+MCP_QUESTIONS = ("elicitation_dialog", "elicitation_url_dialog")
+
+
 def forget_request(task):
     """TASK's agent asks nothing any more."""
-    for field in ("request", "requestCommand", "requestFrom", "requestCall"):
+    for field in ("request", "requestCommand", "requestFrom", "requestCall", "requestQuestion"):
         task.pop(field, None)
 
 
@@ -874,12 +878,13 @@ def tool_answers(task, payload):
     only from the agent that asked, and only as the end of what it asked for,
     however it adds to or leaves out of its arguments, or as its next tool. A
     request a notification named doesn't say who asks: the main agent's event
-    counts, unless it said that another asks, or the notification that a
-    question was answered. Unsure, it stands: as the manual says, it may show
-    until the agent moves on."""
+    counts, unless it said that another asks. Word that a question was
+    answered counts only for an MCP server's question with nothing else
+    asked beside it. Unsure, it stands: as the manual says, it may show until
+    the agent moves on."""
     asked = task.get("requestCall")
     if payload.get("hook_event_name") == "Notification":
-        return not isinstance(asked, dict)
+        return task.get("requestQuestion") is True
     if payload.get("hook_event_name") not in ("PreToolUse", "PostToolUse"):
         return True
     call = tool_call(payload)
@@ -1015,9 +1020,7 @@ class ClaudeAgent:
         # A prompt that runs no PermissionRequest, as when a sandboxed
         # command needs a new network host, is named by its notification.
         message = payload.get("message") if isinstance(payload.get("message"), str) else ""
-        if (event == "Notification"
-                and payload.get("notification_type") in ("permission_prompt", "elicitation_dialog",
-                                                         "elicitation_url_dialog")
+        if (event == "Notification" and payload.get("notification_type") in ("permission_prompt", *MCP_QUESTIONS)
                 and current != "permission" and one_line(message)):
             updates["request"] = one_line(message)[:REQUEST_LIMIT]
         if event == "StopFailure":
@@ -5852,16 +5855,23 @@ def update_hook(store, task_id, payload, run_id=None):
                 # What will say that it is over.
                 if payload.get("tool_name"):
                     task["requestCall"] = tool_call(payload)
-                elif payload.get("notification_type") in ANOTHER_AGENT_ASKS:
-                    task.setdefault("requestCall", dict(agent="another agent"))
                 else:
                     task.pop("requestCall", None)
-            elif ((not relayed or not agent.reports_turns)
+            elif ((new_conversation or not relayed or not agent.reports_turns)
                   and (task["status"] != "permission" or before != "permission")):
                 # The notification that follows a request names no tool:
                 # keep the request it follows, and only that one. The agent's
-                # status reports clear it, for one whose reports end its turns.
+                # status reports clear it, for one whose reports end its turns,
+                # but for a new conversation, whose earlier reports don't count.
                 forget_request(task)
+            # Which agent asks is no longer known, and no tool's event says.
+            if payload.get("notification_type") in ANOTHER_AGENT_ASKS:
+                task["requestCall"] = dict(agent="another agent")
+            if updates.get("status") == "permission":
+                if payload.get("notification_type") in MCP_QUESTIONS and before != "permission":
+                    task["requestQuestion"] = True
+                else:
+                    task.pop("requestQuestion", None)
             store.save(task)
         capture(store, task_id, {"hook": payload}, read_at)
 
@@ -6706,7 +6716,8 @@ def require_not_removing(store, task, action):
 
 
 # Kept in task records for the helper's own use, and not sent to Emacs.
-PRIVATE = ("lastReply", "transcript", "requestFrom", "requestCall", "hookAt", "panePid", "endedRun")
+PRIVATE = ("lastReply", "transcript", "requestFrom", "requestCall", "requestQuestion", "hookAt", "panePid",
+           "endedRun")
 
 
 def outgoing(result):

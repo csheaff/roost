@@ -791,9 +791,21 @@ class Lifecycle(unittest.TestCase):
         before = store.read(task["id"])
         for kind in ("elicitation_complete", "elicitation_response", "auth_success"):
             self.assertEqual(hook(hook_event_name="Notification", notification_type=kind), before)
+        answer = lambda kind: hook(hook_event_name="Notification", notification_type=kind)
         hook(hook_event_name="PermissionRequest", tool_name="Bash", tool_input=dict(command="make"))
-        self.assertEqual(hook(hook_event_name="Notification", notification_type="elicitation_response")["status"],
-                         "permission")
+        self.assertEqual(answer("elicitation_response")["status"], "permission")
+        # An answer, perhaps a subagent's server's, says nothing of a prompt
+        # only a notification named, or of one that came beside the question.
+        for kind in ("elicitation_response", "elicitation_complete"):
+            hook(hook_event_name="UserPromptSubmit", prompt="go")
+            hook(hook_event_name="Notification", notification_type="permission_prompt", message="Needs network access")
+            self.assertEqual(answer(kind)["status"], "permission")
+            self.assertIn("Open the task", self.request("send", id=task["id"], text="hello")["error"])
+            hook(hook_event_name="UserPromptSubmit", prompt="go")
+            hook(hook_event_name="Notification", notification_type="elicitation_dialog", message="Asks")
+            hook(hook_event_name="Notification", notification_type="permission_prompt", message="Needs network access")
+            self.assertEqual(answer(kind)["status"], "permission")
+        self.assertNotIn("requestQuestion", self.request("list")["result"][0])
 
     def test_only_the_agent_that_asked_says_its_request_is_over(self):
         store = roost.Store(str(self.state))
@@ -851,18 +863,22 @@ class Lifecycle(unittest.TestCase):
         hook(hook_event_name="Notification", notification_type="permission_prompt", message="Needs network access")
         self.assertEqual(hook(hook_event_name="PostToolUse", **theirs)["status"], "permission")
         over(hook(hook_event_name="PostToolUse", **mine))
-        # A request of another agent's, as the main agent's tools go on, with
-        # a subagent's request before it, which it doesn't take the place of.
+        # A request of another agent's, as the main agent's tools go on, and
+        # after a request of the main agent's or a subagent's, whose tool's
+        # end says nothing of it, with its words or without.
         hook(hook_event_name="UserPromptSubmit", prompt="go")
         record = hook(hook_event_name="Notification", notification_type="agent_needs_input", message="a1 waits")
         self.assertEqual(record["request"], "a1 waits")
         self.assertEqual(hook(hook_event_name="PostToolUse", **mine)["status"], "permission")
         self.assertEqual(hook(hook_event_name="PreToolUse", **mine)["status"], "permission")
-        hook(hook_event_name="UserPromptSubmit", prompt="go")
-        hook(hook_event_name="PermissionRequest", agent_id="a1", **asked)
-        hook(hook_event_name="Notification", notification_type="worker_permission_prompt", message="a1 asks")
-        self.assertEqual(hook(hook_event_name="PostToolUse", **mine)["status"], "permission")
-        over(hook(hook_event_name="PostToolUse", agent_id="a1", **asked))
+        for first, words in ((dict(agent_id="a1"), dict(message="a1 asks")), (dict(agent_id="a1"), {}),
+                             ({}, dict(message="a teammate asks")), ({}, {})):
+            hook(hook_event_name="UserPromptSubmit", prompt="go")
+            hook(hook_event_name="PermissionRequest", **dict(asked, **first))
+            hook(hook_event_name="Notification", notification_type="worker_permission_prompt", **words)
+            self.assertEqual(hook(hook_event_name="PostToolUse", **mine)["status"], "permission")
+            self.assertEqual(hook(hook_event_name="PostToolUse", **dict(asked, **first))["status"], "permission")
+            self.assertIn("Open the task", self.request("send", id=task["id"], text="also the docs")["error"])
         # What ends a turn ends it whoever asked.
         asks()
         self.assertEqual(hook(hook_event_name="Stop")["status"], "ready")
@@ -9026,9 +9042,15 @@ class ProgramStatus(unittest.TestCase):
                 store.save(task)
                 return task
 
-            report("working")
+            # What the last conversation asked goes with it, whatever its
+            # reports, which may never count.
+            hook(hook_event_name="PermissionRequest", tool_name="Bash", tool_input=dict(command="make"))
+            self.assertEqual(store.read("0" * 16)["request"], "Asks to run make")
+            task = hook(hook_event_name="SessionStart", source="clear")
+            self.assertFalse({"request", "requestCommand", "requestCall"} & set(task))
+            report("working", receivedAt=time.time() + 1)
             hook(hook_event_name="SessionEnd", reason="clear")
-            report("idle")
+            report("idle", receivedAt=time.time() + 1)
             task = hook(hook_event_name="SessionStart", source="clear", session_id="next")
             self.assertEqual((task["status"], task["lastEvent"], task["agentSession"]), ("ready", "SessionStart", "next"))
             self.assertTrue(roost.seen_since_last_event(task))

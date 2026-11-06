@@ -646,7 +646,7 @@ Invariants:
 | any | `Notification` | `permission_prompt`, `worker_permission_prompt`, `agent_needs_input`, `elicitation_dialog`, `elicitation_url_dialog` | `permission` | `Notification` | names the request if none was |
 | `starting`, `running` | `Notification` | `idle_prompt` | `ready` | `Notification` | |
 | others | `Notification` | `idle_prompt` | unchanged | | |
-| `permission` | `Notification` | `elicitation_response`, `elicitation_complete`, named by a notification | `running` | `Notification` | request cleared |
+| `permission` | `Notification` | `elicitation_response`, `elicitation_complete`; `requestQuestion`, so an MCP server's question asks, and nothing beside it | `running` | `Notification` | request cleared |
 | any | `Notification` | any other type | unchanged | | |
 
 Claude waits for a hook before it goes on, and the captures show `PreToolUse`,
@@ -821,7 +821,7 @@ Open: STATUS-3.
 ### A task's request
 
 Kind: implicit. Lives in: `request`, `requestCommand`, `requestFrom`,
-`requestCall`, `activity`.
+`requestCall`, `requestQuestion`, `activity`.
 What the agent asks, in words; the command to watch start; whether the words are
 the agent's own report; which tool call will say it's over; what it says it's doing.
 
@@ -831,6 +831,8 @@ the agent's own report; which tool call will say it's over; what it says it's do
 | Named by a hook | From the tool's payload, or a notification's message | `request`, no `requestFrom` |
 | Watching a command | As above, for Bash | `requestCommand`, at most 200 characters |
 | Knowing its tool | Named by a hook that names a tool | `requestCall`: who asked, the tool, a digest of each argument |
+| Another agent's | Said by `worker_permission_prompt` or `agent_needs_input`, whatever asked before | `requestCall` names no agent that reports |
+| An MCP question alone | The first thing to ask since the agent last didn't | `requestQuestion`; anything else that asks takes it away |
 | Named by a report | The agent's words | `requestFrom` = `report` |
 
 Emacs shows `request` only while `status` is `permission`
@@ -843,16 +845,16 @@ Invariants:
 - I3. A notification that follows a request, naming no tool, keeps it.
 - I4. A tool's event ends a request only from the agent that asked: the end of what
   it asked for, or its next tool (`tool_answers`). Without `requestCall`, a
-  notification named it, and only the main agent's event does, or word that a
-  question was answered. For another agent's, `requestCall` names none, so no tool
-  does. Unsure, it stands.
+  notification named it, and only the main agent's event does. For another
+  agent's, `requestCall` names none, so no tool does. Word that a question was
+  answered ends only `requestQuestion`'s. Unsure, it stands.
 
 | From | Event | Guard | To | Code |
 | --- | --- | --- | --- | --- |
 | any | hook that asks, naming a tool | | hook-named; `requestFrom` gone; `requestCommand` if Bash; `requestCall` | `update_hook` |
 | any | adapter names it (`named`) | | same | `update_hook` |
 | any | hook that asks, naming nothing | was `permission` | unchanged | `update_hook` |
-| any | hook that doesn't ask | unrelayed, or Codex; not `permission` to `permission` | None | `update_hook` |
+| any | hook that doesn't ask | unrelayed, Codex, or a new conversation; not `permission` to `permission` | None | `update_hook` |
 | any | a tool's event that isn't an answer | unrelayed | unchanged | `tool_answers`, `update_hook` |
 | None, report-named | report `blocked` | `permission` now | report-named; words from `msg`, or `kind` | `apply_program_status` |
 | hook-named | report `blocked` | | unchanged | `apply_program_status` |
