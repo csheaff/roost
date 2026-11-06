@@ -8,6 +8,7 @@ import fcntl
 import http.server
 import importlib.util
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -884,6 +885,48 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(hook(hook_event_name="Stop")["status"], "ready")
         asks()
         over(hook(hook_event_name="UserPromptSubmit", prompt="never mind"))
+
+    def test_two_requests_at_once_stand_until_the_turn_ends(self):
+        store = roost.Store(str(self.state))
+        task = self.create()
+        hook = lambda **payload: roost.update_hook(store, task["id"], payload) or store.read(task["id"])
+        bash = dict(tool_name="Bash", tool_input=dict(command="make deploy"))
+        asks = dict(main=dict(hook_event_name="PermissionRequest", **bash),
+                    subagent=dict(hook_event_name="PermissionRequest", agent_id="a1", **bash),
+                    worker=dict(hook_event_name="Notification", notification_type="worker_permission_prompt",
+                                message="a teammate asks"),
+                    worker_saying_nothing=dict(hook_event_name="Notification",
+                                               notification_type="worker_permission_prompt"),
+                    question=dict(hook_event_name="Notification", notification_type="elicitation_dialog",
+                                  message="Claude Code needs your input"),
+                    link=dict(hook_event_name="Notification", notification_type="elicitation_url_dialog",
+                              message="Claude Code needs your input"))
+        for first, second in itertools.permutations(asks, 2):
+            for end, status in (("Stop", "ready"), ("UserPromptSubmit", "running")):
+                with self.subTest(first=first, second=second, end=end):
+                    hook(hook_event_name="UserPromptSubmit", prompt="go")
+                    hook(**asks[first])
+                    hook(**asks[second])
+                    for event in (dict(hook_event_name="PostToolUse", **bash),
+                                  dict(hook_event_name="PostToolUse", agent_id="a1", **bash),
+                                  dict(hook_event_name="PreToolUse", tool_name="Read"),
+                                  dict(hook_event_name="PreToolUse", tool_name="Read", agent_id="a1"),
+                                  dict(hook_event_name="Notification", notification_type="elicitation_response"),
+                                  dict(hook_event_name="Notification", notification_type="elicitation_complete")):
+                        self.assertEqual(hook(**event)["status"], "permission", event)
+                    # The poll sees no approval of what asked, whatever runs.
+                    with patch.object(roost, "approved_command_running", return_value=True):
+                        self.assertEqual(self.request("list")["result"][0]["status"], "permission")
+                    self.assertIn("Open the task", self.request("send", id=task["id"], text="hello")["error"])
+                    record = hook(hook_event_name=end, prompt="go on")
+                    self.assertEqual(record["status"], status)
+                    self.assertFalse({"request", "requestCommand", "requestCall", "requestQuestion"} & set(record))
+        # The notification that follows a request is no second one.
+        hook(hook_event_name="UserPromptSubmit", prompt="go")
+        hook(**asks["main"])
+        hook(hook_event_name="Notification", notification_type="permission_prompt", message="Claude needs you")
+        self.assertEqual(store.read(task["id"])["requestCommand"], "make deploy")
+        self.assertEqual(hook(hook_event_name="PostToolUse", **bash)["status"], "running")
 
     def test_the_order_of_a_request_and_another_agents_tool_makes_no_difference(self):
         store = roost.Store(str(self.state))

@@ -5864,14 +5864,21 @@ def update_hook(store, task_id, payload, run_id=None):
                 # status reports clear it, for one whose reports end its turns,
                 # but for a new conversation, whose earlier reports don't count.
                 forget_request(task)
-            # Which agent asks is no longer known, and no tool's event says.
-            if payload.get("notification_type") in ANOTHER_AGENT_ASKS:
-                task["requestCall"] = dict(agent="another agent")
-            if updates.get("status") == "permission":
-                if payload.get("notification_type") in MCP_QUESTIONS and before != "permission":
-                    task["requestQuestion"] = True
-                else:
+            # Reports say what waits, for an agent that sends them. Otherwise,
+            # with another agent asking, or a new ask beside a request, no one
+            # event can say that all of them are over: no tool's event, answer
+            # or approval ends this, only the turn. A `permission_prompt` is
+            # the notification that follows a request, but for a question's.
+            kind = payload.get("notification_type")
+            if not relayed and (payload.get("hook_event_name") == "PermissionRequest"
+                                or kind in ANOTHER_AGENT_ASKS or kind in MCP_QUESTIONS
+                                or kind == "permission_prompt" and task.get("requestQuestion")):
+                if before == "permission" or kind in ANOTHER_AGENT_ASKS:
+                    task["requestCall"] = dict(agent="another agent")
+                    task.pop("requestCommand", None)
                     task.pop("requestQuestion", None)
+                elif kind in MCP_QUESTIONS:
+                    task["requestQuestion"] = True
             store.save(task)
         capture(store, task_id, {"hook": payload}, read_at)
 
