@@ -1763,6 +1763,45 @@ A name of its own keeps the fields as long as they are."
       (undo-more 1)
       (should (equal (roost--compose-prompt) "Fix")))))
 
+(ert-deftest roost-sweep-late-a-click-on-another-project-moves-a-written-draft ()
+  (roost-sweep-late--world
+    (roost-sweep-late--populate nil nil)
+    (with-current-buffer (roost-sweep-late--lay-out 'compose)
+      (should (string-search "ledger" (plist-get roost--compose-fields :directory)))
+      (let ((prompt (roost--compose-prompt)))
+        (roost--compose nil nil "/ssh:dev:/home/user/other/")
+        (should (equal (plist-get roost--compose-fields :directory) "/ssh:dev:/home/user/other/"))
+        (should (equal (roost--compose-prompt) prompt))))))
+
+(ert-deftest roost-sweep-late-a-click-on-another-project-leaves-a-draft-that-quotes-files ()
+  (roost-sweep-late--world
+    (roost-sweep-late--populate nil nil)
+    (with-current-buffer (roost-sweep-late--lay-out 'compose)
+      (let ((here (plist-get roost--compose-fields :directory))
+            (from (with-current-buffer (messages-buffer) (point-max))))
+        (goto-char (point-max))
+        (insert (propertize "src/a.py:1-2" 'roost-file "src/a.py"))
+        (roost--compose nil nil "/ssh:dev:/home/user/other/")
+        (should (equal (plist-get roost--compose-fields :directory) here))
+        (should (string-search "The draft stays in" (roost-sweep-late--messages from)))))))
+
+(ert-deftest roost-sweep-late-text-to-add-leaves-a-written-draft-where-it-is ()
+  ;; As `roost-draft-task' says.
+  (roost-sweep-late--world
+    (roost-sweep-late--populate nil nil)
+    (with-current-buffer (roost-sweep-late--lay-out 'compose)
+      (let ((here (plist-get roost--compose-fields :directory)))
+        (roost--compose nil (cons "More." nil) "/ssh:dev:/home/user/other/")
+        (should (equal (plist-get roost--compose-fields :directory) here))))))
+
+(ert-deftest roost-sweep-late-a-click-on-a-project-takes-an-empty-draft-there ()
+  (roost-sweep-late--world
+    (roost-sweep-late--populate nil nil)
+    (with-current-buffer (roost-sweep-late--lay-out 'compose)
+      (delete-region roost--compose-body (point-max))
+      (roost--compose nil nil "/ssh:dev:/home/user/other/")
+      (should (equal (plist-get roost--compose-fields :directory) "/ssh:dev:/home/user/other/")))))
+
 (ert-deftest roost-sweep-late-a-poll-that-fails-says-nothing-of-a-host-you-forgot ()
   (roost-sweep-late--world
     (roost-sweep-late--populate nil nil)

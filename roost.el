@@ -3194,16 +3194,21 @@ Planning lines and drawers are left out."
 (defun roost--compose (&optional fork seed directory)
   "Open the new task buffer.  FORK defaults to the current task's HEAD.
 SEED, as `roost--compose-seed' makes one, starts the prompt in place of
-what is at point, and DIRECTORY is its project in place of where you are."
+what is at point, and DIRECTORY is its project in place of where you are.
+Given with no SEED, DIRECTORY moves a written draft there too, unless it
+quotes files of the project it is in."
   (let* ((task (roost--task-at-point))
          (fork (and fork task))
          (given seed)
+         (project directory)
          (seed (or seed (roost--compose-seed)))
          (org (and seed (not given) (not (use-region-p)) (roost--org-marker)))
          ;; Where you are, before the draft becomes the current buffer.
          (directory (or directory (roost--compose-default-directory task fork)))
          (buffer (get-buffer roost--compose-buffer))
-         (fresh (not buffer)))
+         (fresh (not buffer))
+         ;; Given with no text to add, as by a click on a project.
+         (chosen (and project (not given))))
     (setq buffer (or buffer (get-buffer-create roost--compose-buffer)))
     (with-current-buffer buffer
       (when fresh
@@ -3220,6 +3225,14 @@ what is at point, and DIRECTORY is its project in place of where you are."
                     :base (when fork "HEAD")
                     :integration (when fork (roost--compose-integration directory "HEAD"))
                     :source (when fork (roost--field task 'name)))))
+      (when-let* ((chosen)
+                  (here (plist-get roost--compose-fields :directory))
+                  ;; However it is spelled.
+                  ((not (equal (roost--project-place here) (roost--project-place project)))))
+        (if (roost--compose-quoted-files)
+            (message "The draft stays in %s, as it quotes that project's files"
+                     (roost--project-label here))
+          (roost--compose-move project)))
       (roost--compose-render)
       (goto-char (point-max))
       (if (not (and seed (string-empty-p (roost--compose-prompt))))
@@ -3591,15 +3604,18 @@ then for a folder there, starting above the project used last on it."
       (setq choice (roost--read-project-directory))
       (roost--back-in-draft draft))
     (when choice
-      (let* ((directory (file-name-as-directory (expand-file-name choice)))
-             (base (plist-get roost--compose-fields :base)))
-        ;; The starting ref now names a ref of this project, not the task's.
-        (setq roost--compose-fields
-              (thread-first roost--compose-fields
-                            (plist-put :directory directory)
-                            (plist-put :integration (and base (roost--compose-integration directory base)))
-                            (plist-put :source nil))))
+      (roost--compose-move (file-name-as-directory (expand-file-name choice)))
       (roost--compose-render))))
+
+(defun roost--compose-move (directory)
+  "Make DIRECTORY the draft's project."
+  (let ((base (plist-get roost--compose-fields :base)))
+    ;; The starting ref now names a ref of this project, not the task's.
+    (setq roost--compose-fields
+          (thread-first roost--compose-fields
+                        (plist-put :directory directory)
+                        (plist-put :integration (and base (roost--compose-integration directory base)))
+                        (plist-put :source nil)))))
 
 (defun roost-compose-set-agent ()
   "Choose the draft's agent."
