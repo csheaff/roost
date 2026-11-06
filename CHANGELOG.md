@@ -4,6 +4,9 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- After `P` pushes, the task panel no longer says it has commits to push. It
+  did until Roost next asked GitHub or GitLab, up to two minutes. Nothing to do
+  when upgrading.
 - `P` drafts another pull request after one closed, or for commits made after
   one merged. It opened the old one in your browser, though the next step said
   it opens a pull request. Nothing to do when upgrading.

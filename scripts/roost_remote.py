@@ -4765,8 +4765,9 @@ def delete_remote_branch(repo, branch, commit):
 
 
 def push_pull_request(store, task):
-    """Push new commits to the task's existing pull request branch and say how
-    many were new. Runs without the registry lock."""
+    """Push new commits to the task's existing pull request branch, and say how
+    many were new and where the branch is on the remote now, as (PUSHED,
+    HEAD). Runs without the registry lock."""
     worktree = check_worktree(store, task)
     if not worktree.is_dir():
         raise RoostError("Task worktree is gone")
@@ -4786,9 +4787,25 @@ def push_pull_request(store, task):
     # With nothing new, pushing could only be refused, as when the pull
     # request has a commit made on GitHub since; unfetched, what was last
     # fetched says nothing.
-    if pushed or not fetched:
-        remote_git(worktree, "push", "-u", "origin", branch)
-    return pushed
+    if not pushed and fetched:
+        return pushed, since
+    tip = git(worktree, "rev-parse", "refs/heads/" + branch + "^{commit}").stdout.strip()
+    remote_git(worktree, "push", "-u", "origin", branch)
+    return pushed, tip
+
+
+def record_push(store, task_id, number, head):
+    """TASK_ID's record, with HEAD, where a push left the branch of its pull
+    request NUMBER, as that one's head: the forge will say so when next
+    asked, and its status until then is of the head before. Not one closed
+    or merged, which the push isn't in, and which merged at the recorded
+    head alone: a head moved on would say the commits since had merged."""
+    task = store.read(task_id)
+    pr = recorded_pull_request(task)
+    if pr.get("number") == number and pr.get("state") not in ("CLOSED", "MERGED") and pr.get("head") != head:
+        pr["head"] = head
+        store.save(task)
+    return task
 
 
 def pull_request(store, task, request):
@@ -6735,8 +6752,10 @@ def rpc(request):
                     # One closed or merged takes no more commits: a title asks for another.
                     if recorded and not (text(request.get("title")) and recorded.get("state") in ("CLOSED", "MERGED")):
                         with store.released():
-                            pushed = push_pull_request(store, task)
-                        return {"ok": True, "result": outgoing(dict(store.read(request["id"]), pushed=pushed))}
+                            pushed, head = push_pull_request(store, task)
+                            lacks = unpushed(task, head, branch_tip(task))
+                        task = record_push(store, request["id"], recorded["number"], head)
+                        return {"ok": True, "result": outgoing(dict(task, pushed=pushed, unpushed=lacks))}
                     with store.released():
                         pr, opened = pull_request(store, task, request)
                     task = store.read_to_act_on(request["id"])

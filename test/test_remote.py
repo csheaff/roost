@@ -5167,6 +5167,59 @@ sys.exit(status)
         self.assertEqual(reply["pr"]["number"], 9)
         self.assertEqual([call for call in self.gh_calls() if call[:2] == ["pr", "create"]], [])
 
+    def test_what_p_pushed_is_no_longer_unpushed(self):
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        self.listing((9, "OPEN", tip))
+        self.listed(full=True)
+        new = self.commit_in(task, "more")
+        self.assertEqual(self.listed(full=[task["id"]])["unpushed"], 1)
+        reply = self.request("pr", id=task["id"])["result"]
+        self.assertEqual((reply["pushed"], reply["unpushed"], reply["pr"]["head"]), (1, 0, new))
+        # A measurement that asks GitHub nothing agrees, and GitHub says so next.
+        self.assertEqual(self.listed(full=[task["id"]])["unpushed"], 0)
+        self.listing((9, "OPEN", new))
+        self.assertEqual(self.listed(full=True)["unpushed"], 0)
+
+    def test_commits_committed_while_p_pushed_are_unpushed(self):
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        self.listing((9, "OPEN", tip))
+        self.listed(full=True)
+        pushed = self.commit_in(task, "more")
+        original = roost.push_pull_request
+
+        def meanwhile(store, record):
+            done = original(store, record)
+            self.commit_in(task, "meanwhile")
+            return done
+
+        with patch.object(roost, "push_pull_request", meanwhile):
+            reply = self.request("pr", id=task["id"])["result"]
+        self.assertEqual((reply["unpushed"], reply["pr"]["head"]), (1, pushed))
+
+    def test_a_push_to_a_pull_request_merged_meanwhile_doesnt_say_the_push_merged(self):
+        # P in another Emacs, which has it open still: the record's head is
+        # where it merged, and moved on it would say the new commit had.
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        self.listing((9, "MERGED", tip))
+        self.listed(full=True)
+        since = self.commit_in(task, "since")
+        reply = self.request("pr", id=task["id"])
+        self.assertEqual(reply["result"]["pushed"], 1)
+        self.assertEqual(reply["result"]["pr"]["head"], tip)
+        self.assertIs(self.listed(full=[task["id"]])["landed"], False)
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        self.assertIn("unmerged commits", self.request("retire", id=task["id"])["error"])
+        self.assertEqual(self.git("rev-parse", task["branch"]), since)
+
     def test_list_learns_the_pull_request_an_agent_opened(self):
         self.github()
         task = self.create()
