@@ -967,6 +967,9 @@ Things to know:
   task they start from the task's work, its panel lists them with what they
   hold, each opening in Magit, and the task can't be merged or retired while
   one holds work not on the task's branch.
+- Claude Code writes a conversation once something is said in it, so a task
+  stopped before that has none to go back to: `s` starts it anew, with its
+  prompt if it has one.
 - Claude and Codex each ask once per repository to trust it; every task worktree
   of that repository is trusted after that.
 - Codex asks you to review Roost's observer hooks the first time. The hook

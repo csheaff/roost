@@ -20,6 +20,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import textwrap
 import threading
 import time
 import unittest
@@ -2684,6 +2685,70 @@ class Lifecycle(unittest.TestCase):
             self.assertIn("--add-dir=" + str(folder), argv)
             self.assertTrue(folder.is_dir())
         self.assertEqual(argv[-2:], ["--resume", "recorded-session"])
+
+    def test_a_claude_with_no_conversation_yet_starts_anew(self):
+        store = roost.Store(str(self.state))
+        transcript = self.root / "recorded-session.jsonl"
+        task = dict(id="1234567890abcdef", command=["claude"], prompt="Look", agentSession="recorded-session",
+                    runId="run", transcript=str(transcript))
+        self.assertEqual(roost.ClaudeAgent().launch(store, task, True)[-2:], ["--", "Look"])
+        self.assertNotIn("--resume", roost.ClaudeAgent().launch(store, dict(task, prompt=None), True))
+        transcript.write_text("{}\n")
+        self.assertEqual(roost.ClaudeAgent().launch(store, task, True)[-2:], ["--resume", "recorded-session"])
+
+    def test_a_task_stopped_before_anything_was_said_in_it_starts_again(self):
+        # As Claude Code 2.1.317 does: a session says where its transcript
+        # will be, and --resume refuses one with nothing in it yet.
+        fake = self.root / "says_nothing.py"
+        fake.write_text(textwrap.dedent("""\
+            import json, os, subprocess, sys, uuid
+            from pathlib import Path
+            settings = json.loads(Path(sys.argv[sys.argv.index("--settings") + 1]).read_text())
+            folder = Path(os.environ["TRANSCRIPTS"])
+            session = sys.argv[sys.argv.index("--resume") + 1] if "--resume" in sys.argv else str(uuid.uuid4())
+            transcript = folder / (session + ".jsonl")
+            if "--resume" in sys.argv and not transcript.exists():
+                print("No conversation found with session ID: " + session, flush=True)
+                sys.exit(1)
+
+            def event(name, **fields):
+                payload = dict(hook_event_name=name, session_id=session, transcript_path=str(transcript), **fields)
+                for matcher in settings["hooks"].get(name, []):
+                    for hook in matcher["hooks"]:
+                        subprocess.run(hook["command"], input=json.dumps(payload), text=True, shell=True, check=True)
+
+            event("SessionStart")
+            for line in sys.stdin:
+                transcript.write_text(line)
+                event("UserPromptSubmit", prompt=line.strip())
+                event("Stop")
+            """))
+        folder = self.root / "transcripts"
+        folder.mkdir()
+        command = ["/usr/bin/env", "TRANSCRIPTS=" + str(folder), sys.executable, str(fake)]
+
+        def resumed(task):
+            self.assertTrue(self.request("stop", id=task["id"])["ok"])
+            self.assertTrue(self.request("resume", id=task["id"])["ok"])
+            deadline = time.monotonic() + 8
+            while time.monotonic() < deadline:
+                record = roost.Store(str(self.state)).read(task["id"])
+                if record["status"] in ("ready", "failed"):
+                    return record
+                time.sleep(.04)
+            self.fail("Neither ready nor failed: %s" % record)
+
+        silent = self.create(name="silent", command=command)
+        first = self.wait(silent, "ready")["agentSession"]
+        record = resumed(silent)
+        self.assertEqual(record["status"], "ready")
+        self.assertNotEqual(record["agentSession"], first)
+        # One with a conversation goes back to it.
+        spoken = self.create(name="spoken", command=command)
+        self.assertTrue(self.request("send", id=spoken["id"], text="hello")["ok"])
+        first = self.wait(spoken, "ready", "Stop")["agentSession"]
+        record = resumed(spoken)
+        self.assertEqual((record["status"], record["agentSession"]), ("ready", first))
 
     def test_adapter_launch_failure_marks_the_task_failed(self):
         task = self.create()

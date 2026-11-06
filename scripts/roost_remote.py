@@ -880,12 +880,19 @@ class ClaudeAgent:
         argv = task["command"] + ["--settings", claude_hook_settings(store, task),
                                   "--add-dir=" + str(attachments)]
         session = task.get("agentSession") or task.get("claudeSession")
-        if resume_conversation and session:
+        if resume_conversation and session and self.has_conversation(task):
             argv += ["--resume", session]
         elif text(task.get("prompt")):
             # Otherwise a prompt starting with -, such as a list, is an option.
             argv += ["--", task["prompt"]]
         return argv
+
+    def has_conversation(self, task):
+        """Whether Claude has a conversation to resume. It names a session as
+        it starts, and where its transcript will be, and writes nothing there
+        until something is said in it; --resume of one it hasn't written
+        fails, each time. One it never said this of is left to --resume."""
+        return not isinstance(task.get("transcript"), str) or Path(task["transcript"]).is_file()
 
     def observe(self, payload, current=None):
         """Status updates for hook PAYLOAD, given the task's CURRENT status."""
