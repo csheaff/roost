@@ -894,12 +894,13 @@ class ClaudeAgent:
         says it created one, rather than that it entered, reused or
         resumed one that was there; or an isolated subagent of its works
         there, in a folder Claude names after it. A workflow's folder names
-        no agent, and any subagent may visit one, so it stays."""
+        no agent, and any subagent may visit one, so it stays. "new" for a
+        worktree made just now, which may take a name it had before."""
         if payload.get("tool_name") == "EnterWorktree":
             reply = payload.get("tool_response")
             said = reply.get("message") if isinstance(reply, dict) else None
-            return (payload.get("hook_event_name") == "PostToolUse" and isinstance(said, str)
-                    and said.startswith("Created worktree"))
+            return ("new" if payload.get("hook_event_name") == "PostToolUse" and isinstance(said, str)
+                    and said.startswith("Created worktree") else False)
         agent = payload.get("agent_id")
         folder = re.fullmatch(r"agent-(a[0-9a-f]{16}|a[0-9a-f]{7})", Path(path).name)
         return bool(folder and isinstance(agent, str) and agent.startswith(folder.group(1)))
@@ -5495,6 +5496,15 @@ def made_stamp(gitdir):
     return None
 
 
+def is_as_made(task, path, gitdir):
+    """Whether the worktree Git keeps in GITDIR is the one TASK's agent made
+    at PATH, not another since, as by another session. A stamp not noted says
+    no: only a hook from inside a worktree that was there notes one."""
+    stamps = task.get("agentMadeAt")
+    made = stamps.get(path) if isinstance(stamps, dict) else None
+    return made is not None and made == made_stamp(gitdir)
+
+
 def made_since(gitdir, started):
     """Whether Git made the worktree it keeps in GITDIR at STARTED or after,
     a time as in a record, by `made_stamp`."""
@@ -5521,9 +5531,7 @@ def agent_work(task):
     for path in (task["agentMade"] if known else task.get("agentWorktrees")) or []:
         gitdir = worktree_at(task["repo"], path) if isinstance(path, str) else None
         # Not one made since at the same path, as by another session.
-        stamps = task.get("agentMadeAt") if isinstance(task.get("agentMadeAt"), dict) else {}
-        if not gitdir or known and not (made_since(gitdir, task.get("startedAt"))
-                                        and stamps.get(path, made_stamp(gitdir)) == made_stamp(gitdir)):
+        if not gitdir or known and not (made_since(gitdir, task.get("startedAt")) and is_as_made(task, path, gitdir)):
             continue
         branch = read_git(path, "symbolic-ref", "--short", "-q", "HEAD").stdout.strip()
         ahead = read_git(path, "rev-list", "--count", "refs/heads/" + task["branch"] + "..HEAD", "--")
@@ -5556,6 +5564,10 @@ def remove_agent_worktrees(task, entries):
     hence --force twice. Best effort: what can't be removed stays where Git
     put it, and `agent_left` says so."""
     for entry in entries:
+        # As it is now: a teardown command may have run since it was listed.
+        gitdir = worktree_at(task["repo"], entry["path"])
+        if not gitdir or not is_as_made(task, entry["path"], gitdir):
+            continue
         commit = read_git(entry["path"], "rev-parse", "HEAD").stdout.strip()
         removed = git(task["repo"], "worktree", "remove", "--force", "--force", entry["path"], check=False)
         if removed.returncode == 0 and commit and entry["branch"] == agent_branch(task, entry["path"]):
@@ -5799,15 +5811,14 @@ def update_hook(store, task_id, payload, run_id=None):
             new_place = place not in been
             # A record from before `agentMade` stays as it is: the key says
             # that everything of its agent's is noted there.
-            new_made = ("agentMade" in task and place not in made
-                        and bool(says_made and says_made(payload, place)))
+            said = "agentMade" in task and says_made and says_made(payload, place)
+            gitdir = worktree_at(task["repo"], place) if said and (place not in made or said == "new") else None
+            new_made = bool(gitdir)
             if new_place:
                 task["agentWorktrees"] = been + [place]
             if new_made:
-                task["agentMade"] = made + [place]
-                gitdir = worktree_at(task["repo"], place)
-                if gitdir:
-                    task["agentMadeAt"] = dict(task.get("agentMadeAt") or {}, **{place: made_stamp(gitdir)})
+                task["agentMade"] = made if place in made else made + [place]
+                task["agentMadeAt"] = dict(task.get("agentMadeAt") or {}, **{place: made_stamp(gitdir)})
             if new_place or new_made:
                 store.save(task)
         concerns = getattr(agent, "concerns", None)

@@ -540,7 +540,9 @@ Invariants:
   not "Entered", "Reused" or "Resumed", or a subagent whose ID names the folder; Git
   made it since the task started (`made_since`, by the `commondir` Git writes once);
   and it is the one made then, by that stamp in `agentMadeAt`, not another since at
-  that path. A workflow's folder names no agent, so it stays. A record from before
+  that path, looked at again just before removal, as a teardown command runs first.
+  No stamp says no. A worktree its agent makes again at that name takes a new stamp.
+  A workflow's folder names no agent, so it stays. A record from before
   `agentMade` has no such key, and is never given one: its worktrees still show and
   keep the task from retiring, with `made` false, and stay.
 - I3. A branch goes only if `git worktree remove` exited 0, only if it is

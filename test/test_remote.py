@@ -3314,6 +3314,38 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(own.exists())
         self.assertTrue(roost.ref_exists(self.repo, "worktree-probe"))
 
+    def test_a_worktree_its_agent_made_again_is_its_own(self):
+        # The same name, by the same agent: what it holds keeps the task.
+        task = self.create()
+        own = self.agent_worktree(task)
+        self.git("worktree", "remove", "--force", "--force", str(own))
+        self.git("branch", "-D", "worktree-probe")
+        time.sleep(0.01)
+        self.agent_worktree(task)
+        (own / "scratch").write_text("work\n")
+        self.assertIn("left work in its own worktree", self.request("retire", id=task["id"])["error"])
+
+    def test_a_worktree_with_no_stamp_noted_isnt_the_agents(self):
+        # A hook that came once it had gone, then another session's at that path.
+        task = self.create()
+        own = self.repo / ".claude" / "worktrees" / "probe"
+        self.report_entered(task, own, dict(name="probe"))
+        self.git("worktree", "add", "-q", "-b", "worktree-probe", str(own), task["branch"])
+        told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+        self.assertTrue(self.request("discard", id=task["id"], expect=told["commit"])["ok"])
+        self.assertTrue(own.exists())
+
+    def test_a_worktree_another_session_made_during_teardown_stays(self):
+        task = self.create()
+        own = self.agent_worktree(task)
+        replace = ('git -C "$ROOST_REPO" worktree remove --force --force %s && git -C "$ROOST_REPO" branch -D worktree-probe'
+                   ' && sleep 0.01 && git -C "$ROOST_REPO" worktree add -q -b worktree-probe %s %s'
+                   % (shlex.quote(str(own)), shlex.quote(str(own)), shlex.quote(task["branch"])))
+        reply = self.request("retire", id=task["id"], teardown=replace)
+        self.assertTrue(reply["ok"], reply)
+        self.assertTrue(own.exists())
+        self.assertTrue(roost.ref_exists(self.repo, "worktree-probe"))
+
     def test_a_subagent_of_another_id_didnt_make_its_folder(self):
         task = self.create()
         store = roost.Store(str(self.state))

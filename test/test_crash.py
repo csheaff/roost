@@ -56,6 +56,7 @@ class Crashes(unittest.TestCase):
                     box.git("worktree", "add", "-q", "-b", "worktree-agent", str(path), task["branch"])
                     record = box.record(task["id"])
                     record["agentWorktrees"] = record["agentMade"] = [str(path)]
+                    record["agentMadeAt"] = {str(path): (box.repo / ".git/worktrees/agent/commondir").stat().st_mtime_ns}
                     (box.state / "tasks" / (task["id"] + ".json")).write_text(json.dumps(record))
                     box.helper("stop", id=task["id"])
                     args = dict(id=task["id"])
