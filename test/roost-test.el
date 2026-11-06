@@ -5919,6 +5919,114 @@ With FAILING, it prints it on stderr and exits with status 1."
            (should (= (length (directory-files root nil "\\`remote-.*\\.py\\'")) 1)))
        (delete-directory root t)))))
 
+(defmacro roost-test--with-state-directory (path &rest body)
+  "Run BODY with a state directory of its own, and PATH the helper's place in it."
+  (declare (indent 1))
+  `(roost-test--isolated
+    (let* ((root (make-temp-file "roost-rpc" t))
+           (roost-state-directory root)
+           (,path (expand-file-name (car (roost--helper)) root)))
+      (unwind-protect (progn ,@body)
+        (delete-directory root t)))))
+
+(defun roost-test--helper-reply ()
+  "Ask this machine's helper for a list, and return (GOOD . WORDS)."
+  (let (outcome)
+    (roost--request nil "list" nil (lambda (_) (setq outcome '(t)))
+                    (lambda (err) (setq outcome (cons nil err))))
+    (roost-test--wait-for (lambda () outcome))
+    outcome))
+
+(defun roost-test--file-text (file)
+  "What FILE holds."
+  (with-temp-buffer (insert-file-contents file) (buffer-string)))
+
+(defmacro roost-test--with-cut-connection (&rest body)
+  "Run BODY with what is sent to an install ending halfway, as when ssh drops.
+sshd closes what it runs on the host's input: it reads an end, and isn't
+stopped."
+  `(let ((real (symbol-function 'roost--run)))
+     (cl-letf (((symbol-function 'roost--run)
+                (lambda (host code input success failure &optional timeout)
+                  (funcall real host code
+                           (if (string-search "runpy" code) input (substring input 0 (/ (length input) 2)))
+                           success failure timeout))))
+       ,@body)))
+
+(ert-deftest roost-an-install-cut-short-installs-nothing ()
+  ;; It read to the end of its input and put that where hooks call it.
+  (roost-test--with-state-directory path
+    (let ((outcome (roost-test--with-cut-connection (roost-test--helper-reply))))
+      (should-not (car outcome))
+      (should (string-search "bytes of the helper arrived; nothing was installed" (cdr outcome)))
+      (should-not (directory-files roost-state-directory nil "\\`[^.]")))))
+
+(ert-deftest roost-an-install-cut-short-leaves-what-was-there ()
+  ;; A file an older Roost's install left short: not this one's to make worse.
+  (roost-test--with-state-directory path
+    (with-temp-file path (insert "# Short.\n"))
+    (should-not (car (roost-test--with-cut-connection (roost-test--helper-reply))))
+    (should (equal (roost-test--file-text path) "# Short.\n"))
+    (should (equal (directory-files roost-state-directory nil "\\`[^.]")
+                   (list (file-name-nondirectory path))))
+    ;; With the connection back, it is put right.
+    (should (car (roost-test--helper-reply)))
+    (should (equal (roost-test--file-text path) (cdr (roost--helper))))))
+
+(ert-deftest roost-an-install-that-fails-leaves-no-file-of-its-own ()
+  ;; As with a full disk, here with something else in the helper's place.
+  (roost-test--with-state-directory path
+    (make-directory path)
+    (should-not (car (roost-test--helper-reply)))
+    (should (equal (directory-files roost-state-directory nil "\\`[^.]")
+                   (list (file-name-nondirectory path))))))
+
+(ert-deftest roost-the-helper-in-place-is-left-alone ()
+  ;; Each Emacs's first request replaced the file agents' hooks call, so a
+  ;; dropped connection at any start could break them.  Left, it counts
+  ;; as used, or `prune_helpers' would take it for one nobody calls.
+  (roost-test--with-state-directory path
+    (should (car (roost-test--helper-reply)))
+    (let ((file (file-attribute-inode-number (file-attributes path)))
+          (old (encode-time '(0 0 0 1 1 2020 nil nil t))))
+      (set-file-times path old)
+      (clrhash roost--installed)
+      (should (car (roost-test--helper-reply)))
+      (should (= (file-attribute-inode-number (file-attributes path)) file))
+      (should (time-less-p old (file-attribute-modification-time (file-attributes path))))
+      ;; Cut short, it is left alone all the same.
+      (clrhash roost--installed)
+      (should (car (roost-test--with-cut-connection (roost-test--helper-reply))))
+      (should (equal (roost-test--file-text path) (cdr (roost--helper)))))))
+
+(ert-deftest roost-a-helper-that-is-not-whole-is-installed-again ()
+  ;; With the installation noted, only `FileNotFoundError' reinstalled it,
+  ;; so a host stayed offline until Emacs restarted.  Each of these is what
+  ;; a cut left, and what Python makes of it.
+  (roost-test--with-state-directory path
+    (should (car (roost-test--helper-reply)))
+    (let ((whole (roost-test--file-text path)))
+      (dolist (text (list (substring whole 0 (string-search "\n\ndef main" whole)) ; reads, does nothing
+                          "def broken(:\n"          ; SyntaxError
+                          "def broken():\n"))       ; IndentationError
+        (with-temp-file path (insert text))
+        (should (car (roost-test--helper-reply)))
+        (should (equal (roost-test--file-text path) whole))))))
+
+(ert-deftest roost-only-a-helper-that-is-not-whole-is-installed-again ()
+  ;; Asking again after any other failure could run an action twice.
+  (let ((name "remote-abc.py"))
+    (dolist (err (list "The host helper returned no response"
+                       (format "FileNotFoundError: [Errno 2] No such file or directory: '/s/%s'" name)
+                       (format "  File \"/s/%s\", line 9\nSyntaxError: invalid syntax" name)
+                       (format "  File \"/s/%s\", line 9\nIndentationError: expected an indented block" name)))
+      (should (roost--helper-unusable-p err name)))
+    (dolist (err (list "ssh: connect to host dev port 22: Operation timed out"
+                       "Roost can't read the host helper's reply: {"
+                       (format "  File \"/s/%s\", line 9\nBrokenPipeError: [Errno 32] Broken pipe" name)
+                       "FileNotFoundError: [Errno 2] No such file or directory: 'git'"))
+      (should-not (roost--helper-unusable-p err name)))))
+
 (ert-deftest roost-an-unreachable-host-keeps-its-helper ()
   ;; Each poll of a host that was down sent the whole helper again.
   (roost-test--isolated

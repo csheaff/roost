@@ -4,6 +4,12 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A connection that drops while Roost installs its helper on a host changes
+  nothing there. What had arrived replaced the helper, which agents' hooks
+  call, so their statuses stopped moving, and the host could read offline
+  until you restarted Emacs. Each Emacs now leaves a helper of the right
+  size as it is, and installs again one that isn't whole. Nothing to do when
+  upgrading.
 - A host goes on being asked after a refresh that couldn't start, as with
   `C-g` just then, or a poll as Git replaced Roost's helper file. Its rows
   stopped changing, with no error, until you restarted Emacs. Nothing to do

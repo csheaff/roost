@@ -880,6 +880,43 @@ terminal.  TASK is nil for one not yet created."
               (height . ,(alist-get 'height size)))
           size)))))
 
+(defconst roost--install-code
+  "import json,os,sys,tempfile
+r=os.path.expanduser(%s)
+os.makedirs(r,mode=0o700,exist_ok=True)
+p=os.path.join(r,%s)
+n=%d
+if os.path.isfile(p) and os.path.getsize(p)==n:
+    os.utime(p)
+else:
+    d=sys.stdin.buffer.read()
+    if len(d)!=n:
+        sys.exit('Only %%d of %%d bytes of the helper arrived; nothing was installed'%%(len(d),n))
+    fd,t=tempfile.mkstemp(dir=r)
+    try:
+        with os.fdopen(fd,'wb') as f: f.write(d)
+        os.chmod(t,0o700)
+        os.replace(t,p)
+    except BaseException:
+        os.unlink(t)
+        raise
+print(json.dumps({'ok':True}))"
+  "Python that installs the helper from its input: state directory, name, size.
+The name is a hash of the helper, and agents' hooks call that file, so one
+of the right size stays, as newly used, for `prune_helpers' to go by.  A
+connection that drops ends the input, not this: what comes up short
+replaces nothing.")
+
+(defun roost--helper-unusable-p (err filename)
+  "Whether ERR says the helper FILENAME is gone, or not whole, on its host.
+Python couldn't open it, as another Emacs pruned it or the state directory
+went.  Or an older Roost's install was cut off, and Python can't read what
+came, or reads it to the end with nothing run: `main' is called last.  In
+each, no action ran, so asking again can't run one twice."
+  (or (equal err "The host helper returned no response")
+      (and (string-match-p "\\(?:FileNotFound\\|Syntax\\|Indentation\\)Error" err)
+           (string-search filename err))))
+
 (defun roost--request (host action parameters success &optional failure timeout)
   "Run ACTION with PARAMETERS on HOST, installing the versioned helper as needed.
 Call SUCCESS with the result, or FAILURE with an error message.  TIMEOUT
@@ -905,8 +942,8 @@ is the seconds ACTION may take, if not `roost-request-timeout'."
           (lambda ()
             (roost--run
              host
-             (format "import os,sys,tempfile,json\nr=os.path.expanduser(%s)\nos.makedirs(r,mode=0o700,exist_ok=True)\np=os.path.join(r,%s)\nfd,t=tempfile.mkstemp(dir=r)\nwith os.fdopen(fd,'wb') as f: f.write(sys.stdin.buffer.read())\nos.chmod(t,0o700)\nos.replace(t,p)\nprint(json.dumps({'ok':True}))"
-                     (json-serialize root) (json-serialize filename))
+             (format roost--install-code (json-serialize root) (json-serialize filename)
+                     (string-bytes (cdr helper)))
              (cdr helper)
              (lambda (_)
                (puthash installation-key filename roost--installed)
@@ -916,11 +953,8 @@ is the seconds ACTION may take, if not `roost-request-timeout'."
         (funcall install-and-invoke)
       (funcall invoke
                (lambda (err)
-                 ;; Python could not open the helper: another Emacs pruned
-                 ;; it, or the state directory went.  Install it again.
                  ;; Other failures, such as an unreachable host, keep it.
-                 (if (not (and (string-search "FileNotFoundError" err)
-                               (string-search filename err)))
+                 (if (not (roost--helper-unusable-p err filename))
                      (funcall failure err)
                    (remhash installation-key roost--installed)
                    (funcall install-and-invoke)))))))
