@@ -4,6 +4,10 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A host goes on being asked after a refresh that couldn't start, as with
+  `C-g` just then, or a poll as Git replaced Roost's helper file. Its rows
+  stopped changing, with no error, until you restarted Emacs. Nothing to do
+  when upgrading.
 - A draft started from a Jira work item has its text when your site keeps
   that in a rich-text custom field. The prompt had only its summary and
   link, as Roost read the description alone. Now, as you pick one with

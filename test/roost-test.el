@@ -5887,6 +5887,21 @@ With FAILING, it prints it on stderr and exits with status 1."
           (should (= timeouts 1)))
       (when (process-live-p process) (delete-process process)))))
 
+(ert-deftest roost-a-reply-reaches-its-callback-before-any-timer ()
+  ;; The sentinel reads what is left of stderr before the callback.  A
+  ;; timer run there, as one from `with-timeout' that throws, left the
+  ;; request ended and its callback never called: a poll, for good.
+  (roost-test--isolated
+   (let* ((real (symbol-function 'cancel-timer)) order)
+     (cl-letf (((symbol-function 'cancel-timer)
+                (lambda (timer)
+                  (funcall real timer)
+                  (run-at-time 0 nil (lambda () (push 'timer order))))))
+       (roost--run nil "print('{\"ok\": true}')" "{}" (lambda (_) (push 'reply order)) #'ignore)
+       (roost-test--wait-for (lambda () (memq 'reply order))))
+     (roost-test--wait-for (lambda () (memq 'timer order)))
+     (should (equal (reverse order) '(reply timer))))))
+
 (ert-deftest roost-a-removed-helper-is-installed-again ()
   ;; A task launched by another Emacs prunes helper copies over a week old.
   ;; Requests then failed, until a failed poll happened to reinstall it.
@@ -6626,6 +6641,80 @@ With FAILING, it prints it on stderr and exits with status 1."
        (setq broken nil)
        (roost-refresh t)
        (should (= attempts 2))))))
+
+(ert-deftest roost-a-refresh-that-could-not-start-leaves-its-host-asked-again ()
+  ;; With no helper to read, as Git replaces it, the host stayed marked as
+  ;; refreshing with nothing to end that: no poll asked it until Emacs
+  ;; restarted, and no error showed.
+  (roost-test--isolated
+   (let* ((directory (file-name-as-directory (make-temp-file "roost-package" t)))
+          (roost--package-directory directory)
+          (roost--helper-cache nil)
+          (roost-hosts '("dev"))
+          (asked 0))
+     (unwind-protect
+         (cl-letf (((symbol-function 'roost--run) (lambda (&rest _) (cl-incf asked))))
+           (make-directory (expand-file-name "scripts" directory))
+           (should-error (roost-refresh t) :type 'file-missing)
+           (should (= asked 0))
+           (should-not (gethash "dev" roost--refreshing))
+           (with-temp-file (expand-file-name "scripts/roost_remote.py" directory)
+             (insert "# A helper.\n"))
+           (roost-refresh t)
+           (should (= asked 1))
+           ;; That one is in flight, so the next poll waits for it.
+           (should (gethash "dev" roost--refreshing))
+           (roost-refresh t)
+           (should (= asked 1)))
+       (delete-directory directory t)))))
+
+(ert-deftest roost-a-refresh-you-quit-as-it-starts-leaves-its-host-asked-again ()
+  ;; As `C-g' while Roost loads tmux-control for a remote host: `quit' isn't
+  ;; an error, and goes on to the command you quit.
+  (roost-test--isolated
+   (let ((roost-hosts '("dev")) (asked 0) quitting quit)
+     (puthash (list "dev" roost-state-directory) (car (roost--helper)) roost--installed)
+     (cl-letf (((symbol-function 'roost--run)
+                (lambda (&rest _) (if quitting (signal 'quit nil) (cl-incf asked)))))
+       (setq quitting t)
+       (condition-case nil (roost-refresh) (quit (setq quit t)))
+       (should quit)
+       (should-not (gethash "dev" roost--refreshing))
+       (setq quitting nil)
+       (roost-refresh t)
+       (should (= asked 1))))))
+
+(ert-deftest roost-a-refresh-that-ends-at-once-leaves-the-one-after-it-marked ()
+  ;; It fails as it starts, draws badly, and the refresh owed after it goes
+  ;; out.  That one is in flight, and only its own reply ends it.
+  (roost-test--isolated
+   (let ((roost-hosts '("dev")) (asked 0))
+     (puthash "dev" t roost--full-refresh-pending)
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host _action _params _success failure &rest _)
+                  (when (= (cl-incf asked) 1) (funcall failure "unreachable"))))
+               ((symbol-function 'roost--redraw) (lambda () (error "Broken view"))))
+       (should-error (roost-refresh t))
+       (should (= asked 2))
+       (should (gethash "dev" roost--refreshing))))))
+
+(ert-deftest roost-a-turn-that-could-not-be-sent-is-sent-again ()
+  ;; It stayed marked as sent, and the host never heard.
+  (roost-test--isolated
+   (let ((task (roost-test--task "1111111111111111" "stopped")) (asked 0) broken)
+     (setf (alist-get 'landed task) nil
+           (alist-get 'conflicts task) '("a.txt")
+           (alist-get 'seen task) (alist-get 'updatedAt task))
+     (cl-letf (((symbol-function 'roost--report-turn) roost-test--report-turn)
+               ((symbol-function 'roost--request)
+                (lambda (&rest _) (when broken (error "No helper")) (cl-incf asked))))
+       (setq broken t)
+       (should-error (roost--report-turn task))
+       (should (eq (gethash (roost--key task) roost--turns-sent 'none) 'none))
+       (setq broken nil)
+       (roost--report-turn task)
+       (should (= asked 1))
+       (should (equal (gethash (roost--key task) roost--turns-sent) "conflicts"))))))
 
 (ert-deftest roost-dashboard-groups-by-project-and-summarizes-attention ()
   (roost-test--isolated

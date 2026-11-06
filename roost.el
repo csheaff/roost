@@ -760,7 +760,9 @@ is the seconds it may take, if not `roost-request-timeout'."
                      (when-let* ((timer (process-get proc 'roost-timer)))
                        (cancel-timer timer))
                      (when input-file (ignore-errors (delete-file input-file)))
-                     (while (accept-process-output stderr-pipe 0 nil t))
+                     ;; An integer runs no timers: one that throws, as
+                     ;; `with-timeout' does, would leave without a callback.
+                     (while (accept-process-output stderr-pipe 0 nil 1))
                      (delete-process stderr-pipe)
                      (unwind-protect
                          (let* ((stdout (with-current-buffer buffer (buffer-string)))
@@ -1381,18 +1383,22 @@ those tasks."
           (puthash host (if (or (null ids) (eq pending t)) t (seq-union pending ids))
                    roost--full-refresh-pending)))
     (puthash host t roost--refreshing)
-    (let ((request (puthash host (1+ (gethash host roost--list-requests 0)) roost--list-requests))
-          (revision (gethash host roost--revisions 0))
-          ;; Full refreshes ask GitHub too, and quiet polls now and then.
-          (pull-requests (if quiet
-                             (> (- (float-time) (gethash host roost--pull-requests-asked 0))
-                                roost--pull-request-interval)
-                           (not ids)))
-          (finish (lambda ()
-                    (remhash host roost--refreshing)
-                    (when-let* ((pending (gethash host roost--full-refresh-pending)))
-                      (remhash host roost--full-refresh-pending)
-                      (roost--refresh-host host nil (unless (eq pending t) pending))))))
+    (let* ((request (puthash host (1+ (gethash host roost--list-requests 0)) roost--list-requests))
+           (revision (gethash host roost--revisions 0))
+           ;; Full refreshes ask GitHub too, and quiet polls now and then.
+           (pull-requests (if quiet
+                              (> (- (float-time) (gethash host roost--pull-requests-asked 0))
+                                 roost--pull-request-interval)
+                            (not ids)))
+           asked finished
+           ;; Once: the refresh it starts next has the flag then.
+           (finish (lambda ()
+                     (unless finished
+                       (setq finished t)
+                       (remhash host roost--refreshing)
+                       (when-let* ((pending (gethash host roost--full-refresh-pending)))
+                         (remhash host roost--full-refresh-pending)
+                         (roost--refresh-host host nil (unless (eq pending t) pending)))))))
       (when pull-requests (puthash host (float-time) roost--pull-requests-asked))
       (let ((failed
              (lambda (err)
@@ -1415,38 +1421,45 @@ those tasks."
                                 roost--failures))
                      (roost--redraw))
                  (funcall finish)))))
-        (roost--request
-         host "list" `((full . ,(cond (quiet :false) (ids (vconcat ids)) (t t)))
-                       ,@(when (and quiet pull-requests) '((pullRequests . t))))
-         ;; Each ends the refresh even if drawing what it found fails, or
-         ;; the host would never be asked again.
-         (lambda (tasks)
-           (if (not (roost--task-list-p tasks))
-               (funcall failed "Roost can't read the tasks the host helper listed")
-             (unwind-protect
-                 (progn
-                   (remhash host roost--failures)
-                   (remhash host roost--errors)
-                   ;; A newer mutation must win over a stale list reply, and a host
-                   ;; forgotten meanwhile stays forgotten.
-                   (when (and (= revision (gethash host roost--revisions 0))
-                              (member host (roost--hosts)))
-                     (let ((before (roost--task-states host)))
-                       (roost--apply-snapshot host tasks request)
-                       (with-demoted-errors "Roost: %S" (roost--compose-listed host tasks))
-                       ;; Quiet polls leave out Git statistics.  An agent that reported
-                       ;; something, such as finishing an edit, may have changed files,
-                       ;; and a commit moves the task's Git stamp: measure those tasks
-                       ;; once this poll is done.
-                       (when-let* ((quiet)
-                                   (changed (seq-keep (lambda (state)
-                                                        (unless (equal state (assoc (car state) before))
-                                                          (car state)))
-                                                      (roost--task-states host))))
-                         (roost--refresh-host host nil changed))))
-                   (roost--redraw))
-               (funcall finish))))
-         failed)))))
+        ;; Stopped before a callback is in place, as with no helper to read
+        ;; or by a quit, nothing else ends the refresh: the host would
+        ;; never be asked again.
+        (unwind-protect
+            (progn
+              (roost--request
+               host "list" `((full . ,(cond (quiet :false) (ids (vconcat ids)) (t t)))
+                             ,@(when (and quiet pull-requests) '((pullRequests . t))))
+               ;; Each ends the refresh even if drawing what it found fails, or
+               ;; the host would never be asked again.
+               (lambda (tasks)
+                 (if (not (roost--task-list-p tasks))
+                     (funcall failed "Roost can't read the tasks the host helper listed")
+                   (unwind-protect
+                       (progn
+                         (remhash host roost--failures)
+                         (remhash host roost--errors)
+                         ;; A newer mutation must win over a stale list reply, and a host
+                         ;; forgotten meanwhile stays forgotten.
+                         (when (and (= revision (gethash host roost--revisions 0))
+                                    (member host (roost--hosts)))
+                           (let ((before (roost--task-states host)))
+                             (roost--apply-snapshot host tasks request)
+                             (with-demoted-errors "Roost: %S" (roost--compose-listed host tasks))
+                             ;; Quiet polls leave out Git statistics.  An agent that reported
+                             ;; something, such as finishing an edit, may have changed files,
+                             ;; and a commit moves the task's Git stamp: measure those tasks
+                             ;; once this poll is done.
+                             (when-let* ((quiet)
+                                         (changed (seq-keep (lambda (state)
+                                                              (unless (equal state (assoc (car state) before))
+                                                                (car state)))
+                                                            (roost--task-states host))))
+                               (roost--refresh-host host nil changed))))
+                         (roost--redraw))
+                     (funcall finish))))
+               failed)
+              (setq asked t))
+          (unless asked (funcall finish)))))))
 
 (defun roost--task-list-p (tasks)
   "Whether TASKS, as a host listed them, is a list of tasks, each with an ID."
@@ -6796,18 +6809,23 @@ it had would seem to end: the one `roost--pr-view' has."
            (let ((sent (lambda ()
                          (when (equal (gethash key roost--turns-sent 'none) turn)
                            (remhash key roost--turns-sent)))))
-             (roost--request (roost--field task 'host) "turn"
-                             (list (cons 'id (roost--field task 'id)) (cons 'turn turn))
-                             ;; What its record says now, which another Emacs
-                             ;; may yet change: the next poll compares again.
-                             (lambda (record)
-                               (funcall sent)
-                               (when-let* ((cached (gethash key roost--tasks)))
-                                 (puthash key (cons (cons 'turn (roost--field record 'turn))
-                                                    (assq-delete-all 'turn (copy-sequence cached)))
-                                          roost--tasks)))
-                             ;; Sent again with the task's next news.
-                             (lambda (_) (funcall sent))))))))
+             ;; Not sent at all, as with no helper to read, it is sent again too.
+             (condition-case err
+                 (roost--request (roost--field task 'host) "turn"
+                                 (list (cons 'id (roost--field task 'id)) (cons 'turn turn))
+                                 ;; What its record says now, which another Emacs
+                                 ;; may yet change: the next poll compares again.
+                                 (lambda (record)
+                                   (funcall sent)
+                                   (when-let* ((cached (gethash key roost--tasks)))
+                                     (puthash key (cons (cons 'turn (roost--field record 'turn))
+                                                        (assq-delete-all 'turn (copy-sequence cached)))
+                                              roost--tasks)))
+                                 ;; Sent again with the task's next news.
+                                 (lambda (_) (funcall sent)))
+               ((error quit)
+                (funcall sent)
+                (signal (car err) (cdr err)))))))))
 
 (defun roost--reviewer-name (reviewer)
   "How to name REVIEWER, a login or team slug that a review is asked of.
