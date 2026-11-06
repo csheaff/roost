@@ -35,9 +35,10 @@ class Crashes(unittest.TestCase):
                 task = box.create()
                 commit = box.commit(task)
                 box.arm("after", match="update-ref -d")
-                self.assertIsNone(box.helper("merge", id=task["id"], **style))
+                self.assertIsNone(box.helper("merge", id=task["id"], expect=commit, **style))
                 box.disarm()
-                reply = box.helper("merge", id=task["id"], **style)
+                # Emacs says where it last saw the branch, which has gone.
+                reply = box.helper("merge", id=task["id"], expect=commit, **style)
                 self.assertTrue(reply["ok"], reply)
                 self.assertEqual(reply["result"]["retiringCommit"], commit)
                 self.assertEqual(box.helper("list", socket=box.socket)["result"], [])

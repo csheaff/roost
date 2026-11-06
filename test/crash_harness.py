@@ -497,7 +497,7 @@ def way_out(box, scenario, outcome):
             dry = box.helper("discard", id=task["id"], dryRun=True)
             said(dry, "discard's question", problems)
             gone = dry if not dry or not dry.get("ok") else box.helper(
-                "discard", id=task["id"], expect=dry["result"]["discard"]["commit"])
+                "discard", id=task["id"], expect=dry["result"]["discard"]["commit"], told=dry["result"]["discard"])
             if not stale_locks(box, gone):
                 break
         said(gone, "discard", problems)
