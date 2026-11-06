@@ -3474,6 +3474,9 @@ def add_git_stats(tasks):
     the registry lock: in a large repository, or over the network, these
     take seconds."""
     for task in tasks:
+        # What Emacs says it asked you about, as it merges: `m` finishes a
+        # removal cut short too.
+        tip = task["branchTip"] = branch_tip(task)
         if task.get("removing"):
             continue  # Going, file by file.
         reply = last_message(task)
@@ -3481,9 +3484,6 @@ def add_git_stats(tasks):
             task["lastMessage"] = reply
         if task.get("agentWorktrees"):
             task["agentWork"] = agent_work(task)
-        tip = branch_tip(task)
-        # What Emacs says it asked you about, as it merges.
-        task["branchTip"] = tip
         task["landed"] = landed(task, tip)
         # Commits made since GitHub was last asked, as in Magit, are ones
         # its open pull request lacks.
@@ -4559,9 +4559,6 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
     worktree = check_worktree(store, task)
     worktree_exists = worktree.exists()
     branch_exists = ref_exists(repo, branch)
-    # Gone, as after a request cut short that had merged it, it can't have moved.
-    if merge and expect and branch_exists and branch_tip(task) != expect:
-        raise RoostError("The task's branch has moved since you were asked; look at it again before merging")
     if worktree_exists:
         require_clean(str(worktree))
         # Before stopping the agent, rather than fail halfway through.
@@ -4594,6 +4591,9 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
             overwritten = overwritten_ignored(repo, "refs/heads/" + branch)
             if overwritten:
                 raise RoostError(ignored_refusal("Merging", overwritten, "the primary checkout " + repo, "merge"))
+        # Last, as the checks above can take a while.
+        if expect and branch_tip(task) != expect:
+            raise RoostError("The task's branch has moved since you were asked; look at it again before merging")
         if squash:
             squashed = squash_merge(task, integration, here)
             result = None
@@ -4896,7 +4896,8 @@ def discard_losses(repo, branch, branch_exists, worktree, worktree_exists, work)
     # Removing the worktrees deletes their submodules' repositories,
     # whose changes are counted there; here, which commits they're at.
     submodules = [entry for path in paths for entry in submodule_work(path)]
-    changes = sum(unlinked_files(path) or len(read_git(path, "status", "--porcelain", "--untracked-files=normal",
+    # Each file, not a new folder as one: more in it is more to lose.
+    changes = sum(unlinked_files(path) or len(read_git(path, "status", "--porcelain", "--untracked-files=all",
                                                        "--ignore-submodules=dirty").stdout.splitlines())
                   for path in paths) + sum(entry["changes"] for entry in submodules)
     return dict(
@@ -4934,11 +4935,12 @@ def discard(store, task, expect=None, dry_run=False, teardown=None, told=None):
                                        commit=commit))
     if commit != (expect or None):
         raise RoostError("The task's branch has moved since you were asked; look at it again before discarding")
-    # A request from an older Emacs says only where the branch was.
     if isinstance(told, dict):
         losses = discard_losses(repo, branch, branch_exists, worktree, worktree_exists, work)
         if any(count > (told.get(name) or 0) for name, count in losses.items()):
-            raise RoostError("The task holds more than you were told; look at it again before discarding")
+            # Asking again would only find more.
+            raise RoostError("The task holds more than you were told; %slook at it again before discarding"
+                             % ("its agent is at work, so stop it (K), then " if task["status"] in ACTIVE else ""))
     stop(store, task)
     remove_worktrees(store, task, worktree if worktree_exists else None, work, force=True, teardown=teardown)
     shutil.rmtree(copy_staging(task["worktree"]), ignore_errors=True)

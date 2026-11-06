@@ -387,8 +387,8 @@ What each step leaves if it stops there, and what asking again does.
 | 2 | `require_not_removing` | registry | refused, nothing changed |
 | 3 | `require_finished`, pane ownership | registry | refused |
 | 4 | `put_back_removed` if `removing` | registry | restores tracked files, its link |
-| 5 | `check_worktree`, branch moved from `expect`, clean, submodules, Git lock, agent work | registry | refused, nothing changed |
-| 6 | merge | registry | see next machine; a second merge finds it there |
+| 5 | `check_worktree`, clean, submodules, Git lock, agent work | registry | refused, nothing changed |
+| 6 | branch moved from `expect`, then merge | registry | see next machine; a second merge finds it there |
 | 7 | `safe_to_delete`, save `retiringCommit` | registry | |
 | 8 | `stop` | registry | task stopped; agent's window gone |
 | 9 | `remove_worktrees` | released | worktree partly gone; `put_back_removed` restores it |
@@ -2539,10 +2539,10 @@ Invariants:
 
 | Question | From | Pins | The host checks again | Changes it misses |
 |---|---|---|---|---|
-| Discard, name typed | dry run | branch commit (`expect`), counts (`told`) | branch moved, any count higher | a change that adds to no count, as to a file already counted |
+| Discard, name typed | dry run | branch commit (`expect`), counts (`told`) | branch moved, any count higher | a change that adds to no count: a file edited, one swapped for another, a commit amended off the branch |
 | Discard, y-or-n-p | dry run | the same, all counts 0 | the same: asked again, it wants the name | none: any new file or commit counts |
 | Retire | cache | nothing | agent, dirty, unmerged | none: it refuses |
-| Merge | cache | branch commit (`branchTip`, as `expect`), once measured | branch moved, agent, dirty, conflicts | none, once measured |
+| Merge | cache | branch commit (`branchTip`, as `expect`), once measured | branch moved, just before merging; agent, dirty, conflicts | a commit before it was measured, which is refused too: the question spoke of what was measured |
 | Stop | cache | nothing | | none that matter |
 | Forget | cache | nothing | agent running | none: it refuses |
 | Send anyway | status | nothing | status without `force` | a stale copy: VIEWS-4 |
@@ -2569,8 +2569,10 @@ No state has no way out, and nothing offered is always refused: a task on anothe
 branch has `x`, and a task gone has `X`.
 
 A merge refused as moved measures the task, so that the next `m` asks about where it
-is now, watching or not. A request with no `expect` or `told`, as from an older Emacs
-or before a task is measured, goes as it always did.
+is now, watching or not; a removal cut short, which `m` finishes, is measured that far
+too. With no `branchTip` yet, nothing is pinned, and a merge goes as it always did. A
+discard refused while its agent is at work says to stop it first, as each new look
+would find more.
 
 Open: VIEWS-4.
 

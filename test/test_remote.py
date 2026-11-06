@@ -3095,6 +3095,29 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(self.told(task)[1]["agentWorktrees"], 1)
         self.assert_not_discarded(task, self.request("discard", id=task["id"], expect=commit, told=told))
 
+    def test_more_files_in_a_new_folder_stop_a_discard_you_typed_the_name_for(self):
+        # Git would list the folder once, however many it holds.
+        task = self.create()
+        folder = Path(task["worktree"]) / "out"
+        folder.mkdir()
+        (folder / "one").write_text("one\n")
+        commit, told = self.told(task)
+        self.assertEqual(told["changes"], 1)
+        (folder / "two").write_text("two\n")
+        self.assert_not_discarded(task, self.request("discard", id=task["id"], expect=commit, told=told))
+        self.assertEqual(self.told(task)[1]["changes"], 2)
+
+    def test_a_task_at_work_that_holds_more_says_to_stop_its_agent(self):
+        # Or each time you ask, it would have written more.
+        task = self.create()
+        commit, told = self.told(task)
+        store = roost.Store(str(self.state))
+        store.save(dict(store.read(task["id"]), status="running"))
+        (Path(task["worktree"]) / "written").write_text("work\n")
+        error = self.request("discard", id=task["id"], expect=commit, told=told)["error"]
+        self.assertIn("stop it (K)", error)
+        self.assertIn(task["paneId"], roost.pane_inventory(self.socket))
+
     def test_a_discard_goes_with_nothing_new_or_with_less_than_you_were_told(self):
         for less in (False, True):
             task = self.create(name="less" if less else "same")
@@ -3110,7 +3133,6 @@ class Lifecycle(unittest.TestCase):
             self.assertFalse(wt.exists())
 
     def test_a_discard_that_says_only_where_the_branch_was_goes_as_before(self):
-        # As from an older Emacs.
         task = self.create()
         commit, _ = self.told(task)
         (Path(task["worktree"]) / "written").write_text("work\n")
@@ -4175,6 +4197,22 @@ elif args[:2] == ["auth", "status"]:
             self.assertTrue(reply["ok"], reply)
             self.assertFalse(Path(task["worktree"]).exists())
 
+    def test_a_commit_made_as_a_merge_checks_the_task_stops_it(self):
+        # Those checks take seconds in a large repository.
+        task = self.create()
+        asked = self.commit_in(task, "asked-about")
+        before = self.git("rev-parse", "main")
+        checks = roost.require_clean
+
+        def committing(*args):
+            checks(*args)
+            self.commit_in(task, "made-as-it-checked")
+
+        with patch.object(roost, "require_clean", committing):
+            reply = self.request("merge", id=task["id"], expect=asked)
+        self.assertIn("moved since you were asked", reply["error"])
+        self.assertEqual(self.git("rev-parse", "main"), before)
+
     def test_a_merge_that_says_nothing_of_the_branch_goes_as_before(self):
         # As from an older Emacs, or one that has yet to measure the task.
         task = self.create()
@@ -4194,6 +4232,12 @@ elif args[:2] == ["auth", "status"]:
         self.assertNotIn("branchTip", store.read(task["id"]))
         # Not measured, it isn't said.
         self.assertNotIn("branchTip", self.request("list", full=False)["result"][0])
+        # A removal cut short, which `m` finishes, is measured no further.
+        store.save(dict(store.read(task["id"]), removing=True))
+        self.git("commit", "-q", "--allow-empty", "-m", "Later", cwd=task["worktree"])
+        listed = self.request("list", full=[task["id"]])["result"][0]
+        self.assertEqual(listed["branchTip"], self.git("rev-parse", "HEAD", cwd=task["worktree"]))
+        self.assertNotIn("landed", listed)
 
     def test_pr_pushes_the_branch_creates_a_pull_request_and_records_it(self):
         self.github()
