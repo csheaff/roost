@@ -122,6 +122,9 @@ they can do themselves.
   option. Each user-visible change gets a line in `CHANGELOG.md` under
   Unreleased, with what to do when upgrading. `docs/validation.md` records
   live runs, and new ideas go in `docs/roadmap.md`.
+- `docs/state-machines.md` has every state machine, with its invariants and
+  transitions. A change to how a task, request or view moves between states
+  changes its table in the same commit.
 - Write plainly and briefly, in terms of what the user sees and does, with
   no hype. Messages say what happened ("Sent to X").
 - Commit messages and pull request titles are one imperative sentence
