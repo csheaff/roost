@@ -6004,30 +6004,34 @@ stopped."
 (ert-deftest roost-a-helper-that-is-not-whole-is-installed-again ()
   ;; With the installation noted, only `FileNotFoundError' reinstalled it,
   ;; so a host stayed offline until Emacs restarted.  Each of these is what
-  ;; a cut left, and what Python makes of it.
+  ;; an older Roost's cut left, each failing its own way.
   (roost-test--with-state-directory path
     (should (car (roost-test--helper-reply)))
     (let ((whole (roost-test--file-text path)))
       (dolist (text (list (substring whole 0 (string-search "\n\ndef main" whole)) ; reads, does nothing
                           "def broken(:\n"          ; SyntaxError
-                          "def broken():\n"))       ; IndentationError
+                          "def broken():\n"         ; IndentationError
+                          "de"                      ; NameError
+                          "from pathlib import Pa"  ; ImportError
+                          ""))
         (with-temp-file path (insert text))
         (should (car (roost-test--helper-reply)))
         (should (equal (roost-test--file-text path) whole))))))
 
 (ert-deftest roost-only-a-helper-that-is-not-whole-is-installed-again ()
   ;; Asking again after any other failure could run an action twice.
-  (let ((name "remote-abc.py"))
-    (dolist (err (list "The host helper returned no response"
-                       (format "FileNotFoundError: [Errno 2] No such file or directory: '/s/%s'" name)
-                       (format "  File \"/s/%s\", line 9\nSyntaxError: invalid syntax" name)
-                       (format "  File \"/s/%s\", line 9\nIndentationError: expected an indented block" name)))
-      (should (roost--helper-unusable-p err name)))
-    (dolist (err (list "ssh: connect to host dev port 22: Operation timed out"
-                       "Roost can't read the host helper's reply: {"
-                       (format "  File \"/s/%s\", line 9\nBrokenPipeError: [Errno 32] Broken pipe" name)
-                       "FileNotFoundError: [Errno 2] No such file or directory: 'git'"))
-      (should-not (roost--helper-unusable-p err name)))))
+  (roost-test--isolated
+   (let ((name "remote-abc.py"))
+     (dolist (err (list (format "FileNotFoundError: [Errno 2] No such file or directory: '/s/%s'" name)
+                        (format "Not whole: /s/%s" name)))
+       (should (roost--helper-unusable-p err name)))
+     (dolist (err (list "ssh: connect to host dev port 22: Operation timed out"
+                        "The host helper returned no response"
+                        "Roost can't read the host helper's reply: {"
+                        (format "  File \"/s/%s\", line 9\nBrokenPipeError: [Errno 32] Broken pipe" name)
+                        (format "  File \"/s/%s\", line 9\nSyntaxError: invalid syntax" name)
+                        "FileNotFoundError: [Errno 2] No such file or directory: 'git'"))
+       (should-not (roost--helper-unusable-p err name))))))
 
 (ert-deftest roost-an-unreachable-host-keeps-its-helper ()
   ;; Each poll of a host that was down sent the whole helper again.
@@ -6092,13 +6096,30 @@ stopped."
    (roost-test--as-emacs emacs (lambda () (roost--remember-host "delta")))
    (should (equal (roost-test--hosts-on-file) '("beta" "delta" "gamma")))))
 
+(ert-deftest roost-a-host-forgotten-in-another-emacs-goes-here-too ()
+  ;; No poll would ask it, and no list take its tasks away: their rows
+  ;; would stay as they were until a restart.
+  (roost-test--two-emacs
+   (roost-test--as-emacs emacs (lambda () (roost--remember-host "alpha")))
+   (roost-test--as-emacs other (lambda () (roost--remember-host "beta")))
+   (roost-test--as-emacs other (lambda () (roost-forget-host "alpha")))
+   (let ((inhibit-message t))
+     (roost--cache-task "alpha" (roost-test--task "2222222222222222" "permission"))
+     (roost-test--as-emacs emacs (lambda () (roost--remember-host "gamma")))
+     (should-not (gethash '("alpha" "2222222222222222") roost--tasks))
+     (should (gethash (roost--key task) roost--tasks))
+     (should (string-search "no longer watches alpha, as another Emacs forgot it"
+                            (with-current-buffer "*Messages*" (buffer-string)))))))
+
 (ert-deftest roost-a-host-you-use-again-after-another-emacs-forgot-it-is-watched ()
   (roost-test--two-emacs
    (roost-test--as-emacs emacs (lambda () (roost--remember-host "alpha")))
    (roost-test--as-emacs other (lambda () (roost--remember-host "beta")))
    (roost-test--as-emacs other (lambda () (roost-forget-host "alpha")))
+   (roost--cache-task "alpha" (roost-test--task "2222222222222222" "running"))
    (roost-test--as-emacs emacs (lambda () (roost--remember-host "alpha")))
-   (should (equal (roost-test--hosts-on-file) '("alpha" "beta")))))
+   (should (equal (roost-test--hosts-on-file) '("alpha" "beta")))
+   (should (gethash '("alpha" "2222222222222222") roost--tasks))))
 
 (ert-deftest roost-the-local-host-stays-remembered-across-two-emacs ()
   ;; It is null on file, which must not read as nothing there.
@@ -6123,6 +6144,35 @@ stopped."
    (roost-test--as-emacs emacs (lambda () (roost--remember-project "/home/user/delta/")))
    (should (equal (roost-test--projects-on-file)
                   '("/home/user/beta/" "/home/user/delta/" "/home/user/gamma/")))))
+
+(ert-deftest roost-a-file-that-is-a-link-still-shows-another-emacs-wrote ()
+  ;; A link's own time doesn't move as what it leads to is replaced.
+  (roost-test--two-emacs
+   (let ((real (expand-file-name "kept/hosts.json" (file-name-directory roost-hosts-file))))
+     (make-directory (file-name-directory real))
+     (write-region "[]" nil real nil 'silent)
+     (make-symbolic-link real roost-hosts-file)
+     (dolist (each (list emacs other))
+       (roost-test--as-emacs each (lambda ()
+                                    (setq roost--hosts-loaded nil)
+                                    (roost--hosts))))
+     (roost-test--as-emacs emacs (lambda () (roost--remember-host "alpha")))
+     (roost-test--as-emacs other (lambda () (roost--remember-host "beta")))
+     (should (equal (roost-test--hosts-on-file) '("alpha" "beta"))))))
+
+(ert-deftest roost-a-write-that-lands-just-after-this-one-still-counts ()
+  ;; What the file was after the rename may already be the other Emacs's.
+  (roost-test--two-emacs
+   (let ((real (symbol-function 'rename-file)) (first t))
+     (cl-letf (((symbol-function 'rename-file)
+                (lambda (&rest arguments)
+                  (apply real arguments)
+                  (when first
+                    (setq first nil)
+                    (roost-test--as-emacs other (lambda () (roost--remember-host "beta")))))))
+       (roost-test--as-emacs emacs (lambda () (roost--remember-host "alpha")))))
+   (roost-test--as-emacs emacs (lambda () (roost--remember-host "gamma")))
+   (should (equal (roost-test--hosts-on-file) '("alpha" "beta" "gamma")))))
 
 (ert-deftest roost-what-is-remembered-is-written-whole ()
   ;; Another Emacs reading the file as it was written found it empty, and
@@ -6898,7 +6948,8 @@ stopped."
        (should (gethash "dev" roost--refreshing))))))
 
 (ert-deftest roost-a-turn-that-could-not-be-sent-is-sent-again ()
-  ;; It stayed marked as sent, and the host never heard.
+  ;; It stayed marked as sent, and the host never heard.  Nor does a report
+  ;; stop the reply it came of.
   (roost-test--isolated
    (let ((task (roost-test--task "1111111111111111" "stopped")) (asked 0) broken)
      (setf (alist-get 'landed task) nil
@@ -6908,7 +6959,7 @@ stopped."
                ((symbol-function 'roost--request)
                 (lambda (&rest _) (when broken (error "No helper")) (cl-incf asked))))
        (setq broken t)
-       (should-error (roost--report-turn task))
+       (roost--report-turn task)
        (should (eq (gethash (roost--key task) roost--turns-sent 'none) 'none))
        (setq broken nil)
        (roost--report-turn task)
@@ -11367,6 +11418,30 @@ answered with `answer'."
                              (roost-test--note "3" id '(file . "c.py") '(text . "Three"))))
         (roost--notes-as-on-file)
         (should (equal (buffer-string) "\n\na.py\nOne, edited\n\nc.py\nThree")))))))
+
+(ert-deftest roost-a-note-from-another-emacs-shows-as-you-next-write ()
+  ;; Whatever you write: here, a change that removes nothing.
+  (roost-test--two-emacs
+   (roost-test--save-note emacs task "Theirs.")
+   (let (shown)
+     (cl-letf (((symbol-function 'roost--show-notes-everywhere)
+                (lambda () (setq shown (roost-test--note-text roost--notes)))))
+       (roost-test--as-emacs other (lambda () (roost--remove-notes #'ignore))))
+     (should (equal shown '("Theirs."))))))
+
+(ert-deftest roost-a-draft-that-can-t-follow-loses-no-note-from-another-emacs ()
+  ;; It says what happened, and this Emacs holds what the file does, or
+  ;; its next write would take that from the file.
+  (roost-test--two-emacs
+   (roost-test--save-note emacs task "One.")
+   (let ((late (roost-test--new-emacs)))
+     (roost-test--as-emacs late #'roost--notes)
+     (roost-test--save-note emacs task "Two.")
+     (roost-test--save-note emacs task "Edited." (car (roost-test--as-emacs emacs #'roost--notes)))
+     (cl-letf (((symbol-function 'roost--update-drafts) (lambda (&rest _) (error "Read-only draft"))))
+       (should-error (roost-test--as-emacs late #'roost--notes-as-on-file)))
+     (roost-test--save-note late task "Three.")
+     (should (equal (roost-test--notes-on-file) '("Edited." "Three." "Two."))))))
 
 (ert-deftest roost-a-note-a-failed-write-left-here-goes-with-the-next ()
   ;; The file hasn't moved, so what is held here is newer than it: taking

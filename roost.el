@@ -590,8 +590,8 @@ See `roost--file-stamp'.")
 (defun roost--file-stamp (file)
   "What moves when FILE is written: its modification time and inode, or nil.
 Each write makes a new file, so the inode tells two apart in one tick of
-a coarse clock."
-  (when-let* ((attributes (file-attributes file)))
+a coarse clock.  Of what FILE leads to, if it is a link."
+  (when-let* ((attributes (file-attributes (file-truename file))))
     (list (file-attribute-modification-time attributes)
           (file-attribute-inode-number attributes))))
 
@@ -620,14 +620,17 @@ written, and a write that fails leaves it as it was."
   (let* ((coding-system-for-write 'utf-8-unix)
          ;; What a link, as from your dotfiles, leads to stays where it is.
          (target (file-truename file))
-         (new (make-temp-file (concat target "."))))
+         (new (make-temp-file (concat target ".")))
+         stamp)
     (unwind-protect
         (progn
           (with-temp-file new
             (insert (json-serialize (vconcat (mapcar (lambda (item) (or item :null)) list)))))
+          ;; Before it goes: once there, it may already be another Emacs's.
+          (setq stamp (roost--file-stamp new))
           (rename-file new target t))
-      (when (file-exists-p new) (delete-file new))))
-  (puthash file (roost--file-stamp file) roost--file-stamps))
+      (when (file-exists-p new) (delete-file new)))
+    (puthash file stamp roost--file-stamps)))
 
 (defun roost--hosts ()
   "Configured and remembered hosts, without network I/O."
@@ -639,16 +642,21 @@ written, and a write that fails leaves it as it was."
   ;; the remembered ones, which `append' shares as its tail.
   (delete-dups (append roost-hosts roost--remembered-hosts nil)))
 
-(defun roost--hosts-as-on-file ()
-  "Take up the hosts `roost-hosts-file' holds, if another Emacs changed them."
-  (roost--hosts)
-  (let ((hosts (roost--read-again roost-hosts-file)))
+(defun roost--hosts-as-on-file (&optional using)
+  "Take up the hosts `roost-hosts-file' holds, if another Emacs changed them.
+One it forgot goes here too, as no list would take its tasks away; unless
+it is USING, a host you are using again."
+  (let ((watched (roost--hosts))
+        (hosts (roost--read-again roost-hosts-file)))
     (unless (eq hosts 'same)
-      (setq roost--remembered-hosts (seq-filter #'string-or-null-p hosts)))))
+      (setq roost--remembered-hosts (seq-filter #'string-or-null-p hosts))
+      (dolist (host (seq-difference watched (cons using (roost--hosts))))
+        (roost--stop-watching host)
+        (message "Roost no longer watches %s, as another Emacs forgot it" (roost--host-label host))))))
 
 (defun roost--remember-host (host)
   "Remember HOST across restarts."
-  (roost--hosts-as-on-file)
+  (roost--hosts-as-on-file host)
   (unless (member host roost--remembered-hosts)
     (push host roost--remembered-hosts)
     (roost--write-json-list roost-hosts-file roost--remembered-hosts)))
@@ -960,13 +968,12 @@ replaces nothing.")
 
 (defun roost--helper-unusable-p (err filename)
   "Whether ERR says the helper FILENAME is gone, or not whole, on its host.
-Python couldn't open it, as another Emacs pruned it or the state directory
-went.  Or an older Roost's install was cut off, and Python can't read what
-came, or reads it to the end with nothing run: `main' is called last.  In
-each, no action ran, so asking again can't run one twice."
-  (or (equal err "The host helper returned no response")
-      (and (string-match-p "\\(?:FileNotFound\\|Syntax\\|Indentation\\)Error" err)
-           (string-search filename err))))
+Python couldn't find it, as another Emacs pruned it or the state directory
+went, or it isn't the size it should be, as an older Roost's install left
+it when cut off.  Either way nothing ran, so asking again can't run an
+action twice."
+  (and (string-match-p "FileNotFoundError\\|Not whole: " err)
+       (string-search filename err)))
 
 (defun roost--request (host action parameters success &optional failure timeout)
   "Run ACTION with PARAMETERS on HOST, installing the versioned helper as needed.
@@ -974,6 +981,7 @@ Call SUCCESS with the result, or FAILURE with an error message.  TIMEOUT
 is the seconds ACTION may take, if not `roost-request-timeout'."
   (let* ((helper (roost--helper))
          (filename (car helper))
+         (size (string-bytes (cdr helper)))
          (root roost-state-directory)
          (installation-key (list host root))
          (failure (or failure
@@ -986,15 +994,14 @@ is the seconds ACTION may take, if not `roost-request-timeout'."
           (lambda (on-failure)
             (roost--run
              host
-             (format "import os,runpy,sys; p=os.path.join(os.path.expanduser(%s),%s); sys.argv=[p,'rpc']; runpy.run_path(p,run_name='__main__')"
-                     (json-serialize root) (json-serialize filename))
+             (format "import os,runpy,sys; p=os.path.join(os.path.expanduser(%s),%s); os.path.getsize(p)==%d or sys.exit('Not whole: '+p); sys.argv=[p,'rpc']; runpy.run_path(p,run_name='__main__')"
+                     (json-serialize root) (json-serialize filename) size)
              input success on-failure timeout)))
          (install-and-invoke
           (lambda ()
             (roost--run
              host
-             (format roost--install-code (json-serialize root) (json-serialize filename)
-                     (string-bytes (cdr helper)))
+             (format roost--install-code (json-serialize root) (json-serialize filename) size)
              (cdr helper)
              (lambda (_)
                (puthash installation-key filename roost--installed)
@@ -1576,20 +1583,25 @@ Hosts in `roost-hosts' are watched until you take them out of it."
       (roost--hosts-as-on-file)
       (setq roost--remembered-hosts (delete host roost--remembered-hosts))
       (roost--write-json-list roost-hosts-file roost--remembered-hosts)
-      ;; Their terminals, panels and workspaces go too, as a retired
-      ;; task's do; their agents run on, and opening one again connects.
-      (roost--discard-terminal (mapcan #'roost--release-terminal tasks))
-      (mapc #'roost--retired-workspace tasks)
-      (dolist (task tasks)
-        (remhash (roost--key task) roost--tasks)
-        (remhash (roost--key task) roost--statuses)
-        (remhash (roost--key task) roost--pr-verdicts)
-        (remhash (roost--key task) roost--agent-news)
-        (remhash (roost--key task) roost--turns-sent))
-      (remhash host roost--errors)
-      (remhash host roost--failures)
-      (roost--redraw)
+      (roost--stop-watching host)
       (message "Roost no longer watches %s" (roost--host-label host)))))
+
+(defun roost--stop-watching (host)
+  "Drop HOST's tasks from Roost, which no longer asks it about them."
+  (let ((tasks (seq-filter (lambda (task) (equal (roost--field task 'host) host)) (roost-tasks))))
+    ;; Their terminals, panels and workspaces go too, as a retired
+    ;; task's do; their agents run on, and opening one again connects.
+    (roost--discard-terminal (mapcan #'roost--release-terminal tasks))
+    (mapc #'roost--retired-workspace tasks)
+    (dolist (task tasks)
+      (remhash (roost--key task) roost--tasks)
+      (remhash (roost--key task) roost--statuses)
+      (remhash (roost--key task) roost--pr-verdicts)
+      (remhash (roost--key task) roost--agent-news)
+      (remhash (roost--key task) roost--turns-sent))
+    (remhash host roost--errors)
+    (remhash host roost--failures)
+    (roost--redraw)))
 
 (defun roost-refresh (&optional quiet)
   "Refresh hosts asynchronously, including Git statistics.
@@ -4803,7 +4815,8 @@ child frames, the box is `:frame', over `:room' pixels left for it.")
 By ID: a note that is still there stays the same object, as the note box
 or a draft may hold it."
   (let* ((held (roost--notes))
-         (notes (roost--read-again roost-notes-file)))
+         (notes (roost--read-again roost-notes-file))
+         edited)
     (unless (eq notes 'same)
       (setq roost--notes
             (mapcar (lambda (note)
@@ -4811,13 +4824,14 @@ or a draft may hold it."
                              (mine (seq-find (lambda (old) (equal (alist-get 'id old) id)) held))
                              (text (alist-get 'text note)))
                         (when (and mine (not (equal (alist-get 'text mine) text)))
-                          (let ((before (copy-tree mine)))
-                            (setf (alist-get 'text mine) text)
-                            (roost--update-drafts before mine)))
+                          (push (cons (copy-tree mine) mine) edited)
+                          (setf (alist-get 'text mine) text))
                         (or mine note)))
                     (seq-filter #'consp notes)))
+      (pcase-dolist (`(,before . ,note) edited) (roost--update-drafts before note))
       (dolist (note (seq-difference held roost--notes #'eq))
-        (roost--update-drafts note nil)))))
+        (roost--update-drafts note nil))
+      (roost--show-notes-everywhere))))
 
 (defun roost--save-notes ()
   "Write the review notes to `roost-notes-file'."
@@ -6925,8 +6939,9 @@ it had would seem to end: the one `roost--pr-view' has."
            (let ((sent (lambda ()
                          (when (equal (gethash key roost--turns-sent 'none) turn)
                            (remhash key roost--turns-sent)))))
-             ;; Not sent at all, as with no helper to read, it is sent again too.
-             (condition-case err
+             ;; Nor must a report stop the reply it came of: not sent at all,
+             ;; as with no helper to read, it is sent again too.
+             (condition-case nil
                  (roost--request (roost--field task 'host) "turn"
                                  (list (cons 'id (roost--field task 'id)) (cons 'turn turn))
                                  ;; What its record says now, which another Emacs
@@ -6939,9 +6954,7 @@ it had would seem to end: the one `roost--pr-view' has."
                                               roost--tasks)))
                                  ;; Sent again with the task's next news.
                                  (lambda (_) (funcall sent)))
-               ((error quit)
-                (funcall sent)
-                (signal (car err) (cdr err)))))))))
+               (error (funcall sent))))))))
 
 (defun roost--reviewer-name (reviewer)
   "How to name REVIEWER, a login or team slug that a review is asked of.

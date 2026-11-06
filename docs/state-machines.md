@@ -1202,13 +1202,13 @@ requests and by agents' hooks.
 | Installing | Install request in flight (any number at once) | Requests take `install-and-invoke` |
 | Installed | Entry matches; file is whole | Requests run |
 | Pruned | Entry matches; file gone | `FileNotFoundError` naming it |
-| Broken | File cut short, by an older Roost's install | "returned no response", or a `SyntaxError` naming it |
+| Broken | File cut short, by an older Roost's install | A request says `Not whole`, naming it |
 
 Invariants:
 - I1. A file named `remote-HASH.py` holds what HASH says. Hooks of running agents call this path. An install replaces it only with every byte sent, and leaves what was there otherwise (`roost--install-code`).
 - I5. A file of the right size stays, as newly used: no start of an Emacs touches what hooks call, and `prune_helpers` goes by its mtime.
 - I2. A helper a task's agent was launched with is never pruned (`prune_helpers`).
-- I3. Retrying can't run an action twice: only for what `roost--helper-unusable-p` accepts, each of which means no action ran. Only `runpy` failing to open the file, or Python failing to read it, prints that word with that name, as `rpc` turns what it catches into words of its own; and `main` is called last, so a file cut short that reads ends with nothing run or said.
+- I3. Retrying can't run an action twice: only for what `roost--helper-unusable-p` accepts, `FileNotFoundError` naming the file or `Not whole`, each said before the helper runs. A request compares the file's size first, which catches a cut anywhere, and `rpc` turns what it catches into words of its own.
 - I4. An unreachable host keeps its entry (`roost-an-unreachable-host-keeps-its-helper`).
 
 | From | Event | Guard | To | Effect | Code |
@@ -1220,7 +1220,7 @@ Invariants:
 | Installing | Connection cut mid-transfer | | Unknown | Python reads EOF, finds too few bytes and replaces nothing | `roost--install-code` |
 | Installed | Another Emacs's task starts | not kept, over a week old | Pruned | `path.unlink()` | `prune_helpers` |
 | Pruned | Request fails, naming the file | | Installing | `remhash`, install, invoke once | `roost--request` |
-| Broken | Any request | entry matches | Installing | Fails, then as for Pruned | `roost--request` |
+| Broken | Any request | entry matches | Installing | Says `Not whole`, then as for Pruned | `roost--request` |
 | Broken | Any request | no entry | Installing | Replaced whole | `roost--request` |
 
 Illegal or refused: `prune_helpers` does nothing while a record is unreadable or
@@ -1448,7 +1448,9 @@ Invariants:
 - I1. What you remember or write stays until you forget or send it, in either of two Emacs, and what you forget or send stays gone (`roost--hosts-as-on-file`, `roost--projects-as-on-file`, `roost--notes-as-on-file`). Each runs before a change, which then goes on what the file holds.
 - I2. A file is written whole, through a new file renamed into place: nothing reads it half written, and a write that fails leaves it (`roost--write-json-list`). What a link leads to is what changes.
 - I3. A file that hasn't moved says nothing: what this Emacs holds is at least as new, as after a write that failed. One gone or unreadable isn't another Emacs's doing, so what is held here stands, and the next write replaces it (`roost--read-again`).
-- I4. A note still on file stays the same object here, by ID: the note box and drafts hold it. A note gone elsewhere leaves drafts here, and one edited elsewhere changes in them (`roost--notes-as-on-file`).
+- I4. A note still on file stays the same object here, by ID: the note box and drafts hold it. A note gone elsewhere leaves drafts here, and one edited elsewhere changes in them, and Magit shows what changed (`roost--notes-as-on-file`).
+- I5. A host forgotten in another Emacs goes here at this Emacs's next write of the file, its tasks and terminals with it, unless you are using it again: no poll would ask it, and its rows would stay as they were (`roost--stop-watching`).
+- I6. A stamp is of what a link leads to, and is taken before the rename, as what is there after it may be another Emacs's (`roost--file-stamp`, `roost--write-json-list`).
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
@@ -1463,9 +1465,9 @@ Invariants:
 Illegal or refused: none.
 
 Open: none. Between one Emacs's read and its rename, another's write goes: a window of
-microseconds, with no lock, as nothing else would need one. A host forgotten in another
-Emacs stops being asked here at this Emacs's next write of the file, and its rows stay
-until this Emacs restarts.
+microseconds, with no lock, as nothing else would need one. A change a failed write
+left, in Ahead, goes if the other Emacs then writes, as the file's word stands: the
+failed write said so at the time.
 
 ## Git and the forge
 
