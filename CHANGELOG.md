@@ -4,6 +4,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A pull request its agent opened after `git pull --rebase`, or of work that
+  came to the task's branch as a fast-forward, as from a worktree of its own,
+  shows in Roost, with its checks, and `merged` once it is. Roost took those
+  commits for ones an update brought in, until a later commit. Nothing to do
+  when upgrading.
 - A pull request merged with a commit made on GitHub or GitLab, as by the
   Update branch button or an applied suggestion, says `merged`, and `x`
   retires it. It read as merged but for commits since, and `m` merged the

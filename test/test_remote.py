@@ -5036,6 +5036,87 @@ sys.exit(status)
             self.assertIsNone(self.listed(full=True)["unpushed"])
         self.assertEqual(fetched, [])
 
+    def main_moves_on_origin(self, name="other"):
+        (self.repo / name).write_text("other\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "other")
+        self.git("push", "-q", "origin", "main")
+
+    def test_an_agents_pull_request_after_git_pull_rebase_is_followed(self):
+        self.github()
+        task = self.create()
+        wt = Path(task["worktree"])
+        self.commit_in(task)
+        self.main_moves_on_origin()
+        self.git("pull", "-q", "--rebase", "origin", "main", cwd=wt)
+        head = self.git("rev-parse", "HEAD", cwd=wt)
+        self.push(task)
+        self.listing((9, "OPEN", head))
+        self.assertEqual(self.listed(full=True)["pr"]["number"], 9)
+        # And its merge, as a squash.
+        self.squash_on_forge(task, head)
+        self.listing((9, "MERGED", head))
+        self.assertIs(self.listed(full=True)["landed"], True)
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        self.assertTrue(self.request("retire", id=task["id"])["ok"])
+
+    def test_an_agents_pull_request_after_git_rebase_is_followed(self):
+        self.github()
+        task = self.create()
+        wt = Path(task["worktree"])
+        self.commit_in(task)
+        self.main_moves_on_origin()
+        self.git("fetch", "-q", "origin", cwd=wt)
+        self.git("rebase", "-q", "origin/main", cwd=wt)
+        head = self.git("rev-parse", "HEAD", cwd=wt)
+        self.push(task)
+        self.listing((9, "OPEN", head))
+        self.assertEqual(self.listed(full=True)["pr"]["number"], 9)
+
+    def fast_forwarded_from_an_agents_worktree(self, task):
+        """The agent's work comes to the task's branch as a fast-forward, as
+        the next step's merge in Magit does for a task with no commits of its own."""
+        wt = Path(task["worktree"])
+        own = self.root / "agents-own"
+        self.git("worktree", "add", "-q", "-b", "agents-own", str(own), cwd=wt)
+        (own / "work").write_text("work\n")
+        self.git("add", ".", cwd=own)
+        self.git("commit", "-qm", "work", cwd=own)
+        self.git("merge", "-q", "--ff-only", "agents-own", cwd=wt)
+        return self.git("rev-parse", "HEAD", cwd=wt)
+
+    def test_an_agents_pull_request_of_work_fast_forwarded_in_is_followed(self):
+        self.github()
+        task = self.create()
+        head = self.fast_forwarded_from_an_agents_worktree(task)
+        self.push(task)
+        self.listing((9, "OPEN", head))
+        self.assertEqual(self.listed(full=True)["pr"]["number"], 9)
+
+    def test_work_fast_forwarded_in_then_merged_into_main_has_landed(self):
+        task = self.create()
+        head = self.fast_forwarded_from_an_agents_worktree(task)
+        self.git("merge", "-q", "--no-ff", "-m", "Merge the task", head)
+        self.assertIs(self.listed(full=True)["landed"], True)
+
+    def test_commits_an_update_brought_in_are_still_not_the_tasks(self):
+        # What `own_commits` is for: main's, fast-forwarded in, by any name.
+        self.github()
+        for name in ("main", "origin/main", "refs/heads/main"):
+            with self.subTest(name=name):
+                task = self.create(name="task " + name)
+                wt = Path(task["worktree"])
+                self.main_moves_on_origin("other " + name.replace("/", " "))
+                self.git("fetch", "-q", "origin", cwd=wt)
+                self.git("merge", "-q", "--ff-only", name, cwd=wt)
+                head = self.git("rev-parse", "HEAD", cwd=wt)
+                self.push(task)
+                self.listing((9, "MERGED", head))
+                listed = next(entry for entry in self.request("list", full=True)["result"]
+                              if entry["id"] == task["id"])
+                self.assertNotIn("pr", listed)
+                self.assertIs(listed["landed"], False)
+
     def test_list_learns_the_pull_request_an_agent_opened(self):
         self.github()
         task = self.create()

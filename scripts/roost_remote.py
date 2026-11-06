@@ -3007,8 +3007,10 @@ def task_pull_requests(task, tip, timeout=15, branch=None):
     say within TIMEOUT seconds. They are those from its branch whose head is a
     commit of its own, made since it started and still on its branch at
     TIP, of a task that made commits: a task retired earlier, or someone
-    else's fork, may have had a branch of the same name. The recorded one
-    counts too. BRANCH, when given, is the branch its worktree is on
+    else's fork, may have had a branch of the same name. A commit is its
+    own when its reflog says so or its integration branch lacks it, so no
+    update brought it in. The recorded one counts too. BRANCH, when given,
+    is the branch its worktree is on
     instead, at TIP, as after its agent made one there: its pull requests
     are those whose head is a commit made there or on the task's branch."""
     try:
@@ -3036,7 +3038,9 @@ def task_pull_requests(task, tip, timeout=15, branch=None):
             if branch and made is not True:
                 there = own_commits(task, branch)
                 made = True if there is True else made | there
-        return made is True or head in made
+        integration = task.get("integrationBranch")
+        return (made is True or head in made
+                or not (integration and is_ancestor(task["repo"], head, "refs/heads/" + integration)))
 
     return sorted((pr for pr in listed if isinstance(pr, dict) and isinstance(pr.get("number"), int) and ours(pr)),
                   key=lambda pr: pr["number"], reverse=True)
@@ -3198,19 +3202,23 @@ def own_commits(task, branch=None):
     has them, merge commits among them, rather than brought in from its
     integration branch, as when an update fast-forwards a task that had
     none; True, meaning it can't tell, if Git keeps no reflog. A rebase's
-    makes count unless its integration branch has it."""
+    makes count unless its integration branch has it, and so does a
+    fast-forward from elsewhere, as from a worktree of its agent's."""
     log = read_git(task["repo"], "log", "--walk-reflogs", "--format=%H %gs",
                    "refs/heads/" + (branch or task["branch"]), "--")
     if log.returncode or not log.stdout.strip():
         return True
+    integration = task.get("integrationBranch")
     made, rebased = set(), set()
     for line in log.stdout.splitlines():
         commit, _, subject = line.partition(" ")
-        if re.match(r"(commit|cherry-pick|revert|am)\b|(merge|pull)\b[^:]*: Merge made by", subject):
+        forwarded = re.fullmatch(r"merge (.+): Fast-forward", subject)
+        if (re.match(r"(commit|cherry-pick|revert|am)\b|(merge|pull)\b[^:]*: Merge made by", subject)
+                or forwarded and re.sub(r"^(refs/heads/|refs/remotes/origin/|origin/)", "", forwarded.group(1))
+                != integration):
             made.add(commit)
         elif subject.startswith("rebase"):
             rebased.add(commit)
-    integration = task.get("integrationBranch")
     return made | {commit for commit in rebased
                    if not (integration and is_ancestor(task["repo"], commit, "refs/heads/" + integration))}
 
