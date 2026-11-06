@@ -5399,6 +5399,37 @@ sys.exit(status)
                 self.assertNotIn("pr", listed)
                 self.assertIs(listed["landed"], False)
 
+    def test_an_update_from_an_integration_branch_with_a_slash_is_still_not_the_tasks(self):
+        self.git("checkout", "-q", "-b", "release/1.0")
+        task = self.create()
+        (self.repo / "other").write_text("other\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "other")
+        self.git("merge", "-q", "--ff-only", "release/1.0", cwd=Path(task["worktree"]))
+        self.assertIs(self.listed(full=True)["landed"], False)
+
+    def test_a_head_two_projects_ask_for_is_fetched_for_each(self):
+        task, tip, forge = self.open_then_commit_on_forge()
+        # Another project, whose origin hasn't that commit.
+        other = self.root / "other project"
+        self.git("clone", "-q", str(self.repo), str(other))
+        self.git("config", "user.name", "Roost Test", cwd=other)
+        self.git("config", "user.email", "roost@example.invalid", cwd=other)
+        bare = self.root / "other origin.git"
+        self.git("clone", "-q", "--bare", str(other), str(bare))
+        self.git("remote", "set-url", "origin", str(bare), cwd=other)
+        theirs = self.create(directory=str(other), name="theirs")
+        self.commit_in(theirs)
+        store = roost.Store(str(self.state))
+        record = store.read(theirs["id"])
+        record["pr"] = dict(number=9, url="u", state="OPEN", head=tip)
+        store.save(record)
+        self.listing((9, "OPEN", forge))
+        listed = {entry["id"]: entry for entry in self.request("list", full=True)["result"]}
+        self.assertEqual(listed[task["id"]]["unpushed"], 0)
+        self.assertNotIn("unfetched", listed[task["id"]]["pr"])
+        self.assertEqual(listed[theirs["id"]]["pr"]["unfetched"], forge)
+
     def test_commits_of_origins_main_alone_are_still_not_the_tasks(self):
         # A local main behind origin's can't say an update brought them in.
         self.github()
@@ -5500,6 +5531,53 @@ sys.exit(status)
         with patch.object(roost, "push_pull_request", meanwhile):
             reply = self.request("pr", id=task["id"])["result"]
         self.assertEqual((reply["unpushed"], reply["pr"]["head"]), (1, pushed))
+
+    def test_a_commit_as_p_pushes_stays_unpushed(self):
+        # After Git was told what to push, and before it reads the branch.
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.git("push", "-q", "origin", task["branch"], cwd=Path(task["worktree"]))
+        self.listing((9, "OPEN", tip))
+        record = roost.Store(str(self.state)).read(task["id"])
+        record["pr"] = dict(number=9, url="u", state="OPEN", head=tip)
+        roost.Store(str(self.state)).save(record)
+        pushed = self.commit_in(task, "more")
+        original = roost.remote_git
+
+        def meanwhile(repo, *args, **kwargs):
+            if args[0] == "push":
+                self.commit_in(task, "meanwhile")
+            return original(repo, *args, **kwargs)
+
+        with patch.object(roost, "remote_git", meanwhile):
+            reply = self.request("pr", id=task["id"])["result"]
+        self.assertEqual((reply["pushed"], reply["unpushed"], reply["pr"]["head"]), (1, 1, pushed))
+        self.assertEqual(self.git("rev-parse", "refs/heads/" + task["branch"], cwd=self.origin), pushed)
+        # And the branch still follows origin's, as `pushed` goes by.
+        self.assertEqual(self.git("config", "branch.%s.remote" % task["branch"]), "origin")
+
+    def test_two_ps_leave_the_later_head(self):
+        self.github()
+        task = self.create()
+        tip = self.commit_in(task)
+        self.push(task)
+        self.listing((9, "OPEN", tip))
+        self.listed(full=True)
+        first = self.commit_in(task, "first")
+        original, later = roost.push_pull_request, []
+
+        def overtaken(store, record):
+            done = original(store, record)
+            if not later:
+                later.append(self.commit_in(task, "second"))
+                self.assertEqual(self.request("pr", id=task["id"])["result"]["pushed"], 1)
+            return done
+
+        with patch.object(roost, "push_pull_request", overtaken):
+            reply = self.request("pr", id=task["id"])["result"]
+        self.assertNotEqual(first, later[0])
+        self.assertEqual((reply["pr"]["head"], reply["unpushed"]), (later[0], 0))
 
     def test_a_push_to_a_pull_request_merged_meanwhile_doesnt_say_the_push_merged(self):
         # P in another Emacs, which has it open still: the record's head is

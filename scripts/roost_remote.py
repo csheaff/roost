@@ -2984,22 +2984,24 @@ def fetch_head(task, head, timeout):
 def fetch_heads(asked, answers, deadline):
     """Fetch the heads to fetch of ANSWERS, the pull requests of the tasks in
     ASKED, several at once, as long as DEADLINE, as time.monotonic() has it,
-    leaves room. The heads that didn't come, to ask for no more."""
+    leaves room. The heads that didn't come, each with its repository, to
+    ask for no more: another project's origin may have the same one."""
     wanted = {}
     for (task, tip, _), prs in zip(asked, answers):
         for pr in prs or []:
             head = head_to_fetch(task, pr, tip)
             if head:
-                wanted[head] = task
+                wanted[task["repo"], head] = task
 
     def fetch(entry):
+        (_, head), task = entry
         left = deadline - time.monotonic()
-        return left >= HEAD_FETCH_SECONDS and fetch_head(entry[1], entry[0], left) is False and entry[0]
+        return left >= HEAD_FETCH_SECONDS and fetch_head(task, head, left) is False and entry[0]
 
     if not wanted:
         return set()
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(wanted))) as pool:
-        return {head for head in pool.map(fetch, wanted.items()) if head}
+        return {failed for failed in pool.map(fetch, wanted.items()) if failed}
 
 
 def pushed(task, branch=None):
@@ -3155,7 +3157,8 @@ def check_pull_requests(store, tasks):
         record = dict(number=pr["number"], url=pr.get("url"), state=pr.get("state"), head=pr.get("headRefOid"))
         if pr.get("forge"):
             record["forge"] = pr["forge"]
-        if record["head"] in unfetched or record["head"] == recorded_pull_request(task).get("unfetched"):
+        if ((task["repo"], record["head"]) in unfetched
+                or record["head"] == recorded_pull_request(task).get("unfetched")):
             record["unfetched"] = record["head"]
         # Where it merges, for views that ask GitHub nothing.
         if pr.get("baseRefName"):
@@ -3227,7 +3230,8 @@ def own_commits(task, branch=None):
         if (re.match(r"(commit|cherry-pick|revert|am)\b|(merge|pull)\b[^:]*: Merge made by", subject)
                 # By its commit, as Git names one from FETCH_HEAD, it could be anyone's.
                 or forwarded and not re.fullmatch(r"[0-9a-f]+", forwarded.group(1))
-                and re.sub(r"^(refs/heads/|refs/remotes/[^/]+/|[^/]+/)", "", forwarded.group(1)) != integration):
+                and integration not in (forwarded.group(1), re.sub(r"^(refs/heads/|refs/remotes/[^/]+/|[^/]+/)", "",
+                                                                   forwarded.group(1)))):
             made.add(commit)
         elif subject.startswith("rebase"):
             rebased.add(commit)
@@ -4805,26 +4809,30 @@ def push_pull_request(store, task):
     remote = git(worktree, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/" + branch + "^{commit}",
                  check=False)
     since = remote.stdout.strip() if remote.returncode == 0 else task["baseCommit"]
-    pushed = int(git(worktree, "rev-list", "--count", since + "..HEAD").stdout.strip())
+    # By its commit, so what is said of it is what went, whatever comes meanwhile.
+    tip = git(worktree, "rev-parse", "refs/heads/" + branch + "^{commit}").stdout.strip()
+    pushed = int(git(worktree, "rev-list", "--count", since + ".." + tip).stdout.strip())
     # With nothing new, pushing could only be refused, as when the pull
     # request has a commit made on GitHub since; unfetched, what was last
     # fetched says nothing.
     if not pushed and fetched:
         return pushed, since
-    tip = git(worktree, "rev-parse", "refs/heads/" + branch + "^{commit}").stdout.strip()
-    remote_git(worktree, "push", "-u", "origin", branch)
+    remote_git(worktree, "push", "origin", "%s:refs/heads/%s" % (tip, branch))
+    git(worktree, "branch", "--set-upstream-to=refs/remotes/origin/" + branch, branch, check=False)
     return pushed, tip
 
 
-def record_push(store, task_id, number, head):
+def record_push(store, task_id, before, head):
     """TASK_ID's record, with HEAD, where a push left the branch of its pull
-    request NUMBER, as that one's head: the forge will say so when next
-    asked, and its status until then is of the head before. Not one closed
-    or merged, which the push isn't in, and which merged at the recorded
-    head alone: a head moved on would say the commits since had merged."""
+    request, recorded as BEFORE when it began, as that one's head: the forge
+    will say so when next asked, and its status until then is of the head
+    before. Not when the record moved meanwhile, as for a later push. Nor
+    one closed or merged, which the push isn't in, and which merged at the
+    recorded head alone: a head moved on would say the commits since had
+    merged."""
     task = store.read(task_id)
     pr = recorded_pull_request(task)
-    if pr.get("number") == number and pr.get("state") not in ("CLOSED", "MERGED") and pr.get("head") != head:
+    if pr == before and pr.get("state") not in ("CLOSED", "MERGED"):
         pr["head"] = head
         store.save(task)
     return task
@@ -6805,7 +6813,10 @@ def rpc(request):
                         with store.released():
                             pushed, head = push_pull_request(store, task)
                             lacks = unpushed(task, head, branch_tip(task))
-                        task = record_push(store, request["id"], recorded["number"], head)
+                        task = record_push(store, request["id"], recorded, head)
+                        kept = recorded_pull_request(task).get("head")
+                        if kept != head:
+                            lacks = unpushed(task, kept, branch_tip(task))
                         return {"ok": True, "result": outgoing(dict(task, pushed=pushed, unpushed=lacks))}
                     with store.released():
                         pr, opened = pull_request(store, task, request)
