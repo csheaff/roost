@@ -100,7 +100,7 @@ Within a severity, they are ranked by what they cost and how often they happen.
 | 19 | FORGE-4, REQUESTS-5 | S3 | A change a poll saw can go unmeasured until something else asks | [Task measurement](#task-measurement) | Fixed, `roost-a-measurement-dropped-as-stale-is-asked-for-again` |
 | 20 | FORGE-5 | S3 | A commit made on the forge holds back all an open pull request says | [What the forge last said](#what-the-forge-last-said) | Open, [#227](https://github.com/csheaff/roost/issues/227) |
 | 21 | STATUS-6 | S3 | An MCP server's question reads as work | [Agent status](#agent-status) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
-| 22 | FORGE-6 | S3 | A task held at a startup prompt waits, and no notification says so | [The word](#the-word) | Open, [#228](https://github.com/csheaff/roost/issues/228) |
+| 22 | FORGE-6 | S3 | A task held at a startup prompt waits, and no notification says so | [The word](#the-word) | Fixed, `roost-an-agent-held-at-a-startup-prompt-notifies-once` |
 | 23 | VIEWS-3 | S3 | Undo in the new task draft changes the wrong text | [The new task draft](#the-new-task-draft) | Open, [#226](https://github.com/csheaff/roost/issues/226) |
 | 24 | STATUS-5 | S3 | As tmux goes, a Claude task reads `exited`, not `crashed` | [Who wins](#who-wins-hooks-reports-poll-runner) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
 | 25 | STATUS-7 | S3 | A report landing after the runner's end turns `exited` into `crashed` | [Agent status](#agent-status) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
@@ -1364,6 +1364,7 @@ Invariants:
 |---|---|---|---|---|---|
 | Quiet | Status becomes ready or permission | unwatched, not just started | Inspecting | Older held one dropped | `roost--notify-attention` |
 | Quiet | Becomes failed, crashed, exited | unwatched | Held | | `roost--notify-attention` |
+| Quiet | First reads `prompt`, past `roost-startup-grace` | unwatched, not so when first seen | Sent | At once: `roost--statuses` holds `prompt` meanwhile, and hooks still get the record's status | `roost--cache-task` |
 | Quiet | Same status, new `Stop` | | Inspecting | `new-stop` | `roost--cache-task` |
 | Inspecting | Reply or failure | token same, permission | Sent | At once | `send` |
 | Inspecting | Reply or failure | token same, unseen | Held | | `send` |
@@ -1886,7 +1887,7 @@ grouped by what each view says (234 distinct results).
 | Word | Waits | Inputs | `n` | Mode line, sidebar count | Notified | Dot |
 | --- | --- | --- | --- | --- | --- | --- |
 | `permission` | Yes, first | status | Yes | Yes | At once | Colour |
-| `starting`, held | Yes | past grace | Yes | Yes | **No: FORGE-6** | Colour |
+| `starting`, held | Yes | past grace | Yes | Yes | At once, as it first reads so | Colour |
 | `starting` | No | | No | No | No | Dim |
 | `ready` | Until seen | status, unseen | Yes | Yes | Yes | Colour |
 | `interrupted` | Until seen | `lastEvent` | Yes | Yes | Yes | Colour |
@@ -1911,7 +1912,6 @@ Invariants:
   `prompt`, which `roost--history-spans` handles, and offline.
 - I5. `roost--turn` is the word whenever the word is a turn. Holds.
 - I6. The manual's "a notification announces" holds for each waiting word.
-  **Broken: FORGE-6.**
 - I7. The manual's "the dot ... is dim when the task waits for nothing". **Broken:
   FORGE-7**, though the changelog of that change says an error keeps its colour.
   The reverse isn't promised: an `exited` agent you haven't seen waits on a dim dot.
@@ -1925,7 +1925,7 @@ The word goes by inputs, so wrong inputs give a wrong word: see FORGE-1, 2, 4, 5
 10. A review that requests changes with no thread open gives no word; the manual
 promises none, and the next step says only that `P` pushes new commits.
 
-Open: FORGE-6, FORGE-7, FORGE-10.
+Open: FORGE-7, FORGE-10.
 
 ## What you are doing in Emacs
 

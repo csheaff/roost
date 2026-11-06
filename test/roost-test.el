@@ -7311,6 +7311,61 @@ stopped."
        (roost--report-turn (cons '(conflicts) task))
        (should asked)))))
 
+(defun roost-test--notified-of-a-start (&rest steps)
+  "The titles Roost notifies with as a task goes through STEPS, oldest first.
+Each is what happens at a poll: `starting', an agent starting; `held',
+one past `roost-startup-grace'; or a status."
+  (let ((roost-notify t) (now (format-time-string "%FT%T%z")) notices)
+    (cl-letf (((symbol-function 'roost--notify) (lambda (title &rest _) (push title notices)))
+              ((symbol-function 'roost--watched-task) #'ignore))
+      (dolist (step steps)
+        (let ((roost-startup-grace (if (eq step 'held) -1 60)))
+          (roost--cache-task
+           "dev" (append `((updatedAt . ,now))
+                         (roost-test--task roost-test--x (if (symbolp step) "starting" step)))))))
+    (reverse notices)))
+
+(ert-deftest roost-an-agent-held-at-a-startup-prompt-notifies-once ()
+  ;; "those are the tasks `n' visits, the mode line counts and a notification
+  ;; announces": its status never changes, only how long it has had it,
+  ;; so nothing said so, though its agent can do nothing without you.
+  (roost-test--isolated
+   (should (equal (roost-test--notified-of-a-start 'starting 'held 'held 'held)
+                  '("fix auth — prompt")))))
+
+(ert-deftest roost-an-agent-starting-in-time-notifies-of-nothing ()
+  (roost-test--isolated
+   (should-not (roost-test--notified-of-a-start 'starting 'starting 'starting))))
+
+(ert-deftest roost-an-agent-already-at-its-startup-prompt-is-no-news ()
+  ;; As with anything there when Roost first saw the task.
+  (roost-test--isolated
+   (should-not (roost-test--notified-of-a-start 'held 'held))))
+
+(ert-deftest roost-an-agent-at-its-startup-prompt-you-are-watching-is-no-news ()
+  (roost-test--isolated
+   (let ((roost-notify t) (now (format-time-string "%FT%T%z")) notified)
+     (cl-letf (((symbol-function 'roost--notify) (lambda (&rest _) (setq notified t)))
+               ((symbol-function 'roost--watched-task)
+                (lambda () (gethash (list "dev" roost-test--x) roost--tasks))))
+       (roost--cache-task "dev" (append `((updatedAt . ,now)) (roost-test--task roost-test--x "starting")))
+       (let ((roost-startup-grace -1))
+         (roost--cache-task "dev" (append `((updatedAt . ,now)) (roost-test--task roost-test--x "starting"))))
+       (should-not notified)))))
+
+(ert-deftest roost-the-status-hooks-see-no-prompt ()
+  ;; It is a word for you, not a status: `roost-task-status-functions' goes on
+  ;; as the record does.
+  (roost-test--isolated
+   (let ((now (format-time-string "%FT%T%z")) seen)
+     (let ((roost-task-status-functions (list (lambda (_task old new) (push (list old new) seen)))))
+       (roost--cache-task "dev" (append `((updatedAt . ,now)) (roost-test--task roost-test--x "starting")))
+       (let ((roost-startup-grace -1))
+         (roost--cache-task "dev" (append `((updatedAt . ,now)) (roost-test--task roost-test--x "starting"))))
+       (should-not seen)
+       (roost--cache-task "dev" (append `((updatedAt . ,now)) (roost-test--task roost-test--x "running")))
+       (should (equal seen '(("starting" "running"))))))))
+
 (ert-deftest roost-dashboard-groups-by-project-and-summarizes-attention ()
   (roost-test--isolated
    (roost--cache-task "dev" (append '((repo . "/home/user/ledger") (startedAt . "1")

@@ -1145,7 +1145,11 @@ must a reply with a newer look lose it for an older agent event."
          (old (gethash key roost--tasks))
          (had-merged (and old (roost--pr-merges old)))
          (status (roost--field task 'status))
-         (previous (gethash key roost--statuses))
+         ;; Only time shows an agent held at a startup prompt, so what is
+         ;; noted of it is "prompt" for as long as it reads so.
+         (noted (gethash key roost--statuses))
+         (previous (if (equal noted "prompt") "starting" noted))
+         (prompt (and (equal status "starting") (roost--held-starting-p task)))
          (new-stop (and (equal status "ready")
                         (equal (roost--field task 'lastEvent) "Stop")
                         (not (equal (roost--field task 'updatedAt)
@@ -1170,7 +1174,7 @@ must a reply with a newer look lose it for an older agent event."
       (roost--rename-workspace old task)
       (roost--name-panels))
     ;; Record the status before notifying, which may cache this task again.
-    (puthash key status roost--statuses)
+    (puthash key (if prompt "prompt" status) roost--statuses)
     (let ((turn (roost--news-turn task))
           (had (gethash key roost--pr-verdicts 'unknown))
           ;; Not when you are looking at it already.
@@ -1205,7 +1209,10 @@ must a reply with a newer look lose it for an older agent event."
                  (not (roost--just-started-p task))
                  (member status '("ready" "permission" "failed" "crashed" "exited"))
                  (funcall unwatched))
-        (roost--notify-attention host task status)))
+        (roost--notify-attention host task status))
+      ;; Once, as it comes to read so.
+      (when (and roost-notify previous prompt (not (equal noted "prompt")) (funcall unwatched))
+        (roost--notify-attention host task "prompt")))
     (when (and previous (not (equal previous status)))
       (roost--run-task-hook 'roost-task-status-functions task previous status))
     (when (gethash key roost--tasks)
@@ -1287,18 +1294,19 @@ a host said, nor the other functions from running."
 (defun roost--notify-attention (host task status)
   "Notify that TASK on HOST became STATUS.
 A permission request goes at once, since its agent can do nothing until
-you answer; the rest are held to go together, by `roost--hold-notice'.
+you answer, as does \"prompt\", for an agent held at a startup prompt; the
+rest are held to go together, by `roost--hold-notice'.
 A ready agent or one asking permission is inspected first, since quiet
 polls leave out its latest reply, so the notification can say what it
 finished or wants; unless its agent changed again by then, which
 notifies of itself."
-  (let* ((name (roost--status-name task))
+  (let* ((name (if (equal status "prompt") status (roost--status-name task)))
          (label (roost--host-label host))
          (key (roost--key task))
          (news (puthash key (list status) roost--agent-news))
          (send (lambda (task body)
                  (cond ((not (eq (gethash key roost--agent-news) news)))
-                       ((equal status "permission")
+                       ((member status '("permission" "prompt"))
                         ;; It replaces one held about the task, which is older.
                         (roost--drop-notices key)
                         (roost--notify (roost--notice-title task name) body task))
@@ -1691,14 +1699,16 @@ says: it waits at its prompt, as one you resumed does."
         (or (equal (gethash (roost--key task) roost--seen) updated)
             (equal (roost--field task 'seen) updated)))))
 
+(defun roost--held-starting-p (task)
+  "Whether TASK, starting, has been so too long, as at a startup prompt."
+  (> (or (roost--seconds-since (roost--field task 'updatedAt)) 0) roost-startup-grace))
+
 (defun roost--attention-status (task)
   "TASK's status for attention.
 That is \"prompt\" when it has been starting too long, and \"idle\" when
 it is ready and you have seen it since, rather than \"ready\"."
   (let ((status (roost--display-status task)))
-    (cond ((and (equal status "starting")
-                (> (or (roost--seconds-since (roost--field task 'updatedAt)) 0)
-                   roost-startup-grace))
+    (cond ((and (equal status "starting") (roost--held-starting-p task))
            "prompt")
           ((and (member status '("ready" "interrupted")) (roost--seen-p task))
            "idle")

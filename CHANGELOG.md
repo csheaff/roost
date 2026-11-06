@@ -4,6 +4,9 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A task held at a startup prompt, such as folder trust, notifies you, once,
+  as it first reads so. It was the only waiting word that didn't, and it
+  holds its agent up. Nothing to do when upgrading.
 - Conflicts or a pull request that waited on you before Emacs started no
   longer notify as it starts, when you watch from your configuration, nor a
   pull request after an outage. A first list says nothing of them, which
