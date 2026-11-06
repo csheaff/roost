@@ -2557,6 +2557,15 @@ or the task with KEY went, LISTED being as for `roost--went-p'."
                 (not (roost--went-p key listed)))
        (funcall open)))))
 
+(defun roost--stayed-as-it-goes (stayed note)
+  "Call NOTE with what STAYED says, now and once out of the minibuffer.
+That is whether you stay, for a task that resumes, as its host replies:
+its terminal, which you may be in, is about to go, and what you chose in
+the minibuffer, as a file, shows by then.  So this goes first: asked
+after the terminal has gone, where you are says nothing."
+  (funcall note (funcall stayed))
+  (roost--when-out-of-minibuffer (lambda () (funcall note (funcall stayed)))))
+
 (defun roost--ask-after-reply (key listed function)
   "Call FUNCTION, which asks about the task with KEY, once out of a host's reply.
 That is from a timer, and once the minibuffer you are in is done, as a
@@ -2679,19 +2688,24 @@ says once the terminal shows."
                       ;; you answered the agent meanwhile: show it everywhere,
                       ;; the task's panel too, not only where the task opens.
                       (roost--redraw)
-                      (roost--when-out-of-minibuffer
-                       (lambda ()
-                         (when (funcall still-wanted)
-                           (when (equal (current-message) opening)
-                             (message nil))
-                           (let ((said (and describe (funcall describe current))))
-                             (roost--display-task current)
-                             (cond (view (funcall view))
-                                   (said (message "%s" said))
-                                   ((and (assq 'live current) (not (roost--field current 'live)))
-                                    (message "%s's agent has %s; its last output is shown. Resume with `s'."
-                                             (roost--field current 'name)
-                                             (roost--field current 'status)))))))))
+                      (let ((held (active-minibuffer-window)))
+                        (roost--when-out-of-minibuffer
+                         (lambda ()
+                           (when (funcall still-wanted)
+                             (if held
+                                 ;; You can take your time there, and connecting
+                                 ;; to a session that ended starts an empty one.
+                                 (roost--open task view describe)
+                               (when (equal (current-message) opening)
+                                 (message nil))
+                               (let ((said (and describe (funcall describe current))))
+                                 (roost--display-task current)
+                                 (cond (view (funcall view))
+                                       (said (message "%s" said))
+                                       ((and (assq 'live current) (not (roost--field current 'live)))
+                                        (message "%s's agent has %s; its last output is shown. Resume with `s'."
+                                                 (roost--field current 'name)
+                                                 (roost--field current 'status)))))))))))
                     (lambda (err)
                       (cancel-timer timer)
                       ;; Stopped, or its tmux server gone, as after a crash:
@@ -4265,13 +4279,19 @@ terminal the action ended closes."
              (let ((pushed (assq 'pushed updated))
                    (already (alist-get 'alreadySent updated))
                    (torn (alist-get 'teardownFailure updated))
-                   (output (alist-get 'teardownOutput updated)))
+                   (output (alist-get 'teardownOutput updated))
+                   ;; Forgetting says so itself, and always leaves things.
+                   (left (unless (equal action "forget") (alist-get 'leftBehind updated))))
                (setq updated (roost--cache-reply host updated listed))
                (roost--redraw)
                (when-let* ((said (cdr (assoc action roost--action-messages))))
                  (message (if already "Already sent to %s" said) (roost--field task 'name)))
                (when callback
                  (funcall callback (if pushed (cons pushed updated) updated)))
+               (when left
+                 (message "%s" (string-join (delq nil (list (current-message)
+                                                            (concat "left in place: " (string-join left ", "))))
+                                            "; ")))
                (when torn
                  (display-warning
                   'roost (format "%s's teardown command %s; Roost removed its worktree anyway%s"
@@ -4316,10 +4336,9 @@ resume those too."
                       (when there
                         ;; After its old terminal, which waits for that too.
                         (roost--open-once-out generation (roost--key updated) listed
-                                              (lambda () (roost-open-task updated)))))
+                                              (lambda () (when there (roost-open-task updated))))))
                     nil
-                    ;; Its terminal, which you may be in, is about to go.
-                    (lambda () (setq there (funcall stayed))))))))
+                    (lambda () (roost--stayed-as-it-goes stayed (lambda (still) (setq there still)))))))))
 
 (defun roost--resume-parameters (task)
   "What a request to resume TASK says besides which task."
@@ -4391,12 +4410,13 @@ longer shows as crashed, is passed over."
                     ;; opening clears the echo area.
                     (when there
                       (roost--open-once-out generation (roost--key updated) listed
-                                            (lambda () (roost-open-task updated nil (lambda (_) said))))))
+                                            (lambda ()
+                                              (when there (roost-open-task updated nil (lambda (_) said)))))))
                   (lambda (err)
                     (replied task)
                     (push (cons task err) failures)
                     (next others))
-                  (lambda () (setq there (funcall stayed)))))))
+                  (lambda () (roost--stayed-as-it-goes stayed (lambda (still) (setq there still))))))))
 
 (defun roost--resumed-message (host total failures)
   "What resuming TOTAL agents on HOST did, with FAILURES, each (TASK . ERROR)."
@@ -4459,7 +4479,8 @@ when you ask again after no reply."
 (defvar-local roost--send-sending nil
   "Non-nil while the drafted follow-up is being sent.")
 (defvar-local roost--send-notes nil
-  "Identifiers of the review notes in this draft; sending it clears them.")
+  "Identifiers of the review notes in this draft.
+Sending it clears those it holds as they are.")
 (defvar-local roost--send-asked nil
   "The text this draft last asked to send and the ID it asked with, a cons.
 The ID is the same each time for the same text, so its host pastes it
@@ -4499,7 +4520,7 @@ once, however often you ask: it answers again that it did.")
   "Open a draft buffer for a follow-up to TASK, adding INITIAL.
 An existing draft for TASK is reused and kept as written, with INITIAL
 after it.  TASK's review notes not yet in the draft follow; sending the
-draft clears them (see `roost-note')."
+draft clears those it holds as they are (see `roost-note')."
   (let ((buffer (roost--draft-buffer "send" 'roost--send-task task)))
     (with-current-buffer buffer
       (unless (derived-mode-p 'roost-send-mode) (roost-send-mode))
@@ -4547,14 +4568,28 @@ A draft holds the task it was opened for, which goes on changing."
   "What sending the prompt draft would send."
   (replace-regexp-in-string "\\`\\([ \t]*\n\\)+" "" (string-trim-right (buffer-string))))
 
+(defun roost--send-notes-going ()
+  "The draft's review notes that sending it would send, each (ID . TEXT).
+One you took out of it, or changed in it, isn't among them: the agent
+wouldn't read it as it is, so it stays to be sent."
+  (seq-keep (lambda (note)
+              (when (and (member (alist-get 'id note) roost--send-notes)
+                         (save-excursion
+                           (goto-char (point-min))
+                           (let ((case-fold-search nil))
+                             (re-search-forward (roost--note-in-draft note) nil t))))
+                (cons (alist-get 'id note) (alist-get 'text note))))
+            (roost--notes)))
+
 (defun roost--send-kept (task text notes)
   "Keep what the draft says beyond TEXT, which went to TASK with NOTES.
 What went leaves the draft, if it is all still there: sending what is
-left is what you wrote since."
+left is what you wrote since.  NOTES are as `roost--send-notes-going'
+gives them."
   (setq roost--send-sending nil
         roost--send-asked nil
         ;; Those that went, whatever is left of them here.
-        roost--send-notes (seq-difference roost--send-notes notes))
+        roost--send-notes (seq-difference roost--send-notes (mapcar #'car notes)))
   ;; Narrowed to some of it, what is left could be out of sight.
   (widen)
   (let* ((start (save-excursion (goto-char (point-min))
@@ -4569,6 +4604,8 @@ left is what you wrote since."
         (goto-char (point-min))
         (re-search-forward "\\`\\([ \t]*\n\\)*")
         (delete-region (point-min) (point))))
+    ;; One you took out of it is yours to bring back.
+    (setq roost--send-notes (mapcar #'car (roost--send-notes-going)))
     (setq roost--draft-note
           (format (if whole
                       " Sent to %s; this is what you wrote since"
@@ -4578,15 +4615,16 @@ left is what you wrote since."
 
 (defun roost-send-submit (&optional event)
   "Send the drafted follow-up.  The draft is kept if sending fails.
-Review notes in it are cleared once it is sent.  What you write in it
-meanwhile stays.  EVENT, a click on the draft's Send button, says which
-draft."
+Review notes it holds as they are, and that stay so until it is sent,
+are cleared then.  What you write in it meanwhile stays.  EVENT, a click
+on the draft's Send button, says which draft."
   (interactive (list last-nonmenu-event))
   (roost--draft-clicked event 'roost-send-mode)
   (let ((text (roost--send-draft-text))
         ;; As it is now: it may have come to ask for permission.
         (task (roost--as-listed roost--send-task))
-        (notes roost--send-notes)
+        (notes (roost--send-notes-going))
+        (looked roost--send-notes)
         (buffer (current-buffer))
         (written (buffer-chars-modified-tick)))
     (when (string-empty-p (string-trim text))
@@ -4623,7 +4661,9 @@ draft."
                   (with-current-buffer buffer (roost--send-kept task text notes)))
                 ;; The prompt went, whatever becomes of this.
                 (condition-case err
-                    (when (roost--remove-notes (lambda (note) (member (alist-get 'id note) notes)))
+                    (when (roost--remove-notes
+                           ;; As you sent it: one edited as it went stays.
+                           (lambda (note) (equal (cdr (assoc (alist-get 'id note) notes)) (alist-get 'text note))))
                       (roost--redraw))
                   (error (message "Roost could not save your review notes: %s" (error-message-string err))))
                 (unless kept (roost--close-buffer buffer))))))
@@ -4648,8 +4688,9 @@ draft."
                                (roost--host-label (roost--field task 'host))
                                (substitute-command-keys "\\[roost-send-submit]")))
                  (force-mode-line-update)))))
-         ;; You have looked at what your notes are about.
-         (and notes t)
+         ;; You have looked at what your notes are about, sent as you
+         ;; wrote them or not.
+         (and looked t)
          (cdr roost--send-asked))
       ;; A declined confirmation leaves the draft ready to send again.
       (quit (setq roost--send-sending nil) (signal (car err) (cdr err)))
@@ -5117,22 +5158,30 @@ Drafts holding them lose them too."
     (roost--save-notes)
     (roost--update-drafts before note)))
 
+(defun roost--note-in-draft (note)
+  "A regexp for NOTE as a draft holds it, a block of its own, the first group.
+A blank line or the end of the draft follows it: a line added to it
+makes it another note."
+  (concat "^\\(" (regexp-quote (roost--format-note note)) "\\)\\(?:\n[ \t]*\n\\|[ \t\n]*\\'\\)"))
+
 (defun roost--update-drafts (old new)
   "Replace note OLD with NEW in the drafts holding it; nil NEW removes it.
 A draft in which you have changed the note's text keeps your text, and
 no longer counts the note as its own, so sending it leaves the note."
   (let ((id (alist-get 'id old))
-        (before (roost--format-note old))
+        (before (roost--note-in-draft old))
         (case-fold-search nil))
     (dolist (buffer (buffer-list))
       (with-current-buffer buffer
-        (when (and (derived-mode-p 'roost-send-mode) (member id roost--send-notes))
+        (when (and (derived-mode-p 'roost-send-mode) (member id roost--send-notes)
+                   ;; On its way: what it says now hasn't gone, so it stays a
+                   ;; note, and what the draft says, what it sent.
+                   (or (not roost--send-sending)
+                       (progn (setq roost--send-notes (delete id roost--send-notes)) nil)))
           (save-excursion
             (goto-char (point-min))
             ;; The note as it was drafted, on lines of its own.
-            (cond ((not (re-search-forward
-                         (concat "^\\(" (regexp-quote before) "\\)\\(?:\n\\|\\'\\)")
-                         nil t))
+            (cond ((not (re-search-forward before nil t))
                    (setq roost--send-notes (delete id roost--send-notes)))
                   (new (replace-match (roost--format-note new) t t nil 1))
                   (t
@@ -6931,11 +6980,13 @@ Write the title on the first line and the body below it;
 \\<roost-pr-mode-map>\\[roost-pr-submit] pushes the branch and creates it.
 For a task with a pull request, push its new commits and open it in the
 browser; with prefix argument SKIP-PUSH, or once it is merged or closed,
-only open it."
+only open it.  One merged or closed that leaves commits to propose takes
+no more of them: draft another, unless SKIP-PUSH says only to open it."
   (interactive (list nil current-prefix-arg))
   (setq task (roost--choose task))
   (if-let* ((pr (roost--field task 'pr))
-            (url (alist-get 'url pr)))
+            (url (alist-get 'url pr))
+            ((or skip-push (not (roost--pr-spent-p task)))))
       (if (or skip-push (memq (roost--pr-state task) '(merged closed)))
           (browse-url url)
         (roost--act
@@ -6951,6 +7002,16 @@ only open it."
                         pushed (if (= pushed 1) "" "s") number since)))
            (browse-url url))))
     (roost--pr-draft task)))
+
+(defun roost--pr-spent-p (task)
+  "Whether TASK's commits need another pull request than the one it has.
+That one is closed, or merged with commits since, and TASK has commits
+to propose, as the next step offers: its host won't from another branch."
+  (and (numberp (roost--field task 'ahead)) (> (roost--field task 'ahead) 0)
+       (not (roost--other-branch task))
+       (pcase (roost--pr-state task)
+         ('closed t)
+         ('merged (not (roost--landed task))))))
 
 (defun roost-pr-cancel (&optional event)
   "Discard the pull request draft, or the one whose Cancel button EVENT clicked."
@@ -6992,10 +7053,27 @@ Create button, says which draft."
         (roost--act
          task "pr" `((title . ,title) (body . ,body) (draft . ,(and draft t)))
          (lambda (updated)
-           (roost--close-buffer buffer)
-           (message "Roost: opened pull request %s %s"
-                    (roost--pr-number (roost--field updated 'pr))
-                    (alist-get 'url (roost--field updated 'pr))))
+           (let* ((number (roost--pr-number (roost--field updated 'pr)))
+                  (said (cond
+                         ;; It had one by then, as its agent opened, with words of its own.
+                         ((assq 'pushed updated)
+                          (format "%s already has %s; pushed to it, and your text stays here"
+                                  (roost--field task 'name) number))
+                         ;; You went on writing as it went.
+                         ((and (buffer-live-p buffer)
+                               (not (equal text (with-current-buffer buffer (buffer-string)))))
+                          (format "Opened %s before you changed this; all of it is still here" number)))))
+             (if (not said)
+                 (progn
+                   (roost--close-buffer buffer)
+                   (message "Roost: opened pull request %s %s" number
+                            (alist-get 'url (roost--field updated 'pr))))
+               (message "Roost: %s" said)
+               (when (buffer-live-p buffer)
+                 (with-current-buffer buffer
+                   (setq roost--pr-sending nil
+                         roost--draft-note (concat " " said))
+                   (force-mode-line-update))))))
          (lambda (err)
            (message "Roost could not create the pull request: %s" err)
            (when (buffer-live-p buffer)
@@ -7120,7 +7198,8 @@ the pull request lacks are counted from it.  Nil otherwise.  As
 \"ci failed\" when a check failed; \"comments\" when a review thread is
 unresolved, its agent's reply in it or not; \"to merge\" when every check
 passed, no review is still asked for, none requested changes, and GitHub
-finds no conflicts.  Only as `roost--pr-status' has it, and while the
+finds no conflicts, and doesn't say branch rules block it or it needs
+updating.  Only as `roost--pr-status' has it, and while the
 pull request has every commit of the task's, with none left uncommitted
 nor in its agent's own worktrees.  PATIENT leaves a failure or thread to
 the agent for `roost--pr-grace' seconds after it came.  As
@@ -7144,7 +7223,8 @@ is on, while there is one."
             ((and checks (eql failing 0) (eql (alist-get 'pending checks) 0) (eql threads 0)
                   (assq 'requested status) (null (alist-get 'requested status))
                   (not (member (alist-get 'review status) '("CHANGES_REQUESTED" "REVIEW_REQUIRED")))
-                  (equal (alist-get 'mergeable status) "MERGEABLE"))
+                  (equal (alist-get 'mergeable status) "MERGEABLE")
+                  (not (member (alist-get 'mergeState status) '("BLOCKED" "BEHIND"))))
              "to merge")))))
 
 (defun roost--pr-turn (task)
@@ -7250,7 +7330,10 @@ would not push to, nor open, what to do on GitHub, or with that branch."
                                 (when reviewers
                                   (if (cdr reviewers)
                                       (concat "reviews from " (string-join reviewers ", "))
-                                    (concat (car reviewers) "'s review")))))))
+                                    (concat (car reviewers) "'s review")))
+                                (pcase (alist-get 'mergeState status)
+                                  ("BLOCKED" "branch rules")
+                                  ("BEHIND" "an update from the branch it merges into"))))))
     (cond
      (verdict
       (concat (roost--pr-reason task verdict) ": "
@@ -7269,6 +7352,9 @@ would not push to, nor open, what to do on GitHub, or with that branch."
      ((and status (eql unpushed 0) waits)
       (format "%s waits for %s" number (string-join waits " and ")))
      (branch (roost--other-branch-step task key))
+     ;; As after a push, which GitHub is yet to be asked about.
+     ((eql (roost--field task 'unpushed) 0)
+      (format "%s has every commit of the task's: %s opens it" number (funcall key "P")))
      (t (concat (funcall key "P") " pushes new commits to its pull request")))))
 
 (defun roost--conflicts (task)
@@ -9417,7 +9503,8 @@ where RET would pick the agent's default answer, so no key is named."
      ;; As for one you haven't looked at since its agent finished.
      ((roost--landed task) (funcall retire))
      ((consp (roost--conflicts task)) (roost--conflict-next-step task key))
-     (merged (concat "Its pull request is merged, but not its commits since: " (funcall key "m") " merges them"))
+     (merged (concat "Its pull request is merged, but not its commits since: " (funcall key "m") " merges them, or "
+                     (funcall key "P") " opens a pull request"))
      ((memq state '(open draft)) (roost--pr-next-step task key))
      ((and (numberp (roost--field task 'ahead)) (> (roost--field task 'ahead) 0))
       (concat (funcall key "m") " merges it, or " (funcall key "P") " opens a pull request")))))

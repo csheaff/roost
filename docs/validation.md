@@ -47,6 +47,27 @@ happened in a section below:
 - **Not run.** A real `git credential-cache--daemon` from a real push, though one
   started by `git credential approve` kept a lock it was handed; `git gc --auto`.
 
+## Worktrees Claude makes in a task — 2026-11-06
+
+- **Why.** Finishing a task now removes only what its agent made, so Roost has
+  to tell that from what it says (#221).
+- **Claude Code 2.1.317 on Haiku, a real task under the helper.** EnterWorktree
+  made `.claude/worktrees/entered` on `worktree-entered`, locked it, and its
+  `PostToolUse` hook said `Created worktree at …`, with `cwd` already there.
+  An isolated subagent worked in `agent-<its ID>` on `worktree-agent-<its ID>`,
+  its hooks carrying `agent_id`. One that changed nothing was removed by Claude;
+  one that wrote a file stayed. Retiring was refused over that file, naming
+  it. With the file gone, retiring removed both worktrees and both branches,
+  and left nothing.
+- **From its source.** EnterWorktree says `Entered`, `Reused` or `Resumed` of one
+  that was there, and `make contract` now checks those words, the names of
+  subagents' folders and its branches.
+- **Git.** `git worktree remove --force --force` stops at a read-only folder, and
+  when `.git` was listed first has deleted it: Git in that folder then answers
+  for the primary checkout, whose `main` Roost deleted before this.
+- **Not run.** A whole `make contract-live`, so no capture of these hooks; `--worktree`,
+  which Roost refuses in an agent's command.
+
 ## A bug hunt, with two new sweeps — 2026-11-05
 
 - **Why.** About 2,000 lines had landed since the last hunt, and two kinds

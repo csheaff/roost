@@ -30,6 +30,61 @@ What each release changes, and what to do when upgrading. Newest first.
   after two seconds its tasks keep the status they last had, and commands say
   tmux didn't answer, as forgetting a task does unless its agent had ended.
   The host's polls and hooks waited for it, for as long as it was stopped.
+- Merging, retiring or discarding a task deletes nothing that isn't the
+  task's. With a folder in the primary checkout's `.claude/worktrees` that
+  had lost its link to Git, as when removing it stopped partway, it deleted
+  the primary checkout's branch and said all was well: `git log` then said
+  there were no commits yet. It also deleted a branch of yours the agent had
+  switched to in its own worktree, and removed a worktree the agent had only
+  gone to. Now only a worktree the task's agent made goes, with the branch
+  Claude made for it, and Roost says what it left in place. Those of a task
+  started before this update still show and still keep it from retiring
+  while they hold work, but stay once it finishes, as Roost can't tell its
+  agent made them: remove them with `git worktree remove` if you don't want
+  them.
+- Discarding a task whose repository is gone says it went. It deleted the
+  task's worktree, then said the repository wasn't one, and the task stayed
+  until you asked again. Nothing to do when upgrading.
+- A pull request that branch rules block, or that needs updating, no longer
+  says `to merge` on GitHub, and the task panel says that is what it waits
+  for. Roost asked only whether it conflicts. Nothing to do when upgrading.
+- After `P` pushes, the task panel no longer says it has commits to push. It
+  did until Roost next asked GitHub or GitLab, up to two minutes. Nothing to do
+  when upgrading.
+- `P` drafts another pull request after one closed, or for commits made after
+  one merged. It opened the old one in your browser, though the next step said
+  it opens a pull request. Nothing to do when upgrading.
+- A pull request draft whose task has one by the time you create yours, as its
+  agent opened, stays open with your text, and says it pushed to that one. It
+  closed, saying it had opened one, and your text was lost. So does one you go
+  on writing in as it sends, which says it opened the pull request before you
+  changed it. Nothing to do when upgrading.
+- A pull request its agent opened after `git pull --rebase`, or of work that
+  came to the task's branch as a fast-forward, as from a worktree of its own,
+  shows in Roost, with its checks, and `merged` once it is. Roost took those
+  commits for ones an update brought in, until a later commit. Nothing to do
+  when upgrading.
+- A pull request merged with a commit made on GitHub or GitLab, as by the
+  Update branch button or an applied suggestion, says `merged`, and `x`
+  retires it. It read as merged but for commits since, and `m` merged the
+  older commits into your local `main`, apart from `origin/main`. An open one
+  with such a commit says `to merge`, `ci failed` and `comments` again, which
+  it left unsaid until you pressed `P`. Roost fetches that commit, with Git
+  2.29 or newer on the host, once for each head, using the Git credentials
+  there. A merge request GitLab rebases as it merges has no such commit and
+  reads as before. Nothing to do when upgrading.
+- A review note you take out of a prompt draft, or change there, stays once
+  the draft is sent, as the agent didn't read it as it is. It was cleared. So
+  does one you edit in the note box as the draft goes, which lost your edit.
+  Nothing to do when upgrading.
+- A task you resume leaves what you open from a question meanwhile, as a file
+  with `C-x C-f`. Its terminal took the window. Nothing to do when upgrading.
+- A task that stops while its open waits for a question doesn't open. Roost
+  connected all the same, which left an empty tmux session named for it, with
+  a shell in it, that no Roost command closes. Now it asks the task's host
+  again once you answer, and says so if the agent has gone. Nothing to do when
+  upgrading; a session like that left earlier goes when you end tmux on that
+  host.
 - Two Emacs agree on what of a stopped task waits on you. Each undid the
   other's turn at every poll, writing its record and a line of history, and
   `roost-workload` flickered. Nothing to do when upgrading.

@@ -50,7 +50,8 @@ ENDED = ("stopped", "exited", "failed", "crashed")
 # Computed per request and never persisted in a task record.
 TRANSIENT = ("live", "diff", "dirty", "files", "size", "ahead", "behind", "update", "worktreeMissing",
              "prStatus", "unpushed", "lastMessage", "gitStamp", "agentWork", "merging", "landed", "conflicts",
-             "sinceLooked", "teardownFailure", "teardownOutput", "worktreePr", "worktreeHead", "branchTip")
+             "sinceLooked", "teardownFailure", "teardownOutput", "worktreePr", "worktreeHead", "branchTip",
+             "leftBehind")
 LAST_MESSAGE_TAIL = 256 * 1024
 LAST_MESSAGE_LIMIT = 2000
 INTERRUPT_TAIL = 64 * 1024
@@ -385,7 +386,7 @@ def listable(task):
     """Whether TASK's record holds what listing it takes for granted."""
     return (all(isinstance(task.get(field), str) for field in RECORD_TEXT)
             and all(isinstance(task.get(field), (str, type(None))) for field in RECORD_OPTIONAL_TEXT)
-            and isinstance(task.get("agentWorktrees"), (list, type(None))))
+            and all(isinstance(task.get(field), (list, type(None))) for field in ("agentWorktrees", "agentMade")))
 
 
 def own_record(record, task_id):
@@ -869,6 +870,27 @@ class ClaudeAgent:
             # Otherwise a prompt starting with -, such as a list, is an option.
             argv += ["--", task["prompt"]]
         return argv
+
+    def made_worktree(self, payload, path):
+        """Whether hook PAYLOAD, from inside the worktree at PATH under
+        .claude/worktrees, says this agent made it: its EnterWorktree tool
+        says it created one, rather than that it entered, reused or
+        resumed one that was there; or an isolated subagent of its works
+        there, in a folder Claude names after it. A workflow's folder names
+        no agent, and any subagent may visit one, so it stays. "new" for a
+        worktree made just now, which may take a name it had before."""
+        if payload.get("tool_name") == "EnterWorktree":
+            reply = payload.get("tool_response")
+            said = reply.get("message") if isinstance(reply, dict) else None
+            return ("new" if payload.get("hook_event_name") == "PostToolUse" and isinstance(said, str)
+                    and said.startswith("Created worktree") else False)
+        agent = payload.get("agent_id")
+        folder = re.fullmatch(r"agent-(a[0-9a-f]{16}|a[0-9a-f]{7})", Path(path).name)
+        return bool(folder and isinstance(agent, str) and agent.startswith(folder.group(1)))
+
+    def worktree_branch(self, path):
+        """The branch Claude makes for its worktree at PATH."""
+        return "worktree-" + Path(path).name
 
     def observe(self, payload, current=None):
         """Status updates for hook PAYLOAD, given the task's CURRENT status."""
@@ -1923,7 +1945,7 @@ def make_task(store, request, create_id):
                 integrationRef="refs/heads/" + integration if integration else None,
                 session=session_name(repo, task_id),
                 agent=agent_name, command=command, setup=setup, prompt=prompt,
-                status="starting", startedAt=now(), updatedAt=now(), claudeSession=None)
+                status="starting", startedAt=now(), updatedAt=now(), claudeSession=None, agentMade=[])
     if create_id:
         task["createId"] = create_id
     issue = request.get("issue")
@@ -2418,13 +2440,16 @@ def first_failure(rollup):
 PULL_REQUEST_FIELDS = "number,url,state,isDraft,reviewDecision,statusCheckRollup,headRefOid,baseRefName"
 # Seconds that asking GitHub about every task's pull requests may take.
 PULL_REQUEST_DEADLINE = 20
+# Seconds of that a poll needs left to fetch a pull request's head: one that
+# doesn't come is not asked for again.
+HEAD_FETCH_SECONDS = 5
 # What `gh pr list` leaves out, for each of a repository's open pull
 # requests: whether it conflicts, who is yet to review it, Copilot among
 # them, and its review threads, the last 100 of them, each with where it
 # is and how it starts.
 PULL_REQUEST_REVIEWS = """
   pr%d: pullRequest(number: %d) {
-    mergeable
+    mergeable mergeStateStatus
     reviewRequests(first: 20) { nodes { requestedReviewer { ... on Actor { login } ... on Team { slug } } } }
     reviewThreads(last: 100) { totalCount nodes { isResolved isOutdated path line diffSide
       comments(last: 1) { nodes { createdAt } } opening: comments(first: 1) { nodes { author { login } bodyText } } } }
@@ -2493,6 +2518,8 @@ def review_state(pr):
              for thread in unresolved]
     state = dict(mergeable=pr.get("mergeable"),
                  requested=[reviewer.get("login") or reviewer.get("slug") or "someone" for reviewer in requested])
+    if pr.get("mergeStateStatus"):
+        state["mergeState"] = pr["mergeStateStatus"]
     if threads["totalCount"] <= len(threads["nodes"]):
         state.update(threads=len(unresolved),
                      threadAt=(min(times, key=parse_time) if times and all(parse_time(t) for t in times)
@@ -2895,11 +2922,93 @@ def recorded_pull_request(task):
     return pr if isinstance(pr, dict) and pr.get("number") else {}
 
 
+def commit_id(value):
+    """Whether VALUE, as a forge said it, is a commit's full name."""
+    return isinstance(value, str) and bool(re.fullmatch(r"[0-9a-f]{40,64}", value))
+
+
+def has_tip(task, head, tip):
+    """Whether HEAD, a pull request's as its forge named it, has all of TIP,
+    the branch's: it is TIP, or comes after it, as a commit made on the forge
+    does. Commits on the branch since it merged are in no such head. False
+    when HEAD isn't here."""
+    return head == tip or (commit_id(head) and is_ancestor(task["repo"], tip, head))
+
+
+def merged_tip(task, pr, tip):
+    """Whether PR, as its forge lists it, merged all of TIP."""
+    return pr.get("state") == "MERGED" and has_tip(task, pr.get("headRefOid"), tip)
+
+
 def recorded_merge_at(task, tip):
     """Whether GitHub said, as recorded, that one of the task's pull requests
     merged TIP. A merge stays one, whatever later lookups list."""
     pr = recorded_pull_request(task)
-    return bool(tip) and (pr.get("mergedHead") == tip or (pr.get("state") == "MERGED" and pr.get("head") == tip))
+    return bool(tip) and (has_tip(task, pr.get("mergedHead"), tip)
+                          or (pr.get("state") == "MERGED" and has_tip(task, pr.get("head"), tip)))
+
+
+@functools.lru_cache(maxsize=None)
+def fetches_quietly():
+    """Whether this host's Git can fetch and leave FETCH_HEAD as it is."""
+    return (version_of(execute(["git", "--no-optional-locks", "--version"], check=False).stdout)
+            or (0, 0)) >= FETCH_QUIETLY_GIT
+
+
+def head_to_fetch(task, pr, tip, again=False):
+    """The head of PR, one of the task's, at TIP, to fetch: when it is open or
+    merged and its head isn't here, as a commit made on the forge isn't,
+    unless a fetch failed to bring it, as one on a fork's branch may, or
+    AGAIN says to try. None otherwise."""
+    head = pr.get("headRefOid")
+    if (pr.get("state") not in ("OPEN", "MERGED") or head == tip or not commit_id(head)
+            or (not again and recorded_pull_request(task).get("unfetched") == head)):
+        return None
+    return head if read_git(task["repo"], "cat-file", "-e", head + "^{commit}").returncode else None
+
+
+def fetch_head(task, head, timeout):
+    """Bring HEAD, a pull request's, here from origin within TIMEOUT seconds,
+    and say whether it came, or None for running out of time, which doesn't
+    say. By its commit, as the forge may have deleted its branch on merging
+    it. In the primary checkout, whose config a sandbox keeps an agent out
+    of, as nobody asked for this. Nothing there changes but what Git has: no
+    ref holds HEAD, so it goes in time, and comes again if it is still
+    wanted. FETCH_HEAD stays as a `git pull` under way left it, so Git before
+    2.29 fetches nothing."""
+    if not fetches_quietly():
+        return False
+    try:
+        return remote_git(task["repo"], "fetch", "--quiet", "--no-tags", "--no-recurse-submodules",
+                          "--no-auto-maintenance", "--no-write-fetch-head", "origin", head,
+                          check=False, timeout=timeout).returncode == 0
+    except RoostError:
+        return None
+    except OSError:
+        return False
+
+
+def fetch_heads(asked, answers, deadline):
+    """Fetch the heads to fetch of ANSWERS, the pull requests of the tasks in
+    ASKED, several at once, as long as DEADLINE, as time.monotonic() has it,
+    leaves room. The heads that didn't come, each with its repository, to
+    ask for no more: another project's origin may have the same one."""
+    wanted = {}
+    for (task, tip, _), prs in zip(asked, answers):
+        for pr in prs or []:
+            head = head_to_fetch(task, pr, tip)
+            if head:
+                wanted[task["repo"], head] = task
+
+    def fetch(entry):
+        (_, head), task = entry
+        left = deadline - time.monotonic()
+        return left >= HEAD_FETCH_SECONDS and fetch_head(task, head, left) is False and entry[0]
+
+    if not wanted:
+        return set()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(wanted))) as pool:
+        return {failed for failed in pool.map(fetch, wanted.items()) if failed}
 
 
 def pushed(task, branch=None):
@@ -2916,8 +3025,10 @@ def task_pull_requests(task, tip, timeout=15, branch=None):
     say within TIMEOUT seconds. They are those from its branch whose head is a
     commit of its own, made since it started and still on its branch at
     TIP, of a task that made commits: a task retired earlier, or someone
-    else's fork, may have had a branch of the same name. The recorded one
-    counts too. BRANCH, when given, is the branch its worktree is on
+    else's fork, may have had a branch of the same name. A commit is its
+    own when its reflog says so or its integration branch lacks it, so no
+    update brought it in. The recorded one counts too. BRANCH, when given,
+    is the branch its worktree is on
     instead, at TIP, as after its agent made one there: its pull requests
     are those whose head is a commit made there or on the task's branch."""
     try:
@@ -2945,16 +3056,19 @@ def task_pull_requests(task, tip, timeout=15, branch=None):
             if branch and made is not True:
                 there = own_commits(task, branch)
                 made = True if there is True else made | there
-        return made is True or head in made
+        integration = task.get("integrationBranch")
+        return (made is True or head in made
+                or not (integration and any(is_ancestor(task["repo"], head, ref) for ref in (
+                    "refs/heads/" + integration, "refs/remotes/origin/" + integration))))
 
     return sorted((pr for pr in listed if isinstance(pr, dict) and isinstance(pr.get("number"), int) and ours(pr)),
                   key=lambda pr: pr["number"], reverse=True)
 
 
-def shown_pull_request(prs, tip):
-    """Which of PRS the task shows: an open one, else one merged at TIP, else the newest."""
+def shown_pull_request(task, prs, tip):
+    """Which of PRS the task shows: an open one, else one that merged TIP, else the newest."""
     return (next((pr for pr in prs if pr.get("state") == "OPEN"), None)
-            or next((pr for pr in prs if pr.get("state") == "MERGED" and pr.get("headRefOid") == tip), None)
+            or next((pr for pr in prs if merged_tip(task, pr, tip)), None)
             or (prs[0] if prs else None))
 
 
@@ -2987,7 +3101,10 @@ def check_pull_requests(store, tasks):
     pushed branch, several at once, and add each one's state, review and
     checks, and for an open one, its review threads, and how many of the
     branch's commits it lacks. Record the one each shows when it changed, as
-    when its agent opened one or it was merged. A task whose worktree is on
+    when its agent opened one or it was merged. Its head is fetched when it
+    isn't here, as a commit made on the forge isn't, which Git can't compare
+    with the branch otherwise: once, as one that fails is recorded. A task
+    whose worktree is on
     a pushed branch of another name, as when its agent made one to follow a
     team's naming, also has that branch's shown as worktreePr, with the
     same, but not recorded: the task's own, its merge and retiring stay its
@@ -3026,9 +3143,14 @@ def check_pull_requests(store, tasks):
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(asked))) as pool:
         answers = list(pool.map(ask, asked))
-    shown = [shown_pull_request(prs or [], tip) for (_, tip, _), prs in zip(asked, answers)]
-    reviews = pull_request_reviews([pr for pr in shown if pr and pr.get("state") == "OPEN"], deadline)
-    for (task, tip, branch), prs, pr in zip(asked, answers, shown):
+
+    def shown():
+        return [shown_pull_request(task, prs or [], tip) for (task, tip, _), prs in zip(asked, answers)]
+
+    reviews = pull_request_reviews([pr for pr in shown() if pr and pr.get("state") == "OPEN"], deadline)
+    # After what every task's words wait on, which a slow fetch would hold up.
+    unfetched = fetch_heads(asked, answers, deadline)
+    for (task, tip, branch), prs, pr in zip(asked, answers, shown()):
         if branch:
             if prs is not None:
                 task["worktreePr"] = pr and dict(pull_request_status(pr, reviews, checked), branch=branch,
@@ -3045,18 +3167,22 @@ def check_pull_requests(store, tasks):
         record = dict(number=pr["number"], url=pr.get("url"), state=pr.get("state"), head=pr.get("headRefOid"))
         if pr.get("forge"):
             record["forge"] = pr["forge"]
+        if ((task["repo"], record["head"]) in unfetched
+                or record["head"] == recorded_pull_request(task).get("unfetched")):
+            record["unfetched"] = record["head"]
         # Where it merges, for views that ask GitHub nothing.
         if pr.get("baseRefName"):
             record["base"] = pr["baseRefName"]
         # Shown or not, as when an open one goes to another base, or listed
         # or not, as when the branch has had more than a page of them.
-        merged = [other for other in prs if other.get("state") == "MERGED" and other.get("headRefOid") == tip]
+        merged = [other for other in prs if merged_tip(task, other, tip)]
         if merged or recorded_merge_at(task, tip):
-            record["mergedHead"] = tip
+            recorded = recorded_pull_request(task)
+            record["mergedHead"] = (merged[0]["headRefOid"] if merged
+                                    else recorded.get("mergedHead") or recorded.get("head"))
             # And each branch it went to, which the one shown need not say,
             # those recorded included, as a later lookup can list them no more.
-            recorded = recorded_pull_request(task)
-            bases = list(recorded.get("mergedBases") or []) if recorded.get("mergedHead") == tip else []
+            bases = list(recorded.get("mergedBases") or []) if has_tip(task, recorded.get("mergedHead"), tip) else []
             for other in merged:
                 if other.get("baseRefName") and other["baseRefName"] not in bases:
                     bases.append(other["baseRefName"])
@@ -3095,24 +3221,39 @@ def landed(task, tip):
     return bool(integration) and is_ancestor(task["repo"], tip, "refs/heads/" + integration) and committed_on(task)
 
 
+def branch_names(repo, name):
+    """What NAME, as Git's reflog has it, may call a branch: as it is, and
+    less `refs/heads/` or a remote's name. Only one of REPO's remotes: a
+    branch of yours may be named agent/main."""
+    names = {name, re.sub(r"^refs/(heads/|remotes/[^/]+/)", "", name)}
+    names.update(name[len(remote) + 1:] for remote in read_git(repo, "remote").stdout.split()
+                 if name.startswith(remote + "/"))
+    return names
+
+
 def own_commits(task, branch=None):
     """The commits made on the task's branch, or on BRANCH, as its reflog
     has them, merge commits among them, rather than brought in from its
     integration branch, as when an update fast-forwards a task that had
     none; True, meaning it can't tell, if Git keeps no reflog. A rebase's
-    makes count unless its integration branch has it."""
+    makes count unless its integration branch has it, and so does a
+    fast-forward from elsewhere, as from a worktree of its agent's."""
     log = read_git(task["repo"], "log", "--walk-reflogs", "--format=%H %gs",
                    "refs/heads/" + (branch or task["branch"]), "--")
     if log.returncode or not log.stdout.strip():
         return True
+    integration = task.get("integrationBranch")
     made, rebased = set(), set()
     for line in log.stdout.splitlines():
         commit, _, subject = line.partition(" ")
-        if re.match(r"(commit|cherry-pick|revert|am)\b|(merge|pull)\b[^:]*: Merge made by", subject):
+        forwarded = re.fullmatch(r"merge ([\w./-]+): Fast-forward", subject)
+        if (re.match(r"(commit|cherry-pick|revert|am)\b|(merge|pull)\b[^:]*: Merge made by", subject)
+                # By its commit, as Git names one from FETCH_HEAD, it could be anyone's.
+                or forwarded and not re.fullmatch(r"[0-9a-f]+", forwarded.group(1))
+                and integration not in branch_names(task["repo"], forwarded.group(1))):
             made.add(commit)
         elif subject.startswith("rebase"):
             rebased.add(commit)
-    integration = task.get("integrationBranch")
     return made | {commit for commit in rebased
                    if not (integration and is_ancestor(task["repo"], commit, "refs/heads/" + integration))}
 
@@ -4105,6 +4246,7 @@ def require_submodules_kept(worktree, where="its worktree"):
 
 
 MERGE_TREE_GIT = (2, 38)  # `git merge-tree --write-tree`
+FETCH_QUIETLY_GIT = (2, 29)  # `git fetch --no-write-fetch-head`
 
 
 def recorded_integration(task):
@@ -4334,8 +4476,9 @@ def unregister_gone(repo, worktree):
     the branch it held can be deleted: what Git keeps of it goes, as
     `git worktree prune` removes it, but never a folder, which may be back
     meanwhile, as when a drive is mounted again. Retiring refuses a locked
-    one first, and both retiring and discarding one that keeps submodules."""
-    gitdir = kept_of_gone(repo, worktree)
+    one first, and both retiring and discarding one that keeps submodules.
+    With REPO gone, nothing keeps it any more."""
+    gitdir = kept_of_gone(repo, worktree) if Path(repo).is_dir() else None
     if gitdir:
         shutil.rmtree(gitdir)
 
@@ -4510,20 +4653,28 @@ def squash_merge(task, integration, here, tip):
 
 def merged_pull_request_head(task):
     """The task branch's tip when GitHub merged it as one of the task's pull
-    requests, or None, and whether another is open from the branch, which
-    deleting it on the remote would close. GitHub is asked for a task with
+    requests, or None; whether another is open from the branch, which
+    deleting it on the remote would close; and the head that merged, where
+    the remote's branch should still be. GitHub is asked for a task with
     a pull request recorded or a pushed branch; a merge it recorded earlier
     counts too, and without an answer, what it recorded of an open one.
+    You asked, so a head no poll could fetch is tried again.
     Slow: call it without the registry lock and pass the answer to `retire`."""
     tip = branch_tip(task)
     if not tip:
-        return None, False
+        return None, False, None
     recorded = recorded_pull_request(task)
     prs = task_pull_requests(task, tip) if recorded or pushed(task) else None
-    merged = any(pr.get("state") == "MERGED" and pr.get("headRefOid") == tip for pr in prs or [])
+    for pr in prs or []:
+        head = pr.get("state") == "MERGED" and head_to_fetch(task, pr, tip, again=True)
+        if head:
+            fetch_head(task, head, PULL_REQUEST_DEADLINE)
+    merged = next((pr for pr in prs or [] if merged_tip(task, pr, tip)), None)
     still_open = (any(pr.get("state") == "OPEN" for pr in prs) if prs is not None
                   else recorded.get("state") == "OPEN")
-    return (tip if merged or recorded_merge_at(task, tip) else None), still_open
+    if not (merged or recorded_merge_at(task, tip)):
+        return None, still_open, None
+    return tip, still_open, merged["headRefOid"] if merged else recorded.get("mergedHead") or recorded.get("head")
 
 
 def safe_to_delete(task, commit, merged_head=None):
@@ -4671,7 +4822,7 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
     stop(store, task, inventory)
     # With worktrees its agent made that hold nothing beyond the task's branch.
     remove_worktrees(store, task, worktree if worktree_exists else None,
-                     [entry for entry in agent_work(task) if entry["ahead"] == 0 and not entry["dirty"]],
+                     [entry for entry in agent_work(task) if entry["made"] and entry["ahead"] == 0 and not entry["dirty"]],
                      teardown=teardown)
     # What a copy stopped partway left, which may hold a secret.
     shutil.rmtree(copy_staging(task["worktree"]), ignore_errors=True)
@@ -4679,8 +4830,9 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
         if not worktree_exists:
             unregister_gone(repo, worktree)
         delete_branch(repo, branch, commit)
+    left = agent_left(task)
     store.remove(task["id"])
-    task.update(status="retired", updatedAt=now())
+    task.update(status="retired", updatedAt=now(), leftBehind=left)
     # Not with one open from there as well: deleting the branch would close it.
     if commit and merged_head == commit and not still_open:
         task["remoteCleanup"] = True
@@ -4689,7 +4841,7 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
 
 def delete_remote_branch(repo, branch, commit):
     """Best effort: GitHub may already have deleted the merged branch. Only
-    while it is still at COMMIT, the tip that merged, as commits pushed there
+    while it is still at COMMIT, the head that merged, as commits pushed there
     since are in no pull request and nowhere else."""
     ref = "refs/heads/" + branch
     with contextlib.suppress(OSError, RoostError):
@@ -4697,8 +4849,9 @@ def delete_remote_branch(repo, branch, commit):
 
 
 def push_pull_request(store, task):
-    """Push new commits to the task's existing pull request branch and say how
-    many were new. Runs without the registry lock."""
+    """Push new commits to the task's existing pull request branch, and say how
+    many were new and where the branch is on the remote now, as (PUSHED,
+    HEAD). Runs without the registry lock."""
     worktree = check_worktree(store, task)
     if not worktree.is_dir():
         raise RoostError("Task worktree is gone")
@@ -4714,19 +4867,40 @@ def push_pull_request(store, task):
     remote = git(worktree, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/" + branch + "^{commit}",
                  check=False)
     since = remote.stdout.strip() if remote.returncode == 0 else task["baseCommit"]
-    pushed = int(git(worktree, "rev-list", "--count", since + "..HEAD").stdout.strip())
+    # By its commit, so what is said of it is what went, whatever comes meanwhile.
+    tip = git(worktree, "rev-parse", "refs/heads/" + branch + "^{commit}").stdout.strip()
+    pushed = int(git(worktree, "rev-list", "--count", since + ".." + tip).stdout.strip())
     # With nothing new, pushing could only be refused, as when the pull
     # request has a commit made on GitHub since; unfetched, what was last
     # fetched says nothing.
-    if pushed or not fetched:
-        remote_git(worktree, "push", "-u", "origin", branch)
-    return pushed
+    if not pushed and fetched:
+        return pushed, since
+    remote_git(worktree, "push", "origin", "%s:refs/heads/%s" % (tip, branch))
+    git(worktree, "branch", "--set-upstream-to=refs/remotes/origin/" + branch, branch, check=False)
+    return pushed, tip
+
+
+def record_push(store, task_id, before, head):
+    """TASK_ID's record, with HEAD, where a push left the branch of its pull
+    request, recorded as BEFORE when it began, as that one's head: the forge
+    will say so when next asked, and its status until then is of the head
+    before. Not when the record moved meanwhile, as for a later push. Nor
+    one closed or merged, which the push isn't in, and which merged at the
+    recorded head alone: a head moved on would say the commits since had
+    merged."""
+    task = store.read(task_id)
+    pr = recorded_pull_request(task)
+    if pr == before and pr.get("state") not in ("CLOSED", "MERGED"):
+        pr["head"] = head
+        store.save(task)
+    return task
 
 
 def pull_request(store, task, request):
     """Push the task branch and open a pull request on the forge its origin
-    is on. Runs without the registry lock, because pushing and talking to
-    the forge are slow."""
+    is on, and return its record, and whether this opened it: one open
+    already, as its agent's, is pushed to. Runs without the registry lock,
+    because pushing and talking to the forge are slow."""
     integration = task.get("integrationBranch")
     if not integration:
         raise RoostError("The task has no integration branch (it was created from a detached HEAD) to open a pull request against")
@@ -4746,10 +4920,10 @@ def pull_request(store, task, request):
     existing = forge.open_pull_request(worktree, branch)
     remote_git(worktree, "push", "-u", "origin", branch)
     if existing:
-        return existing
+        return existing, False
     return forge.create(worktree, integration, branch, title,
                         request.get("body") if isinstance(request.get("body"), str) else "",
-                        request.get("draft") is True)
+                        request.get("draft") is True), True
 
 
 def conflicted_files(repo):
@@ -4905,13 +5079,16 @@ def update(store, task):
     return task
 
 
-def discard_losses(repo, branch, branch_exists, worktree, worktree_exists, work):
+def discard_losses(task, branch_exists, worktree, worktree_exists, work):
     """What discarding a task would lose, as counts: commits on no other
     branch, commits in submodules on no remote of theirs, and uncommitted
     or untracked files, those in submodules too. WORK is what `agent_work`
-    says of the worktrees its agent made."""
+    says of the worktrees its agent made, whose branches go with them only
+    if Claude made them."""
+    repo, branch = task["repo"], task["branch"]
     paths = ([worktree] if worktree_exists else []) + [entry["path"] for entry in work]
-    branches = ([branch] if branch_exists else []) + [entry["branch"] for entry in work if entry["branch"]]
+    branches = ([branch] if branch_exists else []) + [entry["branch"] for entry in work
+                                                      if entry["branch"] == agent_branch(task, entry["path"])]
     # Commits on a detached HEAD there, too; another branch keeps its own.
     heads = [head for head in [read_git(path, "rev-parse", "-q", "--verify", "HEAD").stdout.strip()
                                for path in paths if linked(path)] if head]
@@ -4954,14 +5131,14 @@ def discard(store, task, expect=None, dry_run=False, teardown=None, told=None):
     if unlinked or not worktree_exists:
         require_nothing_kept(repo, worktree, unlinked, bool(task.get("removing")))
     # The worktrees its agent made go with it.
-    work = agent_work(task)
+    work = [entry for entry in agent_work(task) if entry["made"]]
     if dry_run:
-        return dict(task, discard=dict(discard_losses(repo, branch, branch_exists, worktree, worktree_exists, work),
+        return dict(task, discard=dict(discard_losses(task, branch_exists, worktree, worktree_exists, work),
                                        commit=commit))
     if commit != (expect or None):
         raise RoostError("The task's branch has moved since you were asked; look at it again before discarding")
     if isinstance(told, dict):
-        losses = discard_losses(repo, branch, branch_exists, worktree, worktree_exists, work)
+        losses = discard_losses(task, branch_exists, worktree, worktree_exists, work)
         if any(count > (told.get(name) or 0) for name, count in losses.items()):
             # Asking again would only find more.
             raise RoostError("The task holds more than you were told; %slook at it again before discarding"
@@ -4973,8 +5150,9 @@ def discard(store, task, expect=None, dry_run=False, teardown=None, told=None):
         if not worktree_exists:
             unregister_gone(repo, worktree)
         delete_branch(repo, branch, commit)
+    left = agent_left(task)
     store.remove(task["id"])
-    task.update(status="discarded", updatedAt=now(), live=False)
+    task.update(status="discarded", updatedAt=now(), live=False, leftBehind=left)
     return task
 
 
@@ -5465,9 +5643,9 @@ def permission_request(payload, worktree=None):
 
 
 def agent_worktree(task, cwd):
-    """The worktree Claude Code made for TASK's agent that CWD is in, or
+    """The folder in .claude/worktrees that CWD, from TASK's agent, is in, or
     None. Claude makes them in the primary checkout's .claude/worktrees,
-    for --worktree, its EnterWorktree tool and isolated subagents."""
+    for its EnterWorktree tool and isolated subagents."""
     if not isinstance(cwd, str) or not cwd:
         return None
     try:
@@ -5478,32 +5656,105 @@ def agent_worktree(task, cwd):
     return str(root / parts[0]) if parts else None
 
 
+def worktree_at(repo, path):
+    """The Git directory Git keeps for the worktree of REPO at PATH, if Git
+    says it is one at that very path, or None. An agent's folder lies inside
+    the primary checkout: with no link of its own, as when a removal stopped
+    partway, Git asked there answers for the primary checkout."""
+    path = Path(path).resolve()
+    if linked(path) and Path(read_git(path, "rev-parse", "--show-toplevel").stdout.removesuffix("\n")).resolve() == path:
+        with contextlib.suppress(RoostError):
+            return next((gitdir for gitdir, place in linked_worktrees(repo) if Path(place).resolve() == path), None)
+    return None
+
+
+def made_stamp(gitdir):
+    """When Git made the worktree it keeps in GITDIR, in nanoseconds, or None.
+    It writes `commondir` there as it makes one, and never again, unlike the
+    rest, so this tells one from another made later at the same path."""
+    with contextlib.suppress(OSError):
+        return (gitdir / "commondir").stat().st_mtime_ns
+    return None
+
+
+def is_as_made(task, path, gitdir):
+    """Whether the worktree Git keeps in GITDIR is the one TASK's agent made
+    at PATH, not another since, as by another session. A stamp not noted says
+    no: only a hook from inside a worktree that was there notes one."""
+    stamps = task.get("agentMadeAt")
+    made = stamps.get(path) if isinstance(stamps, dict) else None
+    return made is not None and made == made_stamp(gitdir)
+
+
+def made_since(gitdir, started):
+    """Whether Git made the worktree it keeps in GITDIR at STARTED or after,
+    a time as in a record, by `made_stamp`."""
+    started, made = parse_time(started), made_stamp(gitdir)
+    return started is not None and made is not None and made / 1e9 >= started.timestamp()
+
+
+def agent_branch(task, path):
+    """The branch TASK's agent's program makes for its worktree at PATH, or None."""
+    named = getattr(agent_for(task), "worktree_branch", None)
+    return named(path) if named else None
+
+
 def agent_work(task):
     """The worktrees TASK's agent made, as it left them: branch, commits not
-    on the task's branch, and whether anything is uncommitted."""
+    on the task's branch, and whether anything is uncommitted. These are
+    those its hooks said it made, since the task started, that are
+    worktrees yet: finishing the task leaves any other. A task from before
+    `agentMade` says only where its agent went, so each of those that is a
+    worktree comes with `made` false: what it holds still keeps the task
+    from retiring, but it isn't removed."""
     work = []
-    for path in task.get("agentWorktrees") or []:
-        if not isinstance(path, str) or not Path(path).is_dir():
+    known = "agentMade" in task
+    for path in (task["agentMade"] if known else task.get("agentWorktrees")) or []:
+        gitdir = worktree_at(task["repo"], path) if isinstance(path, str) else None
+        # Not one made since at the same path, as by another session.
+        if not gitdir or known and not (made_since(gitdir, task.get("startedAt")) and is_as_made(task, path, gitdir)):
             continue
         branch = read_git(path, "symbolic-ref", "--short", "-q", "HEAD").stdout.strip()
         ahead = read_git(path, "rev-list", "--count", "refs/heads/" + task["branch"] + "..HEAD", "--")
-        work.append(dict(path=path, branch=branch or None,
+        work.append(dict(path=path, branch=branch or None, made=known,
                          ahead=int(ahead.stdout) if ahead.returncode == 0 else None,
                          dirty=bool(read_git(path, "status", "--porcelain",
                                              "--untracked-files=normal").stdout.strip())))
     return work
 
 
+def agent_left(task):
+    """What stays of the worktrees TASK's agent went to, as `forget` says it:
+    one it didn't make, or that is no worktree, or that Git couldn't remove,
+    and the branch Claude made for it."""
+    left = []
+    for path in task.get("agentWorktrees") or []:
+        if isinstance(path, str):
+            branch = agent_branch(task, path)
+            if os.path.lexists(path):
+                left.append("worktree " + path)
+            if ref_exists(task["repo"], branch):
+                left.append("branch " + branch)
+    return left
+
+
 def remove_agent_worktrees(task, entries):
     """Remove ENTRIES of `agent_work`, worktrees TASK's agent made, and the
-    branches Claude made for them. Claude locks them, hence --force twice.
-    Best effort: what can't be removed stays where Git put it."""
+    branch Claude made for each, once Git has removed it, if it is still on
+    that one: another its agent switched to may be yours. Claude locks them,
+    hence --force twice. Best effort: what can't be removed stays where Git
+    put it, and `agent_left` says so."""
     for entry in entries:
-        branch = entry.get("branch")
-        commit = read_git(entry["path"], "rev-parse", "HEAD").stdout.strip() if branch else ""
-        git(task["repo"], "worktree", "remove", "--force", "--force", entry["path"], check=False)
-        if branch and commit:
-            git(task["repo"], "update-ref", "-d", "refs/heads/" + branch, commit, check=False)
+        # As it is now: a teardown command may have run since it was listed.
+        gitdir = worktree_at(task["repo"], entry["path"])
+        if not gitdir or not is_as_made(task, entry["path"], gitdir):
+            continue
+        commit = read_git(entry["path"], "rev-parse", "HEAD").stdout.strip()
+        branch = read_git(entry["path"], "symbolic-ref", "--short", "-q", "HEAD").stdout.strip()
+        removed = git(task["repo"], "worktree", "remove", "--force", "--force", entry["path"], check=False)
+        if removed.returncode == 0 and commit and branch == agent_branch(task, entry["path"]):
+            with contextlib.suppress(RoostError):
+                delete_branch(task["repo"], branch, commit)
 
 
 @contextlib.contextmanager
@@ -5832,11 +6083,24 @@ def update_hook(store, task_id, payload, run_id=None):
         # Status reports read before hookAt are older news than this hook;
         # its capture keeps that time, so a replay weighs them alike.
         read_at = None
-        made = agent_worktree(task, payload.get("cwd"))
-        if made and made not in (task.get("agentWorktrees") or []):
-            task["agentWorktrees"] = (task.get("agentWorktrees") or []) + [made]
-            store.save(task)
         agent = agent_for(task)
+        place = agent_worktree(task, payload.get("cwd"))
+        if place:
+            been, made = task.get("agentWorktrees") or [], task.get("agentMade") or []
+            says_made = getattr(agent, "made_worktree", None)
+            new_place = place not in been
+            # A record from before `agentMade` stays as it is: the key says
+            # that everything of its agent's is noted there.
+            said = "agentMade" in task and says_made and says_made(payload, place)
+            gitdir = worktree_at(task["repo"], place) if said and (place not in made or said == "new") else None
+            new_made = bool(gitdir)
+            if new_place:
+                task["agentWorktrees"] = been + [place]
+            if new_made:
+                task["agentMade"] = made if place in made else made + [place]
+                task["agentMadeAt"] = dict(task.get("agentMadeAt") or {}, **{place: made_stamp(gitdir)})
+            if new_place or new_made:
+                store.save(task)
         concerns = getattr(agent, "concerns", None)
         updates = agent.observe(payload, before) if not concerns or concerns(task, payload) else None
         if updates:
@@ -6809,16 +7073,24 @@ def rpc(request):
                 # request is saved in, until done: finishing the task waits.
                 with holding_worktree(store, task, fcntl.LOCK_SH,
                                       "Roost is still removing this task's worktree; refresh in a moment"):
-                    if isinstance(task.get("pr"), dict) and task["pr"].get("number"):
+                    recorded = recorded_pull_request(task)
+                    # One closed or merged takes no more commits: a title asks for another.
+                    if recorded and not (text(request.get("title")) and recorded.get("state") in ("CLOSED", "MERGED")):
                         with store.released():
-                            pushed = push_pull_request(store, task)
-                        return {"ok": True, "result": outgoing(dict(store.read(request["id"]), pushed=pushed))}
+                            pushed, head = push_pull_request(store, task)
+                            lacks = unpushed(task, head, branch_tip(task))
+                        task = record_push(store, request["id"], recorded, head)
+                        kept = recorded_pull_request(task).get("head")
+                        if kept != head:
+                            lacks = unpushed(task, kept, branch_tip(task))
+                        return {"ok": True, "result": outgoing(dict(task, pushed=pushed, unpushed=lacks))}
                     with store.released():
-                        pr = pull_request(store, task, request)
+                        pr, opened = pull_request(store, task, request)
                     task = store.read_to_act_on(request["id"])
                     task["pr"] = pr
                     store.save(task)
-            return {"ok": True, "result": outgoing(task)}
+            # One found open was pushed to, as above, though nothing counted how much.
+            return {"ok": True, "result": outgoing(task if opened else dict(task, pushed=None))}
         if action == "look":
             return {"ok": True, "result": outgoing(look(store, request["id"], tracked=request.get("tracked") is True))}
         if action == "list":
@@ -6835,7 +7107,7 @@ def rpc(request):
             # Ask GitHub without the lock; retire then trusts only this answer.
             with store.locked():
                 task = store.read_to_act_on(request["id"])
-            merged_head, still_open = merged_pull_request_head(task)
+            merged_head, still_open, remote_head = merged_pull_request_head(task)
             request = dict(request, mergedHead=merged_head, stillOpen=still_open)
         with store.locked():
             if action == "list":
@@ -6877,7 +7149,7 @@ def rpc(request):
                     else:
                         task["landed"] = False
         elif action in ("retire", "merge") and result.pop("remoteCleanup", None):
-            delete_remote_branch(result["repo"], result["branch"], result["retiringCommit"])
+            delete_remote_branch(result["repo"], result["branch"], remote_head)
         # Asked again, it went long since: you haven't looked at what came after.
         elif prepared and not result.get("alreadySent"):
             with contextlib.suppress(RoostError, OSError):
