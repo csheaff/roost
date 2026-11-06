@@ -34,6 +34,15 @@ What each release changes, and what to do when upgrading. Newest first.
 - A Claude task stopped before anything was said in it starts again on `s`.
   Claude had no conversation to go back to, so `s` failed, each time.
   Nothing to do when upgrading.
+- Discarding or merging a task checks again what its question told you, as
+  an agent goes on working while you read. A file written before you
+  answered went with the task, though Roost had said nothing would be lost
+  and asked for no name, and a merge took commits made since it asked. Now
+  a task that holds more than you were told isn't discarded, a branch that
+  moved isn't merged, and its agent runs on. Roost says so, and to look at
+  the task again. A discard then says what is there, with the name to type
+  if that is work to lose, and each file in a new folder counts, not the
+  folder. Nothing to do when upgrading.
 - A draft started from a Jira work item has its text when your site keeps
   that in a rich-text custom field. The prompt had only its summary and
   link, as Roost read the description alone. Now, as you pick one with
