@@ -317,7 +317,10 @@ the conflicts as you resolved them before and stage them; the merge then stays
 under way, and Roost offers to have the agent check those resolutions and
 commit it. Then `m` merges the task into its integration
 branch and removes its worktree, branch and window. For work you don't
-want, `x` discards the task, first saying what that loses.
+want, `x` discards the task, first saying what that loses. An agent can go
+on working while you read either question: a branch that has moved isn't
+merged, and a task that holds more than you were told isn't discarded. Ask
+again, and it says what is there.
 
 **Or open a pull request.** To finish on GitHub or GitLab instead, `P` drafts one: the first
 line is the title and the rest the body, prefilled from the agent's commit

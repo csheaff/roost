@@ -50,7 +50,7 @@ ENDED = ("stopped", "exited", "failed", "crashed")
 # Computed per request and never persisted in a task record.
 TRANSIENT = ("live", "diff", "dirty", "files", "size", "ahead", "behind", "update", "worktreeMissing",
              "prStatus", "unpushed", "lastMessage", "gitStamp", "agentWork", "merging", "landed", "conflicts",
-             "sinceLooked", "teardownFailure", "teardownOutput", "worktreePr", "worktreeHead")
+             "sinceLooked", "teardownFailure", "teardownOutput", "worktreePr", "worktreeHead", "branchTip")
 LAST_MESSAGE_TAIL = 256 * 1024
 LAST_MESSAGE_LIMIT = 2000
 INTERRUPT_TAIL = 64 * 1024
@@ -3482,6 +3482,8 @@ def add_git_stats(tasks):
         if task.get("agentWorktrees"):
             task["agentWork"] = agent_work(task)
         tip = branch_tip(task)
+        # What Emacs says it asked you about, as it merges.
+        task["branchTip"] = tip
         task["landed"] = landed(task, tip)
         # Commits made since GitHub was last asked, as in Magit, are ones
         # its open pull request lacks.
@@ -4539,11 +4541,13 @@ def safe_to_delete(task, commit, merged_head=None):
     return merged_head is not None and merged_head == commit
 
 
-def retire(store, task, merge=False, merged_head=None, squash=False, teardown=None, still_open=False):
+def retire(store, task, merge=False, merged_head=None, squash=False, teardown=None, still_open=False, expect=None):
     """Remove a finished task's worktree, branch, window and record.
     Never discards uncommitted files or unmerged commits. With MERGE, merge
-    the task first, as one commit with SQUASH. TEARDOWN, the project's
-    teardown command, runs in the worktree before it is removed."""
+    the task first, as one commit with SQUASH. EXPECT is the branch's commit
+    when you were asked, if Emacs knew it, and a branch that has moved since
+    is not merged. TEARDOWN, the project's teardown command, runs in the
+    worktree before it is removed."""
     inventory = inventory_for(task)
     pane = owned_pane(task, inventory)
     require_finished(task, pane)
@@ -4555,6 +4559,9 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
     worktree = check_worktree(store, task)
     worktree_exists = worktree.exists()
     branch_exists = ref_exists(repo, branch)
+    # Gone, as after a request cut short that had merged it, it can't have moved.
+    if merge and expect and branch_exists and branch_tip(task) != expect:
+        raise RoostError("The task's branch has moved since you were asked; look at it again before merging")
     if worktree_exists:
         require_clean(str(worktree))
         # Before stopping the agent, rather than fail halfway through.
@@ -4871,14 +4878,43 @@ def update(store, task):
     return task
 
 
-def discard(store, task, expect=None, dry_run=False, teardown=None):
-    """Delete a task's worktree, branch, window and record, whatever they
-    hold. With DRY_RUN, only say what would be lost: commits on no other
+def discard_losses(repo, branch, branch_exists, worktree, worktree_exists, work):
+    """What discarding a task would lose, as counts: commits on no other
     branch, commits in submodules on no remote of theirs, and uncommitted
-    or untracked files, those in submodules too. Otherwise EXPECT is the
-    branch's commit when you were told, and a branch that has moved since
-    is not deleted. TEARDOWN, the project's teardown command, runs in the
-    worktree before it is removed."""
+    or untracked files, those in submodules too. WORK is what `agent_work`
+    says of the worktrees its agent made."""
+    paths = ([worktree] if worktree_exists else []) + [entry["path"] for entry in work]
+    branches = ([branch] if branch_exists else []) + [entry["branch"] for entry in work if entry["branch"]]
+    # Commits on a detached HEAD there, too; another branch keeps its own.
+    heads = [head for head in [read_git(path, "rev-parse", "-q", "--verify", "HEAD").stdout.strip()
+                               for path in paths if linked(path)] if head]
+    tips = ["refs/heads/" + name for name in branches] + heads
+    # --exclude applies to the --branches that follows it, by short name.
+    commits = int(git(repo, "rev-list", "--count", *tips, "--not",
+                      *("--exclude=" + name for name in branches),
+                      "--branches", "--remotes", "--tags").stdout) if tips else 0
+    # Removing the worktrees deletes their submodules' repositories,
+    # whose changes are counted there; here, which commits they're at.
+    submodules = [entry for path in paths for entry in submodule_work(path)]
+    changes = sum(unlinked_files(path) or len(read_git(path, "status", "--porcelain", "--untracked-files=normal",
+                                                       "--ignore-submodules=dirty").stdout.splitlines())
+                  for path in paths) + sum(entry["changes"] for entry in submodules)
+    return dict(
+        commits=commits, changes=changes, agentWorktrees=len(work),
+        # A stash is commits too, and one Git can't read may hold any.
+        submoduleCommits=sum((entry["commits"] or 0) + entry["stashes"] for entry in submodules),
+        unreadSubmodules=sum(entry["commits"] is None for entry in submodules))
+
+
+def discard(store, task, expect=None, dry_run=False, teardown=None, told=None):
+    """Delete a task's worktree, branch, window and record, whatever they
+    hold. With DRY_RUN, only say what would be lost, as `discard_losses`
+    counts it. Otherwise EXPECT is the branch's commit when you were told,
+    and a branch that has moved since is not deleted. TOLD is what the dry
+    run counted, and a task that would lose more now is not deleted either,
+    nor its agent stopped: an agent goes on working while you read.
+    TEARDOWN, the project's teardown command, runs in the worktree before it
+    is removed."""
     repo = task["repo"]
     branch = task["branch"]
     put_back_removed(store, task)
@@ -4894,29 +4930,15 @@ def discard(store, task, expect=None, dry_run=False, teardown=None):
     # The worktrees its agent made go with it.
     work = agent_work(task)
     if dry_run:
-        paths = ([worktree] if worktree_exists else []) + [entry["path"] for entry in work]
-        branches = ([branch] if branch_exists else []) + [entry["branch"] for entry in work if entry["branch"]]
-        # Commits on a detached HEAD there, too; another branch keeps its own.
-        heads = [head for head in [read_git(path, "rev-parse", "-q", "--verify", "HEAD").stdout.strip()
-                                   for path in paths if linked(path)] if head]
-        tips = ["refs/heads/" + name for name in branches] + heads
-        # --exclude applies to the --branches that follows it, by short name.
-        commits = int(git(repo, "rev-list", "--count", *tips, "--not",
-                          *("--exclude=" + name for name in branches),
-                          "--branches", "--remotes", "--tags").stdout) if tips else 0
-        # Removing the worktrees deletes their submodules' repositories,
-        # whose changes are counted there; here, which commits they're at.
-        submodules = [entry for path in paths for entry in submodule_work(path)]
-        changes = sum(unlinked_files(path) or len(read_git(path, "status", "--porcelain", "--untracked-files=normal",
-                                                           "--ignore-submodules=dirty").stdout.splitlines())
-                      for path in paths) + sum(entry["changes"] for entry in submodules)
-        return dict(task, discard=dict(
-            commits=commits, changes=changes, commit=commit, agentWorktrees=len(work),
-            # A stash is commits too, and one Git can't read may hold any.
-            submoduleCommits=sum((entry["commits"] or 0) + entry["stashes"] for entry in submodules),
-            unreadSubmodules=sum(entry["commits"] is None for entry in submodules)))
+        return dict(task, discard=dict(discard_losses(repo, branch, branch_exists, worktree, worktree_exists, work),
+                                       commit=commit))
     if commit != (expect or None):
         raise RoostError("The task's branch has moved since you were asked; look at it again before discarding")
+    # A request from an older Emacs says only where the branch was.
+    if isinstance(told, dict):
+        losses = discard_losses(repo, branch, branch_exists, worktree, worktree_exists, work)
+        if any(count > (told.get(name) or 0) for name, count in losses.items()):
+            raise RoostError("The task holds more than you were told; look at it again before discarding")
     stop(store, task)
     remove_worktrees(store, task, worktree if worktree_exists else None, work, force=True, teardown=teardown)
     shutil.rmtree(copy_staging(task["worktree"]), ignore_errors=True)
@@ -6579,11 +6601,13 @@ TASK_ACTIONS = {
     "merge": lambda store, task, request: retire(store, task, merge=True, merged_head=request.get("mergedHead"),
                                                  squash=request.get("style") == "squash",
                                                  teardown=text(request.get("teardown")),
-                                                 still_open=request.get("stillOpen") is True),
+                                                 still_open=request.get("stillOpen") is True,
+                                                 expect=text(request.get("expect"))),
     "forget": lambda store, task, request: forget(store, task),
     "discard": lambda store, task, request: discard(store, task, request.get("expect"),
                                                     request.get("dryRun") is True,
-                                                    text(request.get("teardown"))),
+                                                    text(request.get("teardown")),
+                                                    request.get("told")),
     "update": lambda store, task, request: update(store, task),
 }
 
