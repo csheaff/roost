@@ -2150,13 +2150,14 @@ Invariants:
 | Editing | `C-c C-c` | | Sending | request | `roost-pr-submit` |
 | Sending | good reply | | Absent | close, "opened pull request" | `roost-pr-submit` |
 | Sending | good reply with `pushed` | | Editing | text kept, the note says it pushed to that one | `roost-pr-submit` |
+| Sending | good reply | text changed since it went | Editing | text kept, the note says it opened one first | `roost-pr-submit` |
 | Sending | failure | | Failed | note | `roost-pr-submit` |
 | Sending | `quit` or error at once | | Editing | flag cleared | `condition-case` |
 
 A retry after a lost reply is safe here: the record has its pull request, so the host
 pushes, or GitHub refuses a second.
 
-Open: text typed after sending.
+Open: none.
 
 ### A review note
 

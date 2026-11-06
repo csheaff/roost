@@ -6619,15 +6619,21 @@ Create button, says which draft."
         (roost--act
          task "pr" `((title . ,title) (body . ,body) (draft . ,(and draft t)))
          (lambda (updated)
-           (if (not (assq 'pushed updated))
-               (progn
-                 (roost--close-buffer buffer)
-                 (message "Roost: opened pull request %s %s"
-                          (roost--pr-number (roost--field updated 'pr))
-                          (alist-get 'url (roost--field updated 'pr))))
-             ;; It had one by then, as its agent opened, with words of its own.
-             (let ((said (format "%s already has %s; pushed to it, and your text stays here"
-                                 (roost--field task 'name) (roost--pr-number (roost--field updated 'pr)))))
+           (let* ((number (roost--pr-number (roost--field updated 'pr)))
+                  (said (cond
+                         ;; It had one by then, as its agent opened, with words of its own.
+                         ((assq 'pushed updated)
+                          (format "%s already has %s; pushed to it, and your text stays here"
+                                  (roost--field task 'name) number))
+                         ;; You went on writing as it went.
+                         ((and (buffer-live-p buffer)
+                               (not (equal text (with-current-buffer buffer (buffer-string)))))
+                          (format "Opened %s before you changed this; all of it is still here" number)))))
+             (if (not said)
+                 (progn
+                   (roost--close-buffer buffer)
+                   (message "Roost: opened pull request %s %s" number
+                            (alist-get 'url (roost--field updated 'pr))))
                (message "Roost: %s" said)
                (when (buffer-live-p buffer)
                  (with-current-buffer buffer

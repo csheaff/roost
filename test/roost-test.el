@@ -8177,6 +8177,36 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
         (should-not (funcall press nil closed '(ahead . 2) '(worktreeBranch . "feat") '(landed) '(dirty)))
         (should opened))))))
 
+(ert-deftest roost-pr-draft-keeps-what-you-wrote-as-it-went ()
+  (roost-test--isolated
+   (roost-test--with-pr-buffers
+    (let ((task (roost--cache-task "dev" (roost-test--task))) answer said)
+      (cl-letf (((symbol-function 'pop-to-buffer) #'set-buffer)
+                ((symbol-function 'roost--pr-commits) (lambda (_) nil))
+                ((symbol-function 'roost--redraw) #'ignore)
+                ((symbol-function 'message)
+                 (lambda (format &rest args) (when format (push (apply #'format-message format args) said))))
+                ((symbol-function 'roost--request)
+                 (lambda (_host _action _params success &rest _) (setq answer success))))
+        (roost-pr task)
+        (let ((draft (current-buffer)))
+          (erase-buffer)
+          (insert "A title\n\nWritten with care.\n")
+          (roost-pr-submit)
+          (goto-char (point-max))
+          (insert "And one more thing.\n")
+          (funcall answer (roost-test--pr-task))
+          (should (buffer-live-p draft))
+          (should-not roost--pr-sending)
+          (should (string-suffix-p "And one more thing.\n" (buffer-string)))
+          (should (string-search "Opened #12 before you changed this; all of it is still here"
+                                 (roost-test--header)))
+          ;; With nothing written since, it goes.
+          (roost--cache-task "dev" (roost-test--task))
+          (roost-pr-submit)
+          (funcall answer (roost-test--pr-task))
+          (should-not (buffer-live-p draft))))))))
+
 (ert-deftest roost-the-next-step-offers-no-push-with-nothing-to-push ()
   (roost-test--isolated
    (let ((next (lambda (task) (substring-no-properties (roost--next-step (roost--cache-task "dev" task))))))
