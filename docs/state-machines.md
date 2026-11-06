@@ -265,7 +265,8 @@ inside it.
 Invariants:
 - I1. "Hold it only for short record and tmux operations, never for slow Git
   work" (`Store.locked`). Holds for Git's merges and their hooks (`integrating`),
-  and for tmux, whose calls end after `TMUX_SECONDS`. `require_clean`,
+  and for tmux, whose calls end after `TMUX_SECONDS`, and a poll's after
+  `INVENTORY_SECONDS`, within the three seconds some agents give a hook. `require_clean`,
   `submodule_work` and `overwritten_ignored` still run inside it: Git reading,
   with no hooks.
 - I2. After `released`, records read before may have changed: re-read before
@@ -292,7 +293,7 @@ after it; everything in `make_task` up to its one `locked` block.
 
 Illegal or refused: nothing refuses; everything queues. No holder waits on Git's
 hooks or a stopped tmux server any more: a server under SIGSTOP costs each `list`
-`TMUX_SECONDS`, and it then keeps the statuses it had.
+`INVENTORY_SECONDS`, and it then keeps the statuses it had.
 
 What matters isn't only whether it's held, but for how long, as hooks wait on
 it with a clock running:
@@ -350,13 +351,14 @@ turns on this.
 | State | Meaning | How you can tell |
 | --- | --- | --- |
 | Waiting | Emacs holds the process | `roost--requests` has it |
-| Given up, local | `delete-process` sent SIGKILL to the helper's process group | what changes things goes on, in a session of its own (`detach`); only the parent waiting for it dies. What looks, and `create`, die with their Git |
+| Given up, local | `delete-process` sent SIGKILL to the helper's process group | what changes things goes on, in a session of its own (`detach`); only the parent waiting for it dies. What looks, `create` and `send` die with what they started |
 | Given up, SSH | `delete-process` killed the ssh client; sshd signals nothing to a session with no tty | helper and all its children go on; the reply goes nowhere, and printing it fails harmlessly |
 | Lost | connection dropped, reboot | as given up, or everything dead at once |
 
 `DETACHED` is what changes things but `create`, which has its eleven minutes, and a
-kill cuts short cleanly. `seen` and `turn` don't either: each is a line in a record,
-sent again at the next poll.
+kill cuts short cleanly, and `send`, whose prompt is better not sent than sent long
+after you stopped waiting. `seen` and `turn` don't either: each is a line in a
+record, sent again at the next poll.
 
 Invariants:
 - I1. A request Emacs gave up on may still act, for as long as it likes, on any
@@ -471,11 +473,15 @@ Invariants:
   (`git_with_hooks`). Holds.
 - I4. One merge at a time in a repository. A second is refused at once, saying which
   runs: it could only wait. An `update` reads integration and takes no such lock.
-- I5. A merge cut short is named, and never read as your changes. The mark stays;
-  `merge`, `retire`, `update` and `pr` ask `merge_left`: nothing left clears it,
-  and a half-done merge refuses `merge`, or for an update all four, saying how to
-  finish or undo it. Roost began with nothing uncommitted there, so what differs
-  is the merge's, and `merge_left_in` tells a second task's merge the same.
+- I5. A merge cut short is named, and never read as your changes. The mark stays
+  until a poll, or `merge`, `retire`, `update`, `pr`, `resume` or `send`, finds with
+  `merge_left` that nothing is left: HEAD moved, or nothing differs. A half-done
+  merge refuses `merge`, and a half-done update all six, saying how to finish or
+  undo it: an agent would commit what an update left. Roost began with nothing
+  uncommitted there, so what differs is the merge's, and `merge_left_in` tells a
+  second task's merge the same, until that task is discarded or forgotten.
+- I6. While it runs, a hook that hangs holds the task and the repository: nothing
+  ends it. The refusal says how, by the process group the mark names.
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
@@ -1151,7 +1157,7 @@ Invariants:
 - I2. Exactly one of SUCCESS or FAILURE runs, once (`finished`; `roost-sweep-late-a-real-reply-leaves-nothing-behind`).
 - I3. No process, timer, buffer, stderr pipe or input file outlives the request (same test).
 - I4. An error in a callback is Roost's, not the host's: the outcome is settled before it runs (comment in the sentinel).
-- I5. A request that gets no reply "may still finish on the host" (the message; `roost--run`). Holds of what changes things, on any host, by `detach`; of `create`, only over SSH; of what looks it doesn't matter.
+- I5. A request that gets no reply "may still finish on the host" (the message; `roost--run`). Holds of what changes things, on any host, by `detach`; of `create` and `send`, only over SSH; of what looks it doesn't matter.
 - I6. Time asleep isn't counted against a request (`roost--expire-request`).
 - I8. A callback that signals is only logged, so whatever it would have done after
   that point doesn't happen. Nothing states this, and drafts depend on it: VIEWS-11.

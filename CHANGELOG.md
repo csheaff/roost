@@ -22,13 +22,15 @@ What each release changes, and what to do when upgrading. Newest first.
   busy, for as long as it ran, and asking again for a task cut short never
   returned. Nothing to do when upgrading.
 - A merge or `u` stopped partway, as by a reboot, says so and how to undo it,
-  when you merge, update or open a pull request. It said files were uncommitted,
+  when you merge, update, open a pull request, or for `u` resume its agent or
+  send it a prompt. It said files were uncommitted,
   and `u` said to commit them, which would have committed half a merge as your
   work. Nothing to do when upgrading.
-- A tmux server that doesn't answer, as one stopped, holds up nothing: after
-  five seconds its tasks keep the status they last had, and commands say tmux
-  didn't answer. The host's polls and hooks waited for it, for as long as it was
-  stopped. Nothing to do when upgrading.
+- A tmux server that doesn't answer, as one stopped, no longer stops its host:
+  after two seconds its tasks keep the status they last had, and commands say
+  tmux didn't answer, as forgetting a task does unless its agent had ended.
+  The host's polls and hooks waited for it, for as long as it was stopped.
+  Nothing to do when upgrading.
 - A draft started from a Jira work item has its text when your site keeps
   that in a rich-text custom field. The prompt had only its summary and
   link, as Roost read the description alone. Now, as you pick one with

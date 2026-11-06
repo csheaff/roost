@@ -2902,7 +2902,7 @@ class Lifecycle(unittest.TestCase):
         with self.stopped_in_a_hook(task, "post-merge"):
             roost.update_hook(store, task["id"], dict(hook_event_name="UserPromptSubmit", prompt="and this"),
                               store.read(task["id"])["runId"])
-        self.assertIn("The agent is active", self.replied["error"])
+        self.assertIn("task is merged into main, and not retired: The agent is active", self.replied["error"])
         self.assertTrue(Path(task["worktree"]).exists())
         self.assertEqual(self.git("rev-list", "--count", "--merges", "main"), "1")
         self.assertTrue(self.request("stop", id=task["id"])["ok"])
@@ -2947,8 +2947,8 @@ class Lifecycle(unittest.TestCase):
         task = self.create()
         with open(self.state / "registry.lock", "a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            for action in ("list", "inspect", "seen", "turn"):
-                process = self.helper_at(action, id=task["id"], socket=self.socket)
+            for action in ("list", "inspect", "seen", "turn", "send"):
+                process = self.helper_at(action, id=task["id"], socket=self.socket, text="hello")
                 time.sleep(.3)
                 self.assertIsNone(process.poll())
                 self.assertEqual(subprocess.run(["pgrep", "-P", str(process.pid)], stdout=subprocess.PIPE).stdout, b"")
@@ -2961,11 +2961,12 @@ class Lifecycle(unittest.TestCase):
         pid = int(roost.tmux(self.socket, "display-message", "-p", "#{pid}").stdout)
         os.kill(pid, signal.SIGSTOP)
         try:
-            with patch.object(roost, "TMUX_SECONDS", 1):
-                listed = self.answered("list", socket=self.socket)
-                self.assertTrue(listed["ok"], listed)
-                self.assertEqual((listed["result"][0]["status"], listed["result"][0]["live"]), ("ready", None))
-                self.assertIn("tmux did not answer", self.answered("merge", id=task["id"])["error"])
+            listed = self.answered("list", socket=self.socket)
+            self.assertTrue(listed["ok"], listed)
+            self.assertEqual((listed["result"][0]["status"], listed["result"][0]["live"]), ("ready", None))
+            self.assertIn("tmux did not answer", self.answered("merge", id=task["id"])["error"])
+            # Which may be an agent at work: with its record gone, nothing would know.
+            self.assertIn("tmux did not answer", self.answered("forget", id=task["id"])["error"])
         finally:
             os.kill(pid, signal.SIGCONT)
         listed = self.request("list", socket=self.socket)["result"][0]

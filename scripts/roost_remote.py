@@ -224,12 +224,13 @@ def tool(name, cwd, args, timeout, missing, said=lambda result: None):
 
 # A server that doesn't answer, as one stopped, must not hold the registry lock.
 TMUX_SECONDS = 5
+INVENTORY_SECONDS = 2
 
 
-def tmux(socket, *args, check=True, input=None):
+def tmux(socket, *args, check=True, input=None, timeout=TMUX_SECONDS):
     # As a UTF-8 client, whatever the locale: under LC_ALL=C or POSIX tmux
     # prints the tabs between fields, and what isn't ASCII, as underscores.
-    return execute(["tmux", "-u", "-L", socket, *args], check=check, input=input, timeout=TMUX_SECONDS)
+    return execute(["tmux", "-u", "-L", socket, *args], check=check, input=input, timeout=timeout)
 
 
 def enable_extended_keys(socket):
@@ -523,10 +524,12 @@ NO_SERVER = ("no server running", "No such file or directory", "Connection refus
 def pane_inventory(socket):
     """Map pane IDs to their tmux details.
     Return {} when no server runs, or None when tmux could not answer (for
-    example a client/server version mismatch after upgrading tmux)."""
+    example a client/server version mismatch after upgrading tmux). Each
+    poll asks this holding the registry lock, so it gives up sooner than
+    any other call, within what agents' hooks wait."""
     result = tmux(socket, "list-panes", "-a", "-F",
                   "#{pane_id}\t#{window_id}\t#{window_index}\t#{session_id}\t#{pane_dead}\t#{@roost_task_id}\t#{pane_pid}\t#{session_name}",
-                  check=False)
+                  check=False, timeout=INVENTORY_SECONDS)
     if result.returncode:
         return {} if any(marker in result.stderr for marker in NO_SERVER) else None
     panes = {}
@@ -2310,6 +2313,8 @@ def list_tasks(store, request):
             # Kept, so the transcript is read once for each such prompt.
             if put_right_prompt(task):
                 store.note(task)
+            if task.get("integrating"):
+                left_of_merge(store, task)
             tasks.append(task)
     inventories = {}
     table = None  # The process table, read only when a request may have been approved.
@@ -4614,8 +4619,11 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
                 squashed = merge_task(task, integration, here, squash)
         # Hooks came in meanwhile, and the agent may be at work again.
         task = store.read_to_act_on(task["id"])
-        inventory = inventory_for(task)
-        require_finished(task, owned_pane(task, inventory))
+        try:
+            inventory = inventory_for(task)
+            require_finished(task, owned_pane(task, inventory))
+        except RoostError as exc:
+            raise RoostError("%s is merged into %s, and not retired: %s" % (task["name"], integration, exc))
     commit = None
     if branch_exists:
         commit = git(repo, "rev-parse", "refs/heads/" + branch + "^{commit}").stdout.strip()
@@ -4927,6 +4935,9 @@ def forget(store, task):
     """Drop Roost's record without touching Git, closing an ended task's window.
     The escape hatch for tasks Roost can no longer retire."""
     inventory = pane_inventory(task["socket"])
+    # Unanswered, an agent that was working may still be, with its record gone.
+    if inventory is None and task["status"] not in ENDED:
+        inventory_for(task)
     pane = owned_pane(task, inventory) if inventory else None
     if pane and not pane["dead"]:
         raise RoostError("The agent is running; stop the task before forgetting it")
@@ -5497,7 +5508,9 @@ def integrating(store, task, action, branch, place):
     which `require_not_removing` reads."""
     with holding_worktree(store, task, fcntl.LOCK_EX, "Roost is busy with this task's worktree; refresh in a moment"):
         marker = uuid.uuid4().hex
-        task["integrating"] = dict(id=marker, action=action, name=task["name"], branch=branch, place=place)
+        head = git(place, "rev-parse", "HEAD").stdout.strip() if place else None
+        task["integrating"] = dict(id=marker, action=action, name=task["name"], branch=branch, place=place, head=head,
+                                   pid=os.getpid())
         store.save(task)
         try:
             with store.released():
@@ -5518,12 +5531,16 @@ def integrating_words(mark):
 
 def merge_left(mark):
     """What a merge MARK says was cut short left, and how to go on from it,
-    or None when nothing did, as when you put it right. Roost began it with
-    nothing uncommitted there, so whatever Git tracks and differs is the
-    merge's: to commit that, with no merge under way, would commit half a
-    merge as your work."""
+    or None when nothing did, as when it had finished, or you put it right.
+    Roost began it with nothing uncommitted there, so whatever Git tracks
+    and differs is the merge's: to commit that, with no merge under way,
+    would commit half a merge as your work. A poll clears a mark with
+    nothing left (`left_of_merge`), so one doesn't stay to blame what you
+    do there later."""
     place = mark.get("place")
     if not (isinstance(place, str) and Path(place).is_dir()):
+        return None
+    if git(place, "rev-parse", "-q", "--verify", "HEAD", check=False).stdout.strip() != mark.get("head"):
         return None
     doing = integrating_words(mark)
     doing = doing[0].upper() + doing[1:]
@@ -5534,6 +5551,18 @@ def merge_left(mark):
         return ("%s stopped partway, and what it changed is still in %s, uncommitted; undo it with git reset --merge "
                 "there, then try again" % (doing, place))
     return None
+
+
+def left_of_merge(store, task):
+    """What a merge of TASK cut short left, as `merge_left` says it, or None,
+    when its mark goes, unless the merge is still running."""
+    if worktree_holder(store, task):
+        return None
+    left = merge_left(task["integrating"])
+    if not left:
+        del task["integrating"]
+        store.note(task)
+    return left
 
 
 def merge_left_in(store, place):
@@ -5628,8 +5657,8 @@ def remove_worktrees(store, task, worktree, agents, force=False, teardown=None):
     Without the registry lock: a worktree with dependencies installed can
     hold hundreds of thousands of files, and every agent's hooks wait on
     the lock. Meanwhile the record says the worktree is going, and a lock
-    of its own, which Git inherits, says it is still going, so nothing else
-    acts on the task. Without FORCE, changes there are refused. TEARDOWN,
+    of its own says it is still going, so nothing else acts on the task.
+    Without FORCE, changes there are refused. TEARDOWN,
     the project's teardown command, runs in WORKTREE first; if it fails,
     the task says how, and the removal goes on."""
     if not worktree and not agents:
@@ -6618,20 +6647,21 @@ def require_not_removing(store, task, action):
     if action in ("seen", "turn", "inspect") or not (task.get("removing") or mark or action in FINISHING):
         return
     holder = worktree_holder(store, task)
+    if holder == "removal" and mark and not task.get("removing"):
+        raise RoostError("Roost is still %s; refresh in a moment, or if a hook of Git's hangs, end it with kill -- -%s"
+                         % (integrating_words(mark), mark.get("pid")))
     if holder == "removal":
-        raise RoostError("Roost is still %s; refresh in a moment" % (integrating_words(mark) if mark and not task.get("removing")
-                                                                     else "removing this task's worktree"))
+        raise RoostError("Roost is still removing this task's worktree; refresh in a moment")
     if task.get("removing") and action not in FINISHING:
         raise RoostError("Roost was removing this task's worktree when it stopped; "
                          "merge, retire, discard or forget the task")
     if holder and action in FINISHING:
         raise RoostError("Roost is busy with this task's worktree; refresh in a moment")
-    if mark and action in ("merge", "retire", "update", "pr"):
-        left = merge_left(mark)
-        if not left:
-            del task["integrating"]
-            store.save(task)
-        elif action == "merge" or mark.get("action") == "update":
+    if mark and action in ("merge", "retire", "update", "pr", "resume", "send"):
+        left = left_of_merge(store, task)
+        # An agent would commit what an update left in its worktree. What a
+        # merge left is in your checkout, and only another merge minds.
+        if left and (action == "merge" or mark.get("action") == "update"):
             raise RoostError(left)
 
 
@@ -6801,9 +6831,10 @@ def rpc(request):
 
 # What changes things, and goes on once Emacs stops waiting, as a request
 # does over SSH, where ssh dies and the helper doesn't. Not what only looks,
-# which goes when its time is up, nor `create`, which has its eleven minutes,
-# and which a kill cuts short cleanly: `settle_creation` undoes it.
-DETACHED = ("retire", "merge", "discard", "forget", "update", "pr", "resume", "stop", "send", "rename", "shell", "attach")
+# which goes when its time is up; nor `create`, which has its eleven minutes,
+# and which a kill cuts short cleanly: `settle_creation` undoes it; nor `send`,
+# whose prompt is better not sent than sent long after you stopped waiting.
+DETACHED = ("retire", "merge", "discard", "forget", "update", "pr", "resume", "stop", "rename", "shell", "attach")
 
 
 def detach():
@@ -6836,7 +6867,7 @@ def main():
         # otherwise end the reply here, with nothing said.
         sys.stdout.reconfigure(errors="replace")
         request = json.load(sys.stdin)
-        if request.get("action") in DETACHED:
+        if isinstance(request, dict) and request.get("action") in DETACHED:
             detach()
         reply = json.dumps(rpc(request), ensure_ascii=False)
         # Emacs may have stopped waiting, or its connection gone: nothing is

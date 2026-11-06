@@ -112,7 +112,8 @@ class Crashes(unittest.TestCase):
         worktree = task["worktree"]
         self.assertEqual(box.git("status", "--porcelain", cwd=worktree), "A  main-file")
         self.assertEqual(box.git("rev-parse", "-q", "--verify", "MERGE_HEAD", cwd=worktree, check=False), "")
-        for action, args in (("update", {}), ("merge", {}), ("retire", {}), ("pr", dict(title="T"))):
+        for action, args in (("update", {}), ("merge", {}), ("retire", {}), ("pr", dict(title="T")), ("resume", {}),
+                             ("send", dict(text="commit what is there"))):
             with self.subTest(action=action):
                 error = box.helper(action, id=task["id"], **args)["error"]
                 self.assertIn("Updating task from main stopped partway", error)
@@ -134,6 +135,30 @@ class Crashes(unittest.TestCase):
         reply = box.helper("update", id=task["id"])
         self.assertTrue(reply["ok"], reply)
         self.assertNotIn("integrating", box.record(task["id"]))
+
+    def test_a_mark_with_nothing_left_goes_at_the_next_poll(self):
+        box = self.box()
+        task = self.task_to_update(box)
+        box.arm("before", match=" --ff --no-edit")
+        self.assertIsNone(box.helper("update", id=task["id"]))
+        box.disarm()
+        box.helper("list", socket=box.socket)
+        self.assertNotIn("integrating", box.record(task["id"]))
+
+    def test_a_merge_cut_short_blames_nothing_you_do_after_it(self):
+        for mode, match, poll in (("before", "merge --no-ff", True), ("after", "merge --no-ff", False)):
+            with self.subTest(mode=mode):
+                box = self.box()
+                task = box.create()
+                box.commit(task)
+                box.arm(mode, match=match)
+                self.assertIsNone(box.helper("merge", id=task["id"]))
+                box.disarm()
+                if poll:
+                    box.helper("list", socket=box.socket)
+                (box.repo / "hello").write_text("yours\n")
+                box.git("add", "hello")
+                self.assertIn("has uncommitted changes; commit or stash them", box.helper("merge", id=task["id"])["error"])
 
     def test_a_half_done_squash_is_named_to_whatever_merges_there_next(self):
         box = self.box()
