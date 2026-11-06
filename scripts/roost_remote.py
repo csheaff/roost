@@ -582,9 +582,14 @@ def owned_pane(task, inventory):
 
 
 def close_panes(task, inventory, check=True):
-    """Close TASK's agent's pane and its shell, where they are now: each one's
-    window with it, unless something else is in that window, which stays."""
-    ours = {pane_id for pane_id in (task.get("paneId"), task.get("shellPaneId"))
+    """Close TASK's agent's pane, if it owns it, and its shell, where they are
+    now: each one's window with it, unless something else is in that window,
+    which stays. INVENTORY may be from before a slow step, as a merge, and a
+    read now says what is there, if tmux answers."""
+    current = pane_inventory(task["socket"])
+    inventory = inventory if current is None else current
+    ours = {pane_id for pane_id in (task.get("paneId") if owned_pane(task, inventory) else None,
+                                    task.get("shellPaneId"))
             if pane_id in inventory and inventory[pane_id]["task"] == task["id"]}
     for window in sorted({inventory[pane_id]["window"] for pane_id in ours}):
         beside = {pane_id for pane_id, pane in inventory.items() if pane["window"] == window}
@@ -869,11 +874,15 @@ def tool_answers(task, payload):
     only from the agent that asked, and only as the end of what it asked for,
     however it adds to or leaves out of its arguments, or as its next tool. A
     request a notification named doesn't say who asks: the main agent's event
-    counts. Unsure, it stands: as the manual says, it may show until the agent
-    moves on."""
+    counts, unless it said that another asks, or the notification that a
+    question was answered. Unsure, it stands: as the manual says, it may show
+    until the agent moves on."""
+    asked = task.get("requestCall")
+    if payload.get("hook_event_name") == "Notification":
+        return not isinstance(asked, dict)
     if payload.get("hook_event_name") not in ("PreToolUse", "PostToolUse"):
         return True
-    call, asked = tool_call(payload), task.get("requestCall")
+    call = tool_call(payload)
     if not isinstance(asked, dict):
         return not call["agent"]
     if call["agent"] != asked.get("agent"):
@@ -986,12 +995,16 @@ class ClaudeAgent:
             # agent you have seen as waiting again, or forget why it failed.
             if kind == "idle_prompt" and current not in ("starting", "running"):
                 return None
+            # Its answer, or, for a link, the server saying it's done.
+            if kind in ("elicitation_response", "elicitation_complete") and current != "permission":
+                return None
             # A teammate's permission prompt, a background agent of this
             # session blocked on you, and an MCP server's question, as a form
             # or a link to open, also wait in this terminal.
             status = {"permission_prompt": "permission", "worker_permission_prompt": "permission",
                       "agent_needs_input": "permission", "elicitation_dialog": "permission",
-                      "elicitation_url_dialog": "permission", "idle_prompt": "ready"}.get(kind)
+                      "elicitation_url_dialog": "permission", "elicitation_response": "running",
+                      "elicitation_complete": "running", "idle_prompt": "ready"}.get(kind)
         if not status:
             return None
         updates = dict(status=status, updatedAt=now(), lastEvent=event, error=None)
@@ -3613,11 +3626,9 @@ def add_git_stats(tasks):
 
 
 def stop(store, task, inventory=None):
-    """Close the agent's pane, as `close_panes` does, if Roost still owns it.
-    Work is kept."""
+    """Close the agent's pane and shell, as `close_panes` does. Work is kept."""
     inventory = inventory if inventory is not None else inventory_for(task)
-    if owned_pane(task, inventory):
-        close_panes(task, inventory)
+    close_panes(task, inventory)
     # Stopping says nothing new: an agent you had seen stays seen.
     was_seen = seen_since_last_event(task)
     # A pane ID owned by something else means ours is gone (for example after a
@@ -4028,13 +4039,14 @@ def shell(store, task):
     if not owner:
         raise RoostError("Task's tmux window is gone; resume the task before opening its shell")
     pane = inventory.get(task.get("shellPaneId"))
-    if pane and (pane["task"] != task["id"] or pane["window"] != owner["window"]):
+    if pane and pane["task"] != task["id"]:
         raise RoostError("Task's shell ownership changed; inspect the window in tmux")
-    if not pane or pane["dead"]:
+    # One the agent's pane was moved away from stays as it is.
+    if not pane or pane["dead"] or pane["window"] != owner["window"]:
         check_worktree(store, task, branch=False)
         if not Path(task["worktree"]).is_dir():
             raise RoostError("Task worktree is gone")
-        if pane:
+        if pane and pane["dead"]:
             tmux(task["socket"], "kill-pane", "-t", task["shellPaneId"])
         # tmux reads the directory as a format, where # starts one.
         pane_id = tmux(task["socket"], "split-window", "-h", "-d", "-P", "-F", "#{pane_id}",
@@ -5430,6 +5442,10 @@ def shown_command(command, worktree):
     return command
 
 
+# Notifications of what an agent other than the one you talk to asks.
+ANOTHER_AGENT_ASKS = ("worker_permission_prompt", "agent_needs_input")
+
+
 def permission_request(payload, worktree=None):
     """What a permission request asks, as a sentence: "Asks to run python3
     -m pytest", "Asks to edit notes.py", "Asks: Which color do you prefer?".
@@ -5440,7 +5456,7 @@ def permission_request(payload, worktree=None):
 
     # Another agent's request names no tool, but says who asks for what, as
     # "reviewer needs permission for Bash".
-    if (payload.get("notification_type") in ("worker_permission_prompt", "agent_needs_input")
+    if (payload.get("notification_type") in ANOTHER_AGENT_ASKS
             and isinstance(payload.get("message"), str) and payload["message"].strip()):
         return clip(payload["message"])
     tool = payload.get("tool_name")
@@ -5803,6 +5819,8 @@ def update_hook(store, task_id, payload, run_id=None):
                 # What will say that it is over.
                 if payload.get("tool_name"):
                     task["requestCall"] = tool_call(payload)
+                elif payload.get("notification_type") in ANOTHER_AGENT_ASKS:
+                    task.setdefault("requestCall", dict(agent="another agent"))
                 else:
                     task.pop("requestCall", None)
             elif ((not relayed or not agent.reports_turns)
@@ -6624,7 +6642,9 @@ def runner(root, task_id, run_id, resume_conversation=False):
         # On the dead pane for as long as it is shown, where starting the
         # agent again from a shell would leave Roost's hooks out.
         if ended and not error:
-            again = "go back to this conversation" if ended.get("agentSession") else "start it again"
+            check = getattr(agent_for(ended), "has_conversation", None)
+            again = ("go back to this conversation" if ended.get("agentSession") and (not check or check(ended))
+                     else "start it again")
             with contextlib.suppress(OSError):
                 print("\nRoost: the agent exited. Resume the task to %s." % again, flush=True)
     return code

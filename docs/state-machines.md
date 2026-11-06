@@ -645,6 +645,7 @@ Invariants:
 | any | `Notification` | `permission_prompt`, `worker_permission_prompt`, `agent_needs_input`, `elicitation_dialog`, `elicitation_url_dialog` | `permission` | `Notification` | names the request if none was |
 | `starting`, `running` | `Notification` | `idle_prompt` | `ready` | `Notification` | |
 | others | `Notification` | `idle_prompt` | unchanged | | |
+| `permission` | `Notification` | `elicitation_response`, `elicitation_complete`, named by a notification | `running` | `Notification` | request cleared |
 | any | `Notification` | any other type | unchanged | | |
 
 Claude waits for a hook before it goes on, and the captures show `PreToolUse`,
@@ -657,6 +658,9 @@ agrees with the request on each argument both name, as a question's end adds its
 answers, and Codex's leaves out a `description`. A next `PreToolUse` from that
 agent counts as going on, though one called together with it could land after
 the request; its notification, six seconds on, then shows `permission` again.
+What stands may stand long: a subagent declined that calls no tool again, and
+another agent's request (`worker_permission_prompt`, `agent_needs_input`), which no
+tool's event ends, each show `permission` until the turn ends.
 
 Between `SessionEnd` and the process's end, a moment: with `prompt_input_exit`, an
 unrelayed task reads `exited` and a relayed one what it was, and with `other`, both
@@ -838,7 +842,9 @@ Invariants:
 - I3. A notification that follows a request, naming no tool, keeps it.
 - I4. A tool's event ends a request only from the agent that asked: the end of what
   it asked for, or its next tool (`tool_answers`). Without `requestCall`, a
-  notification named it, and only the main agent's event does. Unsure, it stands.
+  notification named it, and only the main agent's event does, or word that a
+  question was answered. For another agent's, `requestCall` names none, so no tool
+  does. Unsure, it stands.
 
 | From | Event | Guard | To | Code |
 | --- | --- | --- | --- | --- |
@@ -888,20 +894,20 @@ Invariants:
   pane, so `spawn` notes the process tmux started, and only that is owned. A task
   whose run began before `panePid` is taken as it is, until it resumes.
 - I5. Not owned means the agent isn't in that pane: the tag goes where the pane goes.
-- I6. What Roost closes is the agent's pane and the task's shell, where they are
-  now, each with its window if nothing else is in it (`close_panes`): a pane of
-  yours beside them stays.
+- I6. What Roost closes is the agent's pane and the task's shell, where tmux has
+  them as it closes them, each with its window if nothing else is in it
+  (`close_panes`): a pane of yours beside them stays.
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
 | No run, Gone, Reused, Respawned, Owned dead | `resume` | | Owned, live | dead pane closed; new `runId`; session named for the task; `shellPaneId` gone | `resume`, `spawn` |
 | Owned, live | `resume` | | refused | "still running" | `resume` |
 | Owned | `stop` | | No run | `close_panes` | `stop` |
-| Gone, Reused, Respawned | `stop` | | No run | nothing closed; IDs forgotten | `stop` |
+| Gone, Reused, Respawned | `stop` | | No run | only the task's shell closed; IDs forgotten | `stop` |
 | Owned, live | runner ends | | Owned, dead | | `remain-on-exit` |
 | Owned, live | tmux restarts | | Gone or Reused | runner killed by SIGHUP, with no end recorded | |
 | Owned, live | `kill-pane` | | Gone | shell pane, if any, stays in its window | |
-| Owned | `break-pane`, `join-pane`, `move-pane` | | Moved | still owned | `list_tasks`, `inspect` |
+| Owned | `break-pane`, `join-pane`, `move-pane` | | Moved | still owned; a shell it left stays, and `shell` opens one beside it | `list_tasks`, `inspect`, `shell` |
 | Owned | `respawn-pane` | | Respawned | not `live`: `send` refused; a status not in `ENDED` reads `crashed` | `owned_pane` |
 | any | a window a failed request made | `runId` differs | closes | `remain-on-exit` off | `runner` |
 

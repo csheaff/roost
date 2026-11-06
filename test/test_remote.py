@@ -781,9 +781,19 @@ class Lifecycle(unittest.TestCase):
                 self.assertEqual((record["status"], record["request"]), ("permission", "Claude Code needs your input"))
                 self.assertIn("Open the task", self.request("send", id=task["id"], text="hello")["error"])
                 self.assertEqual(hook(hook_event_name="PostToolUse", tool_name="mcp__x__ask")["status"], "running")
-        # What it says of its answer changes nothing: its tool's end does.
+                # Or its answer does, without a tool, as to a server that asks by itself.
+                hook(hook_event_name="Notification", notification_type=kind, message="Claude Code needs your input")
+                record = hook(hook_event_name="Notification", notification_type="elicitation_response",
+                              message='Elicitation response for server "x": accept')
+                self.assertEqual(record["status"], "running")
+                self.assertNotIn("request", record)
+        # With nothing asked it's no news, nor while a tool asks.
+        before = store.read(task["id"])
         for kind in ("elicitation_complete", "elicitation_response", "auth_success"):
-            self.assertEqual(hook(hook_event_name="Notification", notification_type=kind)["status"], "running")
+            self.assertEqual(hook(hook_event_name="Notification", notification_type=kind), before)
+        hook(hook_event_name="PermissionRequest", tool_name="Bash", tool_input=dict(command="make"))
+        self.assertEqual(hook(hook_event_name="Notification", notification_type="elicitation_response")["status"],
+                         "permission")
 
     def test_only_the_agent_that_asked_says_its_request_is_over(self):
         store = roost.Store(str(self.state))
@@ -841,6 +851,18 @@ class Lifecycle(unittest.TestCase):
         hook(hook_event_name="Notification", notification_type="permission_prompt", message="Needs network access")
         self.assertEqual(hook(hook_event_name="PostToolUse", **theirs)["status"], "permission")
         over(hook(hook_event_name="PostToolUse", **mine))
+        # A request of another agent's, as the main agent's tools go on, with
+        # a subagent's request before it, which it doesn't take the place of.
+        hook(hook_event_name="UserPromptSubmit", prompt="go")
+        record = hook(hook_event_name="Notification", notification_type="agent_needs_input", message="a1 waits")
+        self.assertEqual(record["request"], "a1 waits")
+        self.assertEqual(hook(hook_event_name="PostToolUse", **mine)["status"], "permission")
+        self.assertEqual(hook(hook_event_name="PreToolUse", **mine)["status"], "permission")
+        hook(hook_event_name="UserPromptSubmit", prompt="go")
+        hook(hook_event_name="PermissionRequest", agent_id="a1", **asked)
+        hook(hook_event_name="Notification", notification_type="worker_permission_prompt", message="a1 asks")
+        self.assertEqual(hook(hook_event_name="PostToolUse", **mine)["status"], "permission")
+        over(hook(hook_event_name="PostToolUse", agent_id="a1", **asked))
         # What ends a turn ends it whoever asked.
         asks()
         self.assertEqual(hook(hook_event_name="Stop")["status"], "ready")
@@ -2850,6 +2872,12 @@ class Lifecycle(unittest.TestCase):
         record = resumed(silent)
         self.assertEqual(record["status"], "ready")
         self.assertNotEqual(record["agentSession"], first)
+        # Left with nothing said, its pane doesn't promise a conversation.
+        roost.tmux(self.socket, "send-keys", "-t", record["paneId"], "C-d")
+        self.wait(silent, "exited")
+        self.wait_for_pane_exit(record)
+        screen = roost.tmux(self.socket, "capture-pane", "-p", "-t", record["paneId"]).stdout
+        self.assertIn("Resume the task to start it again", screen)
         # One with a conversation goes back to it.
         spoken = self.create(name="spoken", command=command)
         self.assertTrue(self.request("send", id=spoken["id"], text="hello")["ok"])
@@ -3070,9 +3098,30 @@ class Lifecycle(unittest.TestCase):
         self.wait(task, "ready", "Stop")
         # So resuming starts no second agent, and stopping stops this one.
         self.assertIn("still running", self.request("resume", id=task["id"])["error"])
+        # Its shell stays where it was, and a new one goes beside it.
+        old = self.request("inspect", id=task["id"])["result"]["shellPaneId"]
+        shell = self.request("shell", id=task["id"])["result"]
+        self.assertNotEqual(shell["shellPaneId"], old)
+        panes = roost.pane_inventory(self.socket)
+        self.assertEqual(panes[shell["shellPaneId"]]["window"], pane["window"])
+        self.assertIn(old, panes)
         self.assertTrue(self.request("stop", id=task["id"])["ok"])
-        self.assertNotIn(task["paneId"], roost.pane_inventory(self.socket))
-        self.assertEqual(roost.pane_inventory(self.socket), {})
+        self.assertEqual(list(roost.pane_inventory(self.socket)), [old])
+
+    def test_stopping_goes_by_what_tmux_has_now(self):
+        # A merge takes a while, and retiring goes on from what it read before.
+        store = roost.Store(str(self.state))
+        task = self.create()
+        shell = self.request("shell", id=task["id"])["result"]["shellPaneId"]
+        before = roost.pane_inventory(self.socket)
+        roost.tmux(self.socket, "kill-pane", "-t", shell)
+        yours = roost.tmux(self.socket, "split-window", "-d", "-P", "-F", "#{pane_id}", "-t", task["paneId"],
+                           "sleep 30").stdout.strip()
+        with store.locked():
+            roost.stop(store, store.read(task["id"]), before)
+        panes = roost.pane_inventory(self.socket)
+        self.assertNotIn(task["paneId"], panes)
+        self.assertIn(yours, panes)
 
     def test_stopping_leaves_what_you_keep_beside_the_agent(self):
         split = lambda target: roost.tmux(self.socket, "split-window", "-d", "-P", "-F", "#{pane_id}", "-t", target,
@@ -3144,10 +3193,14 @@ class Lifecycle(unittest.TestCase):
         self.assertFalse(roost.pane_inventory(self.socket)[task["paneId"]]["dead"])
         # Respawned under a working agent, the agent is gone.
         other = self.create(name="working")
+        shell = self.request("shell", id=other["id"])["result"]["shellPaneId"]
         roost.tmux(self.socket, "respawn-pane", "-k", "-t", other["paneId"], "/bin/sh")
         self.assertEqual(next(t for t in self.request("list")["result"] if t["id"] == other["id"])["status"], "crashed")
+        # Stopping leaves it, and closes the shell Roost opened.
         self.assertTrue(self.request("stop", id=other["id"])["ok"])
-        self.assertIn(other["paneId"], roost.pane_inventory(self.socket))
+        panes = roost.pane_inventory(self.socket)
+        self.assertIn(other["paneId"], panes)
+        self.assertNotIn(shell, panes)
 
     def test_a_task_from_before_the_runner_was_noted_stays_its_agents(self):
         task = self.create()

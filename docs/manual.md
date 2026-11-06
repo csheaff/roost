@@ -937,7 +937,7 @@ Things to know:
   ([Sandboxes](#sandboxes)), a command that needs a new network host
   asks too: the task shows `permission` about six seconds later and,
   once you allow the host, until the command ends. An MCP server's question
-  shows the same way, until its tool ends.
+  shows the same way, until you answer it.
   With `roost-program-status` on, Claude says at once that it asks,
   naming the host, and that it goes on once answered or refused.
 - Pi has no permission prompts of its own, but an extension can ask, as one

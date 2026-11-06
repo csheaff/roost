@@ -71,18 +71,19 @@ IGNORED_EVENTS = {
 }
 # Notification types Roost maps, and those it ignores.
 MAPPED_NOTIFICATIONS = ("permission_prompt", "worker_permission_prompt", "agent_needs_input", "idle_prompt",
-                        "elicitation_dialog", "elicitation_url_dialog")
+                        "elicitation_dialog", "elicitation_url_dialog", "elicitation_response",
+                        "elicitation_complete")
 # plugin_notification (2.1.296) is a plugin's message to you, through its ui.notify.
 IGNORED_NOTIFICATIONS = ("agent_completed", "auth_storage_failure", "auth_success", "computer_use_enter",
-                         "computer_use_exit", "elicitation_complete", "elicitation_response", "model_refusal_fallback",
-                         "plugin_notification", "push_notification", "quota_auto_resume_disabled",
+                         "computer_use_exit", "model_refusal_fallback", "plugin_notification", "push_notification",
+                         "quota_auto_resume_disabled",
                          "quota_auto_resume_fired", "quota_auto_resume_stale")
 # SessionStart sources: compact and clear are handled specially, the rest are a fresh start.
 SESSION_SOURCES = ("startup", "resume", "clear", "compact", "fork")
 # Payload fields the helper reads.
 PAYLOAD_FIELDS = ("session_id", "transcript_path", "hook_event_name", "last_assistant_message",
                   "background_tasks", "session_crons", "notification_type", "message", "tool_name",
-                  "tool_input", "error", "error_details", "source", "reason", "cwd")
+                  "tool_input", "error", "error_details", "source", "reason", "cwd", "agent_id")
 
 
 def notification_kinds(data):
