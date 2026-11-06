@@ -84,12 +84,12 @@ Within a severity, they are ranked by what they cost and how often they happen.
 | 3 | VIEWS-1 | S1 | "Nothing would be lost" doesn't hold for what is written before you answer | [Asking before acting](#asking-before-acting) | Fixed, [#222](https://github.com/csheaff/roost/issues/222), `test_a_file_written_since_you_were_told_stops_a_discard` |
 | 4 | REQUESTS-8 | S2 | On this machine, a merge that outlasts the timeout is killed with its Git and hooks, leaving your checkout half-merged | [Host request](#host-request) | Open, [#223](https://github.com/csheaff/roost/issues/223) |
 | 5 | LC-3 | S2 | What a push or a checkout leaves running holds a task's lock, and refuses every way of finishing it | [Worktree lock](#worktree-lock) | Open, [#223](https://github.com/csheaff/roost/issues/223) |
-| 6 | REQUESTS-1 | S2 | A refresh that can't start leaves its host unasked until Emacs restarts | [Host refresh](#host-refresh) | Open, [#225](https://github.com/csheaff/roost/issues/225) |
-| 7 | REQUESTS-2 | S2 | An install cut short leaves a broken helper under its real name | [Helper copy](#helper-copy) | Open, [#225](https://github.com/csheaff/roost/issues/225) |
+| 6 | REQUESTS-1 | S2 | A refresh that can't start leaves its host unasked until Emacs restarts | [Host refresh](#host-refresh) | Fixed, `roost-a-refresh-that-could-not-start-leaves-its-host-asked-again` |
+| 7 | REQUESTS-2 | S2 | An install cut short leaves a broken helper under its real name | [Helper copy](#helper-copy) | Fixed, `roost-an-install-cut-short-leaves-what-was-there` |
 | 8 | STATUS-1 | S2 | A Claude task stopped before anything was said in it can never resume | [The runner's stages](#the-runners-stages) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
 | 9 | VIEWS-2 | S2 | A retry with an edited draft says it created a task it didn't, and drops the edit | [The creation ID](#the-creation-id) | Open, [#226](https://github.com/csheaff/roost/issues/226) |
 | 10 | VIEWS-9, FORGE-3 | S2 | A pull request draft says it opened one it only pushed to, and `P` can't open one after a closed one | [Pushing and opening](#pushing-and-opening) | Fixed, [#227](https://github.com/csheaff/roost/issues/227): `roost-pr-draft-says-what-became-of-it-when-the-task-has-one-by-then`, `roost-pr-drafts-another-once-the-one-it-has-takes-no-more-commits`, `test_p_opens_another_after_a_closed_pull_request` |
-| 11 | REQUESTS-3, VIEWS-8 | S2 | Two Emacs sessions overwrite each other's review notes | [Remembered files](#remembered-files) | Open, [#225](https://github.com/csheaff/roost/issues/225) |
+| 11 | REQUESTS-3, VIEWS-8 | S2 | Two Emacs sessions overwrite each other's review notes | [Remembered files](#remembered-files) | Fixed, `roost-a-note-from-another-emacs-stays-as-you-write-yours` |
 | 12 | STATUS-2 | S2 | Roost takes a pane changed by hand for its agent, or for gone | [A run and its pane](#a-run-and-its-pane) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
 | 13 | LC-4, STATUS-3 | S3 | A merge's hooks hold the registry lock, so other agents' events are lost and they stay `running` | [Registry lock](#registry-lock) | Open, [#223](https://github.com/csheaff/roost/issues/223) |
 | 14 | FORGE-1 | S3 | A pull request merged with a commit made on the forge reads as not merged, and `m` forks `main` from `origin` | [Landed](#landed) | Fixed, [#227](https://github.com/csheaff/roost/issues/227): `test_a_pull_request_merged_with_a_commit_made_on_the_forge_is_merged`, `test_commits_after_a_merge_never_count_as_merged` |
@@ -109,7 +109,7 @@ Within a severity, they are ranked by what they cost and how often they happen.
 | 28 | VIEWS-4 | S3 | A prompt draft reads its task as it was when it opened | [The prompt draft](#the-prompt-draft) | Open, [#226](https://github.com/csheaff/roost/issues/226) |
 | 29 | VIEWS-6 | S3 | A note taken out of a draft is cleared unsent | [A review note](#a-review-note) | Open, [#229](https://github.com/csheaff/roost/issues/229) |
 | 30 | VIEWS-10 | S3 | A note edited as its draft goes loses the edit | [A review note](#a-review-note) | Open, [#229](https://github.com/csheaff/roost/issues/229) |
-| 31 | REQUESTS-6 | S3 | Two Emacs sessions overwrite each other's hosts and projects | [Remembered files](#remembered-files) | Open, [#225](https://github.com/csheaff/roost/issues/225) |
+| 31 | REQUESTS-6 | S3 | Two Emacs sessions overwrite each other's hosts and projects | [Remembered files](#remembered-files) | Fixed, `roost-a-host-remembered-in-another-emacs-stays-as-you-use-yours` |
 | 32 | LC-6 | S4 | Discarding a task whose repository is gone deletes its worktree and says it failed | [Finishing a task](#finishing-a-task) | Open, [#221](https://github.com/csheaff/roost/issues/221) |
 | 33 | VIEWS-11 | S4 | An error after a good reply leaves a draft busy | [The new task draft](#the-new-task-draft) | Open, [#226](https://github.com/csheaff/roost/issues/226) |
 | 34 | VIEWS-12 | S4 | A resumed task covers what you opened from a question | [Resuming](#resuming) | Open, [#229](https://github.com/csheaff/roost/issues/229) |
@@ -1136,14 +1136,15 @@ Invariants:
 - I6. Time asleep isn't counted against a request (`roost--expire-request`).
 - I8. A callback that signals is only logged, so whatever it would have done after
   that point doesn't happen. Nothing states this, and drafts depend on it: VIEWS-11.
-- I7. Quit or a signal between `make-process` and the sentinel leaves no half-made request. `roost--run` catches `error`, not `quit`, and the `let*` above its `condition-case` is covered by neither: unstated, and the caller must cope. REQUESTS-1.
+- I7. Quit or a signal before the sentinel leaves no flag set. `roost--run` catches `error`, not `quit`, and the `let*` above its `condition-case` is covered by neither, so a caller that sets a flag first ends it itself: `roost--refresh-host`, `roost--report-turn`.
+- I9. No timer runs between a request's end and its callback: one that throws, as `with-timeout`'s does, would leave without one (`roost-a-reply-reaches-its-callback-before-any-timer`).
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
 | Unstarted | `make-process` works | | Running | Timer armed; input sent, or read from a temp file over 4096 bytes | `roost--run` |
 | Unstarted | `error` in setup | | Done | Cleans up; FAILURE called synchronously | `roost--run` |
 | Unstarted | `quit`, or `error` in the `let*` (`roost--python-command`) | | (none) | Signal goes to the caller; the two buffers leak | `roost--run` |
-| Running | Process exits or is signalled | | Reported | Timer cancelled, input file deleted, stderr drained, pipe deleted | sentinel |
+| Running | Process exits or is signalled | | Reported | Timer cancelled, input file deleted, stderr drained with no timer run, pipe deleted | sentinel |
 | Running | Timer fires | live, not late | Expired | `timed-out` set, `delete-process` | `roost--expire-request` |
 | Running | Timer fires | live, over 5s late | Running | Re-armed for the whole timeout | `roost--expire-request` |
 | Running | Timer fires | not live | Running | Nothing: the sentinel is due | `roost--expire-request` |
@@ -1159,15 +1160,9 @@ Invariants:
 Illegal or refused: a second sentinel call stops at `finished`. A stopped
 (`SIGSTOP`) process is ignored by the sentinel; the timer kills it.
 
-Open: REQUESTS-8 (I5), REQUESTS-1 (I7).
+Open: REQUESTS-8 (I5).
 
 Notes, checked and not findings:
-- `(while (accept-process-output stderr-pipe 0 nil t))` in the sentinel runs
-  timers, before the callback. A `with-timeout` due at that instant throws
-  through the sentinel: `finished` is set, the callback never runs. The window is
-  microseconds inside a 60-second wait expiring, and couldn't be driven without
-  forcing it. Moving the drain inside the `unwind-protect`
-  would close it.
 - Input temp files of requests live when Emacs exits stay in the temporary
   directory, mode 600.
 - A dead ` *roost-rpc*` buffer in the sentinel would skip the callback, but
@@ -1218,30 +1213,31 @@ requests and by agents' hooks.
 | Installing | Install request in flight (any number at once) | Requests take `install-and-invoke` |
 | Installed | Entry matches; file is whole | Requests run |
 | Pruned | Entry matches; file gone | `FileNotFoundError` naming it |
-| Broken | Entry may match; file is cut short | "returned no response", or a `SyntaxError` |
+| Broken | File cut short, by an older Roost's install | A request says `Not whole`, naming it |
 
 Invariants:
-- I1. A file named `remote-HASH.py` holds what HASH says. Assumed everywhere, stated nowhere. Hooks of running agents call this path. **Broken by REQUESTS-2.**
+- I1. A file named `remote-HASH.py` holds what HASH says. Hooks of running agents call this path. An install replaces it only with every byte sent, and leaves what was there otherwise (`roost--install-code`).
+- I5. A file of the right size stays, as newly used: no start of an Emacs touches what hooks call, and `prune_helpers` goes by its mtime.
 - I2. A helper a task's agent was launched with is never pruned (`prune_helpers`).
-- I3. Retrying after `FileNotFoundError` can't run an action twice: only `runpy` failing to open the file prints that name with that word, as `rpc` turns OSError into `str(exc)`. Checked.
+- I3. Retrying can't run an action twice: only for what `roost--helper-unusable-p` accepts, `FileNotFoundError` naming the file or `Not whole`, each said before the helper runs. A request compares the file's size first, which catches a cut anywhere, and `rpc` turns what it catches into words of its own.
 - I4. An unreachable host keeps its entry (`roost-an-unreachable-host-keeps-its-helper`).
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
 | Unknown | Any request | | Installing | Sends the helper as input | `roost--request` |
 | Installing | Install replies | | Installed | `puthash`, then invokes | `install-and-invoke` |
-| Installing | Install fails | | Unknown | FAILURE; the next request tries again | `install-and-invoke` |
-| Installing | Connection cut mid-transfer | | Broken, on the host | Python reads EOF, replaces the file with what it got | install code |
+| Installing | File there, of the right size | | Installed | Left in place, its mtime moved; the input goes unread | `roost--install-code` |
+| Installing | Install fails | | Unknown | Nothing changes on the host; FAILURE; the next request tries again | `install-and-invoke` |
+| Installing | Connection cut mid-transfer | | Unknown | Python reads EOF, finds too few bytes and replaces nothing | `roost--install-code` |
 | Installed | Another Emacs's task starts | not kept, over a week old | Pruned | `path.unlink()` | `prune_helpers` |
-| Pruned | Request fails `FileNotFoundError` | names the file | Installing | `remhash`, install, invoke once | `roost--request` |
-| Installed | Another Emacs's install cut | | Broken | As above | install code |
-| Broken | Any request | entry matches | Broken | Fails, no reinstall | `roost--request` |
+| Pruned | Request fails, naming the file | | Installing | `remhash`, install, invoke once | `roost--request` |
+| Broken | Any request | entry matches | Installing | Says `Not whole`, then as for Pruned | `roost--request` |
 | Broken | Any request | no entry | Installing | Replaced whole | `roost--request` |
 
 Illegal or refused: `prune_helpers` does nothing while a record is unreadable or
 names no helper.
 
-Open: REQUESTS-2 (I1).
+Open: none.
 
 A local install killed partway leaves `tmpXXXX` in the state directory,
 which nothing removes. Two Emacs of different versions reinstall each other's only
@@ -1266,7 +1262,7 @@ host unless something newer happened.
 Backing off and Offline hold alongside Idle or Asking.
 
 Invariants:
-- I1. `roost--refreshing` is cleared by every way a refresh can end ("Each ends the refresh even if drawing what it found fails"). **Broken by REQUESTS-1**: `finish` is reachable only from callbacks, and `roost--request` can signal before any is registered.
+- I1. `roost--refreshing` is cleared by every way a refresh can end ("Each ends the refresh even if drawing what it found fails"): `finish` runs from the callbacks, and from an `unwind-protect` round `roost--request`, which can signal before any is registered. Once only: by then the flag may be the next refresh's.
 - I2. One list per host at a time, so list replies can't overtake each other.
 - I3. A list asked before a mutation's reply never overwrites it: `revision` is read as the list starts and bumped as the reply arrives (`roost--act`, `roost--create-task`). Checked: bumping at the reply is right; at the request would let a list read before the mutation through.
 - I4. A list arriving after its host was forgotten changes nothing (`member host (roost--hosts)`).
@@ -1277,7 +1273,7 @@ Invariants:
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
 | Idle | `roost--refresh-host` | | Asking | Flag set, counted, revision read, `asked` stamped if asking GitHub | `roost--refresh-host` |
-| Idle | `roost--request` signals | | **Asking, for good** | Flag stays; signal reaches the timer or command | `roost--refresh-host` |
+| Asking | `roost--request` signals, or a quit | | Idle | `finish` runs; the signal reaches the timer or command | `roost--refresh-host` |
 | Asking | Quiet asked | | Asking | Nothing | `roost--refresh-host` |
 | Asking | Full or IDs asked | | Asking, owed | Merged: t beats IDs | `roost--refresh-host` |
 | Asking | Good reply | revision same, host known | Idle or Asking | Snapshot; if quiet, what changed is owed a measurement | success lambda |
@@ -1291,10 +1287,9 @@ Invariants:
 | Backing off | `g`, or any full refresh | | Asking | Goes anyway | `roost-refresh` |
 | any | `roost-forget-host` | | same | `roost--errors`, `roost--failures` go; in-flight list dropped by I4 | `roost-forget-host` |
 
-Illegal or refused: none refused; a poll over a stuck flag is silently nothing,
-which is what makes REQUESTS-1 quiet.
+Illegal or refused: none.
 
-Open: REQUESTS-1 (I1), REQUESTS-5 (I6).
+Open: REQUESTS-5 (I6).
 
 Notes:
 - `roost--pull-requests-asked` is stamped before the request and not undone when it
@@ -1449,29 +1444,41 @@ Open: none. Sound. No focus hook is needed: every reply redraws, and
 Kind: implicit. Lives in: `roost--hosts-loaded` with `roost--remembered-hosts` and
 `roost-hosts-file`; `roost--projects-loaded` with `roost--remembered-projects` and
 `roost-projects-file`; `roost--notes-loaded` with `roost--notes` and
-`roost-notes-file`.
-Each file is read once per session, then rewritten whole from memory.
+`roost-notes-file`; `roost--file-stamps`.
+Each file is read once per session. Each change here first takes up what the file
+holds, if it moved, and then writes the whole list.
 
 | State | Meaning | How you can tell |
 |---|---|---|
 | Unread | Not loaded | `-loaded` nil |
-| In step | Memory equals the file | Only this Emacs wrote since it read |
-| Apart | Another Emacs wrote since | Nothing shows it |
+| In step | Memory equals the file | `roost--file-stamp` as in `roost--file-stamps` |
+| Ahead | Memory holds a change a failed write left | The stamp as above, memory not as the file |
+| Apart | Another Emacs wrote since | The stamp differs |
 
 Invariants:
-- I1. What you remember or write stays until you forget or send it. Holds for one Emacs. **Broken by REQUESTS-3 and REQUESTS-6** for two.
-- I2. A file read fails to nil, not an error (`roost--read-json-list`): so a file read mid-write by another Emacs, as `with-temp-file` truncates first, reads as empty, and the next write makes that so. Window of microseconds; not driven.
+- I1. What you remember or write stays until you forget or send it, in either of two Emacs, and what you forget or send stays gone (`roost--hosts-as-on-file`, `roost--projects-as-on-file`, `roost--notes-as-on-file`). Each runs before a change, which then goes on what the file holds.
+- I2. A file is written whole, through a new file renamed into place: nothing reads it half written, and a write that fails leaves it (`roost--write-json-list`). What a link leads to is what changes.
+- I3. A file that hasn't moved says nothing: what this Emacs holds is at least as new, as after a write that failed. One gone or unreadable isn't another Emacs's doing, so what is held here stands, and the next write replaces it (`roost--read-again`).
+- I4. A note still on file stays the same object here, by ID: the note box and drafts hold it. A note gone elsewhere leaves drafts here, and one edited elsewhere changes in them, and Magit shows what changed (`roost--notes-as-on-file`).
+- I5. A host forgotten in another Emacs goes here at this Emacs's next write of the file, its tasks and terminals with it, unless you are using it again: no poll would ask it, and its rows would stay as they were (`roost--stop-watching`).
+- I6. A stamp is of what a link leads to, and is taken before the rename, as what is there after it may be another Emacs's (`roost--file-stamp`, `roost--write-json-list`).
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
-| Unread | First use | | In step | Reads | `roost--hosts`, `roost--known-projects`, `roost--notes` |
-| In step | A write here | | In step | Whole list | `roost--write-json-list` |
-| In step | A write in another Emacs | | Apart | | |
-| Apart | A write here | | Apart | **The other's change is gone from disk** | `roost--write-json-list` |
+| Unread | First use | | In step | Reads, noting the stamp | `roost--read-remembered` |
+| In step | A write here | | In step | Whole list, noting the stamp | `roost--write-json-list` |
+| In step | A write here fails | | Ahead | File as it was; an error reaches the command | `roost--write-json-list` |
+| Ahead | A write here | | In step | Memory goes whole, the failed change with it | `roost--write-json-list` |
+| In step, Ahead | A write in another Emacs | | Apart | Nothing here until this Emacs writes or starts | |
+| Apart | A change here | file readable | In step | Takes up the file, applies the change, writes | `roost--read-again` |
+| Apart | A change here | file unreadable | In step | Memory written, replacing the file | `roost--read-again` |
 
 Illegal or refused: none.
 
-Open: REQUESTS-3, REQUESTS-6.
+Open: none. Between one Emacs's read and its rename, another's write goes: a window of
+microseconds, with no lock, as nothing else would need one. A change a failed write
+left, in Ahead, goes if the other Emacs then writes, as the file's word stands: the
+failed write said so at the time.
 
 ## Git and the forge
 
@@ -1820,7 +1827,7 @@ Invariants:
 - I2. `turn` isn't an agent event: `updatedAt` stays.
 - I3. Nothing is told until the task is measured and the forge has spoken
   (`roost--report-turn`'s guard), or a turn would seem to end at every restart.
-- I4. `roost--turns-sent` empties on every reply, so a failure is sent again.
+- I4. `roost--turns-sent` empties on every reply, and if the request can't start, so a failure is sent again.
 - I5 (assumed). Every Emacs on a host works out the same turn. **Broken for a
   stopped task, whose seen lives only in the Emacs that opened it: FORGE-11.**
 
@@ -2182,7 +2189,7 @@ Invariants:
 - I3. One sent at a time. (`roost--notes-sending`.) Not across machines: a note in a
   draft going, and the same note sent alone, go twice. Seen by reading; the window is
   the reply's flight, so not a finding.
-- I4. `roost-notes-file` holds your notes. **Broken** with two Emacsen: VIEWS-8.
+- I4. `roost-notes-file` holds your notes, from two Emacs too ([Remembered files](#remembered-files)).
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
@@ -2204,7 +2211,7 @@ Invariants:
 
 Illegal or refused: saving for a task Roost no longer has, with the box left open so
 the text isn't lost.
-Open: VIEWS-6, VIEWS-8, VIEWS-10.
+Open: VIEWS-6, VIEWS-10.
 
 ### The note box
 
@@ -2749,8 +2756,8 @@ next one starts somewhere else.
 - **Flags.** `roost--compose-submitting`, `roost--send-sending`, `roost--pr-sending`,
   `roost--notes-sending`, `roost--attachments-copying`, `roost--resuming` and
   `roost--held-for-minibuffer` reset on good, refused, dropped, timed out, `C-g`,
-  declined and killed buffer. The exits that missed were `roost--refreshing` (REQUESTS-1)
-  and errors after a good reply (VIEWS-11).
+  declined and killed buffer. The exits that missed were `roost--refreshing` (REQUESTS-1,
+  fixed) and errors after a good reply (VIEWS-11).
 - **Since you last looked.** Compare-and-swap on `looked`, and looks without `base` or
   `commit` from older records still read.
 - **Older records.** `runId`, `claudeSession`, missing flags, `retired`, `{number, url}`
