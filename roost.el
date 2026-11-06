@@ -3914,10 +3914,13 @@ EVENT, a click on the draft's Create button, says which draft."
          (signal (car err) (cdr err)))))))
 
 (defun roost--compose-what ()
-  "What the draft asks for, to tell whether it says that still."
-  (list (roost--compose-prompt)
-        (mapcar (lambda (field) (plist-get roost--compose-fields field))
-                '(:directory :agent :base :name :issue))))
+  "What the draft asks for, to tell whether it says that still.
+All of it, though you have narrowed it to some."
+  (save-restriction
+    (widen)
+    (list (roost--compose-prompt)
+          (mapcar (lambda (field) (plist-get roost--compose-fields field))
+                  '(:directory :agent :base :name :issue)))))
 
 (defun roost--compose-made (buffer fields task what)
   "Close BUFFER, the draft with FIELDS, as its host made TASK from WHAT.
@@ -4345,6 +4348,8 @@ left is what you wrote since."
         roost--send-asked nil
         ;; Those that went, whatever is left of them here.
         roost--send-notes (seq-difference roost--send-notes notes))
+  ;; Narrowed to some of it, what is left could be out of sight.
+  (widen)
   (let* ((start (save-excursion (goto-char (point-min))
                                 (re-search-forward "\\`\\([ \t]*\n\\)*")
                                 (point)))
@@ -4352,9 +4357,10 @@ left is what you wrote since."
          (whole (and (<= end (point-max)) (equal (buffer-substring-no-properties start end) text))))
     (when whole
       (delete-region (point-min) end)
+      ;; Blank lines alone: the indentation of what you wrote is yours.
       (save-excursion
         (goto-char (point-min))
-        (skip-chars-forward " \t\n")
+        (re-search-forward "\\`\\([ \t]*\n\\)*")
         (delete-region (point-min) (point))))
     (setq roost--draft-note
           (format (if whole
@@ -4397,17 +4403,23 @@ draft."
         (roost--send-text
          task text
          (lambda (_task)
-           (let ((kept (and (buffer-live-p buffer)
-                            (with-current-buffer buffer
-                              (not (equal (roost--send-draft-text) text))))))
-             (when kept
-               (with-current-buffer buffer (roost--send-kept task text notes)))
-             ;; The prompt went, whatever becomes of this.
-             (condition-case err
-                 (when (roost--remove-notes (lambda (note) (member (alist-get 'id note) notes)))
-                   (roost--redraw))
-               (error (message "Roost could not save your review notes: %s" (error-message-string err))))
-             (unless kept (roost--close-buffer buffer))))
+           ;; Closing waits for the minibuffer, so looking at what it says
+           ;; does too: a question of the draft's own can add to it.
+           (roost--when-out-of-minibuffer
+            (lambda ()
+              (let ((kept (and (buffer-live-p buffer)
+                               (with-current-buffer buffer
+                                 (save-restriction
+                                   (widen)
+                                   (not (equal (roost--send-draft-text) text)))))))
+                (when kept
+                  (with-current-buffer buffer (roost--send-kept task text notes)))
+                ;; The prompt went, whatever becomes of this.
+                (condition-case err
+                    (when (roost--remove-notes (lambda (note) (member (alist-get 'id note) notes)))
+                      (roost--redraw))
+                  (error (message "Roost could not save your review notes: %s" (error-message-string err))))
+                (unless kept (roost--close-buffer buffer))))))
          (lambda (err)
            (message "Roost could not send to %s: %s" (roost--field task 'name) err)
            (when (buffer-live-p buffer)
@@ -4423,9 +4435,9 @@ draft."
                (if (not (get-text-property 0 'roost-no-reply err))
                    (roost--draft-error "Could not send" err 'roost-send-submit)
                  ;; "Retries" would say too little, and the words of a
-                 ;; request of any kind too much.  Changed, it is a new prompt.
+                 ;; request of any kind too much.
                  (setq roost--draft-note
-                       (format " No reply from %s, and it may have gone · as it is, %s sends it only if it didn't"
+                       (format " No reply from %s, and it may have gone · unchanged, %s sends it only if it didn't; edited, it goes as a new prompt"
                                (roost--host-label (roost--field task 'host))
                                (substitute-command-keys "\\[roost-send-submit]")))
                  (force-mode-line-update)))))

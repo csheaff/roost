@@ -1993,6 +1993,67 @@ A name of its own keeps the fields as long as they are."
         (should-not roost--send-notes))
       (should-not roost--notes))))
 
+(ert-deftest roost-sweep-late-what-you-wrote-since-keeps-its-indentation ()
+  (roost-sweep-late--world
+    (roost-sweep-late--populate nil nil)
+    (let ((draft (roost-sweep-late--lay-out 'send-draft)))
+      (roost-send-submit)
+      (with-current-buffer draft
+        (goto-char (point-max))
+        (insert "\n\n    return value"))
+      (roost-sweep-late--answer (roost-sweep-late--take "send") 'good)
+      (roost-sweep-late--settle)
+      (should (equal (with-current-buffer draft (buffer-string)) "    return value")))))
+
+(ert-deftest roost-sweep-late-what-you-add-before-a-held-close-stays ()
+  ;; The reply comes as a question of the draft's own is open, as Attach's,
+  ;; and its answer adds to the draft before the draft would close.
+  (dolist (added '(nil t))
+    (roost-sweep-late--world
+      (roost-sweep-late--populate nil nil)
+      (let ((draft (roost-sweep-late--lay-out 'send-draft)))
+        (roost-send-submit)
+        (let ((reply (roost-sweep-late--take "send")))
+          (roost-sweep-late--in-minibuffer
+           (lambda ()
+             (roost-sweep-late--answer reply 'good)
+             (when added
+               (with-current-buffer draft
+                 (goto-char (point-max))
+                 (insert "\n\n[Copying a.png…]"))))))
+        (roost-sweep-late--settle)
+        (should (eq (buffer-live-p draft) added))
+        (when added
+          (should (equal (with-current-buffer draft (buffer-string)) "[Copying a.png…]")))))))
+
+(ert-deftest roost-sweep-late-a-draft-narrowed-as-it-goes-keeps-what-is-hidden ()
+  (roost-sweep-late--world
+    (roost-sweep-late--populate nil nil)
+    (let ((draft (roost-sweep-late--lay-out 'send-draft)))
+      (roost-send-submit)
+      (with-current-buffer draft
+        (let ((sent (point-max)))
+          (goto-char (point-max))
+          (insert "\n\nA new paragraph.")
+          (narrow-to-region (point-min) sent)))
+      (roost-sweep-late--answer (roost-sweep-late--take "send") 'good)
+      (roost-sweep-late--settle)
+      (should (buffer-live-p draft))
+      ;; In sight, which it wouldn't be with the narrowing left on what went.
+      (should (equal (with-current-buffer draft (buffer-string)) "A new paragraph."))))
+  (roost-sweep-late--world
+    (roost-sweep-late--populate nil nil)
+    (let ((draft (roost-sweep-late--lay-out 'compose)))
+      (roost-compose-submit)
+      (with-current-buffer draft
+        (let ((sent (point-max)))
+          (goto-char (point-max))
+          (insert "\n\nA new paragraph.")
+          (narrow-to-region (point-min) sent)))
+      (roost-sweep-late--answer (roost-sweep-late--take "create") 'good)
+      (roost-sweep-late--settle)
+      (should (buffer-live-p draft)))))
+
 (ert-deftest roost-sweep-late-a-prompt-draft-changed-after-sending-keeps-it-all ()
   (roost-sweep-late--world
     (roost-sweep-late--populate nil nil)
@@ -2097,7 +2158,8 @@ A name of its own keeps the fields as long as they are."
       (roost-send-submit)
       (roost-sweep-late--answer (roost-sweep-late--take "send") 'no-reply)
       (should (string-search "No reply from dev, and it may have gone" roost--draft-note))
-      (should (string-search "as it is, C-c C-c sends it only if it didn't" roost--draft-note)))))
+      (should (string-search "unchanged, C-c C-c sends it only if it didn't" roost--draft-note))
+      (should (string-search "edited, it goes as a new prompt" roost--draft-note)))))
 
 (ert-deftest roost-sweep-late-a-prompt-its-host-has-closes-its-draft ()
   (roost-sweep-late--world
