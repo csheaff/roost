@@ -4379,6 +4379,63 @@ sys.exit(status)
         self.assertEqual(task["issue"], dict(key="PROJ-7", title="Login loops", url=first["url"]))
         self.assertNotIn("issue", self.create(name="odd", issue=dict(key="PROJ-7; rm -rf ~")))
 
+    def test_jira_issue_reads_a_work_items_text_from_its_sites_rich_text_fields(self):
+        def doc(said):
+            return dict(type="doc", version=1, content=[dict(type="paragraph", content=[dict(type="text", text=said)])])
+        # As a site with its text in a custom field gave it, 2026-11-05,
+        # with the plain fields that site has beside it.
+        item = dict(key="PROJ-7", url="https://acme.atlassian.net/browse/PROJ-7", summary="Login loops",
+                    description=None, labels=["auth"], status=dict(name="In Progress"),
+                    customfield_10001=dict(self="https://acme.atlassian.net/rest/api/3/customFieldOption/1", value="High"),
+                    customfield_10002=dict(accountId="1", displayName="Ana"),
+                    customfield_10003="2026-11-05",
+                    customfield_10004=doc("Run login twice."),
+                    customfield_10005=dict(type="doc", version=1, content=[]),
+                    environment=doc("Only on staging."),
+                    comment=dict(comments=[dict(body=doc("Off-topic, from Slack"))], total=1),
+                    attachment=[dict(filename="trace.txt")])
+        directory = self.fake_twg(dict(apiVersion="1", data=dict(issues=[item])))
+        reply = self.request("jira-issue", key="PROJ-7")
+        self.assertEqual(reply, dict(ok=True, result=dict(body="Run login twice.\n\nOnly on staging.")))
+        called = json.loads((directory / "log").read_text().splitlines()[-1])
+        self.assertEqual(called, ["jira", "workitem", "query", "--jql", "key = PROJ-7", "--limit", "1",
+                                  "--fields", "*all", "-o", "json", "--output-summary", "none"])
+        # Its description comes first, wherever twg puts it, and under fields too.
+        fields = dict(customfield_10004=doc("Second."), description=doc("First."), summary="Login loops")
+        self.fake_twg(dict(data=dict(issues=[dict(key="PROJ-7", fields=fields)])))
+        self.assertEqual(self.request("jira-issue", key="PROJ-7")["result"]["body"], "First.\n\nSecond.")
+        # A description that is already text counts.
+        self.fake_twg(dict(data=dict(issues=[dict(key="PROJ-7", description="As Markdown.",
+                                                  customfield_10004=doc("Second."))])))
+        self.assertEqual(self.request("jira-issue", key="PROJ-7")["result"]["body"], "As Markdown.\n\nSecond.")
+        # The limit is on the text joined, not on each field.
+        self.fake_twg(dict(data=dict(issues=[dict(key="PROJ-7", description=doc("x" * 4000),
+                                                  customfield_10004=doc("y" * 4000))])))
+        body = self.request("jira-issue", key="PROJ-7")["result"]["body"]
+        self.assertTrue(body.endswith("y\n…"))
+        self.assertEqual(len(body), roost.ISSUE_BODY_LIMIT + 2)
+        # A field too deep to read costs that field, not the rest.
+        deep = doc("Too deep.")
+        for _ in range(100000):
+            deep = dict(type="blockquote", content=[deep])
+        self.assertEqual(roost.jira_body(dict(customfield_10004=dict(type="doc", content=[deep]),
+                                              customfield_10005=doc("Readable."))), "Readable.")
+        # Nothing Jira didn't give as a key reaches twg's command line.
+        directory = self.fake_twg(dict(data=dict(issues=[])))
+        calls = (directory / "log").read_text()
+        for key in ("proj-7", "PROJ-7; rm -rf ~", '" OR project = X', "--output-file=/tmp/x", "", None, 7):
+            self.assertIn("no Jira work item's key", self.request("jira-issue", key=key)["error"])
+        self.assertEqual((directory / "log").read_text(), calls)
+        # Jira finding none is an error here, where a list would be empty.
+        self.assertEqual(self.request("jira-issue", key="PROJ-7"),
+                         dict(ok=False, error="twg finds no Jira work item PROJ-7"))
+        # What twg says when it can't is the error, as for the list.
+        self.fake_twg(dict(ok=False, error=dict(summary="You're not signed in.")), status=77)
+        self.assertEqual(self.request("jira-issue", key="PROJ-7"), dict(ok=False, error="You're not signed in."))
+        (directory / "twg").unlink()
+        self.assertEqual(self.request("jira-issue", key="PROJ-7"),
+                         dict(ok=False, error="twg is not installed on this host"))
+
     def test_adf_text_reads_jira_rich_text_as_markdown(self):
         def para(*pieces):
             return dict(type="paragraph", content=[dict(type="text", text=piece) if isinstance(piece, str) else piece

@@ -2603,13 +2603,17 @@ terminal's, on a pty.  Skips the test where it can't be made."
 
 (ert-deftest roost-compose-starts-from-a-jira-work-item ()
   (roost-test--isolated
-   (let ((default-directory "/tmp/") created asked chose pick github jira)
+   (let ((default-directory "/tmp/") created asked chose pick github jira
+         (whole '(t (body . "Run login twice."))))
      (save-window-excursion
        (unwind-protect
            (cl-letf (((symbol-function 'roost--request)
                       (lambda (host action params success &optional failure)
                         (push (list host action params) asked)
-                        (pcase-let ((`(,ok . ,value) (if (equal action "jira-issues") jira github)))
+                        (pcase-let ((`(,ok . ,value) (pcase action
+                                                       ("jira-issues" jira)
+                                                       ("jira-issue" whole)
+                                                       (_ github))))
                           (funcall (if ok success failure) value))))
                      ((symbol-function 'completing-read)
                       (lambda (prompt table &rest _)
@@ -2638,6 +2642,45 @@ terminal's, on a pty.  Skips the test where it can't be made."
                (should (string-match-p "Issue    PROJ-7 Login loops  C-c C-t · the branch leads with its key"
                                        (buffer-string)))
                (should (string-match-p "Name     PROJ-7-login-loops" (buffer-string)))
+               ;; Its text is read as you choose it, here whichever host
+               ;; the project is on, and goes where the list's went.
+               (should (member (list nil "jira-issue" '((key . "PROJ-7"))) asked))
+               (setq whole '(t (body . "Run login twice.\n\nFrom a field of the site's."))
+                     pick "PROJ-7 Login loops")
+               (roost-compose-set-issue)
+               (should (equal (roost--compose-prompt)
+                              (concat "Login loops\n\nRun login twice.\n\nFrom a field of the site's.\n\n"
+                                      "This is Jira issue PROJ-7: https://acme.atlassian.net/browse/PROJ-7")))
+               ;; A site that keeps it all in such a field has no description.
+               (setq jira '(t (issues ((key . "PROJ-7") (title . "Login loops") (body . "")
+                                       (url . "https://acme.atlassian.net/browse/PROJ-7"))))
+                     whole '(t (body . "From a field of the site's.")))
+               (roost-compose-set-issue)
+               (should (equal (roost--compose-prompt)
+                              (concat "Login loops\n\nFrom a field of the site's.\n\n"
+                                      "This is Jira issue PROJ-7: https://acme.atlassian.net/browse/PROJ-7")))
+               ;; When twg can't read it, the pick stands, with what the
+               ;; list gave, and a message says so.
+               (setq jira '(t (issues ((key . "PROJ-7") (title . "Login loops") (body . "Run login twice.")
+                                       (url . "https://acme.atlassian.net/browse/PROJ-7")
+                                       (status . "In Progress") (labels "auth"))))
+                     whole '(nil . "twg timed out: jira workitem\nmore"))
+               (let (said)
+                 (cl-letf (((symbol-function 'message)
+                            (lambda (format &rest arguments)
+                              (when format (push (apply #'format format arguments) said)))))
+                   (roost-compose-set-issue))
+                 (should (equal (car said)
+                                "Roost: couldn't read all of PROJ-7's text: twg timed out: jira workitem")))
+               (should (equal (roost--compose-prompt)
+                              "Login loops\n\nRun login twice.\n\nThis is Jira issue PROJ-7: https://acme.atlassian.net/browse/PROJ-7"))
+               (should (string-match-p "Issue    PROJ-7 Login loops" (buffer-string)))
+               ;; Nor does a read that finds no text take away the list's.
+               (setq whole '(t (body . "")))
+               (roost-compose-set-issue)
+               (should (equal (roost--compose-prompt)
+                              "Login loops\n\nRun login twice.\n\nThis is Jira issue PROJ-7: https://acme.atlassian.net/browse/PROJ-7"))
+               (setq whole '(t (body . "Run login twice.")))
                ;; Another issue in its place takes the prompt it gave, text and all.
                (setq github '(t ((number . 12) (title . "CSV import crashes") (body . "Quoted commas.")
                                  (url . "u") (labels)))

@@ -182,9 +182,13 @@ starts the agent in tmux, and opens its terminal.
 - With [twg](https://developer.atlassian.com/cloud/twg-cli/), Atlassian's
   Teamwork Graph CLI, installed and signed in on this machine (`twg login`,
   then `twg setup default-site`), `C-c C-t` lists your open Jira work items
-  too, by their keys, with their status and labels. One's summary and
-  description become the prompt, and the task's name, and so its branch,
-  starts with its key, as in `PROJ-123-fix-login`. Jira's own GitHub or
+  too, by their keys, with their status and labels. One's summary and text
+  become the prompt, and the task's name, and so its branch, starts with its
+  key, as in `PROJ-123-fix-login`. Its text is its description, then each
+  rich-text field it has, as some sites keep the text in a field of their
+  own. Plain fields and comments stay out. Reading them takes one more call
+  to twg as you pick; if that fails, a message says so and the prompt has
+  what the list gave. Jira's own GitHub or
   Bitbucket integration, where your site has it, links the branch and its
   pull request to the work item by that key, and the pull request draft
   links back to it. Roost doesn't change the work item. `roost-jira-query`
@@ -973,8 +977,8 @@ Things to know:
   `.git` read-only, so it asks before committing.
 - A GitHub issue's text goes to the agent as written, and anyone can open an
   issue on a public repository. Read it in the draft before pressing `C-c C-c`.
-  So does a Jira work item's, which anyone who can file one in your site
-  wrote.
+  So does a Jira work item's description and rich-text fields, which anyone
+  who can file or edit one in your site wrote.
 - Where you last looked at a task is a commit: its `HEAD` when nothing is
   uncommitted, or else one the helper makes of everything in the worktree,
   staged in a copy of its index, so your index, staging and branches stay
