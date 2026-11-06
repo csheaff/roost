@@ -4,6 +4,31 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A draft whose reply was lost does what it says when you ask again. Asked
+  again with its prompt changed, a new task's draft said it created the task,
+  closed, and opened the one made from what you sent first. Now it stays, as
+  you left it, and says what was made from what. So does a draft you go on
+  writing in as it sends, or after no reply, once a poll finds its task; a
+  prompt draft keeps what you wrote since it sent. Nothing to do when
+  upgrading.
+- A prompt or note asked for again goes once. The first may have reached the
+  agent with its reply lost, or still be waiting on its host, and it did the
+  work twice. Nothing to do when upgrading.
+- A prompt draft asks, and names its task, as the task is now. It went by
+  how the task was when you opened it, so it didn't ask once the agent had
+  asked for permission, and asking again was refused each time. Nothing to do
+  when upgrading.
+- Undo in the new task draft undoes what you last did. Once the fields above
+  the prompt had changed length, as the name does while you write, it changed
+  other text, and a prompt you cut didn't come back. Nothing to do when
+  upgrading.
+- A task made or a prompt sent closes its draft though its Org entry can't
+  take the link, or your notes can't be saved. The draft stayed busy, and the
+  task didn't open. Nothing to do when upgrading.
+- A click on another project in the sidebar takes a written draft there, or,
+  if it quotes files of the project it is in, forks a task there or starts
+  from an issue there, stays and says so. It stayed, and said nothing. Nothing
+  to do when upgrading.
 - Two Emacs on one machine keep each other's review notes, hosts and
   projects. What you wrote or used in one went when the other next saved,
   and a note you had sent, or a host you had forgotten, came back. Each now
