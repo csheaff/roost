@@ -1245,6 +1245,22 @@ class Lifecycle(unittest.TestCase):
         told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
         self.assertEqual((told["changes"], told["submoduleCommits"]), (1, 0))
 
+    def test_more_files_in_a_submodules_new_folder_stop_a_discard(self):
+        # Each file counts, as in the task's own worktree, nested or not.
+        self.add_submodule()
+        task = self.create()
+        wt = Path(task["worktree"])
+        self.check_out_submodules(wt)
+        (wt / "lib" / "out").mkdir()
+        (wt / "lib" / "out" / "one").write_text("one\n")
+        told = dict(self.request("discard", id=task["id"], dryRun=True)["result"]["discard"])
+        commit = told.pop("commit")
+        self.assertEqual(told["changes"], 1)
+        (wt / "lib" / "out" / "two").write_text("two\n")
+        reply = self.request("discard", id=task["id"], expect=commit, told=told)
+        self.assertIn("more than you were told", reply["error"])
+        self.assertTrue((wt / "lib" / "out" / "two").exists())
+
     def test_retire_names_a_kept_submodule_repository_that_lost_its_head(self):
         # Beside a clean one, which would otherwise let --force remove both.
         self.add_submodule()
@@ -1464,10 +1480,10 @@ class Lifecycle(unittest.TestCase):
         self.git("checkout", "-q", "-b", "mine")
         record = dict(repo=os.path.realpath(self.repo), branch=task["branch"], name=task["name"])
         tip = self.git("rev-parse", "HEAD", cwd=wt)
-        self.assertEqual(roost.squash_merge(record, "main", False), tip)
+        self.assertEqual(roost.squash_merge(record, "main", False, tip), tip)
         squashed = self.git("rev-parse", "main")
         # As when the merge went through but retiring the task did not.
-        self.assertEqual(roost.squash_merge(record, "main", False), tip)
+        self.assertEqual(roost.squash_merge(record, "main", False, tip), tip)
         self.assertEqual(self.git("rev-parse", "main"), squashed)
 
     def test_a_conflicting_squash_merge_changes_nothing(self):
@@ -3628,6 +3644,122 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(self.request("list")["result"], [])
         self.assertEqual(self.git("show", "HEAD:hello"), "base")
 
+    def told(self, task):
+        """What a discard's question says of TASK, as Emacs sends it back."""
+        told = dict(self.request("discard", id=task["id"], dryRun=True)["result"]["discard"])
+        return told.pop("commit"), told
+
+    def assert_not_discarded(self, task, reply):
+        """REPLY refused, for holding more than you were told, with TASK as it was."""
+        self.assertIn("more than you were told", reply["error"])
+        self.assertTrue(Path(task["worktree"]).exists())
+        self.assertTrue(roost.ref_exists(self.repo, task["branch"]))
+        # Nothing done on the way to refusing.
+        self.assertIn(task["paneId"], roost.pane_inventory(self.socket))
+        self.assertEqual(roost.Store(str(self.state)).read(task["id"])["status"], "ready")
+
+    def test_a_file_written_since_you_were_told_stops_a_discard(self):
+        task = self.create()
+        commit, told = self.told(task)
+        self.assertEqual((told["commits"], told["changes"]), (0, 0))
+        written = Path(task["worktree"]) / "written-while-you-read"
+        written.write_text("work\n")
+        self.assert_not_discarded(task, self.request("discard", id=task["id"], expect=commit, told=told))
+        self.assertTrue(written.exists())
+        # Asked again, it says so, and you know what you are losing.
+        commit, told = self.told(task)
+        self.assertEqual(told["changes"], 1)
+        self.assertTrue(self.request("discard", id=task["id"], expect=commit, told=told)["ok"])
+        self.assertFalse(Path(task["worktree"]).exists())
+
+    def test_a_commit_on_a_detached_head_since_you_were_told_stops_a_discard(self):
+        # The branch stays where it was.
+        task = self.create()
+        self.git("checkout", "-q", "--detach", cwd=task["worktree"])
+        commit, told = self.told(task)
+        self.assertEqual(told["commits"], 0)
+        self.commit_in(task, "on-a-detached-head")
+        self.assert_not_discarded(task, self.request("discard", id=task["id"], expect=commit, told=told))
+
+    def test_a_second_file_stops_a_discard_you_typed_the_name_for(self):
+        task = self.create()
+        wt = Path(task["worktree"])
+        (wt / "one").write_text("one\n")
+        commit, told = self.told(task)
+        self.assertEqual(told["changes"], 1)
+        (wt / "two").write_text("two\n")
+        self.assert_not_discarded(task, self.request("discard", id=task["id"], expect=commit, told=told))
+
+    def test_a_worktree_the_agent_made_since_you_were_told_stops_a_discard(self):
+        task = self.create()
+        commit, told = self.told(task)
+        self.assertEqual(told["agentWorktrees"], 0)
+        record = roost.Store(str(self.state)).read(task["id"])
+        made = self.root / "its own"
+        self.git("worktree", "add", "-q", "-b", "its-own", str(made))
+        record["agentWorktrees"] = [str(made)]
+        roost.Store(str(self.state)).save(record)
+        self.assertEqual(self.told(task)[1]["agentWorktrees"], 1)
+        self.assert_not_discarded(task, self.request("discard", id=task["id"], expect=commit, told=told))
+
+    def test_more_files_in_a_new_folder_stop_a_discard_you_typed_the_name_for(self):
+        # Git would list the folder once, however many it holds.
+        task = self.create()
+        folder = Path(task["worktree"]) / "out"
+        folder.mkdir()
+        (folder / "one").write_text("one\n")
+        commit, told = self.told(task)
+        self.assertEqual(told["changes"], 1)
+        (folder / "two").write_text("two\n")
+        self.assert_not_discarded(task, self.request("discard", id=task["id"], expect=commit, told=told))
+        self.assertEqual(self.told(task)[1]["changes"], 2)
+
+    def test_a_task_at_work_that_holds_more_says_to_stop_its_agent(self):
+        # Or each time you ask, it would have written more.
+        task = self.create()
+        commit, told = self.told(task)
+        store = roost.Store(str(self.state))
+        store.save(dict(store.read(task["id"]), status="running"))
+        (Path(task["worktree"]) / "written").write_text("work\n")
+        error = self.request("discard", id=task["id"], expect=commit, told=told)["error"]
+        self.assertIn("stop it (K)", error)
+        self.assertIn(task["paneId"], roost.pane_inventory(self.socket))
+
+    def test_a_discard_goes_with_nothing_new_or_with_less_than_you_were_told(self):
+        for less in (False, True):
+            task = self.create(name="less" if less else "same")
+            wt = Path(task["worktree"])
+            (wt / "one").write_text("one\n")
+            (wt / "two").write_text("two\n")
+            commit, told = self.told(task)
+            self.assertEqual(told["changes"], 2)
+            if less:
+                (wt / "two").unlink()
+            reply = self.request("discard", id=task["id"], expect=commit, told=told)
+            self.assertTrue(reply["ok"], reply)
+            self.assertFalse(wt.exists())
+
+    def test_a_worktree_git_cant_read_counts_every_file_a_discard_would_lose(self):
+        # Not none: a damaged index says nothing of what is there, and
+        # discarding is still the way out of such a worktree.
+        task = self.create()
+        wt = Path(task["worktree"])
+        commit, told = self.told(task)
+        self.assertEqual(told["changes"], 0)
+        (wt / self.git("rev-parse", "--git-path", "index", cwd=wt)).write_bytes(b"damaged")
+        self.assertNotEqual(roost.read_git(wt, "status").returncode, 0)
+        self.assert_not_discarded(task, self.request("discard", id=task["id"], expect=commit, told=told))
+        commit, told = self.told(task)
+        self.assertGreater(told["changes"], 0)
+        self.assertTrue(self.request("discard", id=task["id"], expect=commit, told=told)["ok"])
+        self.assertFalse(wt.exists())
+
+    def test_a_discard_that_says_only_where_the_branch_was_goes_as_before(self):
+        task = self.create()
+        commit, _ = self.told(task)
+        (Path(task["worktree"]) / "written").write_text("work\n")
+        self.assertTrue(self.request("discard", id=task["id"], expect=commit)["ok"])
+
     def test_discard_counts_only_commits_no_other_branch_holds(self):
         task = self.create()
         wt = Path(task["worktree"])
@@ -4668,6 +4800,94 @@ elif args[:2] == ["auth", "status"]:
         self.git("add", ".", cwd=wt)
         self.git("commit", "-qm", name, cwd=wt)
         return self.git("rev-parse", "HEAD", cwd=wt)
+
+    def test_a_commit_made_since_you_were_asked_stops_a_merge(self):
+        for style in ({}, dict(style="squash")):
+            task = self.create(name="moved " + style.get("style", "merge"))
+            asked = self.commit_in(task, "asked-about-" + style.get("style", "merge"))
+            before = self.git("rev-parse", "main")
+            late = self.commit_in(task, "made-while-you-read-" + style.get("style", "merge"))
+            reply = self.request("merge", id=task["id"], expect=asked, **style)
+            self.assertIn("moved since you were asked", reply["error"])
+            self.assertEqual(self.git("rev-parse", "main"), before)
+            # Nothing done on the way to refusing.
+            self.assertTrue(Path(task["worktree"]).exists())
+            self.assertIn(task["paneId"], roost.pane_inventory(self.socket))
+            self.assertEqual(roost.Store(str(self.state)).read(task["id"])["status"], "ready")
+            # Asked again, where it is now.
+            reply = self.request("merge", id=task["id"], expect=late, **style)
+            self.assertTrue(reply["ok"], reply)
+            self.assertFalse(Path(task["worktree"]).exists())
+
+    def test_a_commit_made_as_a_merge_checks_the_task_stops_it(self):
+        # Those checks take seconds in a large repository.
+        task = self.create()
+        asked = self.commit_in(task, "asked-about")
+        before = self.git("rev-parse", "main")
+        checks = roost.require_clean
+
+        def committing(*args):
+            checks(*args)
+            self.commit_in(task, "made-as-it-checked")
+
+        with patch.object(roost, "require_clean", committing):
+            reply = self.request("merge", id=task["id"], expect=asked)
+        self.assertIn("moved since you were asked", reply["error"])
+        self.assertEqual(self.git("rev-parse", "main"), before)
+
+    def test_a_commit_made_as_a_merge_begins_stays_out_of_it(self):
+        # Past the check, each way of merging takes what was checked, and
+        # the task stays, as its branch has work the merge left out.
+        for style, away, name in ((None, False, "plain"), ("squash", False, "squash"),
+                                  (None, True, "away"), ("squash", True, "squash-away")):
+            with self.subTest(style=style, away=away):
+                task = self.create(name=name)
+                asked = self.commit_in(task, "asked-" + name)
+                if away:
+                    self.git("switch", "-q", "-c", "elsewhere-" + name)
+                late = "late-" + name
+                where = ("merge_without_checkout" if away and not style
+                         else "squash_merge" if style else "untracked_here")
+                merging = getattr(roost, where)
+
+                def committing(*args):
+                    self.commit_in(task, late)
+                    return merging(*args)
+
+                with patch.object(roost, where, committing):
+                    reply = self.request("merge", id=task["id"], expect=asked, **({"style": style} if style else {}))
+                self.assertIn("unmerged commits", reply["error"])
+                merged = self.git("ls-tree", "--name-only", "main")
+                self.assertIn("asked-" + name, merged)
+                self.assertNotIn(late, merged)
+                if away:
+                    self.git("switch", "-q", "main")
+
+    def test_a_merge_that_says_nothing_of_the_branch_goes_as_before(self):
+        # As from an older Emacs, or one that has yet to measure the task.
+        task = self.create()
+        self.commit_in(task)
+        reply = self.request("merge", id=task["id"], style="squash")
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(self.git("show", "main:work"), "work")
+
+    def test_a_full_listing_says_where_the_task_branch_is(self):
+        task = self.create()
+        tip = self.commit_in(task)
+        listed = self.request("list", full=[task["id"]])["result"][0]
+        self.assertEqual(listed["branchTip"], tip)
+        # As of this reply, so no record keeps it.
+        store = roost.Store(str(self.state))
+        store.save(listed)
+        self.assertNotIn("branchTip", store.read(task["id"]))
+        # Not measured, it isn't said.
+        self.assertNotIn("branchTip", self.request("list", full=False)["result"][0])
+        # A removal cut short, which `m` finishes, is measured no further.
+        store.save(dict(store.read(task["id"]), removing=True))
+        self.git("commit", "-q", "--allow-empty", "-m", "Later", cwd=task["worktree"])
+        listed = self.request("list", full=[task["id"]])["result"][0]
+        self.assertEqual(listed["branchTip"], self.git("rev-parse", "HEAD", cwd=task["worktree"]))
+        self.assertNotIn("landed", listed)
 
     def test_pr_pushes_the_branch_creates_a_pull_request_and_records_it(self):
         self.github()

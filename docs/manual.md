@@ -360,7 +360,10 @@ the conflicts as you resolved them before and stage them; the merge then stays
 under way, and Roost offers to have the agent check those resolutions and
 commit it. Then `m` merges the task into its integration
 branch and removes its worktree, branch and window. For work you don't
-want, `x` discards the task, first saying what that loses.
+want, `x` discards the task, first saying what that loses. An agent can go
+on working while you read either question: a branch that has moved isn't
+merged, and a task that holds more than you were told isn't discarded. Look
+at it, then ask again.
 
 **Or open a pull request.** To finish on GitHub or GitLab instead, `P` drafts one: the first
 line is the title and the rest the body, prefilled from the agent's commit
@@ -935,6 +938,8 @@ environment, which Roost adds to with where tmux keeps its server. What the
 server runs has neither the agent's terminal nor its input.
 
 Each status, and what Roost makes of it, is in [What a task says](#what-a-task-says).
+[State machines](state-machines.md) has every state Roost keeps, what must hold
+of it and each way between them.
 
 The helper notes each change of a task's status, of whether you've seen its
 agent since its last event, and of what of its pull request or work waits on
