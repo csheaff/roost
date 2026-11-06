@@ -10,6 +10,9 @@
 (defconst roost-test--report-turn (symbol-function 'roost--report-turn)
   "Roost's `roost--report-turn', which `roost-test--isolated' stubs.")
 
+(defconst roost-test--record-seen (symbol-function 'roost--record-seen)
+  "Roost's `roost--record-seen', which `roost-test--isolated' stubs.")
+
 (defmacro roost-test--isolated (&rest body)
   (let ((scratch (make-symbol "scratch")))
     ;; Removed afterwards: the sweep runs thousands of tests, and Roost's
@@ -42,6 +45,7 @@
          (roost--list-requests (make-hash-table :test 'equal))
          (roost--pull-requests-asked (make-hash-table :test 'equal))
          (roost--full-refresh-pending (make-hash-table :test 'equal))
+         (roost--measures-owed (make-hash-table :test 'equal))
          (roost--failures (make-hash-table :test 'equal))
          (roost--hosts-loaded t) (roost--remembered-hosts nil)
          (roost-notes-file (expand-file-name "notes.json" (nth 1 ,scratch)))
@@ -7040,6 +7044,660 @@ stopped."
        (should (= asked 1))
        (should (equal (gethash (roost--key task) roost--turns-sent) "conflicts"))))))
 
+;; Requests held back, for a test that says when each is answered.
+
+(defvar roost-test--held nil
+  "Requests `roost--request' was given, oldest first, each a plist.")
+
+(defun roost-test--hold (host action parameters success &optional failure _timeout)
+  "Hold back ACTION for HOST, with PARAMETERS, for `roost--request'."
+  (setq roost-test--held
+        (append roost-test--held
+                (list (list :host host :action action :parameters parameters
+                            :success success :failure failure)))))
+
+(defun roost-test--take (action)
+  "Take the oldest request for ACTION held, or nil."
+  (when-let* ((request (seq-find (lambda (request) (equal (plist-get request :action) action))
+                                 roost-test--held)))
+    (setq roost-test--held (delq request roost-test--held))
+    request))
+
+(defun roost-test--answer (action reply)
+  "Answer the oldest request for ACTION with REPLY, and return it."
+  (let ((request (roost-test--take action)))
+    (should request)
+    (funcall (plist-get request :success) reply)
+    request))
+
+(defun roost-test--full (request)
+  "What REQUEST, a list, asks to measure: a list of IDs, or as it asked."
+  (let ((full (alist-get 'full (plist-get request :parameters))))
+    (if (vectorp full) (append full nil) full)))
+
+(defmacro roost-test--with-held-requests (&rest body)
+  "Run BODY with the host dev watched and requests held back."
+  `(roost-test--isolated
+    (dlet ((roost-test--held nil) (roost-hosts '("dev")))
+      (cl-letf (((symbol-function 'roost--request) #'roost-test--hold))
+        ,@body))))
+
+;; What a poll saw of two tasks, x and y: y's agent has committed.
+
+(defconst roost-test--x "aaaaaa0000000000")
+(defconst roost-test--y "bbbbbb0000000000")
+
+(defun roost-test--listed (id &rest fields)
+  "Task ID as a quiet list gives it, with FIELDS over its own."
+  (append fields '((gitStamp . "s1")) (roost-test--task id "ready")))
+
+(defun roost-test--measured (task &rest fields)
+  "TASK, as a list measuring it gives it, with FIELDS over what it measured."
+  (append fields (copy-tree '((landed) (dirty) (ahead . 1) (behind . 0) (conflicts) (diff . "old"))) task))
+
+(defun roost-test--y-committed ()
+  "Task y as a quiet list gives it once its agent has committed."
+  (roost-test--listed roost-test--y '(gitStamp . "s2") '(updatedAt . "2026-10-03T20:05:00+00:00")))
+
+(defun roost-test--y-measured ()
+  "A list's reply that measured y, with x beside it."
+  (list (roost-test--listed roost-test--x)
+        (roost-test--measured (roost-test--y-committed) '(diff . "new"))))
+
+(defun roost-test--y-diff ()
+  "The diff Roost holds of y."
+  (roost--field (gethash (list "dev" roost-test--y) roost--tasks) 'diff))
+
+(defun roost-test--measure-both ()
+  "Have Roost hold x and y, measured."
+  (roost-refresh)
+  (roost-test--answer "list" (list (roost-test--measured (roost-test--listed roost-test--x))
+                                   (roost-test--measured (roost-test--listed roost-test--y)))))
+
+(defun roost-test--a-poll-sees-y-commit ()
+  "Have a quiet poll see y's commit, and return its list measuring y, in flight."
+  (roost-test--measure-both)
+  (roost-refresh t)
+  (roost-test--answer "list" (list (roost-test--listed roost-test--x) (roost-test--y-committed)))
+  (let ((measuring (roost-test--take "list")))
+    (should (equal (roost-test--full measuring) (list roost-test--y)))
+    measuring))
+
+(defun roost-test--poll-on ()
+  "Poll a few times, answering each list as its host would, and return how many went."
+  (let ((lists 0))
+    (dotimes (_ 4)
+      (remhash "dev" roost--failures)
+      (roost-refresh t)
+      (while-let ((request (roost-test--take "list")))
+        (cl-incf lists)
+        (funcall (plist-get request :success)
+                 (if (member roost-test--y (ensure-list (roost-test--full request)))
+                     (roost-test--y-measured)
+                   (list (roost-test--listed roost-test--x) (roost-test--y-committed))))))
+    lists))
+
+(ert-deftest roost-a-measurement-dropped-as-stale-is-asked-for-again ()
+  ;; You send another task a prompt as a poll's measurement is on its way:
+  ;; its reply is older than the send's, so Roost drops it.  The poll had
+  ;; seen the change already, so nothing asked again, and a finished agent
+  ;; sends nothing more.  Until `g', the row said what was no longer so.
+  (roost-test--with-held-requests
+   (let ((measuring (roost-test--a-poll-sees-y-commit)))
+     (roost--act (gethash (list "dev" roost-test--x) roost--tasks) "send" '((text . "Go on.")))
+     (roost-test--answer "send" (roost-test--listed roost-test--x
+                                                    '(updatedAt . "2026-10-03T20:06:00+00:00")))
+     (funcall (plist-get measuring :success) (roost-test--y-measured))
+     (should (equal (roost-test--y-diff) "old"))
+     (roost-test--poll-on)
+     (should (equal (roost-test--y-diff) "new")))))
+
+(ert-deftest roost-a-measurement-that-failed-is-asked-for-again ()
+  (roost-test--with-held-requests
+   (let ((measuring (roost-test--a-poll-sees-y-commit)))
+     (funcall (plist-get measuring :failure) "ssh: connection reset")
+     (roost-test--poll-on)
+     (should (equal (roost-test--y-diff) "new")))))
+
+(ert-deftest roost-a-list-that-failed-gives-up-only-on-what-had-its-try ()
+  ;; It measured y again and x for the first time: x still gets its try.
+  (roost-test--with-held-requests
+   (let ((measuring (roost-test--a-poll-sees-y-commit)))
+     (funcall (plist-get measuring :failure) "ssh: connection reset")
+     (remhash "dev" roost--failures)
+     (roost-refresh t)
+     (roost-test--answer "list" (list (roost-test--listed roost-test--x '(gitStamp . "s9"))
+                                      (roost-test--y-committed)))
+     (let ((both (roost-test--take "list")))
+       (should (equal (sort (copy-sequence (roost-test--full both)) #'string<)
+                      (list roost-test--x roost-test--y)))
+       (funcall (plist-get both :failure) "ssh: connection reset"))
+     (should (equal (gethash "dev" roost--measures-owed) (list roost-test--x))))))
+
+(ert-deftest roost-a-worktrees-pull-request-keeps-what-it-said-beside-a-new-one-of-the-tasks ()
+  ;; It says which it is itself: the task's own says nothing of it.
+  (let* ((said '((number . 7) (head . "h") (base . "main") (state . "OPEN")))
+         (old `((pr . ((number . 1))) (worktreePr . ((threads . 2) ,@said))))
+         (new `((pr . ((number . 2))) (worktreePr . ((reviewsFailed . t) ,@said)))))
+    (should (= (alist-get 'threads (alist-get 'worktreePr (roost--kept-reviews new old))) 2))))
+
+(ert-deftest roost-what-a-failed-review-query-keeps-is-the-forges-alone ()
+  ;; A commit here since: what is to push is as this reply says.
+  (let* ((said '((number . 7) (head . "h") (base . "main") (state . "OPEN")))
+         (old `((pr . ((number . 1))) (worktreePr . ((threads . 2) (tip . "t1") (unpushed . 0) ,@said))))
+         (new `((pr . ((number . 1))) (worktreePr . ((reviewsFailed . t) (tip . "t2") (unpushed . 1) ,@said))))
+         (kept (alist-get 'worktreePr (roost--kept-reviews new old))))
+    (should (= (alist-get 'threads kept) 2))
+    (should (equal (alist-get 'tip kept) "t2"))
+    (should (= (alist-get 'unpushed kept) 1))))
+
+(ert-deftest roost-a-pull-request-made-ready-as-its-reviews-fail-reads-ready ()
+  (let* ((said '((number . 7) (head . "h") (base . "main") (state . "OPEN")))
+         (old `((pr . ((number . 7))) (prStatus . ((draft . t) ,@said))))
+         (new `((pr . ((number . 7))) (prStatus . ((reviewsFailed . t) ,@said)))))
+    (should-not (alist-get 'draft (alist-get 'prStatus (roost--kept-reviews new old))))))
+
+(ert-deftest roost-a-full-refresh-that-took-up-what-was-owed-is-owed-if-it-fails ()
+  ;; Every task but those owed had only that one try.
+  (roost-test--with-held-requests
+   (let ((measuring (roost-test--a-poll-sees-y-commit)))
+     (funcall (plist-get measuring :failure) "ssh: connection reset")
+     (remhash "dev" roost--failures)
+     (should (consp (gethash "dev" roost--measures-owed)))
+     (roost-refresh)
+     (funcall (plist-get (roost-test--take "list") :failure) "ssh: connection reset")
+     (should (eq (gethash "dev" roost--measures-owed) t)))))
+
+(ert-deftest roost-a-pull-request-reopened-as-its-reviews-fail-reads-open ()
+  (let* ((said '((number . 7) (head . "h") (base . "main")))
+         (old `((pr . ((number . 7))) (prStatus . ((state . "CLOSED") ,@said))))
+         (new `((pr . ((number . 7))) (prStatus . ((state . "OPEN") (reviewsFailed . t) ,@said)))))
+    (should (equal (alist-get 'state (alist-get 'prStatus (roost--kept-reviews new old))) "OPEN"))))
+
+(ert-deftest roost-a-full-refresh-that-failed-is-asked-for-again ()
+  ;; After a merge, the others are measured against the branch that moved.
+  (roost-test--with-held-requests
+   (roost-test--measure-both)
+   (roost-refresh)
+   (funcall (plist-get (roost-test--take "list") :failure) "ssh: connection reset")
+   (remhash "dev" roost--failures)
+   (roost-refresh t)
+   (roost-test--answer "list" (list (roost-test--listed roost-test--x) (roost-test--listed roost-test--y)))
+   (should (eq (roost-test--full (roost-test--take "list")) t))))
+
+(ert-deftest roost-a-change-a-measurement-of-another-task-brings-is-measured ()
+  ;; Only quiet polls compared.  An event of y's its host read for a list
+  ;; measuring x was news here, unmeasured, and the next poll found nothing
+  ;; new: with two agents at work, that could be the last of a turn.
+  (roost-test--with-held-requests
+   (let ((x (roost-test--listed roost-test--x '(gitStamp . "s9")
+                                '(updatedAt . "2026-10-03T20:04:00+00:00"))))
+     (roost-test--measure-both)
+     (roost-refresh t)
+     (roost-test--answer "list" (list x (roost-test--listed roost-test--y)))
+     (let ((measuring (roost-test--take "list")))
+       (should (equal (roost-test--full measuring) (list roost-test--x)))
+       (funcall (plist-get measuring :success)
+                (list (roost-test--measured x '(diff . "x, new")) (roost-test--y-committed))))
+     ;; After the next poll: at once, two busy agents would never rest.
+     (should-not roost-test--held)
+     (should-not (gethash "dev" roost--refreshing))
+     (roost-refresh t)
+     (roost-test--answer "list" (list x (roost-test--y-committed)))
+     (let ((next (roost-test--take "list")))
+       (should (equal (roost-test--full next) (list roost-test--y)))
+       (funcall (plist-get next :success)
+                (list x (roost-test--measured (roost-test--y-committed) '(diff . "new")))))
+     (should (equal (roost-test--y-diff) "new")))))
+
+(ert-deftest roost-what-a-list-measures-it-owes-nothing-for ()
+  ;; Whatever it brings of a task it measured, as another commit since the
+  ;; poll, it read that as it measured.
+  (roost-test--with-held-requests
+   (let ((measuring (roost-test--a-poll-sees-y-commit))
+         (y (cons '(gitStamp . "s3") (roost-test--y-committed))))
+     (funcall (plist-get measuring :success)
+              (list (roost-test--listed roost-test--x) (roost-test--measured y '(diff . "new"))))
+     (should (equal (roost-test--y-diff) "new"))
+     (should-not (gethash "dev" roost--measures-owed))
+     ;; Nor do polls that find nothing new go on measuring.
+     (roost-refresh t)
+     (let ((poll (roost-test--take "list")))
+       (should (eq (roost-test--full poll) :false))
+       (funcall (plist-get poll :success) (list (roost-test--listed roost-test--x) y)))
+     (should-not roost-test--held))))
+
+(ert-deftest roost-a-host-that-always-fails-is-asked-at-the-pace-of-polls ()
+  ;; What a failed list owes waits for a good poll: from its end it would
+  ;; ask again at once, for as long as the host is down.
+  (roost-test--with-held-requests
+   (let ((measuring (roost-test--a-poll-sees-y-commit)))
+     (funcall (plist-get measuring :failure) "ssh: connection reset")
+     (should-not roost-test--held)
+     (dotimes (_ 3)
+       (remhash "dev" roost--failures)
+       (roost-refresh t)
+       (let ((poll (roost-test--take "list")))
+         (should (eq (roost-test--full poll) :false))
+         (funcall (plist-get poll :failure) "ssh: connection reset"))
+       (should-not roost-test--held))
+     (should (equal (gethash "dev" roost--measures-owed) (list roost-test--y))))))
+
+(ert-deftest roost-a-list-that-always-fails-holds-up-no-polls ()
+  ;; As a full list that takes longer than Emacs waits, however quiet ones
+  ;; answer: it gets one more try, and polls go on as ever.
+  (roost-test--with-held-requests
+   (roost-test--measure-both)
+   (roost-refresh)
+   (funcall (plist-get (roost-test--take "list") :failure) "No reply after 60s")
+   (remhash "dev" roost--failures)
+   (roost-refresh t)
+   (let ((poll (roost-test--take "list")))
+     (should (eq (roost-test--full poll) :false))
+     (funcall (plist-get poll :success) (list (roost-test--listed roost-test--x) (roost-test--listed roost-test--y))))
+   (let ((again (roost-test--take "list")))
+     (should (eq (roost-test--full again) t))
+     (funcall (plist-get again :failure) "No reply after 60s"))
+   (should-not (gethash "dev" roost--measures-owed))
+   (remhash "dev" roost--failures)
+   (roost-refresh t)
+   (let ((poll (roost-test--take "list")))
+     (should (eq (roost-test--full poll) :false))
+     (funcall (plist-get poll :success) (list (roost-test--listed roost-test--x) (roost-test--listed roost-test--y))))
+   (should-not roost-test--held)))
+
+(ert-deftest roost-a-measurement-asked-again-and-dropped-is-asked-once-more ()
+  ;; Dropped as stale, it had no answer to be wrong about: that isn't a try.
+  (roost-test--with-held-requests
+   (puthash "dev" (list roost-test--y) roost--measures-owed)
+   (roost--refresh-host "dev" nil (list roost-test--y))
+   (let ((measuring (roost-test--take "list")))
+     (cl-incf (gethash "dev" roost--revisions 0))
+     (funcall (plist-get measuring :success) (roost-test--y-measured)))
+   (should (equal (gethash "dev" roost--measures-owed) (list roost-test--y)))))
+
+(ert-deftest roost-a-full-refresh-settles-what-is-owed ()
+  (roost-test--with-held-requests
+   (puthash "dev" (list roost-test--y) roost--measures-owed)
+   (roost-refresh)
+   (should (eq (roost-test--full (roost-test--take "list")) t))
+   (should-not (gethash "dev" roost--measures-owed))))
+
+(ert-deftest roost-a-list-of-some-tasks-takes-up-what-is-owed ()
+  (roost-test--with-held-requests
+   (puthash "dev" (list roost-test--y) roost--measures-owed)
+   (roost--refresh-host "dev" nil (list roost-test--x))
+   (should (equal (sort (copy-sequence (roost-test--full (roost-test--take "list"))) #'string<)
+                  (list roost-test--x roost-test--y)))))
+
+(ert-deftest roost-a-list-that-could-not-start-is-asked-for-again ()
+  ;; As one owed after a poll, when there is no helper to read as it starts.
+  (roost-test--with-held-requests
+   (cl-letf (((symbol-function 'roost--request) (lambda (&rest _) (error "No helper"))))
+     (should-error (roost--refresh-host "dev" nil (list roost-test--y))))
+   (roost-refresh t)
+   (roost-test--answer "list" (list (roost-test--listed roost-test--y)))
+   (should (equal (roost-test--full (roost-test--take "list")) (list roost-test--y)))))
+
+(ert-deftest roost-a-poll-that-could-not-ask-github-asks-the-next-time ()
+  ;; Noted as asked, the first good poll after an outage left it for two
+  ;; minutes, and what it then found read as news.
+  (roost-test--with-held-requests
+   (roost-refresh t)
+   (let ((poll (roost-test--take "list")))
+     (should (alist-get 'pullRequests (plist-get poll :parameters)))
+     (funcall (plist-get poll :failure) "ssh: connection reset"))
+   (remhash "dev" roost--failures)
+   (roost-refresh t)
+   (should (alist-get 'pullRequests (plist-get (roost-test--answer "list" nil) :parameters)))
+   ;; It was answered, so the next needn't.
+   (roost-refresh t)
+   (should-not (alist-get 'pullRequests (plist-get (roost-test--answer "list" nil) :parameters)))))
+
+(ert-deftest roost-a-poll-dropped-as-stale-asks-github-the-next-time ()
+  (roost-test--with-held-requests
+   (roost-refresh t)
+   (let ((poll (roost-test--take "list")))
+     (cl-incf (gethash "dev" roost--revisions 0))
+     (funcall (plist-get poll :success) nil))
+   (roost-refresh t)
+   (should (alist-get 'pullRequests (plist-get (roost-test--take "list") :parameters)))))
+
+(defun roost-test--notices-held ()
+  "The status of each notification held."
+  (mapcar (lambda (notice) (plist-get notice :status)) roost--held-notices))
+
+(defun roost-test--conflicting (task)
+  "TASK as a list that measured it gives it, in conflict with its branch."
+  (roost-test--measured task '(conflicts "ledger.py")))
+
+(ert-deftest roost-a-conflict-from-before-a-restart-is-no-news ()
+  ;; Watching from your configuration, the first list is a quiet poll, which
+  ;; measures nothing and has each task new to it measured next.  The
+  ;; turn read as nil, then `conflicts': a notification, at each start, of
+  ;; what you had known for days.
+  (roost-test--with-held-requests
+   (let ((roost-notify t) (task (roost-test--listed roost-test--x)))
+     (roost-refresh t)
+     (roost-test--answer "list" (list task))
+     (roost-test--answer "list" (list (roost-test--conflicting (roost-test--listed roost-test--x))))
+     (should (equal (roost--display-status (gethash (list "dev" roost-test--x) roost--tasks)) "ready"))
+     (should-not roost--held-notices))))
+
+(ert-deftest roost-a-conflict-from-before-a-restart-is-no-news-on-a-pushed-branch ()
+  ;; A poll that asks GitHub says `landed' of what it asked about, with
+  ;; nothing measured: that isn't enough to tell.
+  (roost-test--with-held-requests
+   (let ((roost-notify t))
+     (roost-refresh t)
+     (roost-test--answer "list" (list (roost-test--listed roost-test--x '(landed))))
+     (roost-test--answer "list" (list (roost-test--conflicting (roost-test--listed roost-test--x))))
+     (should-not roost--held-notices))))
+
+(ert-deftest roost-a-conflict-found-by-a-first-full-refresh-is-no-news ()
+  (roost-test--with-held-requests
+   (let ((roost-notify t))
+     (roost-refresh)
+     (roost-test--answer "list" (list (roost-test--conflicting (roost-test--listed roost-test--x))))
+     (should-not roost--held-notices))))
+
+(ert-deftest roost-a-conflict-that-comes-is-news ()
+  ;; After the first measurement, so the tests above would see one.
+  (roost-test--with-held-requests
+   (let ((roost-notify t))
+     (roost-refresh)
+     (roost-test--answer "list" (list (roost-test--measured (roost-test--listed roost-test--x))))
+     (should-not roost--held-notices)
+     (roost-refresh)
+     (roost-test--answer "list" (list (roost-test--conflicting (roost-test--listed roost-test--x))))
+     (should (equal (roost-test--notices-held) '("conflicts"))))))
+
+(defun roost-test--open-pull-request (&rest fields)
+  "Task x, measured and seen, with an open pull request, and FIELDS over those."
+  (apply #'roost-test--measured
+         (roost-test--listed roost-test--x '(seen . "2026-10-03T20:00:00+00:00")
+                             '(pr . ((number . 12) (url . "https://example.com/12") (state . "OPEN") (head . "a1"))))
+         '(unpushed . 0)
+         fields))
+
+(defconst roost-test--to-merge
+  '(prStatus . ((state . "OPEN") (head . "a1") (checks . ((passing . 3) (failing . 0) (pending . 0)))
+                (mergeable . "MERGEABLE") (requested) (threads . 0)
+                (checkedAt . "2026-10-03T20:05:00+00:00")))
+  "What a forge says of a pull request that passed everything.")
+
+(defconst roost-test--checks-pending
+  '(prStatus . ((state . "OPEN") (head . "a1") (checks . ((passing . 2) (failing . 0) (pending . 1)))
+                (mergeable . "MERGEABLE") (requested) (threads . 0)
+                (checkedAt . "2026-10-03T20:05:00+00:00")))
+  "What a forge says of a pull request still checking.")
+
+(ert-deftest roost-a-pull-request-from-before-an-outage-is-no-news ()
+  ;; Measured, but with nothing yet from GitHub, as when it didn't answer:
+  ;; what it then says was there all along.
+  (roost-test--with-held-requests
+   (let ((roost-notify t))
+     (roost-refresh)
+     (roost-test--answer "list" (list (roost-test--open-pull-request)))
+     (roost-refresh)
+     (roost-test--answer "list" (list (roost-test--open-pull-request (copy-tree roost-test--to-merge))))
+     (should (equal (gethash (list "dev" roost-test--x) roost--pr-verdicts) "to merge"))
+     (should-not roost--held-notices))))
+
+(ert-deftest roost-a-pull-request-from-before-a-failed-review-query-is-no-news ()
+  ;; It says nothing of what waits, with no status before it to keep.
+  (roost-test--with-held-requests
+   (let ((roost-notify t)
+         (failed '(prStatus . ((state . "OPEN") (head . "a1") (reviewsFailed . t)
+                               (checks . ((passing . 3) (failing . 0) (pending . 0)))
+                               (checkedAt . "2026-10-03T20:05:00+00:00")))))
+     (roost-refresh)
+     (roost-test--answer "list" (list (roost-test--open-pull-request (copy-tree failed))))
+     (roost-refresh)
+     (roost-test--answer "list" (list (roost-test--open-pull-request (copy-tree roost-test--to-merge))))
+     (should-not roost--held-notices))))
+
+(ert-deftest roost-a-new-pull-request-that-waits-as-the-last-did-is-news ()
+  ;; It takes the place of one that read the same, with a moment between.
+  (roost-test--with-held-requests
+   (let ((roost-notify t)
+         (next '(pr . ((number . 13) (url . "https://example.com/13") (state . "OPEN") (head . "a1")))))
+     (roost-refresh)
+     (roost-test--answer "list" (list (roost-test--open-pull-request (copy-tree roost-test--to-merge))))
+     (roost-refresh)
+     (roost-test--answer "list" (list (roost-test--open-pull-request next)))
+     (roost-refresh)
+     (roost-test--answer "list" (list (roost-test--open-pull-request next (copy-tree roost-test--to-merge))))
+     (should (equal (roost-test--notices-held) '("to merge"))))))
+
+(ert-deftest roost-a-pull-request-that-comes-to-wait-is-news ()
+  (roost-test--with-held-requests
+   (let ((roost-notify t))
+     (roost-refresh)
+     (roost-test--answer "list" (list (roost-test--open-pull-request (copy-tree roost-test--checks-pending))))
+     (should-not roost--held-notices)
+     (roost-refresh)
+     (roost-test--answer "list" (list (roost-test--open-pull-request (copy-tree roost-test--to-merge))))
+     (should (equal (roost-test--notices-held) '("to merge"))))))
+
+(ert-deftest roost-a-turn-waits-for-a-measurement-not-for-what-github-was-asked ()
+  ;; A poll that asks GitHub says `landed' with nothing measured: the turn
+  ;; the host records read as ended, and began again a moment after.
+  (roost-test--isolated
+   (let ((task (append '((landed) (turn . "conflicts")) (roost-test--task))) asked)
+     (cl-letf (((symbol-function 'roost--report-turn) roost-test--report-turn)
+               ((symbol-function 'roost--request) (lambda (&rest _) (setq asked t))))
+       (roost--report-turn task)
+       (should-not asked)
+       (roost--report-turn (cons '(conflicts) task))
+       (should asked)))))
+
+(defun roost-test--notified-of-a-start (&rest steps)
+  "The titles Roost notifies with as a task goes through STEPS, oldest first.
+Each is what happens at a poll: `starting', an agent starting; `held',
+one past `roost-startup-grace'; or a status.  Or `minute', as what is
+held goes, which it does at the end too."
+  (let ((roost-notify t) (now (format-time-string "%FT%T%z")) notices)
+    (roost-test--held-notices
+     (cl-letf (((symbol-function 'roost--notify) (lambda (title &rest _) (push title notices)))
+               ((symbol-function 'roost--watched-task) #'ignore))
+       (dolist (step (append steps '(minute)))
+         (if (eq step 'minute)
+             (when roost--held-notices (roost-test--a-minute-on))
+           (let ((roost-startup-grace (if (eq step 'held) -1 60)))
+             (roost--cache-task
+              "dev" (append `((updatedAt . ,now))
+                            (roost-test--task roost-test--x (if (symbolp step) "starting" step)))))))))
+    (reverse notices)))
+
+(ert-deftest roost-an-agent-held-at-a-startup-prompt-notifies-once ()
+  ;; "those are the tasks `n' visits, the mode line counts and a notification
+  ;; announces": its status never changes, only how long it has had it,
+  ;; so nothing said so, though its agent can do nothing without you.
+  (roost-test--isolated
+   (should (equal (roost-test--notified-of-a-start 'starting 'held 'held 'held)
+                  '("fix auth — prompt")))))
+
+(ert-deftest roost-an-agent-held-at-a-startup-prompt-notifies-once-whatever-it-reports ()
+  ;; An event that leaves it starting moves its time, so it reads as new
+  ;; again: OpenCode's do.
+  (roost-test--isolated
+   (should (equal (roost-test--notified-of-a-start 'starting 'held 'minute 'starting 'held)
+                  '("fix auth — prompt")))))
+
+(ert-deftest roost-an-agent-only-slow-to-start-notifies-of-nothing ()
+  ;; Held to go with others, it goes no more once it has moved on.
+  (roost-test--isolated
+   (should-not (roost-test--notified-of-a-start 'starting 'held "running"))))
+
+(ert-deftest roost-an-agent-starting-in-time-notifies-of-nothing ()
+  (roost-test--isolated
+   (should-not (roost-test--notified-of-a-start 'starting 'starting 'starting))))
+
+(ert-deftest roost-an-agent-already-at-its-startup-prompt-is-no-news ()
+  ;; As with anything there when Roost first saw the task.
+  (roost-test--isolated
+   (should-not (roost-test--notified-of-a-start 'held 'held))))
+
+(ert-deftest roost-an-agent-at-its-startup-prompt-you-are-watching-is-no-news ()
+  (roost-test--isolated
+   (let ((roost-notify t) (now (format-time-string "%FT%T%z")) notified)
+     (cl-letf (((symbol-function 'roost--notify) (lambda (&rest _) (setq notified t)))
+               ((symbol-function 'roost--watched-task)
+                (lambda () (gethash (list "dev" roost-test--x) roost--tasks))))
+       (roost--cache-task "dev" (append `((updatedAt . ,now)) (roost-test--task roost-test--x "starting")))
+       (let ((roost-startup-grace -1))
+         (roost--cache-task "dev" (append `((updatedAt . ,now)) (roost-test--task roost-test--x "starting"))))
+       (should-not roost--held-notices)
+       (should-not notified)))))
+
+(ert-deftest roost-the-status-hooks-see-no-prompt ()
+  ;; It is a word for you, not a status: `roost-task-status-functions' goes on
+  ;; as the record does.
+  (roost-test--isolated
+   (let ((now (format-time-string "%FT%T%z")) seen)
+     (let ((roost-task-status-functions (list (lambda (_task old new) (push (list old new) seen)))))
+       (roost--cache-task "dev" (append `((updatedAt . ,now)) (roost-test--task roost-test--x "starting")))
+       (let ((roost-startup-grace -1))
+         (roost--cache-task "dev" (append `((updatedAt . ,now)) (roost-test--task roost-test--x "starting"))))
+       (should-not seen)
+       (roost--cache-task "dev" (append `((updatedAt . ,now)) (roost-test--task roost-test--x "running")))
+       (should (equal seen '(("starting" "running"))))))))
+
+(defun roost-test--review-query-failed (&rest status)
+  "`roost-test--turn-task' as a poll gives it when its review query failed.
+`gh pr list' answered and `gh api graphql' didn't, as for a 502 or the
+deadline, so the status has what the first said.  STATUS goes over that."
+  (apply #'roost-test--turn-task
+         (append status '((reviewsFailed . t) (mergeable . :none) (requested . :none) (threads . :none)))))
+
+(ert-deftest roost-a-failed-review-query-takes-back-nothing-that-waits ()
+  ;; The word went for two minutes, the turn was told to end, and it all
+  ;; came back as news.
+  (roost-test--isolated
+   (roost--cache-task "dev" (roost-test--turn-task))
+   (let ((task (roost--cache-task "dev" (roost-test--review-query-failed))))
+     (should (equal (roost--display-status task) "to merge"))
+     (should (equal (roost--pr-verdict task) "to merge"))
+     (should (equal (alist-get 'checkedAt (roost--field task 'prStatus)) "2026-10-03T20:01:00+00:00")))
+   ;; Nor does a second in a row.
+   (should (equal (roost--display-status (roost--cache-task "dev" (roost-test--review-query-failed)))
+                  "to merge"))))
+
+(ert-deftest roost-a-failed-review-query-is-no-news-when-it-answers-again ()
+  (roost-test--isolated
+   (roost-test--held-notices
+    (let ((roost-notify t) notices)
+      (cl-letf (((symbol-function 'roost--notify) (lambda (title &rest _) (push title notices)))
+                ((symbol-function 'roost--watched-task) #'ignore))
+        (roost--cache-task "dev" (roost-test--turn-task '(checks . ((passing . 2) (failing . 0) (pending . 1)))))
+        (dolist (poll (list (roost-test--turn-task) (roost-test--review-query-failed) (roost-test--turn-task)))
+          (roost--cache-task "dev" poll)
+          (roost-test--a-minute-on))
+        (should (equal notices '("fix auth — to merge"))))))))
+
+(ert-deftest roost-a-failed-review-query-makes-no-word-of-newer-checks ()
+  ;; Reviews from before, beside checks from now, are what nobody said: a
+  ;; thread may have come since.
+  (roost-test--isolated
+   (roost--cache-task "dev" (roost-test--turn-task '(checks . ((passing . 2) (failing . 0) (pending . 1)))))
+   (should-not (equal (roost--display-status (roost--cache-task "dev" (roost-test--review-query-failed)))
+                      "to merge"))))
+
+(ert-deftest roost-a-failed-review-query-keeps-nothing-of-another-head ()
+  ;; New commits may have answered a thread, or made a conflict.
+  (roost-test--isolated
+   (roost--cache-task "dev" (roost-test--turn-task))
+   (let ((status (roost--field (roost--cache-task "dev" (roost-test--review-query-failed '(head . "b2")))
+                               'prStatus)))
+     (should (alist-get 'reviewsFailed status))
+     (should-not (assq 'mergeable status)))))
+
+(ert-deftest roost-a-failed-review-query-keeps-nothing-of-another-base ()
+  (roost-test--isolated
+   (roost--cache-task "dev" (roost-test--turn-task '(base . "main")))
+   (should-not (assq 'mergeable (roost--field (roost--cache-task "dev" (roost-test--review-query-failed '(base . "next")))
+                                              'prStatus)))))
+
+(ert-deftest roost-a-failed-review-query-keeps-nothing-of-another-pull-request ()
+  ;; One closed and another opened from the same commit.
+  (roost-test--isolated
+   (roost--cache-task "dev" (roost-test--turn-task))
+   (let ((task (cons '(pr . ((number . 13) (url . "https://github.com/o/r/pull/13") (state . "OPEN") (head . "a1")))
+                     (assq-delete-all 'pr (roost-test--review-query-failed)))))
+     (should-not (assq 'mergeable (roost--field (roost--cache-task "dev" task) 'prStatus))))))
+
+(ert-deftest roost-a-review-query-that-answers-replaces-what-it-said ()
+  ;; A thread resolved goes: only one that failed keeps the last word.
+  (roost-test--isolated
+   (roost--cache-task "dev" (roost-test--turn-task '(threads . 2) `(threadAt . ,(roost-test--ago 300))))
+   (should (equal (alist-get 'threads (roost--field (roost--cache-task "dev" (roost-test--turn-task)) 'prStatus))
+                  0))))
+
+(ert-deftest roost-a-failed-review-query-takes-nothing-back-from-the-worktrees-branch ()
+  (roost-test--isolated
+   (roost--cache-task "dev" (roost-test--worktree-pr-task))
+   (let ((task (roost--cache-task "dev" (roost-test--worktree-pr-task '(reviewsFailed . t) '(mergeable . :none)
+                                                                      '(requested . :none) '(threads . :none)))))
+     (should (equal (alist-get 'mergeable (roost--field task 'worktreePr)) "MERGEABLE")))))
+
+(ert-deftest roost-a-task-whose-worktree-went-waits-on-no-conflicts ()
+  ;; As `add_git_stats' now says of it: left out, Roost kept what it last
+  ;; measured, and `n' went on visiting a task with nothing to resolve.
+  (roost-test--isolated
+   (let ((measured (roost-test--conflicted)))
+     (roost--cache-task "dev" measured)
+     (let ((task (roost--cache-task
+                  "dev" (append '((worktreeMissing . t) (conflicts) (merging) (dirty)) (copy-tree measured)))))
+       (should-not (equal (roost--display-status task) "conflicts"))
+       (should (string-prefix-p "Its worktree is gone" (substring-no-properties (roost--next-step task))))))))
+
+(defun roost-test--turns-of-two-emacs (both)
+  "How often two Emacs write a stopped, conflicting task's turn, in ten polls each.
+You opened the task in one, and if BOTH, in the other too.  Each reads what
+the host records, and the host what each sends."
+  (let* ((turn nil) (seen nil) (writes 0)
+         (record (roost-test--measured
+                  (append (roost-test--task roost-test--x "stopped") '((integrationBranch . "main")))
+                  '(conflicts "ledger.py")))
+         (reply (lambda () (append `((turn . ,turn) (seen . ,seen)) (copy-tree record))))
+         (tables (lambda () (mapcar (lambda (_) (make-hash-table :test 'equal)) (number-sequence 1 5))))
+         (first (funcall tables))
+         (second (funcall tables))
+         (as (lambda (emacs function)
+               (pcase-let ((`(,tasks ,seen ,sent ,statuses ,verdicts) emacs))
+                 (let ((roost--tasks tasks) (roost--seen seen) (roost--turns-sent sent)
+                       (roost--statuses statuses) (roost--pr-verdicts verdicts))
+                   (funcall function))))))
+    (cl-letf (((symbol-function 'roost--report-turn) roost-test--report-turn)
+              ((symbol-function 'roost--record-seen) roost-test--record-seen)
+              ((symbol-function 'roost--request)
+               (lambda (_host action parameters success &rest _)
+                 (pcase action
+                   ("turn" (unless (equal turn (alist-get 'turn parameters))
+                             (setq turn (alist-get 'turn parameters))
+                             (cl-incf writes)))
+                   ("seen" (setq seen (alist-get 'updatedAt parameters))))
+                 (funcall success (funcall reply)))))
+      (dolist (emacs (list first second))
+        (funcall as emacs (lambda () (roost--cache-task "dev" (funcall reply)))))
+      (dolist (emacs (if both (list first second) (list first)))
+        (funcall as emacs (lambda () (roost--mark-seen (gethash (list "dev" roost-test--x) roost--tasks)))))
+      (dotimes (_ 10)
+        (dolist (emacs (list first second))
+          (funcall as emacs (lambda () (roost--cache-task "dev" (funcall reply)))))))
+    writes))
+
+(ert-deftest roost-two-emacs-settle-on-a-stopped-tasks-turn ()
+  ;; Seeing a stopped task stayed in the Emacs that did: the two judged it
+  ;; differently, and each poll undid the other's turn, in its record and
+  ;; its history, for as long as they ran.
+  (roost-test--isolated
+   (should (= (roost-test--turns-of-two-emacs nil) 1))))
+
+(ert-deftest roost-two-emacs-that-both-saw-a-stopped-task-agree ()
+  (roost-test--isolated
+   (should (= (roost-test--turns-of-two-emacs t) 1))))
 (ert-deftest roost-a-turn-you-quit-as-it-went-is-sent-again ()
   ;; A quit is no error, and it stayed marked as sent for good.
   (roost-test--isolated
@@ -8792,7 +9450,7 @@ passed everything, as GitHub said a minute after.  STATUS, fields of its
      `(prStatus . ,(seq-remove (lambda (field) (eq (cdr field) :none))
                                (seq-uniq fields (lambda (a b) (eq (car a) (car b))))))
      '(pr . ((number . 12) (url . "https://github.com/o/r/pull/12") (state . "OPEN") (head . "a1")))
-     '(unpushed . 0) '(live . t) '(ahead . 1) '(dirty) '(seen . "2026-10-03T20:00:00+00:00"))))
+     '(unpushed . 0) '(live . t) '(ahead . 1) '(dirty) '(conflicts) '(seen . "2026-10-03T20:00:00+00:00"))))
 
 (ert-deftest roost-a-pull-request-waiting-on-you-counts-as-waiting ()
   (roost-test--isolated
@@ -8828,7 +9486,7 @@ field (FIELD . :none) is left out."
                           (requested) (threads . 0) (checkedAt . "2026-10-03T20:01:00+00:00")))))
     (append `((worktreePr . ,(seq-remove (lambda (field) (eq (cdr field) :none))
                                          (seq-uniq fields (lambda (a b) (eq (car a) (car b)))))))
-            '((worktreeBranch . "PROJ-1-fix") (worktreeHead . "b2") (integrationBranch . "main") (live . t)
+            '((conflicts) (worktreeBranch . "PROJ-1-fix") (worktreeHead . "b2") (integrationBranch . "main") (live . t)
               (ahead . 1) (dirty) (diff . "1 file changed, 12 insertions(+), 3 deletions(-)")
               (seen . "2026-10-03T20:00:00+00:00"))
             (roost-test--task))))
@@ -12885,7 +13543,7 @@ it of the same ID's, or nil for the first."
        (let ((conflicting `((seen . "2026-10-03T20:00:00+00:00") (integrationBranch . "main")
                             (landed) (conflicts "ledger.py") ,@(roost-test--task))))
          ;; Not before its host has measured it.
-         (roost--cache-task "dev" (assq-delete-all 'landed (copy-tree conflicting)))
+         (roost--cache-task "dev" (assq-delete-all 'conflicts (copy-tree conflicting)))
          (should-not sent)
          (roost--cache-task "dev" conflicting)
          (roost--cache-task "dev" conflicting)
@@ -12906,12 +13564,12 @@ it of the same ID's, or nil for the first."
          (should (equal sent '(("dev" "turn" "conflicts") ("dev" "turn" "conflicts")))))
        ;; An open pull request waits for what GitHub says.
        (setq sent nil fail nil)
-       (roost--cache-task "dev" `((landed) (pr (number . 12)) ,@(roost-test--task "1111111111111111")))
+       (roost--cache-task "dev" `((landed) (conflicts) (pr (number . 12)) ,@(roost-test--task "1111111111111111")))
        (should-not sent)
        ;; Not the task's own, though, while the worktree's branch has the
        ;; one that waits, as when its own branch is gone, which GitHub is
        ;; asked nothing about.
-       (roost--cache-task "dev" `((id . "2222222222222222") (landed) (pr (number . 4) (state . "OPEN"))
+       (roost--cache-task "dev" `((id . "2222222222222222") (landed) (conflicts) (pr (number . 4) (state . "OPEN"))
                                   ,@(roost-test--worktree-pr-task)))
        (should (equal sent '(("dev" "turn" "to merge"))))))))
 
