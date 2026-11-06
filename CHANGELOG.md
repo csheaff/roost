@@ -19,6 +19,20 @@ What each release changes, and what to do when upgrading. Newest first.
 - Discarding a task whose repository is gone says it went. It deleted the
   task's worktree, then said the repository wasn't one, and the task stayed
   until you asked again. Nothing to do when upgrading.
+- Two Emacs on one machine keep each other's review notes, hosts and
+  projects. What you wrote or used in one went when the other next saved,
+  and a note you had sent, or a host you had forgotten, came back. Each now
+  takes up what the file holds as it writes. Nothing to do when upgrading.
+- A connection that drops while Roost installs its helper on a host changes
+  nothing there. What had arrived replaced the helper, which agents' hooks
+  call, so their statuses stopped moving, and the host could read offline
+  until you restarted Emacs. Each Emacs now leaves a helper of the right
+  size as it is, and installs again one that isn't whole. Nothing to do when
+  upgrading.
+- A host goes on being asked after a refresh that couldn't start, as with
+  `C-g` just then, or a poll as Git replaced Roost's helper file. Its rows
+  stopped changing, with no error, until you restarted Emacs. Nothing to do
+  when upgrading.
 - Discarding or merging a task checks again what its question told you, as
   an agent goes on working while you read. A file written before you
   answered went with the task, though Roost had said nothing would be lost
