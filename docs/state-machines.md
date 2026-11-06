@@ -637,7 +637,7 @@ Invariants:
 | not `permission` | `PreToolUse`, `PostToolUse` | | `running` | same | |
 | `permission` | `PostToolUse` | from the agent that asked, of the tool it asked for | `running` | same | request cleared |
 | `permission` | `PreToolUse` | from the agent that asked | `running` | same | request cleared: it went on, as when what it asked for failed |
-| `permission` | `PreToolUse`, `PostToolUse` | named by a notification; the main agent's | `running` | same | request cleared |
+| `permission` | `PreToolUse`, `PostToolUse` | named by a notification, not an MCP question's; the main agent's | `running` | same | request cleared |
 | `permission` | `PreToolUse`, `PostToolUse` | any other | unchanged | unchanged | `tool_answers` |
 | any | `PermissionRequest` | | `permission` | same | `request`, `requestCommand` |
 | any | `Stop` | `background_tasks` or `session_crons` | `background` | `Stop` | `lastReply` |
@@ -829,7 +829,7 @@ the agent's own report; which tool call will say it's over; what it says it's do
 | --- | --- | --- |
 | None | Nothing asked | no `request` |
 | Named by a hook | From the tool's payload, or a notification's message | `request`, no `requestFrom` |
-| Watching a command | As above, for Bash | `requestCommand`, at most 200 characters |
+| Watching a command | As above, for the main agent's Bash, as the poll can't tell whose process it sees | `requestCommand`, at most 200 characters |
 | Knowing its tool | Named by a hook that names a tool | `requestCall`: who asked, the tool, a digest of each argument |
 | Overlapping | Another agent asks, by `worker_permission_prompt` or `agent_needs_input`, or anything new asks beside a request, unrelayed | `requestCall` names no agent that reports; no `requestCommand` or `requestQuestion` |
 | An MCP question alone | The first thing to ask since the agent last didn't | `requestQuestion` |
@@ -845,8 +845,8 @@ Invariants:
 - I3. A notification that follows a request, naming no tool, keeps it.
 - I4. A tool's event ends a request only from the agent that asked: the end of what
   it asked for, or its next tool (`tool_answers`). Without `requestCall`, a
-  notification named it, and only the main agent's event does. Word that a
-  question was answered ends only `requestQuestion`'s. Unsure, it stands.
+  notification named it, and only the main agent's event does. `requestQuestion`
+  is ended by word that it was answered, and by no tool's event. Unsure, it stands.
 - I5. Overlapping requests end together: one answer can't say the other was, so
   no tool's event, answer or approval ends them. Only the turn's end, as `Stop` or
   the poll's Esc, a new prompt, or the run's end does. A `permission_prompt`
@@ -860,6 +860,7 @@ Invariants:
 | any | hook that asks, naming nothing | was `permission` | unchanged | `update_hook` |
 | any | hook that doesn't ask | unrelayed, Codex, or a new conversation; not `permission` to `permission` | None | `update_hook` |
 | any | a tool's event that isn't an answer | unrelayed | unchanged | `tool_answers`, `update_hook` |
+| An MCP question alone | `elicitation_response`, `elicitation_complete` | | None | `update_hook` |
 | any but Overlapping | `PermissionRequest`, or a notification of an MCP question, while `permission`; a `permission_prompt` beside a question | unrelayed | Overlapping | `update_hook` |
 | any | notification of another agent's request | unrelayed | Overlapping | `update_hook` |
 | None, report-named | report `blocked` | `permission` now | report-named; words from `msg`, or `kind` | `apply_program_status` |
@@ -868,6 +869,10 @@ Invariants:
 | any | poll: Interrupt or Approved | | None | `list_tasks` |
 | any | stop, runner's end, crash | | unchanged, and shown only while `permission` | |
 | any | spawn | | None, `activity` too | `spawn` |
+
+Known, and left: two calls of one tool with the same arguments, one approved and one
+waiting. The first's end reads as the second's, which `tool_answers` can't tell
+apart, as a request carries no ID of its call.
 
 Open: none.
 
@@ -909,7 +914,7 @@ Invariants:
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
-| No run, Gone, Reused, Respawned, Owned dead | `resume` | | Owned, live | dead pane closed; new `runId`; session named for the task; `shellPaneId` gone | `resume`, `spawn` |
+| No run, Gone, Reused, Respawned, Owned dead | `resume` | | Owned, live | dead pane and the task's shell closed; new `runId`; session named for the task; `shellPaneId` gone | `resume`, `spawn` |
 | Owned, live | `resume` | | refused | "still running" | `resume` |
 | Owned | `stop` | | No run | `close_panes` | `stop` |
 | Gone, Reused, Respawned | `stop` | | No run | only the task's shell closed; IDs forgotten | `stop` |

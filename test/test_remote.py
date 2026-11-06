@@ -896,9 +896,9 @@ class Lifecycle(unittest.TestCase):
                               message="Claude Code needs your input")
                 self.assertEqual((record["status"], record["request"]), ("permission", "Claude Code needs your input"))
                 self.assertIn("Open the task", self.request("send", id=task["id"], text="hello")["error"])
-                self.assertEqual(hook(hook_event_name="PostToolUse", tool_name="mcp__x__ask")["status"], "running")
-                # Or its answer does, without a tool, as to a server that asks by itself.
-                hook(hook_event_name="Notification", notification_type=kind, message="Claude Code needs your input")
+                # A tool's event may be another tool's: only its answer ends it.
+                for event in ("PreToolUse", "PostToolUse"):
+                    self.assertEqual(hook(hook_event_name=event, tool_name="Read")["status"], "permission")
                 record = hook(hook_event_name="Notification", notification_type="elicitation_response",
                               message='Elicitation response for server "x": accept')
                 self.assertEqual(record["status"], "running")
@@ -936,10 +936,10 @@ class Lifecycle(unittest.TestCase):
             record = hook(hook_event_name="PermissionRequest", **dict(asked, **payload))
             self.assertEqual((record["status"], record["request"]), ("permission", "Asks to run make deploy"))
 
-        def stands():
+        def stands(command="make deploy"):
             record = store.read(task["id"])
-            self.assertEqual((record["status"], record["lastEvent"], record["request"], record["requestCommand"]),
-                             ("permission", "PermissionRequest", "Asks to run make deploy", "make deploy"))
+            self.assertEqual((record["status"], record["lastEvent"], record["request"], record.get("requestCommand")),
+                             ("permission", "PermissionRequest", "Asks to run make deploy", command))
 
         def over(record):
             self.assertEqual(record["status"], "running")
@@ -972,8 +972,15 @@ class Lifecycle(unittest.TestCase):
         asks(agent_id="a1")
         for event in ("PreToolUse", "PostToolUse"):
             hook(hook_event_name=event, **mine)
-            stands()
+            stands(None)
+        # The same command running may be the main agent's, not what it asked.
+        with patch.object(roost, "approved_command_running", return_value=True):
+            self.assertEqual(self.request("list")["result"][0]["status"], "permission")
         over(hook(hook_event_name="PostToolUse", agent_id="a1", **asked))
+        # The main agent's own request is seen to start.
+        asks()
+        with patch.object(roost, "approved_command_running", return_value=True):
+            self.assertEqual(self.request("list")["result"][0]["status"], "running")
         # A request a notification named: only the main agent's tools say.
         hook(hook_event_name="UserPromptSubmit", prompt="go")
         hook(hook_event_name="Notification", notification_type="permission_prompt", message="Needs network access")
@@ -3391,6 +3398,19 @@ class Lifecycle(unittest.TestCase):
         panes = roost.pane_inventory(self.socket)
         self.assertIn(other["paneId"], panes)
         self.assertNotIn(shell, panes)
+        # So do resuming and forgetting.
+        for name, action in (("resumed", "resume"), ("forgotten", "forget")):
+            other = self.create(name=name)
+            shell = self.request("shell", id=other["id"])["result"]["shellPaneId"]
+            roost.tmux(self.socket, "respawn-pane", "-k", "-t", other["paneId"], "/bin/sh")
+            self.assertTrue(self.request(action, id=other["id"])["ok"])
+            panes = roost.pane_inventory(self.socket)
+            self.assertIn(other["paneId"], panes)
+            self.assertNotIn(shell, panes)
+        # With tmux not answering, a task is forgotten all the same.
+        other = self.create(name="unread")
+        with patch.object(roost, "pane_inventory", return_value=None):
+            self.assertTrue(self.request("forget", id=other["id"])["ok"])
 
     def test_a_task_from_before_the_runner_was_noted_stays_its_agents(self):
         task = self.create()

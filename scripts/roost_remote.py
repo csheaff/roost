@@ -878,15 +878,17 @@ def tool_answers(task, payload):
     only from the agent that asked, and only as the end of what it asked for,
     however it adds to or leaves out of its arguments, or as its next tool. A
     request a notification named doesn't say who asks: the main agent's event
-    counts, unless it said that another asks. Word that a question was
-    answered counts only for an MCP server's question with nothing else
-    asked beside it. Unsure, it stands: as the manual says, it may show until
-    the agent moves on."""
+    counts, unless it said that another asks. Only word that it was answered
+    ends an MCP server's question with nothing else asked beside it, as no
+    tool's event says which question it was about. Unsure, it stands: as the
+    manual says, it may show until the agent moves on."""
     asked = task.get("requestCall")
     if payload.get("hook_event_name") == "Notification":
         return task.get("requestQuestion") is True
     if payload.get("hook_event_name") not in ("PreToolUse", "PostToolUse"):
         return True
+    if task.get("requestQuestion"):
+        return False
     call = tool_call(payload)
     if not isinstance(asked, dict):
         return not call["agent"]
@@ -3731,8 +3733,7 @@ def resume(store, task, program_status=None, size=()):
     check_worktree(store, task, branch=False)
     if not Path(task["worktree"]).is_dir():
         raise RoostError("Task worktree is gone; forget the task to remove it from Roost")
-    if pane:
-        close_panes(task, inventory)
+    close_panes(task, inventory)
     # A task begun in a shared session, as before each had its own, moves to
     # its own on resume.
     task["session"] = session_name(task["repo"], task["id"])
@@ -5073,7 +5074,7 @@ def forget(store, task):
     pane = owned_pane(task, inventory) if inventory else None
     if pane and not pane["dead"]:
         raise RoostError("The agent is running; stop the task before forgetting it")
-    if pane:
+    if inventory:
         close_panes(task, inventory, check=False)
     left = []
     if Path(task["worktree"]).exists():
@@ -5867,7 +5868,8 @@ def update_hook(store, task_id, payload, run_id=None):
                 # identifies it, and a heredoc can be long.
                 arguments = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
                 command = arguments.get("command") if payload.get("tool_name") == "Bash" else None
-                if isinstance(command, str) and command.strip():
+                # Not a subagent's: the poll can't tell whose process it sees.
+                if isinstance(command, str) and command.strip() and not payload.get("agent_id"):
                     task["requestCommand"] = command[:APPROVAL_MARKER_LIMIT]
                 else:
                     task.pop("requestCommand", None)
