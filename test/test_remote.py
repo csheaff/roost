@@ -4897,7 +4897,7 @@ sys.exit(status)
     def merged_with_a_commit_made_on_the_forge_is_merged(self, task, tip, forge):
         self.listing((9, "MERGED", forge))
         listed = self.listed(full=True)
-        self.assertEqual((listed["pr"]["state"], listed["pr"]["mergedHead"]), ("MERGED", tip))
+        self.assertEqual((listed["pr"]["state"], listed["pr"]["mergedHead"]), ("MERGED", forge))
         self.assertIs(listed["landed"], True)
         # Then what was recorded stands, with nothing asked.
         (self.gh_dir / "list.json").unlink()
@@ -4918,6 +4918,17 @@ sys.exit(status)
         self.git("update-ref", "-d", "refs/heads/" + task["branch"], cwd=self.origin)
         self.merged_with_a_commit_made_on_the_forge_is_merged(task, tip, forge)
 
+    def test_a_merge_found_before_its_head_came_stays_the_same_merge(self):
+        # Emacs reports each merge once, by its head: `roost--pr-merges`.
+        task, tip, forge = self.open_then_commit_on_forge()
+        self.squash_on_forge(task, forge)
+        self.listing((9, "MERGED", forge))
+        with patch.object(roost, "PULL_REQUEST_DEADLINE", 3):
+            short = self.listed(full=True)["pr"]
+        self.assertEqual((short["head"], short.get("mergedHead")), (forge, None))
+        pr = self.listed(full=True)["pr"]
+        self.assertEqual((pr["head"], pr["mergedHead"]), (forge, forge))
+
     def test_retiring_fetches_what_merged_when_no_poll_has(self):
         task, tip, forge = self.open_then_commit_on_forge()
         self.squash_on_forge(task, forge)
@@ -4925,6 +4936,55 @@ sys.exit(status)
         self.assertTrue(self.request("stop", id=task["id"])["ok"])
         retired = self.request("retire", id=task["id"])
         self.assertTrue(retired["ok"], retired)
+
+    def test_retiring_tries_again_for_a_head_a_poll_gave_up_on(self):
+        task, tip, forge = self.open_then_commit_on_forge()
+        self.squash_on_forge(task, forge)
+        self.listing((9, "MERGED", forge))
+        with patch.object(roost, "fetch_head", lambda *args: False):
+            listed = self.listed(full=True)
+        self.assertEqual((listed["pr"]["unfetched"], listed["landed"]), (forge, False))
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        retired = self.request("retire", id=task["id"])
+        self.assertTrue(retired["ok"], retired)
+
+    def test_a_fetch_out_of_time_says_nothing_of_the_head(self):
+        task, tip, forge = self.open_then_commit_on_forge()
+        self.listing((9, "OPEN", forge))
+        original = roost.remote_git
+
+        def too_slow(repo, *args, **kwargs):
+            if args[0] == "fetch":
+                raise roost.RoostError("git fetch timed out after 15 seconds")
+            return original(repo, *args, **kwargs)
+
+        with patch.object(roost, "remote_git", too_slow):
+            self.assertNotIn("unfetched", self.listed(full=True)["pr"])
+        self.assertEqual(self.listed(full=True)["unpushed"], 0)
+
+    def test_retiring_deletes_the_branch_at_what_merged(self):
+        task, tip, forge = self.open_then_commit_on_forge()
+        self.squash_on_forge(task, forge)
+        self.listing((9, "MERGED", forge))
+        self.listed(full=True)
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        self.assertTrue(self.request("retire", id=task["id"])["ok"])
+        self.assertEqual(self.git("for-each-ref", "refs/heads/" + task["branch"], cwd=self.origin), "")
+
+    def test_retiring_leaves_a_branch_with_commits_after_what_merged(self):
+        task, tip, forge = self.open_then_commit_on_forge()
+        self.squash_on_forge(task, forge)
+        self.listing((9, "MERGED", forge))
+        self.listed(full=True)
+        clone = self.root / "on-the-forge"
+        (clone / "later").write_text("in no pull request\n")
+        self.git("add", ".", cwd=clone)
+        self.git("commit", "-qm", "Later", cwd=clone)
+        self.git("push", "-q", "origin", task["branch"], cwd=clone)
+        later = self.git("rev-parse", "HEAD", cwd=clone)
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        self.assertTrue(self.request("retire", id=task["id"])["ok"])
+        self.assertEqual(self.git("rev-parse", "refs/heads/" + task["branch"], cwd=self.origin), later)
 
     def test_commits_after_a_merge_never_count_as_merged(self):
         # Retiring deletes on this word. A commit made on the forge and one
@@ -5102,12 +5162,14 @@ sys.exit(status)
     def test_commits_an_update_brought_in_are_still_not_the_tasks(self):
         # What `own_commits` is for: main's, fast-forwarded in, by any name.
         self.github()
-        for name in ("main", "origin/main", "refs/heads/main"):
+        self.git("remote", "add", "upstream", str(self.origin))
+        for name in ("main", "origin/main", "refs/heads/main", "upstream/main", "origin/main~0", "FETCH_HEAD"):
             with self.subTest(name=name):
                 task = self.create(name="task " + name)
                 wt = Path(task["worktree"])
                 self.main_moves_on_origin("other " + name.replace("/", " "))
                 self.git("fetch", "-q", "origin", cwd=wt)
+                self.git("fetch", "-q", "upstream", "main", cwd=wt)
                 self.git("merge", "-q", "--ff-only", name, cwd=wt)
                 head = self.git("rev-parse", "HEAD", cwd=wt)
                 self.push(task)
@@ -5116,6 +5178,23 @@ sys.exit(status)
                               if entry["id"] == task["id"])
                 self.assertNotIn("pr", listed)
                 self.assertIs(listed["landed"], False)
+
+    def test_commits_of_origins_main_alone_are_still_not_the_tasks(self):
+        # A local main behind origin's can't say an update brought them in.
+        self.github()
+        task = self.create()
+        wt = Path(task["worktree"])
+        clone = self.forge_clone("elsewhere", "main")
+        (clone / "theirs").write_text("theirs\n")
+        self.git("add", ".", cwd=clone)
+        self.git("commit", "-qm", "Theirs", cwd=clone)
+        self.git("push", "-q", "origin", "main", cwd=clone)
+        self.git("fetch", "-q", "origin", cwd=wt)
+        self.git("merge", "-q", "--ff-only", "origin/main", cwd=wt)
+        head = self.git("rev-parse", "HEAD", cwd=wt)
+        self.push(task)
+        self.listing((9, "MERGED", head))
+        self.assertNotIn("pr", self.listed(full=True))
 
     def test_p_opens_another_after_a_closed_pull_request(self):
         self.github()

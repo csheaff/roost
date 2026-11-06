@@ -8169,7 +8169,37 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
         (should-not (funcall press t closed '(ahead . 2) '(landed) '(dirty)))
         (should opened)
         (should-not (funcall press t merged '(ahead . 2) '(landed) '(dirty)))
+        (should opened)
+        ;; And where its host would refuse: no commits it can tell of, as
+        ;; with no integration branch, or the worktree on another branch.
+        (should-not (funcall press nil closed '(ahead) '(landed) '(dirty)))
+        (should opened)
+        (should-not (funcall press nil closed '(ahead . 2) '(worktreeBranch . "feat") '(landed) '(dirty)))
         (should opened))))))
+
+(ert-deftest roost-the-next-step-offers-no-push-with-nothing-to-push ()
+  (roost-test--isolated
+   (let ((next (lambda (task) (substring-no-properties (roost--next-step (roost--cache-task "dev" task))))))
+     ;; Just pushed: its record has the new head, and GitHub is yet to be asked.
+     (should (equal (funcall next (roost-test--pr-task
+                                   '(pr . ((number . 12) (url . "u") (state . "OPEN") (head . "a2")))
+                                   '(unpushed . 0) '(live . t) '(ahead . 1) '(dirty) '(landed)
+                                   '(seen . "2026-10-03T20:00:00+00:00")))
+                    "#12 has every commit of the task's: P opens it"))
+     ;; It can't tell: as ever.
+     (should (equal (funcall next (roost-test--pr-task
+                                   '(pr . ((number . 12) (url . "u") (state . "OPEN") (head . "a2")))
+                                   '(unpushed) '(live . t) '(ahead . 1) '(dirty) '(landed)
+                                   '(seen . "2026-10-03T20:00:00+00:00")))
+                    "P pushes new commits to its pull request"))
+     ;; What holds it up, beside what else it waits for.
+     (should (equal (funcall next (roost-test--turn-task '(mergeState . "BLOCKED") '(landed)))
+                    "#12 waits for branch rules"))
+     (should (equal (funcall next (roost-test--turn-task '(mergeState . "BEHIND") '(landed)))
+                    "#12 waits for an update from the branch it merges into"))
+     (should (equal (funcall next (roost-test--turn-task
+                                   '(mergeState . "BLOCKED") '(requested "kim") '(landed)))
+                    "#12 waits for kim's review and branch rules")))))
 
 (ert-deftest roost-pr-draft-says-what-became-of-it-when-the-task-has-one-by-then ()
   ;; Its agent opened one while you wrote: the helper pushes to that, which
@@ -9280,7 +9310,7 @@ field (FIELD . :none) is left out."
      ;; had its push.
      (should (equal (funcall status '(checkedAt . "2026-10-03T20:00:20+00:00")) "ready"))
      (should (equal (funcall step '(checkedAt . "2026-10-03T20:00:20+00:00"))
-                    "P pushes new commits to its pull request"))
+                    "#12 has every commit of the task's: P opens it"))
      (should (equal (funcall status '(checkedAt . :none)) "ready"))
      ;; The branch has commits the pull request lacks, or can't tell.
      (let ((ahead (roost--cache-task "dev" (append '((unpushed . 2)) (roost-test--turn-task)))))
@@ -9354,7 +9384,7 @@ field (FIELD . :none) is left out."
      (should-not (roost--field polled 'prStatus))
      (should (equal (roost--display-status polled) "ready"))
      (should (equal (substring-no-properties (roost--next-step polled))
-                    "P pushes new commits to its pull request")))
+                    "#12 has every commit of the task's: P opens it")))
    ;; Nor what GitHub said of one since recorded closed, or replaced by
    ;; another at the same head.
    (dolist (record '(((number . 12) (url . "https://github.com/o/r/pull/12") (state . "CLOSED") (head . "a1"))
@@ -10888,20 +10918,6 @@ answered with `answer'."
      (roost--cache-task "dev" (roost-test--task nil "retired"))
      (should (equal (nreverse calls) '(("fix auth" "dev" "running" "permission")
                                        ("fix auth" "dev" "permission" "retired")))))))
-
-;; What merged has a head of its own, after the tip its host records.
-(ert-deftest roost-merged-functions-run-once-for-a-merge-with-a-commit-made-on-the-forge ()
-  (roost-test--isolated
-   (let* (merges
-          (roost-task-merged-functions (list (lambda (_task branch) (push branch merges))))
-          (task (lambda (&rest fields) (append fields '((integrationBranch . "main")) (roost-test--task)))))
-     (roost--cache-task "dev" (funcall task '(pr (number . 12) (state . "OPEN") (head . "aaa"))))
-     (let ((merged (funcall task '(pr (number . 12) (state . "MERGED") (head . "forge") (base . "main")
-                                      (mergedHead . "aaa") (mergedBases "main"))
-                            '(prStatus (state . "MERGED") (head . "forge") (base . "main")))))
-       (roost--cache-task "dev" merged)
-       (roost--cache-task "dev" merged))
-     (should (equal merges '("main"))))))
 
 (ert-deftest roost-merged-functions-run-once-a-merge-lands ()
   (roost-test--isolated

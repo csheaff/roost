@@ -1146,14 +1146,13 @@ ever."
   "Where TASK's pull requests merged, as a list of (HEAD . BRANCH).
 HEAD is nil when not known, and BRANCH a pull request's base, which an
 agent's own can choose, or else TASK's integration branch.  Those that
-merged at the task's tip count while another, open, is the one shown.
-HEAD is that tip, for one merged with a commit made on the forge after it."
+merged at the task's tip count while another, open, is the one shown."
   (let* ((status (roost--field task 'prStatus))
          (pr (roost--field task 'pr))
          (head (alist-get 'mergedHead pr)))
     (delete-dups
      (append (when (eq (roost--pr-state task) 'merged)
-               (list (cons (or head (alist-get 'head status) (alist-get 'head pr))
+               (list (cons (or (alist-get 'head status) (alist-get 'head pr))
                            (or (alist-get 'base status) (alist-get 'base pr)
                                (roost--field task 'integrationBranch)))))
              (when head
@@ -6572,10 +6571,13 @@ no more of them: draft another, unless SKIP-PUSH says only to open it."
 
 (defun roost--pr-spent-p (task)
   "Whether TASK's commits need another pull request than the one it has.
-That one is closed, with commits of its own, or merged, with commits since."
-  (pcase (roost--pr-state task)
-    ('closed (not (eql (roost--field task 'ahead) 0)))
-    ('merged (not (roost--landed task)))))
+That one is closed, or merged with commits since, and TASK has commits
+to propose, as the next step offers: its host won't from another branch."
+  (and (numberp (roost--field task 'ahead)) (> (roost--field task 'ahead) 0)
+       (not (roost--other-branch task))
+       (pcase (roost--pr-state task)
+         ('closed t)
+         ('merged (not (roost--landed task))))))
 
 (defun roost-pr-cancel (&optional event)
   "Discard the pull request draft, or the one whose Cancel button EVENT clicked."
@@ -6874,7 +6876,10 @@ would not push to, nor open, what to do on GitHub, or with that branch."
                                 (when reviewers
                                   (if (cdr reviewers)
                                       (concat "reviews from " (string-join reviewers ", "))
-                                    (concat (car reviewers) "'s review")))))))
+                                    (concat (car reviewers) "'s review")))
+                                (pcase (alist-get 'mergeState status)
+                                  ("BLOCKED" "branch rules")
+                                  ("BEHIND" "an update from the branch it merges into"))))))
     (cond
      (verdict
       (concat (roost--pr-reason task verdict) ": "
@@ -6893,6 +6898,9 @@ would not push to, nor open, what to do on GitHub, or with that branch."
      ((and status (eql unpushed 0) waits)
       (format "%s waits for %s" number (string-join waits " and ")))
      (branch (roost--other-branch-step task key))
+     ;; As after a push, which GitHub is yet to be asked about.
+     ((eql (roost--field task 'unpushed) 0)
+      (format "%s has every commit of the task's: %s opens it" number (funcall key "P")))
      (t (concat (funcall key "P") " pushes new commits to its pull request")))))
 
 (defun roost--conflicts (task)

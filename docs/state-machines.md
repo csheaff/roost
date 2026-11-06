@@ -1494,9 +1494,9 @@ and retiring can go by the record without asking the forge.
 | fresh | `P` just opened or found one; nothing asked since | `pr` has `number` and `url`, no `state`. Also every record from an older helper |
 | open | Open as last asked, draft or not | `pr.state == "OPEN"` |
 | closed | Closed unmerged as last asked | `pr.state == "CLOSED"` |
-| merged at tip | Its head has all of the branch: it is the tip, or comes after it, as a commit made on the forge does | `recorded_merge_at`: `pr.mergedHead == tip`, or `state == "MERGED"` and `has_tip` |
+| merged at tip | Its head has all of the branch: it is the tip, or comes after it, as a commit made on the forge does | `recorded_merge_at`: `has_tip` of `pr.mergedHead`, or of `head` with `state == "MERGED"` |
 | merged, commits since | Merged at a head that lacks some of the branch | `state == "MERGED"`, not `has_tip` |
-| open beside a merge | Another of its pull requests merged at the tip, and an open one is shown | `state == "OPEN"`, `mergedHead == tip` |
+| open beside a merge | Another of its pull requests merged at the tip, and an open one is shown | `state == "OPEN"`, `has_tip` of `mergedHead` |
 
 Invariants:
 
@@ -1511,15 +1511,18 @@ Invariants:
 - I4. Only a record says `merged at tip`, and retiring believes only that or an
   answer got for this request (`merged_pull_request_head`, `safe_to_delete`).
 - I5. A commit on the branch is the task's own when its reflog says so, by a
-  subject `own_commits` knows, or its integration branch lacks it, so no update
-  brought it in. A fast-forward from another branch counts; one from the
-  integration branch, by any of its names, doesn't. Fixed: FORGE-2.
+  subject `own_commits` knows, or its integration branch lacks it, here and as last
+  fetched from origin, so no update brought it in. A fast-forward from another
+  branch counts; one from the integration branch, by any remote's name for it, or
+  from a commit or an expression, as Git names one from `FETCH_HEAD`, doesn't. Fixed:
+  FORGE-2.
 - I6. The forge's head can be compared with the branch: one that isn't here is
   fetched by its commit, outside the lock and within the deadline, in the primary
   checkout (`fetch_head`, `fetch_heads`), for the recorded pull request only. A
-  failure is kept in `unfetched`, so it is tried once for each head. Such a head,
-  as on a fork's branch, stays unknown, as does one before Git 2.29, which can't
-  leave `FETCH_HEAD` alone. Fixed: FORGE-1, FORGE-5.
+  refusal is kept in `unfetched`, so a poll tries once for each head, while running
+  out of time is tried again, and so does your `x` or `m`. Such a head, as on a
+  fork's branch, stays unknown, as does one before Git 2.29, which can't leave
+  `FETCH_HEAD` alone. Fixed: FORGE-1, FORGE-5.
 - I7. Commits on the branch after what merged never count as merged: `has_tip`
   asks whether the tip is in the head, not the other way, and `record_push` leaves
   a closed or merged one's `head` alone. Retiring deletes on this word.
@@ -1536,7 +1539,7 @@ Invariants:
 | closed | Agent opens another | | open | The newer one replaces it | `shown_pull_request` |
 | closed | `P` with a title | | fresh | Another opened, in its place | `rpc`, `pull_request` |
 | open | Poll says MERGED at tip | | merged at tip | `mergedHead`, `mergedBases` | `check_pull_requests` |
-| open | Poll says MERGED, head after tip | that head here, or fetched | merged at tip | `mergedHead` is the tip | `fetch_heads`, `merged_tip` |
+| open | Poll says MERGED, head after tip | that head here, or fetched | merged at tip | `mergedHead` is that head | `fetch_heads`, `merged_tip` |
 | open | Poll says MERGED, head not here | it doesn't come | merged, commits since | `unfetched`, tried no more | `fetch_heads` |
 | open, merged | Poll: the forge's head isn't here, and hasn't failed | 5 s left | same | Fetched, or `unfetched`; with less left, the next poll tries | `fetch_heads` |
 | fresh, open | `P` pushes | | same | `head` is what it pushed | `record_push` |
@@ -1644,9 +1647,10 @@ Action against state of the record, in Emacs and on the host:
 | none, ahead > 0 | `m merges it, or P opens a pull request` | Drafts | Pushes, creates |
 | fresh, open, draft | `roost--pr-next-step` | Pushes new commits, opens it | `push_pull_request` |
 | open, branch rewritten by its agent | `P pushes new commits to its pull request` | Git refuses the push | Error in Git's words |
+| open, nothing unpushed, no word | `#12 has every commit of the task's: P opens it`, or what it waits for | Pushes nothing, opens it | `push_pull_request` |
 | open, forge has a commit that didn't come | `P pushes new commits to its pull request`; it has none | Fetches, "up to date", opens it | `unpushed` compares |
 | closed, ahead > 0 | `m merges it, or P opens a pull request` | Drafts another (`C-u`: opens the closed one) | With a title, opens another; without, pushes |
-| closed, ahead 0 | nothing | Opens the closed one | |
+| closed, ahead 0 or unknown | nothing | Opens the closed one | |
 | merged, commits since | `merged, but not its commits since: m merges them, or P opens a pull request` | Drafts another (`C-u`: opens the merged one) | With a title, opens another; without, pushes |
 | merged at tip | `x retires it` | Opens it | |
 | worktree on another branch | Says so | Refused (`check_worktree`) | Refused |
@@ -1699,8 +1703,8 @@ Invariants:
 without `dirty` from that path, and `task["landed"] = False` covers the others.
 
 Retiring fetches a merged head no poll has, as `merged_pull_request_head` asks for
-itself. Its remote branch then stays unless the forge deleted it: the lease on it
-names the tip, and the branch is at the commit made there.
+itself, and tries one a poll gave up on. Its remote branch goes under a lease on the
+head that merged, so commits pushed there since stay.
 
 Open: none.
 
@@ -1823,7 +1827,7 @@ Inputs of the verdict, all needed: agent not `starting`, `running`, `background`
 recorded head; `unpushed == 0`; not dirty; not merging; no agent work left. Then
 failing and due, else threads and due, else all checks passed with no threads, no
 reviews asked, none refused, `mergeable` MERGEABLE, and `mergeState`, where GitHub
-gives it, neither BLOCKED nor BEHIND.
+gives it, neither BLOCKED nor BEHIND, which the next step names as what it waits for.
 
 | From | Event | Guard | To | Code |
 | --- | --- | --- | --- | --- |
@@ -1892,8 +1896,8 @@ Invariants:
 
 Checked: survives a retire reply, which is why `roost--cache-task` leaves it. Not
 cleared by `roost-forget-host`, which is harmless as IDs aren't reused. A pull request
-merged with a commit made on the forge is one merge, at the tip: `roost--pr-merges`
-takes `mergedHead` before its head.
+merged with a commit made on the forge is one merge, at its head, whenever that came:
+`mergedHead` is that head, not the tip.
 
 Open: none.
 

@@ -2915,13 +2915,17 @@ def recorded_pull_request(task):
     return pr if isinstance(pr, dict) and pr.get("number") else {}
 
 
+def commit_id(value):
+    """Whether VALUE, as a forge said it, is a commit's full name."""
+    return isinstance(value, str) and bool(re.fullmatch(r"[0-9a-f]{40,64}", value))
+
+
 def has_tip(task, head, tip):
     """Whether HEAD, a pull request's as its forge named it, has all of TIP,
     the branch's: it is TIP, or comes after it, as a commit made on the forge
     does. Commits on the branch since it merged are in no such head. False
     when HEAD isn't here."""
-    return head == tip or (isinstance(head, str) and bool(re.fullmatch(r"[0-9a-f]{40,64}", head))
-                           and is_ancestor(task["repo"], tip, head))
+    return head == tip or (commit_id(head) and is_ancestor(task["repo"], tip, head))
 
 
 def merged_tip(task, pr, tip):
@@ -2933,8 +2937,8 @@ def recorded_merge_at(task, tip):
     """Whether GitHub said, as recorded, that one of the task's pull requests
     merged TIP. A merge stays one, whatever later lookups list."""
     pr = recorded_pull_request(task)
-    return bool(tip) and (pr.get("mergedHead") == tip or (pr.get("state") == "MERGED"
-                                                          and has_tip(task, pr.get("head"), tip)))
+    return bool(tip) and (has_tip(task, pr.get("mergedHead"), tip)
+                          or (pr.get("state") == "MERGED" and has_tip(task, pr.get("head"), tip)))
 
 
 @functools.lru_cache(maxsize=None)
@@ -2944,33 +2948,36 @@ def fetches_quietly():
             or (0, 0)) >= FETCH_QUIETLY_GIT
 
 
-def head_to_fetch(task, pr, tip):
+def head_to_fetch(task, pr, tip, again=False):
     """The head of PR, one of the task's, at TIP, to fetch: when it is open or
     merged and its head isn't here, as a commit made on the forge isn't,
-    unless a fetch failed to bring it, as one on a fork's branch may. None
-    otherwise."""
+    unless a fetch failed to bring it, as one on a fork's branch may, or
+    AGAIN says to try. None otherwise."""
     head = pr.get("headRefOid")
-    if (pr.get("state") not in ("OPEN", "MERGED") or head == tip or not isinstance(head, str)
-            or not re.fullmatch(r"[0-9a-f]{40,64}", head) or recorded_pull_request(task).get("unfetched") == head):
+    if (pr.get("state") not in ("OPEN", "MERGED") or head == tip or not commit_id(head)
+            or (not again and recorded_pull_request(task).get("unfetched") == head)):
         return None
     return head if read_git(task["repo"], "cat-file", "-e", head + "^{commit}").returncode else None
 
 
 def fetch_head(task, head, timeout):
     """Bring HEAD, a pull request's, here from origin within TIMEOUT seconds,
-    and say whether it came. By its commit, as the forge may have deleted its
-    branch on merging it. In the primary checkout, whose config a sandbox
-    keeps an agent out of, as nobody asked for this. Nothing there changes
-    but what Git has: no ref holds HEAD, so it goes in time, and comes again
-    if it is still wanted. FETCH_HEAD stays as a `git pull` under way left it,
-    so Git before 2.29 fetches nothing."""
+    and say whether it came, or None for running out of time, which doesn't
+    say. By its commit, as the forge may have deleted its branch on merging
+    it. In the primary checkout, whose config a sandbox keeps an agent out
+    of, as nobody asked for this. Nothing there changes but what Git has: no
+    ref holds HEAD, so it goes in time, and comes again if it is still
+    wanted. FETCH_HEAD stays as a `git pull` under way left it, so Git before
+    2.29 fetches nothing."""
     if not fetches_quietly():
         return False
     try:
         return remote_git(task["repo"], "fetch", "--quiet", "--no-tags", "--no-recurse-submodules",
                           "--no-auto-maintenance", "--no-write-fetch-head", "origin", head,
                           check=False, timeout=timeout).returncode == 0
-    except (RoostError, OSError):
+    except RoostError:
+        return None
+    except OSError:
         return False
 
 
@@ -2987,7 +2994,7 @@ def fetch_heads(asked, answers, deadline):
 
     def fetch(entry):
         left = deadline - time.monotonic()
-        return left >= HEAD_FETCH_SECONDS and not fetch_head(entry[1], entry[0], left) and entry[0]
+        return left >= HEAD_FETCH_SECONDS and fetch_head(entry[1], entry[0], left) is False and entry[0]
 
     if not wanted:
         return set()
@@ -3042,7 +3049,8 @@ def task_pull_requests(task, tip, timeout=15, branch=None):
                 made = True if there is True else made | there
         integration = task.get("integrationBranch")
         return (made is True or head in made
-                or not (integration and is_ancestor(task["repo"], head, "refs/heads/" + integration)))
+                or not (integration and any(is_ancestor(task["repo"], head, ref) for ref in (
+                    "refs/heads/" + integration, "refs/remotes/origin/" + integration))))
 
     return sorted((pr for pr in listed if isinstance(pr, dict) and isinstance(pr.get("number"), int) and ours(pr)),
                   key=lambda pr: pr["number"], reverse=True)
@@ -3156,11 +3164,12 @@ def check_pull_requests(store, tasks):
         # or not, as when the branch has had more than a page of them.
         merged = [other for other in prs if merged_tip(task, other, tip)]
         if merged or recorded_merge_at(task, tip):
-            record["mergedHead"] = tip
+            recorded = recorded_pull_request(task)
+            record["mergedHead"] = (merged[0]["headRefOid"] if merged
+                                    else recorded.get("mergedHead") or recorded.get("head"))
             # And each branch it went to, which the one shown need not say,
             # those recorded included, as a later lookup can list them no more.
-            recorded = recorded_pull_request(task)
-            bases = list(recorded.get("mergedBases") or []) if recorded.get("mergedHead") == tip else []
+            bases = list(recorded.get("mergedBases") or []) if has_tip(task, recorded.get("mergedHead"), tip) else []
             for other in merged:
                 if other.get("baseRefName") and other["baseRefName"] not in bases:
                     bases.append(other["baseRefName"])
@@ -3214,10 +3223,11 @@ def own_commits(task, branch=None):
     made, rebased = set(), set()
     for line in log.stdout.splitlines():
         commit, _, subject = line.partition(" ")
-        forwarded = re.fullmatch(r"merge (.+): Fast-forward", subject)
+        forwarded = re.fullmatch(r"merge ([\w./-]+): Fast-forward", subject)
         if (re.match(r"(commit|cherry-pick|revert|am)\b|(merge|pull)\b[^:]*: Merge made by", subject)
-                or forwarded and re.sub(r"^(refs/heads/|refs/remotes/origin/|origin/)", "", forwarded.group(1))
-                != integration):
+                # By its commit, as Git names one from FETCH_HEAD, it could be anyone's.
+                or forwarded and not re.fullmatch(r"[0-9a-f]+", forwarded.group(1))
+                and re.sub(r"^(refs/heads/|refs/remotes/[^/]+/|[^/]+/)", "", forwarded.group(1)) != integration):
             made.add(commit)
         elif subject.startswith("rebase"):
             rebased.add(commit)
@@ -4598,24 +4608,28 @@ def squash_merge(task, integration, here):
 
 def merged_pull_request_head(task):
     """The task branch's tip when GitHub merged it as one of the task's pull
-    requests, or None, and whether another is open from the branch, which
-    deleting it on the remote would close. GitHub is asked for a task with
+    requests, or None; whether another is open from the branch, which
+    deleting it on the remote would close; and the head that merged, where
+    the remote's branch should still be. GitHub is asked for a task with
     a pull request recorded or a pushed branch; a merge it recorded earlier
     counts too, and without an answer, what it recorded of an open one.
+    You asked, so a head no poll could fetch is tried again.
     Slow: call it without the registry lock and pass the answer to `retire`."""
     tip = branch_tip(task)
     if not tip:
-        return None, False
+        return None, False, None
     recorded = recorded_pull_request(task)
     prs = task_pull_requests(task, tip) if recorded or pushed(task) else None
     for pr in prs or []:
-        head = pr.get("state") == "MERGED" and head_to_fetch(task, pr, tip)
+        head = pr.get("state") == "MERGED" and head_to_fetch(task, pr, tip, again=True)
         if head:
             fetch_head(task, head, PULL_REQUEST_DEADLINE)
-    merged = any(merged_tip(task, pr, tip) for pr in prs or [])
+    merged = next((pr for pr in prs or [] if merged_tip(task, pr, tip)), None)
     still_open = (any(pr.get("state") == "OPEN" for pr in prs) if prs is not None
                   else recorded.get("state") == "OPEN")
-    return (tip if merged or recorded_merge_at(task, tip) else None), still_open
+    if not (merged or recorded_merge_at(task, tip)):
+        return None, still_open, None
+    return tip, still_open, merged["headRefOid"] if merged else recorded.get("mergedHead") or recorded.get("head")
 
 
 def safe_to_delete(task, commit, merged_head=None):
@@ -4759,7 +4773,7 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
 
 def delete_remote_branch(repo, branch, commit):
     """Best effort: GitHub may already have deleted the merged branch. Only
-    while it is still at COMMIT, the tip that merged, as commits pushed there
+    while it is still at COMMIT, the head that merged, as commits pushed there
     since are in no pull request and nowhere else."""
     ref = "refs/heads/" + branch
     with contextlib.suppress(OSError, RoostError):
@@ -6781,7 +6795,7 @@ def rpc(request):
             # Ask GitHub without the lock; retire then trusts only this answer.
             with store.locked():
                 task = store.read_to_act_on(request["id"])
-            merged_head, still_open = merged_pull_request_head(task)
+            merged_head, still_open, remote_head = merged_pull_request_head(task)
             request = dict(request, mergedHead=merged_head, stillOpen=still_open)
         with store.locked():
             if action == "list":
@@ -6823,7 +6837,7 @@ def rpc(request):
                     else:
                         task["landed"] = False
         elif action in ("retire", "merge") and result.pop("remoteCleanup", None):
-            delete_remote_branch(result["repo"], result["branch"], result["retiringCommit"])
+            delete_remote_branch(result["repo"], result["branch"], remote_head)
         elif prepared:
             with contextlib.suppress(RoostError, OSError):
                 looked = record_look(store, request["id"], *prepared)
