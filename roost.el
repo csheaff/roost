@@ -1756,8 +1756,11 @@ A notification held about it goes no more: you have seen it."
     (unless (or (null updated) (roost--seen-p task))
       (puthash key updated roost--seen)
       ;; Only where seeing it stops it waiting: a working agent's every
-      ;; event would otherwise send its host a request.
-      (when (member (roost--status-name task) '("ready" "interrupted" "error" "failed" "crashed" "exited"))
+      ;; event would otherwise send its host a request.  Stopped too: two
+      ;; Emacs would otherwise judge what of it waits on you differently,
+      ;; and each undo the other's turn.
+      (when (member (roost--status-name task)
+                    '("ready" "interrupted" "error" "failed" "crashed" "exited" "stopped"))
         (roost--record-seen task updated)))))
 
 (defun roost--record-seen (task updated)

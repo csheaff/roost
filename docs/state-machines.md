@@ -115,7 +115,7 @@ Within a severity, they are ranked by what they cost and how often they happen.
 | 34 | VIEWS-12 | S4 | A resumed task covers what you opened from a question | [Resuming](#resuming) | Open, [#229](https://github.com/csheaff/roost/issues/229) |
 | 35 | VIEWS-13 | S4 | An open held for a question connects to a session since ended | [Opening a task](#opening-a-task) | Open, [#229](https://github.com/csheaff/roost/issues/229) |
 | 36 | FORGE-10 | S4 | A task whose worktree went keeps waiting on conflicts last measured | [Task measurement](#task-measurement) | Fixed, `test_a_worktree_gone_says_it_no_longer_conflicts` |
-| 37 | FORGE-11, REQUESTS-7 | S4 | Two Emacs undo each other's turn for a stopped task, on every poll | [Verdict and turn](#verdict-and-turn) | Open, [#228](https://github.com/csheaff/roost/issues/228) |
+| 37 | FORGE-11, REQUESTS-7 | S4 | Two Emacs undo each other's turn for a stopped task, on every poll | [Verdict and turn](#verdict-and-turn) | Fixed, `roost-two-emacs-settle-on-a-stopped-tasks-turn` |
 | 38 | FORGE-12 | S4 | What `P` pushed counts as unpushed until GitHub is next asked | [Pushing and opening](#pushing-and-opening) | Open, [#227](https://github.com/csheaff/roost/issues/227) |
 | 39 | FORGE-7 | S4 | A failed task you've seen keeps its colour, though the manual says otherwise | [The word](#the-word) | Open, [#228](https://github.com/csheaff/roost/issues/228) |
 | 40 | STATUS-8 | S4 | `/clear` reads `interrupted` for a relayed Claude | [Agent status](#agent-status) | Open, [#224](https://github.com/csheaff/roost/issues/224) |
@@ -1392,12 +1392,12 @@ Whether you have seen an agent since its last event, here or in another Emacs.
 | Seen everywhere | Recorded on the host | Record's `seen` equals it |
 
 Invariants:
-- I1. Seeing an agent that waits is recorded for your other Emacs and the next session (`roost--mark-seen`). Only for the statuses it lists: **stopped isn't**, which REQUESTS-7 needs.
+- I1. Seeing an agent that waits, or a stopped one, is recorded for your other Emacs and the next session (`roost--mark-seen`). Not a working one, whose every event would send a request. What of a task waits on you goes by this, so two Emacs must agree.
 - I2. Its next event unsees it, as `updatedAt` moves.
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
-| Unseen | Terminal or panel selected, Emacs focused | status ready, interrupted, error, failed, crashed, exited | Seen everywhere | `seen` sent, reply ignored | `roost--mark-seen` |
+| Unseen | Terminal or panel selected, Emacs focused | status ready, interrupted, error, failed, crashed, exited, stopped | Seen everywhere | `seen` sent, reply ignored | `roost--mark-seen` |
 | Unseen | Same | other status | Seen here | | `roost--mark-seen` |
 | Seen everywhere | Stop | it was seen | Seen everywhere | Helper carries it over | `stop` |
 | any | Agent event | | Unseen | | hook |
@@ -1407,7 +1407,7 @@ Illegal or refused: the helper takes any non-empty `updatedAt`, even older than 
 Needs one to take longer than an agent's whole turn; not a finding. A `seen` that
 fails isn't sent again, so after a restart that task reads as unseen.
 
-Open: REQUESTS-7.
+Open: none.
 
 ### Watching
 
@@ -1791,8 +1791,8 @@ Invariants:
 - I3. Nothing is told until the task is measured and the forge has spoken
   (`roost--judged-p`), or a turn would seem to end at every restart.
 - I4. `roost--turns-sent` empties on every reply, and if the request can't start, so a failure is sent again.
-- I5 (assumed). Every Emacs on a host works out the same turn. **Broken for a
-  stopped task, whose seen lives only in the Emacs that opened it: FORGE-11.**
+- I5. Every Emacs on a host works out the same turn, as what you have seen, a
+  stopped task's too, goes to the host.
 
 Inputs of the verdict, all needed: agent not `starting`, `running`, `background`,
 `permission`; `checkedAt` past the last event plus 30 s; status head equal to the
@@ -1812,7 +1812,7 @@ reviews asked, none refused, `mergeable` MERGEABLE.
 No Emacs running, a turn stays in the record; the history counts it, and the time
 away rule covers it.
 
-Open: FORGE-5, FORGE-11.
+Open: FORGE-5.
 
 ### News of a turn
 

@@ -10,6 +10,9 @@
 (defconst roost-test--report-turn (symbol-function 'roost--report-turn)
   "Roost's `roost--report-turn', which `roost-test--isolated' stubs.")
 
+(defconst roost-test--record-seen (symbol-function 'roost--record-seen)
+  "Roost's `roost--record-seen', which `roost-test--isolated' stubs.")
+
 (defmacro roost-test--isolated (&rest body)
   (let ((scratch (make-symbol "scratch")))
     ;; Removed afterwards: the sweep runs thousands of tests, and Roost's
@@ -7440,6 +7443,53 @@ deadline, so the status has what the first said.  STATUS goes over that."
                   "dev" (append '((worktreeMissing . t) (conflicts) (merging) (dirty)) (copy-tree measured)))))
        (should-not (equal (roost--display-status task) "conflicts"))
        (should (string-prefix-p "Its worktree is gone" (substring-no-properties (roost--next-step task))))))))
+
+(defun roost-test--turns-of-two-emacs (both)
+  "How often two Emacs write a stopped, conflicting task's turn, in ten polls each.
+You opened the task in one, and if BOTH, in the other too.  Each reads what
+the host records, and the host what each sends."
+  (let* ((turn nil) (seen nil) (writes 0)
+         (record (roost-test--measured
+                  (append (roost-test--task roost-test--x "stopped") '((integrationBranch . "main")))
+                  '(conflicts "ledger.py")))
+         (reply (lambda () (append `((turn . ,turn) (seen . ,seen)) (copy-tree record))))
+         (tables (lambda () (mapcar (lambda (_) (make-hash-table :test 'equal)) (number-sequence 1 5))))
+         (first (funcall tables))
+         (second (funcall tables))
+         (as (lambda (emacs function)
+               (pcase-let ((`(,tasks ,seen ,sent ,statuses ,verdicts) emacs))
+                 (let ((roost--tasks tasks) (roost--seen seen) (roost--turns-sent sent)
+                       (roost--statuses statuses) (roost--pr-verdicts verdicts))
+                   (funcall function))))))
+    (cl-letf (((symbol-function 'roost--report-turn) roost-test--report-turn)
+              ((symbol-function 'roost--record-seen) roost-test--record-seen)
+              ((symbol-function 'roost--request)
+               (lambda (_host action parameters success &rest _)
+                 (pcase action
+                   ("turn" (unless (equal turn (alist-get 'turn parameters))
+                             (setq turn (alist-get 'turn parameters))
+                             (cl-incf writes)))
+                   ("seen" (setq seen (alist-get 'updatedAt parameters))))
+                 (funcall success (funcall reply)))))
+      (dolist (emacs (list first second))
+        (funcall as emacs (lambda () (roost--cache-task "dev" (funcall reply)))))
+      (dolist (emacs (if both (list first second) (list first)))
+        (funcall as emacs (lambda () (roost--mark-seen (gethash (list "dev" roost-test--x) roost--tasks)))))
+      (dotimes (_ 10)
+        (dolist (emacs (list first second))
+          (funcall as emacs (lambda () (roost--cache-task "dev" (funcall reply)))))))
+    writes))
+
+(ert-deftest roost-two-emacs-settle-on-a-stopped-tasks-turn ()
+  ;; Seeing a stopped task stayed in the Emacs that did: the two judged it
+  ;; differently, and each poll undid the other's turn, in its record and
+  ;; its history, for as long as they ran.
+  (roost-test--isolated
+   (should (= (roost-test--turns-of-two-emacs nil) 1))))
+
+(ert-deftest roost-two-emacs-that-both-saw-a-stopped-task-agree ()
+  (roost-test--isolated
+   (should (= (roost-test--turns-of-two-emacs t) 1))))
 
 (ert-deftest roost-dashboard-groups-by-project-and-summarizes-attention ()
   (roost-test--isolated

@@ -4,6 +4,9 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Two Emacs agree on what of a stopped task waits on you. Each undid the
+  other's turn at every poll, writing its record and a line of history, and
+  `roost-workload` flickered. Nothing to do when upgrading.
 - A task whose worktree went no longer waits on the conflicts last measured.
   Nothing to do when upgrading.
 - GitHub's review query failing for a moment no longer takes a pull
