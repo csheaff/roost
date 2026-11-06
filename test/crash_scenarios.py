@@ -9,6 +9,10 @@ from crash_harness import FAKE, Scenario
 class Merge(Scenario):
     action = "merge"
 
+    def request(self, box):
+        # Where Emacs last measured the branch, as it asks each time.
+        return dict(super().request(box), expect=self.commit)
+
     def holds(self, box, problems):
         super().holds(box, problems)
         final = self.final
@@ -149,14 +153,15 @@ class Discard(Scenario):
         self.told = box.helper("discard", id=self.task["id"], dryRun=True)["result"]["discard"]
 
     def request(self, box):
-        return dict(id=self.task["id"], expect=self.told["commit"])
+        return dict(id=self.task["id"], expect=self.told["commit"], told=self.told)
 
     def again(self, box):
         # Emacs asks what would be lost each time.
         dry = box.helper("discard", id=self.task["id"], dryRun=True)
         if not dry or not dry.get("ok"):
             return dry
-        return box.helper("discard", id=self.task["id"], expect=dry["result"]["discard"]["commit"])
+        told = dry["result"]["discard"]
+        return box.helper("discard", id=self.task["id"], expect=told["commit"], told=told)
 
 
 class DiscardTeardown(Discard):

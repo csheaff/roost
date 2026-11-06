@@ -862,7 +862,8 @@ with Emacs running only timers and other replies.")
     (merge
      :start ,(lambda () (roost-merge-retire (roost-sweep-late--mine)))
      :action "merge"
-     :refusals (("The integration branch main no longer exists")))
+     :refusals (("The integration branch main no longer exists")
+                ("The task's branch has moved since you were asked; look at it again before merging")))
     (forget
      :fields ((status . "stopped") (live))
      :start ,(lambda () (roost-forget (roost-sweep-late--mine)))
@@ -880,7 +881,8 @@ with Emacs running only timers and other replies.")
      :action "discard" :wait t :refusals ((,roost-sweep-late--retired)))
     (discard
      :start ,(lambda () (roost-discard (roost-sweep-late--mine)))
-     :action "discard" :refusals (("The task's branch has moved since you were asked; look at it again before discarding")))
+     :action "discard" :refusals (("The task's branch has moved since you were asked; look at it again before discarding")
+                                  ("The task holds more than you were told; look at it again before discarding")))
     (update
      :start ,(lambda () (roost-update (roost-sweep-late--mine)))
      :action "update" :refusals ((,roost-sweep-late--uncommitted-update . asks) ("Task worktree is gone")))
