@@ -1863,7 +1863,9 @@ def create(store, request):
     if not (isinstance(create_id, str) and CREATE_ID.fullmatch(create_id)):
         raise RoostError("Invalid creation ID")
     with asking_for(store, create_id):
-        return made_for(store, create_id) or make_task(store, request, create_id)
+        made = made_for(store, create_id)
+        # For Emacs to tell whether it was made from what this request says.
+        return dict(made, alreadyMade=True) if made else make_task(store, request, create_id)
 
 
 def make_task(store, request, create_id):
@@ -3817,15 +3819,19 @@ def control_character(value):
     return next((c for c in value if unicodedata.category(c) == "Cc" and c not in "\n\r\t\f"), None)
 
 
+SEND_IDS_KEPT = 16
+
+
 def send(store, task, text, force=False, send_id=None):
     """Paste TEXT to TASK's agent and press Enter. SEND_ID, as `create` has an
     ID, is the same each time Emacs asks for one text: asked again, as after
     no reply, or queued behind the first on the registry lock, the task's
-    record says it went, and it isn't pasted twice. A record says only the
-    last, which is enough: one draft asks again before it asks for more."""
+    record says it went, and it isn't pasted twice. A record keeps the last
+    few, as a note or a draft can go in between."""
     if send_id is not None and not (isinstance(send_id, str) and CREATE_ID.fullmatch(send_id)):
         raise RoostError("Invalid send ID")
-    if send_id and task.get("sendId") == send_id:
+    sent = task.get("sendIds") if isinstance(task.get("sendIds"), list) else []
+    if send_id and send_id in sent:
         return dict(task, alreadySent=True)
     pane = owned_pane(task, inventory_for(task))
     if not pane or pane["dead"]:
@@ -3857,7 +3863,7 @@ def send(store, task, text, force=False, send_id=None):
     finally:
         tmux(task["socket"], "delete-buffer", "-b", buffer, check=False)
     if send_id:
-        task["sendId"] = send_id
+        task["sendIds"] = (sent + [send_id])[-SEND_IDS_KEPT:]
         # It went, and a full disk is no reason to say otherwise.
         store.note(task)
     return task
@@ -6714,7 +6720,8 @@ def rpc(request):
                         task["landed"] = False
         elif action in ("retire", "merge") and result.pop("remoteCleanup", None):
             delete_remote_branch(result["repo"], result["branch"], result["retiringCommit"])
-        elif prepared:
+        # Asked again, it went long since: you haven't looked at what came after.
+        elif prepared and not result.get("alreadySent"):
             with contextlib.suppress(RoostError, OSError):
                 looked = record_look(store, request["id"], *prepared)
                 result["looked"] = looked.get("looked")

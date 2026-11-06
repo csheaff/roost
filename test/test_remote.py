@@ -183,7 +183,7 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(self.request("stop", id=task["id"])["ok"])
         refused = self.request("send", id=task["id"], text="once resumed", sendId="ab" * 8)
         self.assertIn("not running", refused["error"])
-        self.assertNotIn("sendId", roost.Store(str(self.state)).read(task["id"]))
+        self.assertNotIn("sendIds", roost.Store(str(self.state)).read(task["id"]))
         self.assertTrue(self.request("resume", id=task["id"])["ok"])
         resumed = self.wait(task, "ready")
         reply = self.request("send", id=task["id"], text="once resumed", sendId="ab" * 8)
@@ -198,6 +198,33 @@ class Lifecycle(unittest.TestCase):
         reply = self.request("send", id=task["id"], text="said", sendId="ab" * 8)
         self.assertTrue(reply["ok"], reply)
         self.assertTrue(reply["result"]["alreadySent"])
+
+    def test_a_prompt_asked_for_again_after_others_is_pasted_once(self):
+        # A note's reply lost, then another note, then the first again.
+        task = self.create()
+        for words, number in (("first note", "ab"), ("second note", "cd"), ("first note", "ab")):
+            self.assertTrue(self.request("send", id=task["id"], text=words, sendId=number * 8)["ok"])
+        self.wait_for_pastes(task, "second note", 1)
+        time.sleep(0.3)
+        self.assertEqual(self.pastes(task, "first note"), 1)
+        # The record keeps a few, and goes on working past them.
+        for number in range(roost.SEND_IDS_KEPT + 2):
+            self.assertTrue(self.request("send", id=task["id"], text="more", sendId="%016x" % number)["ok"])
+        kept = roost.Store(str(self.state)).read(task["id"])["sendIds"]
+        self.assertEqual(len(kept), roost.SEND_IDS_KEPT)
+        self.assertEqual(kept[-1], "%016x" % (roost.SEND_IDS_KEPT + 1))
+
+    def test_a_prompt_asked_for_again_leaves_where_you_last_looked(self):
+        # What the agent did about your notes is what you have yet to see.
+        task = self.create()
+        args = dict(id=task["id"], text="my notes", look=True, sendId="ab" * 8)
+        self.assertTrue(self.request("send", **args)["ok"])
+        store = roost.Store(str(self.state))
+        looked = store.read(task["id"])["looked"]
+        self.commit_in(task, "its-answer")
+        reply = self.request("send", **args)
+        self.assertTrue(reply["result"]["alreadySent"])
+        self.assertEqual(store.read(task["id"])["looked"], looked)
 
     def test_a_prompt_asked_with_an_odd_id_is_refused(self):
         task = self.create()
@@ -6871,6 +6898,9 @@ print(json.dumps(dict(data=data)))
         self.assertTrue(again["ok"], again)
         self.assertEqual(again["result"]["id"], task["id"])
         self.assertEqual(again["result"]["name"], "once")
+        self.assertIs(again["result"]["alreadyMade"], True)
+        self.assertNotIn("alreadyMade", task)
+        self.assertNotIn("alreadyMade", roost.Store(str(self.state)).read(task["id"]))
         self.assertEqual([record["id"] for record in roost.Store(str(self.state)).all()], [task["id"]])
         self.assertEqual(self.task_branches(), [task["branch"]])
         self.assertEqual(list((self.state / "creating").glob("*")), [])

@@ -11082,7 +11082,8 @@ answered with `answer'."
         (should (equal (buffer-string) "\n\ny.py\nThere"))
         (roost-send-submit)
         ;; Notes sent say you looked at what they are about.
-        (should (equal sent '("other" (id . "b") (text . "y.py\nThere") (look . t))))
+        (should (equal (cons (car sent) (assq-delete-all 'sendId (cdr sent)))
+                       '("other" (id . "b") (text . "y.py\nThere") (look . t))))
         ;; The other task's draft and note are as they were.
         (should (equal (mapcar (lambda (note) (alist-get 'id note)) roost--notes) '("1")))
         (roost--send-draft here)
@@ -11751,7 +11752,7 @@ note after, for any task, so a restart lost them all."
    (let ((task (roost--cache-task "dev" (roost-test--task "a"))) callbacks)
      (setq roost--notes (list (roost-test--note "1" "a" '(file . "x") '(text . "Once"))))
      (cl-letf (((symbol-function 'roost--send-text)
-                (lambda (_task _text done failed &optional look)
+                (lambda (_task _text done failed &optional look _id)
                   ;; A note sent alone says you looked at what it is about.
                   (should look)
                   (push (cons done failed) callbacks)))

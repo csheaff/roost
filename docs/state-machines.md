@@ -1942,14 +1942,17 @@ Invariants:
 - I1. A flag says Creating only while a request is in flight or a question is open.
   (`left-behind` rule of `test/roost-sweep-late.el`.)
 - I2. A draft is kept if creation fails. (Docstring of `roost-compose-submit`.)
-- I3. A draft closes only for what it says: it closes if the task made says what the
-  draft says now, and anything else is yours (`roost--compose-differs-p`).
+- I3. A draft closes only for what it says now: what the request that made the task
+  said, as `roost--compose-what` has it. That is this request, or, when its host says
+  an earlier one made it (`alreadyMade`) or a poll finds it, what it first asked with
+  that ID. Anything else is yours. A draft that was refused, changed, then lost a
+  reply, can stay though it says what was made: it says so, and costs a `C-c C-k`.
 - I4. The prompt is what you wrote: Roost's redraws of the fields leave it alone, and
   undo goes on working, as they shift each position it holds by what they moved
   (`roost--shift-undo`).
 - I5. An untouched draft follows the context; a written one keeps its text, and its
-  project unless you click another, and it quotes no file of its own.
-  (Comment in `roost--compose`.)
+  project unless you click another and nothing ties it there: files it quotes, a task
+  it forks, an issue it starts from (`roost--compose-tied`). (Comment in `roost--compose`.)
 - I6. "Roost created NAME" names the task as made, by its own name. A draft that says
   otherwise says what was made from what.
 
@@ -1958,7 +1961,7 @@ Invariants:
 | Absent | `roost--compose` | | Editing | buffer, fields, seed | `roost--compose` |
 | Editing | `roost--compose` | prompt empty, or fork | Editing | fields replaced | `roost--compose` |
 | Editing | `roost--compose` | prompt written | Editing | fields kept; a seed is dropped, and a DIRECTORY with it | `roost--compose` |
-| Editing | `roost--compose`, a DIRECTORY and no seed, as a click on a project | prompt written | Editing | moves there, or says it stays if it quotes files | `roost--compose`, `roost--compose-move` |
+| Editing | `roost--compose`, a DIRECTORY and no seed, as a click on a project | prompt written | Editing | moves there, or says why it stays | `roost--compose`, `roost--compose-tied` |
 | Editing | edit | | Editing | idle timer redraws fields | `roost--compose-changed` |
 | Editing | a poll changes who touches a quoted file | | Editing | redraw | `roost--compose-redraw-changing` |
 | Editing | `C-c C-c` | no project or name | Editing | user-error | `roost-compose-submit` |
@@ -1978,8 +1981,8 @@ Invariants:
 | Creating | draft killed | | Absent | request goes on; task made, not opened | `roost--task-made` |
 | Refused, NoReply | `C-c C-c` | same project | Creating | same ID | `roost-compose-submit` |
 | Refused, NoReply | `C-c C-c` | project changed | Creating | new ID | `roost-compose-submit` |
-| Refused, NoReply | poll lists the ID | same project, says what the task does | Absent | closes; opens if you are in it | `roost--compose-listed` |
-| Refused, NoReply | poll lists the ID | same project, says otherwise now | Editing | note says what was made; ID forgotten | `roost--compose-listed`, `roost--compose-made` |
+| Refused, NoReply | poll lists the ID | says what it first asked | Absent | closes; opens if you are in it | `roost--compose-listed` |
+| Refused, NoReply | poll lists the ID | says otherwise now, its project too | Editing | note says what was made; ID forgotten | `roost--compose-listed`, `roost--compose-made` |
 | any | `C-c C-k` | prompt empty or yes | Absent | `quit-window t` | `roost-compose-cancel` |
 
 Illegal or refused: `C-c C-c` in Creating. While busy the header has no buttons, so a
@@ -2008,8 +2011,9 @@ Invariants:
 - I2. A second request waits for the first. (`asking_for`.)
 - I3. A failed creation can be asked for again. (`abandon` pops `createId`.)
 - I4. The ID is kept while the project is the same, so the task it finds may have been
-  made from what the draft said first. The draft tells by what the task holds, and an
-  ID that found something else is forgotten: asked again, it is another task.
+  made from what the draft said first. Its host says so (`alreadyMade`, of one reply),
+  the draft compares that with what it says now, and an ID that found something else
+  is forgotten: asked again, it is another task.
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
@@ -2032,21 +2036,22 @@ Open: none.
 ### The send ID
 
 Kind: implicit. Lives in: `roost--send-asked` (TEXT . ID) in a draft, a hash of a note's
-ID and text for a note sent alone, the record's `sendId`.
+ID and text for a note sent alone, the record's `sendIds`.
 It lets a prompt be asked for again without reaching its agent twice.
 
 | State | Meaning | How you can tell |
 |---|---|---|
 | None | Never asked | `roost--send-asked` nil |
 | Asked, unknown | Emacs doesn't know what became of it | draft Failed |
-| Pasted | Its host pasted it | record's `sendId` is this ID |
+| Pasted | Its host pasted it | record's `sendIds` holds this ID |
 
 Invariants:
 - I1. One ID pastes once: `send` reads the record and writes it under the registry lock,
   so a retry queued behind the first finds it. Written after the paste: a kill between
   the two pastes again, and a prompt never pasted is never said to have gone.
-- I2. A record holds the last ID only, which is enough: a draft asks again before it
-  asks for anything else. A record from an older helper has none, and sends.
+- I2. A record holds the last 16 IDs (`SEND_IDS_KEPT`), as a note or a draft can go
+  between a lost reply and asking again. A record from an older helper has none, and
+  sends.
 - I3. Another text is another prompt: a new ID. `roost--send-asked` goes when a draft
   keeps what you wrote since.
 - I4. Refused, nothing is recorded, so the same ID goes once it can.
@@ -2056,8 +2061,8 @@ Invariants:
 | None | submit | | Asked | new ID | `roost-send-submit` |
 | Asked | submit | same text | Asked | same ID | `roost-send-submit` |
 | Asked | submit | text changed | Asked | new ID | `roost-send-submit` |
-| Asked | host: last ID is another | | Pasted | pastes, records | `send` in the helper |
-| Asked | host: last ID is this | | Pasted | pastes nothing, `alreadySent` | `send` in the helper |
+| Asked | host: not among its IDs | | Pasted | pastes, records | `send` in the helper |
+| Asked | host: among its IDs | | Pasted | pastes nothing, `alreadySent`; records no look | `send`, `rpc` in the helper |
 | Asked | host refuses | | Asked | nothing recorded | `send` in the helper |
 | any | draft closes | | None | | |
 
@@ -2091,7 +2096,8 @@ Invariants:
   goes (VIEWS-10).
 - I4. A prompt reaches the agent once: [The send ID](#the-send-id).
 - I5. What the header says of asking again holds. After no reply it says the prompt may
-  have gone, and that asking again sends it only if it didn't.
+  have gone, and that as it is, asking again sends it only if it didn't. Changed, it is
+  a new prompt, with an ID of its own.
 - I6. A draft closes only for what it sent. What you wrote since stays, without what
   went if that is all still there.
 
@@ -2671,7 +2677,7 @@ registry lock.
 | `retiringCommit` | `retire` | yes; never cleared |
 | `agentWorktrees` | `update_hook` | yes; never pruned |
 | `createId` | `make_task`, `abandon` (pops) | yes |
-| `sendId` | `send` | yes |
+| `sendIds` | `send` | yes |
 | `pr` | `pr` action, `check_pull_requests` | re-read after the release; compared with what it asked about |
 | `looked` | `record_look` | re-read, compared with the look it measured from |
 | `seen` | `seen`, `stop`, `list_tasks` | yes (a late `seen` can set an older value: [Seen, on the host](#seen-on-the-host)) |

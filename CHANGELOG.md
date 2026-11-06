@@ -26,8 +26,9 @@ What each release changes, and what to do when upgrading. Newest first.
   take the link, or your notes can't be saved. The draft stayed busy, and the
   task didn't open. Nothing to do when upgrading.
 - A click on another project in the sidebar takes a written draft there, or,
-  if it quotes files of the project it is in, stays and says so. It stayed,
-  and said nothing. Nothing to do when upgrading.
+  if it quotes files of the project it is in, forks a task there or starts
+  from an issue there, stays and says so. It stayed, and said nothing. Nothing
+  to do when upgrading.
 - A draft started from a Jira work item has its text when your site keeps
   that in a rich-text custom field. The prompt had only its summary and
   link, as Roost read the description alone. Now, as you pick one with

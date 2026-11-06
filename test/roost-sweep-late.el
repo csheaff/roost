@@ -155,13 +155,12 @@ what its host said when it read it.")
       ("issues" '(((number . 7) (title . "Off by one") (url . "https://example.com/7") (body . "It is."))))
       ("jira-issues" '((issues ((key . "PROJ-7") (title . "Off by two") (url . "https://example.com/j")))))
       ("jira-issue" '((body . "It adds two.")))
-      ("create" (or (seq-some (lambda (entry)
-                                (and (equal (alist-get 'createId (cdr entry)) (alist-get 'createId request))
-                                     (copy-tree (cdr entry))))
-                              roost-sweep-late--records)
-                    (roost-sweep-late--record "cccccc0000000000" "made"
-                                              `(createId . ,(alist-get 'createId request))
-                                              (cons 'prompt (alist-get 'prompt request)))))
+      ("create" (let* ((asked (alist-get 'createId request))
+                       (made (seq-find (lambda (entry) (and asked (equal (alist-get 'createId (cdr entry)) asked)))
+                                       roost-sweep-late--records)))
+                  (if made
+                      (cons '(alreadyMade . t) (copy-tree (cdr made)))
+                    (roost-sweep-late--record "cccccc0000000000" "made" `(createId . ,asked)))))
       ("attach" (if record '((paths "/home/user/.roost/attachments/a.png")) gone))
       ((guard (null record)) gone)
       ("stop" (roost-sweep-late--became record "stopped"))
@@ -205,8 +204,9 @@ SUCCESS and FAILURE take it when it comes.  Its host reads the world now."
       ("discard"
        (unless (alist-get 'dryRun (plist-get request :request))
          (setq roost-sweep-late--records (assoc-delete-all id roost-sweep-late--records))))
-      ("create" (setq roost-sweep-late--records
-                      (append roost-sweep-late--records (list (cons (alist-get 'id reply) reply)))))
+      ("create" (unless (assq 'alreadyMade reply)
+                  (setq roost-sweep-late--records
+                        (append roost-sweep-late--records (list (cons (alist-get 'id reply) reply))))))
       ((or "stop" "resume" "rename" "shell" "pr")
        (when (assoc id roost-sweep-late--records)
          (setf (alist-get id roost-sweep-late--records nil nil #'equal) (assq-delete-all 'pushed reply)))))))
@@ -1790,17 +1790,36 @@ A name of its own keeps the fields as long as they are."
         (should (equal (plist-get roost--compose-fields :directory) "/ssh:dev:/home/user/other/"))
         (should (equal (roost--compose-prompt) prompt))))))
 
-(ert-deftest roost-sweep-late-a-click-on-another-project-leaves-a-draft-that-quotes-files ()
+(ert-deftest roost-sweep-late-a-click-on-another-project-leaves-a-draft-tied-to-its-own ()
+  (pcase-dolist (`(,words ,tie)
+                 `(("quotes that project's files"
+                    ,(lambda ()
+                       (goto-char (point-max))
+                       (insert (propertize "src/a.py:1-2" 'roost-file "src/a.py"))))
+                   ("starts from an issue there"
+                    ,(lambda ()
+                       (setq roost--compose-fields (plist-put roost--compose-fields :issue '((number . 7))))))
+                   ("forks a task there"
+                    ,(lambda ()
+                       (setq roost--compose-fields (plist-put roost--compose-fields :source "mine"))))))
+    (roost-sweep-late--world
+      (roost-sweep-late--populate nil nil)
+      (with-current-buffer (roost-sweep-late--lay-out 'compose)
+        (let ((here (plist-get roost--compose-fields :directory))
+              (from (with-current-buffer (messages-buffer) (point-max))))
+          (funcall tie)
+          (roost--compose nil nil "/ssh:dev:/home/user/other/")
+          (should (equal (plist-get roost--compose-fields :directory) here))
+          (should (string-search words (roost-sweep-late--messages from))))))))
+
+(ert-deftest roost-sweep-late-a-click-gives-a-written-draft-its-project ()
+  ;; With none known, it asked for one.
   (roost-sweep-late--world
     (roost-sweep-late--populate nil nil)
     (with-current-buffer (roost-sweep-late--lay-out 'compose)
-      (let ((here (plist-get roost--compose-fields :directory))
-            (from (with-current-buffer (messages-buffer) (point-max))))
-        (goto-char (point-max))
-        (insert (propertize "src/a.py:1-2" 'roost-file "src/a.py"))
-        (roost--compose nil nil "/ssh:dev:/home/user/other/")
-        (should (equal (plist-get roost--compose-fields :directory) here))
-        (should (string-search "The draft stays in" (roost-sweep-late--messages from)))))))
+      (setq roost--compose-fields (plist-put roost--compose-fields :directory nil))
+      (roost--compose nil nil "/ssh:dev:/home/user/other/")
+      (should (equal (plist-get roost--compose-fields :directory) "/ssh:dev:/home/user/other/")))))
 
 (ert-deftest roost-sweep-late-text-to-add-leaves-a-written-draft-where-it-is ()
   ;; As `roost-draft-task' says.
@@ -1866,10 +1885,56 @@ A name of its own keeps the fields as long as they are."
           ;; You stay where you were writing.
           (should (eq (window-buffer (selected-window)) draft))
           ;; Asked now, it is another task.
-          (let ((first (cadr (assq 'createId (roost-sweep-late--mine)))))
-            (roost-compose-submit)
-            (should-not (equal (alist-get 'createId (plist-get (roost-sweep-late--take "create") :request))
-                               first))))))))
+          (roost-compose-submit)
+          (should-not (alist-get 'alreadyMade (plist-get (roost-sweep-late--take "create") :reply))))))))
+
+(ert-deftest roost-sweep-late-a-retry-with-a-field-cleared-keeps-the-draft ()
+  ;; Nothing the task holds tells: it started from feat, and the draft
+  ;; from wherever the project is now.
+  (pcase-dolist (`(,field ,value) '((:base "feat") (:name "Named") (:issue ((number . 7)))))
+    (roost-sweep-late--world
+      (roost-sweep-late--populate nil nil)
+      (let ((draft (roost-sweep-late--lay-out 'compose)))
+        (with-current-buffer draft
+          (setq roost--compose-fields (plist-put roost--compose-fields field value))
+          (roost-sweep-late--made-but-reply-lost 'dropped)
+          (setq roost--compose-fields (plist-put roost--compose-fields field nil))
+          (roost-compose-submit))
+        (roost-sweep-late--answer (roost-sweep-late--take "create") 'good)
+        (roost-sweep-late--settle)
+        (should (buffer-live-p draft))))))
+
+(ert-deftest roost-sweep-late-a-retry-that-makes-the-task-closes-the-draft ()
+  ;; Refused, nothing was made, so you fix the draft and ask again, and it
+  ;; says what its task was made from.
+  (roost-sweep-late--world
+    (roost-sweep-late--populate nil nil)
+    (let ((draft (roost-sweep-late--lay-out 'compose)))
+      (with-current-buffer draft
+        (roost-compose-submit)
+        (roost-sweep-late--answer (roost-sweep-late--take "create") '(refused . "No branch named x"))
+        (roost-sweep-late--rewrite-draft "Something else altogether.")
+        (roost-compose-submit))
+      (roost-sweep-late--answer (roost-sweep-late--take "create") 'good)
+      (roost-sweep-late--settle)
+      (should-not (buffer-live-p draft))
+      (should (equal (buffer-name (window-buffer (selected-window))) "*late terminal cccccc*")))))
+
+(ert-deftest roost-sweep-late-a-task-listed-after-the-draft-moved-says-so ()
+  ;; It said the task opens there if it was made.
+  (roost-sweep-late--world
+    (roost-sweep-late--populate nil nil)
+    (let ((draft (roost-sweep-late--lay-out 'compose)))
+      (with-current-buffer draft
+        (roost-sweep-late--made-but-reply-lost 'no-reply)
+        (roost--compose nil nil "/ssh:dev:/home/user/other/"))
+      (roost--refresh-host roost-sweep-late--host t)
+      (roost-sweep-late--answer (roost-sweep-late--take "list") 'good)
+      (roost-sweep-late--settle)
+      (should (buffer-live-p draft))
+      (with-current-buffer draft
+        (should (string-search "Made made" roost--draft-note))
+        (should-not roost--compose-asked)))))
 
 (ert-deftest roost-sweep-late-a-retry-of-the-same-draft-closes-it ()
   (dolist (form '(dropped no-reply))
@@ -1883,6 +1948,8 @@ A name of its own keeps the fields as long as they are."
         (roost-sweep-late--settle)
         (should-not (buffer-live-p draft))
         (should (equal (length (roost-tasks)) 3))
+        ;; That was of one reply.
+        (should-not (assq 'alreadyMade (roost-sweep-late--task "cccccc0000000000")))
         (should (equal (buffer-name (window-buffer (selected-window))) "*late terminal cccccc*"))))))
 
 (ert-deftest roost-sweep-late-what-you-change-in-a-new-task-draft-stays ()
@@ -1891,6 +1958,7 @@ A name of its own keeps the fields as long as they are."
                     ,(lambda () (setq roost--compose-fields (plist-put roost--compose-fields :agent "codex")))
                     ,(lambda () (setq roost--compose-fields (plist-put roost--compose-fields :name "Named")))
                     ,(lambda () (setq roost--compose-fields (plist-put roost--compose-fields :base "feat")))
+                    ,(lambda () (setq roost--compose-fields (plist-put roost--compose-fields :issue '((number . 7)))))
                     ,(lambda () (roost--compose-move "/ssh:dev:/home/user/other/"))))
     (roost-sweep-late--world
       (roost-sweep-late--populate nil nil)
@@ -2027,7 +2095,7 @@ A name of its own keeps the fields as long as they are."
       (roost-send-submit)
       (roost-sweep-late--answer (roost-sweep-late--take "send") 'no-reply)
       (should (string-search "No reply from dev, and it may have gone" roost--draft-note))
-      (should (string-search "sends it only if it didn't" roost--draft-note)))))
+      (should (string-search "as it is, C-c C-c sends it only if it didn't" roost--draft-note)))))
 
 (ert-deftest roost-sweep-late-a-prompt-its-host-has-closes-its-draft ()
   (roost-sweep-late--world
@@ -2108,11 +2176,12 @@ A name of its own keeps the fields as long as they are."
     (roost-sweep-late--populate nil nil)
     (roost-refresh t)
     (roost-forget-host roost-sweep-late--host)
-    (roost-sweep-late--answer (roost-sweep-late--take "list") 'dropped)
-    (should-not (gethash roost-sweep-late--host roost--errors))
-    (should-not (gethash roost-sweep-late--host roost--failures))
-    (should-not (gethash roost-sweep-late--host roost--refreshing))
-    (should-not (string-search roost-sweep-late--dropped (roost-sweep-late--messages 1)))))
+    (let ((from (with-current-buffer (messages-buffer) (point-max))))
+      (roost-sweep-late--answer (roost-sweep-late--take "list") 'dropped)
+      (should-not (gethash roost-sweep-late--host roost--errors))
+      (should-not (gethash roost-sweep-late--host roost--failures))
+      (should-not (gethash roost-sweep-late--host roost--refreshing))
+      (should-not (string-search roost-sweep-late--dropped (roost-sweep-late--messages from))))))
 
 (ert-deftest roost-sweep-late-the-setup-check-shows-what-its-latest-run-found ()
   (roost-sweep-late--world

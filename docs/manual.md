@@ -252,7 +252,8 @@ drafts a task there. Below the tasks, under "Start a task in", are the
 projects with no tasks now that you used last on each host, three
 (`roost-sidebar-recent-projects`), and "Other directory…". A click on one, or
 `RET`, drafts a task there, taking a draft you have written there too, unless
-it quotes files of the project it is in; "Other directory…" first asks for a
+it quotes files of its project, forks a task there or starts from an issue
+there; "Other directory…" first asks for a
 host, then a folder there, which after a click is the system's folder dialog
 for one on this machine. `X` on a project, or "Forget" on its menu, stops listing it until
 you start a task there again. With perspectives or tabs and no task yet, there
