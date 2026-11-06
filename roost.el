@@ -642,15 +642,15 @@ written, and a write that fails leaves it as it was."
   ;; the remembered ones, which `append' shares as its tail.
   (delete-dups (append roost-hosts roost--remembered-hosts nil)))
 
-(defun roost--hosts-as-on-file (&optional using)
+(defun roost--hosts-as-on-file (&rest using)
   "Take up the hosts `roost-hosts-file' holds, if another Emacs changed them.
 One it forgot goes here too, as no list would take its tasks away; unless
-it is USING, a host you are using again."
+it is among USING, hosts you are using again, where nil is this machine."
   (let ((watched (roost--hosts))
         (hosts (roost--read-again roost-hosts-file)))
     (unless (eq hosts 'same)
       (setq roost--remembered-hosts (seq-filter #'string-or-null-p hosts))
-      (dolist (host (seq-difference watched (cons using (roost--hosts))))
+      (dolist (host (seq-difference watched (append using (roost--hosts))))
         (roost--stop-watching host)
         (message "Roost no longer watches %s, as another Emacs forgot it" (roost--host-label host))))))
 
@@ -6954,7 +6954,8 @@ it had would seem to end: the one `roost--pr-view' has."
                                               roost--tasks)))
                                  ;; Sent again with the task's next news.
                                  (lambda (_) (funcall sent)))
-               (error (funcall sent))))))))
+               (error (funcall sent))
+               (quit (funcall sent) (signal 'quit nil))))))))
 
 (defun roost--reviewer-name (reviewer)
   "How to name REVIEWER, a login or team slug that a review is asked of.

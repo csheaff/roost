@@ -6111,6 +6111,31 @@ stopped."
      (should (string-search "no longer watches alpha, as another Emacs forgot it"
                             (with-current-buffer "*Messages*" (buffer-string)))))))
 
+(ert-deftest roost-this-machine-forgotten-in-another-emacs-goes-here-too ()
+  ;; Nil names it, so no host in use must not read as this one: as when
+  ;; you forget another host here, which uses none.
+  (let ((roost-hosts nil))
+    (roost-test--two-emacs
+     (roost-test--as-emacs emacs (lambda () (roost--remember-host nil) (roost--remember-host "gamma")))
+     (roost-test--as-emacs other (lambda () (roost--remember-host "beta")))
+     (roost-test--as-emacs other (lambda () (roost-forget-host nil)))
+     (let ((inhibit-message t))
+       (roost--cache-task nil (roost-test--task "2222222222222222" "permission"))
+       (roost-test--as-emacs emacs (lambda () (roost-forget-host "gamma")))
+       (should-not (gethash '(nil "2222222222222222") roost--tasks))
+       (should (string-search "no longer watches local, as another Emacs forgot it"
+                              (with-current-buffer "*Messages*" (buffer-string))))))))
+
+(ert-deftest roost-this-machine-you-use-again-after-another-emacs-forgot-it-is-watched ()
+  (let ((roost-hosts nil))
+    (roost-test--two-emacs
+     (roost-test--as-emacs emacs (lambda () (roost--remember-host nil)))
+     (roost-test--as-emacs other (lambda () (roost--remember-host "beta")))
+     (roost-test--as-emacs other (lambda () (roost-forget-host nil)))
+     (roost--cache-task nil (roost-test--task "2222222222222222" "running"))
+     (roost-test--as-emacs emacs (lambda () (roost--remember-host nil)))
+     (should (gethash '(nil "2222222222222222") roost--tasks)))))
+
 (ert-deftest roost-a-host-you-use-again-after-another-emacs-forgot-it-is-watched ()
   (roost-test--two-emacs
    (roost-test--as-emacs emacs (lambda () (roost--remember-host "alpha")))
@@ -6965,6 +6990,24 @@ stopped."
        (roost--report-turn task)
        (should (= asked 1))
        (should (equal (gethash (roost--key task) roost--turns-sent) "conflicts"))))))
+
+(ert-deftest roost-a-turn-you-quit-as-it-went-is-sent-again ()
+  ;; A quit is no error, and it stayed marked as sent for good.
+  (roost-test--isolated
+   (let ((task (roost-test--task "1111111111111111" "stopped")) (asked 0) quitting)
+     (setf (alist-get 'landed task) nil
+           (alist-get 'conflicts task) '("a.txt")
+           (alist-get 'seen task) (alist-get 'updatedAt task))
+     (cl-letf (((symbol-function 'roost--report-turn) roost-test--report-turn)
+               ((symbol-function 'roost--request)
+                (lambda (&rest _) (when quitting (signal 'quit nil)) (cl-incf asked))))
+       (setq quitting t)
+       ;; The quit goes on, as it is yours.
+       (should (eq (condition-case nil (progn (roost--report-turn task) 'finished) (quit 'quit)) 'quit))
+       (should (eq (gethash (roost--key task) roost--turns-sent 'none) 'none))
+       (setq quitting nil)
+       (roost--report-turn task)
+       (should (= asked 1))))))
 
 (ert-deftest roost-dashboard-groups-by-project-and-summarizes-attention ()
   (roost-test--isolated
