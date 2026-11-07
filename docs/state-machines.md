@@ -2924,4 +2924,5 @@ otherwise.
 | A damaged record is hidden, so its worktree and branch can't be finished from Roost | [Task record](#task-record) | Acting on it by ID says so, and to finish with Git |
 | `ref_exists` reads any Git failure as no branch | [Finishing a task](#finishing-a-task) | On the safe side: a branch not deleted |
 | `approvalsLeft` may be GitLab EE's alone, which would fail the merge request query on a CE server | [A task's pull request](#a-tasks-pull-request) | Unverified: needs a run against one |
+| Forgetting a task while its tmux server is stopped can drop the record of an agent still running | [Finishing a task](#finishing-a-task) | It is the way out when tmux doesn't answer, and the worktree and branch stay |
 | A signed-out `gh` freezes words, with no sign but `roost-doctor` | [What the forge last said](#what-the-forge-last-said) | By design: a task keeps what it had |
