@@ -5258,9 +5258,6 @@ def forget(store, task):
     """Drop Roost's record without touching Git, closing an ended task's window.
     The escape hatch for tasks Roost can no longer retire."""
     inventory = pane_inventory(task["socket"])
-    # Unanswered, an agent that was working may still be, with its record gone.
-    if inventory is None and task["status"] not in ENDED:
-        inventory_for(task)
     pane = owned_pane(task, inventory) if inventory else None
     if pane and not pane["dead"]:
         raise RoostError("The agent is running; stop the task before forgetting it")

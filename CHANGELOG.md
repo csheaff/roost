@@ -28,7 +28,7 @@ What each release changes, and what to do when upgrading. Newest first.
   work. Nothing to do when upgrading.
 - A tmux server that doesn't answer, as one stopped, no longer stops its host:
   after two seconds its tasks keep the status they last had, and commands say
-  tmux didn't answer, as forgetting a task does unless its agent had ended.
+  tmux didn't answer, but for forgetting a task, which goes on.
   The host's polls and hooks waited for it, for as long as it was stopped.
 - A dialog as a task resumes says what it asks. It showed what the agent
   had asked before you stopped it. Nothing to do when upgrading.

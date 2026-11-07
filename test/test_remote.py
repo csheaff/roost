@@ -3359,8 +3359,6 @@ class Lifecycle(unittest.TestCase):
             self.assertTrue(listed["ok"], listed)
             self.assertEqual((listed["result"][0]["status"], listed["result"][0]["live"]), ("ready", None))
             self.assertIn("tmux did not answer", self.answered("merge", id=task["id"])["error"])
-            # Which may be an agent at work: with its record gone, nothing would know.
-            self.assertIn("tmux did not answer", self.answered("forget", id=task["id"])["error"])
             # And any other call: a server can stop between two.
             pool = concurrent.futures.ThreadPoolExecutor(1)
             asked = pool.submit(roost.tmux, self.socket, "list-windows", "-a", check=False)
