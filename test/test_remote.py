@@ -3230,6 +3230,26 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(self.replied["result"]["update"]["changed"])
         self.assertNotIn("integrating", roost.Store(str(self.state)).read(task["id"]))
 
+    def test_git_killed_alone_in_an_update_leaves_its_work_named(self):
+        task = self.create()
+        self.request("stop", id=task["id"])
+        (self.repo / "later").write_text("on main\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "Later")
+        worktree = Path(task["worktree"])
+
+        def killed(repo, *args, **kwargs):
+            # Staged, and not yet marked as a merge under way.
+            (worktree / "later").write_text("on main\n")
+            roost.git(worktree, "add", "later")
+            return subprocess.CompletedProcess(args, -9, "", "")
+
+        with patch.object(roost, "git_with_hooks", killed):
+            self.assertFalse(self.request("update", id=task["id"])["ok"])
+        self.assertIn("integrating", roost.Store(str(self.state)).read(task["id"]))
+        for action in ("update", "resume"):
+            self.assertIn("stopped partway", self.request(action, id=task["id"])["error"])
+
     def test_nothing_else_acts_on_a_task_while_it_merges(self):
         task = self.with_a_commit()
         attached = [dict(name="a", data=base64.b64encode(b"a").decode())]

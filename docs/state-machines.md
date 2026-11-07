@@ -478,7 +478,11 @@ Invariants:
   runs: it could only wait. An `update` reads integration and takes no such lock.
 - I5. A merge cut short is named, and never read as your changes. The mark stays
   until a poll, or `merge`, `retire`, `update`, `pr`, `resume` or `send`, finds with
-  `merge_left` that nothing is left: HEAD moved, or nothing differs. A half-done
+  `merge_left` that nothing is left: HEAD moved, or nothing differs. A checkout it
+  can't read, missing or not answering Git, proves nothing, so the mark stays and
+  nothing is refused until it can. Git killed alone fails the action and leaves the
+  mark in the same way, if anything is left. A poll's look runs no program an agent
+  could name in that checkout's config (`read_git`). A half-done
   merge refuses `merge`, and a half-done update all six, saying how to finish or
   undo it: an agent would commit what an update left. Roost began with nothing
   uncommitted there, so what differs is the merge's, and `merge_left_in` tells a

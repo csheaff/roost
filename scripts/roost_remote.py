@@ -5909,13 +5909,18 @@ def integrating(store, task, action, branch, place):
         task["integrating"] = dict(id=marker, action=action, name=task["name"], branch=branch, place=place, head=head,
                                    pid=os.getpid())
         store.save(task)
+        finished = False
         try:
             with store.released():
                 yield
+            finished = True
         finally:
             with contextlib.suppress(RoostError):
                 current = store.read(task["id"])
-                if (current.get("integrating") or {}).get("id") == marker:
+                mark = current.get("integrating") or {}
+                # Git killed alone fails here as a helper killed would, and
+                # what it left needs the mark as much.
+                if mark.get("id") == marker and (finished or merge_left(mark) is None):
                     del current["integrating"]
                     store.save(current)
 
@@ -5928,23 +5933,33 @@ def integrating_words(mark):
 
 def merge_left(mark):
     """What a merge MARK says was cut short left, and how to go on from it,
-    or None when nothing did, as when it had finished, or you put it right.
-    Roost began it with nothing uncommitted there, so whatever Git tracks
+    None when nothing did, as when it had finished, or you put it right, or
+    "" when its checkout can't be read now, as on a drive not mounted, to
+    look again later. Roost began it with nothing uncommitted there, so whatever Git tracks
     and differs is the merge's: to commit that, with no merge under way,
     would commit half a merge as your work. A poll clears a mark with
     nothing left (`left_of_merge`), so one doesn't stay to blame what you
     do there later."""
     place = mark.get("place")
-    if not (isinstance(place, str) and Path(place).is_dir()):
+    if not isinstance(place, str):
         return None
-    if git(place, "rev-parse", "-q", "--verify", "HEAD", check=False).stdout.strip() != mark.get("head"):
+    if not Path(place).is_dir():
+        return ""
+    head = git(place, "rev-parse", "-q", "--verify", "HEAD", check=False)
+    if head.returncode:
+        return ""
+    if head.stdout.strip() != mark.get("head"):
         return None
     doing = integrating_words(mark)
     doing = doing[0].upper() + doing[1:]
     if git(place, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0:
         return ("%s stopped partway, with its merge under way in %s; finish it with git commit, or undo it with "
                 "git merge --abort, then try again" % (doing, place))
-    if git(place, "status", "--porcelain", "--untracked-files=no", check=False).stdout.strip():
+    # A poll comes here, and an agent can write its worktree's config.
+    status = read_git(place, "status", "--porcelain", "--untracked-files=no")
+    if status.returncode:
+        return ""
+    if status.stdout.strip():
         return ("%s stopped partway, and what it changed is still in %s, uncommitted; undo it with git reset --merge "
                 "there, then try again" % (doing, place))
     return None
@@ -5956,7 +5971,7 @@ def left_of_merge(store, task):
     if worktree_holder(store, task):
         return None
     left = merge_left(task["integrating"])
-    if not left:
+    if left is None:
         del task["integrating"]
         store.note(task)
     return left

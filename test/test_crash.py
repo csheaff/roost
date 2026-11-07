@@ -6,6 +6,7 @@ import contextlib
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import signal
 import subprocess
@@ -161,6 +162,37 @@ class Crashes(unittest.TestCase):
         self.assertTrue(reply["ok"], reply)
         self.assertEqual(len(box.git("log", "--merges", "--format=%H", cwd=worktree).split()), 1)
         self.assertNotIn("integrating", box.record(task["id"]))
+
+    def test_a_half_done_update_is_still_named_once_its_checkout_is_back(self):
+        box = self.box()
+        task = self.task_to_update(box)
+        self.update_stopped_in_its_merge(box, task)
+        worktree = Path(task["worktree"])
+        away = worktree.with_name("away")
+        worktree.rename(away)
+        box.helper("list", socket=box.socket)
+        away.rename(worktree)
+        self.assertIn("stopped partway", box.helper("update", id=task["id"])["error"])
+        # A checkout Git can't read says no more than a missing one.
+        head = worktree / ".git"
+        kept = head.read_text()
+        head.write_text("gitdir: /nowhere\n")
+        box.helper("list", socket=box.socket)
+        head.write_text(kept)
+        self.assertIn("stopped partway", box.helper("update", id=task["id"])["error"])
+
+    def test_a_poll_of_a_half_done_update_runs_no_program_its_agent_could_name(self):
+        box = self.box()
+        task = self.task_to_update(box)
+        self.update_stopped_in_its_merge(box, task)
+        ran = box.root / "ran"
+        program = box.root / "fsmonitor"
+        program.write_text("#!/bin/sh\ntouch %s\n" % shlex.quote(str(ran)))
+        program.chmod(0o755)
+        box.git("config", "core.fsmonitor", shlex.quote(str(program)), cwd=task["worktree"])
+        box.helper("list", socket=box.socket)
+        self.assertIn("integrating", box.record(task["id"]))
+        self.assertFalse(ran.exists())
 
     def test_an_update_cut_short_before_git_began_leaves_nothing_to_say(self):
         box = self.box()
