@@ -44,6 +44,10 @@ happened in a section below:
   small. Each had a test that failed, with a control that passed. All are fixed, in
   #231 to #238 and #240, and the document's ledger says where.
 - **`make qa`, whole, on `main` with #240:** 386 steps, no problems.
+- **`make crash`, whole, after the harness began killing Git and its helper at once,
+  as a reboot does.** Merging, updating and retiring, no flags. `Create` showed 5
+  trials of the known empty branch that Git's lock keeps, which the old harness hid
+  by letting the helper tidy up. It counts those now as what stays.
 - **Not run.** `make contract-live`, so no capture holds `agent_id`. A real GitLab
   rebase-on-merge, which leaves no ancestor to follow.
 

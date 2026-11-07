@@ -493,6 +493,8 @@ def recover(box, scenario, outcome):
 def way_out(box, scenario, outcome):
     """Discard what is left, and check that nothing stays."""
     problems = outcome["problems"]
+    # Before `stale_locks` clears it: while it stayed, no ref could go.
+    packed_locked = (box.repo / ".git/packed-refs.lock").exists()
     listed = box.helper("list", socket=box.socket)
     for task in listed["result"] if listed and listed.get("ok") else []:
         gone = None
@@ -520,7 +522,7 @@ def way_out(box, scenario, outcome):
         # What Git's death left locked Roost can't delete, or should: known,
         # and an empty branch is all it costs.
         locked = [branch for branch in branches if (box.repo / ".git/refs/heads" / (branch + ".lock")).exists()
-                  or (box.repo / ".git/packed-refs.lock").exists()]
+                  or packed_locked]
         outcome["residue"] += ["a branch Git left locked: " + branch for branch in locked]
         branches = [branch for branch in branches if branch not in locked]
         if branches:
