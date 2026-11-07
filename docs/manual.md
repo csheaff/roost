@@ -919,7 +919,12 @@ happens there and needs nothing uncommitted (untracked files stay); with it on
 another branch, Git merges into the integration branch without touching your
 checkout (Git 2.38 or newer). A merge that conflicts leaves nothing changed.
 One that a commit hook in the primary checkout refuses is undone, leaving
-what the hook changed in other files. Nor does Roost change anything when it
+what the hook changed in other files. While a merge or `u` runs, agents and
+polls go on, but commands on that task say it is under way, and so does a
+second merge in that repository. It goes on to its end if Emacs stops waiting,
+as anything that changes a task does, on this machine as over SSH. Stopped
+partway, as by a reboot, it says what it left and how to undo it, as `git
+reset --merge`. Nor does Roost change anything when it
 refuses, saying what to do first: to merge a task whose worktree is locked,
 was moved, or is in the middle of a rebase, cherry-pick, revert or bisect,
 or into a branch whose rebase is under way. Neither a merge nor `u` writes

@@ -2,10 +2,14 @@
 a reboot leaves it: see crash_harness.py. `Crashes` holds each crash that went
 wrong, for `make test`; `Sweep` kills every action at every step, for
 `make crash`."""
+import contextlib
+import fcntl
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -105,7 +109,7 @@ class Crashes(unittest.TestCase):
         box.wait_for_orphan()
         box.disarm()
         # A merge under way, to resolve or abort, not changes to commit.
-        self.assertIn("abort it", box.helper("update", id=task["id"])["error"])
+        self.assertIn("git merge --abort", box.helper("update", id=task["id"])["error"])
         box.git("merge", "--abort", cwd=task["worktree"])
         self.assertEqual(Path(task["worktree"], "work").read_text(), "work\n")
 
@@ -120,6 +124,201 @@ class Crashes(unittest.TestCase):
         self.assertIn("git merge --abort", error)
         box.git("merge", "--abort")
         self.assertTrue(box.helper("merge", id=task["id"])["ok"])
+
+    def update_stopped_in_its_merge(self, box, task):
+        """Stop an update of TASK in Git's merge, with the merge staged and
+        not yet marked as under way, as a reboot can."""
+        box.arm("inside", 1)
+        for hook in (box.root / "hooks").iterdir():
+            if hook.name != "pre-merge-commit":
+                hook.unlink()
+        self.assertIsNone(box.helper("update", id=task["id"]))
+        box.disarm()
+
+    def task_to_update(self, box):
+        task = box.create()
+        box.commit(task)
+        (box.repo / "main-file").write_text("main\n")
+        box.git("add", ".")
+        box.git("commit", "-qm", "Move main on")
+        box.helper("stop", id=task["id"])
+        return task
+
+    def test_a_half_done_update_is_named_and_nothing_says_to_commit_it(self):
+        box = self.box()
+        task = self.task_to_update(box)
+        self.update_stopped_in_its_merge(box, task)
+        worktree = task["worktree"]
+        self.assertEqual(box.git("status", "--porcelain", cwd=worktree), "A  main-file")
+        self.assertEqual(box.git("rev-parse", "-q", "--verify", "MERGE_HEAD", cwd=worktree, check=False), "")
+        for action, args in (("update", {}), ("merge", {}), ("retire", {}), ("pr", dict(title="T")), ("resume", {}),
+                             ("send", dict(text="commit what is there"))):
+            with self.subTest(action=action):
+                error = box.helper(action, id=task["id"], **args)["error"]
+                self.assertIn("Updating task from main stopped partway", error)
+                self.assertIn("git reset --merge", error)
+                self.assertNotRegex(error, "Commit|commit it|git commit")
+        box.git("reset", "-q", "--merge", cwd=worktree)
+        reply = box.helper("update", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(len(box.git("log", "--merges", "--format=%H", cwd=worktree).split()), 1)
+        self.assertNotIn("integrating", box.record(task["id"]))
+
+    def test_a_half_done_update_is_still_named_once_its_checkout_is_back(self):
+        box = self.box()
+        task = self.task_to_update(box)
+        self.update_stopped_in_its_merge(box, task)
+        worktree = Path(task["worktree"])
+        away = worktree.with_name("away")
+        worktree.rename(away)
+        box.helper("list", socket=box.socket)
+        away.rename(worktree)
+        self.assertIn("stopped partway", box.helper("update", id=task["id"])["error"])
+        # A checkout Git can't read says no more than a missing one.
+        head = worktree / ".git"
+        kept = head.read_text()
+        head.write_text("gitdir: /nowhere\n")
+        box.helper("list", socket=box.socket)
+        head.write_text(kept)
+        self.assertIn("stopped partway", box.helper("update", id=task["id"])["error"])
+
+    def test_a_poll_of_a_half_done_update_runs_no_program_its_agent_could_name(self):
+        box = self.box()
+        task = self.task_to_update(box)
+        self.update_stopped_in_its_merge(box, task)
+        ran = box.root / "ran"
+        program = box.root / "fsmonitor"
+        program.write_text("#!/bin/sh\ntouch %s\n" % shlex.quote(str(ran)))
+        program.chmod(0o755)
+        box.git("config", "core.fsmonitor", shlex.quote(str(program)), cwd=task["worktree"])
+        box.helper("list", socket=box.socket)
+        self.assertIn("integrating", box.record(task["id"]))
+        self.assertFalse(ran.exists())
+
+    def test_a_look_at_a_half_done_update_refuses_nothing_less(self):
+        box = self.box()
+        task = self.task_to_update(box)
+        self.update_stopped_in_its_merge(box, task)
+        with (box.state / "tasks" / (task["id"] + ".removing")).open() as lock:
+            fcntl.flock(lock, fcntl.LOCK_SH)
+            self.assertIn("stopped partway", box.helper("resume", id=task["id"])["error"])
+
+    def test_an_update_doesnt_take_the_mark_of_a_half_done_squash(self):
+        box = self.box()
+        task = box.create()
+        box.commit(task)
+        box.helper("stop", id=task["id"])
+        box.arm("before", match="commit -q -F -")
+        self.assertIsNone(box.helper("merge", id=task["id"], style="squash"))
+        box.disarm()
+        self.assertIn("Merging task into main stopped partway", box.helper("update", id=task["id"])["error"])
+        self.assertIn("Merging task into main stopped partway", box.helper("merge", id=task["id"], style="squash")["error"])
+
+    def test_an_update_cut_short_before_git_began_leaves_nothing_to_say(self):
+        box = self.box()
+        task = self.task_to_update(box)
+        box.arm("before", match=" --ff --no-edit")
+        self.assertIsNone(box.helper("update", id=task["id"]))
+        box.disarm()
+        self.assertIn("integrating", box.record(task["id"]))
+        reply = box.helper("update", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertNotIn("integrating", box.record(task["id"]))
+
+    def test_a_mark_with_nothing_left_goes_at_the_next_poll(self):
+        box = self.box()
+        task = self.task_to_update(box)
+        box.arm("before", match=" --ff --no-edit")
+        self.assertIsNone(box.helper("update", id=task["id"]))
+        box.disarm()
+        box.helper("list", socket=box.socket)
+        self.assertNotIn("integrating", box.record(task["id"]))
+
+    def test_a_merge_cut_short_blames_nothing_you_do_after_it(self):
+        for mode, match, poll in (("before", "merge --no-ff", True), ("after", "merge --no-ff", False)):
+            with self.subTest(mode=mode):
+                box = self.box()
+                task = box.create()
+                box.commit(task)
+                box.arm(mode, match=match)
+                self.assertIsNone(box.helper("merge", id=task["id"]))
+                box.disarm()
+                if poll:
+                    box.helper("list", socket=box.socket)
+                (box.repo / "hello").write_text("yours\n")
+                box.git("add", "hello")
+                self.assertIn("has uncommitted changes; commit or stash them", box.helper("merge", id=task["id"])["error"])
+
+    def test_a_half_done_squash_is_named_to_whatever_merges_there_next(self):
+        box = self.box()
+        task, other = box.create(), box.create("other")
+        box.commit(task)
+        box.commit(other, "other-work")
+        box.arm("before", match="commit -q -F -")
+        self.assertIsNone(box.helper("merge", id=task["id"], style="squash"))
+        box.disarm()
+        self.assertEqual(box.git("status", "--porcelain"), "A  work")
+        for merging, args in ((task, dict(style="squash")), (other, {})):
+            error = box.helper("merge", id=merging["id"], **args)["error"]
+            self.assertIn("Merging task into main stopped partway", error)
+            self.assertIn("git reset --merge", error)
+        box.git("reset", "-q", "--merge")
+        reply = box.helper("merge", id=task["id"], style="squash")
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(box.git("status", "--porcelain"), "")
+        self.assertEqual(box.git("show", "main:work"), "work")
+
+    def test_a_merge_cut_short_keeps_nothing_else_from_the_task(self):
+        # In the primary checkout: the task's own worktree is as it was.
+        box = self.box()
+        task = box.create()
+        box.commit(task)
+        box.arm("before", match="commit -q -F -")
+        self.assertIsNone(box.helper("merge", id=task["id"], style="squash"))
+        box.disarm()
+        for action, args in (("send", dict(text="more")), ("rename", dict(name="other")), ("stop", {}), ("resume", {})):
+            reply = box.helper(action, id=task["id"], **args)
+            self.assertTrue(reply["ok"], (action, reply))
+
+    def daemon_hook(self, box, name):
+        """Have Git's hook NAME leave a process running, as a build tool's
+        daemon, or the credential cache's from `git push`, goes on."""
+        pid = box.root / (name + ".pid")
+        path = box.repo / ".git" / "hooks" / name
+        path.parent.mkdir(exist_ok=True)
+        path.write_text("#!/bin/sh\nsleep 300 >/dev/null 2>&1 </dev/null &\necho $! > '%s'\n" % pid)
+        path.chmod(0o755)
+
+        def stop():
+            with contextlib.suppress(OSError, ValueError):
+                os.kill(int(pid.read_text()), signal.SIGKILL)
+        self.addCleanup(stop)
+        return pid
+
+    def test_what_a_push_leaves_running_keeps_no_hold_on_its_task(self):
+        box = self.box()
+        box.origin()
+        pid = self.daemon_hook(box, "pre-push")
+        task = box.create()
+        box.commit(task)
+        reply = box.helper("pr", id=task["id"], title="Add work")
+        self.assertTrue(reply["ok"], reply)
+        self.assertTrue(pid.exists())
+        box.helper("stop", id=task["id"])
+        reply = box.helper("forget", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+
+    def test_what_a_checkout_leaves_running_holds_up_no_creation_cut_short(self):
+        box = self.box()
+        pid = self.daemon_hook(box, "post-checkout")
+        args = dict(directory=str(box.repo), name="task", socket=box.socket, createId="ab" * 8,
+                    command=[sys.executable, str(harness.FAKE)])
+        box.arm("after", match="worktree add")
+        self.assertIsNone(box.helper("create", **args))
+        box.disarm()
+        self.assertTrue(pid.exists())
+        reply = box.helper("create", timeout=20, **args)
+        self.assertTrue(reply["ok"], reply)
 
     def cut_short_removing(self, box, task, action, **args):
         """Stop ACTION at the removal of TASK's worktree."""
@@ -511,7 +710,8 @@ class Sweep(unittest.TestCase):
     def sweep(self, modes):
         for scenario in scenarios.ALL:
             with self.subTest(scenario=scenario.__name__):
-                self.assert_no_problems(harness.sweep(scenario, modes=modes, workers=self.workers))
+                self.assert_no_problems(harness.sweep(scenario, workers=self.workers, modes=tuple(
+                    mode for mode in modes if mode not in scenario.left_out)))
 
     def test_every_command(self):
         self.sweep(("before", "after", "orphan", "racing", "fail", "inside"))

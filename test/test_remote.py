@@ -2,6 +2,7 @@
 import ast
 import base64
 import concurrent.futures
+import contextlib
 import datetime
 import errno
 import fcntl
@@ -1847,6 +1848,7 @@ class Lifecycle(unittest.TestCase):
                 self.assertIn("changes to hello made as it ran are left there", error)
                 self.assertEqual((self.repo / "hello").read_text(), self.git("show", "main:hello") + "\nhooked\n")
                 self.assertEqual(self.git("rev-parse", "main"), before)
+                self.assertNotIn("integrating", roost.Store(str(self.state)).read(task["id"]))
                 hook.unlink()
                 self.git("checkout", "--", "hello")
                 roost.git(self.repo, "config", "--unset", "branch.main.mergeOptions", check=False)
@@ -3140,28 +3142,289 @@ class Lifecycle(unittest.TestCase):
         self.assertFalse(Path(task["worktree"]).exists())
         self.assertEqual(self.request("list")["result"], [])
 
-    def test_a_removal_holds_while_a_command_it_started_runs(self):
-        # Emacs kills a local request it gave up waiting for, but not the
-        # Git deleting files for it, and a retry must not race that Git.
-        git = roost.git
+    def helper_at(self, action, stderr=subprocess.PIPE, **args):
+        """The helper at ACTION, as Emacs runs it on this machine: in a
+        process group of its own, which Emacs kills when it stops waiting."""
+        process = subprocess.Popen([sys.executable, str(SOURCE), "rpc"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=stderr, start_new_session=True)
+        process.stdin.write(json.dumps(dict(root=str(self.state), action=action, **args)).encode())
+        process.stdin.close()
+
+        def end():
+            process.wait()
+            for stream in (process.stdout, process.stderr):
+                if stream:
+                    stream.close()
+        self.addCleanup(end)
+        return process
+
+    @contextlib.contextmanager
+    def stopped_in_a_hook(self, task, name, action="merge", **args):
+        """ACTION on TASK, stopped in Git's hook NAME for as long as this
+        lasts, as one running tests or an install, then going on. Yield the
+        helper. Its reply is then in `replied`."""
+        started, release = self.root / "started", self.root / "release"
+        for path in (started, release):
+            path.unlink(missing_ok=True)
+        hook = self.hook(name, "touch %s\nwhile [ ! -e %s ]; do sleep .02; done"
+                         % (shlex.quote(str(started)), shlex.quote(str(release))))
+        process = self.helper_at(action, id=task["id"], **args)
+        deadline = time.monotonic() + 15
+        while not started.exists():
+            self.assertLess(time.monotonic(), deadline, "the hook never ran")
+            time.sleep(.01)
+        try:
+            yield process
+        finally:
+            release.touch()
+            hook.unlink()
+        if not process.stdout.closed:
+            process.wait(timeout=30)
+            self.replied = json.loads(process.stdout.read())
+
+    def answered(self, action, **args):
+        """The reply to ACTION, which must not wait on what is under way."""
+        pool = concurrent.futures.ThreadPoolExecutor(1)
+        try:
+            return pool.submit(self.request, action, **args).result(timeout=8)
+        except concurrent.futures.TimeoutError:
+            self.fail("%s waited on what was under way" % action)
+        finally:
+            pool.shutdown(wait=False)
+
+    def hook_answered(self, task, payload):
+        """Run the agent's hook with PAYLOAD as Codex runs it, which gives it three seconds."""
+        record = roost.Store(str(self.state)).read(task["id"])
+        try:
+            subprocess.run([sys.executable, str(SOURCE), "hook", str(self.state), task["id"], record["runId"]],
+                           input=json.dumps(payload), text=True, timeout=3, check=True)
+        except subprocess.TimeoutExpired:
+            self.fail("the agent's hook waited on what was under way, and its news is lost")
+
+    def with_a_commit(self, name="task"):
+        task = self.create(name=name)
+        self.commit_in(task, "work-" + task["id"])
+        return task
+
+    def test_every_agent_and_poll_goes_on_while_a_merges_hook_runs(self):
+        for name, args in (("post-merge", {}), ("pre-merge-commit", {}), ("commit-msg", {}), ("pre-commit", dict(style="squash"))):
+            with self.subTest(hook=name):
+                task, other = self.with_a_commit(), self.create(name="other")
+                with self.stopped_in_a_hook(task, name, **args):
+                    self.assertTrue(self.answered("list", socket=self.socket)["ok"])
+                    self.hook_answered(other, dict(hook_event_name="PermissionRequest", tool_name="Bash",
+                                                   tool_input=dict(command="ls")))
+                self.assertTrue(self.replied["ok"], self.replied)
+                self.assertEqual(roost.Store(str(self.state)).read(other["id"])["status"], "permission")
+                self.assertTrue(self.request("forget", id=self.request("stop", id=other["id"])["result"]["id"])["ok"])
+
+    def test_every_agent_and_poll_goes_on_while_an_updates_hook_runs(self):
+        task, other = self.create(), self.create(name="other")
+        self.request("stop", id=task["id"])
+        (self.repo / "later").write_text("on main\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "Later")
+        with self.stopped_in_a_hook(task, "post-merge", "update"):
+            self.assertTrue(self.answered("list", socket=self.socket)["ok"])
+            self.hook_answered(other, dict(hook_event_name="UserPromptSubmit", prompt="go"))
+        self.assertTrue(self.replied["ok"], self.replied)
+        self.assertTrue(self.replied["result"]["update"]["changed"])
+        self.assertNotIn("integrating", roost.Store(str(self.state)).read(task["id"]))
+
+    def test_git_killed_as_it_writes_conflicts_leaves_them_named(self):
+        for action, where in (("update", "task"), ("merge", "repository")):
+            with self.subTest(action):
+                task = self.create(name=action)
+                worktree = Path(task["worktree"])
+                (worktree / "hello").write_text("the task's\n")
+                self.git("commit", "-qam", "Task", cwd=worktree)
+                (self.repo / "hello").write_text("main's %s\n" % action)
+                self.git("commit", "-qam", "Main")
+                self.request("stop", id=task["id"])
+                real = roost.git_with_hooks
+
+                def killed(repo, *args, **kwargs):
+                    real(repo, *args, **kwargs)
+                    # Written in the index, and not yet marked as a merge under way.
+                    Path(self.git("rev-parse", "--path-format=absolute", "--git-path", "MERGE_HEAD", cwd=repo)).unlink()
+                    return subprocess.CompletedProcess(args, -9, "", "")
+
+                with patch.object(roost, "git_with_hooks", killed):
+                    reply = self.request(action, id=task["id"])
+                self.assertFalse(reply["ok"], reply)
+                self.assertNotIn("Nothing was changed", reply["error"])
+                self.assertIn("integrating", roost.Store(str(self.state)).read(task["id"]))
+                self.assertIn("stopped partway", self.request(action, id=task["id"])["error"])
+                self.git("reset", "-q", "--merge", cwd=worktree if where == "task" else self.repo)
+                self.request("forget", id=task["id"])
+
+    def test_what_changes_in_a_task_as_it_merges_stops_its_retiring(self):
+        task = self.with_a_commit()
+        self.request("stop", id=task["id"])
+        worktree = task["worktree"]
+        self.hook("pre-merge-commit", "env -u GIT_DIR -u GIT_INDEX_FILE git -C %s checkout -q --detach" % shlex.quote(worktree))
+        error = self.request("merge", id=task["id"])["error"]
+        self.assertIn("is merged into main, and not retired", error)
+        self.assertTrue(Path(worktree).exists())
+
+    def test_git_killed_alone_in_an_update_leaves_its_work_named(self):
         task = self.create()
+        self.request("stop", id=task["id"])
+        (self.repo / "later").write_text("on main\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "Later")
+        worktree = Path(task["worktree"])
 
-        def removing(repo, *args, **kwargs):
-            if args[:2] == ("worktree", "remove"):
-                roost.execute(["sh", "-c", "sleep 1.5 > /dev/null 2>&1 &"])
-                raise roost.RoostError("simulated end of the request")
-            return git(repo, *args, **kwargs)
+        def killed(repo, *args, **kwargs):
+            # Staged, and not yet marked as a merge under way.
+            (worktree / "later").write_text("on main\n")
+            roost.git(worktree, "add", "later")
+            return subprocess.CompletedProcess(args, -9, "", "")
 
-        with patch.object(roost, "git", side_effect=removing):
-            self.assertFalse(self.request("retire", id=task["id"])["ok"])
-        self.assertIn("still removing", self.request("retire", id=task["id"])["error"])
-        # Nor may a push for a pull request start there.
-        self.assertIn("still removing", self.request("pr", id=task["id"], title="Meanwhile")["error"])
-        deadline = time.monotonic() + 8
-        while not self.request("retire", id=task["id"])["ok"]:
-            self.assertLess(time.monotonic(), deadline)
-            time.sleep(0.2)
+        with patch.object(roost, "git_with_hooks", killed):
+            self.assertFalse(self.request("update", id=task["id"])["ok"])
+        self.assertIn("integrating", roost.Store(str(self.state)).read(task["id"]))
+        for action in ("update", "resume"):
+            self.assertIn("stopped partway", self.request(action, id=task["id"])["error"])
+
+    def test_nothing_else_acts_on_a_task_while_it_merges(self):
+        task = self.with_a_commit()
+        attached = [dict(name="a", data=base64.b64encode(b"a").decode())]
+        with self.stopped_in_a_hook(task, "post-merge"):
+            for action, args in (("stop", {}), ("resume", {}), ("send", dict(text="more")), ("shell", {}),
+                                 ("rename", dict(name="other")), ("attach", dict(files=attached)), ("look", {}),
+                                 ("update", {}), ("pr", dict(title="T")), ("retire", {}), ("merge", {}),
+                                 ("discard", {}), ("forget", {})):
+                with self.subTest(action=action):
+                    self.assertIn("still merging task into main", self.answered(action, id=task["id"], **args).get("error"))
+            # What only looks goes on, and hooks, whose news the merge keeps.
+            self.assertTrue(self.answered("seen", id=task["id"], updatedAt="seen meanwhile")["ok"])
+            self.assertTrue(self.answered("inspect", id=task["id"])["ok"])
+        self.assertTrue(self.replied["ok"], self.replied)
         self.assertEqual(self.request("list")["result"], [])
+
+    def test_a_second_merge_into_a_checkout_is_refused_at_once(self):
+        task, other = self.with_a_commit(), self.with_a_commit("other")
+        with self.stopped_in_a_hook(task, "post-merge"):
+            self.assertIn("Roost is merging task into main", self.answered("merge", id=other["id"]).get("error"))
+            self.assertIn("Roost is merging task into main",
+                          self.answered("merge", id=other["id"], style="squash").get("error"))
+            # Which doesn't hold up the rest of what that task does.
+            self.assertTrue(self.answered("stop", id=other["id"])["ok"])
+        self.assertTrue(self.replied["ok"], self.replied)
+        reply = self.request("merge", id=other["id"])
+        self.assertTrue(reply["ok"], reply)
+
+    def test_merges_into_two_repositories_go_on_at_once(self):
+        task = self.with_a_commit()
+        second = self.root / "second"
+        second.mkdir()
+        self.git("init", "-b", "main", cwd=second)
+        for key, value in (("user.name", "Roost Test"), ("user.email", "roost@example.invalid"), ("commit.gpgsign", "false")):
+            self.git("config", key, value, cwd=second)
+        (second / "hello").write_text("base\n")
+        self.git("add", ".", cwd=second)
+        self.git("commit", "-qm", "base", cwd=second)
+        other = self.create(directory=str(second), name="other")
+        self.commit_in(other, "second-work")
+        self.request("stop", id=other["id"])
+        with self.stopped_in_a_hook(task, "post-merge"):
+            reply = self.answered("merge", id=other["id"])
+            self.assertTrue(reply["ok"], reply)
+        self.assertTrue(self.replied["ok"], self.replied)
+
+    def test_a_merge_a_hook_refuses_leaves_what_came_in_meanwhile(self):
+        task = self.with_a_commit()
+        store = roost.Store(str(self.state))
+        with self.stopped_in_a_hook(task, "pre-merge-commit"):
+            self.assertTrue(self.answered("seen", id=task["id"], updatedAt="seen meanwhile")["ok"])
+            hook = self.root / "hooks" / "pre-merge-commit"
+            hook.write_text(hook.read_text() + "\nexit 1\n")
+        self.assertIn("refused the merge", self.replied["error"])
+        record = store.read(task["id"])
+        self.assertEqual(record["seen"], "seen meanwhile")
+        self.assertNotIn("integrating", record)
+        self.assertTrue(self.request("merge", id=task["id"])["ok"])
+
+    def test_an_agent_at_work_again_after_a_merge_keeps_its_task(self):
+        # It reads ready as the merge begins; you may type in its terminal.
+        task = self.with_a_commit()
+        store = roost.Store(str(self.state))
+        with self.stopped_in_a_hook(task, "post-merge"):
+            roost.update_hook(store, task["id"], dict(hook_event_name="UserPromptSubmit", prompt="and this"),
+                              store.read(task["id"])["runId"])
+        self.assertIn("task is merged into main, and not retired: The agent is active", self.replied["error"])
+        self.assertTrue(Path(task["worktree"]).exists())
+        self.assertEqual(self.git("rev-list", "--count", "--merges", "main"), "1")
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        self.assertTrue(self.request("merge", id=task["id"])["ok"])
+
+    def test_what_changes_things_goes_on_once_emacs_stops_waiting(self):
+        # Emacs kills the helper's process group, and says it may still
+        # finish: a hook over its minute, as on a squash merge's first run,
+        # left the task's work staged in your checkout, every time.
+        for name, args in (("pre-commit", dict(style="squash")), ("pre-merge-commit", {})):
+            with self.subTest(hook=name):
+                task = self.with_a_commit()
+                with self.stopped_in_a_hook(task, name, **args) as process:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    self.assertEqual(process.wait(timeout=8), -signal.SIGKILL)
+                    process.stdout.close()
+                store = roost.Store(str(self.state))
+                deadline = time.monotonic() + 15
+                while store.recorded(task["id"]):
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(.02)
+                self.assertEqual(self.git("status", "--porcelain"), "")
+                self.assertTrue((self.repo / ("work-" + task["id"])).exists())
+
+    def test_a_reply_nobody_is_left_to_read_ends_quietly(self):
+        task = self.with_a_commit()
+        with (self.root / "said").open("w") as said:
+            with self.stopped_in_a_hook(task, "post-merge", stderr=said) as process:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=8)
+                process.stdout.close()
+        store = roost.Store(str(self.state))
+        deadline = time.monotonic() + 15
+        while store.recorded(task["id"]):
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(.02)
+        time.sleep(.3)
+        self.assertEqual((self.root / "said").read_text(), "")
+
+    def test_what_only_looks_goes_with_emacss_wait(self):
+        # Or polls of a host in trouble would pile up there.
+        task = self.create()
+        with open(self.state / "registry.lock", "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            for action in ("list", "inspect", "seen", "turn", "send"):
+                process = self.helper_at(action, id=task["id"], socket=self.socket, text="hello")
+                time.sleep(.3)
+                self.assertIsNone(process.poll())
+                self.assertEqual(subprocess.run(["pgrep", "-P", str(process.pid)], stdout=subprocess.PIPE).stdout, b"")
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=8)
+
+    def test_a_tmux_server_that_doesnt_answer_holds_nothing_up(self):
+        task = self.create()
+        record = self.wait(task, "ready")
+        pid = int(roost.tmux(self.socket, "display-message", "-p", "#{pid}").stdout)
+        os.kill(pid, signal.SIGSTOP)
+        try:
+            listed = self.answered("list", socket=self.socket)
+            self.assertTrue(listed["ok"], listed)
+            self.assertEqual((listed["result"][0]["status"], listed["result"][0]["live"]), ("ready", None))
+            self.assertIn("tmux did not answer", self.answered("merge", id=task["id"])["error"])
+            # And any other call: a server can stop between two.
+            pool = concurrent.futures.ThreadPoolExecutor(1)
+            asked = pool.submit(roost.tmux, self.socket, "list-windows", "-a", check=False)
+            pool.shutdown(wait=False)
+            self.assertEqual(asked.result(timeout=8).returncode, 124)
+        finally:
+            os.kill(pid, signal.SIGCONT)
+        listed = self.request("list", socket=self.socket)["result"][0]
+        self.assertEqual((listed["status"], listed["live"], listed["updatedAt"]), ("ready", True, record["updatedAt"]))
 
     def test_finishing_a_task_waits_for_its_pull_request(self):
         # Pushing and asking GitHub take seconds without the registry lock.
@@ -3196,37 +3459,6 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(self.git("rev-parse", "refs/heads/" + task["branch"], cwd=self.origin), tip)
         # Then the task can be finished.
         self.assertTrue(self.request("discard", id=task["id"], dryRun=True)["ok"])
-
-    def test_a_pull_request_holds_while_a_command_it_started_runs(self):
-        # Emacs gives up on a request after a minute, and a push may take
-        # longer; finishing the task must wait for it all the same.
-        self.github()
-        task = self.create()
-        self.commit_in(task)
-
-        def held():
-            self.assertIn("busy", self.request("retire", id=task["id"])["error"])
-            deadline = time.monotonic() + 8
-            while "busy" in self.request("retire", id=task["id"])["error"]:
-                self.assertLess(time.monotonic(), deadline)
-                time.sleep(0.2)
-
-        # What gh started, as it opened the pull request...
-        (self.gh_dir / "linger").touch()
-        reply = self.request("pr", id=task["id"], title="Slow")
-        self.assertTrue(reply["ok"], reply)
-        held()
-        (self.gh_dir / "linger").unlink()
-        # ...and what Git started, as it pushed to it.
-        hooks = self.root / "hooks"
-        hooks.mkdir()
-        (hooks / "pre-push").write_text("#!/bin/sh\nsleep 1.5 > /dev/null 2>&1 &\n")
-        (hooks / "pre-push").chmod(0o755)
-        self.git("config", "core.hooksPath", str(hooks))
-        self.commit_in(task, "more")
-        reply = self.request("pr", id=task["id"])
-        self.assertTrue(reply["ok"], reply)
-        held()
 
     def test_a_removal_that_stopped_short_can_be_finished(self):
         task = self.create()
@@ -8659,36 +8891,6 @@ print(json.dumps(dict(data=data)))
         self.assertNotEqual(task["id"], planned["id"])
         self.assertEqual(self.task_branches(), [task["branch"]])
         self.assertEqual(list((self.state / "creating").glob("*")), [])
-
-    def test_a_creation_whose_git_goes_on_is_undone_once_git_is_done(self):
-        # The helper stopped, as on a host over SSH, while Git checks out.
-        for number in range(4):
-            (self.repo / ("file%d.bin" % number)).write_text("%d\n" % number)
-        (self.repo / ".gitattributes").write_text("*.bin filter=slow\n")
-        self.git("add", ".")
-        self.git("commit", "-qm", "Slow to check out")
-        self.git("config", "filter.slow.smudge", "sleep 1; cat")
-        self.git("config", "filter.slow.clean", "cat")
-        process = self.creating(name="git goes on", createId="78" * 8)
-        note = self.wait_for_note()
-        planned = json.loads(note.read_text())
-        deadline = time.monotonic() + 8
-        while not (Path(planned["worktree"]) / "file0.bin").exists() and time.monotonic() < deadline:
-            time.sleep(0.05)
-        os.kill(process.pid, signal.SIGKILL)
-        process.wait()
-        # Git holds the note's lock: a poll leaves it be.
-        self.assertEqual(self.request("list")["result"], [])
-        self.assertTrue(note.exists())
-        self.assertTrue(Path(planned["worktree"]).exists())
-        deadline = time.monotonic() + 15
-        while note.exists() and time.monotonic() < deadline:
-            self.request("list")
-            time.sleep(0.2)
-        self.assertFalse(note.exists())
-        self.assertFalse(Path(planned["worktree"]).exists())
-        self.assertEqual(self.task_branches(), [])
-        self.assertEqual(len(roost.worktree_branches(self.repo)), 1)
 
     def test_a_creation_cut_short_after_its_checkout_is_undone_as_a_failed_one(self):
         store = roost.Store(str(self.state))

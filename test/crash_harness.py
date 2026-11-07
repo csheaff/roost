@@ -11,7 +11,7 @@ Modes, what becomes of the command at which the helper dies:
 
   before  never runs, as when the connection dropped just before
   after   ran to its end, and the helper never heard the answer
-  orphan  runs on, unattended, as Git does when the connection drops under it
+  orphan  runs on, unattended, as when something kills the helper alone
   racing  the same, while you ask again: a moment later it's still running
   fail    fails, if it changes anything, and the helper lives on to say so,
           as with a full disk
@@ -46,7 +46,11 @@ SHIM = r"""#!/bin/sh
 dir=$ROOST_CRASH_DIR
 name=${0##*/}
 if [ "$name" = git ]; then real=$ROOST_CRASH_GIT; else real=$ROOST_CRASH_TMUX; fi
-if ! read -r helper 2>/dev/null < "$dir/helper" || [ "$PPID" != "$helper" ] || [ ! -f "$dir/armed" ]; then
+if ! read -r helper 2>/dev/null < "$dir/helper" || [ ! -f "$dir/armed" ]; then
+  exec "$real" "$@"
+fi
+# The helper, or the child that a request that changes things goes on in.
+if [ "$PPID" != "$helper" ] && [ "$(ps -o ppid= -p "$PPID" | tr -d ' ')" != "$helper" ]; then
   exec "$real" "$@"
 fi
 read -r at mode < "$dir/armed"
@@ -88,14 +92,15 @@ n=$(wc -c < "$dir/count")
 n=$((n))
 printf '%s\thook\t%s %s\n' "$n" "${0##*/}" "$*" >> "$dir/log"
 if [ "$n" = "$at" ]; then
+  # All at once, the helper first: else it may see Git die and go on.
+  pids=$$
   pid=$PPID
   while [ "$pid" -gt 1 ]; do
-    next=$(ps -o ppid= -p "$pid")
-    kill -9 "$pid"
+    pids="$pid $pids"
     [ "$pid" = "$helper" ] && break
-    pid=$((next))
+    pid=$(($(ps -o ppid= -p "$pid")))
   done
-  kill -9 $$
+  kill -9 $pids
 fi
 exit 0
 """
@@ -365,6 +370,8 @@ class Scenario:
 
     action = None
     args = {}
+    # Modes `make crash` leaves out, as nothing real kills that way.
+    left_out = ()
     # Whether the action deletes work you agreed to lose.
     loses_work = False
     # Whether the action leaves the task's branch and worktree, and says so.
@@ -486,6 +493,8 @@ def recover(box, scenario, outcome):
 def way_out(box, scenario, outcome):
     """Discard what is left, and check that nothing stays."""
     problems = outcome["problems"]
+    # Before `stale_locks` clears it: while it stayed, no ref could go.
+    packed_locked = (box.repo / ".git/packed-refs.lock").exists()
     listed = box.helper("list", socket=box.socket)
     for task in listed["result"] if listed and listed.get("ok") else []:
         gone = None
@@ -510,6 +519,12 @@ def way_out(box, scenario, outcome):
         if worktrees:
             problems.append("a worktree no task knows of: %s" % worktrees)
         branches = [branch for branch in box.branches() if branch.startswith("roost/")]
+        # What Git's death left locked Roost can't delete, or should: known,
+        # and an empty branch is all it costs.
+        locked = [branch for branch in branches if (box.repo / ".git/refs/heads" / (branch + ".lock")).exists()
+                  or packed_locked]
+        outcome["residue"] += ["a branch Git left locked: " + branch for branch in locked]
+        branches = [branch for branch in branches if branch not in locked]
         if branches:
             problems.append("a branch no task knows of: %s" % branches)
         folders = [path.name for path in (box.state / "worktrees").glob("*/*") if path.is_dir()]

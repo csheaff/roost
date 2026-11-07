@@ -43,6 +43,10 @@ class RoostError(Exception):
     pass
 
 
+class Undone(RoostError):
+    """A merge or update that failed and put back what it did."""
+
+
 # Agent states that mean work may be in progress.
 ACTIVE = ("starting", "running", "permission", "background")
 # States in which the agent process is known to have ended.
@@ -79,38 +83,16 @@ def text(value):
     return value if isinstance(value, str) and value else None
 
 
-# Descriptors the commands Roost runs inherit, as Git does the lock held
-# on a worktree while it is removed or pushed; see `handing_on`.
-INHERITED = []
-
-
-@contextlib.contextmanager
-def handing_on(fd):
-    """Hand FD, which holds a lock, on to each command started meanwhile, so
-    that the lock lasts for as long as they run, even past this helper. But
-    not to Git's own file system monitor, a daemon any Git may start, which
-    runs until you stop it: refused from here on, finishing a task, or
-    asking again for one cut short, would wait on it forever."""
-    count = int(os.environ.get("GIT_CONFIG_COUNT") or 0)
-    os.environ.update({"GIT_CONFIG_COUNT": str(count + 1), "GIT_CONFIG_KEY_%d" % count: "core.fsmonitor",
-                       "GIT_CONFIG_VALUE_%d" % count: "false"})
-    INHERITED.append(fd)
-    try:
-        yield
-    finally:
-        INHERITED.remove(fd)
-        del os.environ["GIT_CONFIG_KEY_%d" % count], os.environ["GIT_CONFIG_VALUE_%d" % count]
-        if count:
-            os.environ["GIT_CONFIG_COUNT"] = str(count)
-        else:
-            del os.environ["GIT_CONFIG_COUNT"]
-
-
-def execute(argv, cwd=None, check=True, input=None, env=None):
+def execute(argv, cwd=None, check=True, input=None, env=None, timeout=None):
+    """Run ARGV, for at most TIMEOUT seconds if given: then it is killed,
+    and counts as having failed."""
     # A file name that is not UTF-8, possible on Linux, must not fail every
     # listing of the host: undecodable bytes are replaced, here and below.
-    result = subprocess.run(argv, cwd=cwd, input=input, text=True, errors="replace", env=env,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, pass_fds=tuple(INHERITED))
+    try:
+        result = subprocess.run(argv, cwd=cwd, input=input, text=True, errors="replace", env=env, timeout=timeout,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except subprocess.TimeoutExpired:
+        result = subprocess.CompletedProcess(argv, 124, "", "%s did not answer in %d seconds" % (argv[0], timeout))
     if check and result.returncode:
         raise RoostError(result.stderr.strip() or result.stdout.strip()
                          or "Command failed: " + shlex.join(argv))
@@ -131,8 +113,7 @@ def git_with_hooks(repo, *args, check=True, input=None):
     under way to say why."""
     argv = ["git", "-C", str(repo), *args]
     with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
-        result = subprocess.run(argv, input=None if input is None else input.encode(), stdout=output, stderr=errors,
-                                pass_fds=tuple(INHERITED))
+        result = subprocess.run(argv, input=None if input is None else input.encode(), stdout=output, stderr=errors)
         # Read without moving the offset what it left running still writes at.
         result.stdout, result.stderr = (os.pread(file.fileno(), os.fstat(file.fileno()).st_size, 0)
                                         .decode(errors="replace") for file in (output, errors))
@@ -161,7 +142,7 @@ def measuring(repo):
     gpg.program, and diffs take --no-ext-diff and --no-textconv. Clean filters and merge drivers, which attributes pick by name, still
     run: turning them off would break Git LFS."""
     return ("--no-optional-locks", "-c", "log.showSignature=false",
-            "-c", "core.fsmonitor=" + ("true" if gits_own_fsmonitor(str(repo)) and not INHERITED else "false"))
+            "-c", "core.fsmonitor=" + ("true" if gits_own_fsmonitor(str(repo)) else "false"))
 
 
 def read_git(repo, *args, env=None):
@@ -183,8 +164,7 @@ def run_detached(argv, timeout, env=None):
     timeout the whole process group is killed, so helpers such as ssh or a
     credential helper die with it, and TimeoutExpired is raised."""
     process = subprocess.Popen(argv, text=True, errors="replace", stdin=subprocess.DEVNULL, start_new_session=True,
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
-                               pass_fds=tuple(INHERITED))
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     try:
         stdout, stderr = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -238,7 +218,7 @@ def tool(name, cwd, args, timeout, missing, said=lambda result: None):
     try:
         result = subprocess.run([executable, *args], cwd=cwd, text=True, errors="replace", timeout=timeout,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                env=dict(os.environ, PATH=path), pass_fds=tuple(INHERITED))
+                                env=dict(os.environ, PATH=path))
     except subprocess.TimeoutExpired:
         raise RoostError("%s timed out: %s" % (name, shlex.join(args[:2])))
     if result.returncode:
@@ -247,10 +227,15 @@ def tool(name, cwd, args, timeout, missing, said=lambda result: None):
     return result.stdout
 
 
-def tmux(socket, *args, check=True, input=None):
+# A server that doesn't answer, as one stopped, must not hold the registry lock.
+TMUX_SECONDS = 5
+INVENTORY_SECONDS = 2
+
+
+def tmux(socket, *args, check=True, input=None, timeout=TMUX_SECONDS):
     # As a UTF-8 client, whatever the locale: under LC_ALL=C or POSIX tmux
     # prints the tabs between fields, and what isn't ASCII, as underscores.
-    return execute(["tmux", "-u", "-L", socket, *args], check=check, input=input)
+    return execute(["tmux", "-u", "-L", socket, *args], check=check, input=input, timeout=timeout)
 
 
 def enable_extended_keys(socket):
@@ -544,10 +529,12 @@ NO_SERVER = ("no server running", "No such file or directory", "Connection refus
 def pane_inventory(socket):
     """Map pane IDs to their tmux details.
     Return {} when no server runs, or None when tmux could not answer (for
-    example a client/server version mismatch after upgrading tmux)."""
+    example a client/server version mismatch after upgrading tmux). Each
+    poll asks this holding the registry lock, so it gives up sooner than
+    any other call, within what agents' hooks wait."""
     result = tmux(socket, "list-panes", "-a", "-F",
                   "#{pane_id}\t#{window_id}\t#{window_index}\t#{session_id}\t#{pane_dead}\t#{@roost_task_id}\t#{pane_pid}\t#{session_name}",
-                  check=False)
+                  check=False, timeout=INVENTORY_SECONDS)
     if result.returncode:
         return {} if any(marker in result.stderr for marker in NO_SERVER) else None
     panes = {}
@@ -1846,11 +1833,11 @@ CREATE_ID = re.compile(r"[a-f0-9]{16,32}")
 @contextlib.contextmanager
 def noting_creation(store, task):
     """Note TASK, which is being made, in a file of the state directory's
-    creating folder until done, locked by this request and by Git as it
-    checks the worktree out, which goes on after a request Emacs gave up
-    on. A creation cut short, as when Emacs stopped waiting and killed the
-    helper here and Git with it, leaves its note unlocked, and
-    `settle_creation` undoes it. Yield the note's descriptor."""
+    creating folder until done, locked by this request. A creation cut
+    short, as when Emacs stopped waiting and killed the helper here and
+    Git with it, leaves its note unlocked, and `settle_creation` undoes it.
+    Nothing Git starts inherits the lock: what a hook left running would
+    hold it for as long as that runs, and nothing could settle the note."""
     folder = store.root / "creating"
     folder.mkdir(mode=0o700, exist_ok=True)
     path = folder / (task["id"] + ".json")
@@ -1863,7 +1850,7 @@ def noting_creation(store, task):
             note.flush()
             os.replace(temporary, path)
             try:
-                yield note.fileno()
+                yield
             finally:
                 path.unlink(missing_ok=True)
     finally:
@@ -2079,27 +2066,25 @@ def make_task(store, request, create_id):
     if request.get("programStatus") is True:
         task["programStatus"] = True
     existed, there = ref_exists(repo, branch), worktree.exists()
-    with noting_creation(store, task) as note:
-        # Not to tmux, whose server would hold it for as long as it runs.
-        with handing_on(note):
-            try:
-                git_with_hooks(repo, "-c", "branch.autoSetupMerge=false", "worktree", "add", "-b", branch,
-                               str(worktree), commit)
-            except RoostError as exc:
-                said = "\n".join(line for line in str(exc).splitlines() if not line.startswith("Preparing worktree"))
-                if there or not worktree.exists():
-                    # A checkout that failed, as a filter can, leaves the new branch.
-                    if not existed:
-                        with contextlib.suppress(RoostError):
-                            delete_branch(repo, branch, commit)
-                    raise RoostError(said)
-                # Git made the worktree, then its post-checkout hook failed.
-                with store.locked():
-                    store.save(task)
-                    abandon(store, task)
-                raise RoostError("The repository's post-checkout hook failed in the task's new worktree, so the task "
-                                 "didn't start%s: %s" % ("; its worktree is kept, as the hook left files there"
-                                                         if worktree.exists() else "", said))
+    with noting_creation(store, task):
+        try:
+            git_with_hooks(repo, "-c", "branch.autoSetupMerge=false", "worktree", "add", "-b", branch,
+                           str(worktree), commit)
+        except RoostError as exc:
+            said = "\n".join(line for line in str(exc).splitlines() if not line.startswith("Preparing worktree"))
+            if there or not worktree.exists():
+                # A checkout that failed, as a filter can, leaves the new branch.
+                if not existed:
+                    with contextlib.suppress(RoostError):
+                        delete_branch(repo, branch, commit)
+                raise RoostError(said)
+            # Git made the worktree, then its post-checkout hook failed.
+            with store.locked():
+                store.save(task)
+                abandon(store, task)
+            raise RoostError("The repository's post-checkout hook failed in the task's new worktree, so the task "
+                             "didn't start%s: %s" % ("; its worktree is kept, as the hook left files there"
+                                                     if worktree.exists() else "", said))
         # `git worktree add` leaves them out. Its runner checks them out, in
         # its terminal, as that fetches.
         if (worktree / ".gitmodules").is_file():
@@ -2456,6 +2441,8 @@ def list_tasks(store, request):
             # Kept, so the transcript is read once for each such prompt.
             if put_right_prompt(task):
                 store.note(task)
+            if task.get("integrating"):
+                left_of_merge(store, task)
             tasks.append(task)
     inventories = {}
     table = None  # The process table, read only when a request may have been approved.
@@ -4705,9 +4692,9 @@ def refused_by_hook(repo, said, merged, untracked):
     # Files the merge left alone, changed by the hook or by you as it ran.
     left = git_fields(repo, "diff", "--name-only", "-z", "HEAD")
     if left:
-        return RoostError("A commit hook in %s refused the merge, which is undone; changes to %s made "
+        return Undone("A commit hook in %s refused the merge, which is undone; changes to %s made "
                           "as it ran are left there%s" % (repo, ", ".join(map(shown, left)), said))
-    return RoostError("A commit hook in %s refused the merge, which is undone%s" % (repo, said))
+    return Undone("A commit hook in %s refused the merge, which is undone%s" % (repo, said))
 
 
 def squash_merge(task, integration, here, tip):
@@ -4733,9 +4720,9 @@ def squash_merge(task, integration, here, tip):
             # A squash leaves no MERGE_HEAD to abort; this undoes it alike.
             git(repo, "reset", "-q", "--merge")
             if conflicts:
-                raise RoostError("%s conflicts with %s in %s. Nothing was changed; update the task from %s, then merge again"
-                                 % (task["name"], integration, ", ".join(conflicts), integration))
-            raise RoostError("Merge failed; task retained: " + (result.stderr.strip() or result.stdout.strip()))
+                raise Undone("%s conflicts with %s in %s. Nothing was changed; update the task from %s, then merge again"
+                             % (task["name"], integration, ", ".join(conflicts), integration))
+            raise Undone("Merge failed; task retained: " + (result.stderr.strip() or result.stdout.strip()))
         if not git(repo, "diff", "--cached", "--quiet", check=False).returncode:
             return tip  # The task's work was there already.
         result = git_with_hooks(repo, "commit", "-q", "-F", "-", input=message, check=False)
@@ -4746,7 +4733,7 @@ def squash_merge(task, integration, here, tip):
             if result.returncode == 1:
                 raise refused_by_hook(repo, said, merged, untracked)
             undo_merge(repo, merged, untracked)
-            raise RoostError("Merge failed; task retained: " + said)
+            raise Undone("Merge failed; task retained: " + said)
         return tip
     if (version_of(git(repo, "--version").stdout) or (0, 0)) < MERGE_TREE_GIT:
         raise RoostError("Check out %s in the primary repository %s before merging "
@@ -4814,6 +4801,50 @@ def safe_to_delete(task, commit, merged_head=None):
     return merged_head is not None and merged_head == commit
 
 
+def merge_task(task, integration, here, squash, tip):
+    """Merge TIP, TASK's branch's commit, into INTEGRATION, in the primary
+    checkout if HERE says it has it, as one commit with SQUASH, and return
+    what `squash_merge` does. Runs without the registry lock: Git's hooks
+    may take minutes."""
+    repo = task["repo"]
+    branch = task["branch"]
+    if squash:
+        return squash_merge(task, integration, here, tip)
+    if not here:
+        return merge_without_checkout(task, integration, tip)
+    # With the message a merge of the branch's short name has.
+    message = execute(["git", "-C", repo, "fmt-merge-msg"],
+                      input="%s\t\tbranch '%s' of .\n" % (tip, branch)).stdout.strip()
+    untracked = untracked_here(repo)
+    result = git_with_hooks(repo, "merge", "--no-ff", "--no-edit", "-m", message, tip, check=False)
+    if result.returncode:
+        conflicts = conflicted_files(repo)
+        merging = git(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0
+        if merging and conflicts:
+            git(repo, "merge", "--abort")
+        if not conflicts and merging:
+            # Resolved as you resolved them before, and staged: still
+            # conflicts, which `u` brings into the task, resolved alike.
+            conflicts = resolved_before(repo, "HEAD", "MERGE_HEAD")
+            if conflicts:
+                git(repo, "merge", "--abort")
+        # Conflicts with no merge under way are Git's, killed as it wrote them.
+        if conflicts and merging:
+            raise Undone("%s conflicts with %s in %s. Nothing was changed; update the task from %s, then merge again"
+                         % (task["name"], task["integrationBranch"], ", ".join(conflicts),
+                            task["integrationBranch"]))
+        if merging and result.returncode == 1:
+            # A hook refused the merge commit. Git's last line says to
+            # commit the merge, which is undone.
+            raise refused_by_hook(repo, "\n".join(result.stderr.strip().splitlines()[:-1]).strip(),
+                                  merge_paths(repo, tip), untracked)
+        if merging:
+            undo_merge(repo, merge_paths(repo, tip), untracked)
+            raise Undone("Merge failed; task retained: " + merge_said(result))
+        raise RoostError("Merge failed; task retained: " + merge_said(result))
+    return None
+
+
 def retire(store, task, merge=False, merged_head=None, squash=False, teardown=None, still_open=False, expect=None):
     """Remove a finished task's worktree, branch, window and record.
     Never discards uncommitted files or unmerged commits. With MERGE, merge
@@ -4852,59 +4883,37 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
     if merge:
         if not branch_exists:
             raise RoostError("The task branch no longer exists; there is nothing to merge")
-        integration, here = integration_branch(task)
-        # Untracked files there are yours and stay: Git refuses a merge that
-        # would overwrite one, and aborting a merge leaves them alone.
-        if here and git(repo, "status", "--porcelain", "--untracked-files=no").stdout.strip():
-            raise RoostError("The primary checkout %s has uncommitted changes; commit or stash them before merging"
-                             % repo)
-        require_history(repo, "refs/heads/" + integration, "refs/heads/" + branch, "merge")
-        # Ignored files there are yours too, but Git writes over them.
-        if here:
-            overwritten = overwritten_ignored(repo, "refs/heads/" + branch)
-            if overwritten:
-                raise RoostError(ignored_refusal("Merging", overwritten, "the primary checkout " + repo, "merge"))
-        # Last, as the checks above can take a while, by its full name, which
-        # a tag of the same name would otherwise shadow. What merges from here
-        # is this commit, wherever the branch goes meanwhile.
-        tip = git(repo, "rev-parse", "refs/heads/" + branch + "^{commit}").stdout.strip()
-        if expect and tip != expect:
-            raise RoostError("The task's branch has moved since you were asked; look at it again before merging")
-        if squash:
-            squashed = squash_merge(task, integration, here, tip)
-            result = None
-        elif not here:
-            merge_without_checkout(task, integration, tip)
-            result = None
-        else:
-            # With the message a merge of the branch's short name has.
-            message = execute(["git", "-C", repo, "fmt-merge-msg"],
-                              input="%s\t\tbranch '%s' of .\n" % (tip, branch)).stdout.strip()
-            untracked = untracked_here(repo)
-            result = git_with_hooks(repo, "merge", "--no-ff", "--no-edit", "-m", message, tip, check=False)
-        if result is not None and result.returncode:
-            conflicts = conflicted_files(repo)
-            merging = git(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0
-            if merging and conflicts:
-                git(repo, "merge", "--abort")
-            if not conflicts and merging:
-                # Resolved as you resolved them before, and staged: still
-                # conflicts, which `u` brings into the task, resolved alike.
-                conflicts = resolved_before(repo, "HEAD", "MERGE_HEAD")
-                if conflicts:
-                    git(repo, "merge", "--abort")
-            if conflicts:
-                raise RoostError("%s conflicts with %s in %s. Nothing was changed; update the task from %s, then merge again"
-                                 % (task["name"], task["integrationBranch"], ", ".join(conflicts),
-                                    task["integrationBranch"]))
-            if merging and result.returncode == 1:
-                # A hook refused the merge commit. Git's last line says to
-                # commit the merge, which is undone.
-                raise refused_by_hook(repo, "\n".join(result.stderr.strip().splitlines()[:-1]).strip(),
-                                      merge_paths(repo, tip), untracked)
-            if merging:
-                undo_merge(repo, merge_paths(repo, tip), untracked)
-            raise RoostError("Merge failed; task retained: " + merge_said(result))
+        with merging_in(store, task):
+            integration, here = integration_branch(task)
+            # Untracked files there are yours and stay: Git refuses a merge that
+            # would overwrite one, and aborting a merge leaves them alone.
+            if here and git(repo, "status", "--porcelain", "--untracked-files=no").stdout.strip():
+                raise RoostError(merge_left_in(store, repo) or "The primary checkout %s has uncommitted changes; commit "
+                                 "or stash them before merging" % repo)
+            require_history(repo, "refs/heads/" + integration, "refs/heads/" + branch, "merge")
+            # Ignored files there are yours too, but Git writes over them.
+            if here:
+                overwritten = overwritten_ignored(repo, "refs/heads/" + branch)
+                if overwritten:
+                    raise RoostError(ignored_refusal("Merging", overwritten, "the primary checkout " + repo, "merge"))
+            # Last, as the checks above can take a while, by its full name, which
+            # a tag of the same name would otherwise shadow. What merges from here
+            # is this commit, wherever the branch goes meanwhile.
+            tip = git(repo, "rev-parse", "refs/heads/" + branch + "^{commit}").stdout.strip()
+            if expect and tip != expect:
+                raise RoostError("The task's branch has moved since you were asked; look at it again before merging")
+            with integrating(store, task, "merge", integration, repo if here else None):
+                squashed = merge_task(task, integration, here, squash, tip)
+        # Hooks came in meanwhile, and the agent may be at work again.
+        task = store.read_to_act_on(task["id"])
+        try:
+            inventory = inventory_for(task)
+            require_finished(task, owned_pane(task, inventory))
+            if worktree_exists:
+                check_worktree(store, task)
+                require_clean(str(worktree))
+        except RoostError as exc:
+            raise RoostError("%s is merged into %s, and not retired: %s" % (task["name"], integration, exc))
     commit = None
     if branch_exists:
         commit = git(repo, "rev-parse", "refs/heads/" + branch + "^{commit}").stdout.strip()
@@ -5151,24 +5160,29 @@ def update(store, task):
     if overwritten:
         raise RoostError(ignored_refusal("Updating from " + integration, overwritten, "the task's worktree", "update"))
     before = git(worktree, "rev-parse", "HEAD").stdout.strip()
-    # The full name, which a tag of the same name would otherwise shadow,
-    # and the message a merge of the short one has. A fast-forward where it
-    # can be, as Git's default, whatever your config's merge.ff says: with
-    # --ff-only, a task with commits of its own could never be updated.
-    result = git_with_hooks(worktree, "merge", "--ff", "--no-edit", "-m",
-                            "Merge branch '%s' into %s" % (integration, task["branch"]),
-                            "refs/heads/" + integration, check=False)
-    conflicts = conflicted_files(worktree)
-    merging = git(worktree, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0
-    # Conflicts Git resolved as you resolved them before, staged: the merge
-    # stays under way, as with conflicts, for its agent to check and commit.
-    resolved = resolved_before(worktree, "HEAD", "MERGE_HEAD") if result.returncode and merging else []
-    if result.returncode and not conflicts and not resolved:
-        if merging:
-            git(worktree, "merge", "--abort")
-        raise RoostError("Updating from %s failed: %s" % (integration, merge_said(result)))
-    task["update"] = dict(conflicts=conflicts,
-                          changed=before != git(worktree, "rev-parse", "HEAD").stdout.strip())
+    with integrating(store, task, "update", integration, str(worktree)):
+        # The full name, which a tag of the same name would otherwise shadow,
+        # and the message a merge of the short one has. A fast-forward where it
+        # can be, as Git's default, whatever your config's merge.ff says: with
+        # --ff-only, a task with commits of its own could never be updated.
+        result = git_with_hooks(worktree, "merge", "--ff", "--no-edit", "-m",
+                                "Merge branch '%s' into %s" % (integration, task["branch"]),
+                                "refs/heads/" + integration, check=False)
+        conflicts = conflicted_files(worktree)
+        merging = git(worktree, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0
+        # Conflicts Git resolved as you resolved them before, staged: the merge
+        # stays under way, as with conflicts, for its agent to check and commit.
+        resolved = resolved_before(worktree, "HEAD", "MERGE_HEAD") if result.returncode and merging else []
+        # Conflicts with no merge under way are Git's, killed as it wrote them.
+        if result.returncode and not (merging and (conflicts or resolved)):
+            if merging:
+                git(worktree, "merge", "--abort")
+                raise Undone("Updating from %s failed: %s" % (integration, merge_said(result)))
+            raise RoostError("Updating from %s failed: %s" % (integration, merge_said(result)))
+        changed = before != git(worktree, "rev-parse", "HEAD").stdout.strip()
+    # Hooks came in meanwhile.
+    task = store.read_to_act_on(task["id"])
+    task["update"] = dict(conflicts=conflicts, changed=changed)
     if resolved:
         task["update"]["resolved"] = resolved
     return task
@@ -5856,22 +5870,140 @@ def remove_agent_worktrees(task, entries):
 @contextlib.contextmanager
 def holding_worktree(store, task, operation, refusal):
     """Hold TASK's worktree lock, as OPERATION: LOCK_EX to remove the
-    worktree, or LOCK_SH to keep it while slow work on it, such as a push,
-    runs without the registry lock. Raise REFUSAL if it is not free. The
-    lock is held for as long as the request holding it, or any command it
-    started, runs: Git goes on after a request Emacs gave up on."""
+    worktree or merge in it, or LOCK_SH to keep it while slow work on it,
+    such as a push, runs without the registry lock. Raise REFUSAL if it is
+    not free. Only this request holds it, and nothing it starts: what Git
+    or a hook left running, as a credential cache or a build tool's daemon,
+    would hold it for as long as that runs. A request that changes things
+    outlives Emacs's wait, which is why it can (`detach`)."""
     with store.path(task["id"]).with_suffix(".removing").open("a") as lock:
         try:
             fcntl.flock(lock, operation | fcntl.LOCK_NB)
         except BlockingIOError:
             raise RoostError(refusal)
-        with handing_on(lock.fileno()):
-            yield
+        yield
+
+
+@contextlib.contextmanager
+def merging_in(store, task):
+    """Keep any other merge out of TASK's repository, its primary checkout
+    and integration branches, for as long as this one runs without the
+    registry lock. Another is refused at once, saying which this is: it
+    could only wait, for as long as a hook takes."""
+    folder = store.root / "merging"
+    folder.mkdir(mode=0o700, exist_ok=True)
+    with (folder / (hashlib.sha256(task["repo"].encode()).hexdigest()[:10] + ".lock")).open("a+") as lock:
+        lock.seek(0)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RoostError("Roost is merging %s; merge this task once that is done"
+                             % (lock.read().strip() or "another task"))
+        lock.truncate(0)
+        lock.write("%s into %s in %s\n" % (task["name"], task.get("integrationBranch"), task["repo"]))
+        lock.flush()
+        yield
+
+
+@contextlib.contextmanager
+def integrating(store, task, action, branch, place):
+    """Let Git merge for TASK, its ACTION "merge" or "update", with BRANCH,
+    in PLACE, the checkout it merges in, or None for no checkout, without
+    the registry lock: every agent's hooks and every poll wait on that, and
+    a merge's hooks may take minutes. Meanwhile the record says so, and
+    the task's worktree lock keeps the task as it is. Read the record again
+    after: hooks don't stop for this. A helper killed here leaves the mark,
+    which `require_not_removing` reads."""
+    with holding_worktree(store, task, fcntl.LOCK_EX, "Roost is busy with this task's worktree; refresh in a moment"):
+        marker = uuid.uuid4().hex
+        head = git(place, "rev-parse", "HEAD").stdout.strip() if place else None
+        task["integrating"] = dict(id=marker, action=action, name=task["name"], branch=branch, place=place, head=head,
+                                   pid=os.getpid())
+        store.save(task)
+        finished = False
+        try:
+            with store.released():
+                yield
+            finished = True
+        except Undone:
+            # What is left there now isn't the merge's.
+            finished = True
+            raise
+        finally:
+            with contextlib.suppress(RoostError):
+                current = store.read(task["id"])
+                mark = current.get("integrating") or {}
+                # Git killed alone fails here as a helper killed would, and
+                # what it left needs the mark as much.
+                if mark.get("id") == marker and (finished or merge_left(mark) is None):
+                    del current["integrating"]
+                    store.save(current)
+
+
+def integrating_words(mark):
+    """What MARK, a record's `integrating`, says Roost is doing."""
+    return ("merging %s into %s" if mark.get("action") == "merge" else "updating %s from %s") % (mark.get("name"),
+                                                                                                 mark.get("branch"))
+
+
+def merge_left(mark):
+    """What a merge MARK says was cut short left, and how to go on from it,
+    None when nothing did, as when it had finished, or you put it right, or
+    "" when its checkout can't be read now, as on a drive not mounted, to
+    look again later. Roost began it with nothing uncommitted there, so whatever Git tracks
+    and differs is the merge's: to commit that, with no merge under way,
+    would commit half a merge as your work. A poll clears a mark with
+    nothing left (`left_of_merge`), so one doesn't stay to blame what you
+    do there later."""
+    place = mark.get("place")
+    if not isinstance(place, str):
+        return None
+    if not Path(place).is_dir():
+        return ""
+    head = git(place, "rev-parse", "-q", "--verify", "HEAD", check=False)
+    if head.returncode:
+        return ""
+    if head.stdout.strip() != mark.get("head"):
+        return None
+    doing = integrating_words(mark)
+    doing = doing[0].upper() + doing[1:]
+    if git(place, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0:
+        return ("%s stopped partway, with its merge under way in %s; finish it with git commit, or undo it with "
+                "git merge --abort, then try again" % (doing, place))
+    # A poll comes here, and an agent can write its worktree's config.
+    status = read_git(place, "status", "--porcelain", "--untracked-files=no")
+    if status.returncode:
+        return ""
+    if status.stdout.strip():
+        return ("%s stopped partway, and what it changed is still in %s, uncommitted; undo it with git reset --merge "
+                "there, then try again" % (doing, place))
+    return None
+
+
+def left_of_merge(store, task):
+    """What a merge of TASK cut short left, as `merge_left` says it, or None,
+    when its mark goes, unless the merge is still running. A shared hold on
+    the worktree, as for a look, says nothing of that."""
+    if worktree_holder(store, task) == "removal":
+        return None
+    left = merge_left(task["integrating"])
+    if left is None:
+        del task["integrating"]
+        store.note(task)
+    return left
+
+
+def merge_left_in(store, place):
+    """What a merge of any task cut short left in the checkout PLACE, as
+    `merge_left` says it, or None."""
+    marks = [task["integrating"] for task in store.all() if isinstance(task.get("integrating"), dict)]
+    return next(filter(None, (merge_left(mark) for mark in marks if mark.get("place") == place)), None)
 
 
 def worktree_holder(store, task):
     """What holds TASK's worktree lock, if anything: "removal" while its
-    worktree is removed, or "work" while work that keeps it runs."""
+    worktree is removed or a merge runs on it, or "work" while work that
+    keeps it runs."""
     try:
         lock = store.path(task["id"]).with_suffix(".removing").open()
     except FileNotFoundError:
@@ -5965,8 +6097,8 @@ def remove_worktrees(store, task, worktree, agents, force=False, teardown=None):
     Without the registry lock: a worktree with dependencies installed can
     hold hundreds of thousands of files, and every agent's hooks wait on
     the lock. Meanwhile the record says the worktree is going, and a lock
-    of its own, which Git inherits, says it is still going, so nothing else
-    acts on the task. Without FORCE, changes there are refused. TEARDOWN,
+    of its own says it is still going, so nothing else acts on the task.
+    Without FORCE, changes there are refused. TEARDOWN,
     the project's teardown command, runs in WORKTREE first; if it fails,
     the task says how, and the removal goes on."""
     if not worktree and not agents:
@@ -6570,7 +6702,7 @@ def git_fields(repo, *args, input=None, succeed=(0,), warnings=None):
     status not in SUCCEED raises RoostError. With WARNINGS, a list, what
     it says besides goes there, in English."""
     result = subprocess.run(["git", "-C", str(repo), *args], input=input, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, pass_fds=tuple(INHERITED),
+                            stderr=subprocess.PIPE,
                             env=None if warnings is None else dict(os.environ, LC_ALL="C"))
     if result.returncode not in succeed:
         raise RoostError(os.fsdecode(result.stderr).strip() or "git %s failed in %s" % (args[0], repo))
@@ -6995,27 +7127,41 @@ FINISHING = ("retire", "merge", "discard", "forget")
 
 
 def require_not_removing(store, task, action):
-    """Refuse ACTION on a task whose worktree is being removed. While that
-    runs, refuse all but looking: a retry after Emacs gave up waiting would
-    race it. Once it has stopped short, the worktree may be partly gone, so
-    refuse all but finishing the task. And while work keeps the worktree,
-    such as a push for its pull request, refuse to finish the task, before
-    its agent is stopped or its branch merged."""
-    if action in ("seen", "turn", "inspect") or not (task.get("removing") or action in FINISHING):
+    """Refuse ACTION on a task whose worktree is being removed, or that is
+    being merged or updated. While that runs, refuse all but looking: a
+    retry after Emacs gave up waiting would race it. Once a removal has
+    stopped short, the worktree may be partly gone, so refuse all but
+    finishing the task. Once a merge has, refuse what would take what it
+    left for your work, saying what it is, until that is put right. And
+    while work keeps the worktree, such as a push for its pull request,
+    refuse to finish the task, before its agent is stopped or its branch
+    merged."""
+    mark = task.get("integrating")
+    if action in ("seen", "turn", "inspect") or not (task.get("removing") or mark or action in FINISHING):
         return
     holder = worktree_holder(store, task)
+    if holder == "removal" and mark and not task.get("removing"):
+        raise RoostError("Roost is still %s; refresh in a moment, or if a hook of Git's hangs, end it with kill -- -%s"
+                         % (integrating_words(mark), mark.get("pid")))
     if holder == "removal":
         raise RoostError("Roost is still removing this task's worktree; refresh in a moment")
-    if action not in FINISHING:
+    if task.get("removing") and action not in FINISHING:
         raise RoostError("Roost was removing this task's worktree when it stopped; "
                          "merge, retire, discard or forget the task")
-    if holder:
+    if holder and action in FINISHING:
         raise RoostError("Roost is busy with this task's worktree; refresh in a moment")
+    if mark and action in ("merge", "retire", "update", "pr", "resume", "send"):
+        left = left_of_merge(store, task)
+        # An agent would commit what an update left in its worktree. What a
+        # merge left is in your checkout, and only another merge minds, or
+        # an update, whose mark would take the place of the one naming it.
+        if left and (action in ("merge", "update") or mark.get("action") == "update"):
+            raise RoostError(left)
 
 
 # Kept in task records for the helper's own use, and not sent to Emacs.
 PRIVATE = ("lastReply", "transcript", "requestFrom", "requestCall", "requestQuestion", "hookAt", "panePid",
-           "endedRun")
+           "endedRun", "integrating")
 
 
 def outgoing(result):
@@ -7190,6 +7336,30 @@ def rpc(request):
         return {"ok": False, "error": "%s: %s" % (type(exc).__name__, exc)}
 
 
+# What changes things, and goes on once Emacs stops waiting, as a request
+# does over SSH, where ssh dies and the helper doesn't. Not what only looks,
+# which goes when its time is up; nor `create`, which has its eleven minutes,
+# and which a kill cuts short cleanly: `settle_creation` undoes it; nor `send`,
+# whose prompt is better not sent than sent long after you stopped waiting.
+DETACHED = ("retire", "merge", "discard", "forget", "update", "pr", "resume", "stop", "rename", "shell", "attach")
+
+
+def detach():
+    """Go on in a child, in a session of its own, while this process waits
+    for it and ends as it does. When Emacs stops waiting on this machine it
+    kills this process's group, and the child and what it runs go on, as
+    its message says they may: else a merge dies in its hook, leaving your
+    checkout half merged."""
+    child = os.fork()
+    if not child:
+        os.setsid()
+        return
+    status = os.waitpid(child, 0)[1]
+    if os.WIFSIGNALED(status):
+        os.kill(os.getpid(), signal.SIGKILL)
+    os._exit(os.WEXITSTATUS(status))
+
+
 def main():
     # Emacs, agents and the records speak UTF-8, whatever this host's locale
     # says: Python would take what they say for it, and fail on a name in
@@ -7203,7 +7373,16 @@ def main():
         # What is not UTF-8, as a file named in a message from Git, would
         # otherwise end the reply here, with nothing said.
         sys.stdout.reconfigure(errors="replace")
-        print(json.dumps(rpc(json.load(sys.stdin)), ensure_ascii=False))
+        request = json.load(sys.stdin)
+        if isinstance(request, dict) and request.get("action") in DETACHED:
+            detach()
+        reply = json.dumps(rpc(request), ensure_ascii=False)
+        # Emacs may have stopped waiting, or its connection gone: nothing is
+        # left to tell, nor to say so to.
+        try:
+            print(reply, flush=True)
+        except OSError:
+            os._exit(0)
     elif mode in ("hook", "hook-env"):
         # Observational hooks never emit decision-control JSON or fail
         # the coding session just because its status dashboard is unavailable.

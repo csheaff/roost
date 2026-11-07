@@ -35,6 +35,34 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## State machine audit — 2026-11-06
+
+- **Why.** Every state machine written down in
+  [state-machines.md](state-machines.md), with the invalid states the code can reach.
+- **Found.** 41 findings: 3 that lose work or merge the wrong thing, 9 that leave a
+  task stuck or report success falsely, 19 false statuses or bad advice, and 10
+  small. Each had a test that failed, with a control that passed. All are fixed, in
+  #231 to #238 and #240, and the document's ledger says where.
+- **`make qa`, whole, on `main` with #240:** 386 steps, no problems.
+- **`make crash`, whole, after the harness began killing Git and its helper at once,
+  as a reboot does.** Merging, updating and retiring, no flags. `Create` showed 5
+  trials of the known empty branch that Git's lock keeps, which the old harness hid
+  by letting the helper tidy up. It counts those now as what stays.
+- **Not run.** `make contract-live`, so no capture holds `agent_id`. A real GitLab
+  rebase-on-merge, which leaves no ancestor to follow.
+
+## A merge outside the registry lock — 2026-11-06
+
+- **Why.** What changes things now outlives Emacs's wait, Git's merge runs without
+  the registry lock, and no lock goes to what Git starts (#223).
+- **`make crash`, whole, 46 minutes.** One flag, of a helper killed alone as you
+  ask again, just before `git worktree add`: two tasks from one ID. Only the harness
+  kills that way, as Emacs's kill takes Git too and ssh's end leaves the helper, so
+  `Create` leaves `racing` out. `Update` and `UpdateConflict`, 7 flags on
+  2026-11-05, have none: each refusal names the half-done merge.
+- **Not run.** A real `git credential-cache--daemon` from a real push, though one
+  started by `git credential approve` kept a lock it was handed; `git gc --auto`.
+
 ## Worktrees Claude makes in a task — 2026-11-06
 
 - **Why.** Finishing a task now removes only what its agent made, so Roost has
@@ -93,25 +121,11 @@ happened in a section below:
   history above a terminal noted on 2026-10-26.
 - **Emacs 29.** `rx` before Emacs 30 leaves a range running into raw bytes
   as it is, and such a range matches none of them: write them apart.
-- **Left for a decision.**
-  - `u` with a submodule bump on the integration branch leaves ` M lib`, so
-    `m` refuses, and following its advice reverts the bump. New since #189.
-  - After Git dies mid-merge, refusals say "uncommitted changes" without
-    naming the half-done merge, and following the one on `u` would commit
-    it: `make crash`'s 7 flags.
-  - A ref deletion that fails during undo, as with a lock left by a
-    reboot, leaves an empty branch with no task.
-  - A pull request that branch rules block or that needs updating reads
-    `to merge` on GitHub: Roost asks only for `mergeable`.
-  - A damaged record is hidden, so its worktree and branch can't be
-    finished from Roost.
-  - Text typed in a draft after sending it goes when the good reply closes
-    the draft.
-  - A click on another project with a written draft keeps the old project.
-  - `ref_exists` reads any Git failure as no branch, and tmux calls have no
-    timeout, so a stopped server holds the registry lock.
-  - `approvalsLeft` may be GitLab EE's alone, which would fail the merge
-    request query on a CE server: unverified, needs a run against one.
+- **Left for a decision.** What is still open is under
+  [Known and not fixed](state-machines.md#known-and-not-fixed). The audit of
+  2026-11-06 fixed the rest: half-done merges named and tmux timeouts (#223),
+  text lost as a draft closes and a click on another project (#226), and a pull
+  request that branch rules block (#227).
 
 ## UX review — 2026-11-01
 

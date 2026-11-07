@@ -82,8 +82,8 @@ Within a severity, they are ranked by what they cost and how often they happen.
 | 1 | LC-1 | S1 | Asking again after a cut-short removal deletes the primary checkout's branch | [Agent worktrees](#agent-worktrees) | Fixed, [#221](https://github.com/csheaff/roost/issues/221): `test_a_removal_of_an_agents_worktree_cut_short_costs_the_primary_checkout_nothing`, `test_a_folder_that_is_no_worktree_says_nothing_of_the_primary_checkout` |
 | 2 | LC-2 | S1 | Finishing a task takes a branch or worktree its agent only used | [Agent worktrees](#agent-worktrees) | Fixed, [#221](https://github.com/csheaff/roost/issues/221): `test_finishing_a_task_leaves_a_branch_its_agent_only_switched_to`, `test_finishing_a_task_leaves_a_worktree_its_agent_only_went_to` |
 | 3 | VIEWS-1 | S1 | "Nothing would be lost" doesn't hold for what is written before you answer | [Asking before acting](#asking-before-acting) | Fixed, [#222](https://github.com/csheaff/roost/issues/222), `test_a_file_written_since_you_were_told_stops_a_discard` |
-| 4 | REQUESTS-8 | S2 | On this machine, a merge that outlasts the timeout is killed with its Git and hooks, leaving your checkout half-merged | [Host request](#host-request) | Open, [#223](https://github.com/csheaff/roost/issues/223) |
-| 5 | LC-3 | S2 | What a push or a checkout leaves running holds a task's lock, and refuses every way of finishing it | [Worktree lock](#worktree-lock) | Open, [#223](https://github.com/csheaff/roost/issues/223) |
+| 4 | REQUESTS-8 | S2 | On this machine, a merge that outlasts the timeout is killed with its Git and hooks, leaving your checkout half-merged | [Host request](#host-request) | Fixed, [#223](https://github.com/csheaff/roost/issues/223): `test_what_changes_things_goes_on_once_emacs_stops_waiting` |
+| 5 | LC-3 | S2 | What a push or a checkout leaves running holds a task's lock, and refuses every way of finishing it | [Worktree lock](#worktree-lock) | Fixed, [#223](https://github.com/csheaff/roost/issues/223): `test_what_a_push_leaves_running_keeps_no_hold_on_its_task`, `test_what_a_checkout_leaves_running_holds_up_no_creation_cut_short` |
 | 6 | REQUESTS-1 | S2 | A refresh that can't start leaves its host unasked until Emacs restarts | [Host refresh](#host-refresh) | Fixed, `roost-a-refresh-that-could-not-start-leaves-its-host-asked-again` |
 | 7 | REQUESTS-2 | S2 | An install cut short leaves a broken helper under its real name | [Helper copy](#helper-copy) | Fixed, `roost-an-install-cut-short-leaves-what-was-there` |
 | 8 | STATUS-1 | S2 | A Claude task stopped before anything was said in it can never resume | [The runner's stages](#the-runners-stages) | Fixed, `test_a_task_stopped_before_anything_was_said_in_it_starts_again` |
@@ -91,7 +91,7 @@ Within a severity, they are ranked by what they cost and how often they happen.
 | 10 | VIEWS-9, FORGE-3 | S2 | A pull request draft says it opened one it only pushed to, and `P` can't open one after a closed one | [Pushing and opening](#pushing-and-opening) | Fixed, [#227](https://github.com/csheaff/roost/issues/227): `roost-pr-draft-says-what-became-of-it-when-the-task-has-one-by-then`, `roost-pr-drafts-another-once-the-one-it-has-takes-no-more-commits`, `test_p_opens_another_after_a_closed_pull_request` |
 | 11 | REQUESTS-3, VIEWS-8 | S2 | Two Emacs sessions overwrite each other's review notes | [Remembered files](#remembered-files) | Fixed, `roost-a-note-from-another-emacs-stays-as-you-write-yours` |
 | 12 | STATUS-2 | S2 | Roost takes a pane changed by hand for its agent, or for gone | [A run and its pane](#a-run-and-its-pane) | Fixed, `test_a_pane_you_move_is_still_the_agents`, `test_what_tmux_starts_in_the_agents_pane_is_not_the_agent` |
-| 13 | LC-4, STATUS-3 | S3 | A merge's hooks hold the registry lock, so other agents' events are lost and they stay `running` | [Registry lock](#registry-lock) | Open, [#223](https://github.com/csheaff/roost/issues/223) |
+| 13 | LC-4, STATUS-3 | S3 | A merge's hooks hold the registry lock, so other agents' events are lost and they stay `running` | [Registry lock](#registry-lock) | Fixed, [#223](https://github.com/csheaff/roost/issues/223): `test_every_agent_and_poll_goes_on_while_a_merges_hook_runs`, `test_every_agent_and_poll_goes_on_while_an_updates_hook_runs` |
 | 14 | FORGE-1 | S3 | A pull request merged with a commit made on the forge reads as not merged, and `m` forks `main` from `origin` | [Landed](#landed) | Fixed, [#227](https://github.com/csheaff/roost/issues/227): `test_a_pull_request_merged_with_a_commit_made_on_the_forge_is_merged`, `test_commits_after_a_merge_never_count_as_merged` |
 | 15 | STATUS-4 | S3 | Another tool's event ends a request that still waits, so `send` could answer a menu | [Agent status](#agent-status) | Fixed, `test_only_the_agent_that_asked_says_its_request_is_over` |
 | 16 | VIEWS-5, LC-5 | S3 | A prompt goes twice when its reply was lost | [The prompt draft](#the-prompt-draft) | Fixed, [#226](https://github.com/csheaff/roost/issues/226), `test_a_prompt_queued_behind_the_first_is_pasted_once` |
@@ -121,8 +121,9 @@ Within a severity, they are ranked by what they cost and how often they happen.
 | 40 | STATUS-8 | S4 | `/clear` reads `interrupted` for a relayed Claude | [Agent status](#agent-status) | Fixed, `test_clearing_a_conversation_stops_no_turn` |
 | 41 | STATUS-9 | S4 | A dialog as a task resumes shows the last run's request | [A task's request](#a-tasks-request) | Fixed, `test_a_dialog_as_a_task_resumes_says_what_it_asks` |
 
-Also open from the hunt of 2026-11-05, and taken up under these issues: refusals that
-don't name a half-done merge, and tmux calls with no timeout ([#223](https://github.com/csheaff/roost/issues/223)); text lost as a
+From the hunt of 2026-11-05, refusals that didn't name a half-done merge and tmux
+calls with no timeout are fixed ([#223](https://github.com/csheaff/roost/issues/223)). Also open from it, and taken up under
+these issues: text lost as a
 draft closes, and a click on another project ignored ([#226](https://github.com/csheaff/roost/issues/226)). A pull request that
 branch rules block reading `to merge` is fixed under [#227](https://github.com/csheaff/roost/issues/227), by
 `roost-a-pull-request-github-holds-up-isnt-to-merge`. The rest are under
@@ -136,7 +137,7 @@ record being gone.
 ### Task record
 
 Kind: explicit (`status`) over implicit (the file `tasks/<id>.json`, `removing`,
-`retiringCommit`). Lives in: `Store`, `tasks/<id>.json`, `.settings`, `.removing`,
+`integrating`, `retiringCommit`). Lives in: `Store`, `tasks/<id>.json`, `.settings`, `.removing`,
 `attachments/<id>`.
 
 [Agent status](#agent-status) has the statuses. For the lifecycle they fall in three:
@@ -147,6 +148,8 @@ Kind: explicit (`status`) over implicit (the file `tasks/<id>.json`, `removing`,
 | Live | a running task | status in `ACTIVE`, or `ready` with a live pane |
 | Ended | agent gone, record stays | status in `ENDED`, or dead pane |
 | Failed creation | `abandon` kept its worktree, as something was written there | status `failed`, its error says so, no `createId` |
+| Merging | Git merges or updates it, without the registry lock | `integrating` set, worktree lock exclusive |
+| Merge cut short | a helper died in it | `integrating` set, worktree lock free; see [The merge](#the-merge) |
 | Finishing | passed its checks and checkpointed | `retiringCommit` set |
 | Removing | worktree going | `removing` set, worktree lock exclusive |
 | Removal cut short | a helper died in it | `removing` set, worktree lock free |
@@ -205,7 +208,7 @@ one left.
 | --- | --- | --- |
 | Asked | request holds the ID lock | flock on `<createId>.lock` |
 | Preparing | resolving base, no note yet | nothing on disk but the ID lock |
-| Noted | note in place, locked | note exists, flock held by helper, or by Git it was handed to |
+| Noted | note in place, locked | note exists, flock held by the helper |
 | Made | record saved, spawned | note gone, record has `createId` |
 | Cut short | note unlocked, no record | `settle_creation` gets the flock and finds no record |
 | Saved, cut short | note unlocked, record there | the note goes; the record lists as `crashed` |
@@ -214,9 +217,11 @@ one left.
 Invariants:
 - I1. One `createId`, at most one task. Holds, and fuzzed: two helpers at once,
   and one killed then asked again.
-- I2. A note's lock is held while anything may still write that worktree.
-  **Broken** by a daemon a post-checkout hook leaves (LC-3): it holds the lock
-  after everything else ended.
+- I2. A note's lock is held by the helper alone, so nothing a hook leaves running
+  can keep it. `create` doesn't detach: Emacs's kill at eleven minutes takes
+  helper and Git together, and `settle_creation` clears up. A helper killed alone
+  leaves Git writing a worktree a settler may remove under it, which nothing does
+  but `make crash`'s `orphan` and `racing`.
 - I3. The note is unlinked under its own lock, so a settler that gets the lock
   and finds the path gone knows the creation finished.
 - I4. A worktree Git was stopped making holds only Git's checkout, so may be
@@ -243,7 +248,7 @@ Illegal or refused: a malformed `createId`. [The creation ID](#the-creation-id)
 has Emacs's side: what a retry with an edited draft gets.
 Left over, harmless: `<createId>.lock` after a failure, `.roost-*` temporary
 files from a kill before the rename.
-Open: LC-3.
+Open: none.
 
 ### Registry lock
 
@@ -260,17 +265,19 @@ inside it.
 
 Invariants:
 - I1. "Hold it only for short record and tmux operations, never for slow Git
-  work" (`Store.locked`). **Broken**: `retire` and `update` run `git merge` with
-  its hooks inside it (LC-4), and all of `require_clean`, `submodule_work` and
-  `overwritten_ignored`.
+  work" (`Store.locked`). Holds for Git's merges and their hooks (`integrating`),
+  and for tmux, whose calls end after `TMUX_SECONDS`, and a poll's after
+  `INVENTORY_SECONDS`, within the three seconds some agents give a hook. `require_clean`,
+  `submodule_work` and `overwritten_ignored` still run inside it: Git reading,
+  with no hooks.
 - I2. After `released`, records read before may have changed: re-read before
   saving. Holds at every site (below).
 - I3. Nothing nests `locked` in one process: flock on a second descriptor would
   deadlock. Holds; `abandon` is called under it, `undo_creation` takes it.
 - I4. No lock order cycle: registry is taken while holding a note or the
   `create` ID lock, never the reverse with a blocking wait; the worktree lock
-  and the note are only tried without blocking while the registry lock is
-  held. Holds.
+  and the note, and the repository's merge lock, are only tried without blocking
+  while the registry lock is held. Holds.
 
 | Site of `released` | Slow work | Guard that keeps the task still | After it |
 | --- | --- | --- | --- |
@@ -278,23 +285,23 @@ Invariants:
 | `prepare_look` | snapshot | worktree lock shared | `record_look` re-reads, compares `looked` |
 | `attach` | decoding, writing | worktree lock shared | saves nothing |
 | `remove_worktrees` | teardown, removal | worktree lock exclusive, `removing` marker, status `stopped` | re-reads, clears only its own marker |
+| `integrating` | Git's merge and its hooks | worktree lock exclusive, `integrating` marker, for a merge the repository's lock | re-reads, clears only its own marker; `retire` asks again whether the agent is at work |
 
 Steps outside any lock, by design: `merged_pull_request_head` (only its answer
 is kept, and `retire` compares it to the branch's tip read under the lock);
 `settle_creations` before `list`; `check_pull_requests` and `add_git_stats`
 after it; everything in `make_task` up to its one `locked` block.
 
-Illegal or refused: nothing refuses; everything queues. A holder stuck forever
-stops the host: for hooks that is LC-4, and for tmux a call with no timeout, so
-a server under SIGSTOP held a `list` and a hook behind it for as long as it
-stayed stopped.
+Illegal or refused: nothing refuses; everything queues. No holder waits on Git's
+hooks or a stopped tmux server any more: a server under SIGSTOP costs each `list`
+`INVENTORY_SECONDS`, and it then keeps the statuses it had.
 
 What matters isn't only whether it's held, but for how long, as hooks wait on
 it with a clock running:
 
 Invariants:
 
-Open: LC-4, STATUS-3.
+Open: none.
 
 ### Worktree lock
 
@@ -305,15 +312,16 @@ Says what holds a task's worktree while the registry lock is released.
 | --- | --- | --- |
 | Free | | both probes of `worktree_holder` succeed |
 | Work | shared: `pr`, a look, an attachment | SH free, EX refused: `worktree_holder` says "work" |
-| Removal | exclusive: `remove_worktrees` | SH refused: "removal" |
+| Removal | exclusive: `remove_worktrees`, or Git's merge (`integrating`) | SH refused: "removal"; the record says which |
 
 Invariants:
 - I1. Taken and probed only under the registry lock, so `worktree_holder`'s own
   brief hold never collides with a taker. Holds at every call.
-- I2. Lasts as long as the request or any command it started (`holding_worktree`).
-  **Broken the other way**: anything those commands leave running holds it too,
-  for as long as that runs (LC-3). The fix for `core.fsmonitor` closed one such
-  daemon; hooks, `git credential-cache--daemon` and `git gc --auto` remain.
+- I2. Held by the request alone, and nothing it starts (`holding_worktree`), so what
+  Git or a hook leaves running keeps no hold. A request that takes it for long
+  outlives Emacs's wait ([Request lifetime](#request-lifetime)), which is why it
+  can. A helper killed alone, which nothing but `make crash` does, frees it with Git
+  still at work.
 - I3. Never held across a finishing action by anyone else. Holds: `FINISHING`
   all refuse on any holder, `forget` too.
 - I4. The file goes only with the record (`Store.remove`), after the lock is
@@ -321,59 +329,64 @@ Invariants:
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
-| Free | `pr`, look, attach | | Work | shared, handed to children | `holding_worktree` |
+| Free | `pr`, look, attach | | Work | shared | `holding_worktree` |
 | Work | same | | Work | shared again | `holding_worktree` |
-| Free | removal | | Removal | exclusive, handed to children | `remove_worktrees` |
+| Free | removal | | Removal | exclusive | `remove_worktrees` |
+| Free | merge, update | | Removal | exclusive | `integrating` |
 | Work | removal | | refused | "busy", before anything changes | `require_not_removing` |
-| Removal | anything but looking | | refused | "still removing" | `require_not_removing` |
-| Work, Removal | last holder ends, children too | | Free | | kernel |
+| Removal | anything but looking | | refused | "still removing", "still merging", "still updating" | `require_not_removing` |
+| Work, Removal | the request ends | | Free | | kernel |
 
-Illegal or refused: a teardown command doesn't inherit it (`Popen`, no `pass_fds`),
-so a helper killed in teardown leaves the lock free and the command running in
-its own session: a retry runs it again beside itself. Harmless so far as seen.
-Open: LC-3.
+Illegal or refused: a helper killed in teardown, by a reboot's kin, leaves the lock
+free and the command running in its own session: a retry runs it again beside
+itself. Harmless so far as seen.
+Open: none.
 
 ### Request lifetime
 
 Kind: implicit. Lives in: Emacs's timer in `roost--expire-request`, process
-groups, which descriptors a child inherits, `INHERITED`.
+groups, `detach`, `DETACHED`.
 What becomes of a request once Emacs stops waiting. Everything about retries
-turns on this, and it differs by host.
+turns on this.
 
 | State | Meaning | How you can tell |
 | --- | --- | --- |
 | Waiting | Emacs holds the process | `roost--requests` has it |
-| Given up, local | `delete-process` sent SIGKILL to the helper's process group | helper and every Git in its group are dead; `run_detached` children and teardown, in sessions of their own, live on |
+| Given up, local | `delete-process` sent SIGKILL to the helper's process group | what changes things goes on, in a session of its own (`detach`); only the parent waiting for it dies. What looks, `create` and `send` die with what they started |
 | Given up, SSH | `delete-process` killed the ssh client; sshd signals nothing to a session with no tty | helper and all its children go on; the reply goes nowhere, and printing it fails harmlessly |
 | Lost | connection dropped, reboot | as given up, or everything dead at once |
 
+`DETACHED` is what changes things but `create`, which has its eleven minutes, and a
+kill cuts short cleanly, and `send`, whose prompt is better not sent than sent long
+after you stopped waiting. `seen` and `turn` don't either: each is a line in a
+record, sent again at the next poll.
+
 Invariants:
-- I1. A request Emacs gave up on may still act, for as long as it likes,
-  over SSH. Nothing bounds that: no deadline in the request, and the wait on
-  the registry lock has no timeout. (Assumed by the "may still finish" message
-  in `roost--run`; never stated as a rule.)
+- I1. A request Emacs gave up on may still act, for as long as it likes, on any
+  host. Nothing bounds that: no deadline in the request, and the wait on the
+  registry lock has no timeout. It is why the "may still finish" message in
+  `roost--run` is true. A reply nobody reads ends quietly.
 - I2. A retry must be safe beside the original. True where an ID or a record
   makes it so (`create`, `send` from a draft or a note, finishing actions, `stop`,
   `rename`, `update`); not for `attach` (a second copy under a new name, harmless), or
   the teardown command (runs again).
-- I3. A lock that must outlast the helper is handed to Git (`handing_on`):
-  the creation note and the worktree lock. The registry lock is never handed
-  on, so a dead helper frees it at once, whatever Git still does.
+- I3. No lock is handed to what the helper starts. What must outlast Emacs's wait
+  does so by the helper outlasting it.
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
 | Waiting | reply | | done | callback | `roost--run` |
-| Waiting | timer | local host | Given up, local | kills helper and Git; says "may still finish", which holds only for a detached push or teardown | `roost--expire-request` |
+| Waiting | timer | local host | Given up, local | kills the waiting parent, and what looks; what changes things goes on | `roost--expire-request`, `detach` |
 | Waiting | timer | SSH | Given up, SSH | helper goes on, and acts when it gets the lock | `roost--expire-request` |
 | Given up | same action again | | two helpers | second waits on the lock, or is refused by `require_not_removing` | `rpc` |
 
 Waits Emacs gives: 60 s by default; `create` +600 s; anything with a teardown
 command +120 s; `attach` by size. A push may take 120 s (`REMOTE_GIT_TIMEOUT`)
-and a merge's hooks as long as they like, inside the default 60 s. The helper
-enforces the 120 s itself, so a push that outlives a killed helper has no limit.
+and a merge's hooks as long as they like: past the default 60 s, Emacs says no reply
+came, and the request ends by itself.
 
 Illegal or refused: nothing refuses a request for being old.
-Open: LC-3 for what outlives the helper.
+Open: none.
 
 ### Finishing a task
 
@@ -437,8 +450,11 @@ Open: none.
 
 ### The merge
 
-Kind: implicit. Lives in: `.git/MERGE_HEAD`, the index, the integration ref.
-What `retire`'s step 6 can leave in the checkout you work in.
+Kind: implicit. Lives in: `.git/MERGE_HEAD`, the index, the integration ref,
+`integrating` in the record, `merging/<repository>.lock`.
+What `retire`'s step 6 and `update` can leave in the checkout they merge in. Git
+merges without the registry lock (`integrating`), for a merge under a lock of the
+repository's (`merging_in`).
 
 | State | Meaning | How you can tell |
 | --- | --- | --- |
@@ -458,23 +474,43 @@ Invariants:
   `u` then `m` adds nothing wrong.
 - I3. Git's output goes to files, so a helper gone doesn't stop Git at a report
   (`git_with_hooks`). Holds.
+- I4. One merge at a time in a repository. A second is refused at once, saying which
+  runs: it could only wait. An `update` reads integration and takes no such lock.
+- I5. A merge cut short is named, and never read as your changes. The mark stays
+  until a poll, or `merge`, `retire`, `update`, `pr`, `resume` or `send`, finds with
+  `merge_left` that nothing is left: HEAD moved, or nothing differs. A checkout it
+  can't read, missing or not answering Git, proves nothing, so the mark stays and
+  nothing is refused until it can. Git killed alone fails the action and leaves the
+  mark in the same way, if anything is left, unless it put back what it did
+  (`Undone`): then what is there isn't the merge's. Conflicts with no `MERGE_HEAD`
+  are Git killed as it wrote them, and neither `update` nor `m` takes them for a
+  conflict of the work. After the merge, retiring checks the worktree again, as hooks
+  ran with no lock on what an agent does there. A poll's look runs no program an agent
+  could name in that checkout's config (`read_git`). A half-done
+  merge refuses `merge` and `update`, whose mark would replace its own, and a
+  half-done update all six, saying how to finish or
+  undo it: an agent would commit what an update left. Roost began with nothing
+  uncommitted there, so what differs is the merge's, and `merge_left_in` tells a
+  second task's merge the same, until that task is discarded or forgotten.
+- I6. While it runs, a hook that hangs holds the task and the repository: nothing
+  ends it. The refusal says how, by the process group the mark names.
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
-| Clean | merge | `here` | Merging | `git merge --no-ff` | `retire` |
+| Clean | merge | `here` | Merging | `git merge --no-ff` | `merge_task` |
 | Clean | squash | `here` | Squash staged | | `squash_merge` |
 | Clean | merge or squash | not `here` | Committed | `merge-tree`, `commit-tree`, `update-ref` with old value | `merge_without_checkout`, `squash_merge` |
-| Merging | hook refuses | exit 1, no conflicts | Clean | `refused_by_hook` | `retire` |
-| Merging | conflict | | Clean | `git merge --abort` | `retire` |
-| Merging | Git dies | | Merging | `m` says finish or undo | `integration_branch` |
-| Squash staged | Git dies | | Squash staged | `m` says commit or stash; both work | `retire` |
+| Merging | hook refuses | exit 1, no conflicts | Clean | `refused_by_hook` | `merge_task` |
+| Merging | conflict | | Clean | `git merge --abort` | `merge_task` |
+| Merging | Git dies | | Merging | `m` says finish or undo | `merge_left` |
+| Squash staged | Git dies | | Squash staged | `m` says undo it with `git reset --merge` | `merge_left` |
 | Squash staged | hook refuses | | Clean | `refused_by_hook` | `squash_merge` |
 | Squash staged | committed | | Committed | | `squash_merge` |
 
 Illegal or refused: a merge under way, a rebase of integration anywhere, a
 worktree elsewhere on integration, ignored files it would overwrite, a shallow
-history.
-Open: LC-4 (the lock is held throughout). The known items on `u` are under
+history; everything but looking on the task while Git runs.
+Open: none. The known item on `u` and submodules is under
 [Known and not fixed](#known-and-not-fixed).
 
 ### The task's worktree as Roost reads it
@@ -1200,7 +1236,7 @@ Invariants:
 - I2. Exactly one of SUCCESS or FAILURE runs, once (`finished`; `roost-sweep-late-a-real-reply-leaves-nothing-behind`).
 - I3. No process, timer, buffer, stderr pipe or input file outlives the request (same test).
 - I4. An error in a callback is Roost's, not the host's: the outcome is settled before it runs (comment in the sentinel).
-- I5. A request that gets no reply "may still finish on the host" (the message; `roost--run`). **Assumed by the code to hold for every host. It holds only over SSH**: REQUESTS-8.
+- I5. A request that gets no reply "may still finish on the host" (the message; `roost--run`). Holds of what changes things, on any host, by `detach`; of `create` and `send`, only over SSH; of what looks it doesn't matter.
 - I6. Time asleep isn't counted against a request (`roost--expire-request`).
 - I8. A callback that signals is only logged, so whatever it would have done after
   that point doesn't happen. Nothing states this, and drafts depend on it: VIEWS-11.
@@ -1228,7 +1264,7 @@ Invariants:
 Illegal or refused: a second sentinel call stops at `finished`. A stopped
 (`SIGSTOP`) process is ignored by the sentinel; the timer kills it.
 
-Open: REQUESTS-8 (I5).
+Open: none.
 
 Notes, checked and not findings:
 - Input temp files of requests live when Emacs exits stay in the temporary
@@ -2789,8 +2825,8 @@ nothing to propose.
 | discard | ok | ok | ok | busy | removing | ok | ok | ok |
 | forget | running | running | ok | busy | removing | ok | ok | ok |
 
-No state lacks a way out, but one: a held worktree lock nothing will let go of
-(LC-3). Two refusals have the wrong words, both cosmetic: `update` for an active
+No state lacks a way out. While Git merges or updates a task, each row reads as
+Removing does, in words of its own. Two refusals have the wrong words, both cosmetic: `update` for an active
 agent says "before retiring", from `require_finished`; and `inspect` while a
 worktree is removed, or after that was cut short, says to resume the task, which
 those states refuse.
@@ -2893,8 +2929,9 @@ otherwise.
 | Item | Machine | Why it stays |
 | --- | --- | --- |
 | `u` with a submodule bump on the integration branch leaves ` M lib`, so `m` refuses, and following its advice reverts the bump | [The merge](#the-merge) | Roost doesn't update submodules, as that fetches; needs a decision |
-| A ref deletion that fails during undo, as with a lock left by a reboot, leaves an empty branch with no task | [Creation](#creation) | Costs an empty branch, and nothing else |
+| A ref deletion that fails during undo, as with a lock left by a reboot, leaves an empty branch with no task | [Creation](#creation) | Costs an empty branch, and nothing else. `make crash` counts it as what stays, not as a problem, only with Git's lock beside the branch |
 | A damaged record is hidden, so its worktree and branch can't be finished from Roost | [Task record](#task-record) | Acting on it by ID says so, and to finish with Git |
 | `ref_exists` reads any Git failure as no branch | [Finishing a task](#finishing-a-task) | On the safe side: a branch not deleted |
 | `approvalsLeft` may be GitLab EE's alone, which would fail the merge request query on a CE server | [A task's pull request](#a-tasks-pull-request) | Unverified: needs a run against one |
+| Forgetting a task while its tmux server is stopped can drop the record of an agent still running | [Finishing a task](#finishing-a-task) | It is the way out when tmux doesn't answer, and the worktree and branch stay |
 | A signed-out `gh` freezes words, with no sign but `roost-doctor` | [What the forge last said](#what-the-forge-last-said) | By design: a task keeps what it had |
