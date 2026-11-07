@@ -4828,7 +4828,8 @@ def merge_task(task, integration, here, squash, tip):
             conflicts = resolved_before(repo, "HEAD", "MERGE_HEAD")
             if conflicts:
                 git(repo, "merge", "--abort")
-        if conflicts:
+        # Conflicts with no merge under way are Git's, killed as it wrote them.
+        if conflicts and merging:
             raise Undone("%s conflicts with %s in %s. Nothing was changed; update the task from %s, then merge again"
                          % (task["name"], task["integrationBranch"], ", ".join(conflicts),
                             task["integrationBranch"]))
@@ -4908,6 +4909,9 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
         try:
             inventory = inventory_for(task)
             require_finished(task, owned_pane(task, inventory))
+            if worktree_exists:
+                check_worktree(store, task)
+                require_clean(str(worktree))
         except RoostError as exc:
             raise RoostError("%s is merged into %s, and not retired: %s" % (task["name"], integration, exc))
     commit = None
@@ -5169,7 +5173,8 @@ def update(store, task):
         # Conflicts Git resolved as you resolved them before, staged: the merge
         # stays under way, as with conflicts, for its agent to check and commit.
         resolved = resolved_before(worktree, "HEAD", "MERGE_HEAD") if result.returncode and merging else []
-        if result.returncode and not conflicts and not resolved:
+        # Conflicts with no merge under way are Git's, killed as it wrote them.
+        if result.returncode and not (merging and (conflicts or resolved)):
             if merging:
                 git(worktree, "merge", "--abort")
                 raise Undone("Updating from %s failed: %s" % (integration, merge_said(result)))

@@ -3231,6 +3231,42 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(self.replied["result"]["update"]["changed"])
         self.assertNotIn("integrating", roost.Store(str(self.state)).read(task["id"]))
 
+    def test_git_killed_as_it_writes_conflicts_leaves_them_named(self):
+        for action, where in (("update", "task"), ("merge", "repository")):
+            with self.subTest(action):
+                task = self.create(name=action)
+                worktree = Path(task["worktree"])
+                (worktree / "hello").write_text("the task's\n")
+                self.git("commit", "-qam", "Task", cwd=worktree)
+                (self.repo / "hello").write_text("main's %s\n" % action)
+                self.git("commit", "-qam", "Main")
+                self.request("stop", id=task["id"])
+                real = roost.git_with_hooks
+
+                def killed(repo, *args, **kwargs):
+                    real(repo, *args, **kwargs)
+                    # Written in the index, and not yet marked as a merge under way.
+                    Path(self.git("rev-parse", "--path-format=absolute", "--git-path", "MERGE_HEAD", cwd=repo)).unlink()
+                    return subprocess.CompletedProcess(args, -9, "", "")
+
+                with patch.object(roost, "git_with_hooks", killed):
+                    reply = self.request(action, id=task["id"])
+                self.assertFalse(reply["ok"], reply)
+                self.assertNotIn("Nothing was changed", reply["error"])
+                self.assertIn("integrating", roost.Store(str(self.state)).read(task["id"]))
+                self.assertIn("stopped partway", self.request(action, id=task["id"])["error"])
+                self.git("reset", "-q", "--merge", cwd=worktree if where == "task" else self.repo)
+                self.request("forget", id=task["id"])
+
+    def test_what_changes_in_a_task_as_it_merges_stops_its_retiring(self):
+        task = self.with_a_commit()
+        self.request("stop", id=task["id"])
+        worktree = task["worktree"]
+        self.hook("pre-merge-commit", "env -u GIT_DIR -u GIT_INDEX_FILE git -C %s checkout -q --detach" % shlex.quote(worktree))
+        error = self.request("merge", id=task["id"])["error"]
+        self.assertIn("is merged into main, and not retired", error)
+        self.assertTrue(Path(worktree).exists())
+
     def test_git_killed_alone_in_an_update_leaves_its_work_named(self):
         task = self.create()
         self.request("stop", id=task["id"])

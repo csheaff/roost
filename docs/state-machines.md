@@ -482,7 +482,10 @@ Invariants:
   can't read, missing or not answering Git, proves nothing, so the mark stays and
   nothing is refused until it can. Git killed alone fails the action and leaves the
   mark in the same way, if anything is left, unless it put back what it did
-  (`Undone`): then what is there isn't the merge's. A poll's look runs no program an agent
+  (`Undone`): then what is there isn't the merge's. Conflicts with no `MERGE_HEAD`
+  are Git killed as it wrote them, and neither `update` nor `m` takes them for a
+  conflict of the work. After the merge, retiring checks the worktree again, as hooks
+  ran with no lock on what an agent does there. A poll's look runs no program an agent
   could name in that checkout's config (`read_git`). A half-done
   merge refuses `merge` and `update`, whose mark would replace its own, and a
   half-done update all six, saying how to finish or
