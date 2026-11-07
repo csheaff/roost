@@ -92,14 +92,15 @@ n=$(wc -c < "$dir/count")
 n=$((n))
 printf '%s\thook\t%s %s\n' "$n" "${0##*/}" "$*" >> "$dir/log"
 if [ "$n" = "$at" ]; then
+  # All at once, the helper first: else it may see Git die and go on.
+  pids=$$
   pid=$PPID
   while [ "$pid" -gt 1 ]; do
-    next=$(ps -o ppid= -p "$pid")
-    kill -9 "$pid"
+    pids="$pid $pids"
     [ "$pid" = "$helper" ] && break
-    pid=$((next))
+    pid=$(($(ps -o ppid= -p "$pid")))
   done
-  kill -9 $$
+  kill -9 $pids
 fi
 exit 0
 """
