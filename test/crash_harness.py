@@ -517,6 +517,12 @@ def way_out(box, scenario, outcome):
         if worktrees:
             problems.append("a worktree no task knows of: %s" % worktrees)
         branches = [branch for branch in box.branches() if branch.startswith("roost/")]
+        # What Git's death left locked Roost can't delete, or should: known,
+        # and an empty branch is all it costs.
+        locked = [branch for branch in branches if (box.repo / ".git/refs/heads" / (branch + ".lock")).exists()
+                  or (box.repo / ".git/packed-refs.lock").exists()]
+        outcome["residue"] += ["a branch Git left locked: " + branch for branch in locked]
+        branches = [branch for branch in branches if branch not in locked]
         if branches:
             problems.append("a branch no task knows of: %s" % branches)
         folders = [path.name for path in (box.state / "worktrees").glob("*/*") if path.is_dir()]

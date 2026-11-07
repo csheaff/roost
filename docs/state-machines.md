@@ -2929,7 +2929,7 @@ otherwise.
 | Item | Machine | Why it stays |
 | --- | --- | --- |
 | `u` with a submodule bump on the integration branch leaves ` M lib`, so `m` refuses, and following its advice reverts the bump | [The merge](#the-merge) | Roost doesn't update submodules, as that fetches; needs a decision |
-| A ref deletion that fails during undo, as with a lock left by a reboot, leaves an empty branch with no task | [Creation](#creation) | Costs an empty branch, and nothing else |
+| A ref deletion that fails during undo, as with a lock left by a reboot, leaves an empty branch with no task | [Creation](#creation) | Costs an empty branch, and nothing else. `make crash` counts it as what stays, not as a problem, only with Git's lock beside the branch |
 | A damaged record is hidden, so its worktree and branch can't be finished from Roost | [Task record](#task-record) | Acting on it by ID says so, and to finish with Git |
 | `ref_exists` reads any Git failure as no branch | [Finishing a task](#finishing-a-task) | On the safe side: a branch not deleted |
 | `approvalsLeft` may be GitLab EE's alone, which would fail the merge request query on a CE server | [A task's pull request](#a-tasks-pull-request) | Unverified: needs a run against one |
