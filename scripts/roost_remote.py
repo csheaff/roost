@@ -43,6 +43,10 @@ class RoostError(Exception):
     pass
 
 
+class Undone(RoostError):
+    """A merge or update that failed and put back what it did."""
+
+
 # Agent states that mean work may be in progress.
 ACTIVE = ("starting", "running", "permission", "background")
 # States in which the agent process is known to have ended.
@@ -4688,9 +4692,9 @@ def refused_by_hook(repo, said, merged, untracked):
     # Files the merge left alone, changed by the hook or by you as it ran.
     left = git_fields(repo, "diff", "--name-only", "-z", "HEAD")
     if left:
-        return RoostError("A commit hook in %s refused the merge, which is undone; changes to %s made "
+        return Undone("A commit hook in %s refused the merge, which is undone; changes to %s made "
                           "as it ran are left there%s" % (repo, ", ".join(map(shown, left)), said))
-    return RoostError("A commit hook in %s refused the merge, which is undone%s" % (repo, said))
+    return Undone("A commit hook in %s refused the merge, which is undone%s" % (repo, said))
 
 
 def squash_merge(task, integration, here, tip):
@@ -4716,9 +4720,9 @@ def squash_merge(task, integration, here, tip):
             # A squash leaves no MERGE_HEAD to abort; this undoes it alike.
             git(repo, "reset", "-q", "--merge")
             if conflicts:
-                raise RoostError("%s conflicts with %s in %s. Nothing was changed; update the task from %s, then merge again"
-                                 % (task["name"], integration, ", ".join(conflicts), integration))
-            raise RoostError("Merge failed; task retained: " + (result.stderr.strip() or result.stdout.strip()))
+                raise Undone("%s conflicts with %s in %s. Nothing was changed; update the task from %s, then merge again"
+                             % (task["name"], integration, ", ".join(conflicts), integration))
+            raise Undone("Merge failed; task retained: " + (result.stderr.strip() or result.stdout.strip()))
         if not git(repo, "diff", "--cached", "--quiet", check=False).returncode:
             return tip  # The task's work was there already.
         result = git_with_hooks(repo, "commit", "-q", "-F", "-", input=message, check=False)
@@ -4729,7 +4733,7 @@ def squash_merge(task, integration, here, tip):
             if result.returncode == 1:
                 raise refused_by_hook(repo, said, merged, untracked)
             undo_merge(repo, merged, untracked)
-            raise RoostError("Merge failed; task retained: " + said)
+            raise Undone("Merge failed; task retained: " + said)
         return tip
     if (version_of(git(repo, "--version").stdout) or (0, 0)) < MERGE_TREE_GIT:
         raise RoostError("Check out %s in the primary repository %s before merging "
@@ -4825,9 +4829,9 @@ def merge_task(task, integration, here, squash, tip):
             if conflicts:
                 git(repo, "merge", "--abort")
         if conflicts:
-            raise RoostError("%s conflicts with %s in %s. Nothing was changed; update the task from %s, then merge again"
-                             % (task["name"], task["integrationBranch"], ", ".join(conflicts),
-                                task["integrationBranch"]))
+            raise Undone("%s conflicts with %s in %s. Nothing was changed; update the task from %s, then merge again"
+                         % (task["name"], task["integrationBranch"], ", ".join(conflicts),
+                            task["integrationBranch"]))
         if merging and result.returncode == 1:
             # A hook refused the merge commit. Git's last line says to
             # commit the merge, which is undone.
@@ -4835,6 +4839,7 @@ def merge_task(task, integration, here, squash, tip):
                                   merge_paths(repo, tip), untracked)
         if merging:
             undo_merge(repo, merge_paths(repo, tip), untracked)
+            raise Undone("Merge failed; task retained: " + merge_said(result))
         raise RoostError("Merge failed; task retained: " + merge_said(result))
     return None
 
@@ -5167,6 +5172,7 @@ def update(store, task):
         if result.returncode and not conflicts and not resolved:
             if merging:
                 git(worktree, "merge", "--abort")
+                raise Undone("Updating from %s failed: %s" % (integration, merge_said(result)))
             raise RoostError("Updating from %s failed: %s" % (integration, merge_said(result)))
         changed = before != git(worktree, "rev-parse", "HEAD").stdout.strip()
     # Hooks came in meanwhile.
@@ -5914,6 +5920,10 @@ def integrating(store, task, action, branch, place):
             with store.released():
                 yield
             finished = True
+        except Undone:
+            # What is left there now isn't the merge's.
+            finished = True
+            raise
         finally:
             with contextlib.suppress(RoostError):
                 current = store.read(task["id"])
@@ -5967,8 +5977,9 @@ def merge_left(mark):
 
 def left_of_merge(store, task):
     """What a merge of TASK cut short left, as `merge_left` says it, or None,
-    when its mark goes, unless the merge is still running."""
-    if worktree_holder(store, task):
+    when its mark goes, unless the merge is still running. A shared hold on
+    the worktree, as for a look, says nothing of that."""
+    if worktree_holder(store, task) == "removal":
         return None
     left = merge_left(task["integrating"])
     if left is None:
@@ -7137,8 +7148,9 @@ def require_not_removing(store, task, action):
     if mark and action in ("merge", "retire", "update", "pr", "resume", "send"):
         left = left_of_merge(store, task)
         # An agent would commit what an update left in its worktree. What a
-        # merge left is in your checkout, and only another merge minds.
-        if left and (action == "merge" or mark.get("action") == "update"):
+        # merge left is in your checkout, and only another merge minds, or
+        # an update, whose mark would take the place of the one naming it.
+        if left and (action in ("merge", "update") or mark.get("action") == "update"):
             raise RoostError(left)
 
 

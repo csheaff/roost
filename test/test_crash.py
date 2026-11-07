@@ -3,6 +3,7 @@ a reboot leaves it: see crash_harness.py. `Crashes` holds each crash that went
 wrong, for `make test`; `Sweep` kills every action at every step, for
 `make crash`."""
 import contextlib
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -193,6 +194,25 @@ class Crashes(unittest.TestCase):
         box.helper("list", socket=box.socket)
         self.assertIn("integrating", box.record(task["id"]))
         self.assertFalse(ran.exists())
+
+    def test_a_look_at_a_half_done_update_refuses_nothing_less(self):
+        box = self.box()
+        task = self.task_to_update(box)
+        self.update_stopped_in_its_merge(box, task)
+        with (box.state / "tasks" / (task["id"] + ".removing")).open() as lock:
+            fcntl.flock(lock, fcntl.LOCK_SH)
+            self.assertIn("stopped partway", box.helper("resume", id=task["id"])["error"])
+
+    def test_an_update_doesnt_take_the_mark_of_a_half_done_squash(self):
+        box = self.box()
+        task = box.create()
+        box.commit(task)
+        box.helper("stop", id=task["id"])
+        box.arm("before", match="commit -q -F -")
+        self.assertIsNone(box.helper("merge", id=task["id"], style="squash"))
+        box.disarm()
+        self.assertIn("Merging task into main stopped partway", box.helper("update", id=task["id"])["error"])
+        self.assertIn("Merging task into main stopped partway", box.helper("merge", id=task["id"], style="squash")["error"])
 
     def test_an_update_cut_short_before_git_began_leaves_nothing_to_say(self):
         box = self.box()

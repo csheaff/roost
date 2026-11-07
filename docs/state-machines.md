@@ -481,9 +481,11 @@ Invariants:
   `merge_left` that nothing is left: HEAD moved, or nothing differs. A checkout it
   can't read, missing or not answering Git, proves nothing, so the mark stays and
   nothing is refused until it can. Git killed alone fails the action and leaves the
-  mark in the same way, if anything is left. A poll's look runs no program an agent
+  mark in the same way, if anything is left, unless it put back what it did
+  (`Undone`): then what is there isn't the merge's. A poll's look runs no program an agent
   could name in that checkout's config (`read_git`). A half-done
-  merge refuses `merge`, and a half-done update all six, saying how to finish or
+  merge refuses `merge` and `update`, whose mark would replace its own, and a
+  half-done update all six, saying how to finish or
   undo it: an agent would commit what an update left. Roost began with nothing
   uncommitted there, so what differs is the merge's, and `merge_left_in` tells a
   second task's merge the same, until that task is discarded or forgotten.

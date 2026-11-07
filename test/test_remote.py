@@ -1848,6 +1848,7 @@ class Lifecycle(unittest.TestCase):
                 self.assertIn("changes to hello made as it ran are left there", error)
                 self.assertEqual((self.repo / "hello").read_text(), self.git("show", "main:hello") + "\nhooked\n")
                 self.assertEqual(self.git("rev-parse", "main"), before)
+                self.assertNotIn("integrating", roost.Store(str(self.state)).read(task["id"]))
                 hook.unlink()
                 self.git("checkout", "--", "hello")
                 roost.git(self.repo, "config", "--unset", "branch.main.mergeOptions", check=False)
