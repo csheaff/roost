@@ -115,7 +115,7 @@ helpers, and a second task. `discard` counts its losses and stops the agent
 in one step: an agent's write in the moment between them is lost untold, as
 stopping first would stop an agent you didn't agree to stop.
 
-## Known finding
+## Known findings
 
 `TaskOnHost.others-in-agent-worktree.cfg` shows it for retire, and
 `TaskOnHost.others-in-agent-worktree-discard.cfg` for discard; each expects
@@ -136,3 +136,13 @@ When it is fixed (look again at `ahead` and `dirty` where it removes, or
 count again for a discard), mirror the fix in `RemoveAgents`, and the
 config for each side fixed should pass: delete it. Once both are, set
 `OthersWorkInX = TRUE` in `TaskOnHost.cfg`.
+
+`TaskOnHost.replaced-in-removal.cfg` expects `OnlyItsOwn` to fail.
+`remove_agent_worktrees` checks x by its stamp (`is_as_made`), reads its
+HEAD and branch, and then removes whatever worktree is at x, with no lock
+held between: `RemoveAgents`, then `RemoveAgentsGo`. If you remove x in that
+moment and someone else makes a worktree there, Roost force-removes theirs.
+The window is a few Git calls long. When it is fixed (check the worktree's
+identity again as part of the removal, or remove by the gitdir checked), mirror it
+in `RemoveAgentsGo`, delete the config, and set `ReplaceInWindow = TRUE` in
+the others.

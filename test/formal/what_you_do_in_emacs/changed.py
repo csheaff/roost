@@ -31,14 +31,22 @@ COVERED = {
 
 
 def definition(text, name, lisp):
-    """NAME's definition in TEXT, up to the next top-level form, or None."""
+    """NAME's definition in TEXT, with its decorators, up to the next
+    top-level form, or None."""
     start = (r"^\(def\S* %s[\s)]" if lisp else r"^(?:def %s\(|%s = )") % (
         (re.escape(name),) if lisp else (re.escape(name), re.escape(name)))
     m = re.search(start, text, re.M)
     if not m:
         return None
+    begin = m.start()
+    while not lisp and begin:
+        # Its decorators, as @contextlib.contextmanager, are part of it.
+        above = text.rfind("\n", 0, begin - 1) + 1
+        if not text.startswith("@", above):
+            break
+        begin = above
     end = re.compile(r"^\(" if lisp else r"^[^\s#]", re.M).search(text, m.end())
-    return text[m.start():end.start() if end else len(text)]
+    return text[begin:end.start() if end else len(text)]
 
 
 def main(sync):

@@ -117,7 +117,18 @@ def main(names):
         for cfg in sorted([base, *folder.glob(spec.stem + ".*.cfg")]):
             if not cfg.exists():
                 continue
-            want = expected(cfg) or "pass"
+            want = expected(cfg)
+            if cfg == base and want:
+                print(f"FAIL {folder.name}/{cfg.name}: expects {want}, but "
+                      "the base config must pass; move it to a variant")
+                failures += 1
+                continue
+            if cfg != base and not want:
+                print(f"FAIL {folder.name}/{cfg.name}: a variant needs a "
+                      "first line \\* expect: RuleName")
+                failures += 1
+                continue
+            want = want or "pass"
             start = time.monotonic()
             text = run(jar, java, spec, cfg)
             got = outcome(text)

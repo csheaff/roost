@@ -36,7 +36,8 @@ COVERED = {
 
 
 def body(text, path, name):
-    """NAME's definition in TEXT, the source of PATH, to the next top-level form."""
+    """NAME's definition in TEXT, the source of PATH, with its decorators,
+    to the next top-level form."""
     if path.endswith(".py"):
         start = re.compile(r"^def %s\(" % re.escape(name))
         top = re.compile(r"^[^\s#)]")
@@ -49,6 +50,8 @@ def body(text, path, name):
             j = i + 1
             while j < len(lines) and not top.match(lines[j]):
                 j += 1
+            while i and lines[i - 1].startswith("@"):  # its decorators too
+                i -= 1
             return "\n".join(lines[i:j]).rstrip()
     return None
 

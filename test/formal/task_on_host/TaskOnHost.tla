@@ -26,6 +26,9 @@ CONSTANTS
     OthersWorkInX,  \* TRUE: something besides the task's agent works in the
                     \* worktree x: another session or task's agent, a process
                     \* the agent left running, the teardown command
+    ReplaceInWindow, \* TRUE: you remove x, and someone makes another there,
+                    \* between `remove_agent_worktrees` checking x by its
+                    \* stamp and removing it
     Break           \* "none", or a guard turned off, for a TaskOnHost.<variant>.cfg:
                     \* "retire_force", "branch_no_cas", "no_safe_check",
                     \* "agent_only_went", "no_stamp", "agent_any_branch", "no_recount"
@@ -110,7 +113,7 @@ SafeToDelete(commit) == commit \subseteq mainCommits
 -----------------------------------------------------------------------------
 NoRequest == [kind |-> "none", pc |-> "none", expect |-> {}, told |-> Losses, toldBranch |-> TRUE,
               tip |-> {}, commit |-> {}, hadBranch |-> FALSE, hadWorktree |-> FALSE,
-              agents |-> FALSE, refused |-> FALSE]
+              agents |-> FALSE, refused |-> FALSE, xHead |-> "wt", xCommits |-> {}]
 
 Init ==
     /\ tw = "there" /\ twDirty = {} /\ tb = TRUE /\ tbCommits = {} /\ mainCommits = {}
@@ -188,13 +191,16 @@ AgentCommitsX == Outside(AgentInX /\ CommitsX)
 OtherWritesX  == Outside(OtherInX /\ WritesX)
 OtherCommitsX == Outside(OtherInX /\ CommitsX)
 
+\* A request is between checking x by its stamp and removing it.
+InWindow == \E r \in Req : req[r].pc = "remove agents go"
+
 \* Someone else makes a worktree at the empty path x.
-OtherMakesX == Outside(x = "none" /\ ~wt /\ x' = "other" /\ xOn' = "wt" /\ wt' = TRUE
+OtherMakesX == Outside((ReplaceInWindow \/ ~InWindow) /\ x = "none" /\ ~wt /\ x' = "other" /\ xOn' = "wt" /\ wt' = TRUE
     /\ UNCHANGED <<tw, twDirty, tb, tbCommits, mainCommits, mine, mineCommits, xDirty, wtCommits, agent, next>>)
 
 \* You, or the agent's ExitWorktree, remove the agent's x and its branch:
 \* not Roost's doing, so nothing it loses counts.
-YouRemoveX == Outside(x = "ours" /\ x' = "none" /\ xDirty' = {} /\ wt' = FALSE /\ wtCommits' = {}
+YouRemoveX == Outside((ReplaceInWindow \/ ~InWindow) /\ x = "ours" /\ x' = "none" /\ xDirty' = {} /\ wt' = FALSE /\ wtCommits' = {}
     /\ xOn' = "wt"
     /\ UNCHANGED <<tw, twDirty, tb, tbCommits, mainCommits, mine, mineCommits, agent, next>>)
 
@@ -326,15 +332,26 @@ RemoveBegin(r) == req[r].pc = "remove begin" /\ Roost(r,
        []   OTHER      -> Go(r, "remove agents") /\ wtLock' = r /\ removing' = r /\ regLock' = 0
     /\ UNCHANGED <<gitVars, rec, status, retiringCommit, noted, agent>>)
 
-\* `remove_agent_worktrees`, after the teardown command: x again by its
-\* stamp, its HEAD read, `git worktree remove --force --force`, and
-\* worktree-x deleted at that HEAD if x was on it.  Broken: `agent_any_branch`
-\* deletes whichever branch x was on.
+\* `remove_agent_worktrees`, after the teardown command, in two steps with
+\* no lock held between: x checked again by its stamp (`is_as_made`) and its
+\* HEAD and branch read; then `git worktree remove --force --force` of
+\* whatever worktree is at x by then, and the branch read deleted if it is
+\* worktree-x, at the commit read.  Broken: `agent_any_branch` deletes
+\* whichever branch x was on.
 RemoveAgents(r) == req[r].pc = "remove agents" /\ Roost(r,
     /\ IF req[r].agents /\ AsMade
+       THEN req' = [req EXCEPT ![r].pc = "remove agents go", ![r].xHead = xOn,
+                               ![r].xCommits = IF xOn = "wt" THEN wtCommits ELSE mineCommits]
+       ELSE Go(r, "remove worktree")
+    /\ UNCHANGED <<gitVars, recordVars, agent, regLock, wtLock>>)
+
+RemoveAgentsGo(r) == req[r].pc = "remove agents go" /\ Roost(r,
+    /\ IF x # "none"
        THEN /\ x' = "none" /\ xDirty' = {} /\ xOn' = "wt"
-            /\ IF xOn = "wt"
-               THEN wt' = FALSE /\ wtCommits' = {} /\ UNCHANGED <<mine, mineCommits>>
+            /\ IF req[r].xHead = "wt"
+               THEN IF wt /\ wtCommits = req[r].xCommits
+                    THEN wt' = FALSE /\ wtCommits' = {} /\ UNCHANGED <<mine, mineCommits>>
+                    ELSE UNCHANGED <<wt, wtCommits, mine, mineCommits>>
                ELSE /\ UNCHANGED <<wt, wtCommits>>
                     /\ IF Break = "agent_any_branch" THEN mine' = FALSE /\ mineCommits' = {}
                        ELSE UNCHANGED <<mine, mineCommits>>
@@ -393,7 +410,7 @@ Crash(r) ==
     /\ UNCHANGED <<gitVars, recordVars, agent, next, lost, xRemovedBy, removedOther>>
 
 Request(r) == \/ Start(r) \/ GitMerge(r) \/ AfterMerge(r) \/ Checkpoint(r) \/ Stop(r)
-              \/ RemoveBegin(r) \/ RemoveAgents(r) \/ RemoveWorktree(r) \/ WorktreeGoing(r)
+              \/ RemoveBegin(r) \/ RemoveAgents(r) \/ RemoveAgentsGo(r) \/ RemoveWorktree(r) \/ WorktreeGoing(r)
               \/ RemoveEnd(r) \/ DeleteBranch(r) \/ RemoveRecord(r) \/ Crash(r)
 
 \* Every request has ended, and nothing else need happen.
