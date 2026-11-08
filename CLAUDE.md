@@ -36,6 +36,12 @@ The [manual](docs/manual.md#how-it-works) says how it fits together.
   `test/test_crash.py`. Run it after changing how the helper merges,
   retires, removes a worktree or records a task. A new action goes in
   `test/crash_scenarios.py`.
+- `make formal` model-checks TLA+ models of the state machines in
+  `docs/state-machines.md`, one folder of `test/formal` per section, each
+  with the broken variants it must catch (about two minutes). Before
+  committing a change to a section's code, follow its skill,
+  `.claude/skills/verify-*`: it says which functions each model covers and
+  the commit it was last confirmed at.
 - Tests hold Roost to what it says about security. Every ERT test fails if
   Roost starts a program not in `roost-test--programs`; the helper's
   `Subprocesses` test allows a shell only for the project's own setup and
