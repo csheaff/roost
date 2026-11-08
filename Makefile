@@ -33,6 +33,12 @@ QA_FLAGS ?=
 qa:
 	python3 test/qa/qa.py --emacs "$(EMACS)" $(QA_FLAGS)
 
+# Roost's TLA+ models of its state machines, each with the broken variants
+# it must catch: see test/formal/check.py and .claude/skills/verify-*.
+.PHONY: formal
+formal:
+	python3 test/formal/check.py
+
 .PHONY: compile
 compile:
 	$(EMACS) -Q --batch -L . --eval '(setq byte-compile-error-on-warn t)' \
