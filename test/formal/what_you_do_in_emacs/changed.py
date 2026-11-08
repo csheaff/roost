@@ -45,7 +45,7 @@ def definition(text, name, lisp):
         if not text.startswith("@", above):
             break
         begin = above
-    end = re.compile(r"^\(" if lisp else r"^[^\s#]", re.M).search(text, m.end())
+    end = re.compile(r"^\(" if lisp else r"^[^\s#)]", re.M).search(text, m.end())
     return text[begin:end.start() if end else len(text)]
 
 

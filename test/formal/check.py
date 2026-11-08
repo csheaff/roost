@@ -123,9 +123,9 @@ def main(names):
                       "the base config must pass; move it to a variant")
                 failures += 1
                 continue
-            if cfg != base and not want:
+            if cfg != base and want in (None, "pass", "error"):
                 print(f"FAIL {folder.name}/{cfg.name}: a variant needs a "
-                      "first line \\* expect: RuleName")
+                      "first line \\* expect: RuleName, the rule it breaks")
                 failures += 1
                 continue
             want = want or "pass"

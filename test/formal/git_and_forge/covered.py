@@ -25,6 +25,8 @@ COVERED = {
         "safe_to_delete", "push_pull_request", "record_push", "pull_request",
         # Both: rpc's `pr` and `list` branches, and the measurement.
         "rpc", "add_git_stats",
+        # MergedWord.tla: commits move the stamp, so a poll looks again.
+        "git_stamp",
     ],
     "roost.el": [
         # MergedWord.tla

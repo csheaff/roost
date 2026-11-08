@@ -6,7 +6,7 @@ description: >
   in Emacs as polls and replies come and go. Use when a change touches
   has_tip, recorded_merge_at, landed, check_pull_requests,
   task_pull_requests, fetch_heads, record_push, push_pull_request,
-  pull_request, safe_to_delete, merged_pull_request_head, add_git_stats or
+  pull_request, safe_to_delete, merged_pull_request_head, add_git_stats, git_stamp or
   rpc's `pr` and `list` in scripts/roost_remote.py, or roost--refresh-host,
   roost--cache-task, roost--task-states, roost--landed or roost--merged-p in
   roost.el; or when asked to verify "Git and the forge" in
