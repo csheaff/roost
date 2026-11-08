@@ -39,6 +39,10 @@ with the shortest path to a broken rule.
 
 - **OneCallback.** Every request ends in exactly one callback, SUCCESS or
   FAILURE. Harm: a command that never hears back, or acts twice.
+- **EveryRequestEnds.** Each request is answered in the end, by its host or,
+  if the host never answers, by its timer (`roost--expire-request`). A
+  property, checked under `TimedSpec`, which assumes only that the timer
+  fires. Harm: a command that waits for ever.
 - **ActionOnce.** What changes things runs at most once on the host, however
   Roost asks again. Harm: a stop, merge or prompt done twice.
 - **NoHelperFailure.** A helper another Emacs pruned fails no request.
@@ -123,6 +127,8 @@ are known to bite:
   first, which went on. ActionOnce.
 - `SetupErrorLeavesProcess`: an error after `make-process` calls FAILURE
   and leaves the process, whose sentinel calls back too. OneCallback.
+- `NoTimer`: no timer, so a host that never answers holds the request for
+  ever. EveryRequestEnds (`temporal`).
 
 ## Findings kept
 

@@ -44,15 +44,26 @@ def tools():
         return subprocess.run(["mise", *args], capture_output=True,
                               text=True, cwd=HERE, env=env)
 
-    where = mise("where", TLC_TOOL)
-    if where.returncode != 0:
-        got = mise("install", JAVA_TOOL, TLC_TOOL)
+    def lookup():
+        where = mise("where", TLC_TOOL)
+        which = mise("which", "java", "--tool", JAVA_TOOL)
+        return (where.stdout.strip() if where.returncode == 0 else None,
+                which.stdout.strip() if which.returncode == 0 else None)
+
+    tlc_dir, mise_java = lookup()
+    missing = [tool for tool, found in ((TLC_TOOL, jar or tlc_dir),
+                                        (JAVA_TOOL, java or mise_java))
+               if not found]
+    if missing:
+        got = mise("install", *missing)
         if got.returncode != 0:
             sys.exit("mise install failed:\n" + got.stderr)
-        where = mise("where", TLC_TOOL)
-    which = mise("which", "java", "--tool", JAVA_TOOL)
-    return (jar or str(Path(where.stdout.strip()) / "tla2tools.jar"),
-            java or which.stdout.strip())
+        tlc_dir, mise_java = lookup()
+    jar = jar or (tlc_dir and str(Path(tlc_dir) / "tla2tools.jar"))
+    java = java or mise_java
+    if not (jar and Path(jar).is_file() and java and Path(java).is_file()):
+        sys.exit(f"check.py found no TLC or Java: jar {jar}, java {java}")
+    return jar, java
 
 
 def expected(cfg):
@@ -88,27 +99,37 @@ def main(names):
     folders = ([HERE / n for n in names] if names else
                sorted(p for p in HERE.iterdir() if p.is_dir()
                       and not p.name.startswith(("_", "."))))
+    unknown = [f.name for f in folders if not f.is_dir()]
+    if unknown:
+        sys.exit("no such model folder: " + ", ".join(unknown))
+    specs = [spec for folder in folders for spec in sorted(folder.glob("*.tla"))]
+    if not specs:
+        sys.exit("no models to check")
     jar, java = tools()
     failures = 0
-    for folder in folders:
-        for spec in sorted(folder.glob("*.tla")):
-            for cfg in sorted([folder / (spec.stem + ".cfg"),
-                               *folder.glob(spec.stem + ".*.cfg")]):
-                if not cfg.exists():
-                    continue
-                want = expected(cfg) or "pass"
-                start = time.monotonic()
-                text = run(jar, java, spec, cfg)
-                got = outcome(text)
-                states = re.findall(r"(\d+) distinct states found", text)
-                took = time.monotonic() - start
-                ok = got == want
-                failures += not ok
-                print(f"{'ok  ' if ok else 'FAIL'} {folder.name}/{cfg.name}: "
-                      f"{got} (want {want}), "
-                      f"{states[-1] if states else '?'} states, {took:.1f}s")
-                if not ok:
-                    print(text[-4000:])
+    for spec in specs:
+        folder = spec.parent
+        base = folder / (spec.stem + ".cfg")
+        if not base.exists():
+            print(f"FAIL {folder.name}/{spec.name}: no {base.name}, "
+                  "the config it must pass")
+            failures += 1
+        for cfg in sorted([base, *folder.glob(spec.stem + ".*.cfg")]):
+            if not cfg.exists():
+                continue
+            want = expected(cfg) or "pass"
+            start = time.monotonic()
+            text = run(jar, java, spec, cfg)
+            got = outcome(text)
+            states = re.findall(r"(\d+) distinct states found", text)
+            took = time.monotonic() - start
+            ok = got == want
+            failures += not ok
+            print(f"{'ok  ' if ok else 'FAIL'} {folder.name}/{cfg.name}: "
+                  f"{got} (want {want}), "
+                  f"{states[-1] if states else '?'} states, {took:.1f}s")
+            if not ok:
+                print(text[-4000:])
     print("all models as expected" if not failures
           else f"{failures} model run(s) not as expected")
     return 1 if failures else 0

@@ -149,8 +149,10 @@ Deliver(i) ==
 (* roost--expire-request's timer, or the connection dropping: FAILURE,  *)
 (* whatever the host has done or will still do.  Broken                 *)
 (* (RetryAnyFailure), the helper is taken for gone on any failure.      *)
+(* Broken (NoTimer), no timer is set, so only an answer ends it.        *)
 GiveUp(i) ==
   /\ reqs[i].waiting
+  /\ Break # "NoTimer"
   /\ IF Break = "RetryAnyFailure" /\ reqs[i].phase = "invoke" /\ reqs[i].checks
      THEN /\ installed' = FALSE
           /\ Then(i, "install")
@@ -174,6 +176,10 @@ Init ==
 
 Spec == Init /\ [][Next]_vars
 
+(* Each request's timer fires in the end if nothing else ends it first.   *)
+(* Nothing is assumed of the host or the network: they may never answer. *)
+TimedSpec == Spec /\ \A i \in 1..MaxReqs : WF_vars(i \in DOMAIN reqs /\ GiveUp(i))
+
 (***************************************************************************)
 (* The rules.                                                              *)
 (***************************************************************************)
@@ -183,6 +189,11 @@ OneCallback ==
   \A i \in DOMAIN reqs :
     /\ reqs[i].calls <= 1
     /\ (~reqs[i].waiting) => reqs[i].calls = 1
+
+(* Every request is answered in the end, by its host or by its timer: a *)
+(* command never waits for ever.                                        *)
+EveryRequestEnds ==
+  \A i \in 1..MaxReqs : [](i \in DOMAIN reqs => <>(i \in DOMAIN reqs /\ ~reqs[i].waiting))
 
 (* What changes things runs at most once on the host, however Roost asks  *)
 (* again: a stop, a merge, a prompt sent.                                 *)
