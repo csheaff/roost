@@ -14,6 +14,8 @@ What each release changes, and what to do when upgrading. Newest first.
   helper's. It is off by default, and an experiment: it may change or go.
   To try it, set `roost-agent-offers` to t; tasks you start from then on
   can offer.
+- In the task panel, a pull request's URL is drawn as a link and opens it,
+  as its number already did. Nothing to do when upgrading.
 - A Claude task whose turn ends on an API error, or with work left in the
   background, says so even when its status reports lag behind its hooks. With
   `roost-program-status` on, a report that the agent was working, still

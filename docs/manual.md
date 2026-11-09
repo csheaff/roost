@@ -19,6 +19,16 @@ Python 3.9+, Git, tmux 3.1+, and an installed, signed-in agent CLI (Claude Code
 2.1.78 or newer, Codex 0.160.0 or newer). Remote hosts need key- or agent-based
 SSH; use SSH config aliases for ports and jump hosts. Roost copies its helper to each host itself.
 
+Roost runs Claude Code, Codex, Pi and OpenCode, and means to support a few
+agents well rather than many loosely: a couple from the labs that make the
+models, and a couple that work across them. Each agent needs its own way of
+reporting its status, resuming and taking hooks, and each of its releases can
+change them, so every one Roost supports is tested against the real agent.
+An agent gets an adapter when it is widely used, reports what it is doing
+through hooks or events Roost can read, and keeps its launch and resume
+arguments stable. Roost can't start an agent it has no adapter for, and an
+agent that falls out of use may lose its adapter.
+
 Emacs 30 (built-in `use-package`):
 
 ```elisp

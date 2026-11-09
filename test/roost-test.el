@@ -9886,7 +9886,16 @@ field (FIELD . :none) is left out."
                                  '(checks . ((passing . 2) (failing . 1) (pending . 0))) '(failingChecks "lint")))))
        (should (string-match-p "^Checks\n✗ lint failed\n✓ 2 passed$" text))
        (should (string-match-p "^Pull request  from PROJ-1-fix\n  #12  https://github.com/o/r/pull/12\nOpen$" text))
-       (should-not (string-search "The task's branch" text)))
+       (should-not (string-search "The task's branch" text))
+       ;; The URL, drawn as a link, opens it, as the number does.
+       (let ((at (string-search "https://github.com/o/r/pull/12" text)) opened)
+         (should (eq (get-text-property at 'face text) 'link))
+         (cl-letf (((symbol-function 'browse-url) (lambda (url &rest _) (push url opened))))
+           (with-temp-buffer
+             (insert text)
+             (push-button (1+ at))
+             (push-button (1+ (string-search "#12  https" text)))))
+         (should (equal opened '("https://github.com/o/r/pull/12" "https://github.com/o/r/pull/12")))))
      ;; Beside its terminal too, where checks show only with a pull request.
      (should (string-match-p "^Checks\n✓ 3 passed$" (funcall panel (roost-test--worktree-pr-task) t)))
      (let ((text (funcall panel (append '((pr . ((number . 4) (url . "https://github.com/o/r/pull/4") (state . "OPEN"))))
