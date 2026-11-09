@@ -4316,7 +4316,8 @@ class Lifecycle(unittest.TestCase):
         except OSError:
             self.skipTest("This file system takes only names in UTF-8")
         self.assertIsNone(roost.agent_worktree_seen(task, str(own)))
-        reply = self.request("retire", id=task["id"])
+        told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+        reply = self.request("discard", id=task["id"], expect=told["commit"], told=told)
         self.assertTrue(reply["ok"], reply)
         self.assertTrue(own.exists())
 
