@@ -1508,8 +1508,14 @@ what changed since is measured against."
 What a list that failed or was dropped would have measured, and tasks a
 list brought news of without measuring them.  From a poll, rather than
 the end of a list: so a host that always fails isn't asked in a loop,
-two busy agents aren't measured back to back, and a list too slow ever
-to answer holds up no polls.  Taken up once: if that fails too, it goes.")
+and two busy agents aren't measured back to back.  Owed until measured:
+taken up again at once, then, if that fails too, now and then, as
+`roost--measures-due' says, so a list too slow ever to answer holds up
+few polls.")
+(defvar roost--measures-due (make-hash-table :test 'equal)
+  "When each host's quiet polls take up what it owes again, as (COUNT . TIME).
+COUNT is the measurements lost in a row since one was taken up again,
+and TIME the `float-time' from which polls take it up.")
 (defvar roost--failures (make-hash-table :test 'equal)
   "Consecutive refresh failures per host, as (COUNT . RETRY-AFTER).")
 
@@ -1527,7 +1533,6 @@ those tasks, and what is owed, as `roost--measures-owed' has it, goes too."
       (unless quiet (roost--owe-measuring roost--full-refresh-pending host ids))
     (puthash host t roost--refreshing)
     (let* ((owed (unless quiet (gethash host roost--measures-owed)))
-           (new ids)
            (ids (if (and owed ids) (unless (eq owed t) (seq-union ids owed)) ids))
            (request (puthash host (1+ (gethash host roost--list-requests 0)) roost--list-requests))
            (revision (gethash host roost--revisions 0))
@@ -1539,16 +1544,17 @@ those tasks, and what is owed, as `roost--measures-owed' has it, goes too."
            ;; Nothing came of this list, so what it was for is still to do.
            ;; UNTRIED, it was no try: its reply was stale, or it never went.
            (lost (lambda (&optional untried)
-                   ;; What was owed has had its one more try; what this list
-                   ;; added to it hasn't.
-                   (let ((first-try (if (eq owed t) new (seq-difference new owed))))
-                     (cond (quiet)
-                           ((or untried (not owed)) (roost--owe-measuring roost--measures-owed host ids))
-                           (first-try (roost--owe-measuring roost--measures-owed host first-try))
-                           ;; It asked for every task, which what was owed
-                           ;; was only some of.
-                           ((and (null new) (not (eq owed t)))
-                            (roost--owe-measuring roost--measures-owed host nil))))
+                   (unless quiet
+                     (roost--owe-measuring roost--measures-owed host ids)
+                     ;; What was owed had its one more try: polls take it up
+                     ;; again only now and then, first after as long as
+                     ;; they wait to ask the forge, then twice as long each
+                     ;; time, up to eight times.
+                     (when (and owed (not untried))
+                       (let ((count (1+ (or (car (gethash host roost--measures-due)) 0))))
+                         (puthash host (cons count (+ (float-time) (* roost--pull-request-interval
+                                                                      (expt 2 (min 3 (1- count))))))
+                                  roost--measures-due))))
                    (when pull-requests
                      (if last-asked
                          (puthash host last-asked roost--pull-requests-asked)
@@ -1610,6 +1616,8 @@ those tasks, and what is owed, as `roost--measures-owed' has it, goes too."
                           ((/= revision (gethash host roost--revisions 0)) (funcall lost t))
                           (t
                            (let ((before (roost--task-states host)))
+                             ;; What was owed is measured.
+                             (when owed (remhash host roost--measures-due))
                              (roost--apply-snapshot host tasks request)
                              (with-demoted-errors "Roost: %S" (roost--compose-listed host tasks))
                              ;; Quiet polls leave out Git statistics, as does a list of
@@ -1625,7 +1633,8 @@ those tasks, and what is owed, as `roost--measures-owed' has it, goes too."
                                                            (car state)))
                                                        (roost--task-states host))
                                              ids))
-                                   (owed (gethash host roost--measures-owed)))
+                                   (owed (and (< (or (cdr (gethash host roost--measures-due)) 0) (float-time))
+                                              (gethash host roost--measures-owed))))
                                (cond ((and quiet (or changed owed))
                                       (roost--refresh-host host nil (or changed (unless (eq owed t) owed))))
                                      ((and ids changed)
@@ -1687,6 +1696,7 @@ Hosts in `roost-hosts' are watched until you take them out of it."
     (remhash host roost--errors)
     (remhash host roost--failures)
     (remhash host roost--measures-owed)
+    (remhash host roost--measures-due)
     (roost--redraw)))
 
 (defun roost-refresh (&optional quiet)

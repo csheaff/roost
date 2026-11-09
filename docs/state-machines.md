@@ -1353,7 +1353,7 @@ after a week. Sound.
 ### Host refresh
 
 Kind: implicit. Lives in: `roost--refreshing`, `roost--full-refresh-pending`,
-`roost--measures-owed`, `roost--failures`, `roost--errors`, `roost--revisions`,
+`roost--measures-owed`, `roost--measures-due`, `roost--failures`, `roost--errors`, `roost--revisions`,
 `roost--list-requests`, `roost--snapshots`, `roost--pull-requests-asked`, per host.
 At most one list in flight per host; its reply replaces what Roost holds of the
 host unless something newer happened.
@@ -1374,7 +1374,7 @@ Invariants:
 - I3. A list asked before a mutation's reply never overwrites it: `revision` is read as the list starts and bumped as the reply arrives (`roost--act`, `roost--create-task`). Checked: bumping at the reply is right; at the request would let a list read before the mutation through.
 - I4. A list arriving after its host was forgotten changes nothing (`member host (roost--hosts)`).
 - I5. Any reply clears Offline and Backing off; a stale one too, as the host answered.
-- I6. A refresh asked for while one is in flight happens after it. One that failed, was dropped or couldn't start is owed to the next good poll, not to `finish`, so a host that always fails is asked at the pace of polls (`roost--measures-owed`). Polls stay quiet, and what is owed goes once more, so a list too slow ever to answer holds up no polls.
+- I6. A refresh asked for while one is in flight happens after it. One that failed, was dropped or couldn't start is owed to the next good poll, not to `finish`, so a host that always fails is asked at the pace of polls (`roost--measures-owed`). Polls stay quiet, and what is owed goes once more at once, then, lost again, only now and then (`roost--measures-due`: after two minutes, doubling to sixteen), so a list too slow ever to answer holds up few polls, and nothing owed is dropped.
 - I7. One message per outage (`roost--errors` tested before it's set).
 
 | From | Event | Guard | To | Effect | Code |
@@ -1842,7 +1842,7 @@ say what is no longer so.
 | Owed | Changed since, measurement asked | Its ID is in pending, in a list in flight, or in `roost--measures-owed` |
 
 Invariants:
-- I1. A change any reply brings gets a measurement, unless that reply measured it. A list dropped, failed or never started owes it to the next good poll, and one that fails then is given up: the next change, or `g`, asks again.
+- I1. A change any reply brings gets a measurement, unless that reply measured it. A list dropped, failed or never started owes it to the next good poll, and one that fails then owes it again, to a poll after a back-off (`roost--measures-due`), until a measurement comes back.
 - I6. Measuring goes at the pace of polls: a quiet poll's changes go right after it, and what a list of some tasks brings of others goes after the next poll, or two busy agents would be measured back to back.
 - I2. What waits on you isn't told, or reported, until the task is measured (`roost--judged-p`).
 - I3. A stale list reply never overwrites a newer action: `roost--revisions`.
@@ -1857,9 +1857,11 @@ Invariants:
 | Owed | List with its ID replies | revision same | Measured | | `roost--apply-snapshot` |
 | Owed | That list dropped as stale | | Owed | Into `roost--measures-owed`, for the next poll | success lambda |
 | Owed | That list fails, or can't start | not owed before | Owed | Same | `failed`, `roost--refresh-host` |
-| Owed | That list fails | owed before | Measured, in name | Given up, so a list too slow ever to answer holds up no polls | `failed` |
+| Owed | That list fails | owed before | Owed | Owed again; quiet polls take it up only once `roost--measures-due` says, from two minutes to sixteen, so a list too slow ever to answer holds up few polls | `failed` |
 | Measured | IDs list for another task brings its event | | Owed | Same | success lambda |
-| Owed | A good quiet poll | | Owed | Asks to measure them, right after | success lambda |
+| Owed | A good quiet poll | due, or something changed | Owed | Asks to measure them, right after | success lambda |
+| Owed | A good quiet poll | not due, nothing changed | Owed | Nothing more | success lambda |
+| Owed | A list that took it replies | revision same | Measured | `roost--measures-due` cleared | success lambda |
 | Owed | A full refresh | | Owed | It covers them | `roost--refresh-host` |
 
 Conflicts:
