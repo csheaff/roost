@@ -242,6 +242,10 @@ Invariants:
 - I4. What you read is what an agent gets: a title or brief that holds a control
   character, or one that doesn't show as itself, is refused before it is recorded.
   (`hidden_character`.)
+- I5. A task made from an offer leaves none of it waiting, though opening's take
+  failed and its creation was cut short once the task was saved: the task records the
+  offer it came from, and every listing takes such an offer. (`make_task`,
+  `taken_offers`; `make crash`'s `CreateFromOffer`.)
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
@@ -250,6 +254,7 @@ Invariants:
 | any | agent offers | task `stopped` or `retired` | as it was | refused | `propose_task` |
 | Waiting | you open it, do it here, or dismiss it | | Waiting or None | dropped | `take_offer` |
 | Waiting | a task is made from it | its take failed | Waiting or None | dropped | `make_task`, `take_offer` |
+| Waiting | a listing | a task records it as the offer it came from | Waiting or None | dropped | `taken_offers` |
 | Waiting | task finished or forgotten | | gone with the record | the question before names them | `roost--offers-sentence` |
 
 `test/formal/emacs_and_hosts` checks I2 in Emacs as `NoOfferRollback`: no reply brings
@@ -2962,8 +2967,8 @@ registry lock.
 | `shellPaneId` | `shell`, `spawn`, `stop` | yes |
 | `name`, `task`, `renamedAt` | `rename` | yes |
 | `setupComplete`, `copyComplete`, `submodulesComplete`, `allSubmodules` | `runner` | yes, fresh read each |
-| `offers`, `offersAt` | `propose_task`, `take_offer`, `make_task` (the parent's, through `take_offer`) | yes |
-| `mayOffer`, `parent` | `make_task` | yes; never changed |
+| `offers`, `offersAt` | `propose_task`, `take_offer`, `make_task` and `list_tasks` (the parent's, through `take_offer`) | yes |
+| `mayOffer`, `parent`, `offer` | `make_task` | yes; never changed |
 
 No lost update found in any of them.
 

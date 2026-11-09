@@ -9472,7 +9472,15 @@ print(json.dumps(dict(data=data)))
                              command=[sys.executable, str(FAKE)])
         self.assertTrue(reply["ok"], reply)
         self.assertEqual(roost.Store(str(self.state)).read(parent["id"])["offers"], [second])
+        self.assertEqual(reply["result"]["offer"], first["id"])
         self.wait(reply["result"], "ready")
+        # Its helper cut short once the task was saved, before the offer was
+        # taken: the next listing takes it, and another offer still waits.
+        store = roost.Store(str(self.state))
+        store.save(dict(store.read(parent["id"]), offers=[first, second]))
+        listed = {task["id"]: task for task in self.request("list")["result"]}
+        self.assertEqual(listed[parent["id"]]["offers"], [second])
+        self.assertEqual(store.read(parent["id"])["offers"], [second])
         # A parent that isn't a task's ID makes nothing.
         reply = self.request("create", directory=str(self.repo), name="x", parent="../../etc", socket=self.socket,
                              command=[sys.executable, str(FAKE)])

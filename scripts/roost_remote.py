@@ -2091,11 +2091,14 @@ def make_task(store, request, create_id):
     # Its agent can offer tasks, if it can be given Roost's tool.
     if request.get("mayOffer") is True and getattr(agent, "offers", False):
         task["mayOffer"] = True
-    # The task whose agent offered this one, which shows it under that.
-    parent = request.get("parent")
+    # The task whose agent offered this one, which shows it under that, and
+    # the offer it was made from, which waits no more once it is saved.
+    parent, offer = request.get("parent"), text(request.get("offer"))
     if parent is not None:
         store.path(parent)
         task["parent"] = parent
+        if offer:
+            task["offer"] = offer
     existed, there = ref_exists(repo, branch), worktree.exists()
     with noting_creation(store, task):
         try:
@@ -2128,8 +2131,8 @@ def make_task(store, request, create_id):
                 abandon(store, task)
                 raise
             # Made from an offer, which opening it took already, unless that
-            # failed: it waits no more either way.
-            offer = text(request.get("offer"))
+            # failed: it waits no more either way. Cut short before this, a
+            # listing takes it (`taken_offers`).
             if parent is not None and offer:
                 with contextlib.suppress(RoostError, OSError):
                     take_offer(store, store.read(parent), offer)
@@ -2481,6 +2484,7 @@ def list_tasks(store, request):
             if task.get("integrating"):
                 left_of_merge(store, task)
             tasks.append(task)
+    taken_offers(store, tasks)
     inventories = {}
     table = None  # The process table, read only when a request may have been approved.
     for task in tasks:
@@ -4374,6 +4378,19 @@ def take_offer(store, task, offer):
         set_offers(task, still)
         store.save(task)
     return task
+
+
+def taken_offers(store, tasks):
+    """Take from each of TASKS the offers a task was made from, which its
+    creation takes too, unless it was cut short after the task was saved:
+    a task made from an offer leaves none of it waiting. Under the registry
+    lock, as a listing is."""
+    by_id = {task["id"]: task for task in tasks}
+    for task in tasks:
+        parent, offer = by_id.get(task.get("parent")), text(task.get("offer"))
+        if parent is not None and offer and any(other["id"] == offer for other in task_offers(parent)):
+            with contextlib.suppress(OSError):
+                take_offer(store, parent, offer)
 
 
 def attach(store, task, files):

@@ -389,7 +389,34 @@ class CreateFromRemote(Create):
         self.asked = dict(self.asked, base="origin/feature")
 
 
+class CreateFromOffer(Create):
+    """From an agent's offer whose take, as it was opened, failed: once its
+    task is made, the offer waits no more, however its creation was cut
+    short and asked for again."""
+
+    def arrange(self, box):
+        super().arrange(box)
+        self.parent = box.create(name="parent")
+        reply = offer(box, self.parent)
+        assert reply and reply["ok"], reply
+        self.offer = box.record(self.parent["id"])["offers"][0]["id"]
+        self.asked = dict(self.asked, parent=self.parent["id"], offer=self.offer)
+
+    def holds(self, box, problems):
+        final = self.final
+        if final and final.get("ok"):
+            self.task = final["result"]
+        records = [box.record(name[:-len(".json")]) for name in box.records() if name.endswith(".json")]
+        made = [record for record in records
+                if record and record.get("parent") == self.parent["id"] and record.get("offer") == self.offer]
+        if len(made) > 1:
+            problems.append("its offer made %d tasks" % len(made))
+        waiting = [other.get("id") for other in (box.record(self.parent["id"]) or {}).get("offers") or []]
+        if made and self.offer in waiting:
+            problems.append("its task was made, and its offer still waits")
+
+
 ALL = [Merge, MergeSquash, MergeAway, SquashAway, MergeTeardown, MergeSubmodule, MergeAgentWorktree, Retire, RetireMerged,
        RetireDead, RetireSquashedOnGitHub, Update, UpdateConflict, Discard, DiscardDirty, DiscardTeardown, Forget, Rename,
        Stop, Resume, Seen, Turn, Send, Shell, Attach, Inspect, Look, PullRequest, PullRequestPush, Create, CreateFromRemote,
-       Propose, TakeOffer]
+       Propose, TakeOffer, CreateFromOffer]
