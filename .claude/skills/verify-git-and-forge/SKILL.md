@@ -49,7 +49,7 @@ they are given, such as the fields of a record or of a reply.
 python3 test/formal/check.py git_and_forge
 ```
 
-About 35 seconds. Every line must say `ok`. `Landed.cfg`, `LandedTwoPRs.cfg`
+About two minutes. Every line must say `ok`. `Landed.cfg`, `LandedTwoPRs.cfg`
 and `MergedWord.cfg` must pass; each `Name.VARIANT.cfg` must fail as its
 first line says, which proves the rule can still fail. `make formal` runs
 every model.
@@ -84,11 +84,11 @@ ask the forge too (`QP`); a quiet poll that sees the Git stamp move, or
 finds measuring owed, starts a list of that task (`M`), or a full one
 (`F`) when every task is owed; `g` is `F`. Replies come back good, failed,
 or dropped as stale, as `roost--refresh-host`'s success lambda, `lost` and
-`roost--measures-owed` handle them. `Merged` is `roost--merged-p` reduced
+`roost--measures-owed` and `roost--measures-due` handle them. `Merged` is `roost--merged-p` reduced
 to `landed` and `dirty`.
 
 Bounds: `Landed.cfg` three commits and one pull request, `LandedTwoPRs.cfg`
-two and two, `MergedWord.cfg` two commits, two merges and one reply lost.
+two and two, `MergedWord.cfg` two commits, two merges and two replies lost.
 
 Left out: a second poll at once (another Emacs), the fields
 `unfetched` (every poll may try a head again, any fetch may fail, which
@@ -107,9 +107,11 @@ weaken a rule or a bound until it passes, and do not fix product code
 unless asked. If a step can't happen in the code, the model is wrong: fix
 the action and point its comment at the code that rules the step out.
 
-`MergedWord.TwoLost.cfg` is such a finding, kept failing on purpose. A
-change that makes it pass fixes the finding: then make it `MergedWord.cfg`'s
-bound, and drop the file.
+`MergedWord.TwoLost.cfg` was such a finding: two measurements of a change
+lost in a row, and Emacs stopped asking. It is fixed: what is owed stays
+owed, taken up later (`roost--measures-due`, the model's `later` and `Due`),
+`MergedWord.cfg` has its bound of two replies lost, and
+`MergedWord.GivesUp.cfg` undoes the fix.
 
 ## When the code changes on purpose
 
@@ -122,4 +124,5 @@ would, a `Name.VARIANT.cfg` with `\* expect: Rule`, and keep it.
 Once the models describe the code at a new commit and every line is `ok`,
 move `SYNC` in `covered.py` to that commit. Only then.
 
-Last confirmed at `a627a3a`.
+Last confirmed at `e910487`, with the change to `roost--refresh-host` and
+`roost--measures-due` that came with this line.

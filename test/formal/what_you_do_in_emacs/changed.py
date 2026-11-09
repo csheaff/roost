@@ -12,7 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-SYNC = "d31ec86"
+SYNC = "e910487"
 ROOT = Path(__file__).resolve().parents[3]
 COVERED = {
     "roost.el": [

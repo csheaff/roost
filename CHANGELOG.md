@@ -4,6 +4,26 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A Claude task whose turn ends on an API error, or with work left in the
+  background, says so even when its status reports lag behind its hooks. With
+  `roost-program-status` on, a report that the agent was working, still
+  waiting to be recorded as the turn ended, made the task read `ready`: the
+  error was dropped, and an agent with background work notified you as if it
+  were done. Nothing to do when upgrading.
+- A task that reads "merged" no longer keeps saying so over commits the
+  merge lacks. When measuring its new commits failed twice in a row, as with
+  a list slower than Emacs waits, Roost stopped asking until something else
+  changed or you pressed `g`. Now it asks again now and then, from every two
+  minutes to every sixteen, until a measurement comes back, and polls go on
+  between. Nothing to do when upgrading.
+- One C-c C-c in a new task draft makes one task. With a question left open
+  in the minibuffer, a poll that found a task from an earlier request could
+  land after the C-c C-c that quit it, and the draft then forgot its own
+  request was out: it said C-c C-c makes another task, and that made a
+  second. And a draft changed back to what it first said, after a request
+  with the same ID asked for something else, no longer closes for the task
+  made from that something else; it stays, saying what was made. Its note
+  now says "from what you sent before". Nothing to do when upgrading.
 - Retiring or discarding a task no longer deletes what was done in its agent's
   own worktree after its agent stopped. A commit or a file made there by the
   teardown command, another session or a process the agent left running was
