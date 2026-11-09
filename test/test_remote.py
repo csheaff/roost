@@ -4286,6 +4286,61 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(reply["ok"], reply)
         self.assertTrue(own.exists())
 
+    def test_a_change_only_to_what_is_staged_in_the_agents_worktree_stays_on_discard(self):
+        # A file staged and changed again, so its status stays as it was
+        # when the teardown command stages something else in its place.
+        task = self.create()
+        own = self.agent_worktree(task)
+        name = self.git("ls-files", cwd=own).split("\n")[0]
+        (own / name).write_text("staged\n")
+        self.git("add", name, cwd=own)
+        (own / name).write_text("staged, then changed\n")
+        again = self.root / "again"
+        again.write_text("staged again\n")
+        blob = self.git("hash-object", "-w", str(again), cwd=own)
+        told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+        stage = "git -C %s update-index --cacheinfo 100644,%s,%s" % (
+            shlex.quote(str(own)), blob, shlex.quote(name))
+        reply = self.request("discard", id=task["id"], expect=told["commit"], told=told, teardown=stage)
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(self.git("show", ":" + name, cwd=own), "staged again")
+
+    def test_a_file_whose_name_cant_be_read_in_the_agents_worktree_stays(self):
+        # As a name not in UTF-8 comes back from Git changed: nothing then
+        # tells whether it was written again.
+        task = self.create()
+        own = self.agent_worktree(task)
+        try:
+            with open(os.path.join(os.fsencode(own), b"caf\xe9"), "w") as file:
+                file.write("work\n")
+        except OSError:
+            self.skipTest("This file system takes only names in UTF-8")
+        self.assertIsNone(roost.agent_worktree_seen(task, str(own)))
+        reply = self.request("retire", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertTrue(own.exists())
+
+    def test_a_file_that_cant_be_looked_at_in_the_agents_worktree_stays(self):
+        # A file Git lists that isn't there to look at, nor gone as Git has it.
+        task = self.create()
+        own = self.agent_worktree(task)
+        (own / "scratch").write_text("work\n")
+        lstat = os.lstat
+
+        def unreadable(path, *args, **kwargs):
+            if os.path.basename(path) == "scratch":
+                raise PermissionError(errno.EACCES, "Permission denied", path)
+            return lstat(path, *args, **kwargs)
+
+        with patch.object(roost.os, "lstat", unreadable):
+            self.assertIsNone(roost.agent_worktree_seen(task, str(own)))
+        # One Git has as gone is still seen.
+        (own / "scratch").unlink()
+        (own / "gone").write_text("work\n")
+        self.git("add", "gone", cwd=own)
+        os.remove(own / "gone")
+        self.assertIsNotNone(roost.agent_worktree_seen(task, str(own)))
+
     def test_a_worktree_made_where_the_agents_was_moved_from_stays(self):
         # As Roost reads it to remove it: its own, moved, keeps its Git
         # directory and stamp, and the one there now is another's.

@@ -5852,11 +5852,15 @@ def agent_worktree_seen(task, path):
     would lose, to tell whether anyone has worked there since: its commits
     not on the task's branch, or its HEAD with no task branch to compare;
     every file Git doesn't have, with when each last changed and its size,
-    as one may be written again; and what its submodules hold. None when
-    Git can't say, as with a damaged index: then nothing tells."""
+    as one may be written again; what is staged, as that may change with
+    no change to the status; and what its submodules hold. None when Git
+    can't say, as with a damaged index, or a file it lists can't be looked
+    at, as with a name not in UTF-8: then nothing tells."""
     ahead = read_git(path, "rev-list", "refs/heads/" + task["branch"] + "..HEAD", "--")
     status = read_git(path, "status", "--porcelain", "-z", "--untracked-files=all", "--ignore-submodules=dirty")
-    if status.returncode:
+    staged = read_git(path, "diff", "--cached", "--raw", "-z", "--no-abbrev", "--no-renames",
+                      "--ignore-submodules=dirty")
+    if status.returncode or staged.returncode:
         return None
     files, entries = [], iter(status.stdout.split("\0"))
     for entry in entries:
@@ -5867,10 +5871,12 @@ def agent_worktree_seen(task, path):
                 info = os.lstat(os.path.join(path, entry[3:]))
                 files.append((entry[3:], info.st_mtime_ns, info.st_size))
             except OSError:
+                if "D" not in entry[:2]:
+                    return None
                 files.append((entry[3:], None, None))
     return [ahead.stdout if ahead.returncode == 0
             else "HEAD " + read_git(path, "rev-parse", "-q", "--verify", "HEAD").stdout,
-            status.stdout, files, submodule_work(path)]
+            status.stdout, files, submodule_work(path), staged.stdout]
 
 
 def agent_left(task):
