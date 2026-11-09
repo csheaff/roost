@@ -14,6 +14,14 @@ What each release changes, and what to do when upgrading. Newest first.
   helper's. It is off by default, and an experiment: it may change or go.
   To try it, set `roost-agent-offers` to t; tasks you start from then on
   can offer.
+- A narrow sidebar keeps each task's name and still says its status. Where
+  the status word would leave the name under a dozen columns, a mark in
+  the word's colour stands for it at the row's end: `?` asks you, `!` went
+  wrong, `●` is your turn, `◌` is working. Before, a word that needed you
+  cut the name down to a few letters, and `running`, `starting` and
+  `stopped` went unsaid. A row's help, under the mouse, now says its status
+  in full. At the default width nothing changes. Nothing to do when
+  upgrading.
 - In the task panel, a pull request's URL is drawn as a link and opens it,
   as its number already did. Nothing to do when upgrading.
 - A Claude task whose turn ends on an API error, or with work left in the

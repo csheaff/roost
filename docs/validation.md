@@ -35,6 +35,36 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## UX review — 2026-11-09
+
+- **Scope.** How a task's status reads in the sidebar as it narrows, from
+  40 columns to 16, and whether the status glyph column proposed in #256
+  is the fix. For Clay, and for someone with many agents in a narrow frame.
+- **Evidence.** The sidebar drawn for every state of the sweep's gallery at
+  16, 20, 24, 30 and 40 columns, and mock sidebars in a separate Emacs with
+  Clay's fonts, in ef-dream and ef-reverie: today's, a glyph column with
+  and without the word, a mark at the row's end, and two rows for each
+  task, each also with the child tasks and offers of #257.
+- **Found, most important first.** (1) The name loses to the word: at 18
+  columns rows read `sideb… permission`, and two tasks both `pull …`.
+  (2) `running`, `starting` and `stopped` went unsaid beside a long name,
+  so a working task looked like one that waits for nothing; a status that
+  needs you was never hidden. (3) At the default 30 columns nothing is
+  hidden, and a glyph column there says each status twice and takes two
+  columns from every name. (4) A glyph alone folds eleven words into three
+  colours, and nobody will remember which is which. (5) A merged task's
+  glyph would be the brightest in the column. (6) A row's help didn't say
+  its status. (7) `◌` comes from Arial in Clay's fonts, fainter than `●`.
+  (8) The echo area needs point on the row, and Clay clicks. (9) "N files
+  changed" shows only beside a short name.
+- **Chosen.** A mark at the row's end, only where the word doesn't fit, in
+  the word's colour, with a shape that says the kind: `?`, `!`, `●`, `◌`.
+  The word stays wherever it fits, so it teaches the marks, and the row's
+  help says it. Two rows for each task read best alone, but under #257 an
+  indented line would mean a status, an offer or a child, and the list
+  doubles in height. For #257: an offer's row could drop its word `offer`
+  in a narrow sidebar. 9 went to the roadmap.
+
 ## State machine audit — 2026-11-06
 
 - **Why.** Every state machine written down in
