@@ -82,6 +82,8 @@ KIND is `committed', `uncommitted', `untracked' or `binary'."
      (error . "Its turn ended on an error (APIError): invalid x-api-key"))
     ("running" (status . "running") (live . t) (task . ,roost-sweep--long-prompt)
      (diff . "") (ahead . 0))
+    ("in the background, under a name longer than a narrow sidebar" (status . "background") (live . t)
+     (diff . "") (ahead . 0))
     ("permission" (status . "permission") (live . t) (request . "Asks to run python3 -m unittest")
      (task . ,roost-sweep--long-prompt) (lastMessage . ,roost-sweep--long-reply)
      (diff . "2 files +16 −4 · uncommitted") (dirty . t) (ahead . 0)
@@ -1019,6 +1021,26 @@ Return them as (PROBLEM . PLACES), PLACES naming the view, state and width."
 (ert-deftest roost-sweep-named-keys-can-be-clicked ()
   (roost-test--isolated
    (roost-sweep--report (roost-sweep--run #'roost-sweep--check-key-clicks '(panel)))))
+
+(ert-deftest roost-sweep-a-narrow-sidebar-hides-no-status ()
+  "At any width, each task's row fits, and ends in its status or its mark."
+  (roost-test--isolated
+   (roost-sweep--populate)
+   (let ((roost--name-counts (roost--count-names)))
+     (dolist (width '(12 16 20 24 30 44))
+       (dolist (state (mapcar #'car roost-sweep--gallery))
+         (let* ((task (gethash (roost-sweep--key state) roost--tasks))
+                (attention (roost--attention-status task))
+                (mark (roost--status-mark attention (roost--waiting-p task)))
+                (row (substring-no-properties (roost--sidebar-row task width))))
+           (ert-info ((format "%s at %d: %S" state width row))
+             (should (<= (string-width row) width))
+             (if mark
+                 (should (or (string-suffix-p (concat " " (roost--display-status task)) row)
+                             (string-suffix-p (concat " " mark) row)))
+               ;; Only what neither needs you nor works goes without.
+               (should (member attention '("idle" "stopped" "merged" "offline" "exited")))
+               (should-not (roost--waiting-p task))))))))))
 
 (ert-deftest roost-sweep-the-sidebar-needs-no-font-lock ()
   (roost-test--isolated

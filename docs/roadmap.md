@@ -86,6 +86,11 @@ account, with no badge or verdict.
   menu in a task's terminal, where most time goes; and a line in the
   manual that answering an agent's question takes a real key (Enter takes
   its default), which Roost doesn't press for you.
+- **What changed since you looked, beside a long name.** From the UX
+  review of 2026-11-09 ([validation](validation.md)): the sidebar says
+  "3 files changed" only beside a task's whole name, so at 30 columns a
+  name over 13 characters says nothing. A dim mark at the row's end, as a
+  status has in a narrow sidebar, would say there is something.
 - **A quiet word for a stalled task.** The task panel and dashboard say how
   long since an agent's last event ("for 14m"); the sidebar doesn't. A dim
   `quiet` there, for a working task far past its own usual gap between
