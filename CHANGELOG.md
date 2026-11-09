@@ -4,6 +4,14 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- One C-c C-c in a new task draft makes one task. With a question left open
+  in the minibuffer, a poll that found a task from an earlier request could
+  land after the C-c C-c that quit it, and the draft then forgot its own
+  request was out: it said C-c C-c makes another task, and that made a
+  second. And a draft changed back to what it first said, after a request
+  with the same ID asked for something else, no longer closes for the task
+  made from that something else; it stays, saying what was made. Its note
+  now says "from what you sent before". Nothing to do when upgrading.
 - A merge, update or discard that outlasts Emacs's wait on this machine goes on
   to its end, as it does over SSH. Emacs killed it, with Git and its hooks: with
   a `pre-commit` hook over a minute, a squash merge left the task's work staged

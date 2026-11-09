@@ -2105,8 +2105,9 @@ Invariants:
 - I2. A draft is kept if creation fails. (Docstring of `roost-compose-submit`.)
 - I3. A draft closes only for what it says now: what the request that made the task
   said, as `roost--compose-what` has it. That is this request, or, when its host says
-  an earlier one made it (`alreadyMade`) or a poll finds it, what it first asked with
-  that ID. Anything else is yours. A draft that was refused, changed, then lost a
+  an earlier one made it (`alreadyMade`) or a poll finds it, what it asked with that
+  ID, if it asked for the same each time; asked for different things, which made the
+  task isn't known, and the draft stays. Anything else is yours. A draft that was refused, changed, then lost a
   reply, can stay though it says what was made: it says so, and costs a `C-c C-k`.
 - I4. The prompt is what you wrote: Roost's redraws of the fields leave it alone, and
   undo goes on working, as they shift each position it holds by what they moved
@@ -2134,6 +2135,7 @@ Invariants:
 | Creating | `C-c C-c` | | Creating | user-error "Already creating" | `roost-compose-submit` |
 | Creating | good reply | no minibuffer, says what the task does | Absent | Org link, close, redraw, open if you stayed | `roost--task-made`, `roost--compose-made` |
 | Creating | good reply | no minibuffer, says otherwise now | Editing | Org link, note says what was made; ID forgotten, nothing opens | `roost--compose-made` |
+| Creating | a poll's news of an earlier ID, held for a question you quit with `C-c C-c` | says otherwise now | Creating | Org link; flag, ID and note kept for the request out | `roost--compose-made` |
 | Creating | good reply | minibuffer open | Closing | task cached | `roost--when-out-of-minibuffer` |
 | Closing | minibuffer ends | | Absent or Editing | as above | `roost--task-made` |
 | Creating, Closing | Org link signals | | as if it hadn't | says so | `roost--compose-made` |
@@ -2142,7 +2144,7 @@ Invariants:
 | Creating | draft killed | | Absent | request goes on; task made, not opened | `roost--task-made` |
 | Refused, NoReply | `C-c C-c` | same project | Creating | same ID | `roost-compose-submit` |
 | Refused, NoReply | `C-c C-c` | project changed | Creating | new ID | `roost-compose-submit` |
-| Refused, NoReply | poll lists the ID | says what it first asked | Absent | closes; opens if you are in it | `roost--compose-listed` |
+| Refused, NoReply | poll lists the ID | says what it asked each time with that ID | Absent | closes; opens if you are in it | `roost--compose-listed` |
 | Refused, NoReply | poll lists the ID | says otherwise now, its project too | Editing | note says what was made; ID forgotten | `roost--compose-listed`, `roost--compose-made` |
 | any | `C-c C-k` | prompt empty or yes | Absent | `quit-window t` | `roost-compose-cancel` |
 
@@ -2172,15 +2174,19 @@ Invariants:
 - I2. A second request waits for the first. (`asking_for`.)
 - I3. A failed creation can be asked for again. (`abandon` pops `createId`.)
 - I4. The ID is kept while the project is the same, so the task it finds may have been
-  made from what the draft said first. Its host says so (`alreadyMade`, of one reply),
-  the draft compares that with what it says now, and an ID that found something else
-  is forgotten: asked again, it is another task.
+  made from what the draft said at any ask. Its host says so (`alreadyMade`, of one
+  reply), the draft compares what it asked with that ID, if that was the same each
+  time, with what it says now, and an ID that found something else is forgotten:
+  asked again, it is another task. Not while a request of the draft's own is out,
+  which says in its own time.
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
 | None | submit | | Asked | new ID | `roost-compose-submit` |
 | Asked | submit | project same | Asked | same ID, whatever else changed; the draft then compares what comes | `roost-compose-submit` |
 | Asked | task comes, draft says otherwise | | None | | `roost--compose-made` |
+| Asked | a poll's task comes, draft says otherwise | a request of its own out | Asked | | `roost--compose-made` |
+| Asked | submit | project same, draft says otherwise than at the ID's last ask | Asked | same ID; what it asked for unknown from then on | `roost-compose-submit` |
 | Asked | submit | project differs | Asked | new ID; a task from the old one stays | `roost-compose-submit` |
 | Asked | host: not seen | | Being made | `make_task` | `create` in the helper |
 | Asked | host: seen | | Made | answers with the old task, ignoring the request | `made_for` |

@@ -1882,7 +1882,7 @@ A name of its own keeps the fields as long as they are."
         (should (buffer-live-p draft))
         (with-current-buffer draft
           (should (equal (roost--compose-prompt) "Something else altogether."))
-          (should (string-search "Made made from what you sent first" roost--draft-note))
+          (should (string-search "Made made from what you sent before" roost--draft-note))
           (should-not roost--compose-submitting)
           ;; You stay where you were writing.
           (should (eq (window-buffer (selected-window)) draft))

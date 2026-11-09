@@ -7995,6 +7995,86 @@ the host records, and the host what each sends."
                (should-not (equal (alist-get 'createId (nth 2 (car asked))) id))))
          (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
 
+(defmacro roost-test--draft-world (&rest body)
+  "Run BODY with a new task draft in /ssh:dev:/repo/, its requests stubbed.
+In BODY, `asked' lists the create requests, newest first, each
+\(PARAMS SUCCESS FAILURE); `listed' is what a list request answers;
+`held' the closures a minibuffer holds back while `minibuffer' is set."
+  (declare (indent 0) (debug t))
+  `(roost-test--isolated
+    (let ((default-directory "/tmp/") (roost-hosts '("dev")) asked listed held minibuffer)
+      (ignore asked listed held minibuffer)
+      (save-window-excursion
+        (unwind-protect
+            (cl-letf (((symbol-function 'roost--request)
+                       (lambda (_host action params success failure &optional _timeout)
+                         (if (equal action "list")
+                             (funcall success listed)
+                           (push (list params success failure) asked))))
+                      ((symbol-function 'roost--when-out-of-minibuffer)
+                       (lambda (function) (if minibuffer (push function held) (funcall function))))
+                      ((symbol-function 'roost-open-task) #'ignore)
+                      ((symbol-function 'roost-watch-mode) #'ignore)
+                      ((symbol-function 'roost--redraw) #'ignore)
+                      ((symbol-function 'roost--terminal-size) #'ignore)
+                      ((symbol-function 'roost--remember-host) #'ignore)
+                      ((symbol-function 'roost--remember-project) #'ignore))
+              (roost--compose)
+              (with-current-buffer roost--compose-buffer
+                (setq roost--compose-fields (plist-put roost--compose-fields :directory "/ssh:dev:/repo/"))
+                (goto-char (point-max))
+                (insert "Fix the parser"))
+              ,@body)
+          (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-a-poll-of-an-earlier-task-leaves-the-drafts-request-going ()
+  "With a question left open, a poll finds what an earlier request made,
+and its news waits; meanwhile you ask from another project.  That news
+leaves the new request as it is, and C-c C-c still says it is creating.
+The model found it: NewTaskDraft.news-frees-draft.cfg."
+  (roost-test--draft-world
+    (with-current-buffer roost--compose-buffer
+      (roost-compose-submit)
+      (funcall (nth 2 (car asked)) (propertize "No reply after 660s" 'roost-no-reply t))
+      (setq roost--compose-fields (plist-put roost--compose-fields :directory "/ssh:dev:/other/")))
+    (let ((first (alist-get 'createId (car (car asked)))))
+      (setq listed (list (append `((createId . ,first) (repo . "/repo")) (roost-test--task "2222222222222222")))
+            minibuffer t)
+      (roost--refresh-host "dev" t)
+      (should held)
+      ;; C-c C-c quits the question, then asks from the other project.
+      (setq minibuffer nil)
+      (with-current-buffer roost--compose-buffer
+        (roost-compose-submit)
+        (should-not (equal (alist-get 'createId (car (car asked))) first)))
+      (mapc #'funcall (reverse held))
+      (with-current-buffer roost--compose-buffer
+        (should roost--compose-submitting)
+        (should-error (roost-compose-submit) :type 'user-error)
+        (should (= (length asked) 2))))))
+
+(ert-deftest roost-a-draft-changed-back-stays-for-a-task-made-from-another-ask ()
+  "Refused, changed, asked again with the same ID, then changed back to
+what it first said: the task its host made is from the second ask, so
+the draft stays.  The model found it: NewTaskDraft.first-kept-when-mixed.cfg."
+  (roost-test--draft-world
+    (with-current-buffer roost--compose-buffer
+      (roost-compose-submit)
+      (funcall (nth 2 (car asked)) "No branch named x")
+      (goto-char (point-max))
+      (insert " and the lexer")
+      (roost-compose-submit)
+      (funcall (nth 2 (car asked)) (propertize "No reply after 660s" 'roost-no-reply t))
+      (should (equal (alist-get 'createId (car (car asked))) (alist-get 'createId (car (cadr asked)))))
+      (delete-region (- (point-max) (length " and the lexer")) (point-max)))
+    (setq listed (list (append `((createId . ,(alist-get 'createId (car (car asked)))) (repo . "/repo"))
+                               (roost-test--task "2222222222222222"))))
+    (roost--refresh-host "dev" t)
+    (should (get-buffer roost--compose-buffer))
+    (with-current-buffer roost--compose-buffer
+      (should (equal (roost--compose-prompt) "Fix the parser"))
+      (should (string-search "Made" roost--draft-note)))))
+
 (ert-deftest roost-unreachable-hosts-are-named-rather-than-taken-as-empty ()
   (roost-test--isolated
    (let ((roost-hosts '(nil "dev" "lab")))
