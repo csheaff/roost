@@ -1354,7 +1354,7 @@ after a week. Sound.
 ### Host refresh
 
 Kind: implicit. Lives in: `roost--refreshing`, `roost--full-refresh-pending`,
-`roost--measures-owed`, `roost--failures`, `roost--errors`, `roost--revisions`,
+`roost--measures-owed`, `roost--measures-due`, `roost--failures`, `roost--errors`, `roost--revisions`,
 `roost--list-requests`, `roost--snapshots`, `roost--pull-requests-asked`, per host.
 At most one list in flight per host; its reply replaces what Roost holds of the
 host unless something newer happened.
@@ -1375,7 +1375,7 @@ Invariants:
 - I3. A list asked before a mutation's reply never overwrites it: `revision` is read as the list starts and bumped as the reply arrives (`roost--act`, `roost--create-task`). Checked: bumping at the reply is right; at the request would let a list read before the mutation through.
 - I4. A list arriving after its host was forgotten changes nothing (`member host (roost--hosts)`).
 - I5. Any reply clears Offline and Backing off; a stale one too, as the host answered.
-- I6. A refresh asked for while one is in flight happens after it. One that failed, was dropped or couldn't start is owed to the next good poll, not to `finish`, so a host that always fails is asked at the pace of polls (`roost--measures-owed`). Polls stay quiet, and what is owed goes once more, so a list too slow ever to answer holds up no polls.
+- I6. A refresh asked for while one is in flight happens after it. One that failed, was dropped or couldn't start is owed to the next good poll, not to `finish`, so a host that always fails is asked at the pace of polls (`roost--measures-owed`). Polls stay quiet, and what is owed goes once more at once, then, lost again, only now and then (`roost--measures-due`: after two minutes, doubling to sixteen), so a list too slow ever to answer holds up few polls, and nothing owed is dropped.
 - I7. One message per outage (`roost--errors` tested before it's set).
 
 | From | Event | Guard | To | Effect | Code |
@@ -1844,7 +1844,7 @@ say what is no longer so.
 | Owed | Changed since, measurement asked | Its ID is in pending, in a list in flight, or in `roost--measures-owed` |
 
 Invariants:
-- I1. A change any reply brings gets a measurement, unless that reply measured it. A list dropped, failed or never started owes it to the next good poll, and one that fails then is given up: the next change, or `g`, asks again.
+- I1. A change any reply brings gets a measurement, unless that reply measured it. A list dropped, failed or never started owes it to the next good poll, and one that fails then owes it again, to a poll after a back-off (`roost--measures-due`), until a measurement comes back.
 - I6. Measuring goes at the pace of polls: a quiet poll's changes go right after it, and what a list of some tasks brings of others goes after the next poll, or two busy agents would be measured back to back.
 - I2. What waits on you isn't told, or reported, until the task is measured (`roost--judged-p`).
 - I3. A stale list reply never overwrites a newer action: `roost--revisions`.
@@ -1859,9 +1859,11 @@ Invariants:
 | Owed | List with its ID replies | revision same | Measured | | `roost--apply-snapshot` |
 | Owed | That list dropped as stale | | Owed | Into `roost--measures-owed`, for the next poll | success lambda |
 | Owed | That list fails, or can't start | not owed before | Owed | Same | `failed`, `roost--refresh-host` |
-| Owed | That list fails | owed before | Measured, in name | Given up, so a list too slow ever to answer holds up no polls | `failed` |
+| Owed | That list fails | owed before | Owed | Owed again; quiet polls take it up only once `roost--measures-due` says, from two minutes to sixteen, so a list too slow ever to answer holds up few polls | `failed` |
 | Measured | IDs list for another task brings its event | | Owed | Same | success lambda |
-| Owed | A good quiet poll | | Owed | Asks to measure them, right after | success lambda |
+| Owed | A good quiet poll | due, or something changed | Owed | Asks to measure them, right after | success lambda |
+| Owed | A good quiet poll | not due, nothing changed | Owed | Nothing more | success lambda |
+| Owed | A list that took it replies | revision same | Measured | `roost--measures-due` cleared | success lambda |
 | Owed | A full refresh | | Owed | It covers them | `roost--refresh-host` |
 
 Conflicts:
@@ -2110,8 +2112,9 @@ Invariants:
 - I2. A draft is kept if creation fails. (Docstring of `roost-compose-submit`.)
 - I3. A draft closes only for what it says now: what the request that made the task
   said, as `roost--compose-what` has it. That is this request, or, when its host says
-  an earlier one made it (`alreadyMade`) or a poll finds it, what it first asked with
-  that ID. Anything else is yours. A draft that was refused, changed, then lost a
+  an earlier one made it (`alreadyMade`) or a poll finds it, what it asked with that
+  ID, if it asked for the same each time; asked for different things, which made the
+  task isn't known, and the draft stays. Anything else is yours. A draft that was refused, changed, then lost a
   reply, can stay though it says what was made: it says so, and costs a `C-c C-k`.
 - I4. The prompt is what you wrote: Roost's redraws of the fields leave it alone, and
   undo goes on working, as they shift each position it holds by what they moved
@@ -2139,6 +2142,7 @@ Invariants:
 | Creating | `C-c C-c` | | Creating | user-error "Already creating" | `roost-compose-submit` |
 | Creating | good reply | no minibuffer, says what the task does | Absent | Org link, close, redraw, open if you stayed | `roost--task-made`, `roost--compose-made` |
 | Creating | good reply | no minibuffer, says otherwise now | Editing | Org link, note says what was made; ID forgotten, nothing opens | `roost--compose-made` |
+| Creating | a poll's news of an earlier ID, held for a question you quit with `C-c C-c` | says otherwise now | Creating | Org link; flag, ID and note kept for the request out | `roost--compose-made` |
 | Creating | good reply | minibuffer open | Closing | task cached | `roost--when-out-of-minibuffer` |
 | Closing | minibuffer ends | | Absent or Editing | as above | `roost--task-made` |
 | Creating, Closing | Org link signals | | as if it hadn't | says so | `roost--compose-made` |
@@ -2147,7 +2151,7 @@ Invariants:
 | Creating | draft killed | | Absent | request goes on; task made, not opened | `roost--task-made` |
 | Refused, NoReply | `C-c C-c` | same project | Creating | same ID | `roost-compose-submit` |
 | Refused, NoReply | `C-c C-c` | project changed | Creating | new ID | `roost-compose-submit` |
-| Refused, NoReply | poll lists the ID | says what it first asked | Absent | closes; opens if you are in it | `roost--compose-listed` |
+| Refused, NoReply | poll lists the ID | says what it asked each time with that ID | Absent | closes; opens if you are in it | `roost--compose-listed` |
 | Refused, NoReply | poll lists the ID | says otherwise now, its project too | Editing | note says what was made; ID forgotten | `roost--compose-listed`, `roost--compose-made` |
 | any | `C-c C-k` | prompt empty or yes | Absent | `quit-window t` | `roost-compose-cancel` |
 
@@ -2177,15 +2181,19 @@ Invariants:
 - I2. A second request waits for the first. (`asking_for`.)
 - I3. A failed creation can be asked for again. (`abandon` pops `createId`.)
 - I4. The ID is kept while the project is the same, so the task it finds may have been
-  made from what the draft said first. Its host says so (`alreadyMade`, of one reply),
-  the draft compares that with what it says now, and an ID that found something else
-  is forgotten: asked again, it is another task.
+  made from what the draft said at any ask. Its host says so (`alreadyMade`, of one
+  reply), the draft compares what it asked with that ID, if that was the same each
+  time, with what it says now, and an ID that found something else is forgotten:
+  asked again, it is another task. Not while a request of the draft's own is out,
+  which says in its own time.
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
 | None | submit | | Asked | new ID | `roost-compose-submit` |
 | Asked | submit | project same | Asked | same ID, whatever else changed; the draft then compares what comes | `roost-compose-submit` |
 | Asked | task comes, draft says otherwise | | None | | `roost--compose-made` |
+| Asked | a poll's task comes, draft says otherwise | a request of its own out | Asked | | `roost--compose-made` |
+| Asked | submit | project same, draft says otherwise than at the ID's last ask | Asked | same ID; what it asked for unknown from then on | `roost-compose-submit` |
 | Asked | submit | project differs | Asked | new ID; a task from the old one stays | `roost-compose-submit` |
 | Asked | host: not seen | | Being made | `make_task` | `create` in the helper |
 | Asked | host: seen | | Made | answers with the old task, ignoring the request | `made_for` |

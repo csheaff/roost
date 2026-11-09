@@ -29,6 +29,10 @@ CONSTANTS
   CompareBeforeClose, \* `roost--compose-made` closes only if `roost--compose-what` is unchanged
   KeepIdForProject,   \* `roost-compose-submit` keeps the ID while the project is the same
   FailureClearsFlag,  \* the failure callback sets `roost--compose-submitting` nil
+  KeepOwnInFlight,    \* `roost--compose-made` from a poll leaves the flag and the ID while a
+                      \* request of the draft's own is out
+  ForgetMixedFirst,   \* `roost-compose-submit` forgets what the ID first asked once it asks
+                      \* with that ID for something else
   \* Scope: what you may do.  FALSE in NewTaskDraft.cfg; each finding's
   \* config turns one on.
   SubmitQuitsQuestion, \* C-c C-c with a question left open (`roost--quit-questions-here`)
@@ -37,12 +41,15 @@ CONSTANTS
 None == 0
 What == (1..NDirs) \X (1..NTexts)
 NoAsk == [dir |-> 0, id |-> 0, first |-> <<0, 0>>]
+\* What the ID asked for, once it asked for different things: nothing the
+\* draft can say.
+Unknown == <<0, 0>>
 
 VARIABLES
   draft,       \* "open", "closed" (Roost closed it), "cancelled" (C-c C-k)
   dir, text,   \* what the draft says now: `roost--compose-what`
   submitting,  \* `roost--compose-submitting`
-  asked,       \* `roost--compose-asked`: (DIRECTORY ID FIRST-WHAT)
+  asked,       \* `roost--compose-asked`: (DIRECTORY ID WHAT), WHAT Unknown once mixed
   nextId,      \* `roost--random-id`: never repeats
   mini,        \* a question is open in the minibuffer
   held,        \* closures on `minibuffer-exit-hook` (`roost--when-out-of-minibuffer`)
@@ -66,10 +73,13 @@ Reqs == 1..Len(reqs)
 (* Steps the code runs                                                     *)
 
 \* roost-compose-submit, past its checks: keep the ID while the project is
-\* the same, else make one, and ask the host with it.
+\* the same, else make one, and ask the host with it.  Asked with the
+\* same ID for something else, what it asked for is Unknown from then on.
 DoSubmit ==
   LET fresh  == asked.id = None \/ asked.dir # dir \/ ~KeepIdForProject
-      ask    == IF fresh THEN [dir |-> dir, id |-> nextId, first |-> Now] ELSE asked
+      ask    == IF fresh THEN [dir |-> dir, id |-> nextId, first |-> Now]
+                ELSE IF ForgetMixedFirst /\ asked.first # Now THEN [asked EXCEPT !.first = Unknown]
+                ELSE asked
       reason == IF asked.id = None THEN "forgotten"
                 ELSE IF asked.dir # dir THEN "moved"
                 ELSE IF fresh THEN "fresh" ELSE "same"
@@ -83,13 +93,16 @@ DoSubmit ==
      /\ asks' = asks + 1
 
 \* roost--compose-made: close the draft if it says WHAT, else keep it,
-\* saying what was made, and forget the ID.  Called by the closure of
-\* roost--task-made once you are out of the minibuffer.
+\* saying what was made, and forget the ID, unless it is a poll's news
+\* (not OWN) while a request of the draft's own is out.  Called by the
+\* closure of roost--task-made once you are out of the minibuffer.
 ComposeMade(c) ==
   IF draft # "open" THEN UNCHANGED <<draft, submitting, asked, closedWhat>>
   ELSE IF CompareBeforeClose /\ Now # c.what
-  THEN /\ submitting' = FALSE
-       /\ asked' = NoAsk
+  THEN /\ IF KeepOwnInFlight /\ submitting /\ c.src = "poll"
+          THEN UNCHANGED <<submitting, asked>>
+          ELSE /\ submitting' = FALSE
+               /\ asked' = NoAsk
        /\ UNCHANGED <<draft, closedWhat>>
   ELSE /\ draft' = "closed"
        /\ closedWhat' = Now
@@ -322,16 +335,21 @@ OneTaskPerId ==
 DraftNeverLost ==
   draft = "closed" => \E k \in Tasks : tasks[k].what = closedWhat
 
+\* Request B was asked after you moved the draft from where request A
+\* asked to another project and asked there.
+MovedBetween(a, b) == \E i \in Reqs : a < i /\ i <= b /\ reqs[i].what[1] # reqs[a].what[1]
+
 \* A retry after a lost reply makes no second task: a task made from the
 \* same words in the same project as an earlier one was asked for after
 \* Roost said the earlier one was made, or after you moved the draft to
 \* another project and asked there, which the creation ID's table allows
-\* ("new ID; a task from the old one stays").
+\* ("new ID; a task from the old one stays"), back again too.  Earlier
+\* and after are as you asked, whichever request the host took first.
 AtMostOnce ==
   \A j, k \in Tasks :
-    (j < k /\ tasks[j].what = tasks[k].what) =>
+    (tasks[j].req < tasks[k].req /\ tasks[j].what = tasks[k].what) =>
       \/ j \in reqs[tasks[k].req].told
-      \/ reqs[tasks[k].req].reason = "moved"
+      \/ MovedBetween(tasks[j].req, tasks[k].req)
 
 \* The new task draft, I1: the flag says Creating only while a request is
 \* in flight, or its good reply waits for the minibuffer.

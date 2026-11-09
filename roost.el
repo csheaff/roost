@@ -1519,8 +1519,14 @@ what changed since is measured against."
 What a list that failed or was dropped would have measured, and tasks a
 list brought news of without measuring them.  From a poll, rather than
 the end of a list: so a host that always fails isn't asked in a loop,
-two busy agents aren't measured back to back, and a list too slow ever
-to answer holds up no polls.  Taken up once: if that fails too, it goes.")
+and two busy agents aren't measured back to back.  Owed until measured:
+taken up again at once, then, if that fails too, now and then, as
+`roost--measures-due' says, so a list too slow ever to answer holds up
+few polls.")
+(defvar roost--measures-due (make-hash-table :test 'equal)
+  "When each host's quiet polls take up what it owes again, as (COUNT . TIME).
+COUNT is the measurements lost in a row since one was taken up again,
+and TIME the `float-time' from which polls take it up.")
 (defvar roost--failures (make-hash-table :test 'equal)
   "Consecutive refresh failures per host, as (COUNT . RETRY-AFTER).")
 
@@ -1538,7 +1544,6 @@ those tasks, and what is owed, as `roost--measures-owed' has it, goes too."
       (unless quiet (roost--owe-measuring roost--full-refresh-pending host ids))
     (puthash host t roost--refreshing)
     (let* ((owed (unless quiet (gethash host roost--measures-owed)))
-           (new ids)
            (ids (if (and owed ids) (unless (eq owed t) (seq-union ids owed)) ids))
            (request (puthash host (1+ (gethash host roost--list-requests 0)) roost--list-requests))
            (revision (gethash host roost--revisions 0))
@@ -1550,16 +1555,17 @@ those tasks, and what is owed, as `roost--measures-owed' has it, goes too."
            ;; Nothing came of this list, so what it was for is still to do.
            ;; UNTRIED, it was no try: its reply was stale, or it never went.
            (lost (lambda (&optional untried)
-                   ;; What was owed has had its one more try; what this list
-                   ;; added to it hasn't.
-                   (let ((first-try (if (eq owed t) new (seq-difference new owed))))
-                     (cond (quiet)
-                           ((or untried (not owed)) (roost--owe-measuring roost--measures-owed host ids))
-                           (first-try (roost--owe-measuring roost--measures-owed host first-try))
-                           ;; It asked for every task, which what was owed
-                           ;; was only some of.
-                           ((and (null new) (not (eq owed t)))
-                            (roost--owe-measuring roost--measures-owed host nil))))
+                   (unless quiet
+                     (roost--owe-measuring roost--measures-owed host ids)
+                     ;; What was owed had its one more try: polls take it up
+                     ;; again only now and then, first after as long as
+                     ;; they wait to ask the forge, then twice as long each
+                     ;; time, up to eight times.
+                     (when (and owed (not untried))
+                       (let ((count (1+ (or (car (gethash host roost--measures-due)) 0))))
+                         (puthash host (cons count (+ (float-time) (* roost--pull-request-interval
+                                                                      (expt 2 (min 3 (1- count))))))
+                                  roost--measures-due))))
                    (when pull-requests
                      (if last-asked
                          (puthash host last-asked roost--pull-requests-asked)
@@ -1621,6 +1627,8 @@ those tasks, and what is owed, as `roost--measures-owed' has it, goes too."
                           ((/= revision (gethash host roost--revisions 0)) (funcall lost t))
                           (t
                            (let ((before (roost--task-states host)))
+                             ;; What was owed is measured.
+                             (when owed (remhash host roost--measures-due))
                              (roost--apply-snapshot host tasks request)
                              (with-demoted-errors "Roost: %S" (roost--compose-listed host tasks))
                              ;; Quiet polls leave out Git statistics, as does a list of
@@ -1636,7 +1644,8 @@ those tasks, and what is owed, as `roost--measures-owed' has it, goes too."
                                                            (car state)))
                                                        (roost--task-states host))
                                              ids))
-                                   (owed (gethash host roost--measures-owed)))
+                                   (owed (and (< (or (cdr (gethash host roost--measures-due)) 0) (float-time))
+                                              (gethash host roost--measures-owed))))
                                (cond ((and quiet (or changed owed))
                                       (roost--refresh-host host nil (or changed (unless (eq owed t) owed))))
                                      ((and ids changed)
@@ -1698,6 +1707,7 @@ Hosts in `roost-hosts' are watched until you take them out of it."
     (remhash host roost--errors)
     (remhash host roost--failures)
     (remhash host roost--measures-owed)
+    (remhash host roost--measures-due)
     (roost--redraw)))
 
 (defun roost-refresh (&optional quiet)
@@ -3163,10 +3173,11 @@ Nil too on another host, where reading it would hold up the draft."
 
 (defvar-local roost--compose-asked nil
   "The project directory and the ID the draft last asked to create its task with.
-A list, with what it said as it first asked with that ID, from
-`roost--compose-what'.  The ID is the same each time for the same
-project, so its host makes the task once, however often you ask: it
-answers again with the task it made.")
+A list, with what it said each time it asked with that ID, from
+`roost--compose-what', or nil once it asked with that ID for different
+things: which of them made a task isn't known then.  The ID is the same
+each time for the same project, so its host makes the task once, however
+often you ask: it answers again with the task it made.")
 
 (defvar-keymap roost-compose-mode-map
   :doc "Keys for drafting a new Roost task."
@@ -4107,10 +4118,14 @@ EVENT, a click on the draft's Create button, says which draft."
     (let* ((directory (plist-get fields :directory))
            (host (roost--directory-host directory))
            (what (roost--compose-what))
+           (asked (copy-sequence roost--compose-asked))
            ;; Asked again in the same project, as after no reply came, the
-           ;; host answers with the task it made, if it did.
-           (first (progn (unless (equal (car roost--compose-asked) directory)
-                           (setq roost--compose-asked (list directory (roost--random-id) what)))
+           ;; host answers with the task it made, if it did, from what it
+           ;; was asked for first, or since.
+           (first (progn (if (not (equal (car roost--compose-asked) directory))
+                             (setq roost--compose-asked (list directory (roost--random-id) what))
+                           (unless (equal (nth 2 roost--compose-asked) what)
+                             (setcar (nthcdr 2 roost--compose-asked) nil)))
                          (nth 2 roost--compose-asked))))
       (setq roost--compose-submitting t
             roost--draft-note (format " Creating %s…" name))
@@ -4119,7 +4134,7 @@ EVENT, a click on the draft's Create button, says which draft."
            (plist-get fields :directory) name (plist-get fields :base) prompt
            (plist-get fields :agent)
            (lambda (task &optional found)
-             (roost--compose-made buffer fields task (if found first what)))
+             (roost--compose-made buffer fields task (if found first what) t))
            (lambda (err)
              (when (buffer-live-p buffer)
                (with-current-buffer buffer
@@ -4144,7 +4159,9 @@ EVENT, a click on the draft's Create button, says which draft."
         ;; the project's setup command: the draft is ready to create again.
         ((quit error)
          (setq roost--compose-submitting nil
-               roost--draft-note nil)
+               roost--draft-note nil
+               ;; Nor was it asked for what it says now.
+               roost--compose-asked asked)
          (signal (car err) (cdr err)))))))
 
 (defun roost--compose-what ()
@@ -4156,12 +4173,14 @@ All of it, though you have narrowed it to some."
           (mapcar (lambda (field) (plist-get roost--compose-fields field))
                   '(:directory :agent :base :name :issue)))))
 
-(defun roost--compose-made (buffer fields task what)
+(defun roost--compose-made (buffer fields task what &optional own)
   "Close BUFFER, the draft with FIELDS, as its host made TASK from WHAT.
-WHAT is as `roost--compose-what' gives it.  An Org entry it was drafted
-from links to TASK, if it can.  A draft that says something else now is
-yours, as when you wrote on after asking, or changed it after no reply:
-it stays, saying what was made, and this returns non-nil."
+WHAT is as `roost--compose-what' gives it, or nil if not known.  OWN
+says this is the reply to the draft's request, not a poll's news of an
+earlier one.  An Org entry it was drafted from links to TASK, if it can.
+A draft that says something else now is yours, as when you wrote on
+after asking, or changed it after no reply: it stays, saying what was
+made, and this returns non-nil."
   (when-let* ((marker (plist-get fields :org)))
     (condition-case err
         (roost--org-link marker task)
@@ -4171,14 +4190,17 @@ it stays, saying what was made, and this returns non-nil."
                 (with-current-buffer buffer (not (equal (roost--compose-what) what)))))
       (progn (roost--close-buffer buffer) nil)
     (with-current-buffer buffer
-      ;; Whatever you ask for from here on is another task.
-      (setq roost--compose-submitting nil
-            roost--compose-asked nil
-            roost--compose-fields (plist-put roost--compose-fields :org nil)
-            roost--draft-note
-            (format " Made %s from what you sent first; this draft is as you left it · %s makes another task"
-                    (roost--field task 'name)
-                    (substitute-command-keys "\\[roost-compose-submit]")))
+      (setq roost--compose-fields (plist-put roost--compose-fields :org nil))
+      ;; Unless a request of its own is out, as you asked again since the
+      ;; poll that found this: it says what it made in its own time.
+      (unless (and roost--compose-submitting (not own))
+        ;; Whatever you ask for from here on is another task.
+        (setq roost--compose-submitting nil
+              roost--compose-asked nil
+              roost--draft-note
+              (format " Made %s from what you sent before; this draft is as you left it · %s makes another task"
+                      (roost--field task 'name)
+                      (substitute-command-keys "\\[roost-compose-submit]"))))
       (force-mode-line-update))
     t))
 

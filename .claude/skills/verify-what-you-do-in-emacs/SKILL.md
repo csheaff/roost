@@ -48,8 +48,9 @@ Each variant config's first lines say what it breaks.
 
 ## 1. Does your change touch this?
 
-The models were last checked against the code at the sync commit, `d31ec86`
-(roost.el and the helper as at `a627a3a`). This lists each covered
+The models were last checked against the code at the sync commit, `e910487`,
+with the change to `roost-compose-submit` and `roost--compose-made` that came
+with this line. This lists each covered
 definition that differs from it in your working tree:
 
     python3 test/formal/what_you_do_in_emacs/changed.py
@@ -61,9 +62,9 @@ its `SYNC`; keep both in step with this table.
 
 | Code | Model step | What the step assumes |
 | --- | --- | --- |
-| `roost-compose-submit` | NewTaskDraft `DoSubmit`, `Submit` | ID kept while the project is the same (`KeepIdForProject`); `first` kept from the ID's first ask; refuses while submitting; quits a question left open, then submits from a timer queued before the question's held closures |
+| `roost-compose-submit` | NewTaskDraft `DoSubmit`, `Submit` | ID kept while the project is the same (`KeepIdForProject`); `first` kept from the ID's first ask, and Unknown once the ID asks for something else (`ForgetMixedFirst`); refuses while submitting; quits a question left open, then submits from a timer queued before the question's held closures |
 | `roost--compose-what` | `Now` | what the draft says: prompt and fields |
-| `roost--compose-made` | `ComposeMade` | closes only if the draft still says WHAT (`CompareBeforeClose`); else clears the flag and the ID |
+| `roost--compose-made` | `ComposeMade` | closes only if the draft still says WHAT (`CompareBeforeClose`); else clears the flag and the ID, but for a poll's news while a request of its own is out (`KeepOwnInFlight`) |
 | `roost--compose-listed` | `Poll` | only when not submitting and the ID is listed; compares with what the ID first asked |
 | `roost--task-made`, `roost--create-task` | `TaskMade`, `Reply` | says "Roost created" at once; the rest waits for the minibuffer; `alreadyMade` compares with `first` |
 | failure lambda in `roost-compose-submit` | `Reply` (refused), `NoReply` | clears the flag (`FailureClearsFlag`) |
@@ -80,7 +81,7 @@ its `SYNC`; keep both in step with this table.
 
     python3 test/formal/check.py what_you_do_in_emacs
 
-About 15 seconds. `make formal` runs every model. Java and TLC 1.7.4 come
+About 30 seconds. `make formal` runs every model. Java and TLC 1.7.4 come
 from mise. Each `Name.cfg` must pass; each `Name.VARIANT.cfg` must fail on the
 rule its first line names. All `ok` is the result to keep.
 
@@ -91,7 +92,7 @@ shortest path (the jar's mise name is `TLC_TOOL` in `test/formal/check.py`):
     cd test/formal/what_you_do_in_emacs
     jar="$(MISE_CEILING_PATHS=.. mise where 'http:tla2tools[url=https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar,checksum=sha256:936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88]@1.7.4')/tla2tools.jar"
     MISE_CEILING_PATHS=.. mise exec java@temurin-25 -- java -cp "$jar" tlc2.TLC \
-      -workers 1 -metadir "$(mktemp -d)" -config NewTaskDraft.finding-edit-back.cfg NewTaskDraft.tla
+      -workers 1 -metadir "$(mktemp -d)" -config PromptDraft.finding-dropped-connection.cfg PromptDraft.tla
 
 Read every
 result with the pstack `/statechart` skill (`/pstack:statechart` in Claude
@@ -139,11 +140,12 @@ window never fills within the bound. Both passed at larger bounds too
 2.4 minutes; PromptDraft 4 pieces, 4 asks, 2 others, 8 kept: 31.8 million
 states, 13 minutes), each on one worker.
 
-Scope switches, FALSE in each `Name.cfg`, each turned on by one finding or
-known config: `SubmitQuitsQuestion` (C-c C-c with a question left open),
-`EditBack` (the draft says again what it said before), `Drops` (a dropped
-connection, after which the helper goes on), `KillAfterPaste` (a helper
-killed between paste and record).
+Scope switches, each turned on by one finding or known config:
+`SubmitQuitsQuestion` (C-c C-c with a question left open) and `EditBack` (the
+draft says again what it said before), both on in `NewTaskDraft.cfg` since
+their findings were fixed; `Drops` (a dropped connection, after which the
+helper goes on) and `KillAfterPaste` (a helper killed between paste and
+record), off in `PromptDraft.cfg`.
 
 Left out: the setup command's question, the Org link, which task opens after
 (`roost--you-stay`), `roost--compose-tied`, notes and attachments in a prompt
@@ -152,42 +154,21 @@ closed, a refusal after the paste (`send-keys` failing), crash recovery of a
 creation (`settle_creation`, which `make crash` covers), and opening a task
 and the open generation.
 
-## Findings at d31ec86
+## Findings at e910487
 
-Each is a config here that fails as named. None is fixed.
+Each is a config here that fails as named.
 
-1. **A second task from one C-c C-c with a question left open**
-   (`NewTaskDraft.finding-question-left-open.cfg`, `AtMostOnce`).
-   1. In project A, C-c C-c: `roost-compose-submit` asks with ID1. No reply
-      comes, though the helper makes T1.
-   2. You move the draft to project B, and leave a question open in the
-      minibuffer.
-   3. A poll lists ID1: `roost--compose-listed` calls `roost--task-made`,
-      which says "Roost created T1" and holds its closure.
-   4. C-c C-c in the draft: `roost--quit-questions-here` queues the submit,
-      then quits the question, whose closure's timer comes after.
-   5. The submit runs: another project, so ID2; "Creating…".
-   6. The closure runs `roost--compose-made` with what ID1 asked: the draft
-      says B, so it stays, sets `roost--compose-submitting` and
-      `roost--compose-asked` to nil, and says "Made T1 from what you sent
-      first · C-c C-c makes another task", while ID2's request is in flight.
-   7. C-c C-c, as it says: no "Already creating"; ID3.
-   8. The helper makes a task for ID2 and one for ID3: two from one prompt
-      in project B.
-2. **A draft changed back closes for words it never sent**
-   (`NewTaskDraft.finding-edit-back.cfg`, `DraftNeverLost`).
-   1. You write P1, C-c C-c: ID1, and `roost--compose-asked` keeps P1 as
-      what ID1 first asked.
-   2. While it creates you change it to P2; nothing is made (refused, or
-      the helper killed with Emacs's wait).
-   3. C-c C-c: the same project, so ID1 again, with P2.
-   4. While it creates you change it back to P1, by undo; no reply comes,
-      and the helper makes T from P2.
-   5. A poll lists ID1 (or a third C-c C-c gets `alreadyMade`): the draft
-      compares with P1, says P1, and closes: "Roost created T". T works on
-      P2, and P1 is gone. The same root as the known case in The new task
-      draft's I3: `(nth 2 roost--compose-asked)` is what the ID first asked,
-      not what made the task.
+1. Fixed: **a second task from one C-c C-c with a question left open**. A
+   poll's news of an earlier task, held while a question was open, ran after
+   the C-c C-c that quit it, and `roost--compose-made` cleared the flag and
+   the ID of the request that C-c C-c sent; C-c C-c then made a third.
+   `NewTaskDraft.news-frees-draft.cfg` undoes the fix.
+2. Fixed: **a draft changed back closed for words it never sent**: the ID
+   kept what it first asked for, though asked with since for something else,
+   which made the task. `NewTaskDraft.first-kept-when-mixed.cfg` undoes the
+   fix. With `EditBack` on, `AtMostOnce` reads earlier and later as you asked,
+   not as the host made, and counts a move to another project and back as a
+   move: the creation ID's table allows a new ID there.
 3. **After a dropped connection, an edited prompt repeats what went**
    (`PromptDraft.finding-dropped-connection.cfg`, `PromptOnce`).
    1. You send P from a prompt draft: `roost-send-submit`, ID1.
