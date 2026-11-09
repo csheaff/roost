@@ -252,6 +252,9 @@ Invariants:
 | Waiting | a task is made from it | its take failed | Waiting or None | dropped | `make_task`, `take_offer` |
 | Waiting | task finished or forgotten | | gone with the record | the question before names them | `roost--offers-sentence` |
 
+`test/formal/emacs_and_hosts` checks I2 in Emacs as `NoOfferRollback`: no reply brings
+back an offer you took, or hides one made since.
+
 In Emacs, opening an offer takes it at once and opens an ordinary
 [new task draft](#the-new-task-draft): nothing ties the offer to the draft, so the
 draft's states are its own. Do it here is an ordinary [send](#the-send-id) of a fixed
