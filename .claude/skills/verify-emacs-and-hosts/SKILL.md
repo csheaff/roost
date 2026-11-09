@@ -53,7 +53,7 @@ with the shortest path to a broken rule.
 python3 test/formal/check.py emacs_and_hosts
 ```
 
-About 30 seconds; `make formal` runs every model. Java and TLC 1.7.4 come
+About three minutes; `make formal` runs every model. Java and TLC 1.7.4 come
 from mise. Every line must say `ok`: `CachedTasks.cfg` and
 `HostRequests.cfg` pass, and each other config fails the way its first line
 says.
@@ -64,21 +64,22 @@ model as a chart.
 
 ## Does your change touch it?
 
-Coverage, confirmed against the code at **d31ec86**. `git diff d31ec86 --
-roost.el scripts/roost_remote.py` and look for these:
+Coverage, confirmed against the code at **e910487**, with the change to
+`roost--run`, `roost--task-made` and `roost--went` that came with this line.
+`git diff e910487 -- roost.el scripts/roost_remote.py` and look for these:
 
 | Code | Model step |
 | --- | --- |
 | `roost--refresh-host`: the flag, `finish`, the `unwind-protect`, `revision` read at the start, the quiet poll calling itself | `CachedTasks`: `AskRefresh`, `Finish`, `Succeed` (list) |
 | `roost--apply-snapshot` | `ApplySnapshot` |
 | `roost--cache-task`'s merge, `roost--newer-events` | `CacheTask`, `NewerEvents` |
-| `roost--cache-reply`, `roost--went-p` | `CacheReply` |
+| `roost--cache-reply`, `roost--went-p`, `roost--went` | `CacheReply` |
 | `roost--act`: `listed`, the revision bump at the reply | `AskAct`, `Succeed` (stop, retire) |
 | inspect in `roost--open` and `roost--notify-attention` | `AskAct` (inspect), `Succeed` |
-| `roost--create-task`'s bump, `roost--task-made` | `AskCreate`, `Succeed` (create) |
+| `roost--create-task`'s bump, `roost--task-made` (`roost--cache-reply` with `roost--went`) | `AskCreate`, `Succeed` (create) |
 | rpc under the registry lock; `list_tasks` | `HostRun`: one step each |
 | `detach`, `DETACHED`: what changes things outlives Emacs's wait | `Kept`, `HostLoses` |
-| `roost--run`: sentinel, `finished`, the `condition-case` | `HostRequests`: `Ask`, `Deliver`, `Callback` |
+| `roost--run`: sentinel, `finished`, the `condition-case` (a quit too) | `HostRequests`: `Ask`, `Deliver`, `Callback`; `CachedTasks`: `AskRefresh` |
 | `roost--expire-request`, a dropped connection | `GiveUp` (both models) |
 | `roost--request`: `install-and-invoke`, `roost--helper-unusable-p` | `Deliver`, `Then` |
 | `roost--install-code`, `prune_helpers` (a week by mtime) | `Host` (install), `OtherPrunes`, `WeekPasses` |
@@ -129,26 +130,18 @@ are known to bite:
   and leaves the process, whose sentinel calls back too. OneCallback.
 - `NoTimer`: no timer, so a host that never answers holds the request for
   ever. EveryRequestEnds (`temporal`).
+- `QuitLeavesProcess`: `roost--run` catches errors only, so C-g during `g`
+  leaves its list running, and it lands after a newer one. NoRollback.
+- `CreateNoWentCheck`: `roost--task-made` caches create's late reply with
+  `roost--cache-task`, bringing back the task you finished meanwhile.
+  NoRollback.
 
 ## Findings kept
 
-The main config assumes neither of these happens. Each `Finding` config
-allows one and must fail NoRollback, until the code changes. When a fix
-lands, model it, and the finding config then passes: delete it, or turn it
-into a variant of the fix.
-
-- `FindingQuitDuringG`: `C-g` during `g` once `make-process` has run.
-  `roost--run` catches `error`, not `quit`, so the process lives on while
-  `roost--refresh-host`'s `unwind-protect` finishes the refresh. The next
-  poll starts a second list; another Emacs retires a task; the poll's list
-  lands, then the first, read before the retire, whose revision still
-  matches: the task is back until the next poll. Needs Emacs to see the
-  `C-g` within milliseconds.
-- `FindingCreateReplyLate`: a list shows the task `create` just made before
-  `create`'s reply arrives, and you finish the task meanwhile.
-  `roost--task-made` caches the late reply with `roost--cache-task`, not
-  `roost--cache-reply`, so the task is back, and opens, until the next poll.
-  The window is the reply's way back to Emacs, under a second.
+None. The two the model found, C-g during `g` leaving its list running and
+create's late reply bringing back a task that went, are fixed: the main
+config allows both (`Allow`), and `QuitLeavesProcess` and
+`CreateNoWentCheck` undo each fix.
 
 ## Bounds and what is left out
 

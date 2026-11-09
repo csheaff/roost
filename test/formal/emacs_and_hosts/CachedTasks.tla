@@ -126,10 +126,12 @@ AskRefresh(quiet) ==
           \* NoUnwind) the flag stays.
           \/ /\ refreshing' = (Break = "NoUnwind")
              /\ UNCHANGED <<pending, reqs, inbox>>
-          \* C-g during g once make-process has run: roost--run catches
-          \* errors, not quit, so the quit leaves the process running and
-          \* reaches the unwind-protect, which finishes the refresh.
-          \/ /\ "quit" \in Allow /\ ~quiet
+          \* C-g during g once make-process has run: roost--run deletes the
+          \* process, as for an error, and the quit reaches the
+          \* unwind-protect, which finishes the refresh: nothing is left,
+          \* as above.  Broken: `QuitLeavesProcess` catches errors only, as
+          \* before, so the process runs on and its list lands later.
+          \/ /\ "quit" \in Allow /\ ~quiet /\ Break = "QuitLeavesProcess"
              /\ refreshing' = FALSE
              /\ reqs' = [rs EXCEPT ![i].finished = TRUE]
              /\ inbox' = inbox \cup {i}
@@ -277,11 +279,14 @@ Succeed(i) ==
          /\ Cache(CacheReply(cache, r.task, a.rec, r.listed))
          /\ UNCHANGED revision
          /\ Over(i)
-    \* roost--task-made caches it with roost--cache-task, asking nothing of
-    \* what went since.
+    \* roost--task-made caches it with roost--cache-reply, LISTED being
+    \* whether it went since Emacs held it (`roost--went`): Emacs held it
+    \* once its version is past the 0 it starts at.  Broken:
+    \* `CreateNoWentCheck` caches it with roost--cache-task, as before.
     [] r.kind = "create" ->
          /\ revision' = IF Break = "BumpAtRequest" THEN revision ELSE revision + 1
-         /\ Cache(CacheTask(cache, r.task, a.rec))
+         /\ Cache(IF Break = "CreateNoWentCheck" THEN CacheTask(cache, r.task, a.rec)
+                  ELSE CacheReply(cache, r.task, a.rec, cache[r.task].ver > 0))
          /\ Over(i)
 
 Deliver(i) ==

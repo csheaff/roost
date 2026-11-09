@@ -41,6 +41,7 @@
          (roost--installed (make-hash-table :test 'equal))
          (roost--refreshing (make-hash-table :test 'equal))
          (roost--revisions (make-hash-table :test 'equal))
+         (roost--went (make-hash-table :test 'equal))
          (roost--snapshots (make-hash-table :test 'equal))
          (roost--list-requests (make-hash-table :test 'equal))
          (roost--pull-requests-asked (make-hash-table :test 'equal))
@@ -5913,6 +5914,50 @@ With FAILING, it prints it on stderr and exits with status 1."
                  (should (<= (length (cadar outcomes)) (1+ roost--error-limit))))
                (should-not roost--requests))))
        (delete-file file)))))
+
+(ert-deftest roost-a-request-you-quit-as-it-starts-leaves-nothing-running ()
+  "C-g once its process has started, as during g: no reply comes later,
+as a list read before you retired a task would bring it back.
+CachedTasks.FindingQuitDuringG.cfg found it."
+  (roost-test--isolated
+   (let (called process)
+     (cl-letf (((symbol-function 'process-send-string)
+                (lambda (proc _string) (setq process proc) (signal 'quit nil))))
+       (should (eq (condition-case nil
+                       (roost--run nil "print('{\"ok\": true, \"result\": []}')" "{}"
+                                   (lambda (_) (setq called 'success)) (lambda (_) (setq called 'failure)))
+                     (quit 'quit))
+                   'quit)))
+     (should process)
+     (should-not (process-live-p process))
+     (should-not roost--requests)
+     (accept-process-output nil 0.3)
+     (should-not called))))
+
+(ert-deftest roost-a-late-reply-to-create-leaves-a-task-that-went-gone ()
+  "A poll shows the task you asked for, you retire it, and then the reply
+to create comes: the task stays gone, and doesn't open.
+CachedTasks.FindingCreateReplyLate.cfg found it."
+  (roost-test--isolated
+   (let ((roost-hosts '("dev")) reply opened made)
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host action _params success _failure &optional _timeout)
+                  (when (equal action "create") (setq reply success))))
+               ((symbol-function 'roost--terminal-size) #'ignore)
+               ((symbol-function 'roost--remember-host) #'ignore)
+               ((symbol-function 'roost--remember-project) #'ignore)
+               ((symbol-function 'roost--redraw) #'ignore)
+               ((symbol-function 'roost-watch-mode) #'ignore)
+               ((symbol-function 'roost-open-task) (lambda (task &rest _) (push task opened))))
+       (roost--create-task "/ssh:dev:/repo/" "new" nil "Fix it" nil (lambda (task &rest _) (push task made)))
+       (let ((task (roost-test--task "2222222222222222")))
+         (roost--apply-snapshot "dev" (list task))
+         (should (gethash '("dev" "2222222222222222") roost--tasks))
+         (roost--apply-snapshot "dev" nil)
+         (funcall reply task))
+       (should made)
+       (should-not (gethash '("dev" "2222222222222222") roost--tasks))
+       (should-not opened)))))
 
 (ert-deftest roost-a-poll-of-a-reply-it-cannot-read-is-reported-and-asked-again ()
   ;; The list a host sends is polled for, every few seconds: an error in
@@ -11871,6 +11916,17 @@ answered with `answer'."
        (should (equal requests '(("resume" "sum check"))))
        (should (equal (car messages) "Resumed 1 agent on dev"))
        (should-not roost--resuming)))))
+
+(ert-deftest roost-resuming-together-you-quit-offers-them-again ()
+  ;; C-g as the first is asked: no reply comes, nor are the rest asked,
+  ;; so opening one offers to resume them all again.
+  (roost-test--isolated
+   (let ((task (roost-test--crashed-host)))
+     (cl-letf (((symbol-function 'roost--request) (lambda (&rest _) (signal 'quit nil))))
+       (should (eq (condition-case nil (roost--resume-together task (roost--crashed-with task)) (quit 'quit))
+                   'quit))
+       (should-not roost--resuming)
+       (should (roost--crashed-with (gethash '("dev" "3333333333333333") roost--tasks)))))))
 
 (ert-deftest roost-resuming-together-leaves-what-you-do-meanwhile ()
   ;; Each reply waits until the test gives it, as a host's does.

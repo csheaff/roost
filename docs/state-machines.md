@@ -1243,14 +1243,15 @@ Invariants:
 - I6. Time asleep isn't counted against a request (`roost--expire-request`).
 - I8. A callback that signals is only logged, so whatever it would have done after
   that point doesn't happen. Nothing states this, and drafts depend on it: VIEWS-11.
-- I7. Quit or a signal before the sentinel leaves no flag set. `roost--run` catches `error`, not `quit`, and the `let*` above its `condition-case` is covered by neither, so a caller that sets a flag first ends it itself: `roost--refresh-host`, `roost--report-turn`.
+- I7. Quit or a signal before the sentinel leaves no flag set, and no process running. `roost--run` catches `error` and `quit`, deleting the process, and passes a quit on to the caller with no callback; the `let*` above its `condition-case` is covered by neither, so a caller that sets a flag first ends it itself: `roost--refresh-host`, `roost--report-turn`, `roost--resume-together`.
 - I9. No timer runs between a request's end and its callback: one that throws, as `with-timeout`'s does, would leave without one (`roost-a-reply-reaches-its-callback-before-any-timer`).
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
 | Unstarted | `make-process` works | | Running | Timer armed; input sent, or read from a temp file over 4096 bytes | `roost--run` |
 | Unstarted | `error` in setup | | Done | Cleans up; FAILURE called synchronously | `roost--run` |
-| Unstarted | `quit`, or `error` in the `let*` (`roost--python-command`) | | (none) | Signal goes to the caller; the two buffers leak | `roost--run` |
+| Unstarted | `quit` in setup, as `C-g` during `g` | | (none) | Cleans up, the process deleted; no callback, and the quit goes to the caller | `roost--run` |
+| Unstarted | `error` in the `let*` (`roost--python-command`) | | (none) | Signal goes to the caller; the two buffers leak | `roost--run` |
 | Running | Process exits or is signalled | | Reported | Timer cancelled, input file deleted, stderr drained with no timer run, pipe deleted | sentinel |
 | Running | Timer fires | live, not late | Expired | `timed-out` set, `delete-process` | `roost--expire-request` |
 | Running | Timer fires | live, over 5s late | Running | Re-armed for the whole timeout | `roost--expire-request` |
@@ -1421,10 +1422,10 @@ What Emacs believes of each task, and how a reply merges into it.
 |---|---|---|
 | Absent | Never seen, or dropped from a list | No key |
 | Cached | Listed or replied about | Key in `roost--tasks` |
-| Went | Was cached, gone since a request began | `roost--went-p` with the request's `listed` |
+| Went | Was cached, gone since a request began | `roost--went-p` with the request's `listed`; for create, its key in `roost--went` |
 
 Invariants:
-- I1. A reply read before a task went doesn't bring it back (`roost--cache-reply`, `roost--went-p`; lists by I3 of Host refresh). Checked for `inspect`, `roost--act`, the turn reply, `roost--compose-listed`.
+- I1. A reply read before a task went doesn't bring it back (`roost--cache-reply`, `roost--went-p`; lists by I3 of Host refresh). Checked for `inspect`, `roost--act`, the turn reply, `roost--compose-listed`, and create's reply, of a task a list showed and that went before it came (`roost--went`).
 - I2. No reply rolls a task back: older `updatedAt` keeps the old record with the reply's measurements (`roost--newer-events`); name and look have clocks of their own (`roost--newer-name`, `roost--newer-look`).
 - I3. A reply saying the task went always counts. It would not if its `updatedAt` were older, but `retire`, `discard` and `forget` all stamp `now()` last.
 - I4. String order of `updatedAt` is time order. `now()` is UTC isoformat; `+` sorts before `.`, so a whole second sorts first. True while the host's clock doesn't step back.
@@ -1433,9 +1434,10 @@ Invariants:
 |---|---|---|---|---|---|
 | Absent | List names it | | Cached | No news: `previous` nil, verdict `unknown` | `roost--cache-task` |
 | Absent | Create replies | | Cached | Revision bumped | `roost--task-made` |
+| Went | Create replies | a list showed it, and it went | Went | Revision bumped; the reply goes only to the command, and nothing opens | `roost--task-made`, `roost--cache-reply` |
 | Cached | List names it | | Cached | Merged by I2; absent measurements carried over | `roost--cache-task` |
-| Cached | List lacks it | | Absent | All keyed state and its notes go | `roost--apply-snapshot` |
-| Cached | Reply says retired, forgotten or discarded | | Absent | Its notes go | `roost--cache-task` |
+| Cached | List lacks it | | Went | All keyed state and its notes go; its key noted in `roost--went` | `roost--apply-snapshot` |
+| Cached | Reply says retired, forgotten or discarded | | Went | Its notes go; its key noted in `roost--went` | `roost--cache-task` |
 | Cached | Host forgotten | | Absent | | `roost-forget-host` |
 | Went | Reply, not saying so | `listed` | Went | Reply goes only to the command | `roost--cache-reply` |
 | Went | Reply saying so | | Went | Recorded quietly | `roost--cache-reply` |
