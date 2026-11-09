@@ -4,6 +4,12 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A Claude task whose turn ends on an API error, or with work left in the
+  background, says so even when its status reports lag behind its hooks. With
+  `roost-program-status` on, a report that the agent was working, still
+  waiting to be recorded as the turn ended, made the task read `ready`: the
+  error was dropped, and an agent with background work notified you as if it
+  were done. Nothing to do when upgrading.
 - A merge, update or discard that outlasts Emacs's wait on this machine goes on
   to its end, as it does over SSH. Emacs killed it, with Git and its hooks: with
   a `pre-commit` hook over a minute, a squash merge left the task's work staged

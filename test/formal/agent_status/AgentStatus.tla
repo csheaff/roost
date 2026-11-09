@@ -102,11 +102,14 @@ Observe(e, cur) ==
     ELSE IF e \in {"Stop", "Interrupt"} THEN "ready"
     ELSE "none"                                  \* SessionEnd
 
-(* `beside_program_status`: the status a relayed agent's hook keeps. *)
+(* `beside_program_status`: the status a relayed agent's hook keeps.
+   Broken: `turn_end_from_work` keeps `background` only over `running` or
+   `ready`, as before, which may be the last turn's or a request's, its
+   reports of this one not recorded yet. *)
 Beside(s, before) ==
   IF Turns
   THEN IF Break # "no_turn_end_kept"
-          /\ (s = "failed" \/ (s = "background" /\ before \in {"running", "ready"}))
+          /\ (s = "failed" \/ (s = "background" /\ (Break # "turn_end_from_work" \/ before \in {"running", "ready"})))
        THEN s ELSE "none"
   ELSE IF s = "running" /\ before = "permission" THEN "none" ELSE s
 
@@ -125,8 +128,10 @@ Hook(e, r) ==
           /\ dialog' = IF s2 = "none" THEN dialog ELSE FALSE
           \* updatedAt moves with any status a hook records.
           /\ marker' = IF s2 = "none" THEN marker ELSE FALSE
-          \* hookAt: reports read before it are older news.
-          /\ queue' = IF s2 # "none" /\ ~Turns
+          \* hookAt, with any status a hook records: reports read before it
+          \* are older news.  Broken: `turn_end_no_hookat` sets it only for
+          \* Codex, as before.
+          /\ queue' = IF s2 # "none" /\ (~Turns \/ Break # "turn_end_no_hookat")
                       THEN [i \in 1..Len(queue) |-> [queue[i] EXCEPT !.stale = TRUE]]
                       ELSE queue
           /\ reqCmd' = IF asks /\ e = "PermissionRequest" THEN TRUE

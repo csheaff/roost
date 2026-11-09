@@ -781,7 +781,8 @@ plugin folds into these.
 
 `T` = the adapter's `reports_turns` (Claude, Pi, OpenCode true; Codex false).
 A report with an `id` is a subagent's, and left out. A report read before `hookAt`
-is dropped first; Codex's hooks set that, and Claude's `SessionStart` with
+is dropped first; every hook that records a status sets that: any of Codex's, a
+relayed Claude's `failed` or `background`, and its `SessionStart` with
 `source=clear`. Conditions are tried in this order:
 
 | From | State | Guard | To | `lastEvent` |
@@ -821,7 +822,7 @@ Four sources write one field. This says which counts when they disagree.
 | Mode | How you can tell | Status comes from |
 | --- | --- | --- |
 | Unrelayed | `programStatusRun` != `runId` | Hooks, in order of the lock; the poll for Claude's Esc and approvals |
-| Relayed, turns (Claude, Pi) | `programStatusRun` == `runId`, `reports_turns` | Reports. Hooks keep their other fields, and their status only if `failed`, `background` from `running`/`ready`, or Claude's `SessionStart` with `source=clear`, as reports can't say that a new conversation started |
+| Relayed, turns (Claude, Pi) | `programStatusRun` == `runId`, `reports_turns` | Reports. Hooks keep their other fields, and their status only if `failed`, `background`, or Claude's `SessionStart` with `source=clear`, as reports can't say that a new conversation started; such a hook sets `hookAt`, so a report read before it, of the turn it ended, is older news |
 | Relayed, hooks (Codex) | same, not `reports_turns` | Hooks, but for `running` from `permission`. Reports for what hooks miss: a request, its approval, `idle` after a failed request, `error`. A report read before `hookAt` is older news |
 
 Before a relayed run's first report it counts as unrelayed. The poll's guesses
@@ -849,7 +850,7 @@ Is the outcome the same in any order? Replayed: each capture in
 
 | Swap | Can it happen | Outcome |
 | --- | --- | --- |
-| Report later than following hooks (the queue waits for the lock) | Yes | Same end, each step, for all relayed captures: Claude's hooks hold only other fields, and Codex's `hookAt` drops the old report |
+| Report later than following hooks (the queue waits for the lock) | Yes | Same end, each step, for all relayed captures: Claude's hooks hold only other fields, and `hookAt` drops the old report, from Codex's hooks and from Claude's `StopFailure` or `Stop` with work left |
 | Report later than another report | No: one queue | |
 | Hook later than the agent's next event | Not for an awaited hook of one agent | Different, and stays so until the next event, for `Stop`, `PermissionRequest` |
 | `PermissionRequest` and another agent's tool event, unrelayed | Yes, with subagents | `permission`, either way |
@@ -861,6 +862,7 @@ Disagreements, and who wins:
 | Hook `running`, report `blocked`, Claude | Report | Yes |
 | Hook `Stop` with work left, report `done`, either order | Hook: `background` | Yes |
 | `StopFailure`, report `done`/`idle`, either order | Hook: `failed` | Yes |
+| Claude's `StopFailure` or `Stop` with work left, then a `working` read before it, relayed | Hook: `hookAt` drops the report, whatever the status before | Yes |
 | Hook `PostToolUse` during `permission`, Codex relayed | Dropped | Yes |
 | The same unrelayed, Claude or Codex | The request, unless the hook is the agent that asked moving on | Yes |
 | `SessionEnd` as tmux goes, relayed or not | Poll: `crashed` | Yes |

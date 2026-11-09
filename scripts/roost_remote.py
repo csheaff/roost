@@ -6183,7 +6183,9 @@ def beside_program_status(updates, before, reports_turns=True):
     waits on you: one tool's end says nothing of another's request."""
     status = updates.get("status")
     if reports_turns:
-        kept = status == "failed" or status == "background" and before in ("running", "ready")
+        # Whatever it was before, as its reports of this turn may not be
+        # recorded yet: its last turn's end, its start, or what it asked.
+        kept = status in ("failed", "background")
     else:
         kept = not (status == "running" and before == "permission")
     return updates if kept else without_status(updates)
@@ -6255,7 +6257,11 @@ def update_hook(store, task_id, payload, run_id=None):
                 updates = beside_program_status(updates, before, agent.reports_turns)
             elif before == "permission" and updates.get("status") == "running" and answers and not answers(task, payload):
                 updates = without_status(updates)
-            if (new_conversation or not agent.reports_turns) and "status" in updates:
+            # A report read before this hook, still waiting for the lock, is
+            # older news than any status it records: for a relayed agent whose
+            # reports end its turns, one they don't say, as a turn's end on an
+            # API error; for any other, as before its first report is recorded.
+            if "status" in updates:
                 task["hookAt"] = read_at = time.time()
             # What the agent asks, if its adapter can say better than its payload.
             named = updates.pop("request", None)
@@ -6464,7 +6470,8 @@ def apply_program_status(task, fields, run_id):
     # hook that last set its status is older news than that hook's: it runs
     # its hooks before it goes on, but its reports wait for the registry.
     # So too for what an agent said before a hook whose status counts over
-    # its reports, as for a new conversation.
+    # its reports, as for a new conversation, or a turn's end on an API
+    # error or with work in the background.
     turns = agent_for(task).reports_turns
     if fields.get("receivedAt", float("inf")) < (task.get("hookAt") or 0):
         return task != before
