@@ -869,7 +869,10 @@ is the seconds it may take, if not `roost-request-timeout'."
             (ignore-errors
               (process-send-string process input)
               (process-send-eof process))))
-      (error
+      ;; Nothing is left running: a reply to a request you quit, as with
+      ;; C-g during g, would come after newer news.  The quit goes on to
+      ;; whoever asked, with no callback.
+      ((quit error)
        (setq finished t roost--requests (delq process roost--requests))
        (when-let* ((timer (and process (process-get process 'roost-timer))))
          (cancel-timer timer))
@@ -878,7 +881,9 @@ is the seconds it may take, if not `roost-request-timeout'."
        (when (buffer-live-p buffer) (kill-buffer buffer))
        (when (buffer-live-p errors) (kill-buffer errors))
        (when input-file (ignore-errors (delete-file input-file)))
-       (funcall failure (error-message-string err))))))
+       (if (eq (car err) 'quit)
+           (signal (car err) (cdr err))
+         (funcall failure (error-message-string err)))))))
 
 (defun roost--request-wait (host action parameters &optional timeout)
   "Run ACTION with PARAMETERS on HOST and return its result.
@@ -1157,6 +1162,10 @@ they could make a word nobody said."
                                                          had)))
                          (assq-delete-all field task)))))))
 
+(defvar roost--went (make-hash-table :test 'equal)
+  "Tasks that left `roost--tasks', by key, as a list or a reply said they went.
+A reply to create read before then can come after.")
+
 (defun roost--cache-task (host task)
   "Cache TASK from HOST and notify only on attention transitions."
   (setf (alist-get 'host task) host)
@@ -1195,6 +1204,7 @@ they could make a word nobody said."
     (if (not (member status '("retired" "forgotten" "discarded")))
         (puthash key task roost--tasks)
       (remhash key roost--tasks)
+      (puthash key t roost--went)
       (roost--remove-notes (lambda (note) (equal (roost--note-key note) key))))
     ;; Renamed, here or from another Emacs: its workspace and the panels
     ;; follow, before the views are drawn.
@@ -1468,6 +1478,7 @@ in `roost--list-requests'; without one, TASKS count as asked for now."
     (maphash (lambda (key _)
                (when (and (equal (car key) host) (not (member key keys)))
                  (remhash key roost--tasks)
+                 (puthash key t roost--went)
                  (remhash key roost--statuses)
                  (remhash key roost--pr-verdicts)
                  (remhash key roost--agent-news)
@@ -2996,7 +3007,9 @@ non-nil, as for a draft that stays, which you are writing in."
   (when (roost--field task 'repo)
     (roost--remember-project (roost--project-directory (cons (cons 'host host) task))))
   (let ((found (roost--field task 'alreadyMade)))
-    (setq task (roost--cache-task host task))
+    ;; Unless it went since a list showed it, as you finished it: the reply
+    ;; can take longer to come than that.
+    (setq task (roost--cache-reply host task (gethash (list host (roost--field task 'id)) roost--went)))
     (roost-watch-mode 1)
     ;; It opens where the draft closes.
     (roost--when-out-of-minibuffer

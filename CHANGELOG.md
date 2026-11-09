@@ -4,6 +4,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A task you finished no longer comes back for a moment. C-g as `g` started
+  left its list running, and its reply, read before you retired a task, could
+  bring the task back until the next poll; now C-g stops it. And the reply to
+  creating a task, coming after a poll had shown the task and you had
+  finished it, brought it back and opened it. Nothing to do when upgrading.
 - A merge, update or discard that outlasts Emacs's wait on this machine goes on
   to its end, as it does over SSH. Emacs killed it, with Git and its hooks: with
   a `pre-commit` hook over a minute, a squash merge left the task's work staged
