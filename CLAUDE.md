@@ -94,6 +94,10 @@ they can do themselves.
   worktrees, merging, review in Magit, remote hosts. What happens inside one
   conversation, such as watching a pull request, fixing CI or answering
   review comments, is the agent's, through its own features and plugins.
+- Roost supports a few agents well rather than many: a couple from the model
+  labs and a couple that work across them (see the manual's Install
+  section). Don't add an adapter unless asked; a request for one goes in
+  `docs/roadmap.md` with whether the agent meets the bar there.
 - Prefer what works the same for every agent, or does nothing for one that
   can't, and what uses data Roost already has or one `git` or `gh` call. A
   new dependency, option or key has to earn its place.
