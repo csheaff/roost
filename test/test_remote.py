@@ -10273,6 +10273,8 @@ class ProgramStatus(unittest.TestCase):
         self.assertEqual(beside(hook, "permission"), dict(agentSession="s"))
         self.assertEqual(beside(dict(hook, status="background"), "ready")["status"], "background")
         self.assertEqual(beside(dict(hook, status="failed"), "running")["status"], "failed")
+        # One that doesn't wait for its hooks may send one late, as Pi.
+        self.assertEqual(beside(dict(hook, status="background"), "permission", True, False), dict(agentSession="s"))
 
     def test_clearing_a_conversation_stops_no_turn(self):
         # As claude-relayed-2.1.310.jsonl has it, as the helper reads it.
@@ -10358,6 +10360,34 @@ class ProgramStatus(unittest.TestCase):
             # A turn that ended without its hooks, as on a failed request.
             hook("UserPromptSubmit")
             self.assertEqual(report("idle")["lastEvent"], "Idle")
+
+    def test_a_claude_report_older_than_the_hook_that_ended_its_turn_is_left_out(self):
+        """A relayed Claude reports it works, then its turn ends on an API
+        error, or with work left in the background, whose hook takes the
+        lock first. The report, recorded only then, is older news, and the
+        hook's word stands. AgentStatus.StaleReport.cfg found it."""
+        stop_failure = dict(hook_event_name="StopFailure", error="overloaded")
+        background = dict(hook_event_name="Stop", background_tasks=[dict(id="b1")])
+        # Last, with the status its reports of this turn have yet to replace:
+        # the last turn's end, or a request you answered.
+        for event, before, status in ((stop_failure, "running", "failed"), (background, "running", "background"),
+                                      (background, "background", "background"), (background, "failed", "background"),
+                                      (background, "permission", "background")):
+            with self.subTest(status=status, before=before), tempfile.TemporaryDirectory() as root:
+                store = roost.Store(root)
+                store.save(dict(id="0" * 16, agent="claude", worktree="/w", status=before, runId="run",
+                                programStatusRun="run"))
+                said = time.time() - 1
+                roost.update_hook(store, "0" * 16, event, "run")
+                task = store.read("0" * 16)
+                self.assertEqual(task["status"], status)
+                error = task.get("error")
+                roost.apply_program_status(task, dict(state="working", receivedAt=said), "run")
+                roost.apply_program_status(task, dict(state="done", receivedAt=time.time()), "run")
+                self.assertEqual((task["status"], task.get("error")), (status, error))
+                # Its next turn, read after that hook, is news.
+                roost.apply_program_status(task, dict(state="working", receivedAt=time.time() + 1), "run")
+                self.assertEqual(task["status"], "running")
 
     def test_a_codex_report_older_than_its_last_hook_is_left_out(self):
         # The relay reads reports at once but records them once the registry
