@@ -922,6 +922,9 @@ class ClaudeAgent:
     # Its status reports, which the runner reads for a task that asks,
     # say when a turn ends and how.
     reports_turns = True
+    # It runs its hooks before it goes on, so a report read before one is
+    # older news than it.
+    waits_for_hooks = True
     answers = staticmethod(tool_answers)
 
     def validate(self, command):
@@ -1153,6 +1156,7 @@ class CodexAgent:
     # runs or a server starts. Its hooks, which it runs before it goes on,
     # say when a turn starts and how it ends.
     reports_turns = False
+    waits_for_hooks = True
     answers = staticmethod(tool_answers)
 
     def validate(self, command):
@@ -6173,19 +6177,22 @@ def require_agent_work_kept(task):
             require_submodules_kept(entry["path"], "its agent's worktree " + entry["path"])
 
 
-def beside_program_status(updates, before, reports_turns=True):
+def beside_program_status(updates, before, reports_turns=True, waits_for_hooks=True):
     """What of a hook's UPDATES to record, for an agent whose status was
     BEFORE, that reports its status to its terminal. For one whose reports
     say when a turn ends and how (REPORTS_TURNS), all but the status, which
     its reports give sooner and surer, unless the hook knows more: that its
     turn ended with work left in the background, or on an API error. For
     one whose hooks say that instead, all but a return to work while it
-    waits on you: one tool's end says nothing of another's request."""
+    waits on you: one tool's end says nothing of another's request. One
+    that doesn't wait for its hooks (WAITS_FOR_HOOKS nil) may send one late,
+    after what it says is older than what it did since."""
     status = updates.get("status")
     if reports_turns:
-        # Whatever it was before, as its reports of this turn may not be
-        # recorded yet: its last turn's end, its start, or what it asked.
-        kept = status in ("failed", "background")
+        # For one that waits for its hooks, whatever it was before, as its
+        # reports of this turn may not be recorded yet: its last turn's end,
+        # its start, or what it asked.
+        kept = status == "failed" or status == "background" and (waits_for_hooks or before in ("running", "ready"))
     else:
         kept = not (status == "running" and before == "permission")
     return updates if kept else without_status(updates)
@@ -6254,14 +6261,15 @@ def update_hook(store, task_id, payload, run_id=None):
             answers = getattr(agent, "answers", None)
             new_conversation = updates.pop("newConversation", False)
             if relayed and not new_conversation:
-                updates = beside_program_status(updates, before, agent.reports_turns)
+                updates = beside_program_status(updates, before, agent.reports_turns,
+                                                getattr(agent, "waits_for_hooks", False))
             elif before == "permission" and updates.get("status") == "running" and answers and not answers(task, payload):
                 updates = without_status(updates)
             # A report read before this hook, still waiting for the lock, is
-            # older news than any status it records: for a relayed agent whose
-            # reports end its turns, one they don't say, as a turn's end on an
-            # API error; for any other, as before its first report is recorded.
-            if "status" in updates:
+            # older news than any status it records, for an agent that waits
+            # for its hooks: relayed, one its reports don't say, as a turn's
+            # end on an API error; else, as before its first report counts.
+            if "status" in updates and (new_conversation or getattr(agent, "waits_for_hooks", False)):
                 task["hookAt"] = read_at = time.time()
             # What the agent asks, if its adapter can say better than its payload.
             named = updates.pop("request", None)

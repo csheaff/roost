@@ -10273,6 +10273,8 @@ class ProgramStatus(unittest.TestCase):
         self.assertEqual(beside(hook, "permission"), dict(agentSession="s"))
         self.assertEqual(beside(dict(hook, status="background"), "ready")["status"], "background")
         self.assertEqual(beside(dict(hook, status="failed"), "running")["status"], "failed")
+        # One that doesn't wait for its hooks may send one late, as Pi.
+        self.assertEqual(beside(dict(hook, status="background"), "permission", True, False), dict(agentSession="s"))
 
     def test_clearing_a_conversation_stops_no_turn(self):
         # As claude-relayed-2.1.310.jsonl has it, as the helper reads it.
@@ -10375,7 +10377,7 @@ class ProgramStatus(unittest.TestCase):
                 store = roost.Store(root)
                 store.save(dict(id="0" * 16, agent="claude", worktree="/w", status=before, runId="run",
                                 programStatusRun="run"))
-                said = time.time()
+                said = time.time() - 1
                 roost.update_hook(store, "0" * 16, event, "run")
                 task = store.read("0" * 16)
                 self.assertEqual(task["status"], status)

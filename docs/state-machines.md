@@ -781,9 +781,10 @@ plugin folds into these.
 
 `T` = the adapter's `reports_turns` (Claude, Pi, OpenCode true; Codex false).
 A report with an `id` is a subagent's, and left out. A report read before `hookAt`
-is dropped first; every hook that records a status sets that: any of Codex's, a
-relayed Claude's `failed` or `background`, and its `SessionStart` with
-`source=clear`. Conditions are tried in this order:
+is dropped first; every hook of an agent that waits for its hooks (Claude, Codex:
+`waits_for_hooks`) that records a status sets that: any of Codex's, a relayed
+Claude's `failed` or `background`, and its `SessionStart` with `source=clear`. Pi
+and OpenCode may send a hook late, so theirs set none. Conditions are tried in this order:
 
 | From | State | Guard | To | `lastEvent` |
 | --- | --- | --- | --- | --- |
@@ -822,7 +823,7 @@ Four sources write one field. This says which counts when they disagree.
 | Mode | How you can tell | Status comes from |
 | --- | --- | --- |
 | Unrelayed | `programStatusRun` != `runId` | Hooks, in order of the lock; the poll for Claude's Esc and approvals |
-| Relayed, turns (Claude, Pi) | `programStatusRun` == `runId`, `reports_turns` | Reports. Hooks keep their other fields, and their status only if `failed`, `background`, or Claude's `SessionStart` with `source=clear`, as reports can't say that a new conversation started; such a hook sets `hookAt`, so a report read before it, of the turn it ended, is older news |
+| Relayed, turns (Claude, Pi) | `programStatusRun` == `runId`, `reports_turns` | Reports. Hooks keep their other fields, and their status only if `failed`, `background` (for Pi, only from `running`/`ready`, as its hooks may come late), or Claude's `SessionStart` with `source=clear`, as reports can't say that a new conversation started; such a hook sets `hookAt`, so a report read before it, of the turn it ended, is older news |
 | Relayed, hooks (Codex) | same, not `reports_turns` | Hooks, but for `running` from `permission`. Reports for what hooks miss: a request, its approval, `idle` after a failed request, `error`. A report read before `hookAt` is older news |
 
 Before a relayed run's first report it counts as unrelayed. The poll's guesses
