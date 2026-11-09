@@ -4095,6 +4095,7 @@ EVENT, a click on the draft's Create button, says which draft."
     (let* ((directory (plist-get fields :directory))
            (host (roost--directory-host directory))
            (what (roost--compose-what))
+           (asked (copy-sequence roost--compose-asked))
            ;; Asked again in the same project, as after no reply came, the
            ;; host answers with the task it made, if it did, from what it
            ;; was asked for first, or since.
@@ -4135,7 +4136,9 @@ EVENT, a click on the draft's Create button, says which draft."
         ;; the project's setup command: the draft is ready to create again.
         ((quit error)
          (setq roost--compose-submitting nil
-               roost--draft-note nil)
+               roost--draft-note nil
+               ;; Nor was it asked for what it says now.
+               roost--compose-asked asked)
          (signal (car err) (cdr err)))))))
 
 (defun roost--compose-what ()

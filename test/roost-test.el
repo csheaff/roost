@@ -8053,6 +8053,21 @@ The model found it: NewTaskDraft.news-frees-draft.cfg."
         (should-error (roost-compose-submit) :type 'user-error)
         (should (= (length asked) 2))))))
 
+(ert-deftest roost-a-draft-asked-for-nothing-new-when-you-quit-its-question ()
+  "C-g at the question about the project's setup command sends nothing,
+so the ID still knows what it asked for."
+  (roost-test--draft-world
+    (with-current-buffer roost--compose-buffer
+      (roost-compose-submit)
+      (funcall (nth 2 (car asked)) (propertize "No reply after 660s" 'roost-no-reply t))
+      (let ((before (copy-sequence roost--compose-asked)))
+        (goto-char (point-max))
+        (insert " and the lexer")
+        (cl-letf (((symbol-function 'roost--create-task) (lambda (&rest _) (signal 'quit nil))))
+          (should (eq (condition-case nil (roost-compose-submit) (quit 'quit)) 'quit)))
+        (should (equal roost--compose-asked before))
+        (should-not roost--compose-submitting)))))
+
 (ert-deftest roost-a-draft-changed-back-stays-for-a-task-made-from-another-ask ()
   "Refused, changed, asked again with the same ID, then changed back to
 what it first said: the task its host made is from the second ask, so
