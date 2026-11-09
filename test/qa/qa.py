@@ -2785,10 +2785,15 @@ def draft_kept(qa):
 
 def go_offer(qa, target):
     # TARGET's agent offers a task as you were away: sent the prompt as `e'
-    # sends one, which moves nothing. Then a click on the offer.
-    qa.emacs.eval("(progn (roost--act (seq-find (lambda (task) (equal (roost--field task 'name) %s)) (roost-tasks))"
-                  " \"send\" '((text . %s))) t)" % (lisp(target), lisp("offer " + WALK_OFFER)))
-    qa.wait("its offer", lambda s: offer_row(qa, s, WALK_OFFER))
+    # sends one, which moves nothing. Then a click on the offer, once it is
+    # this one: one a pair before left waiting, its agent would offer again
+    # after the click took it.
+    task = "(seq-find (lambda (task) (equal (roost--field task 'name) %s)) (roost-tasks))" % lisp(target)
+    made = lambda: qa.emacs.json("(json-encode (or (alist-get 'at (seq-find (lambda (offer) (equal (alist-get 'title offer)"
+                                 " %s)) (roost--offers %s))) \"\"))" % (lisp(WALK_OFFER), task))
+    before = made()
+    qa.emacs.eval("(progn (roost--act %s \"send\" '((text . %s))) t)" % (task, lisp("offer " + WALK_OFFER)))
+    qa.wait("its offer", lambda s: offer_row(qa, s, WALK_OFFER) and made() not in ("", before))
     click_offer(qa, WALK_OFFER)
 
 

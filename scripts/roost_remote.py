@@ -2063,7 +2063,10 @@ def make_task(store, request, create_id):
                          "delete it and try again" % (prompt.count("\n", 0, prompt.index("\0")) + 1))
     setup = text(request.get("setup"))
     task = dict(id=task_id, name=name, task=prompt or name, repo=repo,
-                worktree=str(worktree), branch=branch, baseRef=base, baseCommit=commit,
+                worktree=str(worktree), branch=branch, baseCommit=commit,
+                # Shown by its short name, as a branch asked for in full is,
+                # as from an agent's offer.
+                baseRef=base[len("refs/heads/"):] if base.startswith("refs/heads/") else base,
                 integrationBranch=integration, socket=socket,
                 # Its full name, which also tells this record from an older helper's.
                 integrationRef="refs/heads/" + integration if integration else None,

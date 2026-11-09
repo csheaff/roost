@@ -9460,6 +9460,8 @@ print(json.dumps(dict(data=data)))
         self.assertEqual((child["parent"], child["name"], child["prompt"]),
                          (parent["id"], "Document calc", "Write the README's section on calc."))
         self.assertEqual((child["integrationBranch"], child["baseCommit"]), ("develop", self.git("rev-parse", "develop")))
+        # From the branch asked for in full, shown by its short name.
+        self.assertEqual(child["baseRef"], "develop")
         self.assertNotIn("offers", roost.Store(str(self.state)).read(parent["id"]))
         self.wait(child, "ready")
         # Made from an offer whose take never came, it waits no more, and
