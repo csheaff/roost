@@ -17,6 +17,10 @@ import uuid
 if sys.argv[1:] == ["--version"]:
     print("2.1.303 (Claude Code)")
     sys.exit()
+# UTF-8 in and out, whatever the locale says, as Claude Code's terminal is:
+# a prompt in another script is echoed, rather than ending the agent.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+sys.stdin.reconfigure(encoding="utf-8", errors="replace")
 settings = json.loads(Path(sys.argv[sys.argv.index("--settings") + 1]).read_text())
 session = sys.argv[sys.argv.index("--resume") + 1] if "--resume" in sys.argv else str(uuid.uuid4())
 # Roost's MCP server, as Claude Code finds it in --mcp-config.

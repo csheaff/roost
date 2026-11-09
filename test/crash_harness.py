@@ -288,11 +288,11 @@ class Box:
         folder = self.state / "tasks"
         return sorted(path.name for path in folder.iterdir()) if folder.is_dir() else []
 
-    def wait_for(self, task, status, seconds=10):
+    def wait_for(self, task, status, seconds=10, event=None):
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
             record = self.record(task["id"])
-            if record and record.get("status") == status:
+            if record and record.get("status") == status and event in (None, record.get("lastEvent")):
                 return record
             time.sleep(0.02)
         raise AssertionError("Expected %s; got %s" % (status, self.record(task["id"])))
@@ -302,7 +302,10 @@ class Box:
                             command=[sys.executable, str(FAKE)], **args)
         if not reply or not reply["ok"]:
             raise AssertionError(reply)
-        self.wait_for(reply["result"], "ready")
+        # With a prompt, the agent is ready as it starts, then at work on the
+        # prompt: once that turn is over, as an action that wants the agent
+        # idle, as a merge, would be refused before then.
+        self.wait_for(reply["result"], "ready", event="Stop" if args.get("prompt") else None)
         return reply["result"]
 
     def commit(self, task, name="work", text="work\n"):
