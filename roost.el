@@ -8504,6 +8504,21 @@ rest of the time."
     ((or "ready" "interrupted" "to merge" "comments" "conflicts") nil)
     (_ 'roost-dim)))
 
+(defun roost--status-mark (status waiting)
+  "One column that stands for STATUS where its word has no room, or nil.
+STATUS is from `roost--attention-status', and WAITING whether its task
+waits for you.  A ? when the task asks something of you, a ! when
+something went wrong, a disc when it is your turn, and a dotted circle
+while its agent works.  Nil for the rest, which neither need you nor are
+at work: stopped, merged, offline, and an agent that exited that you
+have seen."
+  (pcase status
+    ((or "permission" "prompt" "comments" "conflicts") "?")
+    ((or "failed" "crashed" "error" "ci failed") (propertize "!" 'face 'bold))
+    ("exited" (and waiting (propertize "!" 'face 'bold)))
+    ((or "ready" "interrupted" "to merge") (if (char-displayable-p ?●) "●" "*"))
+    ((or "starting" "running" "background") (if (char-displayable-p ?◌) "◌" "~"))))
+
 (defconst roost--gap (propertize "\n" 'face '(:height 0.5))
   "A blank line half as tall as the rest, between groups and sections.")
 
@@ -10440,7 +10455,7 @@ When another task in the project has the same name, the start of its ID
 follows, dim, as in `roost-open-task' and tab names, and then a dim ±
 when its changes are large (`roost-large-change').  Cutting the name to
 fit keeps the ID, and the ± while a column of the name is left beside
-them: a row that narrow keeps its room for an urgent status."
+them: a row that narrow keeps its room for its status."
   (let* ((name (roost--field task 'name))
          (id (roost--field task 'id))
          ;; TASK is one of them.
@@ -11206,13 +11221,13 @@ With workspaces, the task of the frame you are in: see `roost--frame-task'."
   "TASK's sidebar line, within WIDTH columns: its name, then its status.
 The status is in its colour when you have something to look at, dim
 when there is only something to know, and not there for an agent you
-have seen that waits for nothing."
+have seen that waits for nothing.  Where its word would leave the name
+under a dozen columns, `roost--status-mark' stands for it."
   (let* ((current (roost--current-task-p task))
          (attention (roost--attention-status task))
          (face (if (roost--waiting-p task)
                    (roost--status-face attention)
                  (roost--status-word-face attention)))
-         (urgent (and face (not (eq face 'roost-dim))))
          ;; After an indent.
          (room (1- width))
          (idle (equal attention "idle"))
@@ -11221,11 +11236,8 @@ have seen that waits for nothing."
          (status (if idle
                      (and (roost--since-looked-shown-p task) (roost--since-looked-text task))
                    (roost--display-status task)))
-         ;; The fewest columns the name takes: one, and the ID that tells
-         ;; it from a task of the same name.
-         (least (string-width (roost--row-name task 1)))
-         ;; A status you should look at shows even where the name then has
-         ;; little room; the others, where its name keeps a dozen columns.
+         ;; A status shows as its word where the name keeps a dozen columns,
+         ;; and as its mark where it would not: the name tells tasks apart.
          ;; What changed since you looked shows only beside the whole name.
          (fits (lambda (label &optional whole)
                  (>= room (+ (if whole
@@ -11236,13 +11248,17 @@ have seen that waits for nothing."
                       (idle (seq-find (lambda (text) (funcall fits text t))
                                       (list status (roost--since-looked-text task t))))
                       ((funcall fits status) status)
-                      (urgent (truncate-string-to-width status (max 1 (- room least 1)) nil nil "…"))))
+                      (t (roost--status-mark attention (roost--waiting-p task)))))
          (name (roost--row-name task (if label (max 1 (- room (string-width label) 1)) room)
                                 (if current 'roost-heading 'default))))
     (let ((row (concat " " name
                        (when label
                          (concat (make-string (max 1 (- room (string-width name) (string-width label))) ?\s)
-                                 (propertize label 'face face))))))
+                                 ;; With a mark's own weight.
+                                 (propertize label 'face
+                                             (if-let* ((own (get-text-property 0 'face label)))
+                                                 (delq nil (list own face))
+                                               face)))))))
       ;; Behind the row's own faces, so its status keeps its colour.
       (when current
         (add-face-text-property 0 (length row) 'roost-current t row))
@@ -11331,8 +11347,10 @@ for any other directory, which asks for a host and a folder first."
             (let ((row (list 'roost-task (roost--key task) 'keymap roost--dashboard-row-map)))
               (insert (apply #'propertize (roost--sidebar-row task width)
                              'mouse-face 'highlight
-                             'help-echo (format "%s\n%s · %s\n%smouse-1: open · mouse-3: actions"
+                             'help-echo (format "%s\n%s\n%s · %s\n%smouse-1: open · mouse-3: actions"
                                                 (roost--field task 'name)
+                                                ;; In full, which a narrow row has no room for.
+                                                (roost--with-since-looked task (roost--row-word task))
                                                 (roost--host-label host)
                                                 (or repo "?")
                                                 (roost--large-change-echo task))

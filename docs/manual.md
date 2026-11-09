@@ -368,7 +368,13 @@ The sidebar and the dashboard give each task a word after its name. The
 table's second column says when a task waits for you: those are the tasks
 `n` visits, the mode line counts and a notification announces. In the
 sidebar, their word is in its colour, and an agent you've seen that waits
-for nothing has none; the dashboard shows every task's word, and counts
+for nothing has none. Where a sidebar is too narrow for a word beside a
+dozen columns of the name, a mark in the word's colour stands for it at
+the row's end: `?` for a task that asks something of you, `!` for
+something that went wrong, `●` when it is your turn and `◌` while the
+agent works. A row with neither is stopped or merged, on a host that is
+away, or waits for nothing. The row's help, when the mouse is over it,
+says the word. The dashboard shows every task's word, and counts
 them by those words at its top, what can't go on without you first. In
 the dashboard and the task panel, the dot before a task's word is dim
 when the task waits for nothing, but for one that failed, crashed or hit

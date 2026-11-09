@@ -4910,13 +4910,47 @@ Read from the layout transient keeps, whose form varies by version."
      (should (eq (funcall word-face (roost--sidebar-row finished 30) "ready") 'roost-status-ready))
      (should (eq (funcall word-face (roost--sidebar-row failed 30) "failed") 'roost-status-failed))
      (should (equal (substring-no-properties (roost--sidebar-row seen 30)) " cleanup"))
-     ;; Where there is little room, what you should look at still shows,
-     ;; and the rest gives way to the name.
+     ;; Where the word would leave the name little room, a mark in its
+     ;; colour stands for it, and the name keeps the row.
      (let ((row (roost--sidebar-row asking 16)))
-       (should (string-suffix-p "permission" row))
-       (should (<= (string-width row) 16)))
-     (should-not (string-match-p "running" (roost--sidebar-row working 16)))
+       (should (equal (substring-no-properties row) " budget-alerts ?"))
+       (should (eq (get-text-property (1- (length row)) 'face row) 'roost-status-permission)))
+     (cl-letf (((symbol-function 'char-displayable-p) #'always))
+       (let ((row (roost--sidebar-row working 16)))
+         (should (equal (substring-no-properties row) " parser-rewri… ◌"))
+         (should (eq (get-text-property (1- (length row)) 'face row) 'roost-dim)))
+       (should (equal (substring-no-properties (roost--sidebar-row finished 7)) " docs ●")))
+     ;; Where they can't be drawn, plain characters do.
+     (cl-letf (((symbol-function 'char-displayable-p) #'ignore))
+       (should (string-suffix-p " ~" (roost--sidebar-row working 16)))
+       (should (string-suffix-p " *" (roost--sidebar-row finished 7))))
+     ;; Something that went wrong keeps its colour, and stands out.
+     (let ((row (roost--sidebar-row failed 9)))
+       (should (equal (substring-no-properties row) " deploy !"))
+       (should (equal (get-text-property (1- (length row)) 'face row) '(bold roost-status-failed))))
      (should (<= (string-width (roost--sidebar-row asking 12)) 12))
+     ;; What neither needs you nor works has no mark: the name has the row.
+     (let ((stopped (funcall task "7777777777777777" "another-long-task-name" "stopped")))
+       (should (equal (substring-no-properties (roost--sidebar-row stopped 16)) " another-long-t…")))
+     (should-not (roost--status-mark "merged" nil))
+     (should-not (roost--status-mark "offline" nil))
+     (should-not (roost--status-mark "idle" nil))
+     ;; An agent that exited, until you have seen it.
+     (should (equal (roost--status-mark "exited" t) "!"))
+     (should-not (roost--status-mark "exited" nil))
+     (dolist (status '("prompt" "comments" "conflicts"))
+       (should (equal (roost--status-mark status t) "?")))
+     (dolist (status '("crashed" "error" "ci failed"))
+       (should (equal (roost--status-mark status t) "!")))
+     ;; The row's help says the status in full, whatever its width.
+     (cl-letf (((symbol-function 'roost--narrowest-width) (lambda (&rest _) 16)))
+       (with-temp-buffer
+         (roost-sidebar-list-mode)
+         (roost--render-sidebar)
+         (goto-char (point-min))
+         (search-forward "budget-alerts ?")
+         (should (string-prefix-p "budget-alerts\npermission\n"
+                                  (get-text-property (match-beginning 0) 'help-echo)))))
      ;; A name another task shares keeps the ID that tells them apart.
      (let ((twin (funcall task "6666666666666666" "budget-alerts" "permission")))
        (dolist (width '(12 16 30))
@@ -7950,7 +7984,7 @@ the host records, and the host what each sends."
                                                     (roost-test--task "4444444444444444" "permission")))))
          (let ((row (roost--sidebar-row twin 12)))
            (should (<= (string-width row) 12))
-           (should (string-match-p " 444444 p…\\'" row))
+           (should (string-match-p " 444444 \\?\\'" row))
            (should-not (string-match-p "±" row)))
          (should (string-match-p "fix auth 444444 ± +permission\\'" (roost--sidebar-row twin 30)))))
      ;; The panel says how large, and where.
