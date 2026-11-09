@@ -4263,6 +4263,29 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(reply["ok"], reply)
         self.assertTrue(own.exists())
 
+    def test_a_commit_in_a_submodule_as_retire_reads_the_agents_worktree_stays(self):
+        # On a branch of lib's, made just before retire reads what x holds,
+        # with lib back where it was.
+        self.add_submodule()
+        task = self.create()
+        own = self.agent_worktree(task)
+        self.check_out_submodules(own)
+        seen = roost.agent_worktree_seen
+        made = []
+
+        def commit_then_see(task, path):
+            if not made:
+                made.append(True)
+                self.git("checkout", "-q", "-b", "idea", cwd=own / "lib")
+                self.commit_in_submodule(own)
+                self.git("checkout", "-q", "--detach", "HEAD~", cwd=own / "lib")
+            return seen(task, path)
+
+        with patch.object(roost, "agent_worktree_seen", commit_then_see):
+            reply = self.request("retire", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertTrue(own.exists())
+
     def test_a_worktree_made_where_the_agents_was_moved_from_stays(self):
         # As Roost reads it to remove it: its own, moved, keeps its Git
         # directory and stamp, and the one there now is another's.

@@ -4934,10 +4934,13 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
     # With worktrees its agent made that hold nothing beyond the task's branch.
     remove_worktrees(store, task, worktree if worktree_exists else None,
                      # As one read says: with nothing past the task's
-                     # branch, nor a file Git doesn't have, as it reads now.
+                     # branch, nor a file Git doesn't have, nor anything
+                     # in its submodules, as it reads now.
                      [entry for entry in agent_work(task, seen=True)
                       if entry["made"] and entry["ahead"] == 0 and not entry["dirty"]
-                      and entry["seen"] and not entry["seen"][0] and not entry["seen"][1]],
+                      and entry["seen"] and not entry["seen"][0] and not entry["seen"][1]
+                      and all(module["commits"] == 0 and not module["stashes"] and not module["changes"]
+                              for module in entry["seen"][3])],
                      teardown=teardown)
     # What a copy stopped partway left, which may hold a secret.
     shutil.rmtree(copy_staging(task["worktree"]), ignore_errors=True)
