@@ -43,6 +43,7 @@ The [manual](docs/manual.md#how-it-works) says how it fits together.
   `.claude/skills/verify-*`: it says which functions each model covers and
   the commit it was last confirmed at. To fix a bug a model found, one of
   the findings a section's skill lists, follow `.claude/skills/fix-a-finding`.
+  A new subsystem with state of its own follows "Adding a machine" there.
 - Tests hold Roost to what it says about security. Every ERT test fails if
   Roost starts a program not in `roost-test--programs`; the helper's
   `Subprocesses` test allows a shell only for the project's own setup and
