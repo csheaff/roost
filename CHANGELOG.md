@@ -10,6 +10,12 @@ What each release changes, and what to do when upgrading. Newest first.
   waiting to be recorded as the turn ended, made the task read `ready`: the
   error was dropped, and an agent with background work notified you as if it
   were done. Nothing to do when upgrading.
+- A task that reads "merged" no longer keeps saying so over commits the
+  merge lacks. When measuring its new commits failed twice in a row, as with
+  a list slower than Emacs waits, Roost stopped asking until something else
+  changed or you pressed `g`. Now it asks again now and then, from every two
+  minutes to every sixteen, until a measurement comes back, and polls go on
+  between. Nothing to do when upgrading.
 - A merge, update or discard that outlasts Emacs's wait on this machine goes on
   to its end, as it does over SSH. Emacs killed it, with Git and its hooks: with
   a `pre-commit` hook over a minute, a squash merge left the task's work staged

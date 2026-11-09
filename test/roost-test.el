@@ -46,6 +46,7 @@
          (roost--pull-requests-asked (make-hash-table :test 'equal))
          (roost--full-refresh-pending (make-hash-table :test 'equal))
          (roost--measures-owed (make-hash-table :test 'equal))
+         (roost--measures-due (make-hash-table :test 'equal))
          (roost--failures (make-hash-table :test 'equal))
          (roost--hosts-loaded t) (roost--remembered-hosts nil)
          (roost-notes-file (expand-file-name "notes.json" (nth 1 ,scratch)))
@@ -7187,8 +7188,9 @@ stopped."
      (roost-test--poll-on)
      (should (equal (roost-test--y-diff) "new")))))
 
-(ert-deftest roost-a-list-that-failed-gives-up-only-on-what-had-its-try ()
-  ;; It measured y again and x for the first time: x still gets its try.
+(ert-deftest roost-a-list-that-failed-owes-again-all-it-asked ()
+  ;; It measured y again and x for the first time: both stay owed, taken
+  ;; up later, as y had its one more try.
   (roost-test--with-held-requests
    (let ((measuring (roost-test--a-poll-sees-y-commit)))
      (funcall (plist-get measuring :failure) "ssh: connection reset")
@@ -7200,7 +7202,9 @@ stopped."
        (should (equal (sort (copy-sequence (roost-test--full both)) #'string<)
                       (list roost-test--x roost-test--y)))
        (funcall (plist-get both :failure) "ssh: connection reset"))
-     (should (equal (gethash "dev" roost--measures-owed) (list roost-test--x))))))
+     (should (equal (sort (copy-sequence (gethash "dev" roost--measures-owed)) #'string<)
+                    (list roost-test--x roost-test--y)))
+     (should (> (cdr (gethash "dev" roost--measures-due)) (float-time))))))
 
 (ert-deftest roost-a-worktrees-pull-request-keeps-what-it-said-beside-a-new-one-of-the-tasks ()
   ;; It says which it is itself: the task's own says nothing of it.
@@ -7312,27 +7316,50 @@ stopped."
      (should (equal (gethash "dev" roost--measures-owed) (list roost-test--y))))))
 
 (ert-deftest roost-a-list-that-always-fails-holds-up-no-polls ()
-  ;; As a full list that takes longer than Emacs waits, however quiet ones
-  ;; answer: it gets one more try, and polls go on as ever.
+  "As a full list that takes longer than Emacs waits, however quiet ones
+answer: it is tried once more at once, then now and then, as polls go
+on, until it answers.  Given up after two, a task whose new commits went
+unmeasured read \"merged\" until something else changed.
+MergedWord.TwoLost.cfg found it."
   (roost-test--with-held-requests
-   (roost-test--measure-both)
-   (roost-refresh)
-   (funcall (plist-get (roost-test--take "list") :failure) "No reply after 60s")
-   (remhash "dev" roost--failures)
-   (roost-refresh t)
-   (let ((poll (roost-test--take "list")))
-     (should (eq (roost-test--full poll) :false))
-     (funcall (plist-get poll :success) (list (roost-test--listed roost-test--x) (roost-test--listed roost-test--y))))
-   (let ((again (roost-test--take "list")))
-     (should (eq (roost-test--full again) t))
-     (funcall (plist-get again :failure) "No reply after 60s"))
-   (should-not (gethash "dev" roost--measures-owed))
-   (remhash "dev" roost--failures)
-   (roost-refresh t)
-   (let ((poll (roost-test--take "list")))
-     (should (eq (roost-test--full poll) :false))
-     (funcall (plist-get poll :success) (list (roost-test--listed roost-test--x) (roost-test--listed roost-test--y))))
-   (should-not roost-test--held)))
+   (let ((now (float-time)) (quiet (lambda ()
+                                     (remhash "dev" roost--failures)
+                                     (roost-refresh t)
+                                     (let ((poll (roost-test--take "list")))
+                                       (should (eq (roost-test--full poll) :false))
+                                       (funcall (plist-get poll :success)
+                                                (list (roost-test--listed roost-test--x)
+                                                      (roost-test--listed roost-test--y)))))))
+     (cl-letf (((symbol-function 'float-time) (lambda (&rest _) now)))
+       (roost-test--measure-both)
+       (roost-refresh)
+       (funcall (plist-get (roost-test--take "list") :failure) "No reply after 60s")
+       (funcall quiet)
+       (let ((again (roost-test--take "list")))
+         (should (eq (roost-test--full again) t))
+         (funcall (plist-get again :failure) "No reply after 60s"))
+       (should (eq (gethash "dev" roost--measures-owed) t))
+       ;; Polls go on meanwhile.
+       (funcall quiet)
+       (should-not roost-test--held)
+       (dolist (wait (list roost--pull-request-interval (* 2 roost--pull-request-interval)))
+         (setq now (+ now wait 1))
+         (funcall quiet)
+         (let ((again (roost-test--take "list")))
+           (should (eq (roost-test--full again) t))
+           (funcall (plist-get again :failure) "No reply after 60s"))
+         (funcall quiet)
+         (should-not roost-test--held))
+       ;; Once it answers, nothing is owed.
+       (setq now (+ now (* 4 roost--pull-request-interval) 1))
+       (funcall quiet)
+       (funcall (plist-get (roost-test--take "list") :success)
+                (list (roost-test--measured (roost-test--listed roost-test--x))
+                      (roost-test--measured (roost-test--listed roost-test--y))))
+       (should-not (gethash "dev" roost--measures-owed))
+       (setq now (+ now 3600))
+       (funcall quiet)
+       (should-not roost-test--held)))))
 
 (ert-deftest roost-a-measurement-asked-again-and-dropped-is-asked-once-more ()
   ;; Dropped as stale, it had no answer to be wrong about: that isn't a try.
