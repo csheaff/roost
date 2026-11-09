@@ -5840,10 +5840,14 @@ def agent_work(task, seen=False):
 def agent_worktree_seen(task, path):
     """What the worktree of TASK's agent at PATH holds that removing it
     would lose, to tell whether anyone has worked there since: its commits
-    not on the task's branch, and every file Git doesn't have."""
-    return [read_git(path, *args).stdout for args in (
-        ("rev-list", "refs/heads/" + task["branch"] + "..HEAD", "--"),
-        ("status", "--porcelain", "--untracked-files=all", "--ignore-submodules=dirty"))]
+    not on the task's branch, and every file Git doesn't have. With no
+    task branch to compare, its HEAD; with no status Git can read, as from
+    a damaged index, how many files it holds."""
+    ahead = read_git(path, "rev-list", "refs/heads/" + task["branch"] + "..HEAD", "--")
+    status = read_git(path, "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=dirty")
+    return [ahead.stdout if ahead.returncode == 0
+            else "HEAD " + read_git(path, "rev-parse", "-q", "--verify", "HEAD").stdout,
+            status.stdout if status.returncode == 0 else "files %d" % files_in(path)]
 
 
 def agent_left(task):

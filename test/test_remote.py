@@ -4208,6 +4208,19 @@ class Lifecycle(unittest.TestCase):
                 self.git("worktree", "remove", "--force", "--force", str(own))
                 self.git("branch", "-D", "worktree-probe")
 
+    def test_work_in_the_agents_worktree_stays_with_the_task_branch_gone(self):
+        # Nothing to count its commits past: what it holds is its HEAD.
+        task = self.create()
+        own = self.agent_worktree(task)
+        self.git("checkout", "-q", "--detach", cwd=task["worktree"])
+        self.git("branch", "-D", task["branch"])
+        told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+        commits = 'cd %s && echo more > hello && git commit -qam more' % shlex.quote(str(own))
+        reply = self.request("discard", id=task["id"], expect=told["commit"], told=told, teardown=commits)
+        self.assertTrue(reply["ok"], reply)
+        self.assertTrue(own.exists())
+        self.assertTrue(roost.ref_exists(self.repo, "worktree-probe"))
+
     def test_a_worktree_made_at_the_agents_path_as_it_goes_stays(self):
         """You remove its agent's worktree, and another session makes one
         there, while Roost reads it to remove it.
