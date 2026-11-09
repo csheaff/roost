@@ -4933,8 +4933,11 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
     stop(store, task, inventory)
     # With worktrees its agent made that hold nothing beyond the task's branch.
     remove_worktrees(store, task, worktree if worktree_exists else None,
+                     # As one read says: with nothing past the task's
+                     # branch, nor a file Git doesn't have, as it reads now.
                      [entry for entry in agent_work(task, seen=True)
-                      if entry["made"] and entry["ahead"] == 0 and not entry["dirty"]],
+                      if entry["made"] and entry["ahead"] == 0 and not entry["dirty"]
+                      and entry["seen"] and not entry["seen"][0] and not entry["seen"][1]],
                      teardown=teardown)
     # What a copy stopped partway left, which may hold a secret.
     shutil.rmtree(copy_staging(task["worktree"]), ignore_errors=True)
@@ -5844,14 +5847,27 @@ def agent_work(task, seen=False):
 def agent_worktree_seen(task, path):
     """What the worktree of TASK's agent at PATH holds that removing it
     would lose, to tell whether anyone has worked there since: its commits
-    not on the task's branch, and every file Git doesn't have. With no
-    task branch to compare, its HEAD; with no status Git can read, as from
-    a damaged index, how many files it holds."""
+    not on the task's branch, or its HEAD with no task branch to compare;
+    every file Git doesn't have, with when each last changed and its size,
+    as one may be written again; and what its submodules hold. None when
+    Git can't say, as with a damaged index: then nothing tells."""
     ahead = read_git(path, "rev-list", "refs/heads/" + task["branch"] + "..HEAD", "--")
-    status = read_git(path, "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=dirty")
+    status = read_git(path, "status", "--porcelain", "-z", "--untracked-files=all", "--ignore-submodules=dirty")
+    if status.returncode:
+        return None
+    files, entries = [], iter(status.stdout.split("\0"))
+    for entry in entries:
+        if entry:
+            if "R" in entry[:2] or "C" in entry[:2]:
+                next(entries, None)  # The name it had.
+            try:
+                info = os.lstat(os.path.join(path, entry[3:]))
+                files.append((entry[3:], info.st_mtime_ns, info.st_size))
+            except OSError:
+                files.append((entry[3:], None, None))
     return [ahead.stdout if ahead.returncode == 0
             else "HEAD " + read_git(path, "rev-parse", "-q", "--verify", "HEAD").stdout,
-            status.stdout if status.returncode == 0 else "files %d" % files_in(path)]
+            status.stdout, files, submodule_work(path)]
 
 
 def agent_left(task):
@@ -5886,8 +5902,10 @@ def remove_agent_worktrees(task, entries):
         commit = read_git(entry["path"], "rev-parse", "HEAD").stdout.strip()
         branch = read_git(entry["path"], "symbolic-ref", "--short", "-q", "HEAD").stdout.strip()
         seen = agent_worktree_seen(task, entry["path"])
-        # Its stamp last: it tells the worktree from one made there since.
-        if seen != entry["seen"] or not is_as_made(task, entry["path"], gitdir):
+        # Then the worktree there, by its Git directory and the stamp in it:
+        # not one made there since, as after it was moved away.
+        if (seen is None or seen != entry["seen"] or worktree_at(task["repo"], entry["path"]) != gitdir
+                or not is_as_made(task, entry["path"], gitdir)):
             continue
         removed = git(task["repo"], "worktree", "remove", "--force", "--force", entry["path"], check=False)
         if removed.returncode == 0 and commit and branch == agent_branch(task, entry["path"]):

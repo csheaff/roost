@@ -4221,6 +4221,78 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(own.exists())
         self.assertTrue(roost.ref_exists(self.repo, "worktree-probe"))
 
+    def test_a_file_written_as_retire_reads_the_agents_worktree_stays(self):
+        # Between its reads of whether x is clean and of what x holds.
+        task = self.create()
+        own = self.agent_worktree(task)
+        seen = roost.agent_worktree_seen
+        written = []
+
+        def write_then_see(task, path):
+            if not written:
+                written.append(True)
+                (own / "scratch").write_text("work\n")
+            return seen(task, path)
+
+        with patch.object(roost, "agent_worktree_seen", write_then_see):
+            reply = self.request("retire", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertTrue((own / "scratch").is_file())
+
+    def test_a_file_written_again_in_the_agents_worktree_stays_on_discard(self):
+        # What you were told of is there still, with more in it.
+        task = self.create()
+        own = self.agent_worktree(task)
+        (own / "scratch").write_text("work\n")
+        told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+        self.assertEqual(told["changes"], 1)
+        more = 'sleep 0.01; echo more >> %s/scratch' % shlex.quote(str(own))
+        reply = self.request("discard", id=task["id"], expect=told["commit"], told=told, teardown=more)
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual((own / "scratch").read_text(), "work\nmore\n")
+
+    def test_work_in_a_submodule_of_the_agents_worktree_stays(self):
+        self.add_submodule()
+        task = self.create()
+        own = self.agent_worktree(task)
+        self.check_out_submodules(own)
+        # On a branch there, with lib back where the task has it.
+        commits = ('cd %s/lib && git checkout -q -b idea && echo more > more && git add more && git commit -qm more'
+                   ' && git checkout -q --detach HEAD~' % shlex.quote(str(own)))
+        reply = self.request("retire", id=task["id"], teardown=commits)
+        self.assertTrue(reply["ok"], reply)
+        self.assertTrue(own.exists())
+
+    def test_a_worktree_made_where_the_agents_was_moved_from_stays(self):
+        # As Roost reads it to remove it: its own, moved, keeps its Git
+        # directory and stamp, and the one there now is another's.
+        task = self.create()
+        own = self.agent_worktree(task)
+        moved = self.root / "moved"
+        seen, remove_agent_worktrees = roost.agent_worktree_seen, roost.remove_agent_worktrees
+        removing, replaced = [], []
+
+        def replace_then_see(task, path):
+            if removing and not replaced:
+                replaced.append(True)
+                self.git("worktree", "unlock", str(own))
+                self.git("worktree", "move", str(own), str(moved))
+                self.git("worktree", "add", "-q", "-b", "other", str(own), task["branch"])
+            return seen(task, path)
+
+        def remove(*args):
+            removing.append(True)
+            return remove_agent_worktrees(*args)
+
+        with patch.object(roost, "agent_worktree_seen", replace_then_see), \
+                patch.object(roost, "remove_agent_worktrees", remove):
+            reply = self.request("retire", id=task["id"])
+        self.assertTrue(replaced)
+        self.assertTrue(reply["ok"], reply)
+        self.assertTrue(own.exists())
+        self.assertTrue(moved.exists())
+        self.assertTrue(roost.ref_exists(self.repo, "other"))
+
     def test_a_worktree_made_at_the_agents_path_as_it_goes_stays(self):
         """You remove its agent's worktree, and another session makes one
         there, while Roost reads it to remove it.

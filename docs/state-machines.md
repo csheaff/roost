@@ -579,8 +579,11 @@ Invariants:
   and it is the one made then, by that stamp in `agentMadeAt`, not another since at
   that path, looked at again just before removal, as a teardown command runs first.
   It goes only as it was when finishing listed it, just after `stop`: its commits past
-  the task's branch and its files Git doesn't have, read again then
-  (`agent_worktree_seen`), and the stamp last.
+  the task's branch (or its HEAD, with no task branch), its files Git doesn't have with
+  when each last changed and its size, and what its submodules hold, read again then
+  (`agent_worktree_seen`); then the worktree at that path, by its Git directory and the
+  stamp there. Retire lists it as clean from that same read. One whose status Git can't
+  read stays.
   No stamp says no. A worktree its agent makes again at that name takes a new stamp.
   A workflow's folder names no agent, so it stays. A record from before
   `agentMade` has no such key, and is never given one: its worktrees still show and
