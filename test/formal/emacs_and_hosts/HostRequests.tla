@@ -55,6 +55,9 @@ Ask(kind) ==
      \* roost--run's condition-case: an error once the process is made
      \* cleans up, deleting the process, and calls FAILURE at once.  Broken
      \* (SetupErrorLeavesProcess), the process runs on and calls back too.
+     \* A quit cleans up the same and goes to the caller with no callback,
+     \* as a signal before any process does: not modelled here, but in
+     \* CachedTasks, whose refresh is what a quit can leave owed.
      \/ /\ reqs' = Append(reqs, [r EXCEPT !.calls = 1,
                                           !.waiting = (Break = "SetupErrorLeavesProcess")])
         /\ inbox' = IF Break = "SetupErrorLeavesProcess" THEN inbox \cup {Msg(i, r)} ELSE inbox

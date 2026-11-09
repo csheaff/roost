@@ -24,6 +24,11 @@ What each release changes, and what to do when upgrading. Newest first.
   with the same ID asked for something else, no longer closes for the task
   made from that something else; it stays, saying what was made. Its note
   now says "from what you sent before". Nothing to do when upgrading.
+- A task you finished no longer comes back for a moment. C-g as `g` started
+  left its list running, and its reply, read before you retired a task, could
+  bring the task back until the next poll; now C-g stops it. And the reply to
+  creating a task, coming after a poll had shown the task and you had
+  finished it, brought it back and opened it. Nothing to do when upgrading.
 - Retiring or discarding a task no longer deletes what was done in its agent's
   own worktree after its agent stopped. A commit or a file made there by the
   teardown command, another session or a process the agent left running was
