@@ -4,6 +4,12 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A Claude task whose turn ends on an API error, or with work left in the
+  background, says so even when its status reports lag behind its hooks. With
+  `roost-program-status` on, a report that the agent was working, still
+  waiting to be recorded as the turn ended, made the task read `ready`: the
+  error was dropped, and an agent with background work notified you as if it
+  were done. Nothing to do when upgrading.
 - A task you finished no longer comes back for a moment. C-g as `g` started
   left its list running, and its reply, read before you retired a task, could
   bring the task back until the next poll; now C-g stops it. And the reply to
