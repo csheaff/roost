@@ -251,7 +251,7 @@ own status is as it would be without it.
   create shows under the one that offered it, each task's panel names the
   other, and you stay where you were.
 - `e` on it, or **Do it here** from its right-click menu, sends that agent
-  `Do this task here: "TITLE"`, as `e` sends a prompt, and the offer no
+  `Do this task here: “TITLE”`, as `e` sends a prompt, and the offer no
   longer waits. The agent wrote the brief, so the title is enough.
 - `x` on it, or **Dismiss**, drops it.
 

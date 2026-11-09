@@ -3176,7 +3176,8 @@ DIRECTORY's checkout, or a project Roost knows it is in."
 (defvar-local roost--compose-fields nil
   "Plist of the draft task: :directory :agent :base :integration :name :source.
 A draft of an agent's offer also has :parent, the key of the task whose
-agent offered it, which the task it makes shows under.")
+agent offered it, which the task it makes shows under, and :offer, the
+offer's ID, which its host drops then, should taking it have failed.")
 (defvar-local roost--compose-body nil
   "Marker at the start of the prompt text.")
 (defvar-local roost--compose-timer nil)
@@ -3915,7 +3916,7 @@ Moved elsewhere, a draft of an offer is a task of its own, under none."
                         (plist-put :integration (and base (roost--compose-integration directory base)))
                         (plist-put :source nil)))
     (unless (and here (equal (roost--project-place here) (roost--project-place directory)))
-      (setq roost--compose-fields (plist-put roost--compose-fields :parent nil)))))
+      (setq roost--compose-fields (plist-put (plist-put roost--compose-fields :parent nil) :offer nil)))))
 
 (defun roost-compose-set-agent ()
   "Choose the draft's agent."
@@ -4205,7 +4206,10 @@ EVENT, a click on the draft's Create button, says which draft."
              ,@(when-let* ((issue (plist-get fields :issue)))
                  (list (cons 'issue issue)))
              ,@(when-let* ((parent (plist-get fields :parent)))
-                 (list (cons 'parent (cadr parent))))))
+                 (list (cons 'parent (cadr parent))))
+             ,@(when-let* (((plist-get fields :parent))
+                           (offer (plist-get fields :offer)))
+                 (list (cons 'offer offer)))))
         ;; Nothing reached the host, as when you quit the question about
         ;; the project's setup command: the draft is ready to create again.
         ((quit error)
@@ -10653,21 +10657,22 @@ be answered with that one's task."
                                                     (concat "refs/heads/" into))))
                           (plist-put :integration (and (stringp into) (not (string-empty-p into)) into))
                           (plist-put :name (alist-get 'title offer))
-                          (plist-put :parent (roost--key task))))
+                          (plist-put :parent (roost--key task))
+                          (plist-put :offer (alist-get 'id offer))))
       (roost--compose-render)))
   ;; Once its draft is open, which holds all of it.
   (roost--take-offer task offer))
 
 (defun roost-offer-here (&optional event)
   "Have the agent that made the offer at point, or clicked in EVENT, do it.
-Its task gets the prompt Do this task here: \"TITLE\", as `e' sends
+Its task gets the prompt Do this task here: “TITLE”, as `e' sends
 one, and the offer no longer waits.  The agent wrote the brief, so the
 title is all it needs."
   (interactive (list last-nonmenu-event))
   (pcase-let ((`(,task ,offer) (roost--offer-at event)))
     (unless (roost--agent-running-p task)
       (user-error "%s's agent isn't running; resume it first" (roost--field task 'name)))
-    (roost--send-text task (format "Do this task here: \"%s\"" (alist-get 'title offer))
+    (roost--send-text task (format "Do this task here: “%s”" (alist-get 'title offer))
                       (lambda (_task) (roost--take-offer task offer)))))
 
 (defun roost-offer-dismiss (&optional event)

@@ -387,7 +387,7 @@ class Lifecycle(unittest.TestCase):
                          (title, brief, task["id"], branch))
         self.assertEqual(tmux_says(child["windowId"], "#{window_name}"), title)
         here = self.offered(task, title=hostile("here"), brief=hostile("here-brief"))
-        line = 'Do this task here: "%s"' % here["title"]
+        line = 'Do this task here: “%s”' % here["title"]
         self.assertTrue(self.request("send", id=task["id"], text=line)["ok"])
         reply_to(task, line)
         self.assertTrue(self.request("take-offer", id=task["id"], offer=here["id"])["ok"])
@@ -9462,6 +9462,15 @@ print(json.dumps(dict(data=data)))
         self.assertEqual((child["integrationBranch"], child["baseCommit"]), ("develop", self.git("rev-parse", "develop")))
         self.assertNotIn("offers", roost.Store(str(self.state)).read(parent["id"]))
         self.wait(child, "ready")
+        # Made from an offer whose take never came, it waits no more, and
+        # the others still do.
+        first, second = self.offered(parent, title="Test calc"), self.offered(parent, title="Lint calc")
+        reply = self.request("create", directory=str(self.repo), name=first["title"], prompt=first["brief"],
+                             parent=parent["id"], offer=first["id"], socket=self.socket,
+                             command=[sys.executable, str(FAKE)])
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(roost.Store(str(self.state)).read(parent["id"])["offers"], [second])
+        self.wait(reply["result"], "ready")
         # A parent that isn't a task's ID makes nothing.
         reply = self.request("create", directory=str(self.repo), name="x", parent="../../etc", socket=self.socket,
                              command=[sys.executable, str(FAKE)])
@@ -9472,7 +9481,7 @@ print(json.dumps(dict(data=data)))
         refused = [("", "Brief"), ("Title", " \n "), ("Two\nlines", "Brief"), ("Tab\there", "Brief"),
                    ("Fix ‮calc", "Brief"), ("Fix calc", "Run ​this"), ("Fix calc", "Press \x1b[201~ Enter"),
                    ("Fix calc", "A \U000e0041 tag"), ("Fix calc", "x" * (roost.PROMPT_ARGUMENT_LIMIT + 1)),
-                   ("x" * (roost.TITLE_LIMIT + 1), "Brief")]
+                   ("x" * (roost.TITLE_LIMIT + 1), "Brief"), ("Fix calc;", "Brief")]
         for title, brief in refused:
             with self.subTest(title=title[:20], brief=brief[:20]):
                 said = self.propose(parent, title, brief)
@@ -9498,7 +9507,7 @@ print(json.dumps(dict(data=data)))
         [offer] = roost.Store(str(self.state)).read(task["id"])["offers"]
         self.assertEqual((offer["title"], offer["brief"]), ("Docs for calc", "Brief for Docs for calc"))
         self.wait(task, "ready", "Stop")
-        line = 'Do this task here: "Docs for calc"'
+        line = 'Do this task here: “Docs for calc”'
         self.assertTrue(self.request("send", id=task["id"], text=line)["ok"])
         self.assertTrue(self.request("take-offer", id=task["id"], offer=offer["id"])["ok"])
         deadline = time.monotonic() + 8

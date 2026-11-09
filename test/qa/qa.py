@@ -3417,7 +3417,7 @@ def offer(qa, repo):
     click_offer(qa, "Tidy the notes", 3)
     qa.wait("the offer gone", lambda s: not offer_row(qa, s, "Tidy the notes"))
     open_task(qa, parent)
-    line = 'PROMPT Do this task here: "Tidy the notes"'
+    line = 'PROMPT Do this task here: “Tidy the notes”'
     qa.wait("the line in its terminal", lambda s: line in (selected_terminal(s) or {}).get("text", ""))
     qa.step("Done where it was offered", expect=[
         ("its agent got a line that names it", lambda s: line in selected_terminal(s)["text"]),

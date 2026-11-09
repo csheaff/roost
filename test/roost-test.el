@@ -14231,7 +14231,8 @@ it of the same ID's, or nil for the first."
                  (should (equal (butlast fields) '("Fix add in calc.py" "refs/heads/develop"
                                                    "add() subtracts.\n\nFix it." "codex")))
                  (should (equal (alist-get 'parent (car (last fields))) "1111111111111111"))
-                 (should-not (assq 'offer (car (last fields)))))
+                 ;; Which its host drops, should taking it have failed.
+                 (should (equal (alist-get 'offer (car (last fields))) "0a1b2c3d")))
                ;; Made, it opens nothing: you stay where you were.
                (should kept)
                (should-not (get-buffer roost--compose-buffer))))
@@ -14300,6 +14301,7 @@ it of the same ID's, or nil for the first."
                  (should (plist-get roost--compose-fields :parent))
                  (roost--compose-move "/ssh:dev:/srv/other/")
                  (should-not (plist-get roost--compose-fields :parent))
+                 (should-not (plist-get roost--compose-fields :offer))
                  (roost--compose-render)
                  (should (string-prefix-p "New task\n" (buffer-string))))))
          (when (get-buffer roost--compose-buffer)
@@ -14326,7 +14328,7 @@ it of the same ID's, or nil for the first."
            (goto-char (roost--offer-row (list (roost--key task) "0a1b2c3d")))
            ;; Its agent gets a line that names it, not the brief it wrote.
            (roost-offer-here)
-           (should (equal sent '("budget" "Do this task here: \"Fix \"add\"\"")))
+           (should (equal sent '("budget" "Do this task here: “Fix \"add\"”")))
            (should (equal acted '(("budget" "take-offer" ((offer . "0a1b2c3d"))))))
            (setq acted nil sent nil)
            (roost-offer-dismiss)

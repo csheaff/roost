@@ -249,6 +249,7 @@ Invariants:
 | Waiting | agent offers | 3 wait, a new title | Waiting | refused; the agent is told to mention it | `propose_task` |
 | any | agent offers | task `stopped` or `retired` | as it was | refused | `propose_task` |
 | Waiting | you open it, do it here, or dismiss it | | Waiting or None | dropped | `take_offer` |
+| Waiting | a task is made from it | its take failed | Waiting or None | dropped | `make_task`, `take_offer` |
 | Waiting | task finished or forgotten | | gone with the record | the question before names them | `roost--offers-sentence` |
 
 In Emacs, opening an offer takes it at once and opens an ordinary
@@ -2956,7 +2957,7 @@ registry lock.
 | `shellPaneId` | `shell`, `spawn`, `stop` | yes |
 | `name`, `task`, `renamedAt` | `rename` | yes |
 | `setupComplete`, `copyComplete`, `submodulesComplete`, `allSubmodules` | `runner` | yes, fresh read each |
-| `offers`, `offersAt` | `propose_task`, `take_offer` | yes |
+| `offers`, `offersAt` | `propose_task`, `take_offer`, `make_task` (the parent's, through `take_offer`) | yes |
 | `mayOffer`, `parent` | `make_task` | yes; never changed |
 
 No lost update found in any of them.

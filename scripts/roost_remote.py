@@ -2124,6 +2124,12 @@ def make_task(store, request, create_id):
             except Exception:
                 abandon(store, task)
                 raise
+            # Made from an offer, which opening it took already, unless that
+            # failed: it waits no more either way.
+            offer = text(request.get("offer"))
+            if parent is not None and offer:
+                with contextlib.suppress(RoostError, OSError):
+                    take_offer(store, store.read(parent), offer)
     return task
 
 
@@ -4317,6 +4323,10 @@ def propose_task(store, task_id, title, brief):
         raise RoostError("Give the task a title and a brief")
     # Refused now, rather than once the user has opened it.
     task_name(title)
+    # tmux takes a ; that ends an argument for the end of a command, and
+    # the title becomes the task's window name.
+    if title.endswith(";"):
+        raise RoostError("The title ends with ;, which tmux takes for the end of a command; leave it off")
     if len(title) > TITLE_LIMIT:
         raise RoostError("The title is %d characters; give it at most %d" % (len(title), TITLE_LIMIT))
     # You read both before anything starts, and a character that doesn't
