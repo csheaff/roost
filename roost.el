@@ -7720,12 +7720,18 @@ is headed so, and the task's own, if any, named below it."
            (branch (alist-get 'branch pr))
            (own (alist-get 'number (roost--field task 'pr))))
       (roost--insert-heading "Pull request" (when branch (concat "from " branch)))
-      (insert "  ")
-      (insert-text-button (roost--pr-number pr)
-                          'follow-link t 'face 'roost-field
-                          'help-echo (alist-get 'url pr)
-                          'action (lambda (_) (browse-url (alist-get 'url pr))))
-      (insert (propertize (format "  %s\n" (alist-get 'url pr)) 'face 'roost-dim))
+      ;; Both open it: the number, and the URL beside it, drawn as a link.
+      (let* ((url (alist-get 'url pr))
+             (open (lambda (label face)
+                     (insert-text-button label 'follow-link t 'face face
+                                         'help-echo (concat "Open " url)
+                                         'action (lambda (_) (browse-url url))))))
+        (insert "  ")
+        (funcall open (roost--pr-number pr) 'roost-field)
+        (when url
+          (insert "  ")
+          (funcall open url 'link))
+        (insert "\n"))
       (roost--insert-indented
        (string-join
         (delq nil
