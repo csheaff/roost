@@ -4391,6 +4391,8 @@ longer shows as crashed, is passed over."
          there failures said)
     ;; Until each replies, opening one of them offers the rest no more.
     (setq roost--resuming (append (mapcar #'roost--key (cons task others)) roost--resuming))
+    ;; A quit as the first asks gets no reply, and the rest aren't asked.
+    (condition-case err
     (cl-labels ((replied (task)
                   (setq roost--resuming (delete (roost--key task) roost--resuming)))
                 (next (rest)
@@ -4429,7 +4431,10 @@ longer shows as crashed, is passed over."
                     (replied task)
                     (push (cons task err) failures)
                     (next others))
-                  (lambda () (roost--stayed-as-it-goes stayed (lambda (still) (setq there still))))))))
+                  (lambda () (roost--stayed-as-it-goes stayed (lambda (still) (setq there still))))))
+      (quit (dolist (one (cons task others))
+              (setq roost--resuming (delete (roost--key one) roost--resuming)))
+            (signal (car err) (cdr err))))))
 
 (defun roost--resumed-message (host total failures)
   "What resuming TOTAL agents on HOST did, with FAILURES, each (TASK . ERROR)."

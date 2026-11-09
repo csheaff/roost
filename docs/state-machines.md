@@ -1240,7 +1240,7 @@ Invariants:
 - I6. Time asleep isn't counted against a request (`roost--expire-request`).
 - I8. A callback that signals is only logged, so whatever it would have done after
   that point doesn't happen. Nothing states this, and drafts depend on it: VIEWS-11.
-- I7. Quit or a signal before the sentinel leaves no flag set, and no process running. `roost--run` catches `error` and `quit`, deleting the process, and passes a quit on to the caller with no callback; the `let*` above its `condition-case` is covered by neither, so a caller that sets a flag first ends it itself: `roost--refresh-host`, `roost--report-turn`.
+- I7. Quit or a signal before the sentinel leaves no flag set, and no process running. `roost--run` catches `error` and `quit`, deleting the process, and passes a quit on to the caller with no callback; the `let*` above its `condition-case` is covered by neither, so a caller that sets a flag first ends it itself: `roost--refresh-host`, `roost--report-turn`, `roost--resume-together`.
 - I9. No timer runs between a request's end and its callback: one that throws, as `with-timeout`'s does, would leave without one (`roost-a-reply-reaches-its-callback-before-any-timer`).
 
 | From | Event | Guard | To | Effect | Code |

@@ -11795,6 +11795,17 @@ answered with `answer'."
        (should (equal (car messages) "Resumed 1 agent on dev"))
        (should-not roost--resuming)))))
 
+(ert-deftest roost-resuming-together-you-quit-offers-them-again ()
+  ;; C-g as the first is asked: no reply comes, nor are the rest asked,
+  ;; so opening one offers to resume them all again.
+  (roost-test--isolated
+   (let ((task (roost-test--crashed-host)))
+     (cl-letf (((symbol-function 'roost--request) (lambda (&rest _) (signal 'quit nil))))
+       (should (eq (condition-case nil (roost--resume-together task (roost--crashed-with task)) (quit 'quit))
+                   'quit))
+       (should-not roost--resuming)
+       (should (roost--crashed-with (gethash '("dev" "3333333333333333") roost--tasks)))))))
+
 (ert-deftest roost-resuming-together-leaves-what-you-do-meanwhile ()
   ;; Each reply waits until the test gives it, as a host's does.
   (roost-test--isolated
