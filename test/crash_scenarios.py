@@ -303,6 +303,10 @@ def offer(box, task, mode=None, at=None):
     if ran.returncode or not replies:
         return dict(ok=False, error="The server exited %s, with nothing to say: %s"
                     % (ran.returncode, ran.stderr.strip()[-400:]), traceback=True)
+    # A JSON-RPC error is the server's own failure, as a bug it caught, never
+    # a refusal of the agent's offer, which comes as a result.
+    if "error" in replies[0]:
+        return dict(ok=False, error="The server answered with an error: %s" % replies[0]["error"], traceback=True)
     result = replies[0].get("result") or {}
     said = "".join(part.get("text", "") for part in result.get("content") or [])
     return dict(ok=False, error=said) if result.get("isError") else dict(ok=True, result=said)

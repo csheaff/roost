@@ -14307,6 +14307,37 @@ it of the same ID's, or nil for the first."
          (when (get-buffer roost--compose-buffer)
            (kill-buffer roost--compose-buffer)))))))
 
+(ert-deftest roost-an-offer-draft-moved-away-and-back-is-a-draft-of-its-own ()
+  ;; Moved to another project and back while Create waits, it no longer
+  ;; shows under the task that offered it, though the task its request
+  ;; made does: a late reply leaves it, saying what was made.
+  (roost-test--isolated
+   (let ((default-directory "/tmp/") made
+         (offer '((id . "0a1b2c3d") (title . "Fix add") (brief . "add() subtracts."))))
+     (save-window-excursion
+       (delete-other-windows)
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--act) #'ignore)
+                     ((symbol-function 'roost--compose-integration) (lambda (&rest _) "main"))
+                     ((symbol-function 'roost--create-task)
+                      (lambda (_directory _name _base _prompt _agent &optional on-success &rest _)
+                        (setq made on-success))))
+             (let ((task (roost--cache-task "dev" (append `((name . "budget") (repo . "/srv/ledger")
+                                                            (integrationBranch . "main") (offers ,offer))
+                                                          (roost-test--task "1111111111111111" "ready")))))
+               (roost--compose-offer task offer)
+               (with-current-buffer roost--compose-buffer
+                 (let ((here (plist-get roost--compose-fields :directory)))
+                   (roost-compose-submit)
+                   (roost--compose-move "/ssh:dev:/srv/other/")
+                   (roost--compose-move here)))
+               (funcall made (append '((parent . "1111111111111111")) (roost-test--task "2222222222222222" "starting")))
+               (should (get-buffer roost--compose-buffer))
+               (with-current-buffer roost--compose-buffer
+                 (should (string-search "Made fix auth from what you sent before" roost--draft-note)))))
+         (when (get-buffer roost--compose-buffer)
+           (kill-buffer roost--compose-buffer)))))))
+
 (ert-deftest roost-an-offer-done-here-or-dismissed-is-taken ()
   (roost-test--isolated
    (let ((roost--current-task nil) (roost-watch-mode t) acted sent
@@ -14316,8 +14347,8 @@ it of the same ID's, or nil for the first."
                   (push (list (roost--field task 'name) action parameters) acted)
                   (when callback (funcall callback task))))
                ((symbol-function 'roost--send-text)
-                (lambda (task text &optional callback &rest _)
-                  (setq sent (list (roost--field task 'name) text))
+                (lambda (task text &optional callback _failure _look id)
+                  (setq sent (list (roost--field task 'name) text id))
                   (funcall callback task))))
        (let ((task (roost--cache-task "dev" (append `((name . "budget") (repo . "/srv/ledger") (live . t)
                                                       (offers ,offer))
@@ -14326,9 +14357,10 @@ it of the same ID's, or nil for the first."
            (roost-dashboard-mode)
            (roost--render-dashboard)
            (goto-char (roost--offer-row (list (roost--key task) "0a1b2c3d")))
-           ;; Its agent gets a line that names it, not the brief it wrote.
+           ;; Its agent gets a line that names it, not the brief it wrote,
+           ;; once however often you ask: its ID is the offer's own.
            (roost-offer-here)
-           (should (equal sent '("budget" "Do this task here: “Fix \"add\"”")))
+           (should (equal sent '("budget" "Do this task here: “Fix \"add\"”" "11111111111111110a1b2c3d")))
            (should (equal acted '(("budget" "take-offer" ((offer . "0a1b2c3d"))))))
            (setq acted nil sent nil)
            (roost-offer-dismiss)

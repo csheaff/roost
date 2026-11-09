@@ -4221,12 +4221,13 @@ EVENT, a click on the draft's Create button, says which draft."
 
 (defun roost--compose-what ()
   "What the draft asks for, to tell whether it says that still.
-All of it, though you have narrowed it to some."
+All of it, though you have narrowed it to some, and the task it would
+show under, which moving it elsewhere and back takes away."
   (save-restriction
     (widen)
     (list (roost--compose-prompt)
           (mapcar (lambda (field) (plist-get roost--compose-fields field))
-                  '(:directory :agent :base :name :issue)))))
+                  '(:directory :agent :base :name :issue :parent)))))
 
 (defun roost--compose-made (buffer fields task what &optional own)
   "Close BUFFER, the draft with FIELDS, as its host made TASK from WHAT.
@@ -10673,7 +10674,11 @@ title is all it needs."
     (unless (roost--agent-running-p task)
       (user-error "%s's agent isn't running; resume it first" (roost--field task 'name)))
     (roost--send-text task (format "Do this task here: “%s”" (alist-get 'title offer))
-                      (lambda (_task) (roost--take-offer task offer)))))
+                      (lambda (_task) (roost--take-offer task offer))
+                      nil nil
+                      ;; The same for the same offer, so that asking again,
+                      ;; as after no reply, pastes it once.
+                      (concat (roost--field task 'id) (alist-get 'id offer)))))
 
 (defun roost-offer-dismiss (&optional event)
   "Dismiss the offer at point, or the one clicked in EVENT.

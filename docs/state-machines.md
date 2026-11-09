@@ -257,8 +257,10 @@ back an offer you took, or hides one made since.
 
 In Emacs, opening an offer takes it at once and opens an ordinary
 [new task draft](#the-new-task-draft): nothing ties the offer to the draft, so the
-draft's states are its own. Do it here is an ordinary [send](#the-send-id) of a fixed
-line, then a take. A take is asked only for a task still listed: one that went while
+draft's states are its own, though what it says includes the task it shows under, so
+a late reply leaves a draft moved elsewhere and back. Do it here is an ordinary
+[send](#the-send-id) of a fixed line, with a send ID of the task's and the offer's IDs,
+so that asking again pastes it once, then a take. A take is asked only for a task still listed: one that went while
 Do it here's prompt went, as its host was forgotten, stays gone.
 Open: none.
 
