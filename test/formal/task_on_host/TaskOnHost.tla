@@ -31,7 +31,8 @@ CONSTANTS
                     \* stamp and removing it
     Break           \* "none", or a guard turned off, for a TaskOnHost.<variant>.cfg:
                     \* "retire_force", "branch_no_cas", "no_safe_check",
-                    \* "agent_only_went", "no_stamp", "agent_any_branch", "no_recount"
+                    \* "agent_only_went", "no_stamp", "agent_any_branch", "no_recount",
+                    \* "x_not_seen_again", "x_stamp_first"
 
 Req   == 1..MaxRequests
 Kinds == {"retire", "merge", "discard", "forget"}
@@ -106,6 +107,11 @@ Losses ==
     IN  [commits |-> Cardinality(own \ others), changes |-> Cardinality(files),
          x |-> IF AsMade THEN 1 ELSE 0]
 
+\* `agent_worktree_seen`: what removing x would lose, to tell whether anyone
+\* has worked there since it was listed: its commits not on the task's
+\* branch, and its files.
+Seen == <<Ahead, xDirty>>
+
 \* `safe_to_delete`: the integration branch has every commit of the task's,
 \* or it has none, and sits where it started.
 SafeToDelete(commit) == commit \subseteq mainCommits
@@ -113,7 +119,7 @@ SafeToDelete(commit) == commit \subseteq mainCommits
 -----------------------------------------------------------------------------
 NoRequest == [kind |-> "none", pc |-> "none", expect |-> {}, told |-> Losses, toldBranch |-> TRUE,
               tip |-> {}, commit |-> {}, hadBranch |-> FALSE, hadWorktree |-> FALSE,
-              agents |-> FALSE, refused |-> FALSE, xHead |-> "wt", xCommits |-> {}]
+              agents |-> FALSE, refused |-> FALSE, seen |-> <<{}, {}>>, stamped |-> FALSE]
 
 Init ==
     /\ tw = "there" /\ twDirty = {} /\ tb = TRUE /\ tbCommits = {} /\ mainCommits = {}
@@ -286,7 +292,7 @@ Start(r) == req[r].pc = "start" /\ regLock = 0 /\ Roost(r,
                 ELSE /\ agent' = "stopped" /\ status' = "stopped" /\ regLock' = r
                      /\ req' = [req EXCEPT ![r].pc = "remove begin", ![r].commit = tbCommits,
                                            ![r].hadBranch = tb, ![r].hadWorktree = (PutBack # "gone"),
-                                           ![r].agents = AsMade]
+                                           ![r].agents = AsMade, ![r].seen = Seen]
        /\ UNCHANGED <<twDirty, tb, tbCommits, mainCommits, mine, mineCommits, x, xOn, xDirty, wt,
                       wtCommits, rec, removing, retiringCommit, noted, wtLock>>
     )
@@ -318,10 +324,12 @@ Checkpoint(r) == req[r].pc = "checkpoint" /\ Roost(r,
     /\ UNCHANGED <<gitVars, rec, status, removing, noted, agent, wtLock>>)
 
 \* Step 8, `stop`; then which of its agent's worktrees go: those made, as
-\* made, ahead by nothing and clean, as `agent_work` says now.
+\* made, ahead by nothing and clean, as `agent_work` says now, and what
+\* they hold (`seen`).
 Stop(r) == req[r].pc = "stop" /\ Roost(r,
     /\ agent' = "stopped" /\ status' = "stopped"
-    /\ req' = [req EXCEPT ![r].pc = "remove begin", ![r].agents = (AsMade /\ Ahead = {} /\ xDirty = {})]
+    /\ req' = [req EXCEPT ![r].pc = "remove begin", ![r].agents = (AsMade /\ Ahead = {} /\ xDirty = {}),
+                           ![r].seen = Seen]
     /\ UNCHANGED <<gitVars, rec, removing, retiringCommit, noted, regLock, wtLock>>)
 
 \* `remove_worktrees`: the worktree lock, its own `removing` mark, and the
@@ -332,24 +340,30 @@ RemoveBegin(r) == req[r].pc = "remove begin" /\ Roost(r,
        []   OTHER      -> Go(r, "remove agents") /\ wtLock' = r /\ removing' = r /\ regLock' = 0
     /\ UNCHANGED <<gitVars, rec, status, retiringCommit, noted, agent>>)
 
-\* `remove_agent_worktrees`, after the teardown command, in two steps with
-\* no lock held between: x checked again by its stamp (`is_as_made`) and its
-\* HEAD and branch read; then `git worktree remove --force --force` of
-\* whatever worktree is at x by then, and the branch read deleted if it is
-\* worktree-x, at the commit read.  Broken: `agent_any_branch` deletes
-\* whichever branch x was on.
+\* `remove_agent_worktrees`, after the teardown command, with no lock held:
+\* `worktree_at` finds a worktree at x; then, as one step, what x holds read
+\* again (`agent_worktree_seen`) and compared with what was listed, its
+\* stamp checked (`is_as_made`), and `git worktree remove --force --force`,
+\* and the branch read deleted if it is worktree-x, at the commit read.
+\* Those are a few Git calls apart in the code, its stamp last, just
+\* before the removal; what is written there in those milliseconds is
+\* lost, as with `require_clean` and the removal of the task's worktree.
+\* Broken: `x_not_seen_again` removes x whatever it holds now;
+\* `x_stamp_first` checks the stamp at the first step, before the window,
+\* as the code did; `agent_any_branch` deletes whichever branch x was on.
 RemoveAgents(r) == req[r].pc = "remove agents" /\ Roost(r,
-    /\ IF req[r].agents /\ AsMade
-       THEN req' = [req EXCEPT ![r].pc = "remove agents go", ![r].xHead = xOn,
-                               ![r].xCommits = IF xOn = "wt" THEN wtCommits ELSE mineCommits]
+    /\ IF req[r].agents /\ x # "none"
+       THEN req' = [req EXCEPT ![r].pc = "remove agents go", ![r].stamped = AsMade]
        ELSE Go(r, "remove worktree")
     /\ UNCHANGED <<gitVars, recordVars, agent, regLock, wtLock>>)
 
 RemoveAgentsGo(r) == req[r].pc = "remove agents go" /\ Roost(r,
-    /\ IF x # "none"
+    /\ IF /\ x # "none"
+          /\ IF Break = "x_stamp_first" THEN req[r].stamped ELSE AsMade
+          /\ Break = "x_not_seen_again" \/ Seen = req[r].seen
        THEN /\ x' = "none" /\ xDirty' = {} /\ xOn' = "wt"
-            /\ IF req[r].xHead = "wt"
-               THEN IF wt /\ wtCommits = req[r].xCommits
+            /\ IF xOn = "wt"
+               THEN IF wt
                     THEN wt' = FALSE /\ wtCommits' = {} /\ UNCHANGED <<mine, mineCommits>>
                     ELSE UNCHANGED <<wt, wtCommits, mine, mineCommits>>
                ELSE /\ UNCHANGED <<wt, wtCommits>>
