@@ -839,13 +839,16 @@ def next_waiting(qa, repo):
                  " (window-resize window (- %d (window-total-width window)) t t))")
         default = int(qa.emacs.eval("roost-sidebar-width"))
         qa.emacs.eval(widen % (18, 18))
-        qa.wait("the narrow sidebar", lambda s: qa.window(s, "roost-sidebar-list-mode")["total"] == 18)
-        qa.step("A narrow sidebar", expect=[
-            ("the one asking keeps its name, and has a ?",
-             lambda s: re.fullmatch(re.escape(asking[:12]) + r".* \?", sidebar_row(qa, s, asking))),
-            ("the one that finished has a disc",
-             lambda s: re.fullmatch(re.escape(streaming[:12]) + r".* ●", sidebar_row(qa, s, streaming)))])
-        qa.emacs.eval(widen % (default, default))
+        # Put back even if the step stops: later journeys read whole words.
+        try:
+            qa.wait("the narrow sidebar", lambda s: qa.window(s, "roost-sidebar-list-mode")["total"] == 18)
+            qa.step("A narrow sidebar", expect=[
+                ("the one asking keeps its name, and has a ?",
+                 lambda s: re.fullmatch(re.escape(asking[:12]) + r".* \?", sidebar_row(qa, s, asking))),
+                ("the one that finished has a disc",
+                 lambda s: re.fullmatch(re.escape(streaming[:12]) + r".* ●", sidebar_row(qa, s, streaming)))])
+        finally:
+            qa.emacs.eval(widen % (default, default))
         qa.wait("the sidebar as it was", lambda s: qa.window(s, "roost-sidebar-list-mode")["total"] == default)
 
     def opened(name):

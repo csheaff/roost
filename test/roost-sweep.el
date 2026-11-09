@@ -1035,9 +1035,12 @@ Return them as (PROBLEM . PLACES), PLACES naming the view, state and width."
                 (row (substring-no-properties (roost--sidebar-row task width))))
            (ert-info ((format "%s at %d: %S" state width row))
              (should (<= (string-width row) width))
-             (when mark
-               (should (or (string-suffix-p (concat " " (roost--display-status task)) row)
-                           (string-suffix-p (concat " " mark) row)))))))))))
+             (if mark
+                 (should (or (string-suffix-p (concat " " (roost--display-status task)) row)
+                             (string-suffix-p (concat " " mark) row)))
+               ;; Only what neither needs you nor works goes without.
+               (should (member attention '("idle" "stopped" "merged" "offline" "exited")))
+               (should-not (roost--waiting-p task))))))))))
 
 (ert-deftest roost-sweep-the-sidebar-needs-no-font-lock ()
   (roost-test--isolated

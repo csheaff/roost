@@ -8504,20 +8504,33 @@ rest of the time."
     ((or "ready" "interrupted" "to merge" "comments" "conflicts") nil)
     (_ 'roost-dim)))
 
+(defvar roost--mark-glyphs nil
+  "The disc and dotted circle of `roost--status-mark', as (DISC . CIRCLE).
+Bound while a view draws its rows, so the display is asked once.")
+
+(defun roost--mark-glyphs ()
+  "The disc and dotted circle of `roost--status-mark', as (DISC . CIRCLE).
+Plain characters where the display can't draw them."
+  (or roost--mark-glyphs
+      (cons (if (char-displayable-p ?●) "●" "*")
+            (if (char-displayable-p ?◌) "◌" "~"))))
+
 (defun roost--status-mark (status waiting)
   "One column that stands for STATUS where its word has no room, or nil.
 STATUS is from `roost--attention-status', and WAITING whether its task
-waits for you.  A ? when the task asks something of you, a ! when
-something went wrong, a disc when it is your turn, and a dotted circle
-while its agent works.  Nil for the rest, which neither need you nor are
-at work: stopped, merged, offline, and an agent that exited that you
-have seen."
-  (pcase status
-    ((or "permission" "prompt" "comments" "conflicts") "?")
-    ((or "failed" "crashed" "error" "ci failed") (propertize "!" 'face 'bold))
-    ("exited" (and waiting (propertize "!" 'face 'bold)))
-    ((or "ready" "interrupted" "to merge") (if (char-displayable-p ?●) "●" "*"))
-    ((or "starting" "running" "background") (if (char-displayable-p ?◌) "◌" "~"))))
+waits for you.  By the colour `roost--status-face' gives it: a ? when
+the task asks something of you, a ! when something went wrong, a disc
+when it is your turn, and a dotted circle while its agent works or
+starts.  Nil for the rest, which neither need you nor are at work:
+stopped, merged, offline, and an agent that exited that you have seen."
+  (pcase (roost--status-face status)
+    ('roost-status-permission "?")
+    ('roost-status-failed (propertize "!" 'face 'bold))
+    ('roost-status-ready (car (roost--mark-glyphs)))
+    ('roost-status-running (cdr (roost--mark-glyphs)))
+    (_ (pcase status
+         ("starting" (cdr (roost--mark-glyphs)))
+         ("exited" (and waiting (propertize "!" 'face 'bold)))))))
 
 (defconst roost--gap (propertize "\n" 'face '(:height 0.5))
   "A blank line half as tall as the rest, between groups and sections.")
@@ -11225,7 +11238,8 @@ have seen that waits for nothing.  Where its word would leave the name
 under a dozen columns, `roost--status-mark' stands for it."
   (let* ((current (roost--current-task-p task))
          (attention (roost--attention-status task))
-         (face (if (roost--waiting-p task)
+         (waiting (roost--waiting-p task))
+         (face (if waiting
                    (roost--status-face attention)
                  (roost--status-word-face attention)))
          ;; After an indent.
@@ -11248,7 +11262,7 @@ under a dozen columns, `roost--status-mark' stands for it."
                       (idle (seq-find (lambda (text) (funcall fits text t))
                                       (list status (roost--since-looked-text task t))))
                       ((funcall fits status) status)
-                      (t (roost--status-mark attention (roost--waiting-p task)))))
+                      (t (roost--status-mark attention waiting))))
          (name (roost--row-name task (if label (max 1 (- room (string-width label) 1)) room)
                                 (if current 'roost-heading 'default))))
     (let ((row (concat " " name
@@ -11304,6 +11318,7 @@ for any other directory, which asks for a host and a folder first."
                                 (when-let* ((task (roost--frame-task))) (roost--key task))
                               'unset))
          (roost--name-counts (roost--count-names))
+         (roost--mark-glyphs (roost--mark-glyphs))
          ;; The line each window showing it starts at, which erasing loses.
          (starts (mapcar (lambda (shown) (cons shown (line-number-at-pos (window-start shown))))
                          (get-buffer-window-list (current-buffer) nil t)))
