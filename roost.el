@@ -3160,10 +3160,11 @@ Nil too on another host, where reading it would hold up the draft."
 
 (defvar-local roost--compose-asked nil
   "The project directory and the ID the draft last asked to create its task with.
-A list, with what it said as it first asked with that ID, from
-`roost--compose-what'.  The ID is the same each time for the same
-project, so its host makes the task once, however often you ask: it
-answers again with the task it made.")
+A list, with what it said each time it asked with that ID, from
+`roost--compose-what', or nil once it asked with that ID for different
+things: which of them made a task isn't known then.  The ID is the same
+each time for the same project, so its host makes the task once, however
+often you ask: it answers again with the task it made.")
 
 (defvar-keymap roost-compose-mode-map
   :doc "Keys for drafting a new Roost task."
@@ -4104,10 +4105,14 @@ EVENT, a click on the draft's Create button, says which draft."
     (let* ((directory (plist-get fields :directory))
            (host (roost--directory-host directory))
            (what (roost--compose-what))
+           (asked (copy-sequence roost--compose-asked))
            ;; Asked again in the same project, as after no reply came, the
-           ;; host answers with the task it made, if it did.
-           (first (progn (unless (equal (car roost--compose-asked) directory)
-                           (setq roost--compose-asked (list directory (roost--random-id) what)))
+           ;; host answers with the task it made, if it did, from what it
+           ;; was asked for first, or since.
+           (first (progn (if (not (equal (car roost--compose-asked) directory))
+                             (setq roost--compose-asked (list directory (roost--random-id) what))
+                           (unless (equal (nth 2 roost--compose-asked) what)
+                             (setcar (nthcdr 2 roost--compose-asked) nil)))
                          (nth 2 roost--compose-asked))))
       (setq roost--compose-submitting t
             roost--draft-note (format " Creating %s…" name))
@@ -4116,7 +4121,7 @@ EVENT, a click on the draft's Create button, says which draft."
            (plist-get fields :directory) name (plist-get fields :base) prompt
            (plist-get fields :agent)
            (lambda (task &optional found)
-             (roost--compose-made buffer fields task (if found first what)))
+             (roost--compose-made buffer fields task (if found first what) t))
            (lambda (err)
              (when (buffer-live-p buffer)
                (with-current-buffer buffer
@@ -4141,7 +4146,9 @@ EVENT, a click on the draft's Create button, says which draft."
         ;; the project's setup command: the draft is ready to create again.
         ((quit error)
          (setq roost--compose-submitting nil
-               roost--draft-note nil)
+               roost--draft-note nil
+               ;; Nor was it asked for what it says now.
+               roost--compose-asked asked)
          (signal (car err) (cdr err)))))))
 
 (defun roost--compose-what ()
@@ -4153,12 +4160,14 @@ All of it, though you have narrowed it to some."
           (mapcar (lambda (field) (plist-get roost--compose-fields field))
                   '(:directory :agent :base :name :issue)))))
 
-(defun roost--compose-made (buffer fields task what)
+(defun roost--compose-made (buffer fields task what &optional own)
   "Close BUFFER, the draft with FIELDS, as its host made TASK from WHAT.
-WHAT is as `roost--compose-what' gives it.  An Org entry it was drafted
-from links to TASK, if it can.  A draft that says something else now is
-yours, as when you wrote on after asking, or changed it after no reply:
-it stays, saying what was made, and this returns non-nil."
+WHAT is as `roost--compose-what' gives it, or nil if not known.  OWN
+says this is the reply to the draft's request, not a poll's news of an
+earlier one.  An Org entry it was drafted from links to TASK, if it can.
+A draft that says something else now is yours, as when you wrote on
+after asking, or changed it after no reply: it stays, saying what was
+made, and this returns non-nil."
   (when-let* ((marker (plist-get fields :org)))
     (condition-case err
         (roost--org-link marker task)
@@ -4168,14 +4177,17 @@ it stays, saying what was made, and this returns non-nil."
                 (with-current-buffer buffer (not (equal (roost--compose-what) what)))))
       (progn (roost--close-buffer buffer) nil)
     (with-current-buffer buffer
-      ;; Whatever you ask for from here on is another task.
-      (setq roost--compose-submitting nil
-            roost--compose-asked nil
-            roost--compose-fields (plist-put roost--compose-fields :org nil)
-            roost--draft-note
-            (format " Made %s from what you sent first; this draft is as you left it · %s makes another task"
-                    (roost--field task 'name)
-                    (substitute-command-keys "\\[roost-compose-submit]")))
+      (setq roost--compose-fields (plist-put roost--compose-fields :org nil))
+      ;; Unless a request of its own is out, as you asked again since the
+      ;; poll that found this: it says what it made in its own time.
+      (unless (and roost--compose-submitting (not own))
+        ;; Whatever you ask for from here on is another task.
+        (setq roost--compose-submitting nil
+              roost--compose-asked nil
+              roost--draft-note
+              (format " Made %s from what you sent before; this draft is as you left it · %s makes another task"
+                      (roost--field task 'name)
+                      (substitute-command-keys "\\[roost-compose-submit]"))))
       (force-mode-line-update))
     t))
 
