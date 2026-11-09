@@ -578,6 +578,9 @@ Invariants:
   made it since the task started (`made_since`, by the `commondir` Git writes once);
   and it is the one made then, by that stamp in `agentMadeAt`, not another since at
   that path, looked at again just before removal, as a teardown command runs first.
+  It goes only as it was when finishing listed it, just after `stop`: its commits past
+  the task's branch and its files Git doesn't have, read again then
+  (`agent_worktree_seen`), and the stamp last.
   No stamp says no. A worktree its agent makes again at that name takes a new stamp.
   A workflow's folder names no agent, so it stays. A record from before
   `agentMade` has no such key, and is never given one: its worktrees still show and
@@ -594,7 +597,8 @@ Invariants:
 | Unknown, Been there | hook | says the agent made it | Made | saved | `update_hook`, `ClaudeAgent.made_worktree` |
 | Made | retire | holds work | refused | names it, says what to do | `require_agent_work_kept` |
 | Made | retire | idle | Gone | `git worktree remove --force --force`, then the branch | `remove_agent_worktrees` |
-| Made | discard | | Gone | the same, whatever it holds | `remove_agent_worktrees` |
+| Made | discard | | Gone | the same, whatever it held when counted | `remove_agent_worktrees` |
+| Made | retire, discard | anyone worked there since it was listed, or it isn't the one made | stays | so does its branch; the reply names both | `remove_agent_worktrees`, `agent_left` |
 | Made | Git can't remove it | | stays | so does its branch; the reply says both | `remove_agent_worktrees`, `agent_left` |
 | Made | on another branch | | Gone | that branch stays, and `worktree-<folder>`, which the reply names | `remove_agent_worktrees`, `agent_left` |
 | Been there | retire, discard | | stays | the reply says so; work there refuses nothing | `agent_left` |

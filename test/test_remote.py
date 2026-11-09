@@ -4178,6 +4178,67 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(own.exists())
         self.assertTrue(roost.ref_exists(self.repo, "worktree-probe"))
 
+    def test_work_in_the_agents_worktree_after_it_stopped_stays(self):
+        """Retire and discard look at its agent's worktree as its agent
+        stops; something else may work there before it goes, as the
+        teardown command does here. What it left stays, and the reply says
+        so. The model found it: TaskOnHost.x-not-seen-again*.cfg."""
+        own = self.repo / ".claude" / "worktrees" / "probe"
+        commits = 'cd %s && echo more > hello && git commit -qam more' % shlex.quote(str(own))
+        writes = 'echo new > %s/scratch' % shlex.quote(str(own))
+        for action, command in (("retire", commits), ("retire", writes), ("discard", commits), ("discard", writes)):
+            with self.subTest(action=action, command=command):
+                task = self.create()
+                self.agent_worktree(task)
+                told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+                self.assertEqual((told["commits"], told["changes"], told["agentWorktrees"]), (0, 0, 1))
+                head = self.git("rev-parse", "worktree-probe")
+                if action == "discard":
+                    reply = self.request("discard", id=task["id"], expect=told["commit"], told=told, teardown=command)
+                else:
+                    reply = self.request("retire", id=task["id"], teardown=command)
+                self.assertTrue(reply["ok"], reply)
+                self.assertTrue(own.exists())
+                self.assertTrue(roost.ref_exists(self.repo, "worktree-probe"))
+                self.assertEqual(reply["result"]["leftBehind"], ["worktree %s" % own.resolve(), "branch worktree-probe"])
+                if command == commits:
+                    self.assertNotEqual(self.git("rev-parse", "worktree-probe"), head)
+                else:
+                    self.assertTrue((own / "scratch").is_file())
+                self.git("worktree", "remove", "--force", "--force", str(own))
+                self.git("branch", "-D", "worktree-probe")
+
+    def test_a_worktree_made_at_the_agents_path_as_it_goes_stays(self):
+        """You remove its agent's worktree, and another session makes one
+        there, while Roost reads it to remove it.
+        The model found it: TaskOnHost.x-stamp-first.cfg."""
+        task = self.create()
+        own = self.agent_worktree(task)
+        read_git, remove_agent_worktrees = roost.read_git, roost.remove_agent_worktrees
+        removing, replaced = [], []
+
+        def replace_then_read(repo, *args, **kwargs):
+            # As it reads what x holds, once it has found x there.
+            if removing and Path(repo).resolve() == own.resolve() and args[-1:] == ("HEAD",) and not replaced:
+                replaced.append(True)
+                self.git("worktree", "remove", "--force", "--force", str(own))
+                self.git("branch", "-D", "worktree-probe")
+                time.sleep(0.01)
+                self.git("worktree", "add", "-q", "-b", "worktree-probe", str(own), task["branch"])
+            return read_git(repo, *args, **kwargs)
+
+        def remove(*args):
+            removing.append(True)
+            return remove_agent_worktrees(*args)
+
+        with patch.object(roost, "read_git", replace_then_read), \
+                patch.object(roost, "remove_agent_worktrees", remove):
+            reply = self.request("retire", id=task["id"])
+        self.assertTrue(replaced)
+        self.assertTrue(reply["ok"], reply)
+        self.assertTrue(own.exists())
+        self.assertTrue(roost.ref_exists(self.repo, "worktree-probe"))
+
     def test_a_subagent_of_another_id_didnt_make_its_folder(self):
         task = self.create()
         store = roost.Store(str(self.state))

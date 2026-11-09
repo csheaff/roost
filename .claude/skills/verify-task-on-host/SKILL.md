@@ -20,7 +20,9 @@ finishes a task. TLC tries every order of its steps, within small bounds:
 two requests for the same task at once (a retry beside the original, which
 goes on once Emacs stops waiting), a request killed between any two steps,
 the agent working until `stop` closes its pane while its record says it's
-idle, and others working in the repository's `.claude/worktrees`.
+idle, others working in the repository's `.claude/worktrees`, in the
+worktree its agent made too, and another worktree made at its path as
+Roost removes it.
 `make crash` kills one request at each step; this model reaches what that
 doesn't: interleavings, and the moments between a read and the act on it.
 
@@ -42,7 +44,7 @@ doesn't: interleavings, and the moments between a read and the act on it.
 python3 test/formal/check.py task_on_host
 ```
 
-About 50 s, ten runs. `TaskOnHost.cfg` must pass. Each
+About 70 s, eleven runs. `TaskOnHost.cfg` must pass. Each
 `TaskOnHost.<variant>.cfg` breaks one guard, through the `Break` constant,
 and must fail on the rule its first line names: that proves each rule can
 still fail. `make formal` runs every model. TLC and Java come from mise.
@@ -63,15 +65,16 @@ or `discard` calls them, needs the model checked against it.
 | `Start` | `rpc` (lock, `read_to_act_on`), `require_not_removing`, `forget`, `retire` up to `merging_in`, `discard` up to `stop`, `discard_losses`, `put_back_removed` |
 | `GitMerge`, `AfterMerge` | `integrating`, `merge_task`, `retire` after the merge |
 | `Checkpoint` | `safe_to_delete`, `retiringCommit` in `retire` |
-| `Stop` | `stop`, the list of agent worktrees `retire` passes to `remove_worktrees` |
-| `RemoveBegin` … `RemoveEnd` | `remove_worktrees`, `holding_worktree`, `remove_agent_worktrees`, `run_teardown` |
+| `Stop` | `stop`, the list of agent worktrees `retire` passes to `remove_worktrees`, with `seen` |
+| `RemoveBegin` … `RemoveEnd` | `remove_worktrees`, `holding_worktree`, `remove_agent_worktrees`, `agent_worktree_seen`, `run_teardown` |
 | `DeleteBranch`, `RemoveRecord` | `delete_branch`, `Store.remove` |
 | `AsMade`, `Ahead`, `Losses` | `is_as_made`, `made_since`, `agent_work`, `discard_losses` |
 | `Hook`, `AgentMakesX`, `AgentEntersX` | `update_hook`, `agent_worktree`, `ClaudeAgent.made_worktree` |
 | `Crash` | what a reboot leaves: locks freed, `removing` mark kept |
 
-Last confirmed against the code at commit `a627a3a`. If `git log
-a627a3a..HEAD -- scripts/roost_remote.py` shows changes to anything above,
+Last confirmed against the code at commit `e910487`, with the change
+to `remove_agent_worktrees` that came with this line. If `git log
+e910487..HEAD -- scripts/roost_remote.py` shows changes to anything above,
 check the model against them before you trust a pass, and move this commit
 forward only once you have.
 
@@ -113,36 +116,16 @@ a merge that conflicts or a hook that refuses it (each changes nothing),
 submodules, links and moved worktrees (`check_worktree`), records from older
 helpers, and a second task. `discard` counts its losses and stops the agent
 in one step: an agent's write in the moment between them is lost untold, as
-stopping first would stop an agent you didn't agree to stop.
+stopping first would stop an agent you didn't agree to stop. Likewise
+`remove_agent_worktrees` reads what x holds, checks its stamp and removes
+it a few Git calls apart, and the model takes those as one step, as it does
+`require_clean` and the removal of the task's worktree: what is written
+there in those milliseconds is lost.
 
 ## Known findings
 
-`TaskOnHost.others-in-agent-worktree.cfg` shows it for retire, and
-`TaskOnHost.others-in-agent-worktree-discard.cfg` for discard; each expects
-its rule to fail. Retire lists its agent's worktree as idle just after `stop`, under the
-registry lock. `remove_worktrees` then lets the lock go and runs the
-teardown command; only after that does `remove_agent_worktrees` look at
-that worktree again, by its stamp but not by what it holds, remove it with
-`--force --force`, and delete `worktree-<folder>` at whatever commit it has
-then. Anything another session, another task's agent, a process the agent
-left running, or the teardown command commits or writes there meanwhile is
-gone, and the reply's `leftBehind` doesn't say so. Seen in real Git: a
-teardown command that commits in the agent's worktree, then retire, leaves
-the commit on no branch and the file gone. Discard is the same: it counts
-that worktree and stops the agent, and what is written there before the
-forced removal is lost, more than you were told.
-
-When it is fixed (look again at `ahead` and `dirty` where it removes, or
-count again for a discard), mirror the fix in `RemoveAgents`, and the
-config for each side fixed should pass: delete it. Once both are, set
-`OthersWorkInX = TRUE` in `TaskOnHost.cfg`.
-
-`TaskOnHost.replaced-in-removal.cfg` expects `OnlyItsOwn` to fail.
-`remove_agent_worktrees` checks x by its stamp (`is_as_made`), reads its
-HEAD and branch, and then removes whatever worktree is at x, with no lock
-held between: `RemoveAgents`, then `RemoveAgentsGo`. If you remove x in that
-moment and someone else makes a worktree there, Roost force-removes theirs.
-The window is a few Git calls long. When it is fixed (check the worktree's
-identity again as part of the removal, or remove by the gitdir checked), mirror it
-in `RemoveAgentsGo`, delete the config, and set `ReplaceInWindow = TRUE` in
-the others.
+None. `TaskOnHost.x-not-seen-again.cfg`, its `-discard` twin and
+`TaskOnHost.x-stamp-first.cfg` keep what the model once found: retire and
+discard removed the worktree its agent made with `--force --force` after
+the teardown command, by its stamp but not by what it held, and checked
+that stamp before reading it, with no lock between.

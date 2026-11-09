@@ -4,6 +4,13 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Retiring or discarding a task no longer deletes what was done in its agent's
+  own worktree after its agent stopped. A commit or a file made there by the
+  teardown command, another session or a process the agent left running was
+  gone, its branch deleted, and the reply said nothing was left behind. Now that
+  worktree and its branch stay, and the reply names them, as it does one Git
+  couldn't remove; so does a worktree made at that path as Roost removed it.
+  Nothing to do when upgrading.
 - A merge, update or discard that outlasts Emacs's wait on this machine goes on
   to its end, as it does over SSH. Emacs killed it, with Git and its hooks: with
   a `pre-commit` hook over a minute, a squash merge left the task's work staged
