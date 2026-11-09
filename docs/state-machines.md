@@ -9,6 +9,7 @@ Change one of these machines and you change its table here. A new way into a sta
 or out of one, goes in the same commit as the code.
 
 - [How to read this](#how-to-read-this)
+- [Adding a machine](#adding-a-machine), and how its model and fixes follow
 - [The map](#the-map)
 - [What could go wrong](#what-could-go-wrong), ranked
 - Machines: [a task on its host](#a-task-on-its-host),
@@ -38,6 +39,27 @@ Each machine has:
 
 Finding IDs say which area of the audit found them: `LC` for a task's lifecycle,
 `STATUS`, `REQUESTS`, `FORGE` and `VIEWS`.
+
+## Adding a machine
+
+Do this for a subsystem with state of its own, such as a new kind of task, a request
+that outlives Emacs's wait, or a view that waits on a host. Do it too for a section
+whose code has changed so much that its model no longer fits. A change to one
+transition doesn't need it: change its table and follow the section's `verify-*`
+skill.
+
+1. Map it here: its states and how to tell them apart, its invariants with the harm
+   each one guards against, and its transitions by function.
+2. Fix what you can reproduce by hand, each with a test that fails first. Write
+   suspected races, retries and crashes down as open questions.
+3. Model it with `/pstack:create-formal-verification-skill`, naming the section and
+   its open questions. That makes `.claude/skills/verify-<section>` and a folder under
+   `test/formal`, with variants that break its guards and a finding config for each
+   bug it confirms. Draw the main flows with `/pstack:statechart`.
+4. Fix each finding with `.claude/skills/fix-a-finding`, one pull request per group.
+5. From then on, a change to its code follows its `verify-*` skill. After a big
+   refactor, `/pstack:maintain-formal-verification-skill` brings the model back in
+   line.
 
 ## The map
 
