@@ -252,7 +252,12 @@ Larger, or undecided.
   quicker to judge. In ParallelPilot's trial, the developer saw and could
   change the planner's split before any agent started
   ([ParallelPilot](https://arxiv.org/html/2609.33113v1)), so a split here
-  would wait for your yes too.
+  would wait for your yes too. Agents offering tasks you start
+  (`roost-agent-offers`) is the small part of this now in Roost, on trial
+  ([#203](https://github.com/csheaff/roost/issues/203)): what it may grow,
+  if real offers ask for it, is reading the tasks an offer started, setting
+  an offer aside for later, and Codex, Pi and OpenCode, each after a
+  recorded live run. A fuller build is on branch `agent-offered-tasks`.
 - **A map of the agent's work** beside its terminal: the files it reads and
   edits over time, drawn with Emacs 32's canvas images. Prototype on branch
   `work-map`.

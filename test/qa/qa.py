@@ -2763,6 +2763,35 @@ def go_other_directory(qa, target):
     qa.click_text("Other directory…", "roost-sidebar-list-mode")
 
 
+def offer_row(qa, screen, title):
+    """Whether the sidebar lists an offer of TITLE under its task."""
+    return any(re.match(r" +%s.* offer$" % re.escape(title), line) for line in sidebar_rows(screen).split("\n"))
+
+
+def click_offer(qa, title, button=1):
+    """Click the offer of TITLE in the sidebar, which many tasks can scroll
+    out of sight."""
+    qa.emacs.eval("(qa-scroll-to-text %s \"roost-sidebar-list-mode\")" % lisp(title))
+    qa.click_text(title, "roost-sidebar-list-mode", button)
+
+
+WALK_OFFER = "Tally it later"
+
+
+def draft_kept(qa):
+    """Whether a draft still holds what the walk left half written."""
+    return any("Half a thought" in draft for draft in qa.emacs.json("(json-encode (vconcat (qa-drafts)))"))
+
+
+def go_offer(qa, target):
+    # TARGET's agent offers a task as you were away: sent the prompt as `e'
+    # sends one, which moves nothing. Then a click on the offer.
+    qa.emacs.eval("(progn (roost--act (seq-find (lambda (task) (equal (roost--field task 'name) %s)) (roost-tasks))"
+                  " \"send\" '((text . %s))) t)" % (lisp(target), lisp("offer " + WALK_OFFER)))
+    qa.wait("its offer", lambda s: offer_row(qa, s, WALK_OFFER))
+    click_offer(qa, WALK_OFFER)
+
+
 WALK_INTERRUPTERS = [
     ("a click on another task", go_click, "other"),
     ("l in the sidebar", go_switch, "other"),
@@ -2779,6 +2808,7 @@ WALK_INTERRUPTERS = [
     ("a click on a notification", go_notification, "other"),
     ("a click in the terminal", go_terminal, None),
     ("a click on a project to start a task in", go_project, None),
+    ("a click on an agent's offer", go_offer, "other"),
     ("a click on Other directory…", go_other_directory, None),
 ]
 
@@ -2789,6 +2819,8 @@ def walk_away(qa, repo):
     draft, a task still opening, a mouse press in a terminal.  Then go to
     a task another way.  The task you went to opens, what you left is quit
     or kept, and nothing waits unseen."""
+    # So that the other task's agent can offer one.
+    qa.emacs.eval("(setq roost-agent-offers t)")
     home = start_task(qa, "Sort the notes")
     # A change of its own, not committed: a line to write a note on in
     # Magit, and a file discarding it would lose.
@@ -2856,6 +2888,16 @@ def walk_away(qa, repo):
                 # A draft begun stays as it is; an untouched one is the project's.
                 opens = ("a new task's draft opens, selected",
                          lambda s: (qa.window(s, "roost-compose-mode") or {}).get("selected"))
+            elif go is go_offer:
+                # A new task's draft you wrote in stays, and so does the
+                # offer; else the offer opens as a draft, and is taken.
+                opens = (("your draft stays, and the offer waits",
+                          lambda s: draft_kept(qa) and offer_row(qa, s, WALK_OFFER))
+                         if leave is leave_draft else
+                         ("the offer's draft opens, selected, and the offer is taken",
+                          lambda s: (qa.window(s, "roost-compose-mode") or {}).get("selected")
+                          and "offered by " + target in qa.window(s, "roost-compose-mode")["text"]
+                          and not offer_row(qa, s, WALK_OFFER)))
             elif go is go_other_directory:
                 # Where more than one host is known, it asks which first.
                 opens = ("its host or folder is the one question open",
@@ -2900,8 +2942,9 @@ def walk_away(qa, repo):
             qa.step(pair, expect=expect)
             if go is go_other_directory:
                 qa.emacs.eval("(setq use-file-dialog t)")
-    # GitHub as other journeys find it.
+    # GitHub and offers as other journeys find them.
     github(qa, list=[], reviews={})
+    qa.emacs.eval("(setq roost-agent-offers nil)")
 
 
 @journey("A second frame")
@@ -3313,6 +3356,87 @@ def fork(qa, repo):
          lambda s: "Fork me" in qa.git(repo, "log", "--format=%s", "-3",
                                        qa.git(repo, "branch", "--list", "--format=%(refname:short)",
                                               "roost/%s-*" % fork_name)))])
+
+
+@journey("A task an agent offers")
+def offer(qa, repo):
+    """An agent offers a task of its own, which waits under the task that
+    offered it. Opening it takes it, as a draft that starts it under that
+    task, where each panel names the other, and you stay where you were.
+    Or its agent does it, or you dismiss it."""
+    qa.emacs.eval("(setq roost-agent-offers t)")
+    parent = new_task(qa, "offer Document the notes")
+    qa.status(parent, "ready", "idle")
+
+    def under(screen, title, word=None):
+        lines = sidebar_rows(screen).split("\n")
+        row = next((i for i, line in enumerate(lines) if line.startswith(" " + parent[:12])), None)
+        return row is not None and row + 1 < len(lines) and lines[row + 1].startswith("   " + title[:12]) \
+            and (word is None or lines[row + 1].endswith(" " + word))
+
+    qa.wait("the offer under its task", lambda s: under(s, "Document the notes", "offer"))
+    # By name: n goes first to what other journeys left waiting longer.
+    open_task(qa, parent)
+    qa.step("The agent offers a task, which waits under its own", expect=[
+        ("the sidebar lists it under the task that offered it", lambda s: under(s, "Document the notes", "offer")),
+        ("the agent says where it waits",
+         lambda s: "It waits in Roost under this task" in selected_terminal(s)["text"])])
+
+    click_offer(qa, "Document the notes")
+    draft = lambda s: qa.window(s, "roost-compose-mode") or {}
+    qa.wait("its draft", lambda s: draft(s).get("selected"))
+    qa.wait("the offer taken", lambda s: not offer_row(qa, s, "Document the notes"))
+    qa.step("Opening it takes it, as a draft filled in", expect=[
+        ("it names the task that offered it", lambda s: "New task, offered by " + parent in draft(s)["text"]),
+        ("its prompt is the agent's brief", lambda s: "Brief for Document the notes" in draft(s)["text"]),
+        ("an ordinary draft's buttons", lambda s: draft(s).get("header", "").endswith(" Cancel   Create ")),
+        ("the offer no longer waits", lambda s: not offer_row(qa, s, "Document the notes"))])
+    before = {t["key"] for t in qa.screen()["tasks"]}
+    qa.click_in("header", " Create ")
+    qa.wait("the task it offered", lambda s: {t["key"] for t in s["tasks"]} - before)
+    qa.wait("its row", lambda s: under(s, "Document the notes"))
+    qa.step("Started under the task that offered it, and you stay where you were", expect=[
+        ("the sidebar shows it indented under that task", lambda s: under(s, "Document the notes")),
+        ("the draft is gone", lambda s: not draft(s)),
+        ("the terminal of the task that offered it is still yours",
+         lambda s: (s.get("task") or {}).get("name") == parent and selected_terminal(s))])
+    open_task(qa, "Document the notes")
+    qa.step("Its panel names where it came from", expect=[
+        ("it says which task it was started from",
+         lambda s: re.search(r"Started from\s+%s" % re.escape(parent), panel_text(qa, s)))])
+    open_task(qa, parent)
+    qa.step("The other panel names it", expect=[
+        ("it says which task it started", lambda s: re.search(r"Started\s+Document the notes", panel_text(qa, s)))])
+
+    # Done by the agent that offered it, from the offer's menu.
+    qa.type("offer Tidy the notes\r")
+    qa.wait("the second offer", lambda s: offer_row(qa, s, "Tidy the notes"))
+    qa.status(parent, "ready", "idle")
+    qa.emacs.eval("(qa-take-popups)")
+    qa.answer_popups("Do it here")
+    click_offer(qa, "Tidy the notes", 3)
+    qa.wait("the offer gone", lambda s: not offer_row(qa, s, "Tidy the notes"))
+    open_task(qa, parent)
+    line = 'PROMPT Do this task here: "Tidy the notes"'
+    qa.wait("the line in its terminal", lambda s: line in (selected_terminal(s) or {}).get("text", ""))
+    qa.step("Done where it was offered", expect=[
+        ("its agent got a line that names it", lambda s: line in selected_terminal(s)["text"]),
+        ("the offer no longer waits, and started nothing",
+         lambda s: not offer_row(qa, s, "Tidy the notes") and not qa.task(s, "Tidy the notes"))])
+
+    # Dismissed, from its menu too.
+    qa.status(parent, "ready", "idle")
+    qa.type("offer Lint the notes\r")
+    qa.wait("the third offer", lambda s: offer_row(qa, s, "Lint the notes"))
+    qa.emacs.eval("(qa-take-popups)")
+    qa.answer_popups("Dismiss")
+    click_offer(qa, "Lint the notes", 3)
+    qa.wait("the offer gone", lambda s: not offer_row(qa, s, "Lint the notes"))
+    qa.step("Dismissed", expect=[
+        ("the offer no longer waits, and started nothing",
+         lambda s: not offer_row(qa, s, "Lint the notes") and not qa.task(s, "Lint the notes")),
+        ("the echo area says so", lambda s: "Dismissed " + parent in (s["echo"] or ""))])
+    qa.emacs.eval("(setq roost-agent-offers nil)")
 
 
 @journey("Start from another branch")
@@ -3968,7 +4092,7 @@ JOURNEYS = [sweep, answer, next_waiting, fold, resize, merge, review, notes, sin
             search, workload, question_left,
             walk_away,
             frames, draft_frames, org, drafts, draft_fields, by_clicks, clicks, overlap, region, tabs, own_workspace,
-            forget, rename, fork, other_branch, switched_branch, merged, large, pull_request, merge_request, exits,
+            forget, rename, fork, offer, other_branch, switched_branch, merged, large, pull_request, merge_request, exits,
             include, slow_create,
             unreachable,
             doctor, scrollback,

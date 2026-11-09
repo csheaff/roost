@@ -175,6 +175,8 @@ what its host said when it read it.")
                    (roost-sweep-late--became record "discarded")))
       ("shell" (cons '(shellPaneId . "%9") record))
       ("update" (cons '(update (changed . t)) record))
+      ("take-offer" (cons `(offersAt . ,(roost-sweep-late--now))
+                          (assq-delete-all 'offersAt (assq-delete-all 'offers record))))
       ("pr" (cons `(pr (number . 12) (url . "https://example.com/12")) (assq-delete-all 'pr record)))
       (_ record))))
 
@@ -207,7 +209,7 @@ SUCCESS and FAILURE take it when it comes.  Its host reads the world now."
       ("create" (unless (assq 'alreadyMade reply)
                   (setq roost-sweep-late--records
                         (append roost-sweep-late--records (list (cons (alist-get 'id reply) reply))))))
-      ((or "stop" "resume" "rename" "shell" "pr")
+      ((or "stop" "resume" "rename" "shell" "pr" "take-offer")
        (when (assoc id roost-sweep-late--records)
          (setf (alist-get id roost-sweep-late--records nil nil #'equal) (assq-delete-all 'pushed reply)))))))
 
@@ -701,6 +703,16 @@ with Emacs running only timers and other replies.")
 
 (defconst roost-sweep-late--no-window "The agent's tmux window is gone; resume the task")
 
+(defconst roost-sweep-late--offer
+  '((id . "0a1b2c3d") (title . "Fix add") (brief . "add() subtracts.") (at . "2026-11-01T09:59:00+00:00"))
+  "An offer the agent of the task each command acts on made.")
+
+(defun roost-sweep-late--at-offer ()
+  "Go to the row of the offer of the task each command acts on, in the
+dashboard the command starts from."
+  (goto-char (or (roost--offer-row (list (roost-sweep-late--key roost-sweep-late--mine) "0a1b2c3d"))
+                 (error "No offer row"))))
+
 (defconst roost-sweep-late--retired "Task is retired")
 
 (defconst roost-sweep-late--unmerged "Task branch has unmerged commits; merge it (m) first, discard it, or forget the task")
@@ -774,6 +786,22 @@ with Emacs running only timers and other replies.")
     (send
      :start ,(lambda () (roost-send (roost-sweep-late--mine) "Add a test."))
      :action "send" :refusals (("The agent is not running; resume the task first")))
+    (offer-open
+     :origin dashboard :fields ((offers ,roost-sweep-late--offer))
+     :start ,(lambda () (roost-sweep-late--at-offer) (roost-open-offer))
+     :action "take-offer" :refusals ((,roost-sweep-late--retired)))
+    (offer-here
+     :origin dashboard :fields ((offers ,roost-sweep-late--offer))
+     :start ,(lambda () (roost-sweep-late--at-offer) (roost-offer-here))
+     :action "send" :refusals (("The agent is not running; resume the task first")))
+    (offer-here-taking
+     :origin dashboard :fields ((offers ,roost-sweep-late--offer))
+     :start ,(lambda () (roost-sweep-late--at-offer) (roost-offer-here))
+     :first ("send") :action "take-offer" :refusals ((,roost-sweep-late--retired)))
+    (offer-dismiss
+     :origin dashboard :fields ((offers ,roost-sweep-late--offer))
+     :start ,(lambda () (roost-sweep-late--at-offer) (roost-offer-dismiss))
+     :action "take-offer" :refusals ((,roost-sweep-late--retired)))
     (note-send
      :start ,(lambda ()
                (setq roost--notes (list (roost-test--note "n1" roost-sweep-late--mine '(file . "a.py") '(line . 3)

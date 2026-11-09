@@ -298,10 +298,15 @@ def history_state(task):
     """What the history keeps of TASK, a record or None: its status, whether
     you have seen its agent since its last event (`seen_since_last_event`),
     and its `turn`, what of its pull request or work waits on you as Emacs
-    last said."""
+    last said. Also how many tasks its agent offers, while it offers any, so
+    the history says when one was offered and when it was taken."""
     if task is None:
         return None
-    return dict(status=task.get("status"), seen=seen_since_last_event(task), turn=text(task.get("turn")))
+    state = dict(status=task.get("status"), seen=seen_since_last_event(task), turn=text(task.get("turn")))
+    offers = task_offers(task)
+    if offers:
+        state["offers"] = len(offers)
+    return state
 
 
 class History:
@@ -745,6 +750,10 @@ def claude_hook_settings(store, task):
                 # A worktree the agent makes for itself starts from the
                 # task's work, not from the default branch.
                 "worktree": {"baseRef": "head"}}
+    if task.get("mayOffer") is True:
+        # Roost's own tool, which needs no asking: an offer only waits in
+        # Roost for you to take it or leave it.
+        settings["permissions"] = {"allow": ["mcp__roost__propose_task"]}
     path = store.tasks_dir / (task["id"] + ".settings")
     atomic_json(path, settings)
     return str(path)
@@ -925,6 +934,8 @@ class ClaudeAgent:
     # It runs its hooks before it goes on, so a report read before one is
     # older news than it.
     waits_for_hooks = True
+    # It can have Roost's MCP server, to offer tasks (`roost-agent-offers').
+    offers = True
     answers = staticmethod(tool_answers)
 
     def validate(self, command):
@@ -942,6 +953,11 @@ class ClaudeAgent:
         attachments.mkdir(mode=0o700, parents=True, exist_ok=True)
         argv = task["command"] + ["--settings", claude_hook_settings(store, task),
                                   "--add-dir=" + str(attachments)]
+        if task.get("mayOffer") is True:
+            # Its tool in the prompt from the start, rather than behind a
+            # search the agent would make only once it knew of it.
+            server = dict(type="stdio", command=sys.executable, args=mcp_arguments(store, task), alwaysLoad=True)
+            argv.append("--mcp-config=" + json.dumps({"mcpServers": {"roost": server}}))
         session = task.get("agentSession") or task.get("claudeSession")
         if resume_conversation and session and self.has_conversation(task):
             argv += ["--resume", session]
@@ -2069,6 +2085,14 @@ def make_task(store, request, create_id):
         task["copyComplete"] = False
     if request.get("programStatus") is True:
         task["programStatus"] = True
+    # Its agent can offer tasks, if it can be given Roost's tool.
+    if request.get("mayOffer") is True and getattr(agent, "offers", False):
+        task["mayOffer"] = True
+    # The task whose agent offered this one, which shows it under that.
+    parent = request.get("parent")
+    if parent is not None:
+        store.path(parent)
+        task["parent"] = parent
     existed, there = ref_exists(repo, branch), worktree.exists()
     with noting_creation(store, task):
         try:
@@ -4120,6 +4144,223 @@ def numbered(folder, stem, number, suffix):
         # A suffix about as long as a name can be: keep the number alone.
         return "%d" % number
     return stem.encode()[:room].decode(errors="ignore") + tail
+
+
+# Tasks an agent offers. With `roost-agent-offers' on, a task's agent runs
+# this helper as an MCP server of its own, over standard input and output,
+# for as long as the agent runs. The server records an offer in the task's
+# record, where it waits under the task in Roost until you take it, and
+# touches neither Git nor tmux.
+
+MCP_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
+MCP_INSTRUCTIONS = (
+    "Roost runs you in a task of your own: a Git worktree and branch that the user reviews and merges. "
+    "When you come across work outside what you were asked to do that is worth a task of its own, such "
+    "as a bug in code you read, a follow-up worth doing, or docs or tests that are out of date, offer it "
+    "with propose_task rather than only mentioning it or asking whether to fix it. When the user asks "
+    "what to do next, offer each step that is a task of its own. Offer real work, not a one-line tweak "
+    "or a guess, and never work the user turned down. A piece of what you were asked to do stays here, "
+    "without an offer. A task you offer starts from the branch this task merges into, without this "
+    "task's changes, so offer only work that doesn't need them. Say in your reply what you offered.")
+MCP_TOOLS = {
+    "propose_task": dict(
+        description=(
+            "Offer the user a task of its own, with its own agent, Git worktree and branch, for work "
+            "that shouldn't happen in this conversation. It returns at once, and the offer waits in "
+            "Roost under this task for the user to start it, have you do it here, or dismiss it; you "
+            "can't start it yourself. Offering it again by the same title changes its brief. The new "
+            "agent sees only the brief, not this conversation: say what to do, where, what you found, "
+            "and what done looks like."),
+        inputSchema=dict(type="object", required=["title", "brief"], properties=dict(
+            title=dict(type="string", description="A short name for the task, a few words"),
+            brief=dict(type="string", description="Everything the new task's agent needs to start"))),
+        # It only records the offer, so an agent that asks before a tool
+        # that says nothing of itself, as Codex does, needn't ask.
+        annotations=dict(readOnlyHint=False, destructiveHint=False, openWorldHint=False)),
+}
+# The most offers a task keeps waiting for you at once, and the longest
+# title one can have: it names a task, and tmux takes no command as long
+# as one that names thousands of characters.
+OFFER_LIMIT = 3
+TITLE_LIMIT = 1000
+# Format characters that real writing has: the soft hyphen, the joiners,
+# and the signs that draw before a number in Arabic and Syriac.
+WRITTEN_FORMATS = ("­‌‍؀؁؂؃؄؅۝܏࢐࢑࣢"
+                   "\U000110bd\U000110cd")
+# What draws nothing though its category doesn't say so: blanks that count
+# as letters or marks, selectors past the two an emoji uses, and all that
+# Unicode keeps to be ignored.
+UNDRAWN = re.compile("[͏ᅟᅠ឴឵᠋-᠏⠀ㅤ︀-︍ﾠ￰-￸"
+                     "\U000e0000-\U000e0fff]")
+
+
+class McpError(Exception):
+    """A request the server can't answer, with JSON-RPC's CODE for why."""
+
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
+class McpServer:
+    """The MCP server for TASK_ID's agent: JSON-RPC, a message on each line."""
+
+    def __init__(self, store, task_id, reader=None, writer=None):
+        """READER and WRITER, as a test's, or else standard input and output."""
+        self.store, self.task_id = store, task_id
+        self.reader, self.writer = reader, writer or sys.stdout.buffer
+
+    def write(self, message):
+        # UTF-8 whatever the locale, with what no reply can carry, as a lone
+        # surrogate, replaced: an agent waits for every answer.
+        line = json.dumps(dict(message, jsonrpc="2.0"), ensure_ascii=False) + "\n"
+        self.writer.write(line.encode("utf-8", "replace"))
+        self.writer.flush()
+
+    def lines(self):
+        if self.reader is not None:
+            yield from iter(self.reader.readline, "")
+        else:
+            for line in iter(sys.stdin.buffer.readline, b""):
+                yield line.decode("utf-8", "replace")
+
+    def serve(self):
+        with contextlib.suppress(BrokenPipeError):
+            for line in self.lines():
+                try:
+                    message = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(message, dict):
+                    self.handle(message)
+
+    def handle(self, message):
+        method, ident = message.get("method"), message.get("id")
+        # A notification, or an answer no question waits for.
+        if not isinstance(method, str) or ident is None:
+            return
+        params = message.get("params") if isinstance(message.get("params"), dict) else {}
+        try:
+            result = self.answer(method, params)
+        except McpError as exc:
+            self.write(dict(id=ident, error=dict(code=exc.code, message=str(exc))))
+        except Exception as exc:  # A bug answers its request rather than ending the server.
+            self.write(dict(id=ident, error=dict(code=-32603, message="%s: %s" % (type(exc).__name__, exc))))
+        else:
+            self.write(dict(id=ident, result=result))
+
+    def answer(self, method, params):
+        if method == "initialize":
+            asked = params.get("protocolVersion")
+            return dict(protocolVersion=asked if asked in MCP_VERSIONS else MCP_VERSIONS[0],
+                        capabilities=dict(tools={}), serverInfo=dict(name="roost", version="1"),
+                        instructions=MCP_INSTRUCTIONS)
+        if method == "ping":
+            return {}
+        if method == "tools/list":
+            return dict(tools=[dict(definition, name=name) for name, definition in MCP_TOOLS.items()])
+        if method == "tools/call":
+            arguments = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
+            if params.get("name") != "propose_task":
+                raise McpError(-32602, "Unknown tool: %s" % params.get("name"))
+            try:
+                said = propose_task(self.store, self.task_id, arguments.get("title"), arguments.get("brief"))
+            except (RoostError, OSError, ValueError) as exc:
+                return dict(content=[dict(type="text", text=str(exc))], isError=True)
+            return dict(content=[dict(type="text", text=said)])
+        # Such as a newer protocol's first request, after which the client
+        # starts again with an older one.
+        raise McpError(-32601, "Unknown method: " + method)
+
+
+def mcp_arguments(store, task):
+    """The arguments that run this helper as TASK's agent's MCP server."""
+    return [str(Path(__file__).resolve()), "mcp", str(store.root), task["id"]]
+
+
+def task_offers(task):
+    """The offers of TASK's agent that wait for you, oldest first: those
+    this helper wrote, each with an ID, a title and a brief."""
+    offers = task.get("offers")
+    return [offer for offer in offers if isinstance(offer, dict)
+            and all(text(offer.get(key)) for key in ("id", "title", "brief"))] if isinstance(offers, list) else []
+
+
+def set_offers(task, offers):
+    """Leave OFFERS as TASK's offers. `offersAt` tells Emacs a reply read
+    before this from one read since; `updatedAt` stays as the agent's last
+    event left it, as an offer is none, so you have still seen what you had."""
+    if offers:
+        task["offers"] = offers
+    else:
+        task.pop("offers", None)
+    task["offersAt"] = now()
+
+
+def hidden_character(value):
+    """The first character of VALUE that a terminal takes as a key, that
+    draws nothing, or that turns the text after it around, so that what you
+    read isn't what an agent gets, or None. Newlines and tabs can stay, and
+    the joiners and soft hyphen that real writing has."""
+    return next((c for c in value
+                 if (unicodedata.category(c) == "Cc" and c not in "\n\t")
+                 or (unicodedata.category(c) in ("Cf", "Cs", "Zl", "Zp") and c not in WRITTEN_FORMATS)
+                 or UNDRAWN.match(c)), None)
+
+
+def propose_task(store, task_id, title, brief):
+    """Offer the task TITLE, with BRIEF, as TASK_ID's agent asks: it waits
+    under that task in Roost for you, and its agent goes on meanwhile."""
+    title = (text(title) or "").strip()
+    brief = (text(brief) or "").replace("\r\n", "\n").strip()
+    if not title or not brief:
+        raise RoostError("Give the task a title and a brief")
+    # Refused now, rather than once the user has opened it.
+    task_name(title)
+    if len(title) > TITLE_LIMIT:
+        raise RoostError("The title is %d characters; give it at most %d" % (len(title), TITLE_LIMIT))
+    # You read both before anything starts, and a character that doesn't
+    # show would hide what the new task's agent gets. A name has no line
+    # breaks or tabs: `task_name' refused them.
+    for field, value in (("title", title), ("brief", brief)):
+        hidden = hidden_character(value)
+        if hidden:
+            raise RoostError("The %s holds U+%04X, a character that doesn't show as itself where the user "
+                             "reads it; write it as plain text" % (field, ord(hidden)))
+    if len(brief.encode()) > PROMPT_ARGUMENT_LIMIT:
+        raise RoostError("The brief is %d KB, and a task can start with at most %d KB; shorten it"
+                         % (-(-len(brief.encode()) // 1024), PROMPT_ARGUMENT_LIMIT // 1024))
+    with store.locked():
+        task = store.read(task_id)
+        # Its agent may be on its way out, as when you stopped the task.
+        if task.get("status") in ("stopped", "retired"):
+            raise RoostError("This task is %s, so it offers nothing" % task["status"])
+        offers = task_offers(task)
+        again = next((offer for offer in offers if offer["title"] == title), None)
+        if again:
+            again.update(brief=brief, at=now())
+        elif len(offers) >= OFFER_LIMIT:
+            raise RoostError("%d offers of this task already wait for the user; mention this work in your "
+                             "reply instead" % len(offers))
+        else:
+            offers.append(dict(id=uuid.uuid4().hex[:8], title=title, brief=brief, at=now()))
+        set_offers(task, offers)
+        store.save(task)
+    return ("Offered. It waits in Roost under this task, where the user can start it as a task of its own, "
+            "have you do it here, or dismiss it. Say in your reply what you offered, and don't do the work "
+            "unless the user asks.")
+
+
+def take_offer(store, task, offer):
+    """TASK, saved without its offer OFFER, an ID, as you took it: to start
+    it from its draft, to have its agent do it, or to dismiss it. One taken
+    already, as from another Emacs, leaves TASK as it was."""
+    offers = task_offers(task)
+    still = [other for other in offers if other["id"] != offer]
+    if len(still) != len(offers):
+        set_offers(task, still)
+        store.save(task)
+    return task
 
 
 def attach(store, task, files):
@@ -7231,11 +7472,14 @@ PRIVATE = ("lastReply", "transcript", "requestFrom", "requestCall", "requestQues
 
 
 def outgoing(result):
-    """RESULT, a task or a list of them, without the fields only the helper uses."""
+    """RESULT, a task or a list of them, without the fields only the helper
+    uses, and with only the offers it can show."""
     for task in result if isinstance(result, list) else [result]:
         if isinstance(task, dict):
             for field in PRIVATE:
                 task.pop(field, None)
+            if "offers" in task:
+                task["offers"] = task_offers(task)
     return result
 
 
@@ -7265,6 +7509,7 @@ TASK_ACTIONS = {
                                                     text(request.get("teardown")),
                                                     request.get("told")),
     "update": lambda store, task, request: update(store, task),
+    "take-offer": lambda store, task, request: take_offer(store, task, text(request.get("offer"))),
 }
 
 
@@ -7462,6 +7707,9 @@ def main():
             pass
     elif mode == "run":
         return runner(sys.argv[2], sys.argv[3], sys.argv[4], len(sys.argv) > 5)
+    elif mode == "mcp":
+        # The agent's own server, which it starts and ends with itself.
+        McpServer(Store(sys.argv[2]), sys.argv[3]).serve()
     else:
         raise RoostError("Unknown mode")
     return 0

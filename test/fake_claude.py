@@ -19,6 +19,9 @@ if sys.argv[1:] == ["--version"]:
     sys.exit()
 settings = json.loads(Path(sys.argv[sys.argv.index("--settings") + 1]).read_text())
 session = sys.argv[sys.argv.index("--resume") + 1] if "--resume" in sys.argv else str(uuid.uuid4())
+# Roost's MCP server, as Claude Code finds it in --mcp-config.
+SERVER = next((json.loads(arg[len("--mcp-config="):])["mcpServers"].get("roost")
+               for arg in sys.argv if arg.startswith("--mcp-config=")), None)
 
 
 # Asked for, as make qa does with a home of its own: a transcript where
@@ -107,6 +110,23 @@ status("idle")
 print("FAKE_CLAUDE_READY " + session, flush=True)
 
 
+def offer(title):
+    """Offer TITLE as a task through Roost's MCP server, as Claude Code
+    does, and return what the server said."""
+    if SERVER is None:
+        return "No tool offers tasks here"
+    lines = [dict(id=1, method="initialize", params=dict(protocolVersion="2025-11-25", capabilities={})),
+             dict(method="notifications/initialized"),
+             dict(id=2, method="tools/call", params=dict(name="propose_task", arguments=dict(
+                 title=title, brief="Brief for " + title)))]
+    ran = subprocess.run([SERVER["command"], *SERVER["args"]], capture_output=True, text=True,
+                         input="".join(json.dumps(dict(line, jsonrpc="2.0")) + "\n" for line in lines))
+    for reply in map(json.loads, ran.stdout.splitlines()):
+        if reply.get("id") == 2:
+            return reply["result"]["content"][0]["text"]
+    return "Roost's MCP server ended"
+
+
 def lines():
     """The prompt it started with, as Claude Code takes it for its first
     turn, then what is typed."""
@@ -146,6 +166,15 @@ for line in lines():
             event("Stop", last_assistant_message="Ran " + command)
         else:
             event("Stop")
+        status("done")
+    elif line.startswith("offer "):
+        # Offer a task of its own, which waits in Roost for you.
+        event("PreToolUse", tool_name="mcp__roost__propose_task")
+        said = offer(line[len("offer "):].strip())
+        event("PostToolUse", tool_name="mcp__roost__propose_task")
+        print("OFFERED " + said, flush=True)
+        record("assistant", said)
+        event("Stop", last_assistant_message=said)
         status("done")
     elif line.strip() == "interrupt":
         # Esc: Claude stops the turn, and runs no hook.
