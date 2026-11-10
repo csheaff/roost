@@ -3432,7 +3432,31 @@ terminal's, on a pty.  Skips the test where it can't be made."
              (search-forward "Conversations")
              (end-of-line)
              (push-button (1- (point)))
-             (should (eq (alist-get 'conversation (nth 2 asked)) t)))
+             (should (eq (alist-get 'conversation (nth 2 asked)) t))
+             ;; Its heading is no project to start a task in.
+             (should-not (get-text-property (point) 'roost-directory))
+             ;; Drawn again, as each poll does, point stays on New conversation.
+             (goto-char (point-min))
+             (search-forward "New conversation")
+             (roost--render-sidebar)
+             (should (get-text-property (point) 'roost-new-conversation))
+             (let ((conversation (gethash (list nil "c0c0c0c0c0c0c0c0") roost--tasks)))
+               ;; A new task from one is drafted in a project of yours.
+               (let ((default-directory (expand-file-name "~/")))
+                 (cl-letf (((symbol-function 'roost--known-projects) (lambda () '("/srv/ledger/"))))
+                   (should-not (string-match-p "conversations" (or (roost--compose-default-directory
+                                                                    conversation nil) "")))))
+               ;; With nothing to propose or merge, P and m don't apply.
+               (should-not (roost--action-applies-p (append '((ahead . 1)) conversation) 'roost-pr))
+               (should-not (roost--action-applies-p (append '((ahead . 1)) conversation) 'roost-merge-retire))
+               (should-error (roost-pr conversation) :type 'user-error)
+               (should-error (roost-merge-retire conversation) :type 'user-error)
+               ;; A second in the same minute is told apart.
+               (cl-letf (((symbol-function 'format-time-string) (lambda (&rest _) "Conversation 09:15")))
+                 (should (equal (roost--conversation-name) "Conversation 09:15"))
+                 (roost--cache-task nil (append '((name . "Conversation 09:15"))
+                                                (roost-test--task "c1c1c1c1c1c1c1c1" "ready")))
+                 (should (equal (roost--conversation-name) "Conversation 09:15 (2)")))))
          (kill-buffer "*sidebar test*"))))))
 
 (ert-deftest roost-sidebar-shows-the-task-you-work-on ()

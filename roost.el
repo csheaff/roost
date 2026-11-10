@@ -3044,6 +3044,20 @@ non-nil, as for a draft that stays, which you are writing in."
   "Whether TASK is a conversation, in no project of yours."
   (eq (roost--field task 'conversation) t))
 
+(defun roost--refuse-conversation (task why)
+  "Refuse to act on TASK if it is a conversation, saying it WHY."
+  (when (roost--conversation-p task)
+    (user-error "%s is a conversation, which %s; x ends it" (roost--field task 'name) why)))
+
+(defun roost--conversation-name ()
+  "A name for a new conversation: when it starts, and a number if taken."
+  (let* ((base (format-time-string "Conversation %H:%M"))
+         (taken (mapcar (lambda (task) (roost--field task 'name)) (roost-tasks)))
+         (name base) (n 1))
+    (while (member name taken)
+      (setq name (format "%s (%d)" base (cl-incf n))))
+    name))
+
 ;;;###autoload
 (defun roost-new-conversation (&optional host)
   "Start a conversation with an agent, in no project of yours.
@@ -3057,7 +3071,7 @@ for this machine; with a prefix argument, ask which."
                   (pick (completing-read "Conversation on: " (cons here (roost--hosts)) nil nil)))
              (unless (or (string-empty-p pick) (equal pick here)) pick)))))
   (roost--create-task (if host (roost--host-directory host "~") (expand-file-name "~/"))
-                      (format-time-string "Conversation %H:%M")
+                      (roost--conversation-name)
                       nil nil nil nil nil '((conversation . t))))
 
 ;;;###autoload
@@ -3270,7 +3284,8 @@ mouse tries again, or gives up."
 (defun roost--compose-default-directory (task fork)
   "Default project for a new task, given the TASK in context and FORK.
 On a project's heading in the dashboard or sidebar, that project."
-  (cond (task (if fork (roost--remote-directory task) (roost--project-directory task)))
+  (cond ((and task (not (roost--conversation-p task)))
+         (if fork (roost--remote-directory task) (roost--project-directory task)))
         ((get-text-property (point) 'roost-directory))
         ;; On another host, looking there takes a round trip for each
         ;; directory VC tries, and connects first if TRAMP hasn't, while you
@@ -7048,6 +7063,7 @@ only open it.  One merged or closed that leaves commits to propose takes
 no more of them: draft another, unless SKIP-PUSH says only to open it."
   (interactive (list nil current-prefix-arg))
   (setq task (roost--choose task))
+  (roost--refuse-conversation task "has no project to propose its work to")
   (if-let* ((pr (roost--field task 'pr))
             (url (alist-get 'url pr))
             ((or skip-push (not (roost--pr-spent-p task)))))
@@ -7942,6 +7958,7 @@ comes in as one squashed commit, or a merge commit; see `roost-merge-style'.
 A branch that moved while you were asked isn't merged: you look again."
   (interactive)
   (setq task (roost--choose task))
+  (roost--refuse-conversation task "has no project to merge into")
   (cond
    ;; Nor will it merge from a worktree on another branch.
    ((roost--other-branch task)
@@ -9534,10 +9551,13 @@ Unknown Git statistics count as making sense."
       ((or 'roost-files 'roost-review 'roost-diff 'roost-mark-looked 'roost-update) worktree)
       ((or 'roost-send 'roost-stop) (roost--agent-running-p task))
       ('roost-resume (and worktree (not (roost--agent-running-p task))))
-      ('roost-pr (and worktree (or (roost--field task 'pr) (not (eql ahead 0)))))
+      ;; A conversation's branch is Roost's own, with nothing to propose or merge.
+      ('roost-pr (and worktree (not (roost--conversation-p task))
+                      (or (roost--field task 'pr) (not (eql ahead 0)))))
       ;; Merged, the task's branch may be, but not work on another branch
       ;; there, which `m' merges once the task's has it.
-      ('roost-merge-retire (and (or (not merged) (roost--other-branch task)) (not (eql ahead 0)) (not active)
+      ('roost-merge-retire (and (not (roost--conversation-p task))
+                                (or (not merged) (roost--other-branch task)) (not (eql ahead 0)) (not active)
                                 (not (roost--agent-work-left task))))
       ;; Retires the task, or discards work merged nowhere.
       ('roost-retire (and (not active) (not (roost--agent-work-left task))))
@@ -11344,6 +11364,7 @@ for any other directory, which asks for a host and a folder first."
          (key (get-text-property position 'roost-task))
          (heading (unless key (get-text-property position 'roost-directory)))
          (other (eq (get-text-property position 'roost-project) 'other))
+         (conversation (get-text-property position 'roost-new-conversation))
          (tasks (roost-tasks))
          (roost--marked-key (if (roost--workspace-backend)
                                 (when-let* ((task (roost--frame-task))) (roost--key task))
@@ -11391,8 +11412,9 @@ for any other directory, which asks for a host and a folder first."
                                           (goto-char (button-start button))
                                           (call-interactively #'roost-new-task))))
           (insert "\n")
-          ;; `c' on the heading starts a task in this project.
-          (when repo
+          ;; `c' on the heading starts a task in this project; a
+          ;; conversation's is none of yours.
+          (when (and repo (not (roost--conversation-p (cadr group))))
             (put-text-property start (point) 'roost-directory
                                (roost--project-directory (cadr group))))
           (dolist (task (cdr group))
@@ -11415,9 +11437,11 @@ for any other directory, which asks for a host and a folder first."
     ;; A conversation needs no project, so it comes before them.
     (insert roost--gap)
     (insert-text-button " New conversation" 'face 'roost-dim 'follow-link t 'mouse-face 'highlight
+                        'roost-new-conversation t
                         'help-echo "Talk to an agent in no project: mouse-1 opens its terminal"
                         'action (lambda (_) (roost-new-conversation)))
-    (insert "\n")
+    ;; Its end of line too, where point is after a click or C-e.
+    (insert (propertize "\n" 'roost-new-conversation t))
     (when (> (or roost-sidebar-recent-projects 0) 0)
       (insert roost--gap (propertize "Start a task in" 'face 'roost-dim) "\n")
       (dolist (directory (roost--recent-projects tasks))
@@ -11429,6 +11453,7 @@ for any other directory, which asks for a host and a folder first."
     (goto-char (or (and key (roost--task-row key))
                    (and heading (roost--heading-row heading))
                    (and other (text-property-any (point-min) (point-max) 'roost-project 'other))
+                   (and conversation (text-property-any (point-min) (point-max) 'roost-new-conversation t))
                    (point-min)))
     (when window (set-window-point window (point)))
     (pcase-dolist (`(,shown . ,line) starts)

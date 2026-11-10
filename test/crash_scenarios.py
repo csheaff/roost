@@ -322,6 +322,20 @@ class CreateFromRemote(Create):
         self.asked = dict(self.asked, base="origin/feature")
 
 
+class CreateConversation(Create):
+    """A conversation, the first, which makes the repository it is in."""
+
+    def arrange(self, box):
+        super().arrange(box)
+        self.asked = dict(self.asked, directory="/nowhere", conversation=True)
+
+    def holds(self, box, problems):
+        super().holds(box, problems)
+        if self.final and self.final.get("ok") and not self.final["result"].get("conversation"):
+            problems.append("asked again, and what was made is no conversation")
+
+
 ALL = [Merge, MergeSquash, MergeAway, SquashAway, MergeTeardown, MergeSubmodule, MergeAgentWorktree, Retire, RetireMerged,
        RetireDead, RetireSquashedOnGitHub, Update, UpdateConflict, Discard, DiscardDirty, DiscardTeardown, Forget, Rename,
-       Stop, Resume, Seen, Turn, Send, Shell, Attach, Inspect, Look, PullRequest, PullRequestPush, Create, CreateFromRemote]
+       Stop, Resume, Seen, Turn, Send, Shell, Attach, Inspect, Look, PullRequest, PullRequestPush, Create, CreateFromRemote,
+       CreateConversation]

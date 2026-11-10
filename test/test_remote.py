@@ -146,6 +146,15 @@ class Lifecycle(unittest.TestCase):
             self.assertFalse(Path(task["worktree"]).exists())
         self.assertEqual([task["name"] for task in self.request("list")["result"]], ["plain"])
 
+    def test_a_conversations_repository_left_with_no_commit_gets_one(self):
+        # As by a helper stopped between `git init` and its commit.
+        home = self.state / "conversations"
+        home.mkdir(parents=True)
+        roost.git(home, "init", "-q")
+        task = self.create(name="Conversation 09:15", directory="/nowhere", conversation=True)
+        self.assertEqual(self.git("rev-list", "--count", "HEAD", cwd=home), "1")
+        self.assertTrue(self.request("retire", id=task["id"])["ok"])
+
     def pastes(self, task, words):
         """How many times its agent's terminal shows it was sent WORDS."""
         screen = roost.tmux(self.socket, "capture-pane", "-p", "-J", "-t", task["paneId"]).stdout

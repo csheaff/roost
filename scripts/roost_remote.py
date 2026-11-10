@@ -1989,12 +1989,23 @@ def conversation_repository(store):
     project: each is a task in a worktree of it, so it moves, stops,
     resumes and retires as any task does, with nothing of yours in it.
     Made on the first, with one empty commit for tasks to branch from, by
-    no hook or template of yours and signed by no key of yours."""
+    no hook or template of yours and signed by no key of yours; one left
+    with no commit, as by a helper stopped between the two, gets it now.
+    Under a lock of its own, not the registry's, which hooks wait on."""
     repo = store.root / CONVERSATIONS
-    with store.locked():
+    with (store.root / (CONVERSATIONS + ".lock")).open("a") as lock:
+        os.chmod(lock.name, 0o600)
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        # A `git init` cut short leaves a .git Git takes for no repository;
+        # with no commit, nothing of any conversation is in it yet.
+        # Asked of it alone: Git would otherwise look in the folders above.
+        if (repo / ".git").exists() and execute(["git", "--git-dir", str(repo / ".git"), "rev-parse", "--git-dir"],
+                                                check=False).returncode:
+            shutil.rmtree(repo / ".git")
         if not (repo / ".git").exists():
             repo.mkdir(mode=0o700, parents=True, exist_ok=True)
             git(repo, "init", "-q", "--template=")
+        if git(repo, "rev-parse", "--verify", "--quiet", "HEAD", check=False).returncode:
             git(repo, "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
                 "-c", "user.name=Roost", "-c", "user.email=roost@localhost",
                 "commit", "-q", "--allow-empty", "-m", "Conversations")
