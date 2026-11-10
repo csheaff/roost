@@ -2979,7 +2979,9 @@ EXTRA is an alist of further request fields, such as the issue."
   (unless (member agent roost--agents)
     (user-error "Unsupported Roost agent: %s" agent))
   (let ((host (roost--directory-host directory))
-        (setup (roost--project-value directory 'roost-setup-command))
+        ;; A conversation is in no project of yours, so none's setup runs.
+        (setup (unless (alist-get 'conversation extra)
+                 (roost--project-value directory 'roost-setup-command)))
         (stayed (roost--you-stay)))
     (roost--request
      host "create"
@@ -3014,7 +3016,7 @@ and before ON-SUCCESS moves anything, says you are still where you asked
 for it: making a task can take minutes.  Not if ON-SUCCESS returns
 non-nil, as for a draft that stays, which you are writing in."
   (roost--remember-host host)
-  (when (roost--field task 'repo)
+  (when (and (roost--field task 'repo) (not (roost--conversation-p task)))
     (roost--remember-project (roost--project-directory (cons (cons 'host host) task))))
   (let ((found (roost--field task 'alreadyMade)))
     ;; Unless it went since a list showed it, as you finished it: the reply
@@ -3032,9 +3034,31 @@ non-nil, as for a draft that stays, which you are writing in."
          (when (and stayed (not kept) (gethash (roost--key task) roost--tasks))
            (roost-open-task task))))))
   ;; By the name it has: asked again, its host answers with the task it made.
-  (message "Roost created %s on %s from %s; it merges into %s"
-           (or (roost--field task 'name) name) (roost--host-label host)
-           (roost--field task 'baseRef) (roost--field task 'integrationBranch)))
+  (if (roost--conversation-p task)
+      (message "Roost started %s on %s" (or (roost--field task 'name) name) (roost--host-label host))
+    (message "Roost created %s on %s from %s; it merges into %s"
+             (or (roost--field task 'name) name) (roost--host-label host)
+             (roost--field task 'baseRef) (roost--field task 'integrationBranch))))
+
+(defun roost--conversation-p (task)
+  "Whether TASK is a conversation, in no project of yours."
+  (eq (roost--field task 'conversation) t))
+
+;;;###autoload
+(defun roost-new-conversation (&optional host)
+  "Start a conversation with an agent, in no project of yours.
+It opens the agent's own terminal at once, with nothing to write first:
+you say what you want there.  Its host keeps it in a folder of its own,
+so it has no branch to merge, and `roost-retire' ends it.  On HOST, nil
+for this machine; with a prefix argument, ask which."
+  (interactive
+   (list (when current-prefix-arg
+           (let* ((here "This machine")
+                  (pick (completing-read "Conversation on: " (cons here (roost--hosts)) nil nil)))
+             (unless (or (string-empty-p pick) (equal pick here)) pick)))))
+  (roost--create-task (if host (roost--host-directory host "~") (expand-file-name "~/"))
+                      (format-time-string "Conversation %H:%M")
+                      nil nil nil nil nil '((conversation . t))))
 
 ;;;###autoload
 (defun roost-new-task (&optional directory name base prompt agent)
@@ -8293,7 +8317,9 @@ rest from its end: its status and name come first, and are read first."
 
 (defun roost--project-name (task)
   "Short primary repository name for TASK."
-  (file-name-nondirectory (directory-file-name (or (roost--field task 'repo) "unknown"))))
+  (if (roost--conversation-p task)
+      "Conversations"
+    (file-name-nondirectory (directory-file-name (or (roost--field task 'repo) "unknown")))))
 
 ;;;; Since you last looked
 
@@ -9612,6 +9638,7 @@ terminal or worktree, or ask which task."
     ("s" "Resume" roost-resume :inapt-if roost--resume-inapt-p)]]
   ["Roost"
    [("c" "New task" roost-new-task)
+    ("C" "New conversation" roost-new-conversation)
     ("n" "Next waiting" roost-next-waiting)
     ("l" "Switch task" roost-switch-task)
     ("/" "Search conversations" roost-search)]
@@ -9647,6 +9674,7 @@ terminal or worktree, or ask which task."
   "l" #'roost-switch-task
   "/" #'roost-search
   "c" #'roost-new-task
+  "C" #'roost-new-conversation
   "b" #'roost-sidebar-mode
   "S" #'roost-dashboard
   "w" #'roost-workload
@@ -10193,13 +10221,15 @@ EVIDENCE means results stand above it, and its heading says whose it is."
   (let ((base (roost--field task 'baseRef))
         (integration (roost--field task 'integrationBranch)))
     (roost--insert-heading "Details")
-    (dolist (entry `(("Branch" . ,(format "%s, from %s%s%s" (roost--field task 'branch) base
+    (dolist (entry `(,@(unless (roost--conversation-p task)
+                         ;; A conversation's branch is Roost's own, with nothing to merge.
+                         `(("Branch" . ,(format "%s, from %s%s%s" (roost--field task 'branch) base
                                           (if (and integration (not (string-empty-p integration)))
                                               (format ", merges into %s" integration)
                                             "")
                                           (if-let* ((other (roost--other-branch task)))
                                               (format "; the worktree is on %s" (roost--branch-label other))
-                                            "")))
+                                            "")))))
                      ,@(unless (< width roost--wide-panel)
                          `(("Worktree" . ,(roost--abbreviate-path (or (roost--field task 'worktree) "")
                                                                   (roost--field task 'host)))
@@ -10312,6 +10342,7 @@ are told apart."
   "j" #'roost-dashboard-next-task
   "k" #'roost-dashboard-previous-task
   "c" #'roost-new-task
+  "C" #'roost-new-conversation
   "r" #'roost-review
   "D" #'roost-diff
   "v" #'roost-mark-looked
@@ -11343,16 +11374,22 @@ for any other directory, which asks for a host and a folder first."
         (let* ((host (caar group)) (repo (cadar group)) (start (1+ (point)))
                (label (truncate-string-to-width
                        (format "%s · %s" (roost--host-label host)
-                               (file-name-nondirectory (directory-file-name (or repo "?"))))
+                               (if (roost--conversation-p (cadr group))
+                                   "Conversations"
+                                 (file-name-nondirectory (directory-file-name (or repo "?")))))
                        (- width 2) nil nil "…")))
           (insert roost--gap (propertize label 'face (if (gethash host roost--errors)
                                                    'roost-status-failed 'roost-dim))
                   (make-string (max 1 (- width (string-width label) 1)) ?\s))
-          (insert-text-button "+" 'face 'roost-dim 'follow-link t
-                              'help-echo (format "New task in %s" (or repo "this project"))
-                              'action (lambda (button)
-                                        (goto-char (button-start button))
-                                        (call-interactively #'roost-new-task)))
+          (if (roost--conversation-p (cadr group))
+              (insert-text-button "+" 'face 'roost-dim 'follow-link t
+                                  'help-echo "New conversation"
+                                  'action (lambda (_) (roost-new-conversation host)))
+            (insert-text-button "+" 'face 'roost-dim 'follow-link t
+                                'help-echo (format "New task in %s" (or repo "this project"))
+                                'action (lambda (button)
+                                          (goto-char (button-start button))
+                                          (call-interactively #'roost-new-task))))
           (insert "\n")
           ;; `c' on the heading starts a task in this project.
           (when repo
@@ -11375,6 +11412,12 @@ for any other directory, which asks for a host and a folder first."
                       (apply #'propertize "\n" (if (roost--current-task-p task)
                                                    (append '(face roost-current) row)
                                                  row))))))))
+    ;; A conversation needs no project, so it comes before them.
+    (insert roost--gap)
+    (insert-text-button " New conversation" 'face 'roost-dim 'follow-link t 'mouse-face 'highlight
+                        'help-echo "Talk to an agent in no project: mouse-1 opens its terminal"
+                        'action (lambda (_) (roost-new-conversation)))
+    (insert "\n")
     (when (> (or roost-sidebar-recent-projects 0) 0)
       (insert roost--gap (propertize "Start a task in" 'face 'roost-dim) "\n")
       (dolist (directory (roost--recent-projects tasks))

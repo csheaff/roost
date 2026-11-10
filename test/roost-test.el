@@ -3392,6 +3392,49 @@ terminal's, on a pty.  Skips the test where it can't be made."
                    (should-not (get-buffer roost--compose-buffer))))))
          (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
 
+(ert-deftest roost-a-conversation-starts-with-one-click ()
+  ;; In no project of yours: one click asks the host for it, and it opens
+  ;; at once, under a heading of its own, and isn't a project to start in.
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let ((roost-sidebar-recent-projects 3) asked opened said)
+       (switch-to-buffer (get-buffer-create "*sidebar test*"))
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--request)
+                      (lambda (host action params success &rest _)
+                        (setq asked (list host action params))
+                        (funcall success (append `((conversation . t) (name . ,(alist-get 'name params))
+                                                   (repo . "/state/conversations"))
+                                                 (roost-test--task "c0c0c0c0c0c0c0c0" "starting")))))
+                     ((symbol-function 'roost-open-task) (lambda (task) (setq opened task)))
+                     ((symbol-function 'message)
+                      (lambda (format &rest args) (when format (push (apply #'format-message format args) said)))))
+             (roost-sidebar-list-mode)
+             (roost--render-sidebar)
+             (goto-char (point-min))
+             (search-forward "New conversation")
+             (push-button (1- (point)))
+             (should (equal (nth 1 asked) "create"))
+             (should-not (nth 0 asked))
+             (should (eq (alist-get 'conversation (nth 2 asked)) t))
+             (should-not (alist-get 'prompt (nth 2 asked)))
+             (should-not (alist-get 'setup (nth 2 asked)))
+             (should (string-prefix-p "Conversation " (alist-get 'name (nth 2 asked))))
+             (should (equal (roost--field opened 'id) "c0c0c0c0c0c0c0c0"))
+             (should (seq-find (apply-partially #'string-match-p "^Roost started Conversation .* on local$") said))
+             (should-not roost--remembered-projects)
+             (roost--render-sidebar)
+             (should (string-match-p "^ *local · Conversations +\\+$" (buffer-string)))
+             ;; Its heading's + starts another.
+             (setq asked nil)
+             (goto-char (point-min))
+             (search-forward "Conversations")
+             (end-of-line)
+             (push-button (1- (point)))
+             (should (eq (alist-get 'conversation (nth 2 asked)) t)))
+         (kill-buffer "*sidebar test*"))))))
+
 (ert-deftest roost-sidebar-shows-the-task-you-work-on ()
   ;; With more tasks than the sidebar has lines, the one you opened was
   ;; below them, and its band, status and ± with it.

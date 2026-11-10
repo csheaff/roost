@@ -4,6 +4,12 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A conversation with an agent needs no project. "New conversation" in the
+  sidebar, or `C` in the menu, opens an agent's terminal at once, with
+  nothing to write first: you say what you want there. It has no branch to
+  merge, and `x` ends it. Its host keeps it, under "Conversations" in the
+  sidebar, in a repository of Roost's own in its state directory. `C-u C`
+  asks which host. Nothing to do when upgrading.
 - A narrow sidebar keeps each task's name and still says its status. Where
   the status word would leave the name under a dozen columns, a mark in
   the word's colour stands for it at the row's end: `?` asks you, `!` went

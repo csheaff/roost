@@ -125,6 +125,27 @@ class Lifecycle(unittest.TestCase):
         self.assertFalse(Path(task["worktree"]).exists())
         self.assertEqual(self.request("list")["result"], [])
 
+    def test_a_conversation_needs_no_project_and_retires_as_a_task(self):
+        # Wherever Emacs says it is, it goes in the helper's own repository.
+        first = self.create(name="Conversation 09:15", directory="/nowhere", conversation=True)
+        second = self.create(name="Conversation 09:16", directory="/nowhere", conversation=True)
+        home = self.state / "conversations"
+        for task in (first, second):
+            self.assertIs(task["conversation"], True)
+            self.assertEqual(task["repo"], str(home.resolve()))
+            self.assertTrue(Path(task["worktree"]).is_dir())
+        self.assertNotEqual(first["worktree"], second["worktree"])
+        # One empty commit, by Roost, made once.
+        self.assertEqual(self.git("rev-list", "--count", "HEAD", cwd=home), "1")
+        self.assertEqual(self.git("log", "-1", "--format=%an %s", cwd=home), "Roost Conversations")
+        self.assertEqual(self.git("status", "--porcelain", cwd=home), "")
+        # A task in your project is none.
+        self.assertNotIn("conversation", self.create(name="plain"))
+        for task in (first, second):
+            self.assertTrue(self.request("retire", id=task["id"])["ok"])
+            self.assertFalse(Path(task["worktree"]).exists())
+        self.assertEqual([task["name"] for task in self.request("list")["result"]], ["plain"])
+
     def pastes(self, task, words):
         """How many times its agent's terminal shows it was sent WORDS."""
         screen = roost.tmux(self.socket, "capture-pane", "-p", "-J", "-t", task["paneId"]).stdout

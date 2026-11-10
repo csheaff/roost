@@ -258,7 +258,13 @@ since you last looked at it, if anything (below), where the whole name fits
 beside it. A click opens the task,
 quitting any question you left open in the minibuffer, which would hold it back,
 and closing a menu left open. Each project's heading ends with a `+` that
-drafts a task there. Below the tasks, under "Start a task in", are the
+drafts a task there. Below the tasks, "New conversation" opens an agent's
+terminal at once, in no project of yours, with nothing to write first: you
+say what you want in its terminal. A conversation is a task like the others,
+in a repository of Roost's own in the host's state directory, listed under
+"Conversations"; it has no branch to merge, so `x` just ends it.
+`roost-new-conversation` (`C` in the menu) does the same, and with `C-u`
+asks which host. Under "Start a task in" are the
 projects with no tasks now that you used last on each host, three
 (`roost-sidebar-recent-projects`), and "Other directory…". A click on one, or
 `RET`, drafts a task there, taking a draft you have written there too, unless
@@ -561,6 +567,7 @@ counted once you stop and resume it (`K`, then `s`).
 | `h`, `?` | `roost-dispatch` | A Magit-style menu of every command below, naming the task they act on and what to do next |
 | `RET` | `roost-open-task` | Open the task's agent terminal and workspace; for a stopped or crashed agent, offer to resume it, in the same question as the others that crashed on its host |
 | `c` | `roost-new-task` | Draft a new task, from the region or Org entry if any (`C-u` forks the current task's commits) |
+| `C` | `roost-new-conversation` | Open an agent's terminal in no project, with nothing to write first (`C-u` asks which host) |
 | `n` | `roost-next-waiting` | Next task waiting for you, permission requests first, saying why it waits; once none does, again goes back to where you started |
 | `t` | `roost-shell` | Shell beside the agent, in the worktree (reused) |
 | `f` | `roost-files` | Dired in the worktree |
