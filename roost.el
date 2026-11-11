@@ -11416,7 +11416,9 @@ says only that the host is unreachable."
             "  \\<roost-dashboard-mode-map>\\[roost-new-task]  Start a task: choose a project (local, or remote over TRAMP), an agent, and a prompt.\n"
             "     Run \\<global-map>\\[roost-new-task] on an Org heading or with a region selected to start from it;\n"
             "     in the draft, \\<roost-compose-mode-map>\\[roost-compose-set-issue] picks an issue from GitHub, GitLab or Jira.\n"
-            "  \\<roost-dashboard-mode-map>\\[roost-dispatch]  Every command.\n"
+            "  \\<roost-dashboard-mode-map>\\[roost-new-conversation]  Or talk first: an agent in no project, with nothing to write beforehand.\n"
+            "     Ask it to plan a piece of work, and each task it offers waits here for you to start.\n"
+            "  \\[roost-dispatch]  Every command.\n"
             "  \\[roost-doctor]  Check this machine and each host.\n"))
           (format "\n  Watching %s.\n"
                   (string-join (mapcar #'roost--host-label (roost--hosts)) ", "))))
