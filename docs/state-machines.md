@@ -170,8 +170,8 @@ until it is fixed, which its section's skill lists.
 | VIEWS-14 | S3 | A fork's draft closes for a fork made the other way, with its task's conversation or without, when `C-c C-f` is pressed as it is created | [The new task draft](#the-new-task-draft) | Fixed, `roost-a-fork-given-a-new-conversation-stays-for-a-task-that-goes-on-with-the-old` |
 | FORGE-14 | S4 | A branch named in another Emacs, or by a `B` whose reply was lost, goes unmeasured while Git's stamp stays, and the row keeps saying "merged" | [Task measurement](#task-measurement) | Fixed, `roost-a-branch-to-merge-into-named-elsewhere-is-measured-against` |
 | FORGE-15 | S3 | After `B` makes a commit of the task's own its start, by naming what has some of its commits, a reset of its branch reads wrong: `x` retires a task that is ahead, or one merged reads as not | [Landed](#landed) | Open: `LandedRetarget.ResetToStart.cfg`, `ResetToStartMerged.cfg`, `ResetBeforeStart.cfg` |
-| VIEWS-15 | S3 | Several attempts at one prompt are made from two, when the draft's own request is lost or refused, you change the prompt, and ask again | [The creation ID](#the-creation-id) | Open: `NewTaskAttempts.finding-mixed.cfg` |
-| LC-10 | S4 | An offer its agent makes after you were asked goes with a discarded task, unnamed | [Finishing a task](#finishing-a-task) | Open: `TaskOnHost.finding-offer-untold.cfg` |
+| VIEWS-15 | S3 | Several attempts at one prompt are made from two, when the draft's own request is lost or refused, you change the prompt, and ask again | [The creation ID](#the-creation-id) | Fixed: `roost-a-draft-changed-between-asks-makes-its-attempts-from-one-wording`, `test_the_attempts_of_one_draft_are_made_from_one_wording`, `test_attempts_asked_for_at_once_in_other_words_make_one_wording` |
+| LC-10 | S4 | An offer its agent makes after you were asked goes with a task you finish, unnamed | [Finishing a task](#finishing-a-task) | Fixed: `test_an_offer_made_since_you_were_asked_keeps_its_task`, `test_an_offer_made_while_git_merges_keeps_its_task`, `roost-finishing-a-task-tells-its-host-which-offers-its-question-named` |
 | STATUS-12 | S4 | Closing Codex's plan menu says nothing, so its task reads `permission` until your next prompt | [Agent status](#agent-status) | Accepted: `AgentStatus.PlanMenuClosed.cfg` |
 
 ## A task on its host
@@ -3143,12 +3143,12 @@ Invariants:
 
 | Question | From | Pins | The host checks again | Changes it misses |
 |---|---|---|---|---|
-| Discard, name typed | dry run | branch commit (`expect`), counts (`told`) | branch moved, any count higher | a change that adds to no count: a file edited, one swapped for another, a commit amended off the branch |
+| Discard, name typed | dry run | branch commit (`expect`), counts (`told`), the offers it named (`offers`) | branch moved, any count higher, an offer it didn't name | a change that adds to no count: a file edited, one swapped for another, a commit amended off the branch; an offer made again under its title with another brief |
 | Discard, y-or-n-p | dry run | the same, all counts 0 | the same: asked again, it wants the name | none: any new file or commit counts |
-| Retire | cache | nothing | agent, dirty, unmerged | none: it refuses |
-| Merge | cache | branch commit (`branchTip`, as `expect`), once measured | branch moved, just before merging; agent, dirty, conflicts | a commit before it was measured, which is refused too: the question spoke of what was measured |
+| Retire | cache | the offers it named | agent, dirty, unmerged, an offer it didn't name | none: it refuses |
+| Merge | cache | branch commit (`branchTip`, as `expect`), once measured; the offers it named | branch moved, just before merging; agent, dirty, conflicts; an offer it didn't name, before merging and again after | a commit before it was measured, which is refused too: the question spoke of what was measured |
 | Stop | cache | nothing | | none that matter |
-| Forget | cache | nothing | agent running | none: it refuses |
+| Forget | cache | the offers it named | agent running, an offer it didn't name | none: it refuses |
 | Send anyway | status | nothing | status without `force` | a stale copy: VIEWS-4 |
 | Resume? | a refusal | nothing | agent running | none |
 | Update: ask its agent? | a reply | nothing | | none |
@@ -3164,10 +3164,10 @@ Commands against what Emacs offers (`roost--action-applies-p`) and what the host
 | resume | worktree, not running | | running |
 | update | worktree | | active, dirty, merge under way |
 | pull request | worktree, and commits or a pull request | | dirty |
-| merge | work unmerged, not active, none left by the agent | another branch; dirty offers Magit | branch moved, active, dirty, conflicts |
-| retire | not active, none left by the agent | active; else offers discard | active, unmerged, dirty |
-| forget | always | | running: stops it first |
-| discard | always | | branch moved; holds more than you were told |
+| merge | work unmerged, not active, none left by the agent | another branch; dirty offers Magit | branch moved, active, dirty, conflicts; an offer made since you were asked, which after the merge leaves it merged and not retired |
+| retire | not active, none left by the agent | active; else offers discard | active, unmerged, dirty; an offer made since you were asked |
+| forget | always | | running: stops it first; an offer made since you were asked |
+| discard | always | | branch moved; holds more than you were told; an offer made since you were asked |
 
 No state has no way out, and nothing offered is always refused: a task on another
 branch has `x`, and a task gone has `X`.
