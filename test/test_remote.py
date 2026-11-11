@@ -4673,7 +4673,10 @@ class Lifecycle(unittest.TestCase):
             tip = self.commit_in(task)
             own = self.agent_worktree(task, "one")
             self.assertTrue(self.request("retarget", id=task["id"], base="worktree-one")["ok"])
-            return task, tip, own
+            # It has commits of its own, so only the branch it merges into
+            # keeps them for it: `B` names the one that stays.
+            return task, tip, own, lambda: self.assertTrue(
+                self.request("retarget", id=task["id"], base="keep-one")["ok"])
 
         def forked():
             source = self.create(name="source")
@@ -4683,11 +4686,12 @@ class Lifecycle(unittest.TestCase):
             told = self.request("discard", id=source["id"], dryRun=True)["result"]["discard"]
             self.assertEqual(told["commits"], 0)
             self.assertTrue(self.request("discard", id=source["id"], expect=told["commit"], told=told)["ok"])
-            return task, tip, self.agent_worktree(task, "two")
+            # It never committed, so any branch that stays keeps its start.
+            return task, tip, self.agent_worktree(task, "two"), lambda: None
 
         for case in (retargeted, forked):
             with self.subTest(case=case.__name__):
-                task, tip, own = case()
+                task, tip, own, kept_there = case()
                 branch = "worktree-" + own.name
                 self.assertEqual(self.git("rev-parse", branch), tip)
                 reply = self.request("retire", id=task["id"])
@@ -4699,6 +4703,7 @@ class Lifecycle(unittest.TestCase):
                 self.assertIn(task["paneId"], roost.pane_inventory(self.socket))
                 # On a branch that stays, they are kept, and the task goes.
                 self.git("branch", "keep-" + own.name, tip)
+                kept_there()
                 reply = self.request("retire", id=task["id"])
                 self.assertTrue(reply["ok"], reply)
                 self.assertFalse(own.exists())

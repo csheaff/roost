@@ -310,7 +310,10 @@ YouRetarget(b) == Aside(
     /\ "retarget" \in Also /\ ~retargeted
     /\ regLock = 0 /\ rec /\ wtLock = 0 /\ removing = 0
     /\ tb /\ There(b) /\ b # integ
-    /\ integ' = b /\ base' = tbCommits \cap On(b) /\ retargeted' = TRUE,
+    \* Where its commits count from follows, but for a branch that has
+    \* them all: started at its own tip, it would read as never committed.
+    /\ integ' = b /\ retargeted' = TRUE
+    /\ base' = IF tbCommits \subseteq On(b) THEN base ELSE tbCommits \cap On(b),
     <<src, offers, reading, readPartly, untold>>)
 
 Targets == {"main", "mine", "wt"} \cup (IF Break = "retarget_own" THEN {"tb"} ELSE {})
