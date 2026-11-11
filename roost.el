@@ -32,6 +32,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'color)
 (require 'json)
 (require 'subr-x)
 (require 'seq)
@@ -381,6 +382,16 @@ no such app, and start as ever.  Tasks you start after changing this
 follow it."
   :type 'boolean)
 
+(defcustom roost-decorate t
+  "Whether Roost's views are drawn with more than their text.
+A quiet tint behind a status that wants you, a band behind what is
+wrong with a task, a hairline under each view's heading, changed lines
+in a column, and a little air between lines.  Each colour is made from
+your theme's own, afresh when the theme changes, and no text differs:
+nil draws the same words with none of it, as a terminal with few
+colours does anyway."
+  :type 'boolean)
+
 (defcustom roost-notes-file (locate-user-emacs-file "roost/notes.json")
   "Local file keeping review notes not yet sent to an agent.
 See `roost-note'."
@@ -395,6 +406,78 @@ See `roost-note'."
 (defface roost-label '((t :inherit shadow))
   "Face for the word that names a block of the task panel.
 Quiet: what the block holds is what you read.")
+
+;;;; Colours made from the theme's
+
+(defvar roost--mixed (make-hash-table :test 'equal)
+  "Colours `roost--mix' made, by what they were made from.")
+
+(defun roost--mix (colour onto amount)
+  "COLOUR laid over ONTO, AMOUNT of it from 0 to 1, as a colour's name.
+Nil where either can't be read as a colour, as on a terminal that
+leaves its own unsaid."
+  (let ((key (list colour onto amount)))
+    (or (gethash key roost--mixed)
+        (when-let* (((stringp colour))
+                    ((stringp onto))
+                    (over (ignore-errors (color-name-to-rgb colour)))
+                    (under (ignore-errors (color-name-to-rgb onto))))
+          (puthash key
+                   (apply #'color-rgb-to-hex
+                          (append (cl-mapcar (lambda (a b) (+ (* amount a) (* (- 1 amount) b))) over under)
+                                  '(2)))
+                   roost--mixed)))))
+
+(defun roost--decorated-p ()
+  "Whether this display can show what `roost-decorate' draws."
+  (and roost-decorate (display-color-p) (> (display-color-cells) 255)))
+
+(defun roost--tint (face &optional amount)
+  "A background that says FACE's colour quietly: AMOUNT of it on the frame's own.
+An eighth unless given.  Nil where `roost-decorate' is off or the
+display can't show it; then the text stands as it is."
+  (when (roost--decorated-p)
+    (roost--mix (face-foreground face nil t) (face-background 'default nil t) (or amount 0.125))))
+
+(defun roost--hairline ()
+  "The colour of the lines Roost rules under headings: the text's, faintly."
+  (when (roost--decorated-p)
+    (roost--mix (face-foreground 'default nil t) (face-background 'default nil t) 0.22)))
+
+(defun roost--ruled (line)
+  "LINE, which ends in a newline, with a hairline under it to the window's edge.
+Where the display shows one; else LINE as it is."
+  (if-let* ((colour (roost--hairline)))
+      (let ((line (copy-sequence line)))
+        (add-face-text-property 0 (length line)
+                                (list :underline (list :color colour :position t) :extend t) t line)
+        line)
+    line))
+
+(defun roost--banded (line face)
+  "LINE, which ends in a newline, on a band of FACE's colour to the window's edge.
+For what is wrong and wants you.  Where the display shows one; else
+LINE as it is."
+  (if-let* ((tint (roost--tint face)))
+      (let ((line (copy-sequence line)))
+        (add-face-text-property 0 (length line) (list :background tint :extend t) t line)
+        line)
+    line))
+
+(defun roost--tinted (text face &optional amount)
+  "TEXT on a tint of FACE's colour, AMOUNT of it, where the display shows one.
+TEXT's own faces stay as they are, over the tint."
+  (if-let* ((tint (roost--tint face amount)))
+      (let ((text (copy-sequence text)))
+        (add-face-text-property 0 (length text) (list :background tint) t text)
+        text)
+    text))
+
+(defconst roost--line-spacing 0.1
+  "The space between the rows of Roost's lists, as a part of a line's height.
+With `roost-decorate': rows are easier to tell apart with a little air
+between them.  Not in a task's panel, which is read rather than scanned
+and has little height to spare beside a terminal.")
 
 (defface roost-dim '((t :inherit shadow))
   "Secondary text: labels, timestamps, prompts.")
@@ -3674,14 +3757,38 @@ item's key, which Jira finds the branch by."
 (defun roost--compose-field (label value command &optional note)
   "Insert field LABEL showing VALUE as a button running COMMAND, then NOTE."
   (insert (propertize (format "%-9s" label) 'font-lock-face 'roost-dim))
+  ;; As it is, without a link's underline: what you chose is what the
+  ;; draft says, and it lights up under the mouse.
   (insert-text-button value 'action (lambda (_) (call-interactively command))
-                      'follow-link t 'font-lock-face 'roost-field
+                      'follow-link t 'face 'roost-field 'font-lock-face 'roost-field
                       'help-echo (format "mouse-1 or RET: change %s" (downcase label)))
-  (insert (propertize (concat "  " (substitute-command-keys
-                                    (format "\\<roost-compose-mode-map>\\[%s]" command))
-                              (if note (concat " · " note) ""))
-                      'font-lock-face 'roost-dim))
+  ;; Its key quietly, where the display can draw quietly: six of them in
+  ;; a key's own colours are louder than the fields they change.
+  (let ((key (substitute-command-keys (format "\\<roost-compose-mode-map>\\[%s]" command))))
+    (insert (propertize "  " 'font-lock-face 'roost-dim 'roost-field-gap t)
+            (propertize (concat (if (roost--decorated-p) (substring-no-properties key) key)
+                                (if note (concat " · " note) ""))
+                        'font-lock-face 'roost-dim)))
   (insert "\n"))
+
+(defun roost--compose-align-keys (start end)
+  "Draw the keys of the fields between START and END in a column.
+Two past the longest value, but for one that would take them past the
+middle of a wide window: its key follows it.  Only where the display
+can; the text is the same either way."
+  (when (roost--decorated-p)
+    (let (gaps)
+      (save-excursion
+        (goto-char start)
+        (while (setq start (text-property-any (point) end 'roost-field-gap t))
+          (goto-char start)
+          (push (cons start (current-column)) gaps)
+          (goto-char (or (next-single-property-change start 'roost-field-gap nil end) end))))
+      (when-let* ((near (seq-filter (lambda (gap) (<= (cdr gap) 56)) gaps))
+                  (column (+ 2 (apply #'max (mapcar #'cdr near)))))
+        (pcase-dolist (`(,at . ,_) near)
+          (put-text-property at (next-single-property-change at 'roost-field-gap nil end)
+                             'display `(space :align-to ,column)))))))
 
 (defun roost--compose-render ()
   "Redraw the draft's fields above the prompt, leaving the prompt untouched."
@@ -3770,8 +3877,15 @@ item's key, which Jira finds the branch by."
                                           (t derived))
                               #'roost-compose-set-name
                               (unless (or name (string-empty-p derived)) "from the prompt")))
+      (roost--compose-align-keys (point-min) (point))
       (roost--compose-insert-changing changing)
-      (insert (propertize (make-string 60 ?─) 'font-lock-face 'roost-dim) "\n"
+      (insert (if-let* ((colour (and (display-graphic-p) (roost--hairline))))
+                  ;; Drawn as one line across the window, of the same text.
+                  (propertize (make-string 60 ?─) 'font-lock-face 'roost-dim
+                              'display '(space :align-to right)
+                              'face (list :strike-through colour))
+                (propertize (make-string 60 ?─) 'font-lock-face 'roost-dim))
+              "\n"
               (propertize "Describe the task for the agent below.\n" 'font-lock-face 'roost-dim))
       (add-text-properties (point-min) (point)
                            '(read-only "Write the prompt below the fields" rear-nonsticky t
@@ -9504,8 +9618,16 @@ own.  Each button shows all the file's changes since the task began."
                                         ("Committed" . ,(seq-remove uncommitted files))))
       (when (and group (> room 0))
         (insert "  " (propertize label 'face 'roost-dim) "\n")
-        (dolist (file (seq-take group room))
-          (roost--insert-changed-file task file width))
+        (let* ((shown (seq-take group room))
+               ;; Their counts in a column, two past the longest path shown.
+               (column (and (roost--decorated-p)
+                            (+ 4 (apply #'max
+                                        (mapcar (lambda (file)
+                                                  (min (string-width (alist-get 'path file))
+                                                       (roost--changed-file-room file width)))
+                                                shown))))))
+          (dolist (file shown)
+            (roost--insert-changed-file task file width column)))
         (setq room (max 0 (- room (length group))))))
     (when (length> files roost--changed-files-shown)
       (roost--insert-indented
@@ -9514,15 +9636,23 @@ own.  Each button shows all the file's changes since the task began."
                 (- (length files) roost--changed-files-shown)))
        'roost-dim))))
 
-(defun roost--insert-changed-file (task file width)
-  "Insert a button showing FILE, one of TASK's `files', within WIDTH columns."
+(defun roost--changed-file-counts (file)
+  "What FILE, one of a task's `files', changed: its lines, or that it is new."
+  (cond ((alist-get 'untracked file) (propertize "new" 'face 'roost-diff-added))
+        ((alist-get 'added file)
+         (roost--fontify-changes (format "+%d −%d" (alist-get 'added file) (alist-get 'deleted file))))
+        (t (propertize "binary" 'face 'roost-dim))))
+
+(defun roost--changed-file-room (file width)
+  "The columns FILE's path may take beside its counts, in WIDTH columns."
+  (max 8 (- width 6 (string-width (roost--changed-file-counts file)))))
+
+(defun roost--insert-changed-file (task file width &optional column)
+  "Insert a button showing FILE, one of TASK's `files', within WIDTH columns.
+Its counts start at COLUMN, if given, as the display can put them."
   (let* ((path (alist-get 'path file))
-         (counts (cond ((alist-get 'untracked file) (propertize "new" 'face 'roost-diff-added))
-                       ((alist-get 'added file)
-                        (roost--fontify-changes (format "+%d −%d" (alist-get 'added file)
-                                                        (alist-get 'deleted file))))
-                       (t (propertize "binary" 'face 'roost-dim))))
-         (room (max 8 (- width 6 (string-width counts)))))
+         (counts (roost--changed-file-counts file))
+         (room (roost--changed-file-room file width)))
     (insert "  ")
     ;; Long paths keep their end, which names the file.
     (insert-text-button (if (> (string-width path) room)
@@ -9538,7 +9668,8 @@ own.  Each button shows all the file's changes since the task began."
                                   (roost--quit-questions-left-open
                                    (lambda () (roost--diff-file task file)))
                                   (roost--diff-file task file)))
-    (insert "  " counts "\n")))
+    (insert (if column (propertize "  " 'display `(space :align-to ,column)) "  ")
+            counts "\n")))
 
 (defun roost--agent-work-left (task)
   "The worktrees TASK's agent made that hold work not on the task's branch."
@@ -10246,7 +10377,14 @@ wants you, so that either shows from the terminal beside it."
 After a mark, with the lines it wraps to under its first word."
   (let ((line (concat "▲ " text "\n")))
     (add-face-text-property 0 (length line) face t line)
-    (insert (propertize line 'wrap-prefix "  "))))
+    ;; On a band of its colour, to the window's edge: it is the one
+    ;; thing in the panel that is loud.
+    (let ((tint (roost--tint face)))
+      (when tint
+        (add-face-text-property 0 (length line) (list :background tint :extend t) t line))
+      ;; The band runs behind where its lines wrap to, too.
+      (insert (propertize line 'wrap-prefix
+                          (if tint (propertize "  " 'face (list :background tint)) "  "))))))
 
 (defvar-local roost--panel-open nil
   "What a narrow task panel shows unfolded: `prompts' and `details' among them.
@@ -10538,14 +10676,27 @@ scrolled it away."
                         (unless (member word (append '("merged" "conflicts" "seen") roost--pr-turns))
                           (propertize (format " for %s" (roost--elapsed (roost--field task 'updatedAt)))
                                       'face 'roost-dim)))))
-    ;; The status keeps to one line, below the name when both don't fit.
-    (insert name (if (> (+ (roost--text-width name) 3 (roost--text-width state)) width) "\n" "   ")
-            state "\n"))
-  (insert (propertize (format "%s · %s · %s" (roost--host-label (roost--field task 'host))
-                              (roost--project-name task)
-                              (or (roost--field task 'agent) "claude"))
-                      'face 'roost-dim)
-          "\n")
+    ;; The status keeps to one line, below the name when both don't fit:
+    ;; at the window's right edge, where the display can put it.  One
+    ;; that waits on you is on a tint of its colour, from a space before.
+    (let ((tint (and (roost--waiting-p task) (roost--status-face (roost--attention-status task))))
+          (apart (> (+ (roost--text-width name) 3 (roost--text-width state)) width)))
+      (insert name
+              (cond (apart "\n")
+                    ((roost--decorated-p)
+                     (concat (propertize "  " 'display
+                                         `(space :align-to (- right ,(+ 2 (roost--text-width state)))))
+                             (if tint (roost--tinted " " tint) " ")))
+                    (t "   "))
+              (if tint (roost--tinted state tint) state)
+              "\n")))
+  (let ((where (concat (propertize (format "%s · %s · %s" (roost--host-label (roost--field task 'host))
+                                           (roost--project-name task)
+                                           (or (roost--field task 'agent) "claude"))
+                                   'face 'roost-dim)
+                       "\n")))
+    ;; Ruled off from what follows, which is what the panel is for.
+    (insert (roost--ruled where)))
   ;; While it works, what it is doing, which the status word can't say.
   (when-let* ((doing (roost--activity task)))
     (insert (propertize (concat (truncate-string-to-width doing (max 8 (1- width)) nil nil "…") "\n")
@@ -10747,6 +10898,13 @@ UNDER means under the line that folds it, which is its heading."
                                     (or (cdr entry) "unknown") "\n")
                             'wrap-prefix (make-string 15 ?\s)))))))
 
+(defun roost--quiet-but-keys (text)
+  "TEXT dim, but for the keys it names, which keep their face.
+So they look as keys do elsewhere, and can be clicked as those can."
+  (let ((text (copy-sequence text)))
+    (add-face-text-property 0 (length text) 'roost-dim t text)
+    text))
+
 (defun roost--insert-panel-keys (task width)
   "Insert the keys of TASK's panel, in WIDTH columns.
 Beside a terminal, a row of the keys that open the task's other views,
@@ -10754,7 +10912,7 @@ the same for every task but for one that has no such view now: what to
 do with the task next is the next step's, at the top.  With room, what
 ready means, and the menu's key."
   (insert roost--gap
-          (propertize
+          (roost--quiet-but-keys
            (substitute-command-keys
             (if (< width roost--wide-panel)
                 (concat "\\<roost-task-info-mode-map>"
@@ -10767,8 +10925,7 @@ ready means, and the menu's key."
               (concat "Ready means the agent is waiting for you, not that the work is reviewed.\n"
                       "\\<roost-task-info-mode-map>\\[roost-dispatch] opens the menu · "
                       "\\[roost-task-info-refresh] refreshes · "
-                      "\\[roost-task-info-quit] closes")))
-           'face 'roost-dim)
+                      "\\[roost-task-info-quit] closes"))))
           "\n"))
 
 (defun roost--task-label (task)
@@ -10934,6 +11091,7 @@ finish with it.  The others act on the task it sits under."
   "Coding agent tasks across hosts, grouped by project.
 Refreshes are asynchronous; rendering uses only cached state.
 \\{roost-dashboard-mode-map}"
+  (when roost-decorate (setq-local line-spacing roost--line-spacing))
   (setq-local truncate-lines t
               revert-buffer-function (lambda (&rest _) (roost-refresh)))
   (setq header-line-format
@@ -11261,14 +11419,38 @@ A count is in the colour of the most pressing of its tasks, as for
         (cl-incf (gethash word counts 0))
         (unless (equal (gethash word attention) "prompt")
           (puthash word status attention))))
-    (string-join
-     (mapcar (lambda (word)
-               (propertize (format "%d %s" (gethash word counts) word)
-                           'face (roost--status-word-face (gethash word attention))))
-             (seq-filter (lambda (word) (gethash word counts))
-                         ;; Words of statuses Roost doesn't know yet come last.
-                         (seq-uniq (append roost--row-words (hash-table-keys counts)))))
-     (propertize " · " 'face 'roost-dim))))
+    (let* ((words (seq-filter (lambda (word) (gethash word counts))
+                              ;; Words of statuses Roost doesn't know yet come last.
+                              (seq-uniq (append roost--row-words (hash-table-keys counts)))))
+           ;; A count in a status's colour is on a tint of it, from the
+           ;; space before to the space after, where there is one.
+           (tint (lambda (word)
+                   (let ((face (roost--status-word-face (gethash word attention))))
+                     (and (memq face '(roost-status-permission roost-status-failed)) face))))
+           (line (mapconcat
+                  (lambda (word)
+                    (propertize (format "%d %s" (gethash word counts) word)
+                                'face (roost--status-word-face (gethash word attention))
+                                'roost-tint (funcall tint word)))
+                  words (propertize " · " 'face 'roost-dim))))
+      (roost--tint-marked line))))
+
+(defun roost--tint-marked (line)
+  "LINE with each run marked `roost-tint' on a tint of that face's colour.
+The tint takes in the space before the run and the space after, which
+pad it, and the mark is taken off."
+  (let ((line (copy-sequence line))
+        (pos 0))
+    (while (setq pos (text-property-not-all pos (length line) 'roost-tint nil line))
+      (let* ((face (get-text-property pos 'roost-tint line))
+             (end (or (next-single-property-change pos 'roost-tint line) (length line)))
+             (from (if (and (> pos 0) (eq (aref line (1- pos)) ?\s)) (1- pos) pos))
+             (to (if (and (< end (length line)) (eq (aref line end) ?\s)) (1+ end) end)))
+        (when-let* ((colour (roost--tint face)))
+          (add-face-text-property from to (list :background colour) t line))
+        (setq pos end)))
+    (remove-text-properties 0 (length line) '(roost-tint nil) line)
+    line))
 
 (defvar roost--name-counts nil
   "While a list of tasks is drawn, how many tasks have each name in each project.
@@ -11361,8 +11543,15 @@ column shrinks first, then the agent column is dropped."
          (name (concat indent (roost--row-name task (max 1 (- (plist-get layout :name) (length indent))))))
          (line (concat "  " (roost--status-light task 'dashboard) " "
                        name (make-string (max 0 (- (plist-get layout :name) (string-width name))) ?\s)
-                       "  "
-                       (funcall cell status 11 face) " "
+                       (roost--tint-marked
+                        (concat "  "
+                                (propertize (truncate-string-to-width status 11 nil nil "…")
+                                            'face face
+                                            'roost-tint (and (memq face '(roost-status-permission
+                                                                          roost-status-failed))
+                                                             face))
+                                (make-string (max 0 (- 11 (string-width status))) ?\s)
+                                " "))
                        (funcall cell (roost--elapsed (roost--field task 'updatedAt)) 6 'roost-dim) "  "
                        (if (> (plist-get layout :pr) 0)
                            (concat (truncate-string-to-width (roost--pr-marker task) (plist-get layout :pr)
@@ -11461,12 +11650,14 @@ The mark stays where it was."
                            ""))
                    ;; A long path keeps its end, which names the project.
                    (room (- width (roost--text-width heading) (roost--text-width note) 2)))
-              (insert roost--gap heading
-                      (if (< room 4) ""
-                        (propertize (concat "  " (roost--truncate-start
-                                                  (roost--abbreviate-path (or repo "") host) room))
-                                    'face 'roost-dim))
-                      note "\n"))
+              (insert roost--gap
+                      (roost--ruled
+                       (concat heading
+                               (if (< room 4) ""
+                                 (propertize (concat "  " (roost--truncate-start
+                                                           (roost--abbreviate-path (or repo "") host) room))
+                                             'face 'roost-dim))
+                               note "\n"))))
             ;; `c' on the heading starts a task in this project.
             (when repo
               (put-text-property start (point) 'roost-directory
@@ -11740,6 +11931,7 @@ Nil for a task that is no attempt."
 On an attempt's line, task commands such as those in
 \\[roost-dispatch] act on that attempt.
 \\{roost-attempts-mode-map}"
+  (when roost-decorate (setq-local line-spacing roost--line-spacing))
   (setq-local truncate-lines t)
   (add-hook 'after-change-major-mode-hook #'roost--quiet-display 90 t)
   (roost--evil-state 'roost-attempts-mode roost-evil-state)
@@ -11826,13 +12018,19 @@ alone.  The path compares the file between the attempts SHOWN, as
     (if (null paths)
         (insert "\n" (propertize "None of them has changed a file yet.\n" 'face 'roost-dim))
       ;; Each column under its attempt's number.
-      (insert "\n" (make-string (+ 2 path-width) ?\s))
-      (cl-mapc (lambda (task width)
-                 (insert "  " (propertize (string-pad (number-to-string (alist-get 'n (roost--attempt task)))
-                                                      width nil t)
-                                          'face 'roost-dim)))
-               attempts widths)
       (insert "\n")
+      (let ((start (point)))
+        (insert (make-string (+ 2 path-width) ?\s))
+        (cl-mapc (lambda (task width)
+                   (insert "  " (propertize (string-pad (number-to-string (alist-get 'n (roost--attempt task)))
+                                                        width nil t)
+                                            'face 'roost-dim)))
+                 attempts widths)
+        (insert "\n")
+        ;; Ruled off from the files under it, as a table's heading is.
+        (when-let* ((colour (roost--hairline)))
+          (add-face-text-property start (point)
+                                  (list :underline (list :color colour :position t) :extend t) t)))
       (pcase-dolist (`(,path . ,cells) rows)
         (let ((start (point))
               (label (if (> (string-width path) path-width)
@@ -11871,22 +12069,24 @@ Windows showing them keep their place."
         (insert "\nNone of these attempts is left.\n")
       (let* ((task (car attempts))
              (prompt (roost--prompt-text task)))
-        (insert (propertize (concat (roost--host-label (roost--field task 'host)) " · " (roost--project-name task)
-                                    (when prompt
-                                      (concat " · " (truncate-string-to-width (roost--one-line prompt)
-                                                                              60 nil nil "…"))))
-                            'face 'roost-dim)
-                "\n\n"))
+        (insert (roost--ruled
+                 (concat (propertize (concat (roost--host-label (roost--field task 'host)) " · "
+                                             (roost--project-name task)
+                                             (when prompt
+                                               (concat " · " (truncate-string-to-width (roost--one-line prompt)
+                                                                                       60 nil nil "…"))))
+                                     'face 'roost-dim)
+                         "\n"))
+                "\n"))
       (roost--insert-attempt-rows attempts)
       (roost--insert-attempt-files attempts shown)
       (insert "\n"
-              (propertize
+              (roost--quiet-but-keys
                (substitute-command-keys
                 (concat "\\<roost-attempts-mode-map>\\[roost-attempts-visit] on a file compares it between two attempts in Ediff,"
                         " or opens it in the one that changed it.\n"
                         "\\[roost-attempts-merge] merges an attempt and retires it; the others stay until you finish them."
-                        "  \\[roost-attempts-refresh] refreshes."))
-               'face 'roost-dim)
+                        "  \\[roost-attempts-refresh] refreshes.")))
               "\n"))
     (goto-char (point-min))
     (forward-line (1- line))
@@ -12158,15 +12358,17 @@ than WIDTH, such as a URL, is broken within, as in `roost--reply-preview'."
                                 (string> (or (alist-get 'at (car (last (alist-get 'hits (cdr a))))) "")
                                          (or (alist-get 'at (car (last (alist-get 'hits (cdr b))))) "")))))
     (erase-buffer)
-    (insert (propertize "Messages containing " 'face 'roost-dim)
-            (propertize roost--search-query 'face 'roost-heading) "\n")
+    (insert (roost--ruled (concat (propertize "Messages containing " 'face 'roost-dim)
+                                  (propertize roost--search-query 'face 'roost-heading) "\n")))
     (when pending
       (insert (propertize (format "Searching %s…\n" (mapconcat #'roost--host-label pending ", "))
                           'face 'roost-dim)))
     (pcase-dolist (`(,host . ,reply) (reverse roost--search-replies))
       (cond ((eq (car-safe reply) :error)
-             (insert (propertize (format "Could not search %s: %s\n" (roost--host-label host) (cadr reply))
-                                 'face 'roost-status-failed)))
+             (insert (roost--banded (propertize (format "Could not search %s: %s\n" (roost--host-label host)
+                                                        (cadr reply))
+                                                'face 'roost-status-failed)
+                                    'roost-status-failed)))
             ;; A host searches its newest conversations first, for so long.
             ((alist-get 'incomplete reply)
              (insert (propertize (format "%s ran out of time; it searched its newest conversations only\n"
@@ -12428,7 +12630,8 @@ click."
   "Short count of TASKS waiting for you, or nil."
   (let ((waiting (seq-count #'roost--waiting-p tasks)))
     (when (> waiting 0)
-      (propertize (format "%d waiting" waiting) 'face (roost--waiting-face tasks)))))
+      (propertize (format "%d waiting" waiting) 'face (roost--waiting-face tasks)
+                  'roost-tint (roost--waiting-face tasks)))))
 
 (defun roost--waiting-face (tasks)
   "Face for a count of TASKS waiting: as for the most urgent of them.
@@ -12572,11 +12775,20 @@ for any other directory, which asks for a host and a folder first."
           (list (string-replace
                  "%" "%%"
                  ;; From where the text starts, past a margin for lights.
-                 (concat (propertize " " 'display '(space :align-to 0))
-                         (propertize "Roost" 'face 'roost-title)
-                         (if-let* ((summary (roost--sidebar-summary tasks))) (concat "  " summary) "")
-                         ;; Nothing here changes until it watches again.
-                         (if roost-watch-mode "" (propertize "  paused" 'face 'roost-dim))))))
+                 (roost--tint-marked
+                  (concat (propertize " " 'display '(space :align-to 0))
+                          (propertize "Roost" 'face 'roost-title)
+                          (if-let* ((summary (roost--sidebar-summary tasks))) (concat "  " summary) "")
+                          ;; A space after, which pads the count's tint.
+                          (if roost-watch-mode " " (propertize "  paused" 'face 'roost-dim)))))))
+    ;; Ruled off from the tasks under it, to the window's edge.
+    (when-let* ((colour (roost--hairline)))
+      (let ((rule (list :underline (list :color colour :position t))))
+        (setq header-line-format
+              (list (let ((title (copy-sequence (car header-line-format))))
+                      (add-face-text-property 0 (length title) rule t title)
+                      title)
+                    (propertize " " 'display '(space :align-to right) 'face rule)))))
     (roost--insert-unreachable-hosts tasks width t)
     (if (null tasks)
         (insert "\n" (propertize (substitute-command-keys
@@ -13247,9 +13459,10 @@ longest any waited on you at a time while you were here."
          ((seq-some (lambda (entry) (eq (cdr entry) 'pending)) replies)
           (insert (propertize "Asking each host…\n" 'face 'roost-dim)))
          (t
-          (insert (propertize (format "%-12s%7s%10s%15s%10s%17s\n" "" "At once" "Worked" "Waited on you"
-                                      "Longest" "Per hour worked")
-                              'face 'roost-dim))
+          ;; Ruled off from the days under it, as a table's heading is.
+          (insert (roost--ruled (propertize (format "%-12s%7s%10s%15s%10s%17s\n" "" "At once" "Worked"
+                                                    "Waited on you" "Longest" "Per hour worked")
+                                            'face 'roost-dim)))
           (pcase-dolist (`(,start . ,tally) (plist-get roost--workload :days))
             (insert (roost--workload-row
                      (cond ((= start (roost--day-start today)) "Today")

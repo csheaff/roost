@@ -866,6 +866,11 @@ header line. A failed creation keeps the draft.
   then shows at once, and for Claude Code a declined request and Esc too. A
   Codex task is `ready` once you have answered its startup questions, rather
   than at its first turn.
+- `roost-decorate` (t): draw the views with more than their text: a tint
+  behind a status that wants you, a band behind what is wrong with a task,
+  a hairline under each heading, line counts in a column, a little air
+  between a list's rows. The colours are made from your theme's, and no
+  text differs; nil draws the same words without any of it.
 - `roost-remote-control` (nil): start each Claude Code task with Remote
   Control (`--remote-control`, `--name`), named for the task, so it shows
   in the Claude app and at claude.ai/code, which notify your phone when

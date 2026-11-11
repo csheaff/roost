@@ -4,6 +4,21 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Roost's views are drawn with more than their text. A status that wants
+  you sits on a quiet tint of its colour: in a task panel's title, where it
+  is now at the right edge, in the dashboard's counts and rows, and in the
+  sidebar's count. What is wrong with a task, the panel's `▲` lines and a
+  search's errors, is on a band of its colour across the window. A hairline
+  rules off each view's heading and each table's, a panel's changed files
+  have their line counts in a column, the keys at a panel's foot look as
+  keys do elsewhere and can be clicked, and the rows of the lists have a
+  little air between them. A new task's draft shows its fields plainly,
+  without a link's underline, with their keys quietly in a column. Every
+  colour is made from your theme's, afresh when it changes, and no text
+  differs, so a terminal with few colours shows the same words without
+  them. `(setq roost-decorate nil)` turns it all off. If you set
+  `roost-field` to inherit `link`, the draft's fields are underlined again.
+
 - Several attempts at one prompt. `C-c C-x` in the new task draft sets how
   many tasks it makes from the prompt: a number up to 5, each by the
   draft's agent, or agents' names, as `claude codex`, one by each. `C-c C-c`

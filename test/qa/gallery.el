@@ -52,10 +52,15 @@ in a window just as wide as it was drawn for."
               (erase-buffer)
               (insert text))
             (goto-char (point-min))
+            ;; A draft's faces are font-lock's.
+            (font-lock-mode 1)
             (setq mode-line-format nil
                   cursor-type nil
                   truncate-lines list
                   truncate-partial-width-windows nil
+                  line-spacing (and list roost--line-spacing)
+                  ;; As the panel has it: no arrows where a line wraps.
+                  fringe-indicator-alist '((continuation nil nil) (truncation nil nil))
                   word-wrap (not list)
                   header-line-format (propertize (concat " " title) 'face 'shadow)))
           (set-window-buffer window buffer)
@@ -89,6 +94,15 @@ in a window just as wide as it was drawn for."
       (roost-gallery--show
        (mapcar (lambda (state) (cons state (cons 44 (roost-gallery--copy 'panel state 44)))) states))
       (roost-gallery--capture (format "%spanel-%d.png" out (cl-incf n))))
+    ;; The views that are neither a task's panel nor a list of tasks.
+    (roost-gallery--show
+     (list (cons "attempts" (cons 92 (roost-gallery--copy 'attempts "first attempt" 92)))
+           (cons "a new task's draft" (cons 92 (roost-gallery--copy 'draft "running" 92)))))
+    (roost-gallery--capture (format "%sattempts-draft.png" out))
+    (roost-gallery--show
+     (list (cons "search" (cons 92 (roost-gallery--copy 'search "running" 92)))
+           (cons "workload" (cons 92 (roost-gallery--copy 'workload "running" 92)))))
+    (roost-gallery--capture (format "%ssearch-workload.png" out))
     ;; The dashboard shows every state at once.  Not the sidebar, whose
     ;; rows are laid out for the window they are in: `make qa' shows it.
     (roost-gallery--show
