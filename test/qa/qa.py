@@ -529,10 +529,25 @@ class Run:
         registry = subprocess.run(["ioreg", "-n", "Root", "-d1", "-a"], capture_output=True, text=True).stdout
         return bool(re.search(r"<key>CGSSessionScreenIsLocked</key>\s*<true/>", registry))
 
-    def shot(self):
-        """Capture the frame, on macOS; return the file's name, or None."""
-        if sys.platform != "darwin" or self.args.no_shots:
+    def shot_x11(self):
+        """Capture the display Emacs is on, under X, as with Xvfb: its root
+        window, which a display of Emacs's own shows nothing else on."""
+        if not (os.environ.get("DISPLAY") and shutil.which("import")):
             return None
+        self.shots += 1
+        name = "%s/%02d.png" % (self.name, self.shots)
+        subprocess.run(["import", "-window", "root", str(self.out / name)], capture_output=True)
+        if not (self.out / name).exists():
+            self.notes.add("Some screenshots failed: import could not capture the display")
+            return None
+        return name
+
+    def shot(self):
+        """Capture the frame, on macOS or under X; return the file's name, or None."""
+        if self.args.no_shots:
+            return None
+        if sys.platform != "darwin":
+            return self.shot_x11()
         if self.screen_locked():
             self.notes.add("No screenshots while the screen was locked")
             return None
