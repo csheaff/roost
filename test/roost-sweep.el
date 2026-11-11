@@ -969,7 +969,10 @@ Return them as (PROBLEM . PLACES), PLACES naming the view, state and width."
              (pcase action
                (`(button ,label . ,_) (cl-pushnew label buttons :test #'equal))
                (`(key ,_ . ,command) (cl-pushnew (cons view command) keys :test #'equal)))))))
-     (dolist (label '("Show the whole prompt" "Show the whole reply" "ledger.py" "notes.md" "#12" "#70"
+     ;; A narrow panel folds its prompts under a line of the latest one,
+     ;; and its details under another.
+     (dolist (label '("▸ Make the report show how much is lef…" "▸ Now flag the categories that are ove…"
+                      "▸ Details" "Show the whole reply" "ledger.py" "notes.md" "#12" "#70"
                       "probe" "the report" "https://example.com/ci" "+" "conflicts with main"
                       "ledger.py:3"))
        (should (member label buttons)))
@@ -979,8 +982,11 @@ Return them as (PROBLEM . PLACES), PLACES naming the view, state and width."
              (dolist (command commands) (should (member (cons view command) found)))
            (should (length> found 6))))))
    (pcase-dolist (`(,view ,state ,width ,action)
-                  '((panel "running" 40 (button "Show the whole prompt" . 0))
-                    (panel "after a later prompt" 40 (button "Show the whole prompt" . 0))
+                  '((panel "running" 40 (button "▸ Make the report show how much is lef…" . 0))
+                    (panel "after a later prompt" 40 (button "▸ Now flag the categories that are ove…" . 0))
+                    (panel "running" 40 (button "▸ Details" . 0))
+                    (panel "running" 100 (button "Show the whole prompt" . 0))
+                    (panel "after a later prompt" 100 (button "Show the whole prompt" . 0))
                     (panel "permission" 40 (button "Show the whole reply" . 0))
                     (search "running" nil (key [?\t] . roost-search-toggle))))
      (let ((start (roost-sweep--try view state width nil))

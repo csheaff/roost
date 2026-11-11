@@ -10305,10 +10305,14 @@ Windows showing the panel keep their scroll position, and the mark stays."
     ;; With room, what you asked for comes before what came of it.
     (unless (< width roost--wide-panel)
       (roost--insert-prompts task width))
-    (roost--insert-changes task width next)
-    (roost--insert-merge-state task next)
-    (when-let* ((overlaps (roost--overlaps task)))
-      (roost--insert-indented (roost--changing-text overlaps "also changes" "also change") 'roost-dim))
+    (let ((start (point)))
+      (roost--insert-changes task width next)
+      (roost--insert-merge-state task next)
+      (when-let* ((overlaps (roost--overlaps task)))
+        (roost--insert-indented (roost--changing-text overlaps "also changes" "also change") 'roost-dim))
+      ;; With its worktree gone, no summary line sets these apart.
+      (when (and (roost--field task 'worktreeMissing) (> (point) start))
+        (save-excursion (goto-char start) (insert roost--gap))))
     (roost--insert-agent-work task)
     (roost--insert-status-notes task)
     (roost--insert-evidence task width beside)
@@ -10430,13 +10434,14 @@ NEXT is the panel's next step, which may already say some of it."
     ;; No heading: what it changed is most of the panel, and its place
     ;; says so.  How much, quietly, and the files under it plainly.
     (unless (roost--field task 'worktreeMissing)
-      (insert roost--gap
-              (propertize (cond ((not (assq 'diff task)) "Refreshing…")
-                                ((string-empty-p changes) "No changes yet")
-                                (t (concat (when-let* ((mark (roost--large-change-mark task))) (concat mark " "))
-                                           (roost--fontify-changes changes))))
-                          'face 'roost-dim 'wrap-prefix "  ")
-              "\n")))
+      (let ((summary (copy-sequence
+                      (cond ((not (assq 'diff task)) "Refreshing…")
+                            ((string-empty-p changes) "No changes yet")
+                            (t (concat (when-let* ((mark (roost--large-change-mark task))) (concat mark " "))
+                                       (roost--fontify-changes changes)))))))
+        ;; Under the faces of its line counts, which keep theirs.
+        (add-face-text-property 0 (length summary) 'roost-dim t summary)
+        (insert roost--gap (propertize summary 'wrap-prefix "  ") "\n"))))
   (when-let* (((not (roost--field task 'worktreeMissing)))
               (spread (roost--spread task)))
     (roost--insert-indented spread))
@@ -10595,11 +10600,11 @@ ready means, and the menu's key."
             (if (< width roost--wide-panel)
                 (concat "\\<roost-task-info-mode-map>"
                         (mapconcat (lambda (view) (format "\\[%s] %s" (car view) (cdr view)))
-                                   (seq-filter (lambda (view) (roost--action-applies-p task (car view)))
-                                               '((roost-review . "Magit") (roost-files . "Files")
-                                                 (roost-shell . "Shell")))
-                                   "  ")
-                        "  \\[roost-dispatch] More")
+                                   (append (seq-filter (lambda (view) (roost--action-applies-p task (car view)))
+                                                       '((roost-review . "Magit") (roost-files . "Files")
+                                                         (roost-shell . "Shell")))
+                                           '((roost-dispatch . "More")))
+                                   "  "))
               (concat "Ready means the agent is waiting for you, not that the work is reviewed.\n"
                       "\\<roost-task-info-mode-map>\\[roost-dispatch] opens the menu · "
                       "\\[roost-task-info-refresh] refreshes · "
