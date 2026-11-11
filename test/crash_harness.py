@@ -462,7 +462,8 @@ def stale_locks(box, reply):
     whether there were any. Only the user knows no Git is running there."""
     if not reply or "lock file may be stale" not in str(reply.get("error")):
         return False
-    for folder in (box.repo / ".git", box.root / "origin.git"):
+    # Conversations are in the helper's own repository, which Git names.
+    for folder in (box.repo / ".git", box.root / "origin.git", box.state / "conversations" / ".git"):
         for lock in folder.rglob("*.lock"):
             lock.unlink()
     return True

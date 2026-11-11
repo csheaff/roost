@@ -819,6 +819,10 @@ dashboard the command starts from."
      :start ,(lambda () (roost-new-task "/ssh:dev:/home/user/ledger/" "made" nil "Go on." "claude"))
      :action "create" :opens t :shows "*late terminal cccccc*" :watches t :makes t
      :refusals (("No branch, tag or commit named 'x' to start from")))
+    (new-conversation
+     :start ,(lambda () (roost-new-conversation "dev"))
+     :action "create" :opens t :shows "*late terminal cccccc*" :watches t :makes t
+     :refusals (("Roost needs a primary working checkout")))
     (compose-submit
      :origin compose :start ,#'roost-compose-submit
      :action "create" :opens t :shows "*late terminal cccccc*" :closes t :watches t :makes t :draft t

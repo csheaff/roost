@@ -3435,6 +3435,73 @@ terminal's, on a pty.  Skips the test where it can't be made."
                    (should-not (get-buffer roost--compose-buffer))))))
          (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
 
+(ert-deftest roost-a-conversation-starts-with-one-click ()
+  ;; In no project of yours: one click asks the host for it, and it opens
+  ;; at once, under a heading of its own, and isn't a project to start in.
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let ((roost-sidebar-recent-projects 3) asked opened said)
+       (switch-to-buffer (get-buffer-create "*sidebar test*"))
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--request)
+                      (lambda (host action params success &rest _)
+                        (setq asked (list host action params))
+                        (funcall success (append `((conversation . t) (name . ,(alist-get 'name params))
+                                                   (repo . "/state/conversations"))
+                                                 (roost-test--task "c0c0c0c0c0c0c0c0" "starting")))))
+                     ((symbol-function 'roost-open-task) (lambda (task) (setq opened task)))
+                     ((symbol-function 'message)
+                      (lambda (format &rest args) (when format (push (apply #'format-message format args) said)))))
+             (roost-sidebar-list-mode)
+             (roost--render-sidebar)
+             (goto-char (point-min))
+             (search-forward "New conversation")
+             (push-button (1- (point)))
+             (should (equal (nth 1 asked) "create"))
+             (should-not (nth 0 asked))
+             (should (eq (alist-get 'conversation (nth 2 asked)) t))
+             (should-not (alist-get 'prompt (nth 2 asked)))
+             (should-not (alist-get 'setup (nth 2 asked)))
+             (should (string-prefix-p "Conversation " (alist-get 'name (nth 2 asked))))
+             (should (equal (roost--field opened 'id) "c0c0c0c0c0c0c0c0"))
+             (should (seq-find (apply-partially #'string-match-p "^Roost started Conversation .* on local$") said))
+             (should-not roost--remembered-projects)
+             (roost--render-sidebar)
+             (should (string-match-p "^ *local · Conversations +\\+$" (buffer-string)))
+             ;; Its heading's + starts another.
+             (setq asked nil)
+             (goto-char (point-min))
+             (search-forward "Conversations")
+             (end-of-line)
+             (push-button (1- (point)))
+             (should (eq (alist-get 'conversation (nth 2 asked)) t))
+             ;; Its heading is no project to start a task in.
+             (should-not (get-text-property (point) 'roost-directory))
+             ;; Drawn again, as each poll does, point stays on New conversation.
+             (goto-char (point-min))
+             (search-forward "New conversation")
+             (roost--render-sidebar)
+             (should (get-text-property (point) 'roost-new-conversation))
+             (let ((conversation (gethash (list nil "c0c0c0c0c0c0c0c0") roost--tasks)))
+               ;; A new task from one is drafted in a project of yours.
+               (let ((default-directory (expand-file-name "~/")))
+                 (cl-letf (((symbol-function 'roost--known-projects) (lambda () '("/srv/ledger/"))))
+                   (should-not (string-match-p "conversations" (or (roost--compose-default-directory
+                                                                    conversation nil) "")))))
+               ;; With nothing to propose or merge, P and m don't apply.
+               (should-not (roost--action-applies-p (append '((ahead . 1)) conversation) 'roost-pr))
+               (should-not (roost--action-applies-p (append '((ahead . 1)) conversation) 'roost-merge-retire))
+               (should-error (roost-pr conversation) :type 'user-error)
+               (should-error (roost-merge-retire conversation) :type 'user-error)
+               ;; A second in the same minute is told apart.
+               (cl-letf (((symbol-function 'format-time-string) (lambda (&rest _) "Conversation 09:15")))
+                 (should (equal (roost--conversation-name) "Conversation 09:15"))
+                 (roost--cache-task nil (append '((name . "Conversation 09:15"))
+                                                (roost-test--task "c1c1c1c1c1c1c1c1" "ready")))
+                 (should (equal (roost--conversation-name) "Conversation 09:15 (2)")))))
+         (kill-buffer "*sidebar test*"))))))
+
 (ert-deftest roost-sidebar-shows-the-task-you-work-on ()
   ;; With more tasks than the sidebar has lines, the one you opened was
   ;; below them, and its band, status and ± with it.

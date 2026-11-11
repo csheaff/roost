@@ -1594,6 +1594,36 @@ def by_clicks(qa, repo):
             "(json-encode (roost--project-label %s))" % lisp(place)))])
 
 
+@journey("A conversation in no project")
+def conversation(qa, repo):
+    """One click on "New conversation" opens an agent's terminal, with
+    nothing to write first, under a heading of its own; it is in no
+    project of yours, and x ends it."""
+    qa.emacs.eval("(qa-scroll-to-text %s \"roost-sidebar-list-mode\")" % lisp("New conversation"))
+    known = {t["key"] for t in qa.screen()["tasks"]}
+    qa.click_text("New conversation", "roost-sidebar-list-mode")
+    screen = qa.wait("the conversation", lambda s: {t["key"] for t in s["tasks"]} - known)
+    name = next(t["name"] for t in screen["tasks"] if t["key"] not in known)
+    qa.status(name, "ready", "idle")
+    qa.wait("its terminal", shows(qa, name))
+    worktree = task_worktree(qa, name)
+    home = json.loads(qa.emacs.eval("(roost--field (seq-find (lambda (task) (equal (roost--field task 'name) %s))"
+                                    " (roost-tasks)) 'repo)" % lisp(name)))
+    qa.step("A click opens a conversation's terminal", expect=[
+        ("named for when it started", lambda s: re.fullmatch(r"Conversation \d\d:\d\d", name)),
+        ("its terminal is open", shows(qa, name)),
+        ("under Conversations", lambda s: re.search(r"· Conversations +\+\n(?:.*\n)*? *%s" % re.escape(name),
+                                                    sidebar_rows(s))),
+        ("in no project of yours", lambda s: str(repo) not in worktree and home.endswith("/conversations")),
+        ("which isn't offered to start a task in",
+         lambda s: not re.search(r"Start a task in\n(?:.*\n)*? \S+ · conversations", sidebar_rows(s)))])
+    qa.keys("C-c r x")
+    qa.wait("the question", lambda s: (s["prompt"] or "").startswith("Retire " + name))
+    qa.type("y")
+    qa.wait("the conversation to go", lambda s: qa.task(s, name) is None, timeout=30)
+    qa.step("x ends it", expect=[("its folder is gone", lambda s: not os.path.exists(worktree))])
+
+
 @journey("A task's next steps, with clicks")
 def clicks(qa, repo):
     """With a hand on the mouse: a prompt drafted from a task's row menu
@@ -4116,7 +4146,8 @@ JOURNEYS = [sweep, answer, next_waiting, fold, resize, merge, review, notes, sin
             dashboard, panel_keys, stop_resume, retire, discard, teardown, send, attach, update, conflicts, restart,
             search, workload, question_left,
             walk_away,
-            frames, draft_frames, org, drafts, draft_fields, by_clicks, clicks, overlap, region, tabs, own_workspace,
+            frames, draft_frames, org, drafts, draft_fields, by_clicks, conversation, clicks, overlap, region, tabs,
+            own_workspace,
             forget, rename, fork, offer, other_branch, switched_branch, merged, large, pull_request, merge_request, exits,
             include, slow_create,
             unreachable,

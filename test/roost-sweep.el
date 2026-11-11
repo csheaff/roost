@@ -100,6 +100,10 @@ KIND is `committed', `uncommitted', `untracked' or `binary'."
      (diff . "1 file +12 −3") (ahead . 2) (files . ,(roost-sweep--files '("report.py" . committed))))
     ("seen" (status . "ready") (live . t) (lastMessage . "Done.") (seen . "2026-10-03T20:00:00+00:00")
      (diff . "") (ahead . 0))
+    ;; In no project of yours: in the helper's own repository.
+    ("conversation" (status . "ready") (live . t) (conversation . t)
+     (repo . "/home/user/.local/share/roost/conversations") (integrationBranch . "main")
+     (lastMessage . "Short answer: yes, but only if the hosts share a clock.") (diff . "") (ahead . 0))
     ("interrupted" (status . "ready") (lastEvent . "Interrupt") (live . t) (diff . "") (ahead . 0))
     ("failed turn" (status . "failed") (live . t) (error . "You've hit your usage limit")
      (diff . "") (ahead . 0))

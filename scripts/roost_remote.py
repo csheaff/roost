@@ -1997,9 +1997,43 @@ def create(store, request):
         return dict(made, alreadyMade=True) if made else make_task(store, request, create_id)
 
 
+CONVERSATIONS = "conversations"
+
+
+def conversation_repository(store):
+    """The repository Roost keeps for conversations, which belong to no
+    project: each is a task in a worktree of it, so it moves, stops,
+    resumes and retires as any task does, with nothing of yours in it.
+    Made on the first, with one empty commit for tasks to branch from, by
+    no hook or template of yours and signed by no key of yours; one left
+    with no commit, as by a helper stopped between the two, gets it now.
+    Under a lock of its own, not the registry's, which hooks wait on."""
+    repo = store.root / CONVERSATIONS
+    with (store.root / (CONVERSATIONS + ".lock")).open("a") as lock:
+        os.chmod(lock.name, 0o600)
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        # A `git init` cut short leaves a .git Git takes for no repository;
+        # with no commit, nothing of any conversation is in it yet.
+        # Asked of it alone: Git would otherwise look in the folders above.
+        if (repo / ".git").exists() and execute(["git", "--git-dir", str(repo / ".git"), "rev-parse", "--git-dir"],
+                                                check=False).returncode:
+            shutil.rmtree(repo / ".git")
+        if not (repo / ".git").exists():
+            repo.mkdir(mode=0o700, parents=True, exist_ok=True)
+            git(repo, "init", "-q", "--template=")
+        if git(repo, "rev-parse", "--verify", "--quiet", "HEAD", check=False).returncode:
+            git(repo, "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
+                "-c", "user.name=Roost", "-c", "user.email=roost@localhost",
+                "commit", "-q", "--allow-empty", "-m", "Conversations")
+    return repo
+
+
 def make_task(store, request, create_id):
     """Create a worktree and agent window. Preparation and `git worktree add`
     run without the registry lock; only the tmux spawn is serialized."""
+    conversation = request.get("conversation") is True
+    if conversation:
+        request = dict(request, directory=str(conversation_repository(store)), base=None)
     directory = str(Path(request["directory"]).expanduser().resolve())
     # A folder's name may end in a space, or hold a newline.
     checkout = git(directory, "rev-parse", "--show-toplevel").stdout.removesuffix("\n")
@@ -2075,6 +2109,8 @@ def make_task(store, request, create_id):
                 status="starting", startedAt=now(), updatedAt=now(), claudeSession=None, agentMade=[])
     if create_id:
         task["createId"] = create_id
+    if conversation:
+        task["conversation"] = True
     issue = request.get("issue")
     if isinstance(issue, dict) and isinstance(issue.get("number"), int) and not isinstance(issue["number"], bool):
         task["issue"] = dict(number=issue["number"], title=text(issue.get("title")),
