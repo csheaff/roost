@@ -244,6 +244,21 @@ What each release changes, and what to do when upgrading. Newest first.
   worktree and its branch stay, and the reply names them, as it does one Git
   couldn't remove; so does a worktree made at that path as Roost removed it.
   Nothing to do when upgrading.
+- Retiring a task no longer deletes commits that only the branch of a worktree
+  its agent made still had. `x` took that branch for one that keeps them, then
+  removed it with the task: for a fork that never committed, once the task it
+  was made from had gone, and for a task you had told with `B` to merge into
+  that branch. Roost said nothing would be lost, and the commits were on no
+  branch. Now it says the task has unmerged commits, as it does without that
+  worktree, and offers to discard it. And a task can't be finished in the
+  moment a fork of it reads where its work stands, which would have left the
+  fork with half of it: Roost says it is busy. Nothing to do when upgrading.
+- A fork and the task it was made from no longer both go with the commits
+  only they have. Each loses nothing while the other's branch stays, so `x`
+  on each said nothing would be lost; finished at the same moment, as the
+  second while the first's teardown command ran, both branches went and the
+  commits with them. Now the second is told of the commits, or refused, until
+  the first is gone. Nothing to do when upgrading.
 - A merge, update or discard that outlasts Emacs's wait on this machine goes on
   to its end, as it does over SSH. Emacs killed it, with Git and its hooks: with
   a `pre-commit` hook over a minute, a squash merge left the task's work staged

@@ -2208,7 +2208,8 @@ def conversation_repository(store):
 
 def conversation_to_fork(store, task_id, agent_name, repo):
     """The task TASK_ID of REPO, whose agent's conversation a new AGENT_NAME
-    task is to continue; None for a task that starts one of its own."""
+    task is to continue; None for a task that starts one of its own. Under
+    the registry lock, as whatever asks what holds a task's worktree is."""
     if task_id is None:
         return None
     source = store.read(task_id)
@@ -2290,15 +2291,23 @@ def make_task(store, request, create_id):
     current = current_branch(repo)
     # A task whose conversation the new one continues starts where that
     # task's work stands, its uncommitted changes too.
-    source = conversation_to_fork(store, request.get("forkFrom"), agent_name, repo)
-    if source:
-        if text(request.get("base")) not in (None, "HEAD"):
-            raise RoostError("A task that continues %s's conversation starts where its work stands, "
-                             "not at %s" % (source["name"], request["base"]))
-        directory = source["worktree"]
-        carried, head = snapshot(directory)
-        if not head:
-            raise RoostError("Couldn't read where %s's work stands" % source["name"])
+    source = None
+    if request.get("forkFrom") is not None:
+        with store.locked():
+            source = conversation_to_fork(store, request["forkFrom"], agent_name, repo)
+            if text(request.get("base")) not in (None, "HEAD"):
+                raise RoostError("A task that continues %s's conversation starts where its work stands, "
+                                 "not at %s" % (source["name"], request["base"]))
+            directory = source["worktree"]
+            # Its worktree is kept while Git reads it, without the registry
+            # lock, as for a look: retired or discarded meanwhile, it would
+            # leave the fork part of it.
+            with holding_worktree(store, source, fcntl.LOCK_SH,
+                                  "Roost is still removing %s's worktree; refresh in a moment" % source["name"]):
+                with store.released():
+                    carried, head = snapshot(directory)
+            if not head:
+                raise RoostError("Couldn't read where %s's work stands" % source["name"])
     # Independent tasks start at the primary checkout. HEAD only forks the
     # source worktree when explicitly requested, rather than accidentally.
     explicit_base = "HEAD" if source else text(request.get("base"))
@@ -5449,24 +5458,43 @@ def merged_pull_request_head(task):
     return tip, still_open, merged["headRefOid"] if merged else recorded.get("mergedHead") or recorded.get("head")
 
 
-def safe_to_delete(task, commit, merged_head=None):
+def branches_going(store, task):
+    """The branches of the other tasks in TASK's repository whose worktrees
+    Roost is removing, or was when it stopped: what finishes such a task
+    deletes its branch next, having found its commits kept elsewhere. Two
+    tasks with a commit only their branches have, as a fork and the task it
+    was made from, would else each be finished on the strength of the
+    other's branch, and the commit go with both. Under the registry lock,
+    which each of them holds from that finding until its worktree goes."""
+    return [other["branch"] for other in store.all()
+            if other.get("removing") and other.get("id") != task["id"] and other.get("repo") == task["repo"]
+            and isinstance(other.get("branch"), str)]
+
+
+def safe_to_delete(task, commit, merged_head=None, going=()):
     """True when deleting the task branch at COMMIT loses no commits.
     MERGED_HEAD is the tip GitHub merged for the task's pull request. A squash
     merge leaves the branch's commits unmerged to Git, so a branch still at
-    that tip, with nothing committed after the merge, is also safe."""
+    that tip, with nothing committed after the merge, is also safe. A
+    branch that is going keeps nothing: those in GOING, of other tasks
+    (`branches_going`), and the one Claude made for a worktree this task's
+    agent made, which retiring removes too, whatever that worktree is on
+    now, as its agent may switch it back."""
+    going = {"refs/heads/" + name for name in [*going, *(agent_branch(task, entry["path"])
+                                                         for entry in agent_work(task) if entry["made"])] if name}
     if commit == task.get("baseCommit"):
         # The task never committed. Its starting point (perhaps a forked
         # task's commits, or a detached HEAD) must survive elsewhere.
         refs = git(task["repo"], "for-each-ref", "--contains", commit, "--format=%(refname)",
                    check=False).stdout.split()
-        if any(ref != "refs/heads/" + task["branch"] for ref in refs):
+        if any(ref != "refs/heads/" + task["branch"] and ref not in going for ref in refs):
             return True
         if git(task["repo"], "merge-base", "--is-ancestor", commit, "HEAD", check=False).returncode == 0:
             return True
     integration = task.get("integrationBranch")
-    if ref_exists(task["repo"], integration) and git(
+    if (integration and "refs/heads/" + integration not in going and ref_exists(task["repo"], integration) and git(
             task["repo"], "merge-base", "--is-ancestor", commit, "refs/heads/" + integration,
-            check=False).returncode == 0:
+            check=False).returncode == 0):
         return True
     return merged_head is not None and merged_head == commit
 
@@ -5590,7 +5618,7 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
         # A squashed branch's commits stay unmerged to Git, as after a
         # pull request's squash merge, but its tip is in the new commit:
         # proof for this merge, where a pull request merged earlier is not.
-        if not safe_to_delete(task, commit, squashed or merged_head):
+        if not safe_to_delete(task, commit, squashed or merged_head, branches_going(store, task)):
             raise RoostError("Task branch has unmerged commits; merge it (m) first, discard it, "
                              "or forget the task to keep its branch")
         # A durable checkpoint permits retry after a disconnect or partial cleanup.
@@ -5939,12 +5967,13 @@ def retarget(store, task, base):
     return task
 
 
-def discard_losses(task, branch_exists, worktree, worktree_exists, work):
+def discard_losses(task, branch_exists, worktree, worktree_exists, work, going=()):
     """What discarding a task would lose, as counts: commits on no other
     branch, commits in submodules on no remote of theirs, and uncommitted
     or untracked files, those in submodules too. WORK is what `agent_work`
     says of the worktrees its agent made, whose branches go with them only
-    if Claude made them."""
+    if Claude made them. GOING is other tasks' branches that are going
+    (`branches_going`), which keep no commit either."""
     repo, branch = task["repo"], task["branch"]
     paths = ([worktree] if worktree_exists else []) + [entry["path"] for entry in work]
     branches = ([branch] if branch_exists else []) + [entry["branch"] for entry in work
@@ -5955,7 +5984,7 @@ def discard_losses(task, branch_exists, worktree, worktree_exists, work):
     tips = ["refs/heads/" + name for name in branches] + heads
     # --exclude applies to the --branches that follows it, by short name.
     commits = int(git(repo, "rev-list", "--count", *tips, "--not",
-                      *("--exclude=" + name for name in branches),
+                      *("--exclude=" + name for name in [*branches, *going]),
                       "--branches", "--remotes", "--tags").stdout) if tips else 0
     # Removing the worktrees deletes their submodules' repositories,
     # whose changes are counted there; here, which commits they're at.
@@ -5992,13 +6021,14 @@ def discard(store, task, expect=None, dry_run=False, teardown=None, told=None):
         require_nothing_kept(repo, worktree, unlinked, bool(task.get("removing")))
     # The worktrees its agent made go with it.
     work = [entry for entry in agent_work(task, seen=not dry_run) if entry["made"]]
+    going = branches_going(store, task)
     if dry_run:
-        return dict(task, discard=dict(discard_losses(task, branch_exists, worktree, worktree_exists, work),
+        return dict(task, discard=dict(discard_losses(task, branch_exists, worktree, worktree_exists, work, going),
                                        commit=commit))
     if commit != (expect or None):
         raise RoostError("The task's branch has moved since you were asked; look at it again before discarding")
     if isinstance(told, dict):
-        losses = discard_losses(task, branch_exists, worktree, worktree_exists, work)
+        losses = discard_losses(task, branch_exists, worktree, worktree_exists, work, going)
         if any(count > (told.get(name) or 0) for name, count in losses.items()):
             # Asking again would only find more.
             raise RoostError("The task holds more than you were told; %slook at it again before discarding"

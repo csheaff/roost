@@ -213,6 +213,12 @@ Invariants:
 | Removal cut short | retire, merge, discard | | Removing | `put_back_removed` first | `retire`, `discard` |
 | any but Removing | forget | no live pane | Gone | window closed; Git left | `forget` |
 | Ended | retire, merge | a step after the checkpoint fails | Finishing, still stopped | `retiringCommit` stays | `retire` |
+| Live, Ended | retarget | not Merging, Removing or Removal cut short; a branch other than its own | as it was | `integrationBranch` and `baseCommit` saved, whole under the lock | `retarget` |
+
+A conversation is a task too, in a repository Roost keeps for them
+(`conversation_repository`), with a worktree and a branch there: it stops, resumes,
+retires, is discarded and forgotten as any task, and what it loses is counted the
+same way. It is in no project, so `retarget` refuses it.
 
 Illegal or refused: see [Action by state](#action-by-state).
 Assumed, not stated: a record's `worktree` and `repo` never change; `Store.read`
@@ -256,9 +262,12 @@ Invariants:
 | Waiting | a task is made from it | its take failed | Waiting or None | dropped | `make_task`, `take_offer` |
 | Waiting | a listing | a task records it as the offer it came from | Waiting or None | dropped | `taken_offers` |
 | Waiting | task finished or forgotten | | gone with the record | the question before names them | `roost--offers-sentence` |
+| any | agent offers | you were asked, and the task not yet stopped | gone with the record, unnamed | **Broken**: nothing tells the host which offers the question named | `propose_task` |
 
 `test/formal/emacs_and_hosts` checks I2 in Emacs as `NoOfferRollback`: no reply brings
-back an offer you took, or hides one made since.
+back an offer you took, or hides one made since. `test/formal/task_on_host` checks
+what finishing a task takes as `OffersTold`: a stopped task takes no offer, so none
+arrives while its worktree goes, to go with it unseen.
 
 In Emacs, opening an offer takes it at once and opens an ordinary
 [new task draft](#the-new-task-draft): nothing ties the offer to the draft, so the
@@ -267,7 +276,9 @@ a late reply leaves a draft moved elsewhere and back. Do it here is an ordinary
 [send](#the-send-id) of a fixed line, with a send ID of the task's and the offer's IDs,
 so that asking again pastes it once, then a take. A take is asked only for a task still listed: one that went while
 Do it here's prompt went, as its host was forgotten, stays gone.
-Open: none.
+Open: an offer made once you were asked, before the request stops the agent, goes
+with the task unnamed. A discard leaves the longest gap, as its agent works on while
+you read what it loses. `TaskOnHost.finding-offer-untold.cfg` keeps it.
 
 ### Creation
 
@@ -301,6 +312,10 @@ Invariants:
   Git writes that text through gettext, so a translated Git may write
   another; unverified here, as this Mac's Git has no translations. The
   fall-back is a failed row, which `x` clears.
+- I5. A fork starts from its source's worktree whole, as it stood: the source is
+  asked for under the registry lock, refused while its worktree goes, Git merges it
+  or a removal was cut short, and its worktree lock is held, shared, while `snapshot`
+  reads it. (`conversation_to_fork`, `make_task`.)
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
@@ -308,6 +323,7 @@ Invariants:
 | Asked | | a note has this ID | waits | `settle_creation(wait=True)` | `made_for` |
 | Asked | | a record has this ID | Made | returns that task | `made_for` |
 | Asked | | neither | Preparing | | `make_task` |
+| Preparing | a fork | its source is not Merging, Removing or Removal cut short | Preparing | the source's work read, its worktree lock shared meanwhile | `conversation_to_fork`, `snapshot` |
 | Preparing | | | Noted | note locked before it is in place | `noting_creation` |
 | Noted | Git and spawn done | | Made | note unlinked under its lock | `noting_creation` |
 | Noted | Git refused | nothing there | Failed | branch deleted | `make_task` |
@@ -356,13 +372,15 @@ Invariants:
 | `rpc` `pr` | push, forge | worktree lock shared | re-reads, then saves |
 | `prepare_look` | snapshot | worktree lock shared | `record_look` re-reads, compares `looked` |
 | `attach` | decoding, writing | worktree lock shared | saves nothing |
+| `make_task`, for a fork | snapshot of its source | the source's worktree lock shared | saves nothing of the source |
 | `remove_worktrees` | teardown, removal | worktree lock exclusive, `removing` marker, status `stopped` | re-reads, clears only its own marker |
 | `integrating` | Git's merge and its hooks | worktree lock exclusive, `integrating` marker, for a merge the repository's lock | re-reads, clears only its own marker; `retire` asks again whether the agent is at work |
 
 Steps outside any lock, by design: `merged_pull_request_head` (only its answer
 is kept, and `retire` compares it to the branch's tip read under the lock);
 `settle_creations` before `list`; `check_pull_requests` and `add_git_stats`
-after it; everything in `make_task` up to its one `locked` block.
+after it; everything in `make_task` up to its `locked` block, but a fork's look at
+its source, above.
 
 Illegal or refused: nothing refuses; everything queues. No holder waits on Git's
 hooks or a stopped tmux server any more: a server under SIGSTOP costs each `list`
@@ -383,12 +401,13 @@ Says what holds a task's worktree while the registry lock is released.
 | State | Meaning | How you can tell |
 | --- | --- | --- |
 | Free | | both probes of `worktree_holder` succeed |
-| Work | shared: `pr`, a look, an attachment | SH free, EX refused: `worktree_holder` says "work" |
+| Work | shared: `pr`, a look, an attachment, a fork reading where its work stands | SH free, EX refused: `worktree_holder` says "work" |
 | Removal | exclusive: `remove_worktrees`, or Git's merge (`integrating`) | SH refused: "removal"; the record says which |
 
 Invariants:
 - I1. Taken and probed only under the registry lock, so `worktree_holder`'s own
-  brief hold never collides with a taker. Holds at every call.
+  brief hold never collides with a taker. Holds at every call, a fork's of its
+  source among them (`conversation_to_fork`).
 - I2. Held by the request alone, and nothing it starts (`holding_worktree`), so what
   Git or a hook leaves running keeps no hold. A request that takes it for long
   outlives Emacs's wait ([Request lifetime](#request-lifetime)), which is why it
@@ -401,7 +420,7 @@ Invariants:
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
-| Free | `pr`, look, attach | | Work | shared | `holding_worktree` |
+| Free | `pr`, look, attach, a fork of it | | Work | shared | `holding_worktree` |
 | Work | same | | Work | shared again | `holding_worktree` |
 | Free | removal | | Removal | exclusive | `remove_worktrees` |
 | Free | merge, update | | Removal | exclusive | `integrating` |
@@ -475,8 +494,8 @@ What each step leaves if it stops there, and what asking again does.
 | 3 | `require_finished`, pane ownership; `permission` at Codex's plan menu counts as finished | registry | refused |
 | 4 | `put_back_removed` if `removing` | registry | restores tracked files, its link |
 | 5 | `check_worktree`, clean, submodules, Git lock, agent work | registry | refused, nothing changed |
-| 6 | branch moved from `expect`, then merge | registry | see next machine; a second merge finds it there |
-| 7 | `safe_to_delete`, save `retiringCommit` | registry | |
+| 6 | branch moved from `expect`, then merge, into `integrationBranch` as the record has it then | registry | see next machine; a second merge finds it there |
+| 7 | `safe_to_delete`, by `integrationBranch` and `baseCommit` as the record has them now; save `retiringCommit` | registry | |
 | 8 | `stop` | registry | task stopped; agent's window gone |
 | 9 | `remove_worktrees` | released | worktree partly gone; `put_back_removed` restores it |
 | 10 | staging folder, `unregister_gone`, `delete_branch` | registry | branch still there, `check_worktree` finds no folder and goes on |
@@ -492,7 +511,22 @@ Invariants:
 - I1. No uncommitted work and no unmerged commit is lost by retire: checked
   before the agent stops (`require_clean`), again after (`remove_worktrees`), and
   the branch is deleted only at the commit verified. Holds, fuzzed against
-  commits landing throughout.
+  commits landing throughout. What keeps that commit is a branch that stays: the
+  branch it merges into, wherever `retarget` has put that, or, for a task that never
+  committed, any other. Not one that is going: the branch of a worktree its agent
+  made, which goes with the task, nor that of another task whose worktree is going
+  (`safe_to_delete`, `branches_going`). No `retarget` comes between a merge and that
+  check: it is refused while Git merges, and the registry lock is held from the
+  merge's end to the check, so the branch checked is the one merged into.
+- I5. Two tasks never go on each other's word. A fork that never committed and the
+  task it was made from may have a commit only their two branches have: each loses
+  nothing while the other's branch stays. A task finds its commits kept, or counts
+  what a discard loses, under the registry lock, and marks its record `removing`
+  before it lets the lock go; until its branch is deleted, under the lock again, its
+  branch keeps nothing for any other (`branches_going`, in `safe_to_delete` and
+  `discard_losses`). So the second to ask is refused, or told of the commit. A
+  removal cut short leaves the mark, so the same holds for the other task until
+  the first is finished.
 - I2. A second request finds its own partial work and finishes it, for the
   task's worktree (`put_back_removed`). What a removal left of an agent's isn't
   a worktree any more, so it stays, and the reply says so.
@@ -509,10 +543,14 @@ Invariants:
 | step 8 done | agent committed in the last moment | | worktree gone, branch moved | `delete_branch` refuses; `m` merges the rest | `delete_branch` |
 | step 10 done, branch gone, `merge` asked | `retiringCommit` set | | only the record is left | merge skipped | `retire` |
 | step 10 done, branch gone, `merge` asked | no `retiringCommit` | | refused | "nothing to merge"; retire finishes | `retire` |
+| a step failed, no removal cut short | `retarget` | | as it was, merging into another branch | asked again, step 7 checks that branch: "unmerged commits" unless it has them | `retarget`, `safe_to_delete` |
+| step 9 under way, or cut short | another task with the same commits is retired | only this task's branch has them besides | that one refused | "unmerged commits" | `branches_going`, `safe_to_delete` |
+| step 9 under way, or cut short | another task with the same commits is discarded | only this task's branch has them besides | that one told of them, or refused | "holds more than you were told" | `branches_going`, `discard_losses` |
 
 Illegal or refused: an agent at work, a task another pane took, a dirty worktree,
 unmerged commits, work in its agent's worktree or submodules, a locked worktree,
-and for `merge` a branch moved from `expect`; each before anything changes. `discard`
+a fork reading its worktree, and for `merge` a branch moved from `expect`; each
+before anything changes. `discard`
 refuses what `check_worktree` refuses with `branch=False`, a link, a path outside
 Roost's folder, a moved worktree, and a missing one whose branch the primary checkout
 holds; then a branch moved since its dry run, more to lose than it told you, and what
@@ -548,6 +586,9 @@ Invariants:
   (`git_with_hooks`). Holds.
 - I4. One merge at a time in a repository. A second is refused at once, saying which
   runs: it could only wait. An `update` reads integration and takes no such lock.
+  A merge goes into `integrationBranch` as the record has it when it starts, and
+  `retarget` is refused while Git merges, so what retiring checks after is that
+  branch.
 - I5. A merge cut short is named, and never read as your changes. The mark stays
   until a poll, or `merge`, `retire`, `update`, `pr`, `resume` or `send`, finds with
   `merge_left` that nothing is left: HEAD moved, or nothing differs. A checkout it
@@ -665,6 +706,11 @@ Invariants:
   through `delete_branch`, which refuses one checked out anywhere.
 - I4. What stays is said: `agent_left` fills `leftBehind` in the reply, and Emacs
   shows it.
+- I5. The branch Claude made for a worktree its agent made keeps none of the task's
+  commits, as retire sees it: it goes with the task, whatever the worktree is on at
+  that moment. So not as the branch the task merges into, should `retarget` have
+  named it, nor as the other branch that has the start of a task that never
+  committed (`safe_to_delete`).
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
@@ -672,6 +718,7 @@ Invariants:
 | Unknown, Been there | hook | says the agent made it | Made | saved | `update_hook`, `ClaudeAgent.made_worktree` |
 | Made | retire | holds work | refused | names it, says what to do | `require_agent_work_kept` |
 | Made | retire | idle | Gone | `git worktree remove --force --force`, then the branch | `remove_agent_worktrees` |
+| Made | retire | idle, and only its branch has the task's commits | refused | "unmerged commits", before anything changes | `safe_to_delete` |
 | Made | discard | | Gone | the same, whatever it held when counted | `remove_agent_worktrees` |
 | Made | retire, discard | anyone worked there since it was listed, or it isn't the one made | stays | so does its branch; the reply names both | `remove_agent_worktrees`, `agent_left` |
 | Made | Git can't remove it | | stays | so does its branch; the reply says both | `remove_agent_worktrees`, `agent_left` |

@@ -3041,6 +3041,41 @@ class Lifecycle(unittest.TestCase):
         store.save(dict(record, agentSession=None, claudeSession=None))
         refused("hasn't started a conversation yet")
 
+    def test_a_task_stays_while_a_fork_reads_where_its_work_stands(self):
+        """A fork starts from its source's worktree as it stands, which Git
+        reads without the registry lock. Retired or discarded meanwhile,
+        the source would leave the fork part of it, so finishing it waits,
+        as for a look. The model found it: TaskOnHost.fork-not-held.cfg."""
+        source = self.create(name="source")
+        wt = Path(source["worktree"])
+        (wt / "hello").write_text("changed, not committed\n")
+        told = self.request("discard", id=source["id"], dryRun=True)["result"]["discard"]
+        discard = dict(id=source["id"], expect=told["commit"], told=told)
+        real, said = roost.snapshot, {}
+
+        def snapshot(worktree, tracked=False):
+            # While Git reads the source's worktree.
+            if not said:
+                said.update(discard=self.request("discard", **discard), retire=self.request("retire", id=source["id"]),
+                            forget=self.request("forget", id=source["id"]))
+            return real(worktree, tracked=tracked)
+
+        with patch.object(roost, "snapshot", snapshot):
+            reply = self.request("create", directory=str(wt), name="fork", socket=self.socket, base="HEAD",
+                                 forkFrom=source["id"], command=[sys.executable, str(FAKE)])
+        for action in ("discard", "retire", "forget"):
+            with self.subTest(action=action):
+                self.assertEqual(said[action].get("error"),
+                                 "Roost is busy with this task's worktree; refresh in a moment")
+        # Before anything changed: its agent runs on, and its work is there.
+        self.assertIn(source["paneId"], roost.pane_inventory(self.socket))
+        self.assertEqual((wt / "hello").read_text(), "changed, not committed\n")
+        self.assertTrue(reply["ok"], reply)
+        fork = self.wait(reply["result"], "ready")
+        self.assertEqual((Path(fork["worktree"]) / "hello").read_text(), "changed, not committed\n")
+        # The fork made, nothing holds the source.
+        self.assertTrue(self.request("discard", **discard)["ok"])
+
     def test_codex_pi_and_opencode_forks_go_on_in_sessions_of_their_own(self):
         for agent in ("codex", "pi", "opencode"):
             with self.subTest(agent=agent):
@@ -4625,6 +4660,108 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(reply["ok"], reply)
         self.assertTrue(own.exists())
         self.assertTrue(roost.ref_exists(self.repo, "worktree-probe"))
+
+    def test_a_branch_that_goes_with_the_task_keeps_none_of_its_commits(self):
+        """Retire deletes the task's branch once another has its commits.
+        The branch Claude made for a worktree its agent made is no such
+        branch: retire removes it too. It was taken for one when `B` named
+        it as the branch to merge into, and for a fork that never committed,
+        once its source had gone. The model found it:
+        TaskOnHost.proof-goes*.cfg."""
+        def retargeted():
+            task = self.create(name="retargeted")
+            tip = self.commit_in(task)
+            own = self.agent_worktree(task, "one")
+            self.assertTrue(self.request("retarget", id=task["id"], base="worktree-one")["ok"])
+            return task, tip, own
+
+        def forked():
+            source = self.create(name="source")
+            tip = self.commit_in(source)
+            task = self.create(name="fork", directory=source["worktree"], base="HEAD")
+            # The fork has the source's commit, so discarding the source loses none.
+            told = self.request("discard", id=source["id"], dryRun=True)["result"]["discard"]
+            self.assertEqual(told["commits"], 0)
+            self.assertTrue(self.request("discard", id=source["id"], expect=told["commit"], told=told)["ok"])
+            return task, tip, self.agent_worktree(task, "two")
+
+        for case in (retargeted, forked):
+            with self.subTest(case=case.__name__):
+                task, tip, own = case()
+                branch = "worktree-" + own.name
+                self.assertEqual(self.git("rev-parse", branch), tip)
+                reply = self.request("retire", id=task["id"])
+                self.assertIn("unmerged commits", reply.get("error", ""), reply)
+                self.assertEqual(self.git("rev-parse", task["branch"]), tip)
+                self.assertTrue(own.exists())
+                self.assertTrue(roost.ref_exists(self.repo, branch))
+                # Refused before its agent was stopped.
+                self.assertIn(task["paneId"], roost.pane_inventory(self.socket))
+                # On a branch that stays, they are kept, and the task goes.
+                self.git("branch", "keep-" + own.name, tip)
+                reply = self.request("retire", id=task["id"])
+                self.assertTrue(reply["ok"], reply)
+                self.assertFalse(own.exists())
+                self.assertFalse(roost.ref_exists(self.repo, branch))
+                self.assertFalse(roost.ref_exists(self.repo, task["branch"]))
+                self.assertEqual(self.git("rev-parse", "keep-" + own.name), tip)
+
+    def test_two_tasks_that_share_a_commit_never_both_go_on_the_others_word(self):
+        """A fork that never committed and the task it was made from: only
+        their two branches have the source's commit, and each loses nothing
+        while the other's branch stays. Finished at once, each counted on
+        the other's branch, both went, and the commit with them. Now a
+        branch whose task's worktree is going keeps nothing for another.
+        The teardown command acts in that moment, with the registry lock
+        let go. The model found it: TaskOnHost.going-counts*.cfg."""
+        def kept(commit):
+            """The branches that have COMMIT."""
+            return self.git("for-each-ref", "--format=%(refname)", "--contains", commit)
+
+        for first, action in (("fork", "retire"), ("fork", "discard"), ("source", "discard")):
+            with self.subTest(first=first, action=action):
+                source = self.create(name="source")
+                tip = self.commit_in(source)
+                fork = self.create(name="fork", directory=source["worktree"], base="HEAD")
+                one, other = (fork, source) if first == "fork" else (source, fork)
+                told = {task["id"]: self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+                        for task in (one, other)}
+                self.assertEqual([said["commits"] for said in told.values()], [0, 0])
+                asked = dict(root=str(self.state), action="discard", id=other["id"],
+                             expect=told[other["id"]]["commit"], told=told[other["id"]])
+                reply = self.root / ("reply-%s-%s" % (first, action))
+                meanwhile = "printf %%s %s | %s %s rpc > %s" % (
+                    shlex.quote(json.dumps(asked)), shlex.quote(sys.executable), shlex.quote(str(SOURCE)),
+                    shlex.quote(str(reply)))
+                if action == "retire":
+                    finished = self.request("retire", id=one["id"], teardown=meanwhile)
+                else:
+                    finished = self.request("discard", id=one["id"], expect=told[one["id"]]["commit"],
+                                            told=told[one["id"]], teardown=meanwhile)
+                self.assertTrue(finished["ok"], finished)
+                self.assertFalse(roost.ref_exists(self.repo, one["branch"]))
+                # The other keeps the commit: it was told it would lose none, and now would.
+                self.assertEqual(kept(tip), "refs/heads/" + other["branch"])
+                said = json.loads(reply.read_text())
+                self.assertIn("holds more than you were told", said.get("error", ""), said)
+                # Asked again, it says so, and you choose.
+                again = self.request("discard", id=other["id"], dryRun=True)["result"]["discard"]
+                self.assertEqual(again["commits"], 1)
+                self.assertTrue(self.request("discard", id=other["id"], expect=again["commit"], told=again)["ok"])
+        # Retiring the other in that moment is refused the same way.
+        source = self.create(name="source")
+        tip = self.commit_in(source)
+        fork = self.create(name="fork", directory=source["worktree"], base="HEAD")
+        told = self.request("discard", id=source["id"], dryRun=True)["result"]["discard"]
+        reply = self.root / "reply-retire"
+        meanwhile = "printf %%s %s | %s %s rpc > %s" % (
+            shlex.quote(json.dumps(dict(root=str(self.state), action="retire", id=fork["id"]))),
+            shlex.quote(sys.executable), shlex.quote(str(SOURCE)), shlex.quote(str(reply)))
+        self.assertTrue(self.request("discard", id=source["id"], expect=told["commit"], told=told,
+                                     teardown=meanwhile)["ok"])
+        self.assertEqual(kept(tip), "refs/heads/" + fork["branch"])
+        said = json.loads(reply.read_text())
+        self.assertIn("unmerged commits", said.get("error", ""), said)
 
     def test_work_in_the_agents_worktree_after_it_stopped_stays(self):
         """Retire and discard look at its agent's worktree as its agent
