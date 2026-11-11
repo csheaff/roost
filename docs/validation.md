@@ -66,8 +66,8 @@ isolated tmux server, as `make contract-live` runs its sessions.
   run, nor the sandbox session.
 - **Remote Control.** Started with `--remote-control=NAME --name=NAME`,
   Claude 2.1.322 came up as ever, with no question before its prompt.
-  Whether the task then shows in the Claude app was not checked: this
-  machine signs in with an API key, and Remote Control needs a
+  Whether the task then shows in the Claude app was not checked: Claude
+  named its sign-in here "Claude API", and Remote Control needs a
   subscription.
 - **Not checked.** A remote host; Codex, Pi and OpenCode, which take no
   tool of Roost's yet; the draft and rows in a GUI Emacs with a real agent.
