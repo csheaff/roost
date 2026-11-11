@@ -11329,7 +11329,16 @@ class ProgramStatus(unittest.TestCase):
             self.assertNotIn("requestFrom", roost.outgoing(task))
         self.assertEqual(self.apply(dict(status="background"), "done")["status"], "background")
         # Each report replaces the last: a step's description goes with it.
-        self.assertIsNone(self.apply(dict(status="running", activity="Reading notes.py"), "working")["activity"])
+        task = dict(status="running")
+        self.assertEqual(self.apply(task, "working", msg="Reading notes.py")["activity"], "Reading notes.py")
+        self.assertEqual(task["activityFrom"], "report")
+        self.assertIsNone(self.apply(task, "working")["activity"])
+        self.assertNotIn("activityFrom", task)
+        # Not the tool a hook named, which a report with nothing to say
+        # knows no better than, while the agent works on.
+        self.assertEqual(self.apply(dict(status="running", activity="Editing notes.py"), "working")["activity"],
+                         "Editing notes.py")
+        self.assertIsNone(self.apply(dict(status="running", activity="Editing notes.py"), "idle")["activity"])
         self.assertFalse(roost.apply_program_status(dict(status="running", programStatusRun="run"),
                                                     dict(state="blocked", id="subagent"), "run"))
         beside = roost.beside_program_status

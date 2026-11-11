@@ -1817,6 +1817,7 @@ def spawn(store, task, resume=False, size=()):
     # What the last run's agent asked and did: this one has yet to say.
     forget_request(task)
     task.pop("activity", None)
+    task.pop("activityFrom", None)
     # In UTF-8 mode, as `main` would start it, but as the pane's own process.
     argv = [sys.executable, "-X", "utf8", script, "run", str(store.root), task["id"], task["runId"]]
     if resume:
@@ -6946,14 +6947,15 @@ def tool_activity(payload, worktree=None):
 def note_activity(task, payload):
     """Keep in TASK what its agent is doing, as the event PAYLOAD says: the
     tool it starts, until it starts another; nothing once it stops working."""
-    if task.get("status") not in ("running", "background"):
+    if task.get("status") not in ("running", "background") or payload.get("hook_event_name") == "UserPromptSubmit":
         task.pop("activity", None)
+        task.pop("activityFrom", None)
     elif payload.get("hook_event_name") == "PreToolUse":
         doing = tool_activity(payload, task.get("worktree"))
         if doing:
             task["activity"] = doing
-    elif payload.get("hook_event_name") == "UserPromptSubmit":
-        task.pop("activity", None)
+            # Not the agent's own report, which its next report replaces.
+            task.pop("activityFrom", None)
 
 
 def update_hook(store, task_id, payload, run_id=None):
@@ -7264,9 +7266,13 @@ def apply_program_status(task, fields, run_id):
         forget_request(task)
     if task["status"] == "running" and state == "working" and fields.get("msg"):
         task["activity"] = fields["msg"][:REQUEST_LIMIT]
-    else:
-        # Each report replaces the last, so one without a message clears it.
+        task["activityFrom"] = "report"
+    elif task.get("activityFrom") == "report" or task["status"] != "running":
+        # Each report replaces the last, so one without a message clears
+        # it. Not the tool a hook named, which says more than a report
+        # with nothing to say, while the agent still works.
         task.pop("activity", None)
+        task.pop("activityFrom", None)
     return task != before
 
 
@@ -7915,8 +7921,8 @@ def require_not_removing(store, task, action):
 
 
 # Kept in task records for the helper's own use, and not sent to Emacs.
-PRIVATE = ("lastReply", "transcript", "requestFrom", "requestCall", "requestQuestion", "hookAt", "panePid",
-           "endedRun", "integrating")
+PRIVATE = ("lastReply", "transcript", "requestFrom", "requestCall", "requestQuestion", "activityFrom", "hookAt",
+           "panePid", "endedRun", "integrating")
 
 
 def outgoing(result):
