@@ -4526,6 +4526,8 @@ One of the others that fails says so, and the draft goes on."
            ;; makes several.
            (others (cdr (roost--compose-agents)))
            (total (1+ (length others)))
+           ;; What they are all made from, for their host to keep them to.
+           (words (and others (roost--compose-words what)))
            (sent nil)
            ;; The project's setup command is read for each, and asked about once.
            (roost--project-values (list t)))
@@ -4549,7 +4551,7 @@ One of the others that fails says so, and the draft goes on."
                   (lambda (&rest _) t)
                   nil
                   `((createId . ,(format "%s%02x" group n))
-                    ,@(roost--attempt-field group n total)
+                    ,@(roost--attempt-field group n total words)
                     ,@(when-let* ((source (roost--compose-continues agent)))
                         (list (cons 'forkFrom source)))
                     ,@(when-let* ((issue (plist-get fields :issue)))
@@ -4584,7 +4586,7 @@ One of the others that fails says so, and the draft goes on."
                      (message "Roost: no reply from %s about %s yet; it opens if it was made"
                               (roost--host-label host) name)))))
              `((createId . ,(cadr roost--compose-asked))
-               ,@(roost--attempt-field group 1 total)
+               ,@(roost--attempt-field group 1 total words)
                ,@(when-let* ((source (roost--compose-continues)))
                    (list (cons 'forkFrom source)))
                ,@(when-let* ((issue (plist-get fields :issue)))
@@ -4607,12 +4609,16 @@ One of the others that fails says so, and the draft goes on."
            (setq roost--compose-asked asked))
          (signal (car err) (cdr err)))))))
 
-(defun roost--attempt-field (group n total)
+(defun roost--attempt-field (group n total words)
   "What a request to create attempt N of TOTAL at one prompt says of it.
 GROUP, the creation ID of the draft that asks, is what its attempts
-share.  Nothing for a draft that makes one task."
+share.  WORDS, from `roost--compose-words', names what the draft says
+as it asks, the same for each of them: asked again with other words, as
+after you changed the draft, their host makes none beside one it made
+from these, and answers with that one.  Nothing for a draft that makes
+one task."
   (when (> total 1)
-    `((attempt (group . ,group) (n . ,n) (of . ,total)))))
+    `((attempt (group . ,group) (n . ,n) (of . ,total) (words . ,words)))))
 
 (defun roost--compose-what ()
   "What the draft asks for, to tell whether it says that still.
@@ -4625,6 +4631,20 @@ task's conversation."
     (list (roost--compose-prompt)
           (mapcar (lambda (field) (plist-get roost--compose-fields field))
                   '(:directory :agent :base :name :issue :parent :attempts :source :conversation)))))
+
+(defun roost--compose-words (what)
+  "A name for WHAT, as `roost--compose-what' gives it: 32 hex digits.
+The same for what is `equal', whatever properties its text has, and
+another for anything else, so a host can tell requests made from the
+same words from those made from others."
+  (cl-labels ((plain (value)
+                (cond ((stringp value) (substring-no-properties value))
+                      ((consp value) (cons (plain (car value)) (plain (cdr value))))
+                      ((vectorp value) (vconcat (mapcar #'plain value)))
+                      (t value))))
+    (let ((print-length nil) (print-level nil))
+      (substring (secure-hash 'sha256 (encode-coding-string (prin1-to-string (plain what)) 'utf-8-emacs t))
+                 0 32))))
 
 (defun roost--compose-made (buffer fields task what &optional own)
   "Close BUFFER, the draft with FIELDS, as its host made TASK from WHAT.

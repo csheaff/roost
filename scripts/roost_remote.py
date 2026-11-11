@@ -2142,7 +2142,8 @@ def made_for(store, create_id):
 
 def create(store, request):
     """The task asked for: made now, or, for a creation ID asked with
-    before, the one made then."""
+    before, the one made then, marked `alreadyMade`. So is the task that
+    `make_task` answers with in place of an attempt it doesn't make."""
     create_id = request.get("createId")
     if create_id is None:
         return make_task(store, request, None)
@@ -2161,18 +2162,43 @@ ATTEMPTS = 5
 def attempt_of(request):
     """Which of several attempts at one prompt REQUEST asks for, as a task
     records it: the group they share, the draft's creation ID, this one's
-    number and how many there are. None for a task that is no attempt."""
+    number and how many there are. Also `words`, where the draft gives
+    it: a name for what it said as it asked, the same for each attempt of
+    one C-c C-c, which an older Emacs leaves out. None for a task that is
+    no attempt."""
     attempt = request.get("attempt")
     if attempt is None:
         return None
     given = attempt if isinstance(attempt, dict) else {}
-    group, n, of = given.get("group"), given.get("n"), given.get("of")
+    group, n, of, words = given.get("group"), given.get("n"), given.get("of"), given.get("words")
     if not (isinstance(group, str) and CREATE_ID.fullmatch(group)
             and all(isinstance(count, int) and not isinstance(count, bool) for count in (n, of))
-            and 1 <= n <= of <= ATTEMPTS):
+            and 1 <= n <= of <= ATTEMPTS
+            and (words is None or isinstance(words, str) and CREATE_ID.fullmatch(words))):
         raise RoostError("Invalid attempt: it names the group it is one of, its number and how many "
-                         "there are, %d at most" % ATTEMPTS)
-    return dict(group=group, n=n, of=of)
+                         "there are, %d at most, and may name what it is made from" % ATTEMPTS)
+    return dict(group=group, n=n, of=of, **(dict(words=words) if words else {}))
+
+
+def made_from_other_words(store, attempt):
+    """The task of ATTEMPT's group made from other words than ATTEMPT is
+    asked for with, or None; of several, the first attempt among them. A
+    draft changed between two asks sends the same IDs with other words,
+    and its attempts, made apart, would be attempts at two prompts that
+    Emacs compares as attempts at one. Only words both give differ: a
+    request without them, or a record without, is an older Emacs's, and
+    goes on as it did. Nor does a task whose creation failed count, which
+    keeps no creation ID (`abandon`): it is made anew, as its group may
+    be. Under the registry lock."""
+    words = attempt.get("words") if attempt else None
+    if words is None:
+        return None
+    others = [task for task in store.all()
+              if task.get("createId") and isinstance(task.get("attempt"), dict)
+              and task["attempt"].get("group") == attempt["group"]
+              and isinstance(task["attempt"].get("words"), str) and task["attempt"]["words"] != words
+              and isinstance(task["attempt"].get("n"), int)]
+    return min(others, key=lambda task: task["attempt"]["n"], default=None)
 
 
 CONVERSATIONS = "conversations"
@@ -2259,10 +2285,18 @@ def carry_uncommitted(worktree, commit):
 
 def make_task(store, request, create_id):
     """Create a worktree and agent window. Preparation and `git worktree add`
-    run without the registry lock; only the tmux spawn is serialized."""
+    run without the registry lock; only the tmux spawn is serialized. An
+    attempt asked for beside one of its group made from other words is not
+    made: the reply is that other task, marked `alreadyMade`, as `create`
+    answers for a creation ID asked with before."""
     conversation = request.get("conversation") is True
     # Before anything is made.
     attempt = attempt_of(request)
+    if attempt and attempt.get("words"):
+        with store.locked():
+            other = made_from_other_words(store, attempt)
+        if other:
+            return dict(other, alreadyMade=True)
     if conversation:
         request = dict(request, directory=str(conversation_repository(store)), base=None)
     directory = str(Path(request["directory"]).expanduser().resolve())
@@ -2432,6 +2466,17 @@ def make_task(store, request, create_id):
                 raise RoostError("Couldn't bring %s's uncommitted changes to the new task: %s"
                                  % (source["name"], exc))
         with store.locked():
+            # Looked for again as the task is recorded, under the one lock:
+            # of two requests of a group in flight at once with other
+            # words, the first recorded stands, and the other undoes the
+            # worktree it made, as a creation that failed does. What a
+            # hook of yours left there stays, as a failed task, and no
+            # attempt of that group.
+            other = made_from_other_words(store, attempt)
+            if other:
+                task.pop("attempt")
+                abandon(store, task)
+                return dict(other, alreadyMade=True)
             try:
                 store.save(task)
                 spawn(store, task, size=size_options(request))

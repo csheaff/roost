@@ -15212,10 +15212,14 @@ ASKED is as `roost-test--draft-world' keeps it."
             (should (= (length (delete-dups (copy-sequence ids))) 3))
             (dolist (id ids)
               (should (string-match-p "\\`[0-9a-f]\\{16,32\\}\\'" id)))
-            (should (equal (mapcar (lambda (params) (alist-get 'attempt params)) first)
-                           `(((group . ,group) (n . 1) (of . 3))
-                             ((group . ,group) (n . 2) (of . 3))
-                             ((group . ,group) (n . 3) (of . 3)))))
+            ;; Each says which it is, and what it is made from: a name for
+            ;; what the draft says, the same for all three, as an ID is made.
+            (let ((words (alist-get 'words (alist-get 'attempt (car first)))))
+              (should (string-match-p "\\`[0-9a-f]\\{32\\}\\'" words))
+              (should (equal (mapcar (lambda (params) (alist-get 'attempt params)) first)
+                             `(((group . ,group) (n . 1) (of . 3) (words . ,words))
+                               ((group . ,group) (n . 2) (of . 3) (words . ,words))
+                               ((group . ,group) (n . 3) (of . 3) (words . ,words))))))
             ;; The draft's own request is asked for last, as the one that opens.
             (should (= (alist-get 'n (alist-get 'attempt (car (car asked)))) 1))
             (should (equal (roost--compose-header) " Creating fix-parser and 2 more…"))
@@ -15226,12 +15230,15 @@ ASKED is as `roost-test--draft-world' keeps it."
               (funcall (nth 2 (cadr asked)) "No branch, tag or commit named 'release' to start from")
               (should (equal roost--draft-note note))
               (should (string-search "C-c C-c asks again" note)))
-            ;; Asked again, each has the ID it had.
+            ;; Asked again, each has the ID it had, and says the same words.
             (roost-compose-submit)
             (should (= (length asked) 6))
             (should (equal (mapcar (lambda (params) (alist-get 'createId params))
                                    (roost-test--attempts-asked asked 3))
                            ids))
+            (should (equal (mapcar (lambda (params) (alist-get 'attempt params))
+                                   (roost-test--attempts-asked asked 3))
+                           (mapcar (lambda (params) (alist-get 'attempt params)) first)))
             ;; The others are made and open nothing; the draft's own opens,
             ;; and closes the draft.
             (pcase-dolist (`(,n . ,id) '((2 . "2222222222222222") (3 . "3333333333333333")))
@@ -15303,6 +15310,123 @@ ASKED is as `roost-test--draft-world' keeps it."
         (roost-compose-submit)
         (should (= (length asked) 3))
         (should-not (assq 'attempt (car (car asked))))))))
+
+(ert-deftest roost-a-draft-changed-between-asks-makes-its-attempts-from-one-wording ()
+  "A draft that makes two attempts asks.  Its host makes the second, and
+the draft's own request never reaches it.  You change the prompt and ask
+again, with the same IDs: its host makes nothing from the new words
+beside the attempt it made from the old, and answers with that attempt.
+The draft stays, saying so, and asks next under a new ID, for both
+attempts at what it says now.  The model found it:
+NewTaskAttempts.attempt-whatever-its-group.cfg undoes the fix."
+  (roost-test--draft-world
+    (let* (opened records
+           ;; Their host, which answers as the helper's `create' and
+           ;; `make_task' do: with the task a creation ID made before, or
+           ;; one of the attempt's group made from other words, or a new one.
+           (host (lambda (params)
+                   (let* ((attempt (alist-get 'attempt params))
+                          (words (alist-get 'words attempt))
+                          (found (or (seq-find (lambda (task)
+                                                 (equal (alist-get 'createId task) (alist-get 'createId params)))
+                                               records)
+                                     (seq-find (lambda (task)
+                                                 (let ((theirs (alist-get 'attempt task)))
+                                                   (and words (alist-get 'words theirs)
+                                                        (equal (alist-get 'group theirs) (alist-get 'group attempt))
+                                                        (not (equal (alist-get 'words theirs) words)))))
+                                               records))))
+                     (if found
+                         (cons '(alreadyMade . t) found)
+                       (car (push (append `((name . ,(alist-get 'name params)) (repo . "/repo")
+                                            (prompt . ,(alist-get 'prompt params))
+                                            (createId . ,(alist-get 'createId params)) (attempt . ,attempt))
+                                          (roost-test--task (format "%016x" (1+ (length records)))))
+                                  records))))))
+           (reach (lambda (request) (funcall (nth 1 request) (copy-tree (funcall host (car request))))))
+           (words (lambda (request) (alist-get 'words (alist-get 'attempt (car request))))))
+      (cl-letf (((symbol-function 'roost-open-task) (lambda (task &rest _) (push (roost--field task 'id) opened)))
+                ((symbol-function 'roost--project-value) (lambda (&rest _) nil)))
+        (with-current-buffer roost--compose-buffer
+          (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "2")))
+            (roost-compose-set-attempts))
+          (roost-compose-submit)
+          (let ((group (alist-get 'createId (car (car asked)))))
+            ;; Attempt 2 is made.  The draft's own request is lost on its
+            ;; way, and you write on while it says Creating.
+            (funcall reach (cadr asked))
+            (goto-char (point-max))
+            (insert " and the lexer")
+            (funcall (nth 2 (car asked)) (propertize "No reply after 660s" 'roost-no-reply t))
+            (should (string-search "C-c C-c asks again" roost--draft-note))
+            ;; Asked again: the same IDs, for another prompt.
+            (roost-compose-submit)
+            (should (equal (mapcar (lambda (request) (alist-get 'createId (car request))) (seq-take asked 2))
+                           (list group (concat group "02"))))
+            (should (equal (alist-get 'prompt (car (car asked))) "Fix the parser and the lexer"))
+            (funcall reach (cadr asked))
+            (funcall reach (car asked))
+            ;; Nothing is made from it beside the attempt at the first.
+            (should (equal (mapcar (lambda (task) (list (alist-get 'name task) (alist-get 'prompt task))) records)
+                           '(("fix-parser 2" "Fix the parser"))))
+            ;; The draft stays, and says which task was made from what.
+            (should (get-buffer roost--compose-buffer))
+            (should (equal (roost--compose-prompt) "Fix the parser and the lexer"))
+            (should (string-search "Made fix-parser 2 from what you sent before" roost--draft-note))
+            (should-not roost--compose-submitting)
+            (should-not roost--compose-asked)
+            (should-not opened)
+            ;; Each ask named its words, the same for both its attempts,
+            ;; and other words once the draft said something else.
+            (should (equal (mapcar words asked)
+                           (mapcar words (list (nth 0 asked) (nth 0 asked) (nth 2 asked) (nth 2 asked)))))
+            (should-not (equal (funcall words (nth 0 asked)) (funcall words (nth 2 asked))))
+            (should (string-match-p "\\`[0-9a-f]\\{16,32\\}\\'" (funcall words (car asked))))
+            ;; C-c C-c makes another task, as it says: under a new ID, both
+            ;; attempts at what the draft says now.
+            (roost-compose-submit)
+            (should-not (equal (alist-get 'createId (car (car asked))) group))
+            (funcall reach (cadr asked))
+            (funcall reach (car asked))
+            (should (equal (mapcar (lambda (task)
+                                     (list (alist-get 'name task) (alist-get 'prompt task)
+                                           (equal (alist-get 'group (alist-get 'attempt task)) group)))
+                                   (reverse records))
+                           '(("fix-parser 2" "Fix the parser" t)
+                             ("fix-parser-lexer 2" "Fix the parser and the lexer" nil)
+                             ("fix-parser-lexer" "Fix the parser and the lexer" nil))))))
+        ;; The draft closes for its own task, which opens, and the attempt
+        ;; at the first prompt is one of no others.
+        (should-not (get-buffer roost--compose-buffer))
+        (should (equal opened '("0000000000000003")))
+        (should (equal (mapcar (lambda (task) (roost--field task 'name))
+                               (roost--attempts (gethash '("dev" "0000000000000003") roost--tasks)))
+                       '("fix-parser-lexer 2")))
+        (should-not (roost--attempts (gethash '("dev" "0000000000000001") roost--tasks)))))))
+
+(ert-deftest roost-what-a-draft-says-has-one-name-whatever-its-text-looks-like ()
+  ;; Its host tells the words of two requests apart by this name, so what
+  ;; is `equal', as `roost--compose-made' compares it, must have the same.
+  (roost-test--isolated
+   (let* ((fields (lambda (agent attempts conversation)
+                    `("/repo/" ,agent nil nil ((number . 7) (title . "Off by one") (labels . ["bug"]))
+                      nil ,attempts nil ,conversation)))
+          (what (list "Fix the parser" (funcall fields "claude" 2 nil)))
+          (looks `(,(propertize "Fix the parser" 'face 'bold)
+                   ("/repo/" ,(propertize "claude" 'help-echo "An agent") nil nil
+                    ((number . 7) (title . ,(propertize "Off by one" 'face 'italic))
+                     (labels . [,(propertize "bug" 'face 'bold)]))
+                    nil 2 nil nil))))
+     (should (equal what looks))
+     (should (string-match-p "\\`[0-9a-f]\\{32\\}\\'" (roost--compose-words what)))
+     (should (equal (roost--compose-words what)
+                    (let ((print-length 1) (print-level 1))
+                      (roost--compose-words looks))))
+     (dolist (other (list (list "Fix the parser " (funcall fields "claude" 2 nil))
+                          (list "Fix the parser" (funcall fields "codex" 2 nil))
+                          (list "Fix the parser" (funcall fields "claude" 3 nil))
+                          (list "Fix the parser" (funcall fields "claude" 2 t))))
+       (should-not (equal (roost--compose-words what) (roost--compose-words other)))))))
 
 (defun roost-test--attempts ()
   "Cache three attempts at one prompt on this machine, and return them.

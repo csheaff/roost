@@ -48,9 +48,13 @@ What each release changes, and what to do when upgrading. Newest first.
   merges an attempt and retires it. The others stay until you finish them,
   as with `x` on each: Roost deletes work only when you discard a task. The
   dashboard and sidebar keep the attempts together, in order, and a task's
-  panel says which attempt it is under Details. Nothing to do when
-  upgrading: a draft makes one task unless you ask for more, as its new
-  Attempts line says.
+  panel says which attempt it is under Details. The attempts of one draft
+  are all at one prompt: if you change the draft after a failure or no
+  reply and ask again, its host makes nothing from the new words beside an
+  attempt it made from the old, and the draft stays, saying which task
+  was made from what you sent before; `C-c C-c` then makes every attempt
+  from what it says now. Nothing to do when upgrading: a draft makes one
+  task unless you ask for more, as its new Attempts line says.
 - The sidebar says what a waiting agent asks, dim, under its row, as
   `Asks to run make test`: whether to go there now turns on that, and it
   was only under the mouse. A click on the line opens the task, as one on

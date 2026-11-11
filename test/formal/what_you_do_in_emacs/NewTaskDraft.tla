@@ -21,7 +21,9 @@
 (* each, the draft's own last, each with an ID made from the draft's and   *)
 (* its number.  Only the reply to the draft's own changes the draft.  The  *)
 (* others say what became of them in a message and no more, so their       *)
-(* replies are no steps here: the host takes each as it does any request.  *)
+(* replies are no steps here: the host takes each as it does any request,  *)
+(* but that it makes none beside one of the same draft's ID made from      *)
+(* other words, and answers with that one.                                 *)
 (* NewTaskAttempts.tla checks these same steps with two attempts.          *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets
@@ -46,6 +48,8 @@ CONSTANTS
   KeepAskedOnceSent,  \* `roost-compose-submit`, cut short, keeps the ID an attempt went with
   OfferKeepsDraft,    \* `roost--compose-offer` leaves a draft that holds a prompt, a note
                       \* or a request, and the offer waits
+  GroupKeepsItsWords, \* `make_task` makes no attempt beside one of its group, its draft's
+                      \* ID, made from other words (`made_from_other_words`)
   \* Scope: what you may do.  A base config turns each on, but for one a
   \* finding's config turns on, until it is fixed.
   SubmitQuitsQuestion, \* C-c C-c with a question left open (`roost--quit-questions-here`)
@@ -279,7 +283,9 @@ EmacsReads == timers = <<>>
 
 \* A good reply to the draft's own request: roost-compose-submit's success
 \* callback.  Found (the host's `alreadyMade`) compares with what the ID
-\* first asked; made compares with what this request said.
+\* first asked; made compares with what this request said.  The task found
+\* may be another attempt's, which its host made from other words: the ID
+\* then asked for different things, so the draft stays and names that task.
 Reply(r) ==
   /\ EmacsReads
   /\ r \in waits
@@ -337,11 +343,36 @@ AnswerFound(r) ==
                           ![r].task = CHOOSE k \in Found(r) : TRUE]
   /\ UNCHANGED tasks
 
+\* The tasks of R's group, its draft's ID, made from other words than R
+\* says: `made_from_other_words`.  A request of a draft that makes several
+\* attempts names its words (`roost--compose-words`, of what
+\* `roost--compose-what` tells), and each attempt's record keeps them.  A
+\* draft of one task names none.
+OtherWords(r) ==
+  IF Attempts > 1 /\ GroupKeepsItsWords
+  THEN {k \in Tasks : /\ tasks[k].cid = reqs[r].id
+                      /\ SeenOf(tasks[k].what) # SeenOf(reqs[r].what)}
+  ELSE {}
+
+\* The first attempt among them, as found: the host's `alreadyMade`.
+AnswerOther(r) ==
+  /\ reqs' = [reqs EXCEPT ![r].state = "handled", ![r].result = "found",
+                          ![r].task = CHOOSE k \in OtherWords(r) :
+                                        \A j \in OtherWords(r) : tasks[k].n <= tasks[j].n]
+  /\ UNCHANGED tasks
+
+\* make_task: beside a task of its group made from other words it makes
+\* nothing, and answers with that task.  It looks as it records its own,
+\* under the registry lock, so the two are one step, with the ID's lock or
+\* without: of two requests in flight, the first recorded stands.
+MakeOrAnswer(r) ==
+  IF OtherWords(r) # {} THEN AnswerOther(r) ELSE (Make(r) \/ Refuse(r))
+
 \* With the ID's lock: look and make as one.
 HostTake(r) ==
   /\ HostLock
   /\ reqs[r].state = "sent"
-  /\ IF Found(r) # {} THEN AnswerFound(r) ELSE (Make(r) \/ Refuse(r))
+  /\ IF Found(r) # {} THEN AnswerFound(r) ELSE MakeOrAnswer(r)
 
 \* Without it: look, then make, with others in between.
 HostLook(r) ==
@@ -354,7 +385,7 @@ HostLook(r) ==
 HostMake(r) ==
   /\ ~HostLock
   /\ reqs[r].state = "looked"
-  /\ (Make(r) \/ Refuse(r))
+  /\ MakeOrAnswer(r)
 
 Host(r) ==
   /\ (HostTake(r) \/ HostLook(r) \/ HostMake(r))

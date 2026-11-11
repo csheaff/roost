@@ -9887,13 +9887,157 @@ print(json.dumps(dict(data=data)))
         self.assertEqual([record["id"] for record in roost.Store(str(self.state)).all()], [made["id"]])
         self.assertEqual(self.task_branches(), [made["branch"]])
 
+    def attempt(self, group, n, words=None, of=2, **args):
+        """A request for attempt N of GROUP, made from WORDS, and its reply."""
+        return self.request("create", directory=str(self.repo), socket=self.socket,
+                            command=[sys.executable, str(FAKE)], name="fix %d" % n if n > 1 else "fix",
+                            createId=group + ("%02x" % n if n > 1 else ""),
+                            attempt=dict(group=group, n=n, of=of, **(dict(words=words) if words else {})), **args)
+
+    def test_the_attempts_of_one_draft_are_made_from_one_wording(self):
+        # A draft changed between two asks sends the same IDs with other
+        # words. Beside an attempt made from the words before, its host
+        # makes nothing, and answers with that attempt.
+        store = roost.Store(str(self.state))
+        hooks, checkouts = self.root / "hooks", self.root / "checkouts"
+        hooks.mkdir()
+        (hooks / "post-checkout").write_text("#!/bin/sh\necho made >> %s\n" % shlex.quote(str(checkouts)))
+        (hooks / "post-checkout").chmod(0o755)
+        self.git("config", "core.hooksPath", str(hooks))
+        group, before, now = "ab" * 8, "1" * 32, "2" * 32
+        second = self.attempt(group, 2, before)["result"]
+        reply = self.attempt(group, 1, now)
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual((reply["result"]["id"], reply["result"]["name"]), (second["id"], "fix 2"))
+        self.assertIs(reply["result"]["alreadyMade"], True)
+        self.assertEqual(second["attempt"], dict(group=group, n=2, of=2, words=before))
+        self.assertEqual(store.read(second["id"])["attempt"]["words"], before)
+        self.assertNotIn("alreadyMade", store.read(second["id"]))
+        self.assertEqual([record["id"] for record in store.all()], [second["id"]])
+        self.assertEqual(self.task_branches(), [second["branch"]])
+        # No worktree was made for it, so no hook of yours ran there.
+        self.assertEqual(checkouts.read_text(), "made\n")
+        self.assertEqual(list((self.state / "creating").glob("*")), [])
+        # Asked for again in the words the group was made from, it is made.
+        first = self.attempt(group, 1, before)["result"]
+        self.assertNotIn("alreadyMade", first)
+        self.assertEqual(sorted(record["id"] for record in store.all()), sorted([first["id"], second["id"]]))
+        # The other way round: the draft's own task made first, then
+        # another attempt asked for in other words gets the draft's own.
+        group = "cd" * 8
+        own = self.attempt(group, 1, before, of=3)["result"]
+        reply = self.attempt(group, 2, now, of=3)["result"]
+        self.assertEqual((reply["id"], reply.get("alreadyMade")), (own["id"], True))
+        # Of several made from other words, the first of them.
+        third = self.attempt(group, 3, before, of=3)["result"]
+        self.assertNotIn("alreadyMade", third)
+        self.assertEqual(self.attempt(group, 2, now, of=3)["result"]["id"], own["id"])
+        # Another draft's attempts are its own, whatever their words.
+        self.assertNotIn("alreadyMade", self.attempt("ef" * 8, 2, now)["result"])
+        self.assertEqual(len(store.all()), 5)
+
+    def test_an_attempt_that_says_no_words_is_made_as_before(self):
+        # As an older Emacs asks, and as a host's older records are: no
+        # request without words is refused, and no record without is a
+        # reason to refuse.
+        group = "ab" * 8
+        second = self.attempt(group, 2)["result"]
+        self.assertEqual(second["attempt"], dict(group=group, n=2, of=2))
+        first = self.attempt(group, 1, "1" * 32)["result"]
+        self.assertNotIn("alreadyMade", first)
+        group = "cd" * 8
+        second = self.attempt(group, 2, "1" * 32)["result"]
+        first = self.attempt(group, 1)["result"]
+        self.assertNotIn("alreadyMade", first)
+        self.assertNotEqual(first["id"], second["id"])
+        self.assertEqual(len(roost.Store(str(self.state)).all()), 4)
+
+    def test_an_attempt_whose_creation_failed_keeps_its_group_to_no_wording(self):
+        # It is no task made from its words: asked again, it is made anew,
+        # as the others are, whatever the draft says by then.
+        store = roost.Store(str(self.state))
+        hooks = self.root / "hooks"
+        hooks.mkdir()
+        (hooks / "post-checkout").write_text("#!/bin/sh\necho made > made-by-hook\nexit 1\n")
+        (hooks / "post-checkout").chmod(0o755)
+        self.git("config", "core.hooksPath", str(hooks))
+        group = "ab" * 8
+        self.assertIn("its worktree is kept", self.attempt(group, 2, "1" * 32)["error"])
+        [failed] = store.all()
+        self.assertEqual((failed["status"], failed["attempt"].get("words")), ("failed", "1" * 32))
+        self.git("config", "--unset", "core.hooksPath")
+        for n in (2, 1):
+            made = self.attempt(group, n, "2" * 32)
+            self.assertTrue(made["ok"], made)
+            self.assertNotIn("alreadyMade", made["result"])
+            self.assertNotEqual(made["result"]["id"], failed["id"])
+        self.assertEqual(len(store.all()), 3)
+
+    def test_attempts_asked_for_at_once_in_other_words_make_one_wording(self):
+        # Two requests of one draft in flight at once, as one Emacs gave up
+        # waiting for and one sent since you changed the draft: neither
+        # finds a task of its group as it starts. Here the second runs
+        # whole while the first makes its worktree, from the repository's
+        # post-checkout hook. The first recorded stands, and the other
+        # makes nothing: the worktree it made goes.
+        store = roost.Store(str(self.state))
+        hooks, asked, other = self.root / "hooks", self.root / "asked", self.root / "other.json"
+        hooks.mkdir()
+        hook = ("#!/bin/sh\n[ -e {asked} ] && exit 0\n: > {asked}\n"
+                "unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX\n{python} {helper} rpc < {other} > {reply}\n"
+                ).format(asked=shlex.quote(str(asked)), python=shlex.quote(sys.executable),
+                         helper=shlex.quote(str(SOURCE)), other=shlex.quote(str(other)),
+                         reply=shlex.quote(str(self.root / "other.reply")))
+        (hooks / "post-checkout").write_text(hook)
+        (hooks / "post-checkout").chmod(0o755)
+        self.git("config", "core.hooksPath", str(hooks))
+
+        def meanwhile(group):
+            """Have attempt 2 of GROUP asked for, in other words, while the next worktree is made."""
+            asked.unlink(missing_ok=True)
+            other.write_text(json.dumps(dict(
+                root=str(self.state), action="create", directory=str(self.repo), socket=self.socket,
+                command=[sys.executable, str(FAKE)], name="fix 2", createId=group + "02",
+                attempt=dict(group=group, n=2, of=2, words="2" * 32))))
+
+        group = "ab" * 8
+        meanwhile(group)
+        reply = self.attempt(group, 1, "1" * 32)
+        self.assertTrue(reply["ok"], reply)
+        second = json.loads((self.root / "other.reply").read_text())["result"]
+        self.assertNotIn("alreadyMade", second)
+        self.assertEqual([(task["name"], task["attempt"].get("words")) for task in store.all()],
+                         [("fix 2", "2" * 32)], "the attempts of one draft were made from two wordings")
+        self.assertEqual((reply["result"]["id"], reply["result"].get("alreadyMade")), (second["id"], True))
+        self.assertEqual(self.task_branches(), [second["branch"]])
+        self.assertEqual(len(roost.worktree_branches(self.repo)), 2)
+        self.assertEqual(list((self.state / "creating").glob("*")), [])
+        # What a hook of yours left in the worktree that wasn't to be stays
+        # with it, as a failed task to look at, which is no attempt of the
+        # group, and keeps it to no wording.
+        (hooks / "post-checkout").write_text(hook + "echo made > made-by-hook\n")
+        group = "cd" * 8
+        meanwhile(group)
+        reply = self.attempt(group, 1, "1" * 32)
+        second = json.loads((self.root / "other.reply").read_text())["result"]
+        self.assertEqual((reply["result"]["id"], reply["result"].get("alreadyMade")), (second["id"], True))
+        [left] = [task for task in store.all() if task["status"] == "failed"]
+        self.assertEqual((left["name"], left.get("attempt"), left.get("createId")), ("fix", None, None))
+        self.assertTrue((Path(left["worktree"]) / "made-by-hook").exists())
+        first = self.attempt(group, 1, "2" * 32)["result"]
+        self.assertNotIn("alreadyMade", first)
+        self.assertEqual(sorted(task["attempt"]["words"] for task in store.all()
+                                if (task.get("attempt") or {}).get("group") == group), ["2" * 32] * 2)
+
     def test_an_attempt_that_says_it_wrong_makes_nothing(self):
         group = "ef" * 8
         for attempt in ("2 of 3", [group, 1, 2], {}, dict(group=group, n=1), dict(group=group, of=2),
                         dict(n=1, of=2), dict(group="../x", n=1, of=2), dict(group=7, n=1, of=2),
                         dict(group=group, n=0, of=2), dict(group=group, n=3, of=2), dict(group=group, n=1, of=6),
                         dict(group=group, n="1", of=2), dict(group=group, n=1.0, of=2),
-                        dict(group=group, n=True, of=True)):
+                        dict(group=group, n=True, of=True), dict(group=group, n=1, of=2, words="../x"),
+                        dict(group=group, n=1, of=2, words=7), dict(group=group, n=1, of=2, words=""),
+                        dict(group=group, n=1, of=2, words=["1" * 32])):
             with self.subTest(attempt=attempt):
                 reply = self.request("create", directory=str(self.repo), name="odd", socket=self.socket,
                                      command=[sys.executable, str(FAKE)], attempt=attempt)

@@ -723,7 +723,11 @@ agents' names with spaces between, as `claude codex`, one by each. `C-c C-c`
 then creates a task for each at once, from the same prompt, project and
 starting ref. The first has the draft's name and opens, as one task does;
 the others have that name with 2, 3 and so on after it, and start without
-taking you anywhere. Asked again after no reply, each is made once. One of
+taking you anywhere. Asked again after no reply, each is made once. If you
+changed the draft before asking again, and its host had made one of them
+from what it said before, none is made from what it says now beside that
+one: the draft stays, saying which task was made from what you sent before,
+and `C-c C-c` then makes every attempt from what it says now. One of
 the others that fails says so in the echo area, and the rest go on. They
 are tasks like any other, kept together in the dashboard and sidebar, and
 `=` on one [compares them](#commands).

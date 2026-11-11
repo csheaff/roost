@@ -2408,7 +2408,10 @@ Invariants:
   draft shows under, too. That is this request, or, when its host says
   an earlier one made it (`alreadyMade`) or a poll finds it, what it asked with that
   ID, if it asked for the same each time; asked for different things, which made the
-  task isn't known, and the draft stays. Anything else is yours. A draft that was refused, changed, then lost a
+  task isn't known, and the draft stays. So it does when the task its host answers
+  with is another attempt's, made from what the draft said at an earlier ask
+  ([The creation ID](#the-creation-id)'s I5): only an ID that asked for different
+  things gets one. Anything else is yours. A draft that was refused, changed, then lost a
   reply, can stay though it says what was made: it says so, and costs a `C-c C-k`.
 - I4. The prompt is what you wrote: Roost's redraws of the fields leave it alone, and
   undo goes on working, as they shift each position it holds by what they moved
@@ -2447,6 +2450,7 @@ Invariants:
 | Creating | `C-c C-c` | | Creating | user-error "Already creating" | `roost-compose-submit` |
 | Creating | good reply | no minibuffer, says what the task does | Absent | Org link, close, redraw, open if you stayed | `roost--task-made`, `roost--compose-made` |
 | Creating | good reply | no minibuffer, says otherwise now | Editing | Org link, note says what was made; ID forgotten, nothing opens | `roost--compose-made` |
+| Creating | good reply, with another attempt's task | no minibuffer; several attempts, changed between asks with one ID | Editing | as above: the note names the attempt made from what it said before | `roost--compose-made` |
 | Creating | a poll's news of an earlier ID, held for a question you quit with `C-c C-c` | says otherwise now | Creating | Org link; flag, ID and note kept for the request out | `roost--compose-made` |
 | Creating | good reply | minibuffer open | Closing | task cached | `roost--when-out-of-minibuffer` |
 | Closing | minibuffer ends | | Absent or Editing | as above | `roost--task-made` |
@@ -2468,7 +2472,8 @@ Creating and text typed there; neither is refused.
 A conversation (`roost-new-conversation`) has no draft and no creation ID: each `C`
 asks for one, so `C` again after no reply can start a second.
 
-Open: attempts at one prompt can be made from two, [The creation ID](#the-creation-id)'s I5.
+Open: none here. [The creation ID](#the-creation-id) has one, of a draft that named
+another attempt.
 
 ### The creation ID
 
@@ -2477,7 +2482,7 @@ Kind: implicit. Lives in: `roost--compose-asked` (DIRECTORY ID WHAT), the host's
 It lets a draft ask again without making a second task. Each attempt after a draft's
 first has an ID of its own, the draft's with the attempt's number after it, and each
 attempt's record says which it is (`attempt`: the draft's ID as `group`, its number,
-how many).
+how many, and `words`, a name for what the draft said as it asked).
 
 | State | Meaning | How you can tell |
 |---|---|---|
@@ -2498,16 +2503,24 @@ Invariants:
   time, with what it says now, and an ID that found something else is forgotten:
   asked again, it is another task. Not while a request of the draft's own is out,
   which says in its own time.
-- I5. **Broken.** The tasks one draft's ID makes are attempts at one prompt: each made
-  from what the draft said at one ask. It holds while the draft says the same each
-  time it asks with the ID, and each attempt is then made once, however often it asks
-  (`test_an_attempt_asked_for_again_is_made_once` in the helper's tests). A draft
-  you changed, whose own request failed or got no reply, asks again with the same IDs,
-  and its host answers each attempt apart: with the task it made from what the draft
-  said before, or by making it now. The draft compares only its own task (I4), so it
-  can close for that one, made from what it says, while another attempt is of what
-  it said before; `=` then compares the two as attempts at one prompt.
-  (`NewTaskAttempts.finding-mixed.cfg`.)
+- I5. The tasks one draft's ID makes are attempts at one prompt: each made from what
+  the draft said at one ask. Each attempt's request names those words (`words`, from
+  `roost--compose-words`: one name for what `roost--compose-what` tells the same), its
+  record keeps them, and its host makes no attempt beside one of its group made from
+  other words: it answers with that one, as already made (`made_from_other_words`). It
+  looks before it makes anything, and again as it saves the record, under the registry
+  lock, so of two requests in flight at once the first recorded stands, and the other
+  undoes the worktree it made. A draft that says the same each time has each attempt
+  made once, however often it asks (`test_an_attempt_asked_for_again_is_made_once` in
+  the helper's tests). A draft you changed, whose own request failed or got no reply,
+  asks again with the same IDs, and gets the attempt made from what it said before in
+  answer to each: it stays, naming that task (I4), and asks next under a new ID, for
+  every attempt at what it says now. A request or a record without `words`, as an
+  older Emacs's, refuses nothing, nor does a task whose creation failed, which keeps
+  no ID. (`test_the_attempts_of_one_draft_are_made_from_one_wording` and
+  `test_attempts_asked_for_at_once_in_other_words_make_one_wording` in the helper's
+  tests; `roost-a-draft-changed-between-asks-makes-its-attempts-from-one-wording`;
+  `NewTaskAttempts.attempt-whatever-its-group.cfg` undoes it.)
 - I6. A `C-c C-c` cut short once an attempt went, as by `C-g` while the next request
   starts, keeps the ID it asked with, so that asking again names that attempt as it
   was. Cut short before any went, as at the question about the setup command, it
@@ -2521,12 +2534,15 @@ Invariants:
 | None, Asked | submit cut short | none went | as it was | ID put back | `roost-compose-submit` |
 | Asked | submit | project same | Asked | same ID, whatever else changed; the draft then compares what comes | `roost-compose-submit` |
 | Asked | task comes, draft says otherwise | | None | | `roost--compose-made` |
+| Asked | another attempt's task comes to the draft's own request | | None | the draft names it | `roost--compose-made` |
 | Asked | a poll's task comes, draft says otherwise | a request of its own out | Asked | | `roost--compose-made` |
-| Asked | submit | project same, draft says otherwise than at the ID's last ask | Asked | same ID; what it asked for unknown from then on | `roost-compose-submit` |
+| Asked | submit | project same, draft says otherwise than at the ID's last ask | Asked | same ID; what it asked for unknown from then on; each attempt names other words | `roost-compose-submit` |
 | Asked | submit | project differs | Asked | new ID; a task from the old one stays | `roost-compose-submit` |
 | Asked | host: not seen | | Being made | `make_task` | `create` in the helper |
 | Asked | host: seen | | Made | answers with the old task, ignoring the request | `made_for` |
+| Asked | host: not seen, an attempt | another of its group made from other words | Asked | makes nothing; answers with that other task, as already made | `made_from_other_words`, `make_task` in the helper |
 | Being made | second request | | waits | | `asking_for` |
+| Being made | its record is to be saved | another of its group was recorded meanwhile, from other words | Undone | its worktree and branch go; answers with that other task | `make_task`, `abandon` |
 | Being made | failure | | Undone | | `abandon` |
 | Made | task retired | | none on host | a retry makes it anew | `store.remove` |
 | any | draft closes | | None | buffer-local goes with it | |
@@ -2535,8 +2551,14 @@ Checked: `random` is seeded differently at each start, so IDs don't repeat acros
 restarts. A refused create records nothing, so retrying with a fixed base works.
 An attempt's ID is two hex digits longer than a draft's, so it is no other draft's.
 
-Open: I5. Its host takes an attempt's request by the attempt's own ID, and knows
-nothing of what the others were made from.
+Open: a draft that has named another attempt forgets its ID (I4), and what it asks for
+next is another task, as its note says. Changed back to what it said before, that
+makes the same attempt at the same words a second time, and its own task twice if the
+request it gave up on is made after all. Roost named a task of the earlier `C-c C-c`
+first, as it does for a draft of one task; the model's `AtMostOnce` counts only the
+draft's own task as said, and fails there, at three asks
+(`NewTaskAttempts.finding-told-of-another-attempt.cfg`). Not decided: the rule, or what
+such a draft does next.
 
 ### The send ID
 

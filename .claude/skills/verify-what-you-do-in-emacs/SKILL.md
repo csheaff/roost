@@ -5,13 +5,14 @@ description: >
   lost and asks at most once: a retry after a lost reply makes one task,
   one of each attempt at a prompt, and sends one prompt, with you, the
   network and the host acting at once. Use after changing
-  roost-compose-submit, roost--compose-what, roost--compose-made,
-  roost--compose-listed, roost--task-made, roost--compose-agents,
-  roost--compose-offer, roost-send-submit, roost--send-kept,
-  roost--when-out-of-minibuffer, the questions-left-open quitting, or the
-  helper's create, asking_for, made_for, attempt_of or send; when reviewing
-  such a change; or when asked to verify the drafts, the creation ID,
-  several attempts at one prompt, or the send ID.
+  roost-compose-submit, roost--compose-what, roost--compose-words,
+  roost--compose-made, roost--compose-listed, roost--task-made,
+  roost--compose-agents, roost--attempt-field, roost--compose-offer,
+  roost-send-submit, roost--send-kept, roost--when-out-of-minibuffer, the
+  questions-left-open quitting, or the helper's create, asking_for,
+  made_for, make_task, attempt_of, made_from_other_words or send; when
+  reviewing such a change; or when asked to verify the drafts, the creation
+  ID, several attempts at one prompt, or the send ID.
 ---
 
 # Verify what you do in Emacs
@@ -58,9 +59,13 @@ Each variant config's first lines say what it breaks.
 
 ## 1. Does your change touch this?
 
-The models were last checked against the code at the sync commit, `089089e`,
-with the change to `roost--compose-what` that came with this line. This
-lists each covered definition that differs from it in your working tree:
+The models were last checked against the code at the sync commit, `8f651f3`,
+with the change that came with this line: the words an attempt's request
+names, in `roost-compose-submit`, `roost--attempt-field` and
+`roost--compose-words`, and the helper's `attempt_of`, `make_task` and
+`made_from_other_words`, which keep the attempts of one draft to one
+wording, with what `create` says of it. This lists each covered definition
+that differs from it in your working tree:
 
     python3 test/formal/what_you_do_in_emacs/changed.py
 
@@ -72,16 +77,18 @@ its `SYNC`; keep both in step with this table.
 | Code | Model step | What the step assumes |
 | --- | --- | --- |
 | `roost-compose-submit` | NewTaskDraft `DoSubmit`, `Submit` | ID kept while the project is the same (`KeepIdForProject`); `first` kept from the ID's first ask, and Unknown once the ID asks for something else (`ForgetMixedFirst`); refuses while submitting; quits a question left open, then submits from a timer queued before the question's held closures |
-| `roost-compose-submit`, `roost--compose-agents`, `roost--attempt-field` | `Request`, `Others`, `DoSubmitCutShort`, `SubmitCutShort` | one request for each attempt (`Attempts`), the others first and the draft's own last, each other with the ID and its number; a quit or error once one went leaves the flag clear and the ID as it asked (`KeepAskedOnceSent`); before any went, the ID is put back, which changes nothing |
+| `roost-compose-submit`, `roost--compose-agents`, `roost--attempt-field` | `Request`, `Others`, `DoSubmitCutShort`, `SubmitCutShort` | one request for each attempt (`Attempts`), the others first and the draft's own last, each other with the ID and its number, and each with the name of what the draft says then; a quit or error once one went leaves the flag clear and the ID as it asked (`KeepAskedOnceSent`); before any went, the ID is put back, which changes nothing |
 | `roost--compose-what`, `roost--compose-continues` | `Says`, `Now` | what the draft says, prompt and fields: every field a request is made from, a fork's conversation and an offer's task too (`WhatSaysAll`) |
+| `roost--compose-words` | `SeenOf` of a request's `what`, in `OtherWords` | a name for what `roost--compose-what` tells: the same for what is `equal`, as `roost--compose-made` compares it, and another for anything else. Only a draft that makes several attempts sends it |
 | `roost--compose-made` | `ComposeMade` | closes only if the draft still says WHAT (`CompareBeforeClose`); else clears the flag and the ID, but for a poll's news while a request of its own is out (`KeepOwnInFlight`) |
 | `roost--compose-listed` | `Poll` | only when not submitting and the ID is listed, which is the draft's own task's; compares with what the ID first asked |
-| `roost--task-made`, `roost--create-task` | `TaskMade`, `Reply` | says "Roost created" at once; the rest waits for the minibuffer; `alreadyMade` compares with `first`. The reply to another attempt changes nothing of the draft, made or failed, so it is no step |
+| `roost--task-made`, `roost--create-task` | `TaskMade`, `Reply` | says "Roost created" at once; the rest waits for the minibuffer; `alreadyMade` compares with `first`, whichever task comes back: another attempt's, made from other words, comes only to an ID that asked for different things, whose `first` is Unknown, so the draft stays and names it. The reply to another attempt changes nothing of the draft, made, found or failed, so it is no step |
 | failure lambda in `roost-compose-submit` | `Reply` (refused), `NoReply` | clears the flag (`FailureClearsFlag`) |
 | `roost--compose-offer` | `OpenOffer`, `Init` | leaves a draft that holds a prompt, a note or a request, and the offer waits (`OfferKeepsDraft`); otherwise the offer's draft is a new buffer, with no ID |
 | `roost--when-out-of-minibuffer`, `roost--close-buffer` | `held`, `EndQuestion`, `Timer` | held closures run in order, from `run-at-time 0` timers, all before the next input or reply |
 | `roost--quit-questions-left-open`, `roost--quit-questions-here` | `Submit` with `mini` | the THEN timer is queued before quitting |
 | helper `create`, `asking_for`, `made_for`, `make_task`, `attempt_of` | `HostTake` | one ID's look and make are one step under its lock (`HostLock`), and an attempt's ID is its own; a failure records nothing, as a wrong `attempt`, or a fork whose task's conversation can't go on |
+| helper `made_from_other_words`, and `make_task`'s two looks with it | `OtherWords`, `AnswerOther`, `MakeOrAnswer` | beside a task of its group, its draft's ID, made from other words, an attempt is not made, and that task is the answer, as found (`GroupKeepsItsWords`). `make_task` looks before it makes anything, and again as it saves its record, in the one hold of the registry lock: that look and the save are one step, with the ID's lock or without, so of two requests in flight the first recorded stands and the other undoes its worktree (`abandon`). Only words both name differ; a task whose creation failed keeps no creation ID and doesn't count |
 | `roost-send-submit` | PromptDraft `Submit`, `Reply`, `Sent` | same ID for the same text, a new one for another (`NewIdForNewText`); refuses while sending, before quitting questions |
 | `roost--send-kept` | `Sent` | takes out what went only if it is whole at the start (`WholeCheck`); else keeps all and says it went |
 | failure lambda in `roost-send-submit` | `Reply` (refused), `NoReply`, `Dropped` | clears the flag; no reply says "may have gone", a dropped connection doesn't |
@@ -155,21 +162,22 @@ passed at larger bounds too (NewTaskDraft 3 projects, 4 versions, 4 asks, 3
 held, with `SubmitQuitsQuestion` and `EditBack` off: 4.9 million states,
 2.4 minutes; PromptDraft 4 pieces, 4 asks, 2
 others, 8 kept: 31.8 million states, 13 minutes; NewTaskAttempts 3
-projects, 3 versions, 2 asks, 3 held: 2.6 million states, 2.8 minutes, and
-with three asks of a draft you never change, 2 projects, 1 held: 1.7
-million states, 1.9 minutes), each on one worker. Two attempts with three
-asks of a draft you change is too many states for a run you wait for: it
-was stopped at 8.0 million, none of them breaking a rule.
+projects, 3 versions, 2 asks, 3 held: 3.1 million states, 2.1 minutes, and
+with three asks of a draft that says one thing, 2 projects, 1 held: 2.1
+million states, 2.1 minutes), each on one worker. Two attempts with three
+asks of a draft you change break `AtMostOnce`, which finding 6 keeps at
+small bounds; with that rule reading as finding 6 says it might, they pass
+there (840 thousand states, half a minute).
 
 Scope switches, each turned on by one finding or known config:
 `SubmitQuitsQuestion` (C-c C-c with a question left open) and `EditBack` (the
 draft says again what it said before), both on in the base configs since
 their findings were fixed; `CutShort` (C-c C-c cut short between its
-requests), on in `NewTaskAttempts.cfg`; `MixedAttempts` (a draft that makes
-several attempts asks again with its ID for something else), off there
-until finding 3 is fixed; `Drops` (a dropped connection, after which the
-helper goes on) and `KillAfterPaste` (a helper killed between paste and
-record), off in `PromptDraft.cfg`.
+requests) and `MixedAttempts` (a draft that makes several attempts asks
+again with its ID for something else), on in `NewTaskAttempts.cfg`, the
+second since finding 3 was fixed; `Drops` (a dropped connection, after
+which the helper goes on) and `KillAfterPaste` (a helper killed between
+paste and record), off in `PromptDraft.cfg`.
 
 What the draft says is one value, a version of its prompt and fields. So
 `C-c C-x`, `C-c C-f` and the task an offer's draft shows under are edits
@@ -191,7 +199,7 @@ task's and the offer's, the same each time; and a conversation
 (`roost-new-conversation`), which has no draft and no creation ID, so that
 `C` again after no reply can start a second.
 
-## Findings at 089089e
+## Findings at 8f651f3
 
 Each is a config here that fails as named.
 
@@ -206,23 +214,18 @@ Each is a config here that fails as named.
    fix. With `EditBack` on, `AtMostOnce` reads earlier and later as you asked,
    not as the host made, and counts a move to another project and back as a
    move: the creation ID's table allows a new ID there.
-3. **Attempts at one prompt are made from two**
-   (`NewTaskAttempts.finding-mixed.cfg`, `AttemptsAtOnePrompt`). Its fix
-   turns on `MixedAttempts` in `NewTaskAttempts.cfg`.
-   1. A draft that makes two attempts says P. C-c C-c asks for attempt 2,
-      then for its own task, with the draft's ID.
-   2. You change the draft to Q, while it says Creating or after the next
-      step.
-   3. No reply comes to its own request, which never reaches its host, or
-      its host refuses it. Attempt 2's request does, and is made from P.
-   4. C-c C-c: the same IDs, now asking for Q. Its host answers attempt 2
-      with the task it made (`alreadyMade`, which nothing reads for an
-      attempt), and makes the draft's own from Q.
-   5. The draft says Q, as its own task does, and closes. One agent works
-      on P and one on Q, `=` compares them as attempts at one prompt, and
-      nothing said so.
-   The same steps on the real code end the same way. With `MixedAttempts`
-   on and this rule left out, the other rules hold (244,752 states).
+3. Fixed: **attempts at one prompt made from two**. A draft that makes two
+   attempts, changed after its own request failed or got no reply, asked
+   again with the same IDs: its host answered the attempt it had made, from
+   what the draft said before, and made the draft's own from what it said
+   now, and the draft closed. Each attempt's request now names its words,
+   and its host makes none beside one of its group made from others: the
+   draft stays, naming that one. `NewTaskAttempts.attempt-whatever-its-group.cfg`
+   undoes the fix, and
+   `roost-a-draft-changed-between-asks-makes-its-attempts-from-one-wording`
+   and the helper's `test_the_attempts_of_one_draft_are_made_from_one_wording`
+   and `test_attempts_asked_for_at_once_in_other_words_make_one_wording`
+   replay it.
 4. Fixed: **a fork's draft closed for a fork made the other way**. Whether
    a fork goes on with its task's conversation wasn't in
    `roost--compose-what`, so a draft changed in that alone (C-c C-f), while
@@ -239,6 +242,26 @@ Each is a config here that fails as named.
    3. You add a line and C-c C-c: another text, ID2. The agent gets P, then
       P and the line. Rests on sshd leaving the helper running, which
       Checked and found sound lists as not proved.
+6. **A task asked for again once Roost named another attempt**
+   (`NewTaskAttempts.finding-told-of-another-attempt.cfg`, `AtMostOnce`),
+   at three asks, where `NewTaskAttempts.cfg` checks two. It came with the
+   fix of finding 3, which lets a draft name an attempt that is not its own.
+   1. A draft that makes two attempts says P. C-c C-c: attempt 2 and its own
+      task, with the draft's ID. No reply comes to its own request.
+   2. You change the draft to Q and C-c C-c: the same IDs. Its host makes
+      attempt 2 from P, from the first request, and answers the draft's own,
+      asked for with Q, with that attempt. The draft says "Made fix 2 from
+      what you sent before", and forgets its ID.
+   3. You change it back to P and C-c C-c, which makes another task, as the
+      note says: a new ID. Its host makes attempt 2 from P a second time.
+      Or the first request for the draft's own task, still on its way, is
+      made from P, and then the new one is too.
+   Roost named a task of the earlier C-c C-c before you asked again, as it
+   does of a draft that makes one task; the rule counts only the draft's
+   own (`OwnOf`), which was the one a draft named. If `OwnOf` is every task
+   of that C-c C-c, which says the same of the code before the fix, three
+   asks pass at this config's bounds. Whether the rule changes, or what the
+   draft does once it has named another attempt, is not decided.
 
 Known and kept as a config: `PromptDraft.known-kill-after-paste.cfg`, the
 send ID's I1 ("a kill between the two pastes again"); and
