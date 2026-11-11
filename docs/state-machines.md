@@ -971,7 +971,12 @@ the agent's own report; which tool call will say it's over; what it says it's do
 | Named by a report | The agent's words | `requestFrom` = `report` |
 
 Emacs shows `request` only while `status` is `permission`
-(`roost--permission-request`). No Emacs code reads `activity`.
+(`roost--permission-request`), and `activity` only while it is `running` or
+`background` and its window lives (`roost--activity`): in the dashboard where a
+waiting agent's reply goes, and under the task's name in its panel. `activity`
+is the agent's own word in a `working` report, or, from a hook, the tool it
+starts, as "Running make test" (`note_activity`, `tool_activity`); it goes when
+the task stops working, at your next prompt, and with a new run.
 
 Invariants:
 
@@ -2969,8 +2974,12 @@ registry lock.
 | `setupComplete`, `copyComplete`, `submodulesComplete`, `allSubmodules` | `runner` | yes, fresh read each |
 | `offers`, `offersAt` | `propose_task`, `take_offer`, `make_task` and `list_tasks` (the parent's, through `take_offer`) | yes |
 | `mayOffer`, `parent`, `offer` | `make_task` | yes; never changed |
+| `conversation`, `remoteControl`, `forkSession`, `forkedFrom`, `attempt` | `make_task` | yes; never changed |
+| `baseRef`, `baseCommit`, `integrationBranch`, `integrationRef` | `make_task`, `retarget` | yes |
+| `activity` | `update_hook` (`note_activity`), `apply_program_status`, `spawn` | yes |
 
-No lost update found in any of them.
+No lost update found in any of them. The last three rows were added on the
+`yeehaw` branch and read, not model-checked.
 
 ### Checked and found sound
 
