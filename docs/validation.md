@@ -50,19 +50,23 @@ what they found, under "Found by the models".
   task for the one keeping its commits; a fork and its source finished at
   once; and `B` naming what already has the task's commits. The rest
   showed a wrong status, branch or draft.
-- **Three left open**, each a config that fails until it is fixed: a
-  reset after `B` that reads wrong, attempts made from two prompts after
-  an edited retry, and an offer made once you were asked. One accepted:
-  Codex says nothing when its plan's menu is closed.
+- **Three more, left open at first and fixed since**, each as its
+  section's skill says to fix a finding: a reset after `B` read a task
+  wrong, so a task now keeps where its branch was made, which `B` never
+  moves; several attempts could be made from two prompts, so their host
+  keeps a draft's attempts to one wording; and an offer made once you
+  were asked went with the task unnamed, so a request names the offers
+  its question named, and is refused for another. One accepted: Codex
+  says nothing when its plan's menu is closed.
 - **Two new models**: who asks when Claude's subagents can too
   (`SubagentAsks.tla`), and small ones beside each section's for `B`, two
   attempts, and a fork beside an offer.
 - **Codex's plan menu** is from Codex's source, read at `e58bf8f`, and a
   fake Codex that keeps a rollout: no Codex was signed in here, so no
   turn in Plan mode ran live.
-- `make test compile` after all of it: 618 ERT tests and 573 Python
-  tests pass. `make formal`: 97 configs in the five sections, every
-  model as expected, in twenty-five minutes on four cores.
+- `make test compile` after all of it: 622 ERT tests and 584 Python
+  tests pass. `make formal`: 98 configs in the five sections, every
+  model as expected, in under half an hour on four cores.
 - Not done: `make crash` whole. The scenarios for retiring, discarding,
   retargeting and making a fork were run alone, with only the lock file
   Git 2.43 leaves, as on `main`.
