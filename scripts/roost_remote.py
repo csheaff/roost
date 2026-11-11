@@ -731,9 +731,11 @@ def delete_branch(repo, branch, commit):
 # The Claude Code hook events Roost listens to; test/claude_contract.py
 # checks them, and the rest, against the installed Claude Code.
 CLAUDE_HOOK_EVENTS = ("SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse",
-                      "PostToolUse", "PermissionRequest", "Notification", "Stop", "StopFailure")
+                      "PostToolUse", "PostToolUseFailure", "PermissionRequest", "Notification",
+                      "Stop", "StopFailure", "SubagentStop")
 # The first Claude Code that knows all of them. Older ones skip a whole
-# settings file that names an event they don't know, every hook in it.
+# settings file that names an event they don't know, every hook in it:
+# so not PostToolBatch, which came in 2.1.118.
 CLAUDE_MIN_VERSION = (2, 1, 78)
 
 
@@ -859,6 +861,10 @@ def tool_call(payload):
                            for name, value in arguments.items()})
 
 
+# A tool's end, as its hooks say it: done, or failed.
+TOOL_ENDS = ("PostToolUse", "PostToolUseFailure")
+
+
 def tool_answers(task, payload):
     """Whether hook PAYLOAD, of a tool's start or end while TASK's agent asks,
     says it no longer does. Subagents go on working beside one that asks, and
@@ -873,7 +879,7 @@ def tool_answers(task, payload):
     asked = task.get("requestCall")
     if payload.get("hook_event_name") == "Notification":
         return task.get("requestQuestion") is True
-    if payload.get("hook_event_name") not in ("PreToolUse", "PostToolUse"):
+    if payload.get("hook_event_name") not in ("PreToolUse", *TOOL_ENDS):
         return True
     if task.get("requestQuestion"):
         return False
@@ -886,6 +892,47 @@ def tool_answers(task, payload):
     return (payload["hook_event_name"] == "PreToolUse"
             or call["tool"] == asked.get("tool")
             and all(arguments.get(name, digest) == digest for name, digest in call["arguments"].items()))
+
+
+def asking_subagent(task):
+    """The subagent whose tool call TASK's request is about, as its hooks
+    name it, or None: for the main agent's request, one that only a
+    notification named, and requests that overlap."""
+    asked = task.get("requestCall")
+    return asked.get("agent") if isinstance(asked, dict) and asked.get("tool") else None
+
+
+def claude_sent_itself(payload):
+    """Whether Claude Code gave itself the prompt of hook PAYLOAD, as the
+    notice of a background task's end or a wakeup it scheduled, rather than
+    you. An older one doesn't say who sent it: then, whether it is such a
+    notice."""
+    source = payload.get("source")
+    if isinstance(source, str):
+        return source not in ("user", "sdk")
+    prompt = payload.get("prompt")
+    return isinstance(prompt, str) and prompt.lstrip().startswith("<task-notification>")
+
+
+def claude_answers(task, payload):
+    """As `tool_answers`, for Claude Code, whose subagents can work on in the
+    background after the turn of the agent you talk to ends, and ask from
+    there, their prompt on screen. What a subagent asked is over when that
+    subagent says so, by a tool's event or its own end, or when you send a
+    prompt, which a prompt on screen doesn't let you do. It stands as the
+    main agent's turn ends with work left in the background, or starts on
+    a prompt Claude Code sent itself, as the notice of another subagent's
+    end: a turn that ends with nothing left has no subagent to ask. An
+    older Claude Code doesn't say what is left: unsure, it stands."""
+    event = payload.get("hook_event_name")
+    subagent = asking_subagent(task)
+    if event == "SubagentStop":
+        return bool(subagent) and payload.get("agent_id") == subagent
+    if subagent and event == "Stop":
+        return payload.get("background_tasks") == []
+    if subagent and event == "UserPromptSubmit":
+        return not claude_sent_itself(payload)
+    return tool_answers(task, payload)
 
 
 CLAUDE_FOLDER_LIMIT = 200
@@ -925,7 +972,7 @@ class ClaudeAgent:
     # It runs its hooks before it goes on, so a report read before one is
     # older news than it.
     waits_for_hooks = True
-    answers = staticmethod(tool_answers)
+    answers = staticmethod(claude_answers)
 
     def validate(self, command):
         validate_command(command, "Claude")
@@ -1006,6 +1053,12 @@ class ClaudeAgent:
         }.get(event)
         if event == "Stop":
             status = "background" if payload.get("background_tasks") or payload.get("session_crons") else "ready"
+        # A tool's failure and a subagent's end are news only of what was
+        # asked: the turn goes on. Not a tool that failed as you stopped it,
+        # which the transcript records, for the next listing to find.
+        if (event in ("PostToolUseFailure", "SubagentStop") and current == "permission"
+                and not payload.get("is_interrupt")):
+            status = "running"
         if event == "Notification":
             kind = payload.get("notification_type")
             # Claude reminds you of an agent waiting a minute after its turn.
@@ -6314,7 +6367,9 @@ def update_hook(store, task_id, payload, run_id=None):
             if relayed and not new_conversation:
                 updates = beside_program_status(updates, before, agent.reports_turns,
                                                 getattr(agent, "waits_for_hooks", False))
-            elif before == "permission" and updates.get("status") == "running" and answers and not answers(task, payload):
+            elif (before == "permission" and updates.get("status") not in (None, "permission")
+                  and answers and not answers(task, payload)):
+                # It still asks, whatever this event says the agent does.
                 updates = without_status(updates)
             # A report read before this hook, still waiting for the lock, is
             # older news than any status it records, for an agent that waits
