@@ -369,7 +369,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
        (roost-task-info-mode)
        (setq roost--buffer-task-key (roost--key asking))
        (roost--render-task-info)
-       (should (string-match-p "^Answer it in its terminal: RET\n\nWaiting for your answer\nAsks to run make test\n\nPrompt\nfix authentication\n\nChanges\nRefreshing…\n\nAgent's latest reply$"
+       (should (string-match-p "^Answer it in its terminal: RET\n\nWaiting for your answer\nAsks to run make test\n\nPrompt\nfix authentication\n\nRefreshing…\n\nAgent's latest reply$"
                                (buffer-string))))
      ;; The notification names it, rather than the agent's last words.
      (let (body)
@@ -475,7 +475,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
          ;; The agent's word comes after the changes, without a heading's
          ;; note while there are none.
          (should (< (string-match "^fix auth " text) (string-match "^Prompt$" text)
-                    (string-match "^Changes$" text) (string-match "^Agent's latest reply$" text)))
+                    (string-match "^Refreshing…$" text) (string-match "^Agent's latest reply$" text)))
          (should (string-match-p "^Agent's latest reply\n## Summary\n" text))
          (should (equal (get-text-property (string-match "Fixed the" text) 'line-prefix text) "  "))
          (should (string-match-p "^Fixed the auth bug in login\\.py\\.\n" text))
@@ -524,13 +524,17 @@ terminal's, on a pty.  Skips the test where it can't be made."
              (with-current-buffer buffer
                (roost--render-task-info)
                (let ((text (buffer-string)))
-                 ;; What to do next, then what the task is for.  No key:
-                 ;; RET in the terminal would pick the agent's default answer.
-                 (should (string-match-p "^Answer it in its terminal\n\nPrompt\nfix authentication\n" text))
+                 ;; What to do next, then what came of it.  No key: RET in
+                 ;; the terminal would pick the agent's default answer.
+                 (should (string-match-p "^Answer it in its terminal\n\n1 file \\+1 −0\n" text))
                  (should-not (string-match-p "Waiting for your answer\\|Agent's latest reply\\|Fixed the" text))
+                 ;; What the task is for, which the terminal shows, is one
+                 ;; line under the keys.
+                 (should (string-match-p "^r Magit  f Files  t Shell  \\? More\n▸ fix authentication\n▸ Details\n\\'"
+                                         text))
+                 (should-not (string-match-p "^Prompt$" text))
                  ;; The labels say what is uncommitted.  Where notes are
                  ;; written is for a wide panel, as room here goes to changes.
-                 (should (string-match-p "^Changes\n1 file \\+1 −0\n" text))
                  (should (string-match-p "^  Committed\n  login\\.py  \\+1 −0$" text))
                  (should-not (string-match-p "writes a note" text))
                  (should-not (string-match-p "Actions" text))
@@ -695,7 +699,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
        (setq roost--buffer-task-key (roost--key task))
        (cl-letf (((symbol-function 'roost--panel-beside-terminal-p) #'ignore))
          (roost--render-task-info))
-       (should (string-match-p "^Prompt\nFix the login\\.\n\n?Your latest prompt\nNow the logout\\.\nShow the whole prompt\n\n?Changes$"
+       (should (string-match-p "^Prompt\nFix the login\\.\n\n?Your latest prompt\nNow the logout\\.\nShow the whole prompt\n\n?Refreshing…$"
                                (buffer-string)))
        (goto-char (point-min))
        (search-forward "Show the whole")
@@ -719,6 +723,91 @@ terminal's, on a pty.  Skips the test where it can't be made."
          (roost--cache-task "dev" (append `((task . "Fix the login.") (lastPrompt . ,said)) (roost-test--task)))
          (roost--render-task-info)
          (should-not (string-match-p "Your latest prompt" (buffer-string))))))))
+
+(ert-deftest roost-a-narrow-panel-folds-prompts-and-details ()
+  ;; Beside a terminal, which shows your prompts, they are one quiet line
+  ;; under the keys, and where the task's work lives is another, until you
+  ;; open them.  What is wrong comes first, under the title.
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (append '((task . "Fix the login.\n\nRun the tests afterwards.")
+                                                  (lastPrompt . "Now the logout.\n\nAnd its test.")
+                                                  (error . "boom") (baseRef . "main"))
+                                                (roost-test--task))))
+         (keys "^r Magit  f Files  t Shell  \\? More\n")
+         (press (lambda (label)
+                  (goto-char (point-min))
+                  (search-forward label)
+                  (push-button (match-beginning 0)))))
+     (with-temp-buffer
+       (roost-task-info-mode)
+       (setq roost--buffer-task-key (roost--key task))
+       (cl-letf (((symbol-function 'roost--task-info-width) (lambda () 44)))
+         (roost--render-task-info)
+         ;; In its colour, on the third line, and nowhere else.
+         (let ((lines (split-string (buffer-string) "\n")))
+           (should (equal (nth 2 lines) "▲ Last error: boom"))
+           (should (= (cl-count-if (lambda (line) (string-search "boom" line)) lines) 1)))
+         (goto-char (point-min))
+         (search-forward "▲ Last error")
+         (should (memq 'roost-status-failed (ensure-list (get-text-property (point) 'face))))
+         ;; Where you left off, on one line, then the details, after the keys.
+         (let ((folded (concat keys "▸ Now the logout\\. And its test\\.\n▸ Details\n\\'")))
+           (should (string-match-p folded (buffer-string)))
+           (should-not (string-match-p "^Prompt$\\|Your latest prompt\\|Fix the login\\|^  Branch$" (buffer-string)))
+           ;; Pressed, the line gives way to both prompts, under a line
+           ;; that folds them again, with point on it.
+           (funcall press "▸ Now the logout")
+           (should (equal roost--panel-open '(prompts)))
+           (should (string-match-p (concat keys "\n▾ Prompts\nFix the login\\.\nShow the whole prompt\n\n"
+                                           "Your latest prompt\nNow the logout\\.\nShow the whole prompt\n"
+                                           "▸ Details\n\\'")
+                                   (buffer-string)))
+           (should (looking-at-p "▾ Prompts"))
+           ;; A redraw, as a poll's, leaves them open; under the line a
+           ;; long one opens and folds as it does in a wide panel.
+           (roost--render-task-info)
+           (should (string-match-p "^▾ Prompts$" (buffer-string)))
+           (funcall press "Show the whole prompt")
+           (should (string-match-p "^▾ Prompts\nCollapse prompt\nFix the login\\.\n\nRun the tests afterwards\\.\n"
+                                   (buffer-string)))
+           (should (looking-at-p "Collapse prompt"))
+           (push-button)
+           (should (string-match-p "^▾ Prompts\nFix the login\\.\nShow the whole prompt\n" (buffer-string)))
+           (funcall press "▾ Prompts")
+           (should-not roost--panel-open)
+           (should (string-match-p folded (buffer-string)))
+           (should (looking-at-p "▸ Now the logout"))
+           ;; The details likewise, under no other heading.
+           (funcall press "▸ Details")
+           (should (equal roost--panel-open '(details)))
+           (should (string-match-p (concat keys "▸ Now the logout\\. And its test\\.\n"
+                                           "▾ Details\n  Branch\ncodex/roost/fix-auth-123456, from main\n\\'")
+                                   (buffer-string)))
+           (should (looking-at-p "▾ Details"))
+           (push-button)
+           (should-not roost--panel-open)
+           (should (string-match-p folded (buffer-string)))
+           (should (looking-at-p "▸ Details")))
+         ;; With no prompt sent since, the line is the one the task began
+         ;; with; a task without one has only its details to unfold.
+         (roost--cache-task "dev" (append '((task . "Fix the login.\n\nRun the tests afterwards.") (lastPrompt))
+                                          (roost-test--task)))
+         (roost--render-task-info)
+         (should (string-match-p (concat keys "▸ Fix the login\\. Run the tests afterwards\\.\n▸ Details\n\\'")
+                                 (buffer-string)))
+         (roost--cache-task "dev" (append '((task) (lastPrompt)) (roost-test--task)))
+         (roost--render-task-info)
+         (should (string-match-p (concat keys "▸ Details\n\\'") (buffer-string))))
+       ;; With room, the prompts stand near the top and the details at the
+       ;; bottom, under their headings, with nothing to unfold.
+       (cl-letf (((symbol-function 'roost--task-info-width) (lambda () 72)))
+         (roost--cache-task "dev" (append '((task . "Fix the login.") (lastPrompt . "Now the logout.")
+                                            (baseRef . "main"))
+                                          (roost-test--task)))
+         (roost--render-task-info)
+         (should (string-match-p "^Prompt\nFix the login\\.\n\nYour latest prompt\nNow the logout\\.\n" (buffer-string)))
+         (should (string-match-p "^Details\n  Branch       codex/roost/fix-auth-123456, from main\n" (buffer-string)))
+         (should-not (string-match-p "▸\\|▾\\|\\? More" (buffer-string))))))))
 
 (ert-deftest roost-a-draft-from-a-tiled-pane-opens-beside-the-tiles ()
   ;; Shown in the pane's window, the draft was taken back when tmux-control
@@ -1163,8 +1252,8 @@ terminal's, on a pty.  Skips the test where it can't be made."
          (roost--render-task-info)
          (should-not roost--expanded-reply)
          (should-not (string-match-p "A new response arrived" (buffer-string)))
-         (should (string-match-p "^Changes$" (buffer-string)))
-         (should (string-match-p "^Details$" (buffer-string))))))))
+         (should (string-match-p "^Refreshing…$" (buffer-string)))
+         (should (string-match-p "^▸ Details$" (buffer-string))))))))
 
 (ert-deftest roost-task-panel-previews-wrap-long-tokens-and-preserve-short-replies ()
   (should (equal (roost--reply-preview "Done.\nTests passed." 40) "Done.\nTests passed."))
@@ -1246,7 +1335,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
                (setq roost--buffer-task-key (roost--key task))
                (roost--render-task-info)
                (should (string-prefix-p "fix auth" (buffer-string)))
-               (should (< (string-search "Changes" (buffer-string))
+               (should (< (string-search "Refreshing…" (buffer-string))
                           (string-search "Agent's latest reply" (buffer-string))
                           (string-search "Details" (buffer-string)))))
            (delete-window window)))))))
@@ -1274,10 +1363,17 @@ terminal's, on a pty.  Skips the test where it can't be made."
        (roost-task-info-mode)
        (setq roost--buffer-task-key (roost--key task))
        (roost--render-task-info)
-       ;; Sections are apart by half a line.
+       ;; Sections are apart by half a line, under a quiet heading: bold
+       ;; is the task's name, and colour what wants you.
        (goto-char (point-min))
-       (search-forward "\nChanges\n")
-       (should (equal (get-text-property (match-beginning 0) 'face) '(:height 0.5)))))))
+       (search-forward "\nPrompt\n")
+       (should (equal (get-text-property (match-beginning 0) 'face) '(:height 0.5)))
+       (should (eq (get-text-property (1+ (match-beginning 0)) 'face) 'roost-label))
+       ;; What it changed has no heading: how much, dim, after the gap.
+       (search-forward "\nRefreshing…\n")
+       (should (equal (get-text-property (match-beginning 0) 'face) '(:height 0.5)))
+       (should (eq (get-text-property (1+ (match-beginning 0)) 'face) 'roost-dim))
+       (should-not (string-match-p "^Changes$" (buffer-string)))))))
 
 (ert-deftest roost-quiet-refresh-retains-last-message ()
   (roost-test--isolated
@@ -4193,8 +4289,9 @@ terminal's, on a pty.  Skips the test where it can't be made."
                (roost--render-task-info)
                (roost--render-task-info)
                (should (string-prefix-p "fix auth" (buffer-string)))
-               (should (< (string-search "Changes" (buffer-string))
-                          (string-search "Details" (buffer-string))))))
+               (should (< (string-search "Refreshing…" (buffer-string))
+                          (string-search "? More" (buffer-string))
+                          (string-search "▸ Details" (buffer-string))))))
          (kill-buffer buffer))))))
 
 (ert-deftest roost-task-panel-redraws-keep-the-scroll-position ()
@@ -4245,8 +4342,24 @@ terminal's, on a pty.  Skips the test where it can't be made."
        (roost-task-info-mode)
        (setq roost--buffer-task-key (roost--key task))
        (roost--render-task-info)
-       (should (string-search "The worktree is gone" (buffer-string)))
-       (should-not (string-search "notes.py" (buffer-string))))
+       ;; Said first, under its title, and not how much it changed.
+       (should (string-match-p "\\`[^\n]+\n[^\n]+\n▲ The worktree is gone\n\nIts worktree is gone: " (buffer-string)))
+       (should-not (string-search "1 file" (buffer-string)))
+       (should-not (string-search "notes.py" (buffer-string)))
+       ;; What is still said of its changes stands apart from the prompt
+       ;; above it, as the line that says how much does for the rest.
+       ;; With Magit, a wide panel says where notes are written first.
+       (roost--cache-task "dev" (append '((name . "typo") (files ((path . "notes.py") (added . 2) (deleted . 0))))
+                                        (roost-test--task "1111111111111111")))
+       (roost--render-task-info)
+       (should (string-match-p "^fix authentication\n\n\\(?:In a file's diff[^\n]+\n\\)?typo also changes notes\\.py\n\nChecks$"
+                               (buffer-string)))
+       ;; Beside a terminal, where none of its other views is left to
+       ;; open, the row of keys starts at the menu's.
+       (cl-letf (((symbol-function 'roost--task-info-width) (lambda () 44)))
+         (roost--render-task-info))
+       (should (string-match-p " X forgets it\n\ntypo also changes notes\\.py\n\nChecks$" (buffer-string)))
+       (should (string-match-p "\n\n\\? More\n▸ fix authentication\n▸ Details\n\\'" (buffer-string))))
      ;; A pull request's thread on the whole file says so too.
      (should (string-search "worktree is gone"
                             (cadr (should-error (roost--visit-review-thread task '((path . "notes.py")))
@@ -4690,26 +4803,33 @@ terminal's, on a pty.  Skips the test where it can't be made."
        (roost-task-info-mode)
        (setq roost--buffer-task-key (roost--key task))
        (roost--render-task-info)
-       ;; Beside its changes, which are that branch's, and in its details.
-       ;; The next step has said which branch the worktree is on, so this
-       ;; says only whose the changes are, naming both, in its colour.
-       (should (string-search (format "These are feat's changes, not %s's.\n" own) (buffer-string)))
-       (should-not (string-search "The worktree is on" (buffer-string)))
+       ;; First, under its title, in its colour, and in its details: whose
+       ;; the changes below are, naming both branches.  The next step says
+       ;; how to finish it, so that is said once, there.
+       (should (string-match-p (concat "\\`[^\n]+\n[^\n]+\n"
+                                       (regexp-quote (format (concat "▲ On feat, not the task's branch %s, so the "
+                                                                     "changes below are feat's.\n\nIts worktree is on feat")
+                                                             own)))
+                               (buffer-string)))
+       (should (= (cl-count-if (lambda (line) (string-search "x discards the task" line))
+                               (split-string (buffer-string) "\n"))
+                  1))
        (goto-char (point-min))
-       (search-forward "These are feat's")
+       (search-forward "▲ On feat")
        (should (memq 'roost-status-permission (ensure-list (get-text-property (point) 'face))))
        (should (string-search "merges into main; the worktree is on feat\n" (buffer-string))))
-     ;; Stopped, the next step resumes it: the line beside its changes
-     ;; says how to finish it instead.
+     ;; Stopped, the next step resumes it: the line under its title says
+     ;; how to finish it instead.
      (setq task (funcall on "HEAD" '(status . "stopped") '(live)))
      (should (equal (roost--changes task t) "detached · 1 file +12 −3 · ↑1"))
      (with-temp-buffer
        (roost-task-info-mode)
        (setq roost--buffer-task-key (roost--key task))
        (roost--render-task-info)
-       (should (string-search (concat "The worktree is on a detached HEAD, not the task's branch " own
-                                      ", so these are the changes there: x discards the task; to merge its work "
-                                      "with m or P, bring its commits onto " own " and check that out there.\n")
+       (should (string-search (concat "\n▲ On a detached HEAD, not the task's branch " own
+                                      ", so the changes below are those there: x discards the task; to merge its work "
+                                      "with m or P, bring its commits onto " own " and check that out there.\n\n"
+                                      "RET or s resumes its conversation\n")
                               (buffer-string))))
      ;; Merged work there is no task to retire: its host won't retire it.
      ;; Commits on the branch since are still to merge, once brought over.
@@ -8190,7 +8310,7 @@ the host records, and the host what each sends."
        (roost-task-info-mode)
        (setq roost--buffer-task-key (roost--key task))
        (roost--render-task-info)
-       (should (string-match-p "^Changes\n± 12 files \\+520 −40 · 3 ahead\nIn docs/, scripts/, test/ and the top level\n  Uncommitted\n"
+       (should (string-match-p "\n\n± 12 files \\+520 −40 · 3 ahead\nIn docs/, scripts/, test/ and the top level\n  Uncommitted\n"
                                (buffer-string)))))))
 
 (ert-deftest roost-review-fixes-for-paths-layout-and-drafts ()
@@ -8463,8 +8583,9 @@ the draft stays.  The model found it: NewTaskDraft.first-kept-when-mixed.cfg."
      (should (eq (lookup-key transient-predicate-map (vector command)) #'transient--do-exit)))))
 
 ;; Beside a terminal, the panel's top goes to what you don't know yet:
-;; your own prompt is three lines, and how to write a note is taught in a
-;; wide panel.  An agent you've seen says so, as on its dashboard row.
+;; your own prompt is one line under the keys, and three when you unfold
+;; it, and how to write a note is taught in a wide panel.  An agent
+;; you've seen says so, as on its dashboard row.
 (ert-deftest roost-a-docked-panel-keeps-its-top-for-what-you-dont-know ()
   (roost-test--isolated
    (let* ((prompt (mapconcat (lambda (n) (format "Detail %d of what the report should do." n))
@@ -8472,18 +8593,27 @@ the draft stays.  The model found it: NewTaskDraft.first-kept-when-mixed.cfg."
           (task (roost--cache-task "dev" (append `((task . ,prompt) (diff . "1 file changed, 1 insertion(+)")
                                                    (files ((path . "login.py") (added . 1) (deleted . 0))))
                                                  (roost-test--task nil "ready"))))
-          (draw (lambda (width)
+          (draw (lambda (width &optional open)
                   (with-temp-buffer
                     (roost-task-info-mode)
-                    (setq roost--buffer-task-key (roost--key task))
+                    (setq roost--buffer-task-key (roost--key task)
+                          roost--panel-open open)
                     (cl-letf (((symbol-function 'roost--task-info-width) (lambda () width))
                               ((symbol-function 'magit-status) #'ignore))
                       (roost--render-task-info))
                     (buffer-substring-no-properties (point-min) (point-max))))))
-     (let ((narrow (funcall draw 44)) (wide (funcall draw 100)))
-       ;; Three lines and the button, rather than all 400 characters.
-       (should (string-match-p "^Prompt\n\\(?:[^\n]+\n\\)\\{3\\}Show the whole prompt$" narrow))
-       (should (string-match-p "…\nShow the whole prompt$" narrow))
+     (let ((narrow (funcall draw 44)) (unfolded (funcall draw 44 (list 'prompts))) (wide (funcall draw 100)))
+       ;; What came of it stands under the title, and the prompt is one
+       ;; line under the keys, cut to fit.
+       (should (string-match-p "\\`[^\n]+\n[^\n]+\n\n1 file \\+1 −0\n" narrow))
+       (should (string-match-p (concat "^r Magit  f Files  t Shell  \\? More\n"
+                                       "▸ Detail 1 of what the report should do\\. D…\n▸ Details\n\\'")
+                               narrow))
+       (should-not (string-match-p "^Prompt$\\|Show the whole prompt" narrow))
+       ;; Unfolded, three lines and the button, rather than all 400 characters.
+       (should (string-match-p "^▾ Prompts\n\\(?:[^\n]+\n\\)\\{3\\}Show the whole prompt$" unfolded))
+       (should (string-match-p "…\nShow the whole prompt$" unfolded))
+       (should (string-match-p "^Prompt\nDetail 1 of" wide))
        (should (string-match-p "Detail 8 of" wide))
        (should-not (string-match-p "writes a note" narrow))
        (should (string-match-p "In a file's diff, ; writes a note for the agent" wide))
@@ -8506,18 +8636,20 @@ the draft stays.  The model found it: NewTaskDraft.first-kept-when-mixed.cfg."
            (unwind-protect
                (let ((text (buffer-string)))
                  (should (string-match-p "^fix auth   ● ready for" text))
-                 (should (string-match-p "^Prompt\nfix authentication" text))
-                 (should (string-match-p "^Changes\n1 file \\+2 −0" text))
+                 (should (string-match-p "^Prompt\nfix authentication\n\n1 file \\+2 −0\n" text))
+                 (should-not (string-match-p "^Changes$" text))
                  ;; The menu has the actions.
                  (should-not (string-match-p "Merge and retire" text))
                  (should (string-match-p "^\\? opens the menu · g refreshes · q closes$" text))
                  (should (string-match-p "Branch       codex/roost/fix-auth-123456, from main, merges into main" text))
                  ;; In full, on a host named without its user.
                  (should (string-match-p "Worktree     /home/user/work/fix auth" text))
-                 ;; Line counts keep their colors inside the indented section.
+                 ;; Line counts keep their colors on the line that says how
+                 ;; much changed, which is dim.
                  (goto-char (point-min))
                  (search-forward "+2")
-                 (should (memq 'roost-diff-added (ensure-list (get-text-property (1- (point)) 'face))))
+                 (should (equal (get-text-property (1- (point)) 'face) '(roost-diff-added roost-dim)))
+                 (should (eq (get-text-property (line-beginning-position) 'face) 'roost-dim))
                  (should (string-match-p "Conversation abc-123" text))
                  (should-not display-line-numbers))
              (kill-buffer))))))))
@@ -10143,7 +10275,9 @@ field (FIELD . :none) is left out."
        (should (equal (substring-no-properties (roost--next-step merged))
                       "#12 from PROJ-1-fix is merged: x discards the task, keeping PROJ-1-fix"))
        (should (string-search "Merged on GitHub. x discards this task, keeping PROJ-1-fix." text))
-       (should (string-search "These are PROJ-1-fix's changes, not" text))
+       (should (string-search (format "\n▲ On PROJ-1-fix, not the task's branch %s, so the changes below are PROJ-1-fix's.\n"
+                                      own)
+                              text))
        (should (equal (roost--display-status merged) "ready"))
        (should (equal (substring-no-properties (roost--pr-marker merged)) "#12 merged"))
        (should-not (roost--pr-merges merged))
@@ -10216,13 +10350,16 @@ field (FIELD . :none) is left out."
        (should-not (string-match-p "has moved on" (buffer-string)))
        ;; Not since its agent last moved: since a branch did.
        (should (string-match-p "\\`fix auth   ● conflicts\n" (buffer-string))))
-     ;; While its agent works there is no next step, and the changes say it.
+     ;; While its agent works there is no next step, and the panel says it
+     ;; first, under its title.
      (with-temp-buffer
        (roost-task-info-mode)
        (setq roost--buffer-task-key (roost--key (roost--cache-task "dev" (roost-test--conflicted '(status . "running")))))
        (roost--render-task-info)
-       (should (string-match-p "^Merging it into main would conflict in ledger.py, report.py: u merges main into this task, to resolve them here first\\.$"
-                               (buffer-string))))
+       (should (string-match-p (concat "\\`[^\n]+\n[^\n]+\n▲ Merging it into main would conflict in ledger\\.py, report\\.py: "
+                                       "u merges main into this task, to resolve them here first\\.\n\n")
+                               (buffer-string)))
+       (should-not (string-match-p "has moved on" (buffer-string))))
      ;; What its agent last said comes first, and the next step is the same.
      (should (equal (funcall status '(seen)) "ready"))
      (should (string-prefix-p "Conflicts with main" (funcall step '(seen))))
@@ -11094,7 +11231,9 @@ field (FIELD . :none) is left out."
                                text))
        ;; The pull request's own line leaves them to those sections.
        (should (string-match-p "^Open$" text))
-       (should (< (string-search "Changes" text) (string-search "Checks" text) (string-search "Pull request" text))))
+       ;; After what it changed, which has no heading.
+       (should (< (string-search "\n  ledger.py  +4 −1\n" text) (string-search "Checks" text)
+                  (string-search "Pull request" text))))
      ;; Narrow, each thread keeps to its lines, the end of its path shown.
      (let ((text (funcall panel named 40)))
        (should (string-match-p "^  …/long/path/report\\.py  octo · outdated$" text))
