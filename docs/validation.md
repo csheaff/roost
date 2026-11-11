@@ -103,7 +103,14 @@ isolated tmux server, as `make contract-live` runs its sessions.
 - **Not checked.** A remote host; Codex, Pi and OpenCode, which take no
   tool of Roost's yet; the draft and rows in a GUI Emacs with a real
   agent; the tests of Roost in Magit, Evil and perspective.el, which need
-  newer packages than this machine's; `make formal`.
+  newer packages than this machine's.
+- **`make formal`.** With the jar `test/formal/check.py` pins and this
+  machine's Java, every model passed and every broken variant failed as
+  it should, in seventeen minutes on four cores. The models are as
+  merged, the one of offers included: none was extended for what is new
+  here (the branch a task merges into, attempts, an agent's activity, a
+  subagent's request outlasting its main agent's turn), so they say the
+  models still hold together, not that the new code keeps to them.
 
 ## UX review — 2026-11-09
 
