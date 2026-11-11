@@ -98,6 +98,9 @@
 (declare-function svg-rectangle "svg" (svg x y width height &rest args))
 (declare-function svg-line "svg" (svg x1 y1 x2 y2 &rest args))
 (declare-function svg-image "svg" (svg &rest props))
+(declare-function svg-circle "svg" (svg x y radius &rest args))
+(declare-function svg-polygon "svg" (svg points &rest args))
+(declare-function svg-polyline "svg" (svg points &rest args))
 (declare-function dired-get-marked-files "dired" (&optional localp arg filter distinguish-one-marked error))
 (declare-function ediff-files "ediff" (file-a file-b &optional startup-hooks))
 (declare-function evil-define-minor-mode-key "evil-core" (state mode key def &rest bindings))
@@ -9355,6 +9358,88 @@ for the mode line."
     (when motion (roost--lights-start))
     (plist-get light :image)))
 
+(defun roost--status-shape (status waiting)
+  "The shape that stands for STATUS, from `roost--attention-status'.
+WAITING is whether its task waits for you.  Colour says whether a task
+wants you; the shape says what its agent is doing, and says the first
+again to those who can't tell the colours apart: `asks' for an agent
+held up on you, `wrong' for one that failed, `turn' for one that
+finished, `working', `starting', `stopped', `merged', `offline', and
+`idle' for the rest, which wait for nothing."
+  (pcase status
+    ((or "permission" "prompt") 'asks)
+    ((or "failed" "crashed" "error" "ci failed") 'wrong)
+    ((or "ready" "interrupted" "to merge" "comments" "conflicts") 'turn)
+    ((or "running" "background") 'working)
+    ("starting" 'starting)
+    ("stopped" 'stopped)
+    ("merged" 'merged)
+    ("offline" 'offline)
+    ("exited" (if waiting 'wrong 'idle))
+    (_ 'idle)))
+
+(defvar roost--status-shapes (make-hash-table :test 'equal)
+  "The images of `roost--status-shape-image', by (SHAPE COLOUR WIDTH HEIGHT).")
+
+(defun roost--status-shape-image (shape face)
+  "An image of SHAPE, from `roost--status-shape', in FACE's colour, or nil.
+A column wide and no taller than a line of text, so that it stands
+where a status's dot does and moves nothing.  Nil where `roost-decorate'
+is off or the display draws no such image; then the dot stands."
+  (when (and (roost--decorated-p) (display-images-p) (image-type-available-p 'svg)
+             (require 'svg nil t))
+    (let* ((colour (or (face-foreground face nil 'default) "gray50"))
+           (width (default-font-width))
+           (height (default-font-height))
+           (key (list shape colour width height)))
+      (or (gethash key roost--status-shapes)
+          (let* ((svg (svg-create width height))
+                 (cx (/ width 2.0))
+                 (cy (/ height 2.0))
+                 ;; As wide as a column allows, with a little air each side.
+                 (r (* 0.39 width))
+                 (line (max 1.0 (* 0.15 width)))
+                 (stroke (list :fill "none" :stroke colour :stroke-width line
+                               :stroke-linecap "round" :stroke-linejoin "round")))
+            (pcase shape
+              ;; A disc: yours to look at.
+              ('turn (svg-circle svg cx cy r :fill colour))
+              ;; A disc in a ring: it can't go on until you answer.
+              ('asks (svg-circle svg cx cy (* 0.4 r) :fill colour)
+                     (apply #'svg-circle svg cx cy (- r (/ line 2)) stroke))
+              ;; As the mark before what is wrong in a task's panel.
+              ('wrong (svg-polygon svg (list (cons cx (- cy r))
+                                             (cons (+ cx r) (+ cy (* 0.8 r)))
+                                             (cons (- cx r) (+ cy (* 0.8 r))))
+                                   :fill colour :stroke colour :stroke-width (* 0.5 line)
+                                   :stroke-linejoin "round"))
+              ;; Three quarters of a ring, as a wheel that turns.
+              ('working (let ((ring (- r (/ line 2))))
+                          (apply #'svg-circle svg cx cy ring
+                                 :stroke-dasharray (format "%.2f %.2f" (* 1.5 float-pi ring)
+                                                           (* 2 float-pi ring))
+                                 stroke)))
+              ;; A ring of dots: not there yet.
+              ('starting (let ((ring (- r (/ line 2))))
+                           (apply #'svg-circle svg cx cy ring
+                                  :stroke-dasharray (format "0.01 %.2f" (/ (* 2 float-pi ring) 6))
+                                  stroke)))
+              ;; Two bars: paused, and yours to resume.
+              ('stopped (dolist (x (list (- cx (* 0.45 r)) (+ cx (* 0.45 r))))
+                          (apply #'svg-line svg x (- cy (* 0.75 r)) x (+ cy (* 0.75 r)) stroke)))
+              ;; A tick: its work is in.
+              ('merged (apply #'svg-polyline svg
+                              (list (cons (- cx r) (+ cy (* 0.1 r)))
+                                    (cons (- cx (* 0.3 r)) (+ cy (* 0.8 r)))
+                                    (cons (+ cx r) (- cy (* 0.7 r))))
+                              stroke))
+              ;; A dash: its host can't be reached.
+              ('offline (apply #'svg-line svg (- cx r) cy (+ cx r) cy stroke))
+              ;; A small dot: nothing to do here.
+              (_ (svg-circle svg cx cy (* 0.45 r) :fill colour)))
+            ;; A pixel for a pixel: scaled, it would outgrow its column.
+            (puthash key (svg-image svg :ascent 'center :scale 1) roost--status-shapes))))))
+
 (defun roost--status-light (task place &optional inline)
   "TASK's status dot at PLACE: a moving light when `roost--animations-p'.
 The light shows in the window's left margin, which no highlight covers,
@@ -9363,7 +9448,13 @@ dot.  Otherwise this is the dot, in TASK's status face."
   (let* ((status (roost--attention-status task))
          (face (roost--status-face status)))
     (if (not (roost--animations-p))
-        (propertize "●" 'face face)
+        (let ((dot (propertize "●" 'face face)))
+          ;; Where the display draws them, a shape of its own for each
+          ;; kind of status, in place of the dot.
+          (if-let* ((shape (roost--status-shape-image
+                            (roost--status-shape status (roost--waiting-p task)) face)))
+              (propertize dot 'display shape)
+            dot))
       ;; The margin has a face of its own since Emacs 31.
       (let ((image (roost--light place (roost--key task) (roost--light-motion task) face
                                  (if (and (not inline) (facep 'margin)) 'margin 'default)
@@ -12713,11 +12804,20 @@ under a dozen columns, `roost--status-mark' stands for it."
     (let ((row (concat " " indent name
                        (when label
                          (concat (make-string (max 1 (- room (string-width name) (string-width label))) ?\s)
-                                 ;; With a mark's own weight.
+                                 ;; With a mark's own weight.  As in the
+                                 ;; dashboard, the word of an agent that
+                                 ;; can't go on without you, or failed, is
+                                 ;; on a tint of its colour.
                                  (propertize label 'face
                                              (if-let* ((own (get-text-property 0 'face label)))
                                                  (delq nil (list own face))
-                                               face)))))))
+                                               face)
+                                             'roost-tint
+                                             (and (equal label status) (not idle)
+                                                  (car (memq (roost--status-word-face attention)
+                                                             '(roost-status-permission
+                                                               roost-status-failed))))))))))
+      (setq row (roost--tint-marked row))
       ;; Behind the row's own faces, so its status keeps its colour.
       (when current
         (add-face-text-property 0 (length row) 'roost-current t row))
@@ -13679,9 +13779,15 @@ In a narrow window, a long detail or hint goes on below its own start."
                         'help-echo path 'wrap-prefix (make-string (min 20 (- (point) start)) ?\s))
             "\n"))
   (when (and hint (memq ok '(nil optional)))
-    (insert (propertize (concat "      " hint "\n")
-                        'face (if ok 'roost-dim 'roost-status-permission)
-                        'wrap-prefix "      "))))
+    (let ((line (propertize (concat "      " hint "\n")
+                            'face (if ok 'roost-dim 'roost-status-permission))))
+      ;; What to do about a check that failed, on a band: it is what
+      ;; you came to this buffer for.
+      (if-let* (((not ok))
+                (tint (roost--tint 'roost-status-permission)))
+          (insert (propertize (roost--banded line 'roost-status-permission)
+                              'wrap-prefix (propertize "      " 'face (list :background tint))))
+        (insert (propertize line 'wrap-prefix "      "))))))
 
 (defun roost--render-doctor ()
   "Redraw the setup check from `roost--doctor-results'."
@@ -13691,12 +13797,13 @@ In a narrow window, a long detail or hint goes on below its own start."
             (default (roost--agent-name roost-default-agent)))
         (erase-buffer)
         (insert (propertize "Roost setup check" 'face 'roost-title) "\n\n"
-                (propertize "Emacs" 'face 'roost-heading) "\n")
+                (roost--ruled (concat (propertize "Emacs" 'face 'roost-heading) "\n")))
         (dolist (check (roost--doctor-local-checks))
           (apply #'roost--doctor-line check))
         (dolist (entry roost--doctor-results)
           (let ((result (cdr entry)))
-            (insert "\n" (propertize (roost--host-label (car entry)) 'face 'roost-heading) "\n")
+            (insert "\n" (roost--ruled (concat (propertize (roost--host-label (car entry)) 'face 'roost-heading)
+                                                "\n")))
             (cond
              ((eq result 'pending) (insert (propertize "  Checking…\n" 'face 'roost-dim)))
              ((eq (car-safe result) 'error)
@@ -13739,9 +13846,9 @@ In a narrow window, a long detail or hint goes on below its own start."
                                              (format "Optional: needed only for %s tasks" name))
                                             (t (format "For %s tasks: %s" name hint)))
                                       (alist-get 'path check))))))))
-        (insert "\n" (propertize (substitute-command-keys
-                                   "\\<roost-doctor-mode-map>\\[roost-doctor] checks again · C-u \\[roost-doctor] checks another host")
-                                  'face 'roost-dim)
+        (insert "\n" (roost--quiet-but-keys
+                       (substitute-command-keys
+                        "\\<roost-doctor-mode-map>\\[roost-doctor] checks again · C-u \\[roost-doctor] checks another host"))
                 "\n")
         (goto-char (point-min))))))
 
@@ -13809,7 +13916,18 @@ leaves out the status light, for a count no mode line shows."
                                  (propertize "●" 'face face 'display
                                              (roost--light 'mode-line 'waiting (and (> blocked 0) 'pulse)
                                                            face 'mode-line-active))
-                               (propertize "●" 'face face))
+                               ;; In the shape the lists give it, where
+                               ;; the display draws one.
+                               (let ((dot (propertize "●" 'face face)))
+                                 (if-let* (((not plain))
+                                           (shape (roost--status-shape-image
+                                                   (pcase face
+                                                     ('roost-status-permission 'asks)
+                                                     ('roost-status-failed 'wrong)
+                                                     (_ 'turn))
+                                                   face)))
+                                     (propertize dot 'display shape)
+                                   dot)))
                              ;; With a mark while one asks and holds its agent
                              ;; up: colour alone tells that from one that
                              ;; finished only to those who see the colours apart.

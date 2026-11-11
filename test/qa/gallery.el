@@ -66,7 +66,7 @@ in a window just as wide as it was drawn for."
           (set-window-buffer window buffer)
           (set-window-fringes window (if list 0 8) (if list 0 8))
           (when (cdr (memq column columns))
-            (setq window (split-window window (+ width (if list 1 3)) t))))))))
+            (setq window (split-window window (+ width (if list 2 3)) t))))))))
 
 (defun roost-gallery--capture (file)
   "Capture the display as FILE."
@@ -103,12 +103,22 @@ in a window just as wide as it was drawn for."
      (list (cons "search" (cons 92 (roost-gallery--copy 'search "running" 92)))
            (cons "workload" (cons 92 (roost-gallery--copy 'workload "running" 92)))))
     (roost-gallery--capture (format "%ssearch-workload.png" out))
-    ;; The dashboard shows every state at once.  Not the sidebar, whose
-    ;; rows are laid out for the window they are in: `make qa' shows it.
+    ;; The dashboard shows every state at once, and so does the sidebar,
+    ;; here at the widths it is most often kept at.
     (roost-gallery--show
      (list (cons "dashboard" (cons 180 (roost-gallery--copy 'dashboard "permission" 180))))
      t)
     (roost-gallery--capture (format "%sdashboard.png" out))
+    (roost-gallery--show
+     (mapcar (lambda (width)
+               ;; It fits the window it is in, so in a frame that wide.
+               (set-frame-size nil (1+ width) 52)
+               (cons (format "sidebar, %d columns" width)
+                     (cons width (prog1 (roost-gallery--copy 'sidebar "permission" width)
+                                   (set-frame-size nil 190 52)))))
+             '(30 38 48))
+     t)
+    (roost-gallery--capture (format "%ssidebar.png" out))
     (message "Roost's gallery is in %s" out)
     (kill-emacs 0)))
 

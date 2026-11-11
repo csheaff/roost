@@ -869,8 +869,12 @@ header line. A failed creation keeps the draft.
 - `roost-decorate` (t): draw the views with more than their text: a tint
   behind a status that wants you, a band behind what is wrong with a task,
   a hairline under each heading, line counts in a column, a little air
-  between a list's rows. The colours are made from your theme's, and no
-  text differs; nil draws the same words without any of it.
+  between a list's rows, and a status light in the shape of its status
+  (a disc in a ring asks, a disc finished, a triangle failed, most of a
+  ring is at work, a ring of dots is starting, two bars stopped, a tick
+  merged, a dash is a host out of reach, a small dot waits for nothing).
+  The colours are made from your theme's, and no text differs; nil draws
+  the same words without any of it, each light a dot.
 - `roost-remote-control` (nil): start each Claude Code task with Remote
   Control (`--remote-control`, `--name`), named for the task, so it shows
   in the Claude app and at claude.ai/code, which notify your phone when

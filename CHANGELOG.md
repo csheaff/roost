@@ -18,6 +18,18 @@ What each release changes, and what to do when upgrading. Newest first.
   differs, so a terminal with few colours shows the same words without
   them. `(setq roost-decorate nil)` turns it all off. If you set
   `roost-field` to inherit `link`, the draft's fields are underlined again.
+- A status light has a shape as well as a colour, in the dashboard, a task
+  panel's title and the mode line, where Emacs can draw one: a disc in a
+  ring for an agent that can't go on until you answer, a disc for one that
+  finished, a triangle for one that failed, most of a ring for one at
+  work, a ring of dots for one starting, two bars for one stopped, a tick
+  for a task that is merged, a dash for a host out of reach, and a small
+  dot for the rest. So grey says which of several things no longer, and
+  the colours aren't all that tells a task that needs you from one that
+  doesn't. In the sidebar the word of an agent that asks or failed is on a
+  tint, as in the dashboard, and the setup check rules off each host and
+  puts what to do about a failed check on a band. With `roost-decorate`
+  off, or in a terminal, the lights are the dots they were.
 
 - Several attempts at one prompt. `C-c C-x` in the new task draft sets how
   many tasks it makes from the prompt: a number up to 5, each by the

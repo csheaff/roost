@@ -5253,6 +5253,21 @@ Read from the layout transient keeps, whose form varies by version."
        (should (equal (roost--status-mark status t) "?")))
      (dolist (status '("crashed" "error" "ci failed"))
        (should (equal (roost--status-mark status t) "!")))
+     ;; A status light's shape says what its colour doesn't: grey is an
+     ;; agent at work, one starting, one stopped, a task merged, a host
+     ;; out of reach, or nothing to do.
+     (should (equal (mapcar (lambda (status) (roost--status-shape status nil))
+                            '("permission" "prompt" "ready" "to merge" "comments" "conflicts"
+                              "failed" "crashed" "ci failed" "running" "background" "starting"
+                              "stopped" "merged" "offline" "idle" "exited"))
+                    '(asks asks turn turn turn turn wrong wrong wrong working working starting
+                      stopped merged offline idle idle)))
+     (should (eq (roost--status-shape "exited" t) 'wrong))
+     ;; Where no image can be drawn, as here, the dot stands as it was.
+     (should-not (roost--status-shape-image 'asks 'roost-status-permission))
+     (let ((light (roost--status-light asking 'dashboard)))
+       (should (equal (substring-no-properties light) "●"))
+       (should-not (get-text-property 0 'display light)))
      ;; The row's help says the status in full, whatever its width.
      (cl-letf (((symbol-function 'roost--narrowest-width) (lambda (&rest _) 16)))
        (with-temp-buffer
