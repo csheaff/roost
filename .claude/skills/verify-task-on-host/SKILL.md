@@ -53,7 +53,7 @@ doesn't: interleavings, and the moments between a read and the act on it.
 python3 test/formal/check.py task_on_host
 ```
 
-About 105 s, twenty-three runs. Four must pass: `TaskOnHost.cfg`, and the
+About 80 s, twenty-three runs. Four must pass: `TaskOnHost.cfg`, and the
 model again at other bounds, as the runner takes one passing config per
 model and all of it at once takes too long. `TaskOnHostRetarget.cfg` has a
 retarget and a fork's start, `TaskOnHostRetargetWork.cfg` those with work
