@@ -2727,6 +2727,104 @@ class Lifecycle(unittest.TestCase):
         self.assertNotEqual(independent["baseCommit"], child["baseCommit"])
         self.assertTrue(self.request("retire", id=independent["id"])["ok"])
 
+    def test_a_fork_continues_the_conversation_with_the_work_as_it_stands(self):
+        source = self.create(name="source")
+        session = self.wait(source, "ready")["agentSession"]
+        wt = Path(source["worktree"])
+        (wt / "hello").write_text("changed, not committed\n")
+        (wt / "new-file").write_text("made, not added\n")
+        (wt / "staged").write_text("staged\n")
+        self.git("add", "staged", cwd=wt)
+        status = lambda worktree: roost.git(worktree, "status", "--porcelain").stdout.splitlines()
+        before = status(wt)
+        reply = self.request("create", directory=str(wt), name="fork", socket=self.socket, base="HEAD",
+                             forkFrom=source["id"], prompt="-try another way", command=[sys.executable, str(FAKE)])
+        self.assertTrue(reply["ok"], reply)
+        fork = self.wait(reply["result"], "ready")
+        self.assertEqual(fork["forkSession"], session)
+        self.assertEqual(fork["forkedFrom"], dict(id=source["id"], name="source"))
+        # Your prompt, as you wrote it; the agent hears the note before it.
+        self.assertEqual(fork["prompt"], "-try another way")
+        self.assertEqual(fork["integrationBranch"], "main")
+        self.assertEqual(fork["baseCommit"], self.git("rev-parse", "HEAD", cwd=wt))
+        # Its agent goes on under a session of its own, and the source's stays.
+        self.assertNotEqual(fork["agentSession"], session)
+        self.assertEqual(roost.Store(str(self.state)).read(source["id"])["agentSession"], session)
+        # The work as the conversation left it, uncommitted there as here,
+        # and nothing staged in the fork's index; the source's as it was.
+        fork_wt = Path(fork["worktree"])
+        self.assertEqual((fork_wt / "hello").read_text(), "changed, not committed\n")
+        self.assertEqual((fork_wt / "new-file").read_text(), "made, not added\n")
+        self.assertEqual(status(fork_wt), [" M hello", "?? new-file", "?? staged"])
+        self.assertEqual(status(wt), before)
+        # A resume goes back to the fork's own conversation.
+        self.assertTrue(self.request("stop", id=fork["id"])["ok"])
+        self.assertTrue(self.request("resume", id=fork["id"])["ok"])
+        self.assertEqual(self.wait(fork, "ready")["agentSession"], fork["agentSession"])
+
+    def test_a_fork_of_a_conversation_is_refused_where_it_cannot_go_on(self):
+        source = self.create(name="source")
+        store = roost.Store(str(self.state))
+        worktrees = self.git("worktree", "list", "--porcelain")
+
+        def refused(said, **args):
+            fields = dict(directory=source["worktree"], name="fork", socket=self.socket, base="HEAD",
+                          forkFrom=source["id"], command=[sys.executable, str(FAKE)])
+            reply = self.request("create", **dict(fields, **args))
+            self.assertFalse(reply["ok"], reply)
+            self.assertIn(said, reply["error"])
+            self.assertEqual(self.git("worktree", "list", "--porcelain"), worktrees)
+
+        refused("which codex can't continue", agent="codex", command=[sys.executable, str(FAKE_AGENT), "codex"])
+        refused("starts where its work stands, not at main", base="main")
+        refused("Invalid task ID", forkFrom="../../etc")
+        record = store.read(source["id"])
+        # Nor from a worktree that is going, or half gone.
+        store.save(dict(record, removing="0" * 32))
+        refused("was removing this task's worktree")
+        store.save(dict(record, agentSession=None, claudeSession=None))
+        refused("hasn't started a conversation yet")
+
+    def test_codex_pi_and_opencode_forks_go_on_in_sessions_of_their_own(self):
+        for agent in ("codex", "pi", "opencode"):
+            with self.subTest(agent=agent):
+                command = [sys.executable, str(FAKE_AGENT), agent]
+                source = self.create(name=agent, agent=agent, command=command)
+                self.assertTrue(self.request("send", id=source["id"], text="first")["ok"])
+                session = self.wait(source, "ready", event="Stop")["agentSession"]
+                reply = self.request("create", directory=source["worktree"], name=agent + " fork", agent=agent,
+                                     socket=self.socket, base="HEAD", forkFrom=source["id"], prompt="another way",
+                                     command=command)
+                self.assertTrue(reply["ok"], reply)
+                # OpenCode starts its session with the first prompt; the
+                # fakes of the others only start theirs.
+                fork = self.wait(reply["result"], "ready", event="Stop" if agent == "opencode" else None)
+                self.assertEqual(fork["forkSession"], session)
+                self.assertTrue(fork["agentSession"])
+                self.assertNotEqual(fork["agentSession"], session)
+
+    def test_each_agent_starts_a_fork_from_a_copy_of_the_conversation(self):
+        store = roost.Store(str(self.state))
+        prompt = "-try another way"
+        for agent, tail in (("claude", ["--resume", "old", "--fork-session", "--", prompt]),
+                            ("codex", ["fork", "--", "old", prompt]),
+                            ("pi", ["--fork", "old", "\n" + prompt]),
+                            ("opencode", ["--session", "old", "--fork", "--prompt=" + prompt])):
+            with self.subTest(agent=agent):
+                adapter = roost.AGENTS[agent]
+                task = dict(id="1234567890abcdef", agent=agent, command=list(adapter.default_command),
+                            prompt=prompt, forkSession="old", runId="run")
+                # The agent hears it works in a new worktree before your prompt.
+                note = roost.FORK_NOTE % ("fix auth", "fix auth")
+                told = adapter.launch(store, dict(task, forkedFrom=dict(id="0" * 16, name="fix auth")), False)
+                self.assertTrue(any(arg.endswith(note + "\n\n" + prompt) for arg in told), told)
+                self.assertEqual(adapter.launch(store, task, False)[-len(tail):], tail)
+                # Until the fork's own conversation is known, a resume forks again.
+                self.assertEqual(adapter.launch(store, task, True)[-len(tail):], tail)
+                own = adapter.launch(store, dict(task, agentSession="new"), True)
+                self.assertNotIn("old", own)
+                self.assertIn("new", own)
+
     def test_shell_reuses_worktree_pane_and_stops_with_task(self):
         task = self.create()
         reply = self.request("shell", id=task["id"])
