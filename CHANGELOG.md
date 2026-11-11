@@ -4,6 +4,21 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Several attempts at one prompt. `C-c C-x` in the new task draft sets how
+  many tasks it makes from the prompt: a number up to 5, each by the
+  draft's agent, or agents' names, as `claude codex`, one by each. `C-c C-c`
+  creates them at once, the first named as the draft is and the others
+  with 2, 3 and so on after that name; the first opens, as one task does.
+  `=` on any of them (`roost-compare-attempts`), in the dashboard, the
+  sidebar or its panel, lists every file any attempt changed, with a column
+  for each attempt: what it did to the file, or `·` where it left it alone.
+  `RET` on a file there compares it between two attempts in Ediff, and `m`
+  merges an attempt and retires it. The others stay until you finish them,
+  as with `x` on each: Roost deletes work only when you discard a task. The
+  dashboard and sidebar keep the attempts together, in order, and a task's
+  panel says which attempt it is under Details. Nothing to do when
+  upgrading: a draft makes one task unless you ask for more, as its new
+  Attempts line says.
 - `M-x roost-copy-attach-command`, also on a task's right-click menu,
   copies the shell command that attaches another terminal to a task's
   agent, as `ssh -t dev 'tmux -L main attach -t =roost-…'`: for a phone's

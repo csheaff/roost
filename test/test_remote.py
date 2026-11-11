@@ -9387,6 +9387,52 @@ print(json.dumps(dict(data=data)))
         reply = self.request("create", directory=str(self.repo), name="odd", socket=self.socket, createId="../x")
         self.assertEqual(reply["error"], "Invalid creation ID")
 
+    def test_an_attempt_at_a_prompt_records_which_it_is(self):
+        # Several tasks from one draft: each says its group, the draft's
+        # creation ID, its number and how many there are.
+        group = "ab" * 8
+        first = self.create(name="fix", createId=group, attempt=dict(group=group, n=1, of=2))
+        second = self.create(name="fix 2", createId=group + "02", attempt=dict(group=group, n=2, of=2))
+        self.assertEqual(first["attempt"], dict(group=group, n=1, of=2))
+        self.assertNotEqual(first["branch"], second["branch"])
+        self.assertEqual(sorted((task["name"], task["attempt"]["n"], task["attempt"]["group"])
+                                for task in self.request("list")["result"]),
+                         [("fix", 1, group), ("fix 2", 2, group)])
+        # One with no such field is an ordinary task.
+        plain = self.create(name="plain")
+        self.assertNotIn("attempt", plain)
+        self.assertNotIn("attempt", roost.Store(str(self.state)).read(plain["id"]))
+
+    def test_an_attempt_asked_for_again_is_made_once(self):
+        # Each attempt after the first has an ID made from the draft's, the
+        # same each time the draft asks: after a lost reply it makes none twice.
+        group = "cd" * 8
+        made = self.create(name="fix 3", createId=group + "03", attempt=dict(group=group, n=3, of=3))
+        again = self.request("create", directory=str(self.repo), name="fix 3", socket=self.socket,
+                             command=[sys.executable, str(FAKE)], createId=group + "03",
+                             attempt=dict(group=group, n=3, of=3))
+        self.assertTrue(again["ok"], again)
+        self.assertEqual(again["result"]["id"], made["id"])
+        self.assertIs(again["result"]["alreadyMade"], True)
+        self.assertEqual(again["result"]["attempt"], dict(group=group, n=3, of=3))
+        self.assertEqual([record["id"] for record in roost.Store(str(self.state)).all()], [made["id"]])
+        self.assertEqual(self.task_branches(), [made["branch"]])
+
+    def test_an_attempt_that_says_it_wrong_makes_nothing(self):
+        group = "ef" * 8
+        for attempt in ("2 of 3", [group, 1, 2], {}, dict(group=group, n=1), dict(group=group, of=2),
+                        dict(n=1, of=2), dict(group="../x", n=1, of=2), dict(group=7, n=1, of=2),
+                        dict(group=group, n=0, of=2), dict(group=group, n=3, of=2), dict(group=group, n=1, of=6),
+                        dict(group=group, n="1", of=2), dict(group=group, n=1.0, of=2),
+                        dict(group=group, n=True, of=True)):
+            with self.subTest(attempt=attempt):
+                reply = self.request("create", directory=str(self.repo), name="odd", socket=self.socket,
+                                     command=[sys.executable, str(FAKE)], attempt=attempt)
+                self.assertFalse(reply["ok"], reply)
+                self.assertTrue(reply["error"].startswith("Invalid attempt"), reply)
+        self.assertEqual(self.request("list")["result"], [])
+        self.assertEqual(self.task_branches(), [])
+
     def test_asking_again_waits_for_the_task_still_being_made(self):
         hooks = self.root / "hooks"
         hooks.mkdir()

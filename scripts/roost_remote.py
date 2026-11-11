@@ -2031,6 +2031,27 @@ def create(store, request):
         return dict(made, alreadyMade=True) if made else make_task(store, request, create_id)
 
 
+# The most tasks one draft makes from one prompt, to compare.
+ATTEMPTS = 5
+
+
+def attempt_of(request):
+    """Which of several attempts at one prompt REQUEST asks for, as a task
+    records it: the group they share, the draft's creation ID, this one's
+    number and how many there are. None for a task that is no attempt."""
+    attempt = request.get("attempt")
+    if attempt is None:
+        return None
+    given = attempt if isinstance(attempt, dict) else {}
+    group, n, of = given.get("group"), given.get("n"), given.get("of")
+    if not (isinstance(group, str) and CREATE_ID.fullmatch(group)
+            and all(isinstance(count, int) and not isinstance(count, bool) for count in (n, of))
+            and 1 <= n <= of <= ATTEMPTS):
+        raise RoostError("Invalid attempt: it names the group it is one of, its number and how many "
+                         "there are, %d at most" % ATTEMPTS)
+    return dict(group=group, n=n, of=of)
+
+
 CONVERSATIONS = "conversations"
 
 
@@ -2116,6 +2137,8 @@ def make_task(store, request, create_id):
     """Create a worktree and agent window. Preparation and `git worktree add`
     run without the registry lock; only the tmux spawn is serialized."""
     conversation = request.get("conversation") is True
+    # Before anything is made.
+    attempt = attempt_of(request)
     if conversation:
         request = dict(request, directory=str(conversation_repository(store)), base=None)
     directory = str(Path(request["directory"]).expanduser().resolve())
@@ -2208,6 +2231,9 @@ def make_task(store, request, create_id):
         task["createId"] = create_id
     if conversation:
         task["conversation"] = True
+    # One of several tasks made from one prompt, which Emacs compares.
+    if attempt:
+        task["attempt"] = attempt
     issue = request.get("issue")
     if isinstance(issue, dict) and isinstance(issue.get("number"), int) and not isinstance(issue["number"], bool):
         task["issue"] = dict(number=issue["number"], title=text(issue.get("title")),
