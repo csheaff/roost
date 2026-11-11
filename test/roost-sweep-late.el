@@ -1218,12 +1218,13 @@ Return what broke, a list of (RULE . TEXT)."
           (when (or (null (plist-get question :origin))
                     (eq (plist-get question :origin) (plist-get spec :origin)))
             (dolist (form (roost-sweep-late--forms spec))
-              (setq problems
-                    (roost-sweep--add-problems
-                     (delete-dups (mapcar (lambda (found) (format "%s: %s" (car found) (cdr found)))
-                                          (roost-sweep-late--question-case spec question form)))
-                     (format "%s, %s left open, then %s" command name (roost-sweep-late--form-name form))
-                     problems)))))))
+              (when (roost-test--mine-p)
+                (setq problems
+                      (roost-sweep--add-problems
+                       (delete-dups (mapcar (lambda (found) (format "%s: %s" (car found) (cdr found)))
+                                            (roost-sweep-late--question-case spec question form)))
+                       (format "%s, %s left open, then %s" command name (roost-sweep-late--form-name form))
+                       problems))))))))
     problems))
 
 ;;;; Running a case
@@ -1380,7 +1381,7 @@ Return their problems, each (TEXT PLACE...), as `roost-sweep--report' takes them
                         (and (plist-get interrupter :when)
                              (not (plist-get spec (plist-get interrupter :when))))
                         (and (plist-get spec :wait) (not (plist-get interrupter :while-waiting))))
-              (dolist (form (roost-sweep-late--forms spec))
+              (dolist (form (and (roost-test--mine-p) (roost-sweep-late--forms spec)))
                 (cl-dolist (answer '(t nil))
                   (let* ((result (roost-sweep-late--case spec interrupter form answer))
                          (place (format "%s, %s, then %s%s" command name (roost-sweep-late--form-name form)
@@ -1399,12 +1400,14 @@ Return their problems, each (TEXT PLACE...), as `roost-sweep--report' takes them
   (seq-difference (mapcar #'car roost-sweep-late--interrupters) leaving-out))
 
 (ert-deftest roost-sweep-late-replies ()
+  :tags '(sliced)
   ;; Each command against all you might do meanwhile, each form of reply.
   (roost-sweep--report
    (roost-sweep-late--sweep (mapcar #'car roost-sweep-late--commands)
                             (roost-sweep-late--interrupter-names 'delete-frame))))
 
 (ert-deftest roost-sweep-late-replies-to-a-frame-since-deleted ()
+  :tags '(sliced)
   (skip-unless (let ((frame (roost-sweep-late--make-frame)))
                  (when frame (delete-frame frame t))
                  frame))
@@ -1416,6 +1419,7 @@ Return their problems, each (TEXT PLACE...), as `roost-sweep--report' takes them
   "Commands to try with the sidebar and task panel on: what shows, closes or redraws them.")
 
 (ert-deftest roost-sweep-late-replies-beside-the-sidebar-and-panel ()
+  :tags '(sliced)
   (roost-sweep-late--with-room
     (let ((roost-sweep-late--sides t))
       (roost-sweep--report
@@ -1439,6 +1443,7 @@ Return their problems, each (TEXT PLACE...), as `roost-sweep--report' takes them
   "Commands from a draft, which a question of the draft's can be open beside.")
 
 (ert-deftest roost-sweep-late-replies-to-questions-left-open ()
+  :tags '(sliced)
   (roost-sweep--report
    (roost-sweep-late--question-sweep
     (append roost-sweep-late--drafts-pending

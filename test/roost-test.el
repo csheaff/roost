@@ -7,6 +7,49 @@
 (defvar persp-suppress-no-prefix-key-warning t)
 (defvar evil-want-keybinding)
 
+;;;; A share of the tests
+
+;; `make test' runs the suite in several Emacs at once (see test/run.py).
+;; Each takes every Nth test, and every Nth case of the sweeps, which are
+;; most of the time: those tests carry the tag `sliced' and run in each.
+
+(defconst roost-test--share
+  (when-let* ((share (getenv "ROOST_TEST_SHARE"))
+              ((string-match "\\`\\([0-9]+\\)/\\([0-9]+\\)\\'" share)))
+    (cons (string-to-number (match-string 1 share)) (string-to-number (match-string 2 share))))
+  "This Emacs's share of the tests, as (INDEX . OF), or nil for all of them.")
+
+(defconst roost-test--sample
+  (max 1 (string-to-number (or (getenv "ROOST_TEST_SAMPLE") "1")))
+  "Take one case in this many of each sweep, as `make quick' does.")
+
+(defvar roost-test--dealt 0
+  "How many cases the sweeps have dealt out, in the order every share sees.")
+
+(defun roost-test--mine-p ()
+  "Deal out a sweep's next case; non-nil when this Emacs is to run it."
+  (let ((case (cl-incf roost-test--dealt)))
+    (and (zerop (mod case roost-test--sample))
+         (or (null roost-test--share)
+             (= (mod (/ case roost-test--sample) (cdr roost-test--share)) (car roost-test--share))))))
+
+(defun roost-test-run-share ()
+  "Run this Emacs's share of the tests and exit, for test/run.py.
+ROOST_TEST_MATCH, a regexp, keeps to the tests whose names match it."
+  (let* ((match (getenv "ROOST_TEST_MATCH"))
+         (tests (seq-filter (lambda (test)
+                              (or (null match) (string= match "")
+                                  (string-match-p match (symbol-name (ert-test-name test)))))
+                            (ert-select-tests t t)))
+         (index -1)
+         mine)
+    (dolist (test (sort tests (lambda (a b) (string< (ert-test-name a) (ert-test-name b)))))
+      (when (or (memq 'sliced (ert-test-tags test))
+                (null roost-test--share)
+                (= (mod (cl-incf index) (cdr roost-test--share)) (car roost-test--share)))
+        (push (ert-test-name test) mine)))
+    (ert-run-tests-batch-and-exit (if mine `(member ,@(nreverse mine)) '(tag none-of-them)))))
+
 (defconst roost-test--report-turn (symbol-function 'roost--report-turn)
   "Roost's `roost--report-turn', which `roost-test--isolated' stubs.")
 

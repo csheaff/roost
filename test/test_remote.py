@@ -1950,6 +1950,8 @@ class Lifecycle(unittest.TestCase):
         self.git("commit", "-qam", "fix", cwd=wt)
         before = self.git("rev-parse", "main")
         self.git("config", "commit.gpgsign", "true")
+        # Whatever format your own configuration signs with.
+        self.git("config", "gpg.format", "openpgp")
         self.git("config", "gpg.program", "false")
         error = self.request("merge", id=task["id"], style="squash")["error"]
         self.assertTrue(error.startswith("Merge failed; task retained: "), error)
@@ -4537,6 +4539,7 @@ class Lifecycle(unittest.TestCase):
                 self.assertEqual((folder / "kept").read_text(), "what was there\n")
                 self.assertEqual(reply["result"]["leftBehind"], ["worktree %s" % folder.resolve()])
 
+    @unittest.skipIf(os.geteuid() == 0, "root writes to any folder")
     def test_a_branch_stays_while_its_worktree_does(self):
         task = self.create()
         own = self.agent_worktree(task)
@@ -4730,6 +4733,7 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(again["since"], looked["since"])
         self.assertNotEqual(again["commit"], looked["since"]["end"])
 
+    @unittest.skipIf(os.geteuid() == 0, "root writes to any folder")
     def test_a_look_git_cannot_keep_leaves_the_look_before(self):
         task = self.create()
         wt = Path(task["worktree"])

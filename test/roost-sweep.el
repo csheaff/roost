@@ -910,7 +910,7 @@ Return them as (PROBLEM . PLACES), PLACES naming the view, state and width."
     (dolist (view views)
       (dolist (state (mapcar #'car roost-sweep--gallery))
         (dolist (width (or (roost-sweep--view view :widths) '(nil)))
-          (dolist (problem (funcall rule view state width))
+          (dolist (problem (and (roost-test--mine-p) (funcall rule view state width)))
             (let ((place (format "%s, %s%s" view state (if width (format " at %d" width) "")))
                   (entry (assoc problem problems)))
               (if entry
@@ -997,14 +997,17 @@ Return them as (PROBLEM . PLACES), PLACES naming the view, state and width."
                                           t)))))))))
 
 (ert-deftest roost-sweep-views-draw-the-same-each-time ()
+  :tags '(sliced)
   (roost-test--isolated
    (roost-sweep--report (roost-sweep--run #'roost-sweep--check-drawing (mapcar #'car roost-sweep--views)))))
 
 (ert-deftest roost-sweep-buttons-and-keys-work-and-their-changes-go-back ()
+  :tags '(sliced)
   (roost-test--isolated
    (roost-sweep--report (roost-sweep--run #'roost-sweep--check-actions (mapcar #'car roost-sweep--views)))))
 
 (ert-deftest roost-sweep-clicks-never-ask ()
+  :tags '(sliced)
   ;; A click that asked which task left the question open, hidden by a
   ;; completion popup once you clicked again, and every later open
   ;; waited behind it.
@@ -1014,11 +1017,13 @@ Return them as (PROBLEM . PLACES), PLACES naming the view, state and width."
                                                       (mapcar #'car roost-sweep--views))))))
 
 (ert-deftest roost-sweep-named-keys-apply ()
+  :tags '(sliced)
   ;; Only the task panel says what to do next.
   (roost-test--isolated
    (roost-sweep--report (roost-sweep--run #'roost-sweep--check-named-keys '(panel)))))
 
 (ert-deftest roost-sweep-named-keys-can-be-clicked ()
+  :tags '(sliced)
   (roost-test--isolated
    (roost-sweep--report (roost-sweep--run #'roost-sweep--check-key-clicks '(panel)))))
 
@@ -1043,6 +1048,7 @@ Return them as (PROBLEM . PLACES), PLACES naming the view, state and width."
                (should-not (roost--waiting-p task))))))))))
 
 (ert-deftest roost-sweep-the-sidebar-needs-no-font-lock ()
+  :tags '(sliced)
   (roost-test--isolated
    (roost-sweep--report (roost-sweep--run #'roost-sweep--check-plain-faces '(sidebar)))))
 
@@ -1063,6 +1069,7 @@ Return them as (PROBLEM . PLACES), PLACES naming the view, state and width."
      (should-not problems))))
 
 (ert-deftest roost-sweep-n-says-where-it-went-and-why ()
+  :tags '(sliced)
   (roost-test--isolated
    (roost-sweep--report (roost-sweep--run #'roost-sweep--check-next-message '(echo)))
    ;; It looked at tasks of each kind that wait.

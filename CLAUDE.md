@@ -12,7 +12,12 @@ The [manual](docs/manual.md#how-it-works) says how it fits together.
 - `make test compile` before each commit: the ERT suite (tmux-control
   stubbed), the Python lifecycle tests against real Git and isolated tmux
   sockets, and a byte-compile with no warnings. CI runs it on Emacs 29.1
-  and 30.1.
+  and 30.1. `test/run.py` runs it on every core, about four minutes on
+  four. While you work, `make quick` takes one case in twelve of each
+  sweep, and leaves out a suite (ERT or Python) that passed in full on
+  what it reads now: half a minute after a change to `roost.el` alone.
+  `make quick K=REGEXP` keeps to the tests that match. A Python test that fails is run again alone, and named
+  if it passes then.
 - `test/roost-sweep.el` presses every button and key of the task panel,
   dashboard, sidebar and search results in a gallery of task states, and
   checks rules any of them must keep (no Lisp errors, a way back from each
@@ -50,9 +55,13 @@ The [manual](docs/manual.md#how-it-works) says how it fits together.
   teardown commands; and hostile names, prompts, branches and paths go
   through each action against real Git and tmux. A new program, or a new
   way to start one, goes on those lists on purpose.
-- One ERT test, or those matching a regexp:
+- One ERT test, or those matching a regexp: `test/run.py --ert -k REGEXP`,
+  or in one Emacs, to read its output as it comes:
   `emacs -Q --batch -L . -L test -l test/roost-test.el -l test/roost-sweep.el -l test/roost-sweep-late.el --eval '(ert-run-tests-batch-and-exit "REGEXP")'`.
-  Python: `python3 -m unittest discover -s test -p 'test_remote.py' -k PATTERN`.
+  Python: `test/run.py --python -k PATTERN`, or
+  `python3 -m unittest discover -s test -p 'test_remote.py' -k PATTERN`.
+  A sweep is a test tagged `sliced`: each Emacs runs it, on its share of
+  the cases, so a new sweep's loop asks `roost-test--mine-p` for each case.
 - The tests of Roost in Magit, its Evil keys and real perspective.el are
   skipped unless Magit, Evil, evil-collection and perspective.el are on
   `TEST_LOAD_PATH`.

@@ -1217,7 +1217,13 @@ bubblewrap.
 
 `make test compile` runs the ERT suite, the Python lifecycle tests against real
 Git and isolated tmux sockets (fixture agents drive the actual hook commands,
-without model calls), and a warning-free byte-compile. CI runs it on Emacs 29.1
+without model calls), and a warning-free byte-compile. `make test` uses every
+core, each Emacs and Python taking a share (`test/run.py`): about four minutes
+on four cores, where one process takes eighteen. While you work, `make quick`
+runs one case in twelve of each sweep, and leaves out the Python suite when
+neither the helper nor its tests have changed since it last passed: half a
+minute after a change to `roost.el` alone. `make quick K=REGEXP` runs only the
+tests that match. CI runs it on Emacs 29.1
 and 30.1, except for a change only to Markdown files or `docs/`, which no test
 reads: then its checks pass without running it. The tests of Roost in Magit need Magit and its dependencies on the
 load path, as `make test TEST_LOAD_PATH="-L …/magit/lisp -L …"`, Evil
