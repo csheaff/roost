@@ -57,10 +57,11 @@ It does if the diff changes any of these, or what an agent sends:
 | `tool_answers`, `claude_answers`, `asking_subagent`, `asks_beside`, and `requestCall` in `update_hook` | `SubagentAsks`: `ToolAnswers`, `Answers`, `Outlasts`, `Hook` |
 | The order of hooks and reports in `test/captures/claude-*`, `codex-*` | each step's script (`Prompt`, `Ask`, `End` ...) |
 
-Last confirmed to describe the code at `342ec40`, with the change to
-`CodexAgent.observe` and `apply_program_status` for Codex's plan menu that
-came with this line. To see what has changed since:
-`git diff 342ec40 -- scripts/roost_remote.py`. Move this commit forward only
+Last confirmed to describe the code at `4508d8f`, with the changes that
+came with this line: Codex's plan menu, in `CodexAgent.observe` and
+`apply_program_status`, and several requests at once, in `claude_answers`
+and `update_hook`. To see what has changed since:
+`git diff 4508d8f -- scripts/roost_remote.py`. Move this commit forward only
 after you have read the diff of the functions above against the model and it
 still describes them.
 
@@ -132,7 +133,7 @@ one agent are taken as awaited, so in order, as the captures show. Bounds:
 ten steps, two runs, a gone agent may read `failed` or `exited` from a hook
 that landed after the crash.
 
-## Findings open at `342ec40`
+## Findings open at `4508d8f`, with what came with this line
 
 Fixed: **StaleReport**. A relayed Claude's `working`, read before its
 `StopFailure` or `Stop` with background work and recorded after, made the

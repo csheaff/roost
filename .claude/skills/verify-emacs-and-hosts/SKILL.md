@@ -82,10 +82,10 @@ model as a chart.
 
 ## Does your change touch it?
 
-Coverage, confirmed against the code at **089089e**, with the change to
-`retarget` and `roost--cache-task` that came with this line: `retargetedAt`
-and `roost--newer-branch`.
-`git diff 089089e -- roost.el scripts/roost_remote.py` and look for these:
+Coverage, confirmed against the code at **4508d8f**, with the changes that
+came with this line: `retargetedAt` and `roost--newer-branch` for `B`, in
+`retarget` and `roost--cache-task`, and several tasks made at once.
+`git diff 4508d8f -- roost.el scripts/roost_remote.py` and look for these:
 
 | Code | Model step |
 | --- | --- |

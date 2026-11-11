@@ -60,8 +60,9 @@ Each variant config's first lines say what it breaks.
 
 ## 1. Does your change touch this?
 
-The models were last checked against the code at the sync commit, `8f651f3`,
-with the change that came with this line: the words an attempt's request
+The models were last checked against the code at the sync commit, `4508d8f`,
+with the changes that came with this line: several attempts, offers' and
+forks' drafts, and the words an attempt's request
 names, in `roost-compose-submit`, `roost--attempt-field` and
 `roost--compose-words`, and the helper's `attempt_of`, `make_task` and
 `made_from_other_words`, which keep the attempts of one draft to one
@@ -200,7 +201,7 @@ task's and the offer's, the same each time; and a conversation
 (`roost-new-conversation`), which has no draft and no creation ID, so that
 `C` again after no reply can start a second.
 
-## Findings at 8f651f3
+## Findings at 4508d8f, with what came with this line
 
 Each is a config here that fails as named.
 

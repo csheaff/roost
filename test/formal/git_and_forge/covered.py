@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 # The commit at which the models were last confirmed to describe the code.
-SYNC = "8f651f3"
+SYNC = "4508d8f"
 
 ROOT = Path(__file__).resolve().parents[3]
 COVERED = {

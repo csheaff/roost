@@ -217,9 +217,9 @@ would, a `Name.VARIANT.cfg` with `\* expect: Rule`, and keep it.
 Once the models describe the code at a new commit and every line is `ok`,
 move `SYNC` in `covered.py` to that commit. Only then.
 
-Last confirmed at `8f651f3`, with the changes to `landed`, `safe_to_delete`
-and `retarget`, and the new `started_at`, that came with this line. Since
-`e910487`: `retarget` and `B` (the record's branch, and where its commits
+Last confirmed at `4508d8f`, with the changes that came with this line, to
+`landed`, `safe_to_delete`, `retarget` and `roost--task-states`, and the new
+`started_at`. Since `e910487`: `retarget` and `B` (the record's branch, and where its commits
 count from, can change, in both models, and `x` has its steps),
 `startCommit` (where its branch was made, which nothing changes),
 conversations, attempts and forks (no new steps: see above), and

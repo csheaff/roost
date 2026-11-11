@@ -3279,8 +3279,9 @@ registry lock.
 | `startCommit` | `make_task`; `retarget`, for a record without one | yes |
 | `activity` | `update_hook` (`note_activity`), `apply_program_status`, `spawn` | yes |
 
-No lost update found in any of them. The last three rows were added on the
-`yeehaw` branch and read, not model-checked.
+No lost update found in any of them. The last three rows came after the audit:
+the first two are model-checked, in "Git and the forge" and "Emacs and its hosts",
+and `activity` was read, not model-checked.
 
 ### Checked and found sound
 

@@ -33,7 +33,7 @@ but the images don't show a second machine.
 
 ## How they were made
 
-All four were taken on 2026-11-11, with Roost as of the `yeehaw` branch:
+All four were taken on 2026-11-11, with Roost as it is after 0.11.0, with
 the quiet task panel, a status light in the shape of its status, and the
 tints and hairlines of `roost-decorate`. Five tasks were started with
 prompts that ask the agent to run the tests with `python3 -m unittest`, and
