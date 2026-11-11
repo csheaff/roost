@@ -214,6 +214,29 @@ class Rename(KeepsTask):
             problems.append("said renamed, and its name is %r" % record.get("name"))
 
 
+class Retarget(KeepsTask):
+    """The branch a task merges into, changed: whenever the helper stops,
+    the record names one branch, whole, the old or the new."""
+
+    action = "retarget"
+    args = dict(base="other")
+
+    def prepare(self, box):
+        super().prepare(box)
+        box.git("branch", "other")
+
+    def holds(self, box, problems):
+        super().holds(box, problems)
+        record = box.record(self.task["id"]) or {}
+        branch = record.get("integrationBranch")
+        if branch not in ("main", "other"):
+            problems.append("it merges into %r" % branch)
+        elif record.get("integrationRef") != "refs/heads/" + branch:
+            problems.append("it merges into %s by the name %r" % (branch, record.get("integrationRef")))
+        elif self.final and self.final.get("ok") and branch != "other":
+            problems.append("said to merge into other, and it merges into %s" % branch)
+
+
 class Stop(KeepsTask):
     action = "stop"
 
@@ -416,7 +439,46 @@ class CreateFromOffer(Create):
             problems.append("its task was made, and its offer still waits")
 
 
+class CreateFork(Create):
+    """A fork of a task, which starts where that task's work stands, read
+    with its worktree held: however the fork's creation was cut short, its
+    source is as it was, and nothing holds it."""
+
+    def arrange(self, box):
+        super().arrange(box)
+        self.source = box.create(name="source")
+        (Path(self.source["worktree"]) / "left").write_text("not committed\n")
+        self.asked = dict(self.asked, directory=self.source["worktree"], base="HEAD", forkFrom=self.source["id"])
+
+    def holds(self, box, problems):
+        final = self.final
+        if final and final.get("ok"):
+            self.task = final["result"]
+            if not (Path(self.task["worktree"]) / "left").is_file():
+                problems.append("the fork was made without its source's uncommitted file")
+        if not (Path(self.source["worktree"]) / "left").is_file():
+            problems.append("its source lost its uncommitted file")
+        # Finishing the source is refused while anything holds its worktree.
+        told = box.helper("discard", id=self.source["id"], dryRun=True)
+        if not (told and told.get("ok")):
+            problems.append("its source can't be finished: %s" % (told and told.get("error")))
+
+
+class CreateConversation(Create):
+    """A conversation, the first, which makes the repository it is in."""
+
+    def arrange(self, box):
+        super().arrange(box)
+        self.asked = dict(self.asked, directory="/nowhere", conversation=True)
+
+    def holds(self, box, problems):
+        super().holds(box, problems)
+        if self.final and self.final.get("ok") and not self.final["result"].get("conversation"):
+            problems.append("asked again, and what was made is no conversation")
+
+
 ALL = [Merge, MergeSquash, MergeAway, SquashAway, MergeTeardown, MergeSubmodule, MergeAgentWorktree, Retire, RetireMerged,
        RetireDead, RetireSquashedOnGitHub, Update, UpdateConflict, Discard, DiscardDirty, DiscardTeardown, Forget, Rename,
+       Retarget,
        Stop, Resume, Seen, Turn, Send, Shell, Attach, Inspect, Look, PullRequest, PullRequestPush, Create, CreateFromRemote,
-       Propose, TakeOffer, CreateFromOffer]
+       Propose, TakeOffer, CreateFromOffer, CreateFork, CreateConversation]

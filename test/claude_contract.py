@@ -55,13 +55,12 @@ IGNORED_EVENTS = {
     "PermissionDenied": "auto mode refused a tool; the turn goes on, and a prompt beside it may still wait",
     "PostCompact": "compaction ended; SessionStart covers it",
     "PostModelSwitch": "the model changed",
-    "PostToolBatch": "parallel tools ended; PostToolUse covers each",
-    "PostToolUseFailure": "a tool failed; the turn goes on",
+    "PostToolBatch": "each tool of a step ended, which PostToolUse and PostToolUseFailure say of each; it came "
+                     "in 2.1.118, so listening to it would raise CLAUDE_MIN_VERSION",
     "PreCompact": "compaction starts",
     "PreModelSwitch": "the model will change",
     "Setup": "repository setup",
     "SubagentStart": "a subagent started; the turn goes on",
-    "SubagentStop": "a subagent ended; the turn goes on",
     "TaskCompleted": "a task in the session's list was completed",
     "TaskCreated": "a task in the session's list was created",
     "TeammateIdle": "a teammate is idle; its permission prompts are notifications",
@@ -83,7 +82,8 @@ SESSION_SOURCES = ("startup", "resume", "clear", "compact", "fork")
 # Payload fields the helper reads.
 PAYLOAD_FIELDS = ("session_id", "transcript_path", "hook_event_name", "last_assistant_message",
                   "background_tasks", "session_crons", "notification_type", "message", "tool_name",
-                  "tool_input", "error", "error_details", "source", "reason", "cwd", "agent_id")
+                  "tool_input", "error", "error_details", "source", "reason", "cwd", "agent_id", "is_interrupt",
+                  "prompt")
 
 
 def notification_kinds(data):
@@ -95,6 +95,11 @@ def notification_kinds(data):
     for match in re.finditer(rb'\bnotification:(?:\{|\(\w+\)=>\(\{)text:[^;{}]{0,160}?\btype:([^,}]{1,120})', data):
         kinds |= set(re.findall(rb'"([a-z_]+)"', match.group(1)))
     listed = re.search(rb'fieldToMatch:"notification_type",values:\[([^\]]*)\]', data)
+    if not listed:
+        # From 2.1.322 the list stands alone, under a name: the one that
+        # holds both a prompt for permission and the reminder that it waits.
+        listed = next((found for found in re.finditer(rb'=\[((?:"[a-z0-9_]+",?)+)\]', data)
+                       if b'"permission_prompt"' in found.group(1) and b'"idle_prompt"' in found.group(1)), None)
     if not listed:
         return set()
     kinds |= set(re.findall(rb'"([a-z_]+)"', listed.group(1)))
@@ -160,6 +165,12 @@ def static_check():
         values = re.findall(rb'"([a-z_]+)"', match.group(1))
         if b"startup" in values:
             sources = set(value.decode() for value in values)
+    # From 2.1.322 they are in the hook's own description of what it sends.
+    for match in re.finditer(rb'hook_event_name:(?:[\w$.]{1,12}\()?"SessionStart"\)?,source:[\w$.]{1,12}\(\[([^\]]*)\]',
+                             data):
+        values = re.findall(rb'"([a-z_]+)"', match.group(1))
+        if b"startup" in values:
+            sources |= set(value.decode() for value in values)
     for source in sorted(sources - set(SESSION_SOURCES)):
         report(None, "SessionStart source %s: is it a fresh start, a compaction or a clear?" % source)
     if not sources:
@@ -240,6 +251,8 @@ class Session:
     # starts from, if not the fixture's.
     capture = None
     start_from = None
+    # What more its task is created with.
+    asks = {}
 
     def __init__(self, program_status=False):
         # A Claude Code session running this, as an agent may, passes this
@@ -355,6 +368,7 @@ class Session:
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline and self.record()["status"] == "starting":
             if "trust this folder" in self.pane():
+                time.sleep(1)  # Keys a dialog's first moment brings are lost.
                 self.keys("Down", "Enter")
                 break
             time.sleep(0.5)
@@ -375,7 +389,7 @@ class Session:
             self.task = self.rpc("create", directory=str(self.repo), name="contract", socket=self.socket,
                                  agent=self.agent, prompt=agent_captures.PROMPT,
                                  command=self.command, programStatus=self.program_status,
-                                 **({"base": self.start_from} if self.start_from else {}))
+                                 **({"base": self.start_from} if self.start_from else {}), **self.asks)
             self.step("a first turn, from the task's prompt")
             try:
                 self.steps()
@@ -610,15 +624,46 @@ class SandboxSession(Session):
                    record.get("lastReply"))
 
 
+class OfferSession(Session):
+    """Claude with Roost's MCP server, as a task that may offer has it:
+    it starts as any task does, and offers a task with `propose_task`
+    without asking, which waits in its record until taken."""
+
+    capture = "claude-offer"
+    asks = {"mayOffer": True}
+
+    def steps(self):
+        self.trusted()
+        record = self.until(lambda: self.record().get("lastEvent") == "Stop" and self.record(), 120, "the first reply")
+        self.check(record.get("mayOffer") is True, "the task may offer", record.get("mayOffer"))
+        self.check("PONG" in (record.get("lastReply") or ""), "Claude starts with Roost's MCP server",
+                   record.get("lastReply"))
+
+        self.step("offer a task")
+        seen, record = self.turn(
+            "While reading contract_check.py you noticed it has no docstring. That is outside this task. "
+            "Offer it to me as a task of its own, then say what you offered.", 120, "the offering turn")
+        offers = record.get("offers") or []
+        self.check(len(offers) == 1, "Claude offers a task through propose_task", offers)
+        self.check("permission" not in seen, "offering never asks", seen)
+        self.check(bool(self.listed().get("offers")), "the listing carries the offer", self.listed().get("offers"))
+        if offers:
+            self.rpc("take-offer", id=self.task["id"], offer=offers[0]["id"])
+            self.check(not self.record().get("offers"), "an offer taken waits no more", self.record().get("offers"))
+
+
 # Claude's live sessions, in the order they run.
-SESSIONS = (Session, AutoSession, SandboxSession)
+SESSIONS = (Session, AutoSession, SandboxSession, OfferSession)
 
 
 def main():
     problems = static_check()
     if "--live" in sys.argv:
+        # --only NAME, as in --only OfferSession, runs that session alone.
+        only = sys.argv[sys.argv.index("--only") + 1] if "--only" in sys.argv else None
         for session in SESSIONS:
-            problems += session("--program-status" in sys.argv).run()
+            if only in (None, session.__name__):
+                problems += session("--program-status" in sys.argv).run()
     print("All as expected" if not problems else "%d to look at" % problems)
     return 1 if problems else 0
 

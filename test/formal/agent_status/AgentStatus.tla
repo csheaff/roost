@@ -34,13 +34,18 @@ CONSTANTS
     LateKinds,      \* Claude notifications whose hooks may land after the
                     \* agent moved on: subset of {"permission_prompt", "idle_prompt"}
     AfterFailure,   \* what Claude reports after StopFailure: subset of {"done", "idle", "error"}
+    PlanMenuCloses, \* you may close Codex's plan menu, with Esc or "No, stay
+                    \* in Plan mode", of which Codex says nothing
     Break           \* "none", or one place where the model breaks the code
                     \* on purpose, to show a rule can fail
 
 ACTIVE == {"starting", "running", "permission", "background"}
 ENDED == {"stopped", "exited", "failed", "crashed"}
 \* What the agent is really doing, while its process lives.
-Alive == {"idle", "working", "asking", "background", "failedTurn"}
+\* "planMenu": Codex's turn in Plan mode ended with a plan, and its menu
+\* asks whether to implement it.  Text sent then is dropped, and the Enter
+\* after it takes the menu's first choice.
+Alive == {"idle", "working", "asking", "background", "failedTurn", "planMenu"}
 TurnEnds == {"Stop", "StopBg", "StopFailure"}
 
 VARIABLES
@@ -57,6 +62,7 @@ VARIABLES
     polled,             \* the poll has looked since the last change
     \* The task's record.
     status, dialog,     \* `status`; `lastEvent` == "Dialog"
+    plan,               \* `lastEvent` == "Plan" (`asks_about_plan`, with `permission`)
     reqCmd,             \* `requestCommand`
     psRun,              \* `programStatusRun`
     endedRun,           \* `endedRun` == `runId`
@@ -65,9 +71,9 @@ VARIABLES
     steps
 
 vars == <<agent, relayed, truth, cmd, marker, script, queue, stray, late,
-          runnerPending, polled, status, dialog, reqCmd, psRun, endedRun,
+          runnerPending, polled, status, dialog, plan, reqCmd, psRun, endedRun,
           run, sbc, steps>>
-rec == <<status, dialog, reqCmd, psRun, endedRun, run, sbc>>
+rec == <<status, dialog, plan, reqCmd, psRun, endedRun, run, sbc>>
 
 H(e) == [kind |-> "hook", ev |-> e]
 R(s) == [kind |-> "report", st |-> s]
@@ -100,6 +106,10 @@ Observe(e, cur) ==
     ELSE IF e \in {"UserPromptSubmit", "PreToolUse", "PostToolUse"} THEN "running"
     ELSE IF e = "PermissionRequest" THEN "permission"
     ELSE IF e \in {"Stop", "Interrupt"} THEN "ready"
+    \* Stop, with a plan in the turn's rollout that the reply its hook
+    \* reports leaves out (`plan_asked_about`).  Broken: `no_plan_menu`
+    \* takes it for any turn's end, as before.
+    ELSE IF e = "StopPlan" THEN (IF Break = "no_plan_menu" THEN "ready" ELSE "permission")
     ELSE "none"                                  \* SessionEnd
 
 (* `beside_program_status`: the status a relayed agent's hook keeps.
@@ -123,9 +133,11 @@ Hook(e, r) ==
       after == IF s2 = "none" THEN before ELSE s2
       asks == s1 = "permission"
   IN IF ~((Break = "no_run_check" \/ r = run) /\ before # "stopped") \/ s1 = "none"
-     THEN UNCHANGED <<status, dialog, reqCmd, queue, marker>>
+     THEN UNCHANGED <<status, dialog, plan, reqCmd, queue, marker>>
      ELSE /\ status' = after
           /\ dialog' = IF s2 = "none" THEN dialog ELSE FALSE
+          \* lastEvent, with any status a hook records.
+          /\ plan' = IF s2 = "none" THEN plan ELSE (e = "StopPlan" /\ s2 = "permission")
           \* updatedAt moves with any status a hook records.
           /\ marker' = IF s2 = "none" THEN marker ELSE FALSE
           \* hookAt, with any status a hook records: reports read before it
@@ -135,19 +147,25 @@ Hook(e, r) ==
                       THEN [i \in 1..Len(queue) |-> [queue[i] EXCEPT !.stale = TRUE]]
                       ELSE queue
           /\ reqCmd' = IF asks /\ e = "PermissionRequest" THEN TRUE
-                       ELSE IF asks /\ before # "permission" THEN FALSE
+                       ELSE IF asks /\ (before # "permission" \/ e = "StopPlan") THEN FALSE
                        ELSE IF asks THEN reqCmd
                        ELSE IF (~Relayed \/ ~Turns) /\ (after # "permission" \/ before # "permission")
                        THEN FALSE
                        ELSE reqCmd
 
-(* `apply_program_status`, for report F. *)
+\* `asks_about_plan`.
+PlanAsk == status = "permission" /\ plan
+
+(* `apply_program_status`, for report F.  Codex says nothing of its plan's
+   menu: done, then idle, as after any turn.  Broken: `plan_ends_on_report`
+   takes that as the end of what it asks, as for any other request. *)
 Report(f) ==
   LET st == f.st
       s == status
       ch == IF f.stale /\ Break # "no_hookat" THEN "none"
             ELSE IF st = "working" /\ s # "running" /\ (Turns \/ s = "permission") THEN "running"
             ELSE IF st = "blocked" /\ s # "permission" /\ Break # "no_blocked" THEN "permission"
+            ELSE IF st \in {"done", "idle"} /\ PlanAsk /\ Break # "plan_ends_on_report" THEN "none"
             ELSE IF st \in {"done", "idle"} /\ s = "permission" /\ dialog THEN "ready"
             ELSE IF st = "done" /\ s \in {"starting", "running", "permission"} THEN "ready"
             ELSE IF st = "idle" /\ s \in {"running", "permission"} THEN "ready"
@@ -158,6 +176,7 @@ Report(f) ==
   IN /\ psRun' = run
      /\ status' = after
      /\ dialog' = IF ch = "none" THEN dialog ELSE (st = "blocked" /\ s # "running")
+     /\ plan' = IF ch = "none" THEN plan ELSE FALSE
      /\ marker' = IF ch = "none" THEN marker ELSE FALSE
      /\ reqCmd' = IF f.stale /\ Break # "no_hookat" THEN reqCmd
                   ELSE IF after = "permission" THEN reqCmd
@@ -182,6 +201,7 @@ Init ==
   /\ polled = FALSE
   /\ status = "starting"
   /\ dialog = FALSE
+  /\ plan = FALSE
   /\ reqCmd = FALSE
   /\ psRun = 0
   /\ endedRun = FALSE
@@ -205,8 +225,10 @@ Step(t, items, c, m) ==
 
 Claude == agent = "claude"
 
-Prompt ==   \* you send a prompt, or Claude wakes for its background work
-  /\ CanStep /\ truth \in {"idle", "failedTurn", "background"}
+Prompt ==   \* you send a prompt, or Claude wakes for its background work;
+            \* at Codex's plan menu, "Yes, implement this plan", which
+            \* Codex sends itself as a prompt
+  /\ CanStep /\ truth \in {"idle", "failedTurn", "background", "planMenu"}
   /\ Step("working", <<R("working"), H("UserPromptSubmit")>>, FALSE, FALSE)
 
 Tool ==
@@ -249,6 +271,17 @@ End ==
   /\ CanStep /\ truth = "working" /\ ~cmd
   /\ Step("idle", IF Claude THEN <<H("Stop"), R("done")>> ELSE <<H("Stop"), R("idle")>>, FALSE, marker)
 
+EndPlan ==  \* Codex's turn in Plan mode ends with a plan; its menu opens.
+            \* It calls the turn done, or, once you look at its terminal
+            \* and by older versions, idle: one stands for both here, as
+            \* `apply_program_status` takes them alike at the menu.
+  /\ CanStep /\ ~Claude /\ truth = "working" /\ ~cmd
+  /\ \E x \in {"done", "idle"} : Step("planMenu", <<H("StopPlan"), R(x)>>, FALSE, marker)
+
+ClosePlanMenu ==   \* Esc, or "No, stay in Plan mode": no hook, no report
+  /\ CanStep /\ PlanMenuCloses /\ truth = "planMenu"
+  /\ Step("idle", <<>>, FALSE, marker)
+
 EndBackground ==
   /\ CanStep /\ Claude /\ truth = "working" /\ ~cmd
   /\ Step("background", <<H("StopBg"), R("done")>>, FALSE, marker)
@@ -274,7 +307,7 @@ Emit ==     \* the agent sends the next hook or report of its step
   /\ LET it == Head(script) IN
        IF it.kind = "report"
        THEN /\ queue' = Append(queue, [st |-> it.st, stale |-> FALSE])
-            /\ UNCHANGED <<status, dialog, reqCmd, marker>>
+            /\ UNCHANGED <<status, dialog, plan, reqCmd, marker>>
        ELSE /\ LagPastTurnEnd \/ ~Turns \/ it.ev \notin TurnEnds \/ queue = <<>>
             /\ Hook(it.ev, run)
   /\ script' = Tail(script)
@@ -285,7 +318,7 @@ Record ==   \* the recorder takes the lock for the oldest report
   /\ queue # <<>>
   /\ queue' = Tail(queue)
   /\ IF status = "stopped" \/ (endedRun /\ Break # "no_drain")
-     THEN UNCHANGED <<status, dialog, reqCmd, marker, psRun>>
+     THEN UNCHANGED <<status, dialog, plan, reqCmd, marker, psRun>>
      ELSE Report(Head(queue))
   /\ polled' = FALSE
   /\ UNCHANGED <<agent, relayed, truth, cmd, script, stray, late, runnerPending, endedRun, run, sbc, steps>>
@@ -310,7 +343,8 @@ RunnerEnd ==   \* `finish()`, then the end, under the lock
   /\ runnerPending' = FALSE
   /\ IF status # "stopped"
      THEN /\ status' = "exited" /\ endedRun' = TRUE /\ dialog' = FALSE /\ marker' = FALSE
-     ELSE UNCHANGED <<status, endedRun, dialog, marker>>
+          /\ plan' = FALSE
+     ELSE UNCHANGED <<status, endedRun, dialog, plan, marker>>
   /\ polled' = FALSE
   /\ UNCHANGED <<agent, relayed, truth, cmd, script, queue, stray, late, reqCmd, psRun, run, sbc, steps>>
 
@@ -323,18 +357,20 @@ Poll ==
   /\ IF Live /\ status = "crashed" THEN
        /\ status' = IF sbc = "none" THEN "ready" ELSE sbc
        /\ sbc' = "none" /\ marker' = FALSE
-       /\ UNCHANGED <<dialog, reqCmd>>
+       /\ UNCHANGED <<dialog, plan, reqCmd>>
      ELSE IF ~Live /\ status \notin ENDED THEN
        /\ status' = "crashed" /\ sbc' = status /\ marker' = FALSE
-       /\ UNCHANGED <<dialog, reqCmd>>
+       /\ UNCHANGED <<dialog, plan, reqCmd>>
      ELSE IF Claude /\ Live /\ ~Relayed /\ status \in {"running", "permission"} /\ marker
              /\ Break # "no_interrupt_guess" THEN
        /\ status' = "ready" /\ reqCmd' = FALSE /\ dialog' = FALSE /\ marker' = FALSE
+       /\ plan' = FALSE
        /\ UNCHANGED sbc
      ELSE IF Claude /\ Live /\ ~Relayed /\ status = "permission" /\ reqCmd /\ cmd THEN
        /\ status' = "running" /\ reqCmd' = FALSE /\ dialog' = FALSE /\ marker' = FALSE
+       /\ plan' = FALSE
        /\ UNCHANGED sbc
-     ELSE UNCHANGED <<status, sbc, marker, dialog, reqCmd>>
+     ELSE UNCHANGED <<status, sbc, marker, dialog, plan, reqCmd>>
   /\ polled' = TRUE
   /\ UNCHANGED <<agent, relayed, truth, cmd, script, queue, stray, late, runnerPending, psRun, endedRun, run, steps>>
 
@@ -351,7 +387,7 @@ StopTask ==   \* K: `stop`
   /\ stray' \in InFlight
   /\ queue' = <<>> /\ script' = <<>> /\ cmd' = FALSE /\ runnerPending' = FALSE
   /\ steps' = steps + 1 /\ polled' = FALSE
-  /\ UNCHANGED <<agent, relayed, marker, late, dialog, reqCmd, psRun, endedRun, run, sbc>>
+  /\ UNCHANGED <<agent, relayed, marker, late, dialog, plan, reqCmd, psRun, endedRun, run, sbc>>
 
 TmuxGoes ==   \* tmux restarts: the runner dies with its agent, recording nothing
   /\ steps < MaxSteps /\ truth \in Alive
@@ -370,11 +406,11 @@ Resume ==     \* `resume`, `spawn`: a new run
   /\ endedRun' = FALSE /\ reqCmd' = FALSE /\ marker' = FALSE /\ cmd' = FALSE
   /\ queue' = <<>>
   /\ steps' = steps + 1 /\ polled' = FALSE
-  /\ UNCHANGED <<agent, relayed, stray, late, runnerPending, dialog, psRun, sbc>>
+  /\ UNCHANGED <<agent, relayed, stray, late, runnerPending, dialog, plan, psRun, sbc>>
 
 Next ==
   \/ Prompt \/ Tool \/ Ask \/ Notify \/ Remind \/ Approve \/ CommandEnds
-  \/ Decline \/ End \/ EndBackground \/ Fail \/ Exit
+  \/ Decline \/ End \/ EndPlan \/ ClosePlanMenu \/ EndBackground \/ Fail \/ Exit
   \/ Emit \/ Record \/ DeliverLate \/ DeliverStray \/ RunnerEnd \/ Poll
   \/ StopTask \/ TmuxGoes \/ Resume
 
@@ -387,8 +423,9 @@ Settled ==
   /\ script = <<>> /\ queue = <<>> /\ stray = NoHook /\ late = <<>>
   /\ ~runnerPending /\ polled
 
-\* An agent that asks you something shows `permission`.
-AskingShown == Settled /\ truth = "asking" => status = "permission"
+\* An agent that asks you something shows `permission`: at a request, and
+\* at Codex's menu about its plan.
+AskingShown == Settled /\ truth \in {"asking", "planMenu"} => status = "permission"
 
 \* An agent at its prompt shows that it waits for you; one that ended shows so.
 \* A gone agent may read `failed` or `exited`, not only `crashed`: a hook in

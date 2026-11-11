@@ -22,7 +22,9 @@ if sys.argv[1:] == ["--version"]:
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.stdin.reconfigure(encoding="utf-8", errors="replace")
 settings = json.loads(Path(sys.argv[sys.argv.index("--settings") + 1]).read_text())
-session = sys.argv[sys.argv.index("--resume") + 1] if "--resume" in sys.argv else str(uuid.uuid4())
+resumed = sys.argv[sys.argv.index("--resume") + 1] if "--resume" in sys.argv else None
+# A fork goes on from a copy of the conversation, under an ID of its own.
+session = resumed if resumed and "--fork-session" not in sys.argv else str(uuid.uuid4())
 # Roost's MCP server, as Claude Code finds it in --mcp-config.
 SERVER = next((json.loads(arg[len("--mcp-config="):])["mcpServers"].get("roost")
                for arg in sys.argv if arg.startswith("--mcp-config=")), None)
@@ -41,6 +43,10 @@ if os.environ.get("FAKE_CLAUDE_TRANSCRIPTS"):
     TRANSCRIPT = (Path.home() / ".claude" / "projects" / helper.claude_project_folder(os.getcwd())
                   / (session + ".jsonl"))
     TRANSCRIPT.parent.mkdir(parents=True, exist_ok=True)
+    # Found in any project's folder, as Claude Code finds the one it forks.
+    for forked in (Path.home() / ".claude" / "projects").glob("*/%s.jsonl" % resumed) if resumed not in (None, session) else ():
+        TRANSCRIPT.write_text(forked.read_text())
+        break
 
 
 def record(role, text):

@@ -35,6 +35,146 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## The models, brought in line with what is new — 2026-11-11
+
+Each section of `test/formal` against the code as it is, for offers,
+conversations, forks, several attempts at one prompt, `B`, Codex's plan
+menu and a subagent's request. Each was done by its skill: the diff of
+the functions it covers read against the model, what is new modelled
+with a variant that breaks it, and every counterexample replayed on the
+real code before anything was changed. `docs/state-machines.md` lists
+what they found, under "Found by the models".
+
+- **Nine bugs fixed**, each with a test that failed first. Three could
+  lose work or retire it unmerged: `x` taking a branch that goes with the
+  task for the one keeping its commits; a fork and its source finished at
+  once; and `B` naming what already has the task's commits. The rest
+  showed a wrong status, branch or draft.
+- **Three more, left open at first and fixed since**, each as its
+  section's skill says to fix a finding: a reset after `B` read a task
+  wrong, so a task now keeps where its branch was made, which `B` never
+  moves; several attempts could be made from two prompts, so their host
+  keeps a draft's attempts to one wording; and an offer made once you
+  were asked went with the task unnamed, so a request names the offers
+  its question named, and is refused for another. One accepted: Codex
+  says nothing when its plan's menu is closed.
+- **Two new models**: who asks when Claude's subagents can too
+  (`SubagentAsks.tla`), and small ones beside each section's for `B`, two
+  attempts, and a fork beside an offer.
+- **Codex's plan menu** is from Codex's source, read at `e58bf8f`, and a
+  fake Codex that keeps a rollout: no Codex was signed in here, so no
+  turn in Plan mode ran live.
+- `make test compile` after all of it: 622 ERT tests and 584 Python
+  tests pass. `make formal`: 98 configs in the five sections, every
+  model as expected, in under half an hour on four cores.
+- Not done: `make crash` whole. The scenarios for retiring, discarding,
+  retargeting and making a fork were run alone, with only the lock file
+  Git 2.43 leaves, as on `main`.
+
+## The new look, on real sessions and other themes — 2026-11-11
+
+Emacs 29.3 under Xvfb, Magit 3.3.0 as Ubuntu 24.04 packages it, Claude
+Code 2.1.322 with Haiku.
+
+- **Six real tasks on two hosts**, the second this machine under another
+  home behind `test/qa/fake_ssh.py`: five started with prompts, one from
+  an Org heading's draft, their prompts answered in their terminals. The
+  README's four screenshots are of that session (`docs/demo.md`). One
+  agent, reading the project's plans, offered a task unasked, which showed
+  under its row.
+- **Magit 3.3.0.** A click on a changed file in a panel failed there, and
+  so did review notes and the commits to review: three of Magit's names
+  that Magit 4 changed. With that Magit on the load path the ERT suite
+  passes, 615 tests with 7 skipped, and `make qa`'s merge, review, notes,
+  since-looked and overlap journeys pass in a GUI frame, 36 steps. The
+  harness now leaves out Magit 3's fringe marks when it reads a window.
+- **Themes.** `make gallery` in modus-vivendi, modus-operandi, doom-one,
+  doom-nord, zenburn, solarized-light and with no theme. With no theme, or
+  one that leaves `shadow` alone, as zenburn does, the grey status shapes
+  did not show: Emacs's name for that colour is one SVG doesn't have.
+  Fixed. In doom-nord the dim text is faint, as that theme's `shadow` is.
+- **Not checked**: a display of twice the density, as a Mac's, where the
+  shapes should be drawn at that density but were only seen at a font
+  twice the size; Emacs 30 and later in a GUI; a real second machine.
+
+## Offers and a planning conversation, live — 2026-11-11
+
+Claude Code 2.1.322 with Haiku, on Linux, through the helper and an
+isolated tmux server, as `make contract-live` runs its sessions.
+
+- **A task's agent offers one.** Started with Roost's MCP server
+  (`--mcp-config`, `alwaysLoad`), Claude replied to its first prompt as
+  ever. Told of work outside its task, it called `propose_task` without
+  asking, the offer showed in the listing, and taking it left none. Now a
+  session of the contract, `OfferSession`, with a capture `make test`
+  replays.
+- **A conversation plans.** In a conversation on a host that had run a
+  task in one project, asked for two changes there, Claude read the
+  project's files with no permission prompt and offered two tasks, each
+  naming the project, each brief saying what the other covers. Before the
+  conversation could read without asking, the same turn stopped at
+  "Do you want to proceed?" for a `cd` and `git log` there.
+- **Trust.** Claude asked whether to trust the first conversation's folder
+  and not the second's: once for a host's conversations.
+- **The contract.** `make contract` reads 2.1.322 once the scan looks
+  where it now keeps its notification types and session sources: 33 hook
+  events, 19 notification types and five session sources, all known. The
+  manual-mode live session passed each of its twelve checks: a permission
+  request says what it asks, an approved command shows running before it
+  ends, a declined request and a turn stopped with Esc show ready, and
+  `/clear` starts a new conversation. Its capture is
+  `test/captures/claude-2.1.322.jsonl`. With no permission mode set,
+  Claude started in manual mode here, so the auto-mode session was not
+  run, nor the sandbox session.
+- **A fork goes on with the conversation.** A task told a word to
+  remember, then a fork of it (`forkFrom`, as `C-u c` asks) with a file
+  left uncommitted in the task's worktree: the fork's terminal showed the
+  task's conversation, then Roost's sentence about its new worktree, then
+  the fork's prompt, and its agent named the word. The fork had a session
+  of its own and the uncommitted file; the task kept its session.
+- **Remote Control.** Started with `--remote-control=NAME --name=NAME`,
+  Claude 2.1.322 came up as ever, with no question before its prompt.
+  Whether the task then shows in the Claude app was not checked: Claude
+  named its sign-in here "Claude API", and Remote Control needs a
+  subscription.
+- **The helper killed at each step.** On Linux with Git 2.43, the crash
+  scenarios of the actions that changed, each killed at every command
+  (`before`, `after`, `orphan`, `racing`, `fail`, `inside`): creating a
+  task (68 kills), a conversation (80), a task from an offer (64), and
+  sending (25), resuming (45), stopping (15), renaming (10) and the new
+  `Retarget` scenario (40), with no problems. Retiring, discarding and
+  updating each left a problem or two where Git was killed inside a
+  reference transaction and its `.lock` file stayed, so the discard that
+  follows is refused; `main` does the same with this Git, so it is not
+  from these changes, and it is not yet in `test/test_crash.py`. The
+  whole sweep was not run: beside another run on four cores it timed out.
+- **`make qa` under Xvfb.** Emacs 29.3 with its own transient 0.4.3, on
+  Linux, as root, with no window manager, no `ssh` and no Magit: every
+  journey but the sweep in a GUI frame, which ran out of its twenty
+  minutes on four shared cores, and Magit's, which were left out. 345
+  steps, 334 with no problem. The eleven, none of them from these
+  changes: three journeys with a second frame, which never showed; the
+  setup check of a host it can't reach, which words its error for a
+  missing `ssh`; a key file root can read, where the journey expects a
+  refusal; a terminal that wraps this machine's long shell prompt apart
+  from tmux; a pause of 2.5 s collecting garbage; and, with Roost's menu
+  left open, `t`, `f` and two clicks on another task, which found no row
+  in the sidebar. `main` does the same here for the setup check and the
+  menu. The last is worth a look on Emacs 29 with the transient it ships:
+  a click in the sidebar while the menu is open may not reach it.
+- **Not checked.** A remote host; Codex, Pi and OpenCode, which take no
+  tool of Roost's yet; the draft and rows in a GUI Emacs with a real
+  agent; the tests of Roost in Magit, Evil and perspective.el, which need
+  newer packages than this machine's.
+- **`make formal`.** With the jar `test/formal/check.py` pins and this
+  machine's Java, every model passed and every broken variant failed as
+  it should, in seventeen minutes on four cores. The models are as
+  merged, the one of offers included: none was extended for what is new
+  here (the branch a task merges into, attempts, an agent's activity, a
+  subagent's request outlasting its main agent's turn), so they say the
+  models still hold together, not that the new code keeps to them. Since
+  done: "The models, brought in line with what is new", above.
+
 ## UX review — 2026-11-09
 
 - **Scope.** How a task's status reads in the sidebar as it narrows, from

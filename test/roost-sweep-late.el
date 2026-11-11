@@ -167,6 +167,12 @@ what its host said when it read it.")
       ("resume" (roost-sweep-late--became record "starting" '(live . t)))
       ("rename" (let ((name (cons 'name (alist-get 'name request))))
                   (cons name (cons '(renamedAt . "2026-11-01T10:05:00+00:00") (assq-delete-all 'name record)))))
+      ("retarget" (let ((base (alist-get 'base request)))
+                    (append `((baseRef . ,base) (integrationBranch . ,base)
+                              (retargetedAt . ,(roost-sweep-late--now)))
+                            (assq-delete-all 'retargetedAt
+                                             (assq-delete-all 'baseRef
+                                                              (assq-delete-all 'integrationBranch record))))))
       ("retire" (roost-sweep-late--became record "retired"))
       ("forget" (roost-sweep-late--became record "forgotten"))
       ("merge" (roost-sweep-late--became record "retired" '(retiringCommit . "c9")))
@@ -209,7 +215,7 @@ SUCCESS and FAILURE take it when it comes.  Its host reads the world now."
       ("create" (unless (assq 'alreadyMade reply)
                   (setq roost-sweep-late--records
                         (append roost-sweep-late--records (list (cons (alist-get 'id reply) reply))))))
-      ((or "stop" "resume" "rename" "shell" "pr" "take-offer")
+      ((or "stop" "resume" "rename" "retarget" "shell" "pr" "take-offer")
        (when (assoc id roost-sweep-late--records)
          (setf (alist-get id roost-sweep-late--records nil nil #'equal) (assq-delete-all 'pushed reply)))))))
 
@@ -819,6 +825,10 @@ dashboard the command starts from."
      :start ,(lambda () (roost-new-task "/ssh:dev:/home/user/ledger/" "made" nil "Go on." "claude"))
      :action "create" :opens t :shows "*late terminal cccccc*" :watches t :makes t
      :refusals (("No branch, tag or commit named 'x' to start from")))
+    (new-conversation
+     :start ,(lambda () (roost-new-conversation "dev"))
+     :action "create" :opens t :shows "*late terminal cccccc*" :watches t :makes t
+     :refusals (("Roost needs a primary working checkout")))
     (compose-submit
      :origin compose :start ,#'roost-compose-submit
      :action "create" :opens t :shows "*late terminal cccccc*" :closes t :watches t :makes t :draft t
@@ -871,12 +881,17 @@ dashboard the command starts from."
     (rename
      :start ,(lambda () (roost-rename (roost-sweep-late--mine) "renamed"))
      :action "rename" :refusals ((,roost-sweep-late--retired)))
+    (retarget
+     :start ,(lambda () (roost-retarget (roost-sweep-late--mine) "release"))
+     :action "retarget"
+     :refusals ((,roost-sweep-late--retired) ("No branch, tag or commit named 'release' to merge into")))
     (retire
      :fields ((ahead . 0))
      :start ,(lambda () (roost-retire (roost-sweep-late--mine)))
      :action "retire"
      :refusals ((,roost-sweep-late--unmerged . asks) (,roost-sweep-late--uncommitted . asks)
-                (,roost-sweep-late--other-branch . asks) ("The agent is active; stop it or wait before retiring this task")))
+                (,roost-sweep-late--other-branch . asks) ("The agent is active; stop it or wait before retiring this task")
+                ("Its agent has offered a task since you were asked: Lint. Look at it again before retiring")))
     (retire-from-the-panel
      :origin panel :closes t
      :fields ((ahead . 0))
@@ -891,11 +906,14 @@ dashboard the command starts from."
      :start ,(lambda () (roost-merge-retire (roost-sweep-late--mine)))
      :action "merge"
      :refusals (("The integration branch main no longer exists")
-                ("The task's branch has moved since you were asked; look at it again before merging")))
+                ("The task's branch has moved since you were asked; look at it again before merging")
+                ("Its agent has offered a task since you were asked: Lint. Look at it again before merging")))
     (forget
      :fields ((status . "stopped") (live))
      :start ,(lambda () (roost-forget (roost-sweep-late--mine)))
-     :action "forget" :refusals (("The agent is running; stop the task before forgetting it")))
+     :action "forget"
+     :refusals (("The agent is running; stop the task before forgetting it")
+                ("Its agent has offered a task since you were asked: Lint. Look at it again before forgetting")))
     (forget-running
      :fields ((status . "running"))
      :start ,(lambda () (roost-forget (roost-sweep-late--mine)))
@@ -910,7 +928,8 @@ dashboard the command starts from."
     (discard
      :start ,(lambda () (roost-discard (roost-sweep-late--mine)))
      :action "discard" :refusals (("The task's branch has moved since you were asked; look at it again before discarding")
-                                  ("The task holds more than you were told; look at it again before discarding")))
+                                  ("The task holds more than you were told; look at it again before discarding")
+                                  ("Its agent has offered a task since you were asked: Lint. Look at it again before discarding")))
     (update
      :start ,(lambda () (roost-update (roost-sweep-late--mine)))
      :action "update" :refusals ((,roost-sweep-late--uncommitted-update . asks) ("Task worktree is gone")))
@@ -1166,6 +1185,7 @@ elsewhere."
 
 (defvar roost-sweep-late--questions
   `((draft-name :origin compose :ask ,#'roost-compose-set-name :keys "x\r")
+    (draft-attempts :origin compose :ask ,#'roost-compose-set-attempts :keys "2\r")
     (draft-project :origin compose :ask ,#'roost-compose-set-project :keys "\r")
     (draft-folder :origin compose :ask ,#'roost-compose-set-project
                   :keys "Other directory…\r/home/user/other/\r")
@@ -1177,6 +1197,7 @@ elsewhere."
                    :keys ,(lambda () (concat (locate-library "roost.el") "\r")))
     (pull-request-cancel :origin pr-draft :ask ,#'roost-pr-cancel :keys "no\r")
     (rename :ask ,(lambda () (roost-rename (roost-sweep-late--mine))) :keys "x\r")
+    (retarget :ask ,(lambda () (roost-retarget (roost-sweep-late--mine))) :keys "release\r")
     (stop :ask ,(lambda () (roost-stop (roost-sweep-late--mine))) :keys "y\r")
     (merge :ask ,(lambda () (roost-merge-retire (roost-sweep-late--mine))) :keys "y\r")
     (retire :ask ,(lambda () (roost-retire (roost-sweep-late--mine))) :keys "y\r")
@@ -1246,12 +1267,13 @@ Return what broke, a list of (RULE . TEXT)."
           (when (or (null (plist-get question :origin))
                     (eq (plist-get question :origin) (plist-get spec :origin)))
             (dolist (form (roost-sweep-late--forms spec))
-              (setq problems
-                    (roost-sweep--add-problems
-                     (delete-dups (mapcar (lambda (found) (format "%s: %s" (car found) (cdr found)))
-                                          (roost-sweep-late--question-case spec question form)))
-                     (format "%s, %s left open, then %s" command name (roost-sweep-late--form-name form))
-                     problems)))))))
+              (when (roost-test--mine-p)
+                (setq problems
+                      (roost-sweep--add-problems
+                       (delete-dups (mapcar (lambda (found) (format "%s: %s" (car found) (cdr found)))
+                                            (roost-sweep-late--question-case spec question form)))
+                       (format "%s, %s left open, then %s" command name (roost-sweep-late--form-name form))
+                       problems))))))))
     problems))
 
 ;;;; Running a case
@@ -1408,7 +1430,7 @@ Return their problems, each (TEXT PLACE...), as `roost-sweep--report' takes them
                         (and (plist-get interrupter :when)
                              (not (plist-get spec (plist-get interrupter :when))))
                         (and (plist-get spec :wait) (not (plist-get interrupter :while-waiting))))
-              (dolist (form (roost-sweep-late--forms spec))
+              (dolist (form (and (roost-test--mine-p) (roost-sweep-late--forms spec)))
                 (cl-dolist (answer '(t nil))
                   (let* ((result (roost-sweep-late--case spec interrupter form answer))
                          (place (format "%s, %s, then %s%s" command name (roost-sweep-late--form-name form)
@@ -1427,12 +1449,14 @@ Return their problems, each (TEXT PLACE...), as `roost-sweep--report' takes them
   (seq-difference (mapcar #'car roost-sweep-late--interrupters) leaving-out))
 
 (ert-deftest roost-sweep-late-replies ()
+  :tags '(sliced)
   ;; Each command against all you might do meanwhile, each form of reply.
   (roost-sweep--report
    (roost-sweep-late--sweep (mapcar #'car roost-sweep-late--commands)
                             (roost-sweep-late--interrupter-names 'delete-frame))))
 
 (ert-deftest roost-sweep-late-replies-to-a-frame-since-deleted ()
+  :tags '(sliced)
   (skip-unless (let ((frame (roost-sweep-late--make-frame)))
                  (when frame (delete-frame frame t))
                  frame))
@@ -1444,6 +1468,7 @@ Return their problems, each (TEXT PLACE...), as `roost-sweep--report' takes them
   "Commands to try with the sidebar and task panel on: what shows, closes or redraws them.")
 
 (ert-deftest roost-sweep-late-replies-beside-the-sidebar-and-panel ()
+  :tags '(sliced)
   (roost-sweep-late--with-room
     (let ((roost-sweep-late--sides t))
       (roost-sweep--report
@@ -1467,10 +1492,11 @@ Return their problems, each (TEXT PLACE...), as `roost-sweep--report' takes them
   "Commands from a draft, which a question of the draft's can be open beside.")
 
 (ert-deftest roost-sweep-late-replies-to-questions-left-open ()
+  :tags '(sliced)
   (roost-sweep--report
    (roost-sweep-late--question-sweep
     (append roost-sweep-late--drafts-pending
-            '(open retire merge update update-conflicts stop rename resume poll-full notice))
+            '(open retire merge update update-conflicts stop rename retarget resume poll-full notice))
     roost-sweep-late--questions)))
 
 (defconst roost-sweep-late--breakages
@@ -1534,7 +1560,10 @@ COMMAND, INTERRUPTER and FORM keeps RULE until FUNCTION is REPLACEMENT.")
                (should-not (seq-filter (lambda (process) (string-prefix-p "roost-rpc" (process-name process)))
                                        (process-list)))
                (should-not (seq-difference timer-list timers))
-               (should-not (seq-difference (buffer-list) buffers))
+               ;; Not Emacs's own for decoding text, made at its first
+               ;; use, which is here when this test runs before the rest.
+               (should-not (seq-remove (lambda (buffer) (equal (buffer-name buffer) " *code-conversion-work*"))
+                                       (seq-difference (buffer-list) buffers)))
                (should-not (directory-files temporary-file-directory nil "\\`roost-input-")))))
        (delete-directory temporary-file-directory t))))))
 

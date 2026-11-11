@@ -55,7 +55,7 @@ ENDED = ("stopped", "exited", "failed", "crashed")
 TRANSIENT = ("live", "diff", "dirty", "files", "size", "ahead", "behind", "update", "worktreeMissing",
              "prStatus", "unpushed", "lastMessage", "gitStamp", "agentWork", "merging", "landed", "conflicts",
              "sinceLooked", "teardownFailure", "teardownOutput", "worktreePr", "worktreeHead", "branchTip",
-             "leftBehind")
+             "leftBehind", "note")
 LAST_MESSAGE_TAIL = 256 * 1024
 LAST_MESSAGE_LIMIT = 2000
 INTERRUPT_TAIL = 64 * 1024
@@ -388,7 +388,7 @@ class History:
 # What every helper wrote in every record, which listing tasks takes for
 # granted, and what is text whenever it is there.
 RECORD_TEXT = ("name", "status", "repo", "worktree", "branch", "baseCommit", "socket")
-RECORD_OPTIONAL_TEXT = ("integrationBranch", "paneId", "windowId")
+RECORD_OPTIONAL_TEXT = ("integrationBranch", "paneId", "windowId", "startCommit")
 
 
 def listable(task):
@@ -736,9 +736,11 @@ def delete_branch(repo, branch, commit):
 # The Claude Code hook events Roost listens to; test/claude_contract.py
 # checks them, and the rest, against the installed Claude Code.
 CLAUDE_HOOK_EVENTS = ("SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse",
-                      "PostToolUse", "PermissionRequest", "Notification", "Stop", "StopFailure")
+                      "PostToolUse", "PostToolUseFailure", "PermissionRequest", "Notification",
+                      "Stop", "StopFailure", "SubagentStop")
 # The first Claude Code that knows all of them. Older ones skip a whole
-# settings file that names an event they don't know, every hook in it.
+# settings file that names an event they don't know, every hook in it:
+# so not PostToolBatch, which came in 2.1.118.
 CLAUDE_MIN_VERSION = (2, 1, 78)
 
 
@@ -751,9 +753,17 @@ def claude_hook_settings(store, task):
                 # task's work, not from the default branch.
                 "worktree": {"baseRef": "head"}}
     if task.get("mayOffer") is True:
-        # Roost's own tool, which needs no asking: an offer only waits in
+        # Roost's own tools, which need no asking: an offer only waits in
         # Roost for you to take it or leave it.
-        settings["permissions"] = {"allow": ["mcp__roost__propose_task"]}
+        allow = ["mcp__roost__propose_task", "mcp__roost__list_projects"]
+        if task.get("conversation") is True:
+            # A conversation plans work in your projects, which it has to
+            # read first: those this host has run tasks in, without asking
+            # at each file. Reading only: a change or a command there asks
+            # as ever. Not one whose name a rule can't hold.
+            allow += ["Read(/%s/**)" % repo for repo in known_projects(store)
+                      if repo.startswith("/") and not re.search(r"[()\n*]", repo)]
+        settings["permissions"] = {"allow": allow}
     path = store.tasks_dir / (task["id"] + ".settings")
     atomic_json(path, settings)
     return str(path)
@@ -868,6 +878,10 @@ def tool_call(payload):
                            for name, value in arguments.items()})
 
 
+# A tool's end, as its hooks say it: done, or failed.
+TOOL_ENDS = ("PostToolUse", "PostToolUseFailure")
+
+
 def tool_answers(task, payload):
     """Whether hook PAYLOAD, of a tool's start or end while TASK's agent asks,
     says it no longer does. Subagents go on working beside one that asks, and
@@ -882,7 +896,7 @@ def tool_answers(task, payload):
     asked = task.get("requestCall")
     if payload.get("hook_event_name") == "Notification":
         return task.get("requestQuestion") is True
-    if payload.get("hook_event_name") not in ("PreToolUse", "PostToolUse"):
+    if payload.get("hook_event_name") not in ("PreToolUse", *TOOL_ENDS):
         return True
     if task.get("requestQuestion"):
         return False
@@ -895,6 +909,56 @@ def tool_answers(task, payload):
     return (payload["hook_event_name"] == "PreToolUse"
             or call["tool"] == asked.get("tool")
             and all(arguments.get(name, digest) == digest for name, digest in call["arguments"].items()))
+
+
+def asking_subagent(task):
+    """The subagent whose tool call TASK's request is about, as its hooks
+    name it, or None: for the main agent's request, one that only a
+    notification named, and requests that overlap."""
+    asked = task.get("requestCall")
+    return asked.get("agent") if isinstance(asked, dict) and asked.get("tool") else None
+
+
+def claude_sent_itself(payload):
+    """Whether Claude Code gave itself the prompt of hook PAYLOAD, as the
+    notice of a background task's end or a wakeup it scheduled, rather than
+    you. An older one doesn't say who sent it: then, whether it is such a
+    notice."""
+    source = payload.get("source")
+    if isinstance(source, str):
+        return source not in ("user", "sdk")
+    prompt = payload.get("prompt")
+    return isinstance(prompt, str) and prompt.lstrip().startswith("<task-notification>")
+
+
+def asks_beside(task):
+    """Whether several ask at once in TASK and one of them is not the agent
+    you talk to: a subagent, a teammate, or an agent in the background."""
+    asked = task.get("requestCall")
+    return isinstance(asked, dict) and asked.get("beside") is True
+
+
+def claude_answers(task, payload):
+    """As `tool_answers`, for Claude Code, whose subagents can work on in the
+    background after the turn of the agent you talk to ends, and ask from
+    there, their prompt on screen. What a subagent asked is over when that
+    subagent says so, by a tool's event or its own end, or when you send a
+    prompt, which a prompt on screen doesn't let you do. It stands as the
+    main agent's turn ends with work left in the background, or starts on
+    a prompt Claude Code sent itself, as the notice of another subagent's
+    end: a turn that ends with nothing left has no subagent to ask. So do
+    several requests at once, if one of them is not the main agent's:
+    which of them is answered, nothing says. An older Claude Code doesn't
+    say what is left: unsure, it stands."""
+    event = payload.get("hook_event_name")
+    subagent = asking_subagent(task)
+    if event == "SubagentStop":
+        return bool(subagent) and payload.get("agent_id") == subagent
+    if (subagent or asks_beside(task)) and event == "Stop":
+        return payload.get("background_tasks") == []
+    if (subagent or asks_beside(task)) and event == "UserPromptSubmit":
+        return not claude_sent_itself(payload)
+    return tool_answers(task, payload)
 
 
 CLAUDE_FOLDER_LIMIT = 200
@@ -936,7 +1000,9 @@ class ClaudeAgent:
     waits_for_hooks = True
     # It can have Roost's MCP server, to offer tasks (`roost-agent-offers').
     offers = True
-    answers = staticmethod(tool_answers)
+    # It can be reached from the Claude app (`roost-remote-control').
+    remote_control = True
+    answers = staticmethod(claude_answers)
 
     def validate(self, command):
         validate_command(command, "Claude")
@@ -958,12 +1024,26 @@ class ClaudeAgent:
             # search the agent would make only once it knew of it.
             server = dict(type="stdio", command=sys.executable, args=mcp_arguments(store, task), alwaysLoad=True)
             argv.append("--mcp-config=" + json.dumps({"mcpServers": {"roost": server}}))
+        if task.get("remoteControl") is True:
+            # Named for the task, in the Claude app and at claude.ai/code,
+            # which notify your phone when it needs a decision, and in
+            # Claude's own list of sessions. Joined to their options, a
+            # name that starts with - stays a name. Yours stand, if your
+            # command has them.
+            given = {arg.split("=", 1)[0] for arg in task["command"][1:]}
+            if "--remote-control" not in given:
+                argv.append("--remote-control=" + task["name"])
+            if not given & {"--name", "-n"}:
+                argv.append("--name=" + task["name"])
         session = task.get("agentSession") or task.get("claudeSession")
         if resume_conversation and session and self.has_conversation(task):
-            argv += ["--resume", session]
-        elif text(task.get("prompt")):
+            return argv + ["--resume", session]
+        if task.get("forkSession"):
+            # A copy of another task's conversation, under a new session ID.
+            argv += ["--resume", task["forkSession"], "--fork-session"]
+        if first_message(task):
             # Otherwise a prompt starting with -, such as a list, is an option.
-            argv += ["--", task["prompt"]]
+            argv += ["--", first_message(task)]
         return argv
 
     def has_conversation(self, task):
@@ -1022,6 +1102,12 @@ class ClaudeAgent:
         }.get(event)
         if event == "Stop":
             status = "background" if payload.get("background_tasks") or payload.get("session_crons") else "ready"
+        # A tool's failure and a subagent's end are news only of what was
+        # asked: the turn goes on. Not a tool that failed as you stopped it,
+        # which the transcript records, for the next listing to find.
+        if (event in ("PostToolUseFailure", "SubagentStop") and current == "permission"
+                and not payload.get("is_interrupt")):
+            status = "running"
         if event == "Notification":
             kind = payload.get("notification_type")
             # Claude reminds you of an agent waiting a minute after its turn.
@@ -1162,6 +1248,21 @@ CODEX_HOOK_EVENTS = ("SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolU
                      "PostToolUse", "PermissionRequest", "Stop", "Interrupt")
 
 
+# A plan in a reply of Codex's, between lines of its tags, as its own
+# parser has them; one it is still writing has no closing line yet.
+PROPOSED_PLAN = re.compile(r"^[ \t]*<proposed_plan>[ \t]*$(.*?)(?:^[ \t]*</proposed_plan>[ \t]*$|\Z)", re.M | re.S)
+# What Codex asks once a Plan-mode turn ends with a plan, and the name of
+# that for a task's last event: no hook of Codex's says it.
+PLAN_REQUEST = "Asks whether to implement its plan"
+PLAN_EVENT = "Plan"
+
+
+def asks_about_plan(task):
+    """Whether TASK's agent rests at a menu that asks whether to implement
+    its plan: its turn is over, and nothing of it is at work."""
+    return task.get("status") == "permission" and task.get("lastEvent") == PLAN_EVENT
+
+
 class CodexAgent:
     """Native Codex TUI with per-invocation, normally reviewed lifecycle hooks."""
 
@@ -1190,10 +1291,14 @@ class CodexAgent:
             handler = '{ hooks = [{ type = "command", command = ' + json.dumps(command) + ', timeout = 3 }] }'
             argv += ["-c", "hooks." + event + "=[" + handler + "]"]
         session = task.get("agentSession")
+        prompt = [first_message(task)] if first_message(task) else []
         if resume_conversation and session:
             argv += ["resume", session]
-        elif text(task.get("prompt")):
-            argv += ["--", task["prompt"]]
+        elif task.get("forkSession"):
+            # A copy of another task's conversation; its ID, then the prompt.
+            argv += ["fork", "--", task["forkSession"]] + prompt
+        elif prompt:
+            argv += ["--"] + prompt
         return argv
 
     def concerns(self, task, payload):
@@ -1231,24 +1336,69 @@ class CodexAgent:
             updates["lastReply"] = None
         if event == "UserPromptSubmit":
             updates["lastPrompt"] = payload.get("prompt")
+        if event == "Stop":
+            plan = self.plan_asked_about(payload)
+            if plan is not None:
+                # Its turn is over, but it asks: text sent now is dropped,
+                # and the Enter after it takes the menu's first choice.
+                updates.update(status="permission", lastEvent=PLAN_EVENT, request=PLAN_REQUEST)
+                said = "\n\n".join(part for part in (updates.get("lastReply"), plan) if part)
+                if said:
+                    updates["lastReply"] = said[:LAST_MESSAGE_LIMIT + 1]
         return updates
 
-    def last_message(self, task):
-        session = task.get("agentSession")
-        if not session or not re.fullmatch(r"[\w.-]+", session):
+    def rollout(self, session):
+        """The newest entries of the rollout of Codex's SESSION, oldest first,
+        or None without one."""
+        if not isinstance(session, str) or not re.fullmatch(r"[\w.-]+", session):
             return None
         sessions = Path.home() / ".codex" / "sessions"
         files = sorted(sessions.glob("*/*/*/rollout-*-" + session + ".jsonl"))
-        if not files:
+        return transcript_tail(files[-1]) if files else None
+
+    @staticmethod
+    def said(entry, role):
+        """The text of rollout ENTRY if it is a message of ROLE's, or None."""
+        payload = entry.get("payload") if isinstance(entry, dict) else None
+        if (entry.get("type") == "response_item" and isinstance(payload, dict)
+                and payload.get("type") == "message" and payload.get("role") == role):
+            return message_text(payload.get("content"), ("output_text", "input_text", "text")) or ""
+        return None
+
+    def plan_asked_about(self, payload):
+        """The plan Codex asks whether to implement as the turn of Stop hook
+        PAYLOAD ends, as Markdown, or None when it asks nothing. In Plan
+        mode a reply holds its plan between <proposed_plan> lines. Codex
+        shows that as the plan, leaves it out of the reply its hook reports,
+        and, the turn over, opens a menu: "Implement this plan?". It reports
+        nothing of the menu, not to its terminal either, and nothing when
+        you close it. Outside Plan mode it does none of that, and the reply
+        its hook reports has the lines in it. A rollout that is missing or
+        can't be read says nothing is asked."""
+        reply = payload.get("last_assistant_message")
+        if isinstance(reply, str) and PROPOSED_PLAN.search(reply):
             return None
+        try:
+            entries = self.rollout(payload.get("session_id")) or []
+        except (OSError, ValueError, TypeError):
+            return None
+        plan = None
+        for entry in entries:
+            if self.said(entry, "user") is not None:
+                # Another turn, or what you sent during this one, which
+                # Codex goes on with rather than ask.
+                plan = None
+            else:
+                found = PROPOSED_PLAN.search(self.said(entry, "assistant") or "")
+                if found:
+                    plan = found.group(1).strip()
+        return plan
 
-        def extract(entry):
-            payload = entry.get("payload")
-            if (entry.get("type") == "response_item" and isinstance(payload, dict)
-                    and payload.get("type") == "message" and payload.get("role") == "assistant"):
-                return message_text(payload.get("content"), ("output_text", "text"))
-
-        return last_assistant_text(transcript_tail(files[-1]), extract)
+    def last_message(self, task):
+        entries = self.rollout(task.get("agentSession"))
+        if entries is None:
+            return None
+        return last_assistant_text(entries, lambda entry: self.said(entry, "assistant"))
 
 
 PI_EXTENSION = r'''import { spawn } from "node:child_process";
@@ -1313,11 +1463,14 @@ class PiAgent:
         sessions.mkdir(mode=0o700, parents=True, exist_ok=True)
         argv = task["command"] + ["--extension", str(extension), "--session-dir", str(sessions)]
         if resume_conversation and task.get("agentSession"):
-            argv += ["--session", task["agentSession"]]
-        elif text(task.get("prompt")):
+            return argv + ["--session", task["agentSession"]]
+        if task.get("forkSession"):
+            # A copy of another task's session file, made in this task's folder.
+            argv += ["--fork", task["forkSession"]]
+        if first_message(task):
             # Pi has no -- separator. A leading newline keeps -flags and
             # @file-looking prompts literal instead of interpreting them as CLI input.
-            argv.append("\n" + task["prompt"])
+            argv.append("\n" + first_message(task))
         return argv
 
     def observe(self, payload, current=None):
@@ -1601,10 +1754,13 @@ class OpenCodeAgent:
         self.plugin(store)
         argv = list(task["command"])
         if resume_conversation and task.get("agentSession"):
-            argv += ["--session", task["agentSession"]]
-        elif text(task.get("prompt")):
+            return argv + ["--session", task["agentSession"]]
+        if task.get("forkSession"):
+            # A copy of another task's session.
+            argv += ["--session", task["forkSession"], "--fork"]
+        if first_message(task):
             # Joined to its flag, a prompt starting with - stays a prompt.
-            argv.append("--prompt=" + task["prompt"])
+            argv.append("--prompt=" + first_message(task))
         return argv
 
     def environment(self, store, task, env):
@@ -1730,6 +1886,7 @@ def spawn(store, task, resume=False, size=()):
     # What the last run's agent asked and did: this one has yet to say.
     forget_request(task)
     task.pop("activity", None)
+    task.pop("activityFrom", None)
     # In UTF-8 mode, as `main` would start it, but as the pane's own process.
     argv = [sys.executable, "-X", "utf8", script, "run", str(store.root), task["id"], task["runId"]]
     if resume:
@@ -1985,7 +2142,8 @@ def made_for(store, create_id):
 
 def create(store, request):
     """The task asked for: made now, or, for a creation ID asked with
-    before, the one made then."""
+    before, the one made then, marked `alreadyMade`. So is the task that
+    `make_task` answers with in place of an attempt it doesn't make."""
     create_id = request.get("createId")
     if create_id is None:
         return make_task(store, request, None)
@@ -1997,9 +2155,150 @@ def create(store, request):
         return dict(made, alreadyMade=True) if made else make_task(store, request, create_id)
 
 
+# The most tasks one draft makes from one prompt, to compare.
+ATTEMPTS = 5
+
+
+def attempt_of(request):
+    """Which of several attempts at one prompt REQUEST asks for, as a task
+    records it: the group they share, the draft's creation ID, this one's
+    number and how many there are. Also `words`, where the draft gives
+    it: a name for what it said as it asked, the same for each attempt of
+    one C-c C-c, which an older Emacs leaves out. None for a task that is
+    no attempt."""
+    attempt = request.get("attempt")
+    if attempt is None:
+        return None
+    given = attempt if isinstance(attempt, dict) else {}
+    group, n, of, words = given.get("group"), given.get("n"), given.get("of"), given.get("words")
+    if not (isinstance(group, str) and CREATE_ID.fullmatch(group)
+            and all(isinstance(count, int) and not isinstance(count, bool) for count in (n, of))
+            and 1 <= n <= of <= ATTEMPTS
+            and (words is None or isinstance(words, str) and CREATE_ID.fullmatch(words))):
+        raise RoostError("Invalid attempt: it names the group it is one of, its number and how many "
+                         "there are, %d at most, and may name what it is made from" % ATTEMPTS)
+    return dict(group=group, n=n, of=of, **(dict(words=words) if words else {}))
+
+
+def made_from_other_words(store, attempt):
+    """The task of ATTEMPT's group made from other words than ATTEMPT is
+    asked for with, or None; of several, the first attempt among them. A
+    draft changed between two asks sends the same IDs with other words,
+    and its attempts, made apart, would be attempts at two prompts that
+    Emacs compares as attempts at one. Only words both give differ: a
+    request without them, or a record without, is an older Emacs's, and
+    goes on as it did. Nor does a task whose creation failed count, which
+    keeps no creation ID (`abandon`): it is made anew, as its group may
+    be. Under the registry lock."""
+    words = attempt.get("words") if attempt else None
+    if words is None:
+        return None
+    others = [task for task in store.all()
+              if task.get("createId") and isinstance(task.get("attempt"), dict)
+              and task["attempt"].get("group") == attempt["group"]
+              and isinstance(task["attempt"].get("words"), str) and task["attempt"]["words"] != words
+              and isinstance(task["attempt"].get("n"), int)]
+    return min(others, key=lambda task: task["attempt"]["n"], default=None)
+
+
+CONVERSATIONS = "conversations"
+
+
+def conversation_repository(store):
+    """The repository Roost keeps for conversations, which belong to no
+    project: each is a task in a worktree of it, so it moves, stops,
+    resumes and retires as any task does, with nothing of yours in it.
+    Made on the first, with one empty commit for tasks to branch from, by
+    no hook or template of yours and signed by no key of yours; one left
+    with no commit, as by a helper stopped between the two, gets it now.
+    Under a lock of its own, not the registry's, which hooks wait on."""
+    repo = store.root / CONVERSATIONS
+    with (store.root / (CONVERSATIONS + ".lock")).open("a") as lock:
+        os.chmod(lock.name, 0o600)
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        # A `git init` cut short leaves a .git Git takes for no repository;
+        # with no commit, nothing of any conversation is in it yet.
+        # Asked of it alone: Git would otherwise look in the folders above.
+        if (repo / ".git").exists() and execute(["git", "--git-dir", str(repo / ".git"), "rev-parse", "--git-dir"],
+                                                check=False).returncode:
+            shutil.rmtree(repo / ".git")
+        if not (repo / ".git").exists():
+            repo.mkdir(mode=0o700, parents=True, exist_ok=True)
+            git(repo, "init", "-q", "--template=")
+        if git(repo, "rev-parse", "--verify", "--quiet", "HEAD", check=False).returncode:
+            git(repo, "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
+                "-c", "user.name=Roost", "-c", "user.email=roost@localhost",
+                "commit", "-q", "--allow-empty", "-m", "Conversations")
+    return repo
+
+
+def conversation_to_fork(store, task_id, agent_name, repo):
+    """The task TASK_ID of REPO, whose agent's conversation a new AGENT_NAME
+    task is to continue; None for a task that starts one of its own. Under
+    the registry lock, as whatever asks what holds a task's worktree is."""
+    if task_id is None:
+        return None
+    source = store.read(task_id)
+    # Not while its worktree goes, which would leave the fork part of it.
+    require_not_removing(store, source, "fork")
+    if source.get("repo") != repo:
+        raise RoostError("%s is a task of another repository" % source.get("name"))
+    if (source.get("agent") or "claude") != agent_name:
+        raise RoostError("%s's conversation is %s's, which %s can't continue"
+                         % (source["name"], source.get("agent") or "claude", agent_name))
+    if not (source.get("agentSession") or source.get("claudeSession")):
+        raise RoostError("%s's agent hasn't started a conversation yet, so there's none to continue"
+                         % source["name"])
+    if not (isinstance(source.get("worktree"), str) and Path(source["worktree"]).is_dir()):
+        raise RoostError("%s's worktree is gone, and with it the work its conversation is about"
+                         % source["name"])
+    return source
+
+
+# What a fork's agent hears first, before your prompt: its conversation
+# names the source task's worktree, which it would otherwise look in too.
+FORK_NOTE = ("This conversation now goes on in a fork of %s: a new worktree, the current directory, "
+             "with the same work, its uncommitted changes too. The worktree you were in is %s's; "
+             "leave it alone.")
+
+
+def first_message(task):
+    """What TASK's agent starts with: your prompt, after the note a fork's
+    agent needs; None for neither."""
+    prompt = text(task.get("prompt"))
+    forked = task.get("forkedFrom") if task.get("forkSession") else None
+    if not isinstance(forked, dict):
+        return prompt
+    note = FORK_NOTE % (forked.get("name"), forked.get("name"))
+    return note + "\n\n" + prompt if prompt else note
+
+
+def carry_uncommitted(worktree, commit):
+    """Leave in WORKTREE, as it is there, what COMMIT, a snapshot of another
+    worktree on the same HEAD, holds beyond that HEAD: changed files
+    unstaged, and new ones untracked, as WORKTREE's index stays at HEAD."""
+    # Not into submodules, as your submodule.recurse would have it: the
+    # runner checks them out later.
+    git(worktree, "-c", "submodule.recurse=false", "read-tree", "-u", "--reset", commit)
+    git(worktree, "-c", "submodule.recurse=false", "reset", "--quiet")
+
+
 def make_task(store, request, create_id):
     """Create a worktree and agent window. Preparation and `git worktree add`
-    run without the registry lock; only the tmux spawn is serialized."""
+    run without the registry lock; only the tmux spawn is serialized. An
+    attempt asked for beside one of its group made from other words is not
+    made: the reply is that other task, marked `alreadyMade`, as `create`
+    answers for a creation ID asked with before."""
+    conversation = request.get("conversation") is True
+    # Before anything is made.
+    attempt = attempt_of(request)
+    if attempt and attempt.get("words"):
+        with store.locked():
+            other = made_from_other_words(store, attempt)
+        if other:
+            return dict(other, alreadyMade=True)
+    if conversation:
+        request = dict(request, directory=str(conversation_repository(store)), base=None)
     directory = str(Path(request["directory"]).expanduser().resolve())
     # A folder's name may end in a space, or hold a newline.
     checkout = git(directory, "rev-parse", "--show-toplevel").stdout.removesuffix("\n")
@@ -2024,9 +2323,28 @@ def make_task(store, request, create_id):
     command = request.get("command", agent.default_command)
     agent.validate(command)
     current = current_branch(repo)
+    # A task whose conversation the new one continues starts where that
+    # task's work stands, its uncommitted changes too.
+    source = None
+    if request.get("forkFrom") is not None:
+        with store.locked():
+            source = conversation_to_fork(store, request["forkFrom"], agent_name, repo)
+            if text(request.get("base")) not in (None, "HEAD"):
+                raise RoostError("A task that continues %s's conversation starts where its work stands, "
+                                 "not at %s" % (source["name"], request["base"]))
+            directory = source["worktree"]
+            # Its worktree is kept while Git reads it, without the registry
+            # lock, as for a look: retired or discarded meanwhile, it would
+            # leave the fork part of it.
+            with holding_worktree(store, source, fcntl.LOCK_SH,
+                                  "Roost is still removing %s's worktree; refresh in a moment" % source["name"]):
+                with store.released():
+                    carried, head = snapshot(directory)
+            if not head:
+                raise RoostError("Couldn't read where %s's work stands" % source["name"])
     # Independent tasks start at the primary checkout. HEAD only forks the
     # source worktree when explicitly requested, rather than accidentally.
-    explicit_base = text(request.get("base"))
+    explicit_base = "HEAD" if source else text(request.get("base"))
     base = explicit_base or current or "HEAD"
     # The primary checkout's branch by its full name, which a tag of the
     # same name would otherwise shadow.
@@ -2039,7 +2357,9 @@ def make_task(store, request, create_id):
             raise RoostError("%s has no commits yet, and a task branches from one; commit something first "
                              "(git commit --allow-empty -m 'Start' will do)" % repo)
         raise RoostError("No branch, tag or commit named %r to start from" % base)
-    commit = resolved.stdout.strip()
+    # The fork's, as the source's work stood when it was kept, should its
+    # agent commit meanwhile.
+    commit = head if source else resolved.stdout.strip()
     integration = (integration_for(store, repo, directory, explicit_base, current) if explicit_base
                    else current)
     task_id = uuid.uuid4().hex[:16]
@@ -2064,6 +2384,9 @@ def make_task(store, request, create_id):
     setup = text(request.get("setup"))
     task = dict(id=task_id, name=name, task=prompt or name, repo=repo,
                 worktree=str(worktree), branch=branch, baseCommit=commit,
+                # Where its branch is made, which stays as it is when
+                # `retarget` moves where its commits count from.
+                startCommit=commit,
                 # Shown by its short name, as a branch asked for in full is,
                 # as from an agent's offer.
                 baseRef=base[len("refs/heads/"):] if base.startswith("refs/heads/") else base,
@@ -2075,6 +2398,11 @@ def make_task(store, request, create_id):
                 status="starting", startedAt=now(), updatedAt=now(), claudeSession=None, agentMade=[])
     if create_id:
         task["createId"] = create_id
+    if conversation:
+        task["conversation"] = True
+    # One of several tasks made from one prompt, which Emacs compares.
+    if attempt:
+        task["attempt"] = attempt
     issue = request.get("issue")
     if isinstance(issue, dict) and isinstance(issue.get("number"), int) and not isinstance(issue["number"], bool):
         task["issue"] = dict(number=issue["number"], title=text(issue.get("title")),
@@ -2091,6 +2419,9 @@ def make_task(store, request, create_id):
     # Its agent can offer tasks, if it can be given Roost's tool.
     if request.get("mayOffer") is True and getattr(agent, "offers", False):
         task["mayOffer"] = True
+    # It shows in the agent's own app, if the agent has one to show it in.
+    if request.get("remoteControl") is True and getattr(agent, "remote_control", False):
+        task["remoteControl"] = True
     # The task whose agent offered this one, which shows it under that, and
     # the offer it was made from, which waits no more once it is saved.
     parent, offer = request.get("parent"), text(request.get("offer"))
@@ -2099,6 +2430,11 @@ def make_task(store, request, create_id):
         task["parent"] = parent
         if offer:
             task["offer"] = offer
+    if source:
+        # Its agent starts from a copy of this conversation, which goes on
+        # in the source task as before.
+        task["forkSession"] = source.get("agentSession") or source.get("claudeSession")
+        task["forkedFrom"] = dict(id=source["id"], name=source["name"])
     existed, there = ref_exists(repo, branch), worktree.exists()
     with noting_creation(store, task):
         try:
@@ -2123,7 +2459,27 @@ def make_task(store, request, create_id):
         # its terminal, as that fetches.
         if (worktree / ".gitmodules").is_file():
             task["submodulesComplete"] = False
+        if source and carried != commit:
+            try:
+                carry_uncommitted(worktree, carried)
+            except RoostError as exc:
+                with store.locked():
+                    store.save(task)
+                    abandon(store, task)
+                raise RoostError("Couldn't bring %s's uncommitted changes to the new task: %s"
+                                 % (source["name"], exc))
         with store.locked():
+            # Looked for again as the task is recorded, under the one lock:
+            # of two requests of a group in flight at once with other
+            # words, the first recorded stands, and the other undoes the
+            # worktree it made, as a creation that failed does. What a
+            # hook of yours left there stays, as a failed task, and no
+            # attempt of that group.
+            other = made_from_other_words(store, attempt)
+            if other:
+                task.pop("attempt")
+                abandon(store, task)
+                return dict(other, alreadyMade=True)
             try:
                 store.save(task)
                 spawn(store, task, size=size_options(request))
@@ -3352,12 +3708,24 @@ def check_pull_requests(store, tasks):
     return [task for task in tasks if id(task) in ids]
 
 
+def started_at(task):
+    """The commit TASK's branch was made at, which a task that never
+    committed is still at. Not `baseCommit`, where its commits count from:
+    `retarget` moves that, as onto a commit of the task's own when the
+    branch it names has some of its commits, and a branch reset there has
+    commits all the same. An older helper's record has only `baseCommit`,
+    which nothing moved then, and `retarget` writes this down before it
+    moves that."""
+    return task.get("startCommit") or task.get("baseCommit")
+
+
 def landed(task, tip):
     """Whether the task's commits are all merged, so retiring it loses none,
     as `safe_to_delete` has it: TIP, its branch's, is in its integration
     branch, or is what GitHub merged for one of its pull requests. False
-    for a task that never committed. Takes no optional Git locks, for polls."""
-    if not tip or tip == task.get("baseCommit"):
+    for a task that never committed, its branch where it was made
+    (`started_at`). Takes no optional Git locks, for polls."""
+    if not tip or tip == started_at(task):
         return False
     if recorded_merge_at(task, tip):
         return True
@@ -4175,7 +4543,27 @@ MCP_INSTRUCTIONS = (
     "or a guess, and never work the user turned down. A piece of what you were asked to do stays here, "
     "without an offer. A task you offer starts from the branch this task merges into, without this "
     "task's changes, so offer only work that doesn't need them. Say in your reply what you offered.")
+# What a conversation's agent is told instead: it is in no project, so the
+# work it finds is always for a task of its own, in a project it names.
+MCP_CONVERSATION_INSTRUCTIONS = (
+    "Roost runs you in a conversation that belongs to no project: the folder you are in is Roost's own, "
+    "and nothing here is merged anywhere. The user talks to you to think, look into things and plan. "
+    "When they want work done in one of their projects, don't do it from here: offer each piece that "
+    "stands by itself as a task with propose_task, naming its project. list_projects names the projects "
+    "Roost has run tasks in on this machine, and any Git repository's folder will do. Read those "
+    "projects' files with your Read, Grep and Glob tools, which need no permission there, before you "
+    "plan; run no commands in them. Each offer waits "
+    "under this conversation in Roost until the user starts it, as a task with its own agent, worktree "
+    "and branch, which they review and merge; you can't start one yourself, nor do it here. Split a larger piece of "
+    "work into tasks that can go on at the same time without changing the same files, and say in each "
+    "brief what the others cover. Say in your reply what you offered.")
 MCP_TOOLS = {
+    "list_projects": dict(
+        description=(
+            "The projects Roost has run tasks in on this machine, each by the folder of its primary "
+            "checkout, as propose_task's project takes it."),
+        inputSchema=dict(type="object", properties={}),
+        annotations=dict(readOnlyHint=True, destructiveHint=False, openWorldHint=False)),
     "propose_task": dict(
         description=(
             "Offer the user a task of its own, with its own agent, Git worktree and branch, for work "
@@ -4186,7 +4574,11 @@ MCP_TOOLS = {
             "and what done looks like."),
         inputSchema=dict(type="object", required=["title", "brief"], properties=dict(
             title=dict(type="string", description="A short name for the task, a few words"),
-            brief=dict(type="string", description="Everything the new task's agent needs to start"))),
+            brief=dict(type="string", description="Everything the new task's agent needs to start"),
+            project=dict(type="string", description=(
+                "The folder of the project the task is for, when it isn't this task's own: a Git "
+                "repository on this machine, as list_projects names them. Leave it out for a task in "
+                "this task's project. A conversation, which has no project, must give it.")))),
         # It only records the offer, so an agent that asks before a tool
         # that says nothing of itself, as Codex does, needn't ask.
         annotations=dict(readOnlyHint=False, destructiveHint=False, openWorldHint=False)),
@@ -4195,6 +4587,8 @@ MCP_TOOLS = {
 # title one can have: it names a task, and tmux takes no command as long
 # as one that names thousands of characters.
 OFFER_LIMIT = 3
+# A conversation plans: a piece of work split into tasks is more than three.
+CONVERSATION_OFFER_LIMIT = 8
 TITLE_LIMIT = 1000
 # Format characters that real writing has: the soft hyphen, the joiners,
 # and the signs that draw before a number in Arabic and Syriac.
@@ -4262,22 +4656,35 @@ class McpServer:
         else:
             self.write(dict(id=ident, result=result))
 
+    def instructions(self):
+        """What the agent is told of Roost's tools: as a task's, or as a
+        conversation's, which has no project of its own."""
+        try:
+            conversation = self.store.read(self.task_id).get("conversation") is True
+        except (RoostError, OSError, ValueError):
+            conversation = False
+        return MCP_CONVERSATION_INSTRUCTIONS if conversation else MCP_INSTRUCTIONS
+
     def answer(self, method, params):
         if method == "initialize":
             asked = params.get("protocolVersion")
             return dict(protocolVersion=asked if asked in MCP_VERSIONS else MCP_VERSIONS[0],
                         capabilities=dict(tools={}), serverInfo=dict(name="roost", version="1"),
-                        instructions=MCP_INSTRUCTIONS)
+                        instructions=self.instructions())
         if method == "ping":
             return {}
         if method == "tools/list":
             return dict(tools=[dict(definition, name=name) for name, definition in MCP_TOOLS.items()])
         if method == "tools/call":
             arguments = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
-            if params.get("name") != "propose_task":
+            if params.get("name") not in MCP_TOOLS:
                 raise McpError(-32602, "Unknown tool: %s" % params.get("name"))
             try:
-                said = propose_task(self.store, self.task_id, arguments.get("title"), arguments.get("brief"))
+                if params.get("name") == "list_projects":
+                    said = "\n".join(known_projects(self.store)) or "Roost has run no task in a project here yet."
+                else:
+                    said = propose_task(self.store, self.task_id, arguments.get("title"), arguments.get("brief"),
+                                        arguments.get("project"))
             except (RoostError, OSError, ValueError) as exc:
                 return dict(content=[dict(type="text", text=str(exc))], isError=True)
             return dict(content=[dict(type="text", text=said)])
@@ -4321,9 +4728,53 @@ def hidden_character(value):
                  or UNDRAWN.match(c)), None)
 
 
-def propose_task(store, task_id, title, brief):
+def known_projects(store):
+    """The projects this host has run tasks in, by their primary checkouts,
+    newest first: not the repository Roost keeps for conversations."""
+    own = os.path.realpath(store.root / CONVERSATIONS)
+    found = []
+    for marker in sorted((store.root / "worktrees").glob("*/" + REPOSITORY_MARKER),
+                         key=lambda path: path.stat().st_mtime, reverse=True):
+        with contextlib.suppress(OSError):
+            repo = read_repository(marker)
+            if repo and repo not in found and os.path.realpath(repo) != own and os.path.isdir(repo):
+                found.append(repo)
+    return found
+
+
+def offered_project(store, task, project):
+    """The folder an offer of TASK's agent names as PROJECT, a task's own
+    project being None: a Git repository here, which you read in the
+    draft before anything starts there. Looked at, not asked of Git: the
+    server runs no program."""
+    if not project:
+        if task.get("conversation") is True:
+            raise RoostError("A conversation is in no project: give the folder of the project the task is "
+                             "for, as list_projects names them")
+        return None
+    hidden = hidden_character(project) or ("\n" if "\n" in project else None)
+    if hidden:
+        raise RoostError("The project holds U+%04X, which no folder Roost offers a task in has" % ord(hidden))
+    folder = Path(project).expanduser()
+    if not folder.is_absolute():
+        raise RoostError("Name the project by its whole path, as list_projects does")
+    folder = Path(os.path.normpath(folder))
+    if not (folder / ".git").exists():
+        known = known_projects(store)
+        raise RoostError("%s is no Git repository's folder. %s" % (
+            folder, "Projects Roost knows here: " + ", ".join(known) if known else "Give the folder that holds its .git"))
+    real = os.path.realpath(folder)
+    if real == os.path.realpath(store.root) or real.startswith(os.path.realpath(store.root) + os.sep):
+        raise RoostError("%s is Roost's own, not a project of the user's" % folder)
+    # A task's own project is said by leaving it out.
+    return None if real == os.path.realpath(task.get("repo") or "") else str(folder)
+
+
+def propose_task(store, task_id, title, brief, project=None):
     """Offer the task TITLE, with BRIEF, as TASK_ID's agent asks: it waits
-    under that task in Roost for you, and its agent goes on meanwhile."""
+    under that task in Roost for you, and its agent goes on meanwhile. In
+    PROJECT, a folder, if given, and else in the task's own."""
+    project = (text(project) or "").strip()
     title = (text(title) or "").strip()
     brief = (text(brief) or "").replace("\r\n", "\n").strip()
     if not title or not brief:
@@ -4352,17 +4803,26 @@ def propose_task(store, task_id, title, brief):
         # Its agent may be on its way out, as when you stopped the task.
         if task.get("status") in ("stopped", "retired"):
             raise RoostError("This task is %s, so it offers nothing" % task["status"])
+        where = offered_project(store, task, project)
+        conversation = task.get("conversation") is True
         offers = task_offers(task)
         again = next((offer for offer in offers if offer["title"] == title), None)
         if again:
             again.update(brief=brief, at=now())
-        elif len(offers) >= OFFER_LIMIT:
+            again.pop("project", None)
+        elif len(offers) >= (CONVERSATION_OFFER_LIMIT if conversation else OFFER_LIMIT):
             raise RoostError("%d offers of this task already wait for the user; mention this work in your "
                              "reply instead" % len(offers))
         else:
-            offers.append(dict(id=uuid.uuid4().hex[:8], title=title, brief=brief, at=now()))
+            again = dict(id=uuid.uuid4().hex[:8], title=title, brief=brief, at=now())
+            offers.append(again)
+        if where:
+            again["project"] = where
         set_offers(task, offers)
         store.save(task)
+    if conversation:
+        return ("Offered. It waits in Roost under this conversation, where the user can start it as a task in "
+                "%s, or dismiss it. Say in your reply what you offered." % where)
     return ("Offered. It waits in Roost under this task, where the user can start it as a task of its own, "
             "have you do it here, or dismiss it. Say in your reply what you offered, and don't do the work "
             "unless the user asks.")
@@ -4391,6 +4851,23 @@ def taken_offers(store, tasks):
         if parent is not None and offer and any(other["id"] == offer for other in task_offers(parent)):
             with contextlib.suppress(OSError):
                 take_offer(store, parent, offer)
+
+
+def require_offers_named(task, named, doing):
+    """Refuse DOING, as "discarding", to TASK while it holds an offer that
+    NAMED lacks: the IDs of the offers the question before named, as its
+    request says. An offer goes with its record, and one its agent made
+    since you were asked would go unseen. One named that has gone since,
+    taken or dismissed, is no reason to refuse. NAMED is None from an Emacs
+    from before requests said, and for a dry run, which check nothing.
+    Under the registry lock, kept until the task is stopped, when it offers
+    no more (`propose_task`), or its record is gone."""
+    if not isinstance(named, list):
+        return
+    unnamed = [offer["title"] for offer in task_offers(task) if offer["id"] not in named]
+    if unnamed:
+        raise RoostError("Its agent has offered %s since you were asked: %s. Look at it again before %s"
+                         % ("a task" if len(unnamed) == 1 else "%d tasks" % len(unnamed), "; ".join(unnamed), doing))
 
 
 def attach(store, task, files):
@@ -4493,6 +4970,10 @@ def shell(store, task):
 
 
 def require_finished(task, pane):
+    # A menu about a plan comes after its turn, and you may have closed it
+    # since, of which nothing says: the agent is at rest either way.
+    if asks_about_plan(task):
+        return
     if task["status"] in ACTIVE:
         raise RoostError("The agent is active; stop it or wait before retiring this task")
     # The cached status can lag (or predate a reconnect); a live pane in an
@@ -5054,24 +5535,43 @@ def merged_pull_request_head(task):
     return tip, still_open, merged["headRefOid"] if merged else recorded.get("mergedHead") or recorded.get("head")
 
 
-def safe_to_delete(task, commit, merged_head=None):
+def branches_going(store, task):
+    """The branches of the other tasks in TASK's repository whose worktrees
+    Roost is removing, or was when it stopped: what finishes such a task
+    deletes its branch next, having found its commits kept elsewhere. Two
+    tasks with a commit only their branches have, as a fork and the task it
+    was made from, would else each be finished on the strength of the
+    other's branch, and the commit go with both. Under the registry lock,
+    which each of them holds from that finding until its worktree goes."""
+    return [other["branch"] for other in store.all()
+            if other.get("removing") and other.get("id") != task["id"] and other.get("repo") == task["repo"]
+            and isinstance(other.get("branch"), str)]
+
+
+def safe_to_delete(task, commit, merged_head=None, going=()):
     """True when deleting the task branch at COMMIT loses no commits.
     MERGED_HEAD is the tip GitHub merged for the task's pull request. A squash
     merge leaves the branch's commits unmerged to Git, so a branch still at
-    that tip, with nothing committed after the merge, is also safe."""
-    if commit == task.get("baseCommit"):
+    that tip, with nothing committed after the merge, is also safe. A
+    branch that is going keeps nothing: those in GOING, of other tasks
+    (`branches_going`), and the one Claude made for a worktree this task's
+    agent made, which retiring removes too, whatever that worktree is on
+    now, as its agent may switch it back."""
+    going = {"refs/heads/" + name for name in [*going, *(agent_branch(task, entry["path"])
+                                                         for entry in agent_work(task) if entry["made"])] if name}
+    if commit == started_at(task):
         # The task never committed. Its starting point (perhaps a forked
         # task's commits, or a detached HEAD) must survive elsewhere.
         refs = git(task["repo"], "for-each-ref", "--contains", commit, "--format=%(refname)",
                    check=False).stdout.split()
-        if any(ref != "refs/heads/" + task["branch"] for ref in refs):
+        if any(ref != "refs/heads/" + task["branch"] and ref not in going for ref in refs):
             return True
         if git(task["repo"], "merge-base", "--is-ancestor", commit, "HEAD", check=False).returncode == 0:
             return True
     integration = task.get("integrationBranch")
-    if ref_exists(task["repo"], integration) and git(
+    if (integration and "refs/heads/" + integration not in going and ref_exists(task["repo"], integration) and git(
             task["repo"], "merge-base", "--is-ancestor", commit, "refs/heads/" + integration,
-            check=False).returncode == 0:
+            check=False).returncode == 0):
         return True
     return merged_head is not None and merged_head == commit
 
@@ -5120,18 +5620,22 @@ def merge_task(task, integration, here, squash, tip):
     return None
 
 
-def retire(store, task, merge=False, merged_head=None, squash=False, teardown=None, still_open=False, expect=None):
+def retire(store, task, merge=False, merged_head=None, squash=False, teardown=None, still_open=False, expect=None,
+           offers=None):
     """Remove a finished task's worktree, branch, window and record.
     Never discards uncommitted files or unmerged commits. With MERGE, merge
     the task first, as one commit with SQUASH. EXPECT is the branch's commit
     when you were asked, if Emacs knew it, and a branch that has moved since
-    is not merged. TEARDOWN, the project's teardown command, runs in the
-    worktree before it is removed."""
+    is not merged. OFFERS is the IDs of the offers the question named, and
+    a task whose agent has offered another since is left as it is
+    (`require_offers_named`). TEARDOWN, the project's teardown command,
+    runs in the worktree before it is removed."""
     inventory = inventory_for(task)
     pane = owned_pane(task, inventory)
     require_finished(task, pane)
     if task.get("paneId") in inventory and not pane:
         raise RoostError("Task's tmux ownership changed; stop or forget the task instead")
+    require_offers_named(task, offers, "merging" if merge else "retiring")
     repo = task["repo"]
     branch = task["branch"]
     put_back_removed(store, task)
@@ -5179,11 +5683,13 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
                 raise RoostError("The task's branch has moved since you were asked; look at it again before merging")
             with integrating(store, task, "merge", integration, repo if here else None):
                 squashed = merge_task(task, integration, here, squash, tip)
-        # Hooks came in meanwhile, and the agent may be at work again.
+        # Hooks came in meanwhile, and the agent may be at work again, or
+        # have offered a task: Git merged without the registry lock.
         task = store.read_to_act_on(task["id"])
         try:
             inventory = inventory_for(task)
             require_finished(task, owned_pane(task, inventory))
+            require_offers_named(task, offers, "retiring")
             if worktree_exists:
                 check_worktree(store, task)
                 require_clean(str(worktree))
@@ -5195,7 +5701,7 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
         # A squashed branch's commits stay unmerged to Git, as after a
         # pull request's squash merge, but its tip is in the new commit:
         # proof for this merge, where a pull request merged earlier is not.
-        if not safe_to_delete(task, commit, squashed or merged_head):
+        if not safe_to_delete(task, commit, squashed or merged_head, branches_going(store, task)):
             raise RoostError("Task branch has unmerged commits; merge it (m) first, discard it, "
                              "or forget the task to keep its branch")
         # A durable checkpoint permits retry after a disconnect or partial cleanup.
@@ -5470,12 +5976,96 @@ def update(store, task):
     return task
 
 
-def discard_losses(task, branch_exists, worktree, worktree_exists, work):
+def retarget(store, task, base):
+    """Have TASK start from BASE and merge into its branch from now on, as
+    when it started from the wrong branch and its own has since been
+    rebased onto the right one. BASE names a branch as a new task's start
+    does (`integration_for`): a remote-tracking branch gives the local one
+    of its name, and another task's branch that task's. What `m` merges
+    into, `u` merges in and its commits count from all follow. A branch
+    that has all of the task's commits already leaves where they count
+    from as it was, and the task reads as merged there. Where its branch
+    was made, `startCommit`, stays whatever is named: by that it has
+    committed or never did (`started_at`). Only the record
+    changes: no commit moves, and a pull request open against the old
+    branch stays as it is, which the reply's `note` says, as it does that
+    the local branch is not where its remote one is. Not an event of the
+    agent's, so its `updatedAt` stays as it was; `retargetedAt` tells
+    Emacs a reply read before this from one read since."""
+    if task.get("conversation") is True:
+        raise RoostError("%s is a conversation, in no project, with no branch to merge into" % task["name"])
+    base = text(base)
+    if not base:
+        raise RoostError("Name the branch the task should merge into")
+    repo, branch = task["repo"], task["branch"]
+    # A branch before anything else of its name, by its full name: you chose
+    # from the branches, a tag of the same name would otherwise shadow it,
+    # and Git takes a name that starts with - for an option.
+    ref = next((full for full in ("refs/heads/" + base, "refs/remotes/" + base)
+                if git(repo, "show-ref", "--verify", "--quiet", full, check=False).returncode == 0), base)
+    resolved = None if ref.startswith("-") else git(repo, "rev-parse", "--verify", "--quiet", ref + "^{commit}",
+                                                    check=False)
+    if resolved is None or resolved.returncode:
+        raise RoostError("No branch, tag or commit named %r to merge into" % base)
+    commit = resolved.stdout.strip()
+    full = git(repo, "rev-parse", "--symbolic-full-name", ref, check=False).stdout.strip()
+    own = "%s is the task's own branch; name the branch it should merge into" % base
+    if full == "refs/heads/" + branch:
+        raise RoostError(own)
+    tip = branch_tip(task)
+    if not tip:
+        raise RoostError("The task's branch %s no longer exists; there is nothing to merge" % branch)
+    start = git(repo, "merge-base", tip, commit, check=False).stdout.strip()
+    if not start:
+        raise RoostError("%s and the task's branch %s have no commit in common, so neither merges into the other"
+                         % (base, branch))
+    # Last, as it makes the local branch of a remote one that has none.
+    integration = integration_for(store, repo, repo, ref, current_branch(repo))
+    if not integration:
+        raise RoostError("%s names no branch to merge into, and the primary checkout %s has none checked out; "
+                         "name a branch" % (base, repo))
+    # As its own remote-tracking branch gives.
+    if integration == branch:
+        raise RoostError(own)
+    before = task.get("integrationBranch")
+    # What has all of the task's commits, as a branch they are merged into
+    # or a tag at them, leaves where they count from as it was: counted
+    # from its own tip, none would be its own, so it would show no file
+    # changed, have nothing for `P` to propose, and a pull request at them
+    # would not be its. Where its branch was made stays: where they count
+    # from can be a commit of the task's own, as when a tag at an earlier
+    # one is named, and a branch reset there has not gone back to its
+    # start. An older helper's record gets it from `baseCommit`, before
+    # that moves for the first time.
+    task.update(baseRef=base[len("refs/heads/"):] if base.startswith("refs/heads/") else base,
+                baseCommit=task["baseCommit"] if start == tip else start, startCommit=started_at(task),
+                integrationBranch=integration, integrationRef="refs/heads/" + integration, retargetedAt=now())
+    store.save(task)
+    notes = []
+    if full.startswith("refs/remotes/") and branch_tip(task, integration) != commit:
+        notes.append("%s here and %s are at different commits, and it merges into %s as it is here"
+                     % (integration, base, integration))
+    pr = recorded_pull_request(task)
+    # One just opened has no state yet, nor a base.
+    target = pr.get("base") or before
+    if pr and pr.get("state") in (None, "OPEN") and target != integration:
+        notes.append("its pull request still targets %s, which %s changes"
+                     % (target or "the branch it was opened against",
+                        ("glab mr update %s --target-branch %s" if pr.get("forge") == "gitlab"
+                         else "gh pr edit %s --base %s") % (pr["number"], shlex.quote(integration))))
+    if notes:
+        # For Emacs to say once.
+        task["note"] = "; ".join(notes)
+    return task
+
+
+def discard_losses(task, branch_exists, worktree, worktree_exists, work, going=()):
     """What discarding a task would lose, as counts: commits on no other
     branch, commits in submodules on no remote of theirs, and uncommitted
     or untracked files, those in submodules too. WORK is what `agent_work`
     says of the worktrees its agent made, whose branches go with them only
-    if Claude made them."""
+    if Claude made them. GOING is other tasks' branches that are going
+    (`branches_going`), which keep no commit either."""
     repo, branch = task["repo"], task["branch"]
     paths = ([worktree] if worktree_exists else []) + [entry["path"] for entry in work]
     branches = ([branch] if branch_exists else []) + [entry["branch"] for entry in work
@@ -5486,7 +6076,7 @@ def discard_losses(task, branch_exists, worktree, worktree_exists, work):
     tips = ["refs/heads/" + name for name in branches] + heads
     # --exclude applies to the --branches that follows it, by short name.
     commits = int(git(repo, "rev-list", "--count", *tips, "--not",
-                      *("--exclude=" + name for name in branches),
+                      *("--exclude=" + name for name in [*branches, *going]),
                       "--branches", "--remotes", "--tags").stdout) if tips else 0
     # Removing the worktrees deletes their submodules' repositories,
     # whose changes are counted there; here, which commits they're at.
@@ -5500,13 +6090,15 @@ def discard_losses(task, branch_exists, worktree, worktree_exists, work):
         unreadSubmodules=sum(entry["commits"] is None for entry in submodules))
 
 
-def discard(store, task, expect=None, dry_run=False, teardown=None, told=None):
+def discard(store, task, expect=None, dry_run=False, teardown=None, told=None, offers=None):
     """Delete a task's worktree, branch, window and record, whatever they
     hold. With DRY_RUN, only say what would be lost, as `discard_losses`
     counts it. Otherwise EXPECT is the branch's commit when you were told,
     and a branch that has moved since is not deleted. TOLD is what the dry
     run counted, and a task that would lose more now is not deleted either,
-    nor its agent stopped: an agent goes on working while you read.
+    nor its agent stopped: an agent goes on working while you read. Nor one
+    whose agent has offered a task since, which OFFERS, the IDs of the
+    offers the question named, lacks (`require_offers_named`).
     TEARDOWN, the project's teardown command, runs in the worktree before it
     is removed."""
     repo = task["repo"]
@@ -5523,17 +6115,19 @@ def discard(store, task, expect=None, dry_run=False, teardown=None, told=None):
         require_nothing_kept(repo, worktree, unlinked, bool(task.get("removing")))
     # The worktrees its agent made go with it.
     work = [entry for entry in agent_work(task, seen=not dry_run) if entry["made"]]
+    going = branches_going(store, task)
     if dry_run:
-        return dict(task, discard=dict(discard_losses(task, branch_exists, worktree, worktree_exists, work),
+        return dict(task, discard=dict(discard_losses(task, branch_exists, worktree, worktree_exists, work, going),
                                        commit=commit))
     if commit != (expect or None):
         raise RoostError("The task's branch has moved since you were asked; look at it again before discarding")
     if isinstance(told, dict):
-        losses = discard_losses(task, branch_exists, worktree, worktree_exists, work)
+        losses = discard_losses(task, branch_exists, worktree, worktree_exists, work, going)
         if any(count > (told.get(name) or 0) for name, count in losses.items()):
             # Asking again would only find more.
             raise RoostError("The task holds more than you were told; %slook at it again before discarding"
                              % ("its agent is at work, so stop it (K), then " if task["status"] in ACTIVE else ""))
+    require_offers_named(task, offers, "discarding")
     stop(store, task)
     remove_worktrees(store, task, worktree if worktree_exists else None, work, force=True, teardown=teardown)
     shutil.rmtree(copy_staging(task["worktree"]), ignore_errors=True)
@@ -5547,13 +6141,16 @@ def discard(store, task, expect=None, dry_run=False, teardown=None, told=None):
     return task
 
 
-def forget(store, task):
+def forget(store, task, offers=None):
     """Drop Roost's record without touching Git, closing an ended task's window.
-    The escape hatch for tasks Roost can no longer retire."""
+    The escape hatch for tasks Roost can no longer retire. OFFERS is the IDs
+    of the offers the question named, and a task whose agent has offered
+    another since is kept (`require_offers_named`)."""
     inventory = pane_inventory(task["socket"])
     pane = owned_pane(task, inventory) if inventory else None
     if pane and not pane["dead"]:
         raise RoostError("The agent is running; stop the task before forgetting it")
+    require_offers_named(task, offers, "forgetting")
     if inventory:
         close_panes(task, inventory, check=False)
     left = []
@@ -6541,6 +7138,60 @@ def capture(store, task_id, entry, at=None):
             file.write(json.dumps(dict(entry, at=time.time() if at is None else at), ensure_ascii=False) + "\n")
 
 
+# What an agent is doing as it works, from the tool it starts: what it
+# would ask to do, said as doing it.
+ACTIVITIES = (("Asks to run outside the sandbox: ", "Running "), ("Asks to run ", "Running "),
+              ("Asks to edit ", "Editing "), ("Asks to write ", "Writing "), ("Asks to read ", "Reading "),
+              ("Asks to fetch ", "Fetching "), ("Asks to search the web for ", "Searching the web for "),
+              ("Asks to use ", "Using "))
+# Tools that keep the agent's own notes, which say nothing of the work.
+QUIET_TOOLS = ("TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "ToolSearch", "ExitPlanMode",
+               "AskUserQuestion")
+
+
+def tool_activity(payload, worktree=None):
+    """What an agent does as it starts the tool PAYLOAD names, as a phrase
+    for the views to show beside `running`: "Running python3 -m pytest",
+    "Editing notes.py". None for a tool that says nothing of the work, or
+    asks you something, which its status says."""
+    tool = payload.get("tool_name")
+    if not isinstance(tool, str) or not tool or tool in QUIET_TOOLS:
+        return None
+    args = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+
+    def said(key):
+        value = args.get(key)
+        return one_line(value)[:REQUEST_LIMIT] if isinstance(value, str) and one_line(value) else None
+
+    if tool in ("Task", "Agent"):
+        return "Starting a subagent" + (": " + said("description") if said("description") else "")
+    if tool in ("Grep", "Glob"):
+        return ("Searching for " if tool == "Grep" else "Looking for ") + (said("pattern") or "files")
+    if tool.startswith("mcp__") and tool.count("__") >= 2:
+        _, server, name = tool.split("__", 2)
+        return "Using %s's %s" % (server, name)
+    asks = permission_request(payload, worktree)
+    for asking, doing in ACTIVITIES:
+        if asks and asks.startswith(asking):
+            # On one line, without what a terminal would take for a key.
+            return one_line(doing + asks[len(asking):])
+    return None
+
+
+def note_activity(task, payload):
+    """Keep in TASK what its agent is doing, as the event PAYLOAD says: the
+    tool it starts, until it starts another; nothing once it stops working."""
+    if task.get("status") not in ("running", "background") or payload.get("hook_event_name") == "UserPromptSubmit":
+        task.pop("activity", None)
+        task.pop("activityFrom", None)
+    elif payload.get("hook_event_name") == "PreToolUse":
+        doing = tool_activity(payload, task.get("worktree"))
+        if doing:
+            task["activity"] = doing
+            # Not the agent's own report, which its next report replaces.
+            task.pop("activityFrom", None)
+
+
 def update_hook(store, task_id, payload, run_id=None):
     with store.locked():
         task = store.read(task_id)
@@ -6572,6 +7223,8 @@ def update_hook(store, task_id, payload, run_id=None):
                 store.save(task)
         concerns = getattr(agent, "concerns", None)
         updates = agent.observe(payload, before) if not concerns or concerns(task, payload) else None
+        # Who asked before this event, which may name another.
+        asked_before, beside_before = asking_subagent(task), asks_beside(task)
         # News that the agent's end overtook, as Pi and OpenCode don't wait
         # for their reports, says no more what it does, though what it replied
         # is its last word.
@@ -6585,7 +7238,9 @@ def update_hook(store, task_id, payload, run_id=None):
             if relayed and not new_conversation:
                 updates = beside_program_status(updates, before, agent.reports_turns,
                                                 getattr(agent, "waits_for_hooks", False))
-            elif before == "permission" and updates.get("status") == "running" and answers and not answers(task, payload):
+            elif (before == "permission" and updates.get("status") not in (None, "permission")
+                  and answers and not answers(task, payload)):
+                # It still asks, whatever this event says the agent does.
                 updates = without_status(updates)
             # A report read before this hook, still waiting for the lock, is
             # older news than any status it records, for an agent that waits
@@ -6598,6 +7253,7 @@ def update_hook(store, task_id, payload, run_id=None):
             if "lastPrompt" in updates:
                 updates["lastPrompt"] = later_prompt(task, updates["lastPrompt"])
             task.update(updates)
+            note_activity(task, payload)
             request = (named or permission_request(payload, task.get("worktree"))) if asks else None
             if request:
                 task["request"] = request
@@ -6634,6 +7290,11 @@ def update_hook(store, task_id, payload, run_id=None):
                                 or kind == "permission_prompt" and task.get("requestQuestion")):
                 if before == "permission" or kind in ANOTHER_AGENT_ASKS:
                     task["requestCall"] = dict(agent="another agent")
+                    # One of them is not the agent you talk to, and may
+                    # still ask once that agent's turn is over.
+                    if (kind in ANOTHER_AGENT_ASKS or payload.get("agent_id")
+                            or before == "permission" and (asked_before or beside_before)):
+                        task["requestCall"]["beside"] = True
                     task.pop("requestCommand", None)
                     task.pop("requestQuestion", None)
                 elif kind in MCP_QUESTIONS:
@@ -6812,6 +7473,10 @@ def apply_program_status(task, fields, run_id):
         # A dialog while it rests, as one at its start or one you open,
         # waits on you too, but holds up no turn.
         changes = dict(status="permission", lastEvent="Blocked" if status == "running" else "Dialog")
+    elif state in ("done", "idle") and asks_about_plan(task):
+        # As after any turn: it says nothing of the menu it then opens,
+        # which its next turn's hook ends, or its word that it works.
+        pass
     elif state in ("done", "idle") and status == "permission" and task.get("lastEvent") == "Dialog":
         # Back at rest, as before the dialog: no turn ended.
         changes = dict(status="ready", lastEvent="Idle")
@@ -6846,9 +7511,13 @@ def apply_program_status(task, fields, run_id):
         forget_request(task)
     if task["status"] == "running" and state == "working" and fields.get("msg"):
         task["activity"] = fields["msg"][:REQUEST_LIMIT]
-    else:
-        # Each report replaces the last, so one without a message clears it.
+        task["activityFrom"] = "report"
+    elif task.get("activityFrom") == "report" or task["status"] != "running":
+        # Each report replaces the last, so one without a message clears
+        # it. Not the tool a hook named, which says more than a report
+        # with nothing to say, while the agent still works.
         task.pop("activity", None)
+        task.pop("activityFrom", None)
     return task != before
 
 
@@ -7497,8 +8166,8 @@ def require_not_removing(store, task, action):
 
 
 # Kept in task records for the helper's own use, and not sent to Emacs.
-PRIVATE = ("lastReply", "transcript", "requestFrom", "requestCall", "requestQuestion", "hookAt", "panePid",
-           "endedRun", "integrating")
+PRIVATE = ("lastReply", "transcript", "requestFrom", "requestCall", "requestQuestion", "activityFrom", "hookAt",
+           "panePid", "endedRun", "integrating")
 
 
 def outgoing(result):
@@ -7525,19 +8194,23 @@ TASK_ACTIONS = {
     "seen": lambda store, task, request: seen(store, task, request.get("updatedAt")),
     "turn": lambda store, task, request: turn(store, task, text(request.get("turn"))),
     "rename": lambda store, task, request: rename(store, task, request.get("name")),
+    "retarget": lambda store, task, request: retarget(store, task, request.get("base")),
     "retire": lambda store, task, request: retire(store, task, merged_head=request.get("mergedHead"),
                                                   teardown=text(request.get("teardown")),
-                                                  still_open=request.get("stillOpen") is True),
+                                                  still_open=request.get("stillOpen") is True,
+                                                  offers=request.get("offers")),
     "merge": lambda store, task, request: retire(store, task, merge=True, merged_head=request.get("mergedHead"),
                                                  squash=request.get("style") == "squash",
                                                  teardown=text(request.get("teardown")),
                                                  still_open=request.get("stillOpen") is True,
-                                                 expect=text(request.get("expect"))),
-    "forget": lambda store, task, request: forget(store, task),
+                                                 expect=text(request.get("expect")),
+                                                 offers=request.get("offers")),
+    "forget": lambda store, task, request: forget(store, task, request.get("offers")),
     "discard": lambda store, task, request: discard(store, task, request.get("expect"),
                                                     request.get("dryRun") is True,
                                                     text(request.get("teardown")),
-                                                    request.get("told")),
+                                                    request.get("told"),
+                                                    request.get("offers")),
     "update": lambda store, task, request: update(store, task),
     "take-offer": lambda store, task, request: take_offer(store, task, text(request.get("offer"))),
 }
@@ -7682,7 +8355,8 @@ def rpc(request):
 # which goes when its time is up; nor `create`, which has its eleven minutes,
 # and which a kill cuts short cleanly: `settle_creation` undoes it; nor `send`,
 # whose prompt is better not sent than sent long after you stopped waiting.
-DETACHED = ("retire", "merge", "discard", "forget", "update", "pr", "resume", "stop", "rename", "shell", "attach")
+DETACHED = ("retire", "merge", "discard", "forget", "update", "pr", "resume", "stop", "rename", "retarget", "shell",
+            "attach")
 
 
 def detach():

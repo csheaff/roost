@@ -126,6 +126,36 @@ class Lifecycle(unittest.TestCase):
         self.assertFalse(Path(task["worktree"]).exists())
         self.assertEqual(self.request("list")["result"], [])
 
+    def test_a_conversation_needs_no_project_and_retires_as_a_task(self):
+        # Wherever Emacs says it is, it goes in the helper's own repository.
+        first = self.create(name="Conversation 09:15", directory="/nowhere", conversation=True)
+        second = self.create(name="Conversation 09:16", directory="/nowhere", conversation=True)
+        home = self.state / "conversations"
+        for task in (first, second):
+            self.assertIs(task["conversation"], True)
+            self.assertEqual(task["repo"], str(home.resolve()))
+            self.assertTrue(Path(task["worktree"]).is_dir())
+        self.assertNotEqual(first["worktree"], second["worktree"])
+        # One empty commit, by Roost, made once.
+        self.assertEqual(self.git("rev-list", "--count", "HEAD", cwd=home), "1")
+        self.assertEqual(self.git("log", "-1", "--format=%an %s", cwd=home), "Roost Conversations")
+        self.assertEqual(self.git("status", "--porcelain", cwd=home), "")
+        # A task in your project is none.
+        self.assertNotIn("conversation", self.create(name="plain"))
+        for task in (first, second):
+            self.assertTrue(self.request("retire", id=task["id"])["ok"])
+            self.assertFalse(Path(task["worktree"]).exists())
+        self.assertEqual([task["name"] for task in self.request("list")["result"]], ["plain"])
+
+    def test_a_conversations_repository_left_with_no_commit_gets_one(self):
+        # As by a helper stopped between `git init` and its commit.
+        home = self.state / "conversations"
+        home.mkdir(parents=True)
+        roost.git(home, "init", "-q")
+        task = self.create(name="Conversation 09:15", directory="/nowhere", conversation=True)
+        self.assertEqual(self.git("rev-list", "--count", "HEAD", cwd=home), "1")
+        self.assertTrue(self.request("retire", id=task["id"])["ok"])
+
     def pastes(self, task, words):
         """How many times its agent's terminal shows it was sent WORDS."""
         screen = roost.tmux(self.socket, "capture-pane", "-p", "-J", "-t", task["paneId"]).stdout
@@ -283,8 +313,9 @@ class Lifecycle(unittest.TestCase):
     def test_hostile_values_go_through_as_themselves_and_nothing_runs(self):
         """Names, prompts, branches and paths, as you type them or an issue
         brings them, reach Git, tmux and the agent intact, through creating,
-        renaming, sending to, updating, merging and discarding a task. None
-        of it runs: each part a shell or tmux would run leaves a file."""
+        renaming, sending to, retargeting, updating, merging and discarding a
+        task. None of it runs: each part a shell or tmux would run leaves a
+        file."""
         marks, place = (Path(tempfile.mkdtemp(prefix=prefix, dir="/tmp")) for prefix in ("roostmarks", "roostplace"))
         for folder in (marks, place):
             self.addCleanup(shutil.rmtree, folder, True)
@@ -406,6 +437,11 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(((repo / "hello").read_text(), roost.current_branch(str(repo))), ("changed\n", branch))
         self.assertFalse(wt.exists())
         wt = Path(second["worktree"])
+        # Told which branch it merges into by its name, which starts with a
+        # dash, and by one that names nothing.
+        self.assertFalse(self.request("retarget", id=second["id"], base=hostile("retarget"))["ok"])
+        reply = self.request("retarget", id=second["id"], base=branch)
+        self.assertEqual((reply["result"]["baseRef"], reply["result"]["integrationBranch"]), (branch, branch))
         self.assertTrue(self.request("update", id=second["id"])["ok"])
         self.assertEqual((wt / "hello").read_text(), "changed\n")
         (wt / "other").write_text("x\n")
@@ -709,6 +745,46 @@ class Lifecycle(unittest.TestCase):
             listed = self.request("list")["result"][0]
         self.assertEqual((listed["status"], listed["lastEvent"]), ("ready", "Interrupt"))
         self.assertNotIn("request", store.read(task["id"]))
+
+    def test_a_working_agent_says_what_it_is_doing(self):
+        # The tool it starts, as a phrase the views show beside `running`,
+        # until it starts another; nothing once it stops working.
+        task = self.create()
+        store = roost.Store(str(self.state))
+        hook = lambda **payload: roost.update_hook(store, task["id"], payload)
+        doing = lambda: store.read(task["id"]).get("activity")
+        hook(hook_event_name="UserPromptSubmit", prompt="Fix it")
+        self.assertIsNone(doing())
+        wt = task["worktree"]
+        for tool, arguments, said in (
+                ("Bash", dict(command="python3 -m pytest -q"), "Running python3 -m pytest -q"),
+                ("Edit", dict(file_path=wt + "/src/notes.py"), "Editing src/notes.py"),
+                ("Write", dict(file_path=wt + "/new.py"), "Writing new.py"),
+                ("Read", dict(file_path=wt + "/README.md"), "Reading README.md"),
+                ("Grep", dict(pattern="def add"), "Searching for def add"),
+                ("Glob", dict(pattern="**/*.py"), "Looking for **/*.py"),
+                ("WebFetch", dict(url="https://example.com/x"), "Fetching https://example.com/x"),
+                ("Agent", dict(description="Review the diff"), "Starting a subagent: Review the diff"),
+                ("mcp__roost__propose_task", dict(title="x"), "Using roost's propose_task"),
+                ("Frobnicate", {}, "Using Frobnicate")):
+            hook(hook_event_name="PreToolUse", tool_name=tool, tool_input=arguments)
+            self.assertEqual(doing(), said)
+        # Its own notes say nothing of the work: what it was doing stays.
+        hook(hook_event_name="PreToolUse", tool_name="TodoWrite", tool_input=dict(todos=[]))
+        self.assertEqual(doing(), "Using Frobnicate")
+        hook(hook_event_name="PostToolUse", tool_name="Frobnicate")
+        self.assertEqual(doing(), "Using Frobnicate")
+        # On one line, whatever a command holds, and listed for Emacs.
+        hook(hook_event_name="PreToolUse", tool_name="Bash", tool_input=dict(command="make\n\x1b[2Jtest"))
+        self.assertEqual(doing(), "Running make [2Jtest")
+        self.assertEqual(self.request("list")["result"][0]["activity"], "Running make [2Jtest")
+        # Asking, or at rest, it does nothing to speak of.
+        hook(hook_event_name="PermissionRequest", tool_name="Bash", tool_input=dict(command="rm -rf build"))
+        self.assertIsNone(doing())
+        hook(hook_event_name="PreToolUse", tool_name="Bash", tool_input=dict(command="rm -rf build"))
+        self.assertEqual(doing(), "Running rm -rf build")
+        hook(hook_event_name="Stop")
+        self.assertIsNone(doing())
 
     def test_an_approved_command_shows_running_before_it_ends(self):
         # Claude reports nothing between your approval and the command's end,
@@ -1042,12 +1118,29 @@ class Lifecycle(unittest.TestCase):
                                   message="Claude Code needs your input"),
                     link=dict(hook_event_name="Notification", notification_type="elicitation_url_dialog",
                               message="Claude Code needs your input"))
+        # A subagent's, or another agent's, may still be on screen once the
+        # main agent's turn is over.
+        others = {"subagent", "worker", "worker_saying_nothing"}
+        left = [dict(id="a1", type="local_agent", status="running")]
+        nothing_left = dict(background_tasks=[], session_crons=[])
         for first, second in itertools.permutations(asks, 2):
-            for end, status in (("Stop", "ready"), ("UserPromptSubmit", "running")):
-                with self.subTest(first=first, second=second, end=end):
+            ends = [("Stop", nothing_left, "ready"), ("UserPromptSubmit", dict(prompt="go on"), "running")]
+            if not {first, second} & others:
+                # Both the main agent's: its turn's end ends them, whatever
+                # it leaves, and whether or not it says.
+                ends += [("Stop", dict(background_tasks=left), "background"), ("Stop", {}, "ready")]
+            for end, fields, status in ends:
+                with self.subTest(first=first, second=second, end=end, fields=fields):
                     hook(hook_event_name="UserPromptSubmit", prompt="go")
                     hook(**asks[first])
                     hook(**asks[second])
+                    if {first, second} & others:
+                        # A turn that ends with work left, or doesn't say
+                        # what it leaves, or starts on Claude's own notice.
+                        for event in (dict(hook_event_name="Stop", background_tasks=left), dict(hook_event_name="Stop"),
+                                      dict(hook_event_name="UserPromptSubmit", source="system",
+                                           prompt="<task-notification>\n<status>completed</status>\n</task-notification>")):
+                            self.assertEqual(hook(**event)["status"], "permission", event)
                     for event in (dict(hook_event_name="PostToolUse", **bash),
                                   dict(hook_event_name="PostToolUse", agent_id="a1", **bash),
                                   dict(hook_event_name="PreToolUse", tool_name="Read"),
@@ -1059,7 +1152,7 @@ class Lifecycle(unittest.TestCase):
                     with patch.object(roost, "approved_command_running", return_value=True):
                         self.assertEqual(self.request("list")["result"][0]["status"], "permission")
                     self.assertIn("Open the task", self.request("send", id=task["id"], text="hello")["error"])
-                    record = hook(hook_event_name=end, prompt="go on")
+                    record = hook(hook_event_name=end, **fields)
                     self.assertEqual(record["status"], status)
                     self.assertFalse({"request", "requestCommand", "requestCall", "requestQuestion"} & set(record))
         # The notification that follows a request is no second one.
@@ -1081,6 +1174,194 @@ class Lifecycle(unittest.TestCase):
                 hook(**event)
             self.assertEqual(store.read(task["id"])["status"], "permission")
 
+    def test_a_subagents_request_outlasts_the_main_agents_turn(self):
+        # As Claude Code 2.1.319 sent them in manual mode: two subagents in
+        # the background, one asking before it writes a file as the other
+        # reads on, and the main agent's turn ending beside them.
+        store = roost.Store(str(self.state))
+        task = self.create()
+        hook = lambda **payload: roost.update_hook(store, task["id"], payload) or store.read(task["id"])
+        a = dict(agent_id="a3f1c0d2e4b5a697", agent_type="general-purpose")
+        b = dict(agent_id="ab7e61f09c2d4e58", agent_type="Explore")
+        write = dict(tool_name="Write", tool_input=dict(file_path=str(Path(task["worktree"]) / "a.txt"), content="a\n"))
+        read = dict(tool_name="Read", tool_input=dict(file_path=str(Path(task["worktree"]) / "hello")))
+        left = [dict(id=agent["agent_id"], type="local_agent", status="running", agent_type=agent["agent_type"])
+                for agent in (a, b)]
+        note = dict(hook_event_name="UserPromptSubmit",
+                    prompt="<task-notification>\n<task-id>%s</task-id>\n<status>completed</status>\n"
+                           "</task-notification>" % b["agent_id"])
+
+        def waits(record):
+            self.assertEqual((record["status"], record.get("request")), ("permission", "Asks to write a.txt"))
+
+        def asks():
+            hook(hook_event_name="UserPromptSubmit", prompt="go", source="user")
+            waits(hook(hook_event_name="PermissionRequest", **write, **a))
+            waits(hook(hook_event_name="PreToolUse", tool_use_id="toolu_b1", **read, **b))
+            waits(hook(hook_event_name="Notification", notification_type="permission_prompt",
+                       message="Claude needs your permission to use Write"))
+            waits(hook(hook_event_name="PreToolUse", tool_use_id="toolu_b2", **read, **b))
+            record = hook(hook_event_name="Stop", background_tasks=left, session_crons=[],
+                          last_assistant_message="Both are at work.")
+            waits(record)
+            # The turn's end still says what it replied.
+            self.assertEqual(record["lastReply"], "Both are at work.")
+
+        def over(record, status="running"):
+            self.assertEqual(record["status"], status)
+            self.assertFalse({"request", "requestCommand", "requestCall"} & set(record))
+
+        asks()
+        self.assertEqual(self.request("list")["result"][0]["status"], "permission")
+        self.assertIn("Open the task", self.request("send", id=task["id"], text="also the docs")["error"])
+        # Nothing of the other subagent's says it is over: its tools, its
+        # end, the turn Claude Code starts by itself on the notice of that
+        # end, whether or not it says who sent it, nor that turn's end while
+        # the one that asks is still at work. Nor does a tool you stopped.
+        waits(hook(hook_event_name="PostToolUse", tool_use_id="toolu_b2", **read, **b))
+        waits(hook(hook_event_name="SubagentStop", **b))
+        waits(hook(source="system", **note))
+        waits(hook(**note))
+        waits(hook(hook_event_name="PreToolUse", tool_use_id="toolu_1", **read))
+        waits(hook(hook_event_name="Stop", background_tasks=left[:1], session_crons=[]))
+        waits(hook(hook_event_name="PostToolUseFailure", tool_use_id="toolu_a1", error="Interrupted",
+                   is_interrupt=True, **write, **a))
+        # An older Claude Code doesn't say what its turn left: unsure, it stands.
+        waits(hook(hook_event_name="Stop"))
+        # What the subagent that asked does next says it is over: the end of
+        # what it asked for, done or failed, its next tool, or its own end.
+        over(hook(hook_event_name="PostToolUse", tool_use_id="toolu_a1", **write, **a))
+        for event in (dict(hook_event_name="PostToolUseFailure", tool_use_id="toolu_a1", error="EACCES", **write, **a),
+                      dict(hook_event_name="PreToolUse", tool_use_id="toolu_a2", **read, **a),
+                      dict(hook_event_name="SubagentStop", **a)):
+            with self.subTest(event=event["hook_event_name"]):
+                asks()
+                over(hook(**event))
+        # So does a prompt of yours, which its prompt on screen would not
+        # let you send, a turn that ends with nothing left in the
+        # background, and leaving Claude.
+        for event, status in ((dict(hook_event_name="UserPromptSubmit", prompt="never mind", source="user"), "running"),
+                              (dict(hook_event_name="UserPromptSubmit", prompt="never mind"), "running"),
+                              (dict(hook_event_name="Stop", background_tasks=[], session_crons=[]), "ready"),
+                              (dict(hook_event_name="SessionEnd", reason="prompt_input_exit"), "exited")):
+            with self.subTest(event=event):
+                asks()
+                over(hook(**event), status)
+        # A record from an older helper doesn't say who asked: the turn's
+        # end ends its request, as it did.
+        asks()
+        record = store.read(task["id"])
+        del record["requestCall"]
+        store.save(record)
+        over(hook(hook_event_name="Stop", background_tasks=left), "background")
+
+    def test_a_subagents_request_among_several_outlasts_the_main_agents_turn(self):
+        # A subagent asks, then the main agent beside it. You answer the
+        # main agent's, and its turn ends with the subagent still asking:
+        # the task read `background`, the subagent's prompt on screen. From
+        # the model of who asks, test/formal/agent_status/SubagentAsks.tla.
+        store = roost.Store(str(self.state))
+        task = self.create()
+        hook = lambda **payload: roost.update_hook(store, task["id"], payload) or store.read(task["id"])
+        a = dict(agent_id="a3f1c0d2e4b5a697", agent_type="general-purpose")
+        write = dict(tool_name="Write", tool_input=dict(file_path=str(Path(task["worktree"]) / "a.txt"), content="a\n"))
+        make = dict(tool_name="Bash", tool_input=dict(command="make"))
+        left = [dict(id=a["agent_id"], type="local_agent", status="running", agent_type=a["agent_type"])]
+
+        def asks(*order):
+            hook(hook_event_name="UserPromptSubmit", prompt="go", source="user")
+            for who in order:
+                hook(hook_event_name="PermissionRequest", **(dict(write, **a) if who == "subagent" else make))
+            self.assertEqual(store.read(task["id"])["requestCall"], dict(agent="another agent", beside=True))
+            # You answer the main agent's.
+            self.assertEqual(hook(hook_event_name="PostToolUse", **make)["status"], "permission")
+
+        for order in (("subagent", "main"), ("main", "subagent")):
+            with self.subTest(order=order):
+                asks(*order)
+                # The main agent's turn ends, the subagent's prompt on screen.
+                record = hook(hook_event_name="Stop", background_tasks=left, session_crons=[])
+                self.assertEqual(record["status"], "permission")
+                self.assertIn(record["request"], ("Asks to run make", "Asks to write a.txt"))
+                self.assertIn("Open the task", self.request("send", id=task["id"], text="hello")["error"])
+                # Nor does the turn Claude starts on its own notice end it,
+                # nor that turn's end while work is left.
+                self.assertEqual(hook(hook_event_name="UserPromptSubmit", source="system",
+                                      prompt="<task-notification>\n</task-notification>")["status"], "permission")
+                self.assertEqual(hook(hook_event_name="Stop", background_tasks=left)["status"], "permission")
+                # A turn that leaves nothing ends it: nobody is there to ask.
+                record = hook(hook_event_name="Stop", background_tasks=[], session_crons=[])
+                self.assertEqual(record["status"], "ready")
+                self.assertFalse({"request", "requestCall"} & set(record))
+        # A third request beside them keeps that a subagent is among them.
+        asks("subagent", "main")
+        hook(hook_event_name="PermissionRequest", **make)
+        self.assertEqual(store.read(task["id"])["requestCall"], dict(agent="another agent", beside=True))
+        self.assertEqual(hook(hook_event_name="Stop", background_tasks=left)["status"], "permission")
+        # A prompt of yours ends it, as a prompt on screen would not let you send one.
+        self.assertEqual(hook(hook_event_name="UserPromptSubmit", prompt="never mind", source="user")["status"], "running")
+        # Two of the main agent's own, one after the other, end with its
+        # turn whatever it leaves, as before.
+        hook(hook_event_name="UserPromptSubmit", prompt="go", source="user")
+        hook(hook_event_name="PermissionRequest", **make)
+        hook(hook_event_name="PermissionRequest", **write)
+        self.assertEqual(store.read(task["id"])["requestCall"], dict(agent="another agent"))
+        self.assertEqual(hook(hook_event_name="Stop", background_tasks=left)["status"], "background")
+        # A record from an older helper doesn't say who was among them:
+        # the turn's end ends them, as it did.
+        asks("subagent", "main")
+        record = store.read(task["id"])
+        record["requestCall"] = dict(agent="another agent")
+        store.save(record)
+        self.assertEqual(hook(hook_event_name="Stop", background_tasks=left)["status"], "background")
+
+    def test_the_main_agents_request_ends_with_its_turn(self):
+        store = roost.Store(str(self.state))
+        task = self.create()
+        hook = lambda **payload: roost.update_hook(store, task["id"], payload) or store.read(task["id"])
+        asked = dict(tool_name="Bash", tool_input=dict(command="make deploy"))
+        left = [dict(id="a3f1c0d2e4b5a697", type="local_agent", status="running")]
+
+        def asks():
+            hook(hook_event_name="UserPromptSubmit", prompt="go")
+            record = hook(hook_event_name="PermissionRequest", **asked)
+            self.assertEqual((record["status"], record["request"]), ("permission", "Asks to run make deploy"))
+
+        def over(record, status):
+            self.assertEqual(record["status"], status)
+            self.assertFalse({"request", "requestCommand", "requestCall"} & set(record))
+
+        # Its turn's end ends what it asked, whatever it leaves in the
+        # background, as does a prompt, Claude Code's own included, and the
+        # failure of what it asked for.
+        for event, status in ((dict(hook_event_name="Stop"), "ready"),
+                              (dict(hook_event_name="Stop", background_tasks=left), "background"),
+                              (dict(hook_event_name="UserPromptSubmit", source="system",
+                                    prompt="<task-notification>\n<status>completed</status>\n</task-notification>"),
+                               "running"),
+                              (dict(hook_event_name="PostToolUseFailure", error="Exit code 2", **asked), "running")):
+            with self.subTest(event=event):
+                asks()
+                over(hook(**event), status)
+        # A subagent's end, another tool's failure and a tool you stopped
+        # say nothing of it.
+        asks()
+        for event in (dict(hook_event_name="SubagentStop", agent_id="a3f1c0d2e4b5a697", agent_type="Explore",
+                           last_assistant_message="Found it."),
+                      dict(hook_event_name="PostToolUseFailure", tool_name="Read", tool_input=dict(file_path="gone"),
+                           error="File does not exist."),
+                      dict(hook_event_name="PostToolUseFailure", error="Interrupted", is_interrupt=True, **asked)):
+            record = hook(**event)
+            self.assertEqual((record["status"], record["request"], record["lastEvent"]),
+                             ("permission", "Asks to run make deploy", "PermissionRequest"))
+        # With nothing asked, a subagent's end is no news, nor its reply the
+        # task's, nor is a tool's failure.
+        hook(hook_event_name="Stop", last_assistant_message="Done.")
+        before = store.read(task["id"])
+        self.assertEqual(hook(hook_event_name="SubagentStop", agent_id="a3f1c0d2e4b5a697", agent_type="Explore",
+                              last_assistant_message="Found it."), before)
+        self.assertEqual(hook(hook_event_name="PostToolUseFailure", error="Exit code 2", **asked), before)
+
     def test_codex_keeps_a_request_while_a_subagents_tool_runs(self):
         with tempfile.TemporaryDirectory() as root:
             store = roost.Store(root)
@@ -1095,6 +1376,11 @@ class Lifecycle(unittest.TestCase):
             self.assertEqual(store.read("0" * 16)["status"], "permission")
             hook(hook_event_name="PostToolUse", tool_name="Bash", tool_input=dict(command="touch approved.txt"))
             self.assertEqual(store.read("0" * 16)["status"], "running")
+            # Its turn's end ends a request whoever asked, as before.
+            hook(hook_event_name="PermissionRequest", tool_name="Bash", tool_input=dict(command="ls"), agent_id="t2",
+                 agent_type="worker")
+            hook(hook_event_name="Stop")
+            self.assertEqual(store.read("0" * 16)["status"], "ready")
 
     def test_dirty_tracked_and_untracked_work_blocks_cleanup(self):
         task = self.create()
@@ -1968,6 +2254,8 @@ class Lifecycle(unittest.TestCase):
         self.git("commit", "-qam", "fix", cwd=wt)
         before = self.git("rev-parse", "main")
         self.git("config", "commit.gpgsign", "true")
+        # Whatever format your own configuration signs with.
+        self.git("config", "gpg.format", "openpgp")
         self.git("config", "gpg.program", "false")
         error = self.request("merge", id=task["id"], style="squash")["error"]
         self.assertTrue(error.startswith("Merge failed; task retained: "), error)
@@ -2695,6 +2983,139 @@ class Lifecycle(unittest.TestCase):
         self.assertNotEqual(independent["baseCommit"], child["baseCommit"])
         self.assertTrue(self.request("retire", id=independent["id"])["ok"])
 
+    def test_a_fork_continues_the_conversation_with_the_work_as_it_stands(self):
+        source = self.create(name="source")
+        session = self.wait(source, "ready")["agentSession"]
+        wt = Path(source["worktree"])
+        (wt / "hello").write_text("changed, not committed\n")
+        (wt / "new-file").write_text("made, not added\n")
+        (wt / "staged").write_text("staged\n")
+        self.git("add", "staged", cwd=wt)
+        status = lambda worktree: roost.git(worktree, "status", "--porcelain").stdout.splitlines()
+        before = status(wt)
+        reply = self.request("create", directory=str(wt), name="fork", socket=self.socket, base="HEAD",
+                             forkFrom=source["id"], prompt="-try another way", command=[sys.executable, str(FAKE)])
+        self.assertTrue(reply["ok"], reply)
+        fork = self.wait(reply["result"], "ready")
+        self.assertEqual(fork["forkSession"], session)
+        self.assertEqual(fork["forkedFrom"], dict(id=source["id"], name="source"))
+        # Your prompt, as you wrote it; the agent hears the note before it.
+        self.assertEqual(fork["prompt"], "-try another way")
+        self.assertEqual(fork["integrationBranch"], "main")
+        self.assertEqual(fork["baseCommit"], self.git("rev-parse", "HEAD", cwd=wt))
+        # Its agent goes on under a session of its own, and the source's stays.
+        self.assertNotEqual(fork["agentSession"], session)
+        self.assertEqual(roost.Store(str(self.state)).read(source["id"])["agentSession"], session)
+        # The work as the conversation left it, uncommitted there as here,
+        # and nothing staged in the fork's index; the source's as it was.
+        fork_wt = Path(fork["worktree"])
+        self.assertEqual((fork_wt / "hello").read_text(), "changed, not committed\n")
+        self.assertEqual((fork_wt / "new-file").read_text(), "made, not added\n")
+        self.assertEqual(status(fork_wt), [" M hello", "?? new-file", "?? staged"])
+        self.assertEqual(status(wt), before)
+        # A resume goes back to the fork's own conversation.
+        self.assertTrue(self.request("stop", id=fork["id"])["ok"])
+        self.assertTrue(self.request("resume", id=fork["id"])["ok"])
+        self.assertEqual(self.wait(fork, "ready")["agentSession"], fork["agentSession"])
+
+    def test_a_fork_of_a_conversation_is_refused_where_it_cannot_go_on(self):
+        source = self.create(name="source")
+        store = roost.Store(str(self.state))
+        worktrees = self.git("worktree", "list", "--porcelain")
+
+        def refused(said, **args):
+            fields = dict(directory=source["worktree"], name="fork", socket=self.socket, base="HEAD",
+                          forkFrom=source["id"], command=[sys.executable, str(FAKE)])
+            reply = self.request("create", **dict(fields, **args))
+            self.assertFalse(reply["ok"], reply)
+            self.assertIn(said, reply["error"])
+            self.assertEqual(self.git("worktree", "list", "--porcelain"), worktrees)
+
+        refused("which codex can't continue", agent="codex", command=[sys.executable, str(FAKE_AGENT), "codex"])
+        refused("starts where its work stands, not at main", base="main")
+        refused("Invalid task ID", forkFrom="../../etc")
+        record = store.read(source["id"])
+        # Nor from a worktree that is going, or half gone.
+        store.save(dict(record, removing="0" * 32))
+        refused("was removing this task's worktree")
+        store.save(dict(record, agentSession=None, claudeSession=None))
+        refused("hasn't started a conversation yet")
+
+    def test_a_task_stays_while_a_fork_reads_where_its_work_stands(self):
+        """A fork starts from its source's worktree as it stands, which Git
+        reads without the registry lock. Retired or discarded meanwhile,
+        the source would leave the fork part of it, so finishing it waits,
+        as for a look. The model found it: TaskOnHost.fork-not-held.cfg."""
+        source = self.create(name="source")
+        wt = Path(source["worktree"])
+        (wt / "hello").write_text("changed, not committed\n")
+        told = self.request("discard", id=source["id"], dryRun=True)["result"]["discard"]
+        discard = dict(id=source["id"], expect=told["commit"], told=told)
+        real, said = roost.snapshot, {}
+
+        def snapshot(worktree, tracked=False):
+            # While Git reads the source's worktree.
+            if not said:
+                said.update(discard=self.request("discard", **discard), retire=self.request("retire", id=source["id"]),
+                            forget=self.request("forget", id=source["id"]))
+            return real(worktree, tracked=tracked)
+
+        with patch.object(roost, "snapshot", snapshot):
+            reply = self.request("create", directory=str(wt), name="fork", socket=self.socket, base="HEAD",
+                                 forkFrom=source["id"], command=[sys.executable, str(FAKE)])
+        for action in ("discard", "retire", "forget"):
+            with self.subTest(action=action):
+                self.assertEqual(said[action].get("error"),
+                                 "Roost is busy with this task's worktree; refresh in a moment")
+        # Before anything changed: its agent runs on, and its work is there.
+        self.assertIn(source["paneId"], roost.pane_inventory(self.socket))
+        self.assertEqual((wt / "hello").read_text(), "changed, not committed\n")
+        self.assertTrue(reply["ok"], reply)
+        fork = self.wait(reply["result"], "ready")
+        self.assertEqual((Path(fork["worktree"]) / "hello").read_text(), "changed, not committed\n")
+        # The fork made, nothing holds the source.
+        self.assertTrue(self.request("discard", **discard)["ok"])
+
+    def test_codex_pi_and_opencode_forks_go_on_in_sessions_of_their_own(self):
+        for agent in ("codex", "pi", "opencode"):
+            with self.subTest(agent=agent):
+                command = [sys.executable, str(FAKE_AGENT), agent]
+                source = self.create(name=agent, agent=agent, command=command)
+                self.assertTrue(self.request("send", id=source["id"], text="first")["ok"])
+                session = self.wait(source, "ready", event="Stop")["agentSession"]
+                reply = self.request("create", directory=source["worktree"], name=agent + " fork", agent=agent,
+                                     socket=self.socket, base="HEAD", forkFrom=source["id"], prompt="another way",
+                                     command=command)
+                self.assertTrue(reply["ok"], reply)
+                # OpenCode starts its session with the first prompt; the
+                # fakes of the others only start theirs.
+                fork = self.wait(reply["result"], "ready", event="Stop" if agent == "opencode" else None)
+                self.assertEqual(fork["forkSession"], session)
+                self.assertTrue(fork["agentSession"])
+                self.assertNotEqual(fork["agentSession"], session)
+
+    def test_each_agent_starts_a_fork_from_a_copy_of_the_conversation(self):
+        store = roost.Store(str(self.state))
+        prompt = "-try another way"
+        for agent, tail in (("claude", ["--resume", "old", "--fork-session", "--", prompt]),
+                            ("codex", ["fork", "--", "old", prompt]),
+                            ("pi", ["--fork", "old", "\n" + prompt]),
+                            ("opencode", ["--session", "old", "--fork", "--prompt=" + prompt])):
+            with self.subTest(agent=agent):
+                adapter = roost.AGENTS[agent]
+                task = dict(id="1234567890abcdef", agent=agent, command=list(adapter.default_command),
+                            prompt=prompt, forkSession="old", runId="run")
+                # The agent hears it works in a new worktree before your prompt.
+                note = roost.FORK_NOTE % ("fix auth", "fix auth")
+                told = adapter.launch(store, dict(task, forkedFrom=dict(id="0" * 16, name="fix auth")), False)
+                self.assertTrue(any(arg.endswith(note + "\n\n" + prompt) for arg in told), told)
+                self.assertEqual(adapter.launch(store, task, False)[-len(tail):], tail)
+                # Until the fork's own conversation is known, a resume forks again.
+                self.assertEqual(adapter.launch(store, task, True)[-len(tail):], tail)
+                own = adapter.launch(store, dict(task, agentSession="new"), True)
+                self.assertNotIn("old", own)
+                self.assertIn("new", own)
+
     def test_shell_reuses_worktree_pane_and_stops_with_task(self):
         task = self.create()
         reply = self.request("shell", id=task["id"])
@@ -2861,6 +3282,49 @@ class Lifecycle(unittest.TestCase):
         self.wait(task, "permission")
         self.assertFalse(self.request("send", id=task["id"], text="yes")["ok"])
         self.assertFalse(self.request("retire", id=task["id"])["ok"])
+
+    def test_codex_asks_about_its_plan_once_a_plan_mode_turn_ends(self):
+        # In Plan mode Codex ends its turn and then opens a menu, "Implement
+        # this plan?". Text pasted there is dropped, and the Enter after it
+        # takes the first choice, so a prompt sent then would implement the
+        # plan and be lost (#239). Codex says nothing of the menu, by a hook
+        # or to its terminal, nor when you close it.
+        for relayed in (False, True):
+            with self.subTest(relayed=relayed):
+                task = self.create(name="plan-%s" % relayed, agent="codex", programStatus=relayed,
+                                   command=[sys.executable, str(FAKE_AGENT), "codex"])
+                if relayed:
+                    self.wait_for(task, lambda record: record.get("programStatusRun") == record["runId"])
+                self.wait(task, "ready")
+                self.assertTrue(self.request("send", id=task["id"], text="plan")["ok"])
+                record = self.wait(task, "permission", "Plan")
+                self.assertEqual(record["request"], "Asks whether to implement its plan")
+                # The plan is what it replied, though its hook's reply left it out.
+                self.assertEqual(record["lastReply"], "Two steps.\n\n# Plan\n- Step one\n- Step two")
+                # Its word that it is done, as after any turn, leaves it asking.
+                time.sleep(.5)
+                self.assertEqual(roost.Store(str(self.state)).read(task["id"])["status"], "permission")
+                self.assertFalse(self.request("send", id=task["id"], text="more")["ok"])
+                # "Yes, implement this plan" is its next turn.
+                roost.tmux(self.socket, "send-keys", "-t", task["paneId"], "yes", "Enter")
+                record = self.wait(task, "ready", "Stop")
+                self.assertNotIn("request", record)
+                self.assertEqual(record["lastPrompt"], "Implement the plan.")
+                self.assertEqual(record["lastReply"], "Implemented.")
+                # Closed with Esc, it still reads as asking, as nothing said
+                # otherwise: a prompt sent anyway is its next turn's.
+                self.assertTrue(self.request("send", id=task["id"], text="plan")["ok"])
+                self.wait(task, "permission", "Plan")
+                roost.tmux(self.socket, "send-keys", "-t", task["paneId"], "no", "Enter")
+                time.sleep(.3)
+                self.assertEqual(roost.Store(str(self.state)).read(task["id"])["status"], "permission")
+                self.assertTrue(self.request("send", id=task["id"], text="something else", force=True)["ok"])
+                record = self.wait(task, "ready", "Stop")
+                self.assertNotIn("request", record)
+                # Its turn over, the menu holds up nothing: the task can go.
+                self.assertTrue(self.request("send", id=task["id"], text="plan")["ok"])
+                self.wait(task, "permission", "Plan")
+                self.assertTrue(self.request("retire", id=task["id"])["ok"])
 
     def test_codex_deferred_start_requires_first_prompt_in_native_terminal(self):
         reply = self.request("create", directory=str(self.repo), name="deferred", socket=self.socket,
@@ -3310,7 +3774,8 @@ class Lifecycle(unittest.TestCase):
         attached = [dict(name="a", data=base64.b64encode(b"a").decode())]
         with self.stopped_in_a_hook(task, "post-merge"):
             for action, args in (("stop", {}), ("resume", {}), ("send", dict(text="more")), ("shell", {}),
-                                 ("rename", dict(name="other")), ("attach", dict(files=attached)), ("look", {}),
+                                 ("rename", dict(name="other")), ("retarget", dict(base="main")),
+                                 ("attach", dict(files=attached)), ("look", {}),
                                  ("update", {}), ("pr", dict(title="T")), ("retire", {}), ("merge", {}),
                                  ("discard", {}), ("forget", {})):
                 with self.subTest(action=action):
@@ -4196,6 +4661,113 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(own.exists())
         self.assertTrue(roost.ref_exists(self.repo, "worktree-probe"))
 
+    def test_a_branch_that_goes_with_the_task_keeps_none_of_its_commits(self):
+        """Retire deletes the task's branch once another has its commits.
+        The branch Claude made for a worktree its agent made is no such
+        branch: retire removes it too. It was taken for one when `B` named
+        it as the branch to merge into, and for a fork that never committed,
+        once its source had gone. The model found it:
+        TaskOnHost.proof-goes*.cfg."""
+        def retargeted():
+            task = self.create(name="retargeted")
+            tip = self.commit_in(task)
+            own = self.agent_worktree(task, "one")
+            self.assertTrue(self.request("retarget", id=task["id"], base="worktree-one")["ok"])
+            # It has commits of its own, so only the branch it merges into
+            # keeps them for it: `B` names the one that stays.
+            return task, tip, own, lambda: self.assertTrue(
+                self.request("retarget", id=task["id"], base="keep-one")["ok"])
+
+        def forked():
+            source = self.create(name="source")
+            tip = self.commit_in(source)
+            task = self.create(name="fork", directory=source["worktree"], base="HEAD")
+            # The fork has the source's commit, so discarding the source loses none.
+            told = self.request("discard", id=source["id"], dryRun=True)["result"]["discard"]
+            self.assertEqual(told["commits"], 0)
+            self.assertTrue(self.request("discard", id=source["id"], expect=told["commit"], told=told)["ok"])
+            # It never committed, so any branch that stays keeps its start.
+            return task, tip, self.agent_worktree(task, "two"), lambda: None
+
+        for case in (retargeted, forked):
+            with self.subTest(case=case.__name__):
+                task, tip, own, kept_there = case()
+                branch = "worktree-" + own.name
+                self.assertEqual(self.git("rev-parse", branch), tip)
+                reply = self.request("retire", id=task["id"])
+                self.assertIn("unmerged commits", reply.get("error", ""), reply)
+                self.assertEqual(self.git("rev-parse", task["branch"]), tip)
+                self.assertTrue(own.exists())
+                self.assertTrue(roost.ref_exists(self.repo, branch))
+                # Refused before its agent was stopped.
+                self.assertIn(task["paneId"], roost.pane_inventory(self.socket))
+                # On a branch that stays, they are kept, and the task goes.
+                self.git("branch", "keep-" + own.name, tip)
+                kept_there()
+                reply = self.request("retire", id=task["id"])
+                self.assertTrue(reply["ok"], reply)
+                self.assertFalse(own.exists())
+                self.assertFalse(roost.ref_exists(self.repo, branch))
+                self.assertFalse(roost.ref_exists(self.repo, task["branch"]))
+                self.assertEqual(self.git("rev-parse", "keep-" + own.name), tip)
+
+    def test_two_tasks_that_share_a_commit_never_both_go_on_the_others_word(self):
+        """A fork that never committed and the task it was made from: only
+        their two branches have the source's commit, and each loses nothing
+        while the other's branch stays. Finished at once, each counted on
+        the other's branch, both went, and the commit with them. Now a
+        branch whose task's worktree is going keeps nothing for another.
+        The teardown command acts in that moment, with the registry lock
+        let go. The model found it: TaskOnHost.going-counts*.cfg."""
+        def kept(commit):
+            """The branches that have COMMIT."""
+            return self.git("for-each-ref", "--format=%(refname)", "--contains", commit)
+
+        for first, action in (("fork", "retire"), ("fork", "discard"), ("source", "discard")):
+            with self.subTest(first=first, action=action):
+                source = self.create(name="source")
+                tip = self.commit_in(source)
+                fork = self.create(name="fork", directory=source["worktree"], base="HEAD")
+                one, other = (fork, source) if first == "fork" else (source, fork)
+                told = {task["id"]: self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+                        for task in (one, other)}
+                self.assertEqual([said["commits"] for said in told.values()], [0, 0])
+                asked = dict(root=str(self.state), action="discard", id=other["id"],
+                             expect=told[other["id"]]["commit"], told=told[other["id"]])
+                reply = self.root / ("reply-%s-%s" % (first, action))
+                meanwhile = "printf %%s %s | %s %s rpc > %s" % (
+                    shlex.quote(json.dumps(asked)), shlex.quote(sys.executable), shlex.quote(str(SOURCE)),
+                    shlex.quote(str(reply)))
+                if action == "retire":
+                    finished = self.request("retire", id=one["id"], teardown=meanwhile)
+                else:
+                    finished = self.request("discard", id=one["id"], expect=told[one["id"]]["commit"],
+                                            told=told[one["id"]], teardown=meanwhile)
+                self.assertTrue(finished["ok"], finished)
+                self.assertFalse(roost.ref_exists(self.repo, one["branch"]))
+                # The other keeps the commit: it was told it would lose none, and now would.
+                self.assertEqual(kept(tip), "refs/heads/" + other["branch"])
+                said = json.loads(reply.read_text())
+                self.assertIn("holds more than you were told", said.get("error", ""), said)
+                # Asked again, it says so, and you choose.
+                again = self.request("discard", id=other["id"], dryRun=True)["result"]["discard"]
+                self.assertEqual(again["commits"], 1)
+                self.assertTrue(self.request("discard", id=other["id"], expect=again["commit"], told=again)["ok"])
+        # Retiring the other in that moment is refused the same way.
+        source = self.create(name="source")
+        tip = self.commit_in(source)
+        fork = self.create(name="fork", directory=source["worktree"], base="HEAD")
+        told = self.request("discard", id=source["id"], dryRun=True)["result"]["discard"]
+        reply = self.root / "reply-retire"
+        meanwhile = "printf %%s %s | %s %s rpc > %s" % (
+            shlex.quote(json.dumps(dict(root=str(self.state), action="retire", id=fork["id"]))),
+            shlex.quote(sys.executable), shlex.quote(str(SOURCE)), shlex.quote(str(reply)))
+        self.assertTrue(self.request("discard", id=source["id"], expect=told["commit"], told=told,
+                                     teardown=meanwhile)["ok"])
+        self.assertEqual(kept(tip), "refs/heads/" + fork["branch"])
+        said = json.loads(reply.read_text())
+        self.assertIn("unmerged commits", said.get("error", ""), said)
+
     def test_work_in_the_agents_worktree_after_it_stopped_stays(self):
         """Retire and discard look at its agent's worktree as its agent
         stops; something else may work there before it goes, as the
@@ -4555,6 +5127,7 @@ class Lifecycle(unittest.TestCase):
                 self.assertEqual((folder / "kept").read_text(), "what was there\n")
                 self.assertEqual(reply["result"]["leftBehind"], ["worktree %s" % folder.resolve()])
 
+    @unittest.skipIf(os.geteuid() == 0, "root writes to any folder")
     def test_a_branch_stays_while_its_worktree_does(self):
         task = self.create()
         own = self.agent_worktree(task)
@@ -4611,6 +5184,331 @@ class Lifecycle(unittest.TestCase):
                 prompted = self.create(name="docs", prompt=prompt)
                 self.assertEqual(self.request("rename", id=prompted["id"], name="manual")["result"]["task"],
                                  prompt)
+
+    def base_fields(self, task):
+        """What TASK's record says it starts from and merges into."""
+        record = roost.Store(str(self.state)).read(task["id"])
+        return tuple(record[field] for field in ("baseRef", "baseCommit", "integrationBranch", "integrationRef"))
+
+    def test_retargeting_a_task_merges_it_into_the_branch_it_was_rebased_onto(self):
+        self.git("switch", "-q", "-c", "feature-b")
+        (self.repo / "feature").write_text("feature\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "feature")
+        self.git("switch", "-q", "main")
+        main, feature = self.git("rev-parse", "main"), self.git("rev-parse", "feature-b")
+        # Started from main, where it should have started from feature-b.
+        task = self.create(name="fix parser")
+        self.assertEqual(self.base_fields(task), ("main", main, "main", "refs/heads/main"))
+        self.commit_in(task)
+        wt = Path(task["worktree"])
+        self.git("rebase", "-q", "feature-b", cwd=wt)
+        # Against main, feature-b's commit counts as the task's, and its file as changed.
+        listed = self.request("list", full=True)["result"][0]
+        self.assertEqual((listed["ahead"], listed["behind"]), (2, 0))
+        self.assertEqual(sorted(file["path"] for file in listed["files"]), ["feature", "work"])
+        reply = self.request("retarget", id=task["id"], base="feature-b")
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(self.base_fields(task), ("feature-b", feature, "feature-b", "refs/heads/feature-b"))
+        self.assertEqual(reply["result"]["integrationBranch"], "feature-b")
+        self.assertNotIn("note", reply["result"])
+        # Only its own commit and file now.
+        listed = self.request("list", full=True)["result"][0]
+        self.assertEqual((listed["ahead"], listed["behind"], listed["conflicts"]), (1, 0, []))
+        self.assertEqual([file["path"] for file in listed["files"]], ["work"])
+        # Brought up to date from feature-b, which has nothing new, not from main, which has.
+        self.git("commit", "--allow-empty", "-qm", "main moved")
+        self.assertIs(self.request("update", id=task["id"])["result"]["update"]["changed"], False)
+        # And merged into it, leaving main alone.
+        main = self.git("rev-parse", "main")
+        merged = self.request("merge", id=task["id"])
+        self.assertTrue(merged["ok"], merged)
+        self.assertEqual(self.git("rev-parse", "main"), main)
+        self.assertEqual(self.git("show", "feature-b:work"), "work")
+        self.assertEqual(self.git("ls-tree", "--name-only", "main"), "hello")
+        self.assertFalse(wt.exists())
+
+    def test_retargeting_onto_a_remote_branch_merges_into_its_local_one_and_says_what_differs(self):
+        remote = self.root / "remote.git"
+        roost.git(self.root, "clone", "-q", "--bare", str(self.repo), str(remote))
+        self.git("remote", "add", "origin", str(remote))
+        self.git("push", "-q", "origin", "main:release")
+        self.git("fetch", "-q", "origin")
+        task = self.create(name="fix parser")
+        tip = self.commit_in(task)
+        start = self.git("rev-parse", "main")
+        retarget = lambda base: self.request("retarget", id=task["id"], base=base)
+        # With no local release, Roost makes one that tracks origin's, as for a new task.
+        reply = retarget("origin/release")
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(self.base_fields(task), ("origin/release", start, "release", "refs/heads/release"))
+        self.assertEqual(self.git("rev-parse", "--abbrev-ref", "release@{upstream}"), "origin/release")
+        self.assertNotIn("note", reply["result"])
+        # A branch asked for in full is recorded by its short name.
+        self.assertTrue(retarget("refs/heads/main")["ok"])
+        self.assertEqual(self.base_fields(task), ("main", start, "main", "refs/heads/main"))
+        # Another task's branch gives the branch that task merges into, from where the two part.
+        other = self.create(name="other", base="release")
+        self.commit_in(other, "other")
+        self.assertTrue(retarget(other["branch"])["ok"])
+        self.assertEqual(self.base_fields(task), (other["branch"], start, "release", "refs/heads/release"))
+        # The local branch is where origin's was, and origin's has moved on.
+        self.git("commit", "--allow-empty", "-qm", "pushed")
+        self.git("push", "-q", "origin", "main:release")
+        self.git("fetch", "-q", "origin")
+        reply = retarget("origin/release")
+        self.assertEqual(reply["result"]["note"], "release here and origin/release are at different commits, "
+                         "and it merges into release as it is here")
+        self.assertEqual(self.base_fields(task), ("origin/release", start, "release", "refs/heads/release"))
+        # A pull request open against the old branch keeps its base, on GitHub or GitLab.
+        store = roost.Store(str(self.state))
+        for pr, said in ((dict(number=12, url="u", state="OPEN", base="release"),
+                          "its pull request still targets release, which gh pr edit 12 --base main changes"),
+                         # One just opened has only its number.
+                         (dict(number=12, url="u"),
+                          "its pull request still targets release, which gh pr edit 12 --base main changes"),
+                         (dict(number=12, url="u", state="OPEN", base="release", forge="gitlab"),
+                          "its pull request still targets release, which glab mr update 12 --target-branch main "
+                          "changes"),
+                         # Changed there already, or no longer open.
+                         (dict(number=12, url="u", state="OPEN", base="main"), None),
+                         (dict(number=12, url="u", state="MERGED", base="release"), None)):
+            with self.subTest(pr=pr):
+                self.assertTrue(retarget("release")["ok"])
+                record = store.read(task["id"])
+                record["pr"] = pr
+                store.save(record)
+                reply = retarget("main")
+                self.assertEqual(reply["result"].get("note"), said)
+                # Said once: the record keeps none.
+                self.assertNotIn("note", store.read(task["id"]))
+        self.assertEqual(self.git("rev-parse", task["branch"]), tip)
+
+    def test_retargeting_onto_a_branch_that_has_the_tasks_commits_leaves_them_merged(self):
+        # Merged by hand into release, where it belonged, a task still said
+        # it merged into main. Told so, it read as one that never committed.
+        self.git("branch", "release")
+        merge = lambda task: (self.git("switch", "-q", "release"),
+                              self.git("merge", "-q", "--no-ff", "--no-edit", task["branch"]),
+                              self.git("switch", "-q", "main"))
+        listed = lambda task: next(t for t in self.request("list", full=True)["result"] if t["id"] == task["id"])
+        retarget = lambda task: self.request("retarget", id=task["id"], base="release")
+        task = self.create(name="fix parser")
+        start = self.base_fields(task)[1]
+        self.commit_in(task)
+        merge(task)
+        self.assertIs(listed(task)["landed"], False)
+        self.assertTrue(retarget(task)["ok"])
+        # Its commits are all in release, and count from where they did.
+        self.assertEqual([listed(task)[field] for field in ("landed", "ahead", "files")], [True, 0, []])
+        self.assertEqual(self.base_fields(task), ("release", start, "release", "refs/heads/release"))
+        # So does a task whose pull request merged, named the branch that has the merge.
+        other = self.create(name="other")
+        head = self.commit_in(other, "other")
+        store = roost.Store(str(self.state))
+        record = store.read(other["id"])
+        record["pr"] = dict(number=7, url="u", state="MERGED", head=head, mergedHead=head, base="release")
+        store.save(record)
+        merge(other)
+        self.assertIs(listed(other)["landed"], True)
+        self.assertTrue(retarget(other)["ok"])
+        self.assertIs(listed(other)["landed"], True)
+        # A task with no commit of its own still has none to merge.
+        idle = self.create(name="idle")
+        self.assertTrue(retarget(idle)["ok"])
+        self.assertIs(listed(idle)["landed"], False)
+        # Nor does a tag at a task's commits make them none of its own: it
+        # merges into main, which lacks them, and x retires nothing unmerged.
+        unmerged = self.create(name="unmerged")
+        self.commit_in(unmerged, "more")
+        self.git("tag", "kept", unmerged["branch"])
+        self.assertTrue(self.request("retarget", id=unmerged["id"], base="kept")["ok"])
+        self.assertEqual([listed(unmerged)[field] for field in ("landed", "ahead")], [False, 1])
+        self.assertIn("unmerged commits", self.request("retire", id=unmerged["id"])["error"])
+        # And x retires what is merged.
+        self.assertTrue(self.request("retire", id=task["id"])["ok"])
+        self.assertEqual(self.git("show", "release:work"), "work")
+
+    def test_a_task_reset_to_a_commit_of_its_own_after_retargeting_still_has_unmerged_commits(self):
+        # B named a tag at the task's first commit, so its commits counted
+        # from there. Reset to it, the task read as one that never
+        # committed, and x retired it, that commit merged nowhere.
+        task = self.create(name="fix parser")
+        first = self.commit_in(task, "one")
+        self.git("tag", "kept", first)
+        self.commit_in(task, "two")
+        self.assertTrue(self.request("retarget", id=task["id"], base="kept")["ok"])
+        self.assertEqual(self.base_fields(task), ("kept", first, "main", "refs/heads/main"))
+        self.git("reset", "-q", "--hard", first, cwd=Path(task["worktree"]))
+        listed = self.listed(full=True)
+        self.assertEqual((listed["landed"], listed["ahead"]), (False, 1))
+        self.assertIn("unmerged commits", self.request("retire", id=task["id"]).get("error", ""))
+        self.assertEqual(self.git("rev-parse", task["branch"]), first)
+        self.assertFalse(roost.is_ancestor(str(self.repo), first, "refs/heads/main"))
+
+    def test_a_task_reset_to_a_merged_commit_of_its_own_after_retargeting_reads_as_merged(self):
+        # Its first commit merged by hand, and another made since, B named
+        # the branch that has the first. Reset to that, all of its work is
+        # merged, and it read as a task that never committed.
+        task = self.create(name="fix parser")
+        first = self.commit_in(task, "one")
+        self.git("merge", "-q", "--no-ff", "--no-edit", task["branch"])
+        self.commit_in(task, "two")
+        self.assertTrue(self.request("retarget", id=task["id"], base="main")["ok"])
+        self.assertEqual(self.base_fields(task), ("main", first, "main", "refs/heads/main"))
+        self.assertIs(self.listed(full=True)["landed"], False)
+        self.git("reset", "-q", "--hard", first, cwd=Path(task["worktree"]))
+        listed = self.listed(full=True)
+        self.assertEqual((listed["landed"], listed["ahead"]), (True, 0))
+        # And x retires it, its commit in main.
+        self.assertTrue(self.request("retire", id=task["id"])["ok"])
+        self.assertEqual(self.git("show", "main:one"), "one")
+
+    def test_a_task_reset_to_where_it_started_after_retargeting_reads_as_never_committed(self):
+        # B named a tag at the task's first commit. Reset to where its
+        # branch was made, before that, it has no commit of its own, and it
+        # read as merged: its tip is in main, and is not where B counts from.
+        task = self.create(name="fix parser")
+        start = self.base_fields(task)[1]
+        first = self.commit_in(task, "one")
+        self.git("tag", "kept", first)
+        self.commit_in(task, "two")
+        self.assertTrue(self.request("retarget", id=task["id"], base="kept")["ok"])
+        self.git("reset", "-q", "--hard", start, cwd=Path(task["worktree"]))
+        listed = self.listed(full=True)
+        self.assertEqual((listed["landed"], listed["ahead"]), (False, 0))
+        # Nothing of its own is left to lose: x retires it, as it would one never retargeted.
+        self.assertTrue(self.request("retire", id=task["id"])["ok"])
+
+    def test_a_task_that_never_committed_stays_one_wherever_retargeting_counts_its_commits_from(self):
+        store = roost.Store(str(self.state))
+        listed = lambda task: next(t for t in self.request("list", full=True)["result"] if t["id"] == task["id"])
+        # A branch main has moved on from.
+        self.git("branch", "old")
+        self.git("commit", "--allow-empty", "-qm", "main moved")
+        old, main = self.git("rev-parse", "old"), self.git("rev-parse", "main")
+        idle = self.create(name="idle")
+        self.assertEqual([store.read(idle["id"])[field] for field in ("baseCommit", "startCommit")], [main, main])
+        self.assertTrue(self.request("retarget", id=idle["id"], base="old")["ok"])
+        # Its commits count from where it and old part. Its branch was made where it was.
+        self.assertEqual([store.read(idle["id"])[field] for field in ("baseCommit", "startCommit")], [old, main])
+        self.assertIs(listed(idle)["landed"], False)
+        # main has where it started, so x loses nothing, though old lacks it.
+        self.assertTrue(self.request("retire", id=idle["id"])["ok"])
+        # A reset in a task never retargeted reads as it did: to a commit
+        # of its own, merged nowhere, and to where it started.
+        task = self.create(name="fix parser")
+        first = self.commit_in(task, "one")
+        self.commit_in(task, "two")
+        wt = Path(task["worktree"])
+        self.git("reset", "-q", "--hard", first, cwd=wt)
+        self.assertEqual([listed(task)[field] for field in ("landed", "ahead")], [False, 1])
+        self.assertIn("unmerged commits", self.request("retire", id=task["id"])["error"])
+        self.git("reset", "-q", "--hard", main, cwd=wt)
+        self.assertEqual([listed(task)[field] for field in ("landed", "ahead")], [False, 0])
+        # An older helper's record says only where its commits count from,
+        # which was where its branch was made: nothing moved it then.
+        record = store.read(task["id"])
+        del record["startCommit"]
+        store.save(record)
+        self.assertEqual(roost.started_at(store.read(task["id"])), main)
+        self.assertIs(listed(task)["landed"], False)
+        self.assertTrue(self.request("retire", id=task["id"])["ok"])
+        # What is there is text, as where its commits count from is.
+        self.assertFalse(roost.listable(dict(record, startCommit=5)))
+        self.assertTrue(roost.listable(record))
+
+    def test_retargeting_a_task_from_an_older_helper_keeps_where_its_branch_was_made(self):
+        # Its record says only where its commits count from. B moves that,
+        # and with nothing else to go by, a reset there read as no commits.
+        store = roost.Store(str(self.state))
+        task = self.create(name="fix parser")
+        record = store.read(task["id"])
+        start = record.pop("startCommit")
+        store.save(record)
+        self.assertNotIn("startCommit", store.read(task["id"]))
+        first = self.commit_in(task, "one")
+        self.git("tag", "kept", first)
+        self.commit_in(task, "two")
+        retarget = lambda base: self.request("retarget", id=task["id"], base=base)["ok"]
+        self.assertTrue(retarget("kept"))
+        self.git("reset", "-q", "--hard", first, cwd=Path(task["worktree"]))
+        self.assertIn("unmerged commits", self.request("retire", id=task["id"]).get("error", ""))
+        self.assertEqual([store.read(task["id"])[field] for field in ("baseCommit", "startCommit")], [first, start])
+        # And it stays, whatever is named next.
+        self.assertTrue(retarget("main"))
+        self.assertEqual([store.read(task["id"])[field] for field in ("baseCommit", "startCommit")], [start, start])
+
+    def test_retargeting_is_refused_with_no_branch_to_merge_into(self):
+        task = self.create(name="fix parser")
+        self.commit_in(task)
+        before, refs = self.base_fields(task), self.git("for-each-ref")
+        refused = lambda base: self.request("retarget", id=task["id"], base=base).get("error", "")
+        for base in ("nowhere", "origin/nowhere", "-main", "--all", " "):
+            with self.subTest(base=base):
+                self.assertEqual(refused(base), "No branch, tag or commit named %r to merge into" % base)
+        for base in ("", None, 3):
+            with self.subTest(base=base):
+                self.assertEqual(refused(base), "Name the branch the task should merge into")
+        for base in (task["branch"], "refs/heads/" + task["branch"]):
+            with self.subTest(base=base):
+                self.assertIn("is the task's own branch", refused(base))
+        self.assertEqual(self.git("for-each-ref"), refs)
+        # A branch with no commit in common.
+        orphan = self.git("commit-tree", "-m", "unrelated", self.git("rev-parse", "HEAD^{tree}"))
+        self.git("branch", "unrelated", orphan)
+        self.assertIn("have no commit in common", refused("unrelated"))
+        # Its branch gone, as after you deleted it.
+        with patch.object(roost, "branch_tip", return_value=None):
+            self.assertIn("no longer exists", refused("main"))
+        # A tag is no branch: it gives the primary checkout's, which is on none.
+        self.git("tag", "v1")
+        self.git("checkout", "-q", "--detach")
+        self.assertIn("v1 names no branch to merge into", refused("v1"))
+        self.git("checkout", "-q", "main")
+        # Refused, the task merges where it did.
+        self.assertEqual(self.base_fields(task), before)
+        # On a branch again, the tag gives that.
+        self.assertTrue(self.request("retarget", id=task["id"], base="v1")["ok"])
+        self.assertEqual(self.base_fields(task), ("v1", before[1], "main", "refs/heads/main"))
+        # Its own branch as its remote has it.
+        remote = self.root / "remote.git"
+        roost.git(self.root, "clone", "-q", "--bare", str(self.repo), str(remote))
+        self.git("remote", "add", "origin", str(remote))
+        self.git("push", "-q", "origin", task["branch"])
+        self.assertIn("is the task's own branch", refused("origin/" + task["branch"]))
+        # A conversation is in no project.
+        conversation = self.create(name="Conversation 09:15", directory="/nowhere", conversation=True)
+        self.assertIn("is a conversation", self.request("retarget", id=conversation["id"], base="main")["error"])
+
+    def test_retargeting_is_no_event_of_the_agents_and_says_when_it_was(self):
+        # A reply read before it can reach Emacs after its own, with the
+        # same updatedAt: Emacs tells the two apart by retargetedAt.
+        self.git("branch", "release")
+        task = self.create(name="fix parser")
+        self.commit_in(task)
+        store = roost.Store(str(self.state))
+        record = self.wait(task, "ready")
+        self.assertNotIn("retargetedAt", record)
+        seen = self.request("seen", id=task["id"], updatedAt=record["updatedAt"])["result"]
+        before = self.request("inspect", id=task["id"])["result"]
+        reply = self.request("retarget", id=task["id"], base="release")
+        self.assertTrue(reply["ok"], reply)
+        first = reply["result"]["retargetedAt"]
+        self.assertGreater(first, record["updatedAt"])
+        self.assertEqual(store.read(task["id"])["retargetedAt"], first)
+        # Not an event: you have still seen it, and the reply read before
+        # has the same updatedAt, and no stamp.
+        listed = self.request("list")["result"][0]
+        self.assertEqual((listed["seen"], listed["updatedAt"]), (seen["seen"], seen["updatedAt"]))
+        self.assertEqual((before["updatedAt"], before.get("retargetedAt")), (listed["updatedAt"], None))
+        self.assertEqual(listed["retargetedAt"], first)
+        # Each change is later than the last, the same branch again too.
+        second = self.request("retarget", id=task["id"], base="release")["result"]["retargetedAt"]
+        self.assertGreater(second, first)
+        # One refused leaves it.
+        self.assertFalse(self.request("retarget", id=task["id"], base="nowhere")["ok"])
+        self.assertEqual(store.read(task["id"])["retargetedAt"], second)
 
     def test_seen_is_recorded_for_every_emacs_until_the_next_event(self):
         task = self.create()
@@ -4748,6 +5646,7 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(again["since"], looked["since"])
         self.assertNotEqual(again["commit"], looked["since"]["end"])
 
+    @unittest.skipIf(os.geteuid() == 0, "root writes to any folder")
     def test_a_look_git_cannot_keep_leaves_the_look_before(self):
         task = self.create()
         wt = Path(task["worktree"])
@@ -9067,6 +9966,196 @@ print(json.dumps(dict(data=data)))
         reply = self.request("create", directory=str(self.repo), name="odd", socket=self.socket, createId="../x")
         self.assertEqual(reply["error"], "Invalid creation ID")
 
+    def test_an_attempt_at_a_prompt_records_which_it_is(self):
+        # Several tasks from one draft: each says its group, the draft's
+        # creation ID, its number and how many there are.
+        group = "ab" * 8
+        first = self.create(name="fix", createId=group, attempt=dict(group=group, n=1, of=2))
+        second = self.create(name="fix 2", createId=group + "02", attempt=dict(group=group, n=2, of=2))
+        self.assertEqual(first["attempt"], dict(group=group, n=1, of=2))
+        self.assertNotEqual(first["branch"], second["branch"])
+        self.assertEqual(sorted((task["name"], task["attempt"]["n"], task["attempt"]["group"])
+                                for task in self.request("list")["result"]),
+                         [("fix", 1, group), ("fix 2", 2, group)])
+        # One with no such field is an ordinary task.
+        plain = self.create(name="plain")
+        self.assertNotIn("attempt", plain)
+        self.assertNotIn("attempt", roost.Store(str(self.state)).read(plain["id"]))
+
+    def test_an_attempt_asked_for_again_is_made_once(self):
+        # Each attempt after the first has an ID made from the draft's, the
+        # same each time the draft asks: after a lost reply it makes none twice.
+        group = "cd" * 8
+        made = self.create(name="fix 3", createId=group + "03", attempt=dict(group=group, n=3, of=3))
+        again = self.request("create", directory=str(self.repo), name="fix 3", socket=self.socket,
+                             command=[sys.executable, str(FAKE)], createId=group + "03",
+                             attempt=dict(group=group, n=3, of=3))
+        self.assertTrue(again["ok"], again)
+        self.assertEqual(again["result"]["id"], made["id"])
+        self.assertIs(again["result"]["alreadyMade"], True)
+        self.assertEqual(again["result"]["attempt"], dict(group=group, n=3, of=3))
+        self.assertEqual([record["id"] for record in roost.Store(str(self.state)).all()], [made["id"]])
+        self.assertEqual(self.task_branches(), [made["branch"]])
+
+    def attempt(self, group, n, words=None, of=2, **args):
+        """A request for attempt N of GROUP, made from WORDS, and its reply."""
+        return self.request("create", directory=str(self.repo), socket=self.socket,
+                            command=[sys.executable, str(FAKE)], name="fix %d" % n if n > 1 else "fix",
+                            createId=group + ("%02x" % n if n > 1 else ""),
+                            attempt=dict(group=group, n=n, of=of, **(dict(words=words) if words else {})), **args)
+
+    def test_the_attempts_of_one_draft_are_made_from_one_wording(self):
+        # A draft changed between two asks sends the same IDs with other
+        # words. Beside an attempt made from the words before, its host
+        # makes nothing, and answers with that attempt.
+        store = roost.Store(str(self.state))
+        hooks, checkouts = self.root / "hooks", self.root / "checkouts"
+        hooks.mkdir()
+        (hooks / "post-checkout").write_text("#!/bin/sh\necho made >> %s\n" % shlex.quote(str(checkouts)))
+        (hooks / "post-checkout").chmod(0o755)
+        self.git("config", "core.hooksPath", str(hooks))
+        group, before, now = "ab" * 8, "1" * 32, "2" * 32
+        second = self.attempt(group, 2, before)["result"]
+        reply = self.attempt(group, 1, now)
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual((reply["result"]["id"], reply["result"]["name"]), (second["id"], "fix 2"))
+        self.assertIs(reply["result"]["alreadyMade"], True)
+        self.assertEqual(second["attempt"], dict(group=group, n=2, of=2, words=before))
+        self.assertEqual(store.read(second["id"])["attempt"]["words"], before)
+        self.assertNotIn("alreadyMade", store.read(second["id"]))
+        self.assertEqual([record["id"] for record in store.all()], [second["id"]])
+        self.assertEqual(self.task_branches(), [second["branch"]])
+        # No worktree was made for it, so no hook of yours ran there.
+        self.assertEqual(checkouts.read_text(), "made\n")
+        self.assertEqual(list((self.state / "creating").glob("*")), [])
+        # Asked for again in the words the group was made from, it is made.
+        first = self.attempt(group, 1, before)["result"]
+        self.assertNotIn("alreadyMade", first)
+        self.assertEqual(sorted(record["id"] for record in store.all()), sorted([first["id"], second["id"]]))
+        # The other way round: the draft's own task made first, then
+        # another attempt asked for in other words gets the draft's own.
+        group = "cd" * 8
+        own = self.attempt(group, 1, before, of=3)["result"]
+        reply = self.attempt(group, 2, now, of=3)["result"]
+        self.assertEqual((reply["id"], reply.get("alreadyMade")), (own["id"], True))
+        # Of several made from other words, the first of them.
+        third = self.attempt(group, 3, before, of=3)["result"]
+        self.assertNotIn("alreadyMade", third)
+        self.assertEqual(self.attempt(group, 2, now, of=3)["result"]["id"], own["id"])
+        # Another draft's attempts are its own, whatever their words.
+        self.assertNotIn("alreadyMade", self.attempt("ef" * 8, 2, now)["result"])
+        self.assertEqual(len(store.all()), 5)
+
+    def test_an_attempt_that_says_no_words_is_made_as_before(self):
+        # As an older Emacs asks, and as a host's older records are: no
+        # request without words is refused, and no record without is a
+        # reason to refuse.
+        group = "ab" * 8
+        second = self.attempt(group, 2)["result"]
+        self.assertEqual(second["attempt"], dict(group=group, n=2, of=2))
+        first = self.attempt(group, 1, "1" * 32)["result"]
+        self.assertNotIn("alreadyMade", first)
+        group = "cd" * 8
+        second = self.attempt(group, 2, "1" * 32)["result"]
+        first = self.attempt(group, 1)["result"]
+        self.assertNotIn("alreadyMade", first)
+        self.assertNotEqual(first["id"], second["id"])
+        self.assertEqual(len(roost.Store(str(self.state)).all()), 4)
+
+    def test_an_attempt_whose_creation_failed_keeps_its_group_to_no_wording(self):
+        # It is no task made from its words: asked again, it is made anew,
+        # as the others are, whatever the draft says by then.
+        store = roost.Store(str(self.state))
+        hooks = self.root / "hooks"
+        hooks.mkdir()
+        (hooks / "post-checkout").write_text("#!/bin/sh\necho made > made-by-hook\nexit 1\n")
+        (hooks / "post-checkout").chmod(0o755)
+        self.git("config", "core.hooksPath", str(hooks))
+        group = "ab" * 8
+        self.assertIn("its worktree is kept", self.attempt(group, 2, "1" * 32)["error"])
+        [failed] = store.all()
+        self.assertEqual((failed["status"], failed["attempt"].get("words")), ("failed", "1" * 32))
+        self.git("config", "--unset", "core.hooksPath")
+        for n in (2, 1):
+            made = self.attempt(group, n, "2" * 32)
+            self.assertTrue(made["ok"], made)
+            self.assertNotIn("alreadyMade", made["result"])
+            self.assertNotEqual(made["result"]["id"], failed["id"])
+        self.assertEqual(len(store.all()), 3)
+
+    def test_attempts_asked_for_at_once_in_other_words_make_one_wording(self):
+        # Two requests of one draft in flight at once, as one Emacs gave up
+        # waiting for and one sent since you changed the draft: neither
+        # finds a task of its group as it starts. Here the second runs
+        # whole while the first makes its worktree, from the repository's
+        # post-checkout hook. The first recorded stands, and the other
+        # makes nothing: the worktree it made goes.
+        store = roost.Store(str(self.state))
+        hooks, asked, other = self.root / "hooks", self.root / "asked", self.root / "other.json"
+        hooks.mkdir()
+        hook = ("#!/bin/sh\n[ -e {asked} ] && exit 0\n: > {asked}\n"
+                "unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX\n{python} {helper} rpc < {other} > {reply}\n"
+                ).format(asked=shlex.quote(str(asked)), python=shlex.quote(sys.executable),
+                         helper=shlex.quote(str(SOURCE)), other=shlex.quote(str(other)),
+                         reply=shlex.quote(str(self.root / "other.reply")))
+        (hooks / "post-checkout").write_text(hook)
+        (hooks / "post-checkout").chmod(0o755)
+        self.git("config", "core.hooksPath", str(hooks))
+
+        def meanwhile(group):
+            """Have attempt 2 of GROUP asked for, in other words, while the next worktree is made."""
+            asked.unlink(missing_ok=True)
+            other.write_text(json.dumps(dict(
+                root=str(self.state), action="create", directory=str(self.repo), socket=self.socket,
+                command=[sys.executable, str(FAKE)], name="fix 2", createId=group + "02",
+                attempt=dict(group=group, n=2, of=2, words="2" * 32))))
+
+        group = "ab" * 8
+        meanwhile(group)
+        reply = self.attempt(group, 1, "1" * 32)
+        self.assertTrue(reply["ok"], reply)
+        second = json.loads((self.root / "other.reply").read_text())["result"]
+        self.assertNotIn("alreadyMade", second)
+        self.assertEqual([(task["name"], task["attempt"].get("words")) for task in store.all()],
+                         [("fix 2", "2" * 32)], "the attempts of one draft were made from two wordings")
+        self.assertEqual((reply["result"]["id"], reply["result"].get("alreadyMade")), (second["id"], True))
+        self.assertEqual(self.task_branches(), [second["branch"]])
+        self.assertEqual(len(roost.worktree_branches(self.repo)), 2)
+        self.assertEqual(list((self.state / "creating").glob("*")), [])
+        # What a hook of yours left in the worktree that wasn't to be stays
+        # with it, as a failed task to look at, which is no attempt of the
+        # group, and keeps it to no wording.
+        (hooks / "post-checkout").write_text(hook + "echo made > made-by-hook\n")
+        group = "cd" * 8
+        meanwhile(group)
+        reply = self.attempt(group, 1, "1" * 32)
+        second = json.loads((self.root / "other.reply").read_text())["result"]
+        self.assertEqual((reply["result"]["id"], reply["result"].get("alreadyMade")), (second["id"], True))
+        [left] = [task for task in store.all() if task["status"] == "failed"]
+        self.assertEqual((left["name"], left.get("attempt"), left.get("createId")), ("fix", None, None))
+        self.assertTrue((Path(left["worktree"]) / "made-by-hook").exists())
+        first = self.attempt(group, 1, "2" * 32)["result"]
+        self.assertNotIn("alreadyMade", first)
+        self.assertEqual(sorted(task["attempt"]["words"] for task in store.all()
+                                if (task.get("attempt") or {}).get("group") == group), ["2" * 32] * 2)
+
+    def test_an_attempt_that_says_it_wrong_makes_nothing(self):
+        group = "ef" * 8
+        for attempt in ("2 of 3", [group, 1, 2], {}, dict(group=group, n=1), dict(group=group, of=2),
+                        dict(n=1, of=2), dict(group="../x", n=1, of=2), dict(group=7, n=1, of=2),
+                        dict(group=group, n=0, of=2), dict(group=group, n=3, of=2), dict(group=group, n=1, of=6),
+                        dict(group=group, n="1", of=2), dict(group=group, n=1.0, of=2),
+                        dict(group=group, n=True, of=True), dict(group=group, n=1, of=2, words="../x"),
+                        dict(group=group, n=1, of=2, words=7), dict(group=group, n=1, of=2, words=""),
+                        dict(group=group, n=1, of=2, words=["1" * 32])):
+            with self.subTest(attempt=attempt):
+                reply = self.request("create", directory=str(self.repo), name="odd", socket=self.socket,
+                                     command=[sys.executable, str(FAKE)], attempt=attempt)
+                self.assertFalse(reply["ok"], reply)
+                self.assertTrue(reply["error"].startswith("Invalid attempt"), reply)
+        self.assertEqual(self.request("list")["result"], [])
+        self.assertEqual(self.task_branches(), [])
+
     def test_asking_again_waits_for_the_task_still_being_made(self):
         hooks = self.root / "hooks"
         hooks.mkdir()
@@ -9325,9 +10414,35 @@ print(json.dumps(dict(data=data)))
         self.assertIs(server["alwaysLoad"], True)
         # An offer only waits in Roost, so it needs no asking.
         settings = json.loads(Path(argv[argv.index("--settings") + 1]).read_text())
-        self.assertEqual(settings["permissions"], {"allow": ["mcp__roost__propose_task"]})
+        self.assertEqual(settings["permissions"],
+                         {"allow": ["mcp__roost__propose_task", "mcp__roost__list_projects"]})
         # The prompt still comes last, after --.
         self.assertEqual(argv[-2:], ["--", "Look"])
+
+    def test_a_claude_task_can_start_with_remote_control_named_for_it(self):
+        store = roost.Store(str(self.state))
+        task = dict(id="1234567890abcdef", name="-fix the parser", command=["claude"], prompt="Look", runId="run")
+        plain = roost.ClaudeAgent().launch(store, task, False)
+        self.assertFalse([arg for arg in plain if arg.startswith(("--remote-control", "--name"))])
+        argv = roost.ClaudeAgent().launch(store, dict(task, remoteControl=True), False)
+        # Each joined to its option: a name that starts with - is no option.
+        self.assertIn("--remote-control=-fix the parser", argv)
+        self.assertIn("--name=-fix the parser", argv)
+        # The prompt still comes last, after --.
+        self.assertEqual(argv[-2:], ["--", "Look"])
+        # What your own command names stands.
+        mine = dict(task, remoteControl=True, command=["claude", "--remote-control=mine", "-n", "mine"])
+        argv = roost.ClaudeAgent().launch(store, mine, False)
+        self.assertEqual([arg for arg in argv if arg.startswith(("--remote-control", "--name"))],
+                         ["--remote-control=mine"])
+        # Asked for, a Claude task's record keeps it, for a resume too;
+        # another agent's has no app to show it in.
+        made = self.create(name="phone", remoteControl=True)
+        self.assertIs(store.read(made["id"])["remoteControl"], True)
+        self.assertNotIn("remoteControl", self.create(name="plain"))
+        other = self.create(name="codex", agent="codex", remoteControl=True,
+                            command=[sys.executable, str(FAKE_AGENT), "codex"])
+        self.assertNotIn("remoteControl", store.read(other["id"]))
 
     def test_only_an_agent_that_can_take_the_tool_may_offer(self):
         # Claude Code, asked for: its record says so, and keeps it for a resume.
@@ -9362,14 +10477,99 @@ print(json.dumps(dict(data=data)))
         self.assertEqual(replies["new"]["error"]["code"], -32601)
         self.assertEqual(replies[1]["result"]["protocolVersion"], "2025-11-25")
         self.assertIn("offer it with propose_task", replies[1]["result"]["instructions"])
-        # One tool, which only records an offer: an agent that asks before a
-        # tool unless told it changes nothing, as Codex does, needn't ask.
-        [tool] = replies[2]["result"]["tools"]
-        self.assertEqual(tool["name"], "propose_task")
-        self.assertFalse(tool["annotations"]["destructiveHint"])
-        self.assertFalse(tool["annotations"]["openWorldHint"])
+        # Two tools, one that only records an offer and one that only
+        # reads: an agent that asks before a tool unless told it changes
+        # nothing, as Codex does, needn't ask.
+        tools = {tool["name"]: tool for tool in replies[2]["result"]["tools"]}
+        self.assertEqual(sorted(tools), ["list_projects", "propose_task"])
+        for tool in tools.values():
+            self.assertFalse(tool["annotations"]["destructiveHint"])
+            self.assertFalse(tool["annotations"]["openWorldHint"])
+        self.assertTrue(tools["list_projects"]["annotations"]["readOnlyHint"])
         self.assertEqual(replies[3]["error"]["message"], "Unknown tool: read_task")
         self.assertEqual(replies[4]["result"], {})
+
+    def call(self, task, tool, **arguments):
+        """What TASK's agent is told as it calls TOOL of Roost's with ARGUMENTS."""
+        return self.serve(task, dict(id="call", method="tools/call", params=dict(
+            name=tool, arguments=arguments)))["call"]["result"]
+
+    def test_a_conversation_offers_tasks_in_your_projects(self):
+        # It has no project of its own, so it plans: each task it would
+        # split a piece of work into waits under it, for you to start.
+        self.create(name="earlier")
+        talk = self.create(name="Conversation 09:15", directory="/nowhere", conversation=True, mayOffer=True)
+        replies = self.serve(talk)
+        said = replies["hello"]["result"]["instructions"]
+        self.assertIn("belongs to no project", said)
+        self.assertIn("naming its project", said)
+        # The projects this host has run tasks in, and not Roost's own.
+        self.assertEqual(self.call(talk, "list_projects")["content"][0]["text"], str(self.repo.resolve()))
+        # Which it reads without asking, to plan, and changes only by asking.
+        store = roost.Store(str(self.state))
+        argv = roost.ClaudeAgent().launch(store, store.read(talk["id"]), False)
+        allowed = json.loads(Path(argv[argv.index("--settings") + 1]).read_text())["permissions"]["allow"]
+        self.assertEqual(allowed, ["mcp__roost__propose_task", "mcp__roost__list_projects",
+                                   "Read(/%s/**)" % self.repo.resolve()])
+        # Without one, it is told to name it.
+        refused = self.call(talk, "propose_task", title="Fix add", brief="Fix add in calc.py.")
+        self.assertTrue(refused["isError"])
+        self.assertIn("give the folder of the project", refused["content"][0]["text"])
+        said = self.call(talk, "propose_task", title="Fix add", brief="Fix add in calc.py.", project=str(self.repo))
+        self.assertNotIn("isError", said, said)
+        self.assertIn("under this conversation", said["content"][0]["text"])
+        [offer] = self.request("inspect", id=talk["id"])["result"]["offers"]
+        self.assertEqual((offer["title"], offer["project"]), ("Fix add", str(self.repo)))
+        # Started there as Emacs does from its draft, from that project's
+        # own branch, and shown under the conversation.
+        self.assertTrue(self.request("take-offer", id=talk["id"], offer=offer["id"])["ok"])
+        reply = self.request("create", directory=offer["project"], name=offer["title"], prompt=offer["brief"],
+                             parent=talk["id"], createId=uuid.uuid4().hex[:24], socket=self.socket,
+                             command=[sys.executable, str(FAKE)])
+        self.assertTrue(reply["ok"], reply)
+        made = reply["result"]
+        self.assertEqual((made["repo"], made["parent"], made["integrationBranch"]),
+                         (str(self.repo.resolve()), talk["id"], "main"))
+        self.assertNotIn("conversation", made)
+        # More than a task's three: a plan is several tasks.
+        for n in range(roost.CONVERSATION_OFFER_LIMIT):
+            self.assertNotIn("isError", self.call(talk, "propose_task", title="Part %d" % n, brief="Do part %d." % n,
+                                                  project=str(self.repo)))
+        full = self.call(talk, "propose_task", title="One more", brief="And this.", project=str(self.repo))
+        self.assertIn("%d offers" % roost.CONVERSATION_OFFER_LIMIT, full["content"][0]["text"])
+
+    def test_an_offer_names_only_a_repository_of_yours(self):
+        parent = self.create(name="parent")
+        other = self.root / "other project"
+        other.mkdir()
+        roost.git(other, "init", "-q", "-b", "main")
+
+        def refused(project, why):
+            said = self.call(parent, "propose_task", title="Fix add", brief="Fix add.", project=project)
+            self.assertTrue(said.get("isError"), said)
+            self.assertIn(why, said["content"][0]["text"])
+            self.assertFalse(roost.Store(str(self.state)).read(parent["id"]).get("offers"))
+
+        refused(str(self.root / "nowhere"), "is no Git repository's folder")
+        refused("other project", "by its whole path")
+        refused(str(self.state / "conversations"), "is no Git repository's folder")
+        refused(str(other) + "\x1b[2J", "U+001B")
+        # Roost's own, once it has one.
+        self.create(name="Conversation 09:15", directory="/nowhere", conversation=True)
+        refused(str(self.state / "conversations"), "is Roost's own")
+        # Another project of yours, by its folder, however it is spelled.
+        said = self.call(parent, "propose_task", title="Fix add", brief="Fix add.",
+                         project=str(other / ".." / "other project"))
+        self.assertNotIn("isError", said, said)
+        [offer] = roost.Store(str(self.state)).read(parent["id"])["offers"]
+        self.assertEqual(offer["project"], str(other))
+        # Its own project is said by leaving it out, and offering it again
+        # there takes the other away.
+        self.assertNotIn("isError", self.call(parent, "propose_task", title="Fix add", brief="Fix add here.",
+                                              project=str(self.repo)))
+        [offer] = roost.Store(str(self.state)).read(parent["id"])["offers"]
+        self.assertNotIn("project", offer)
+        self.assertEqual(offer["brief"], "Fix add here.")
 
     def test_the_mcp_server_answers_in_utf_8_whatever_the_locale(self):
         # An agent waits for every answer until you stop it.
@@ -9527,6 +10727,85 @@ print(json.dumps(dict(data=data)))
         record = roost.Store(str(self.state)).read(task["id"])
         self.assertEqual(record.get("lastPrompt"), line)
         self.assertNotIn("offers", record)
+
+    def finish(self, action, task, **args):
+        """The reply to ACTION, which finishes TASK, asked as Emacs asks it:
+        a discard with what its dry run just told you."""
+        if action == "discard":
+            told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+            args = dict(args, expect=told.pop("commit"), told=told)
+        return self.request(action, id=task["id"], **args)
+
+    def test_an_offer_made_since_you_were_asked_keeps_its_task(self):
+        # The question before a task is finished names the offers that go
+        # with it, and its request says which those were. One its agent
+        # made while you read would go with the record, and nothing named it.
+        store = roost.Store(str(self.state))
+        for action, doing in (("retire", "retiring"), ("merge", "merging"), ("discard", "discarding"),
+                              ("forget", "forgetting")):
+            with self.subTest(action=action):
+                task = self.with_a_commit(action) if action == "merge" else self.create(name=action)
+                named = self.offered(task)
+                # You are asked, and meanwhile its agent offers another.
+                since = self.offered(task, title="Test calc")
+                if action == "forget":
+                    # Which Emacs stops first, as its question said.
+                    self.assertTrue(self.request("stop", id=task["id"])["ok"])
+                record = store.read(task["id"])
+                tips = [self.git("rev-parse", branch) for branch in (task["branch"], "main")]
+                for asked, said in (([named["id"]], "a task since you were asked: Test calc"),
+                                    ([], "2 tasks since you were asked: Document calc; Test calc")):
+                    reply = self.finish(action, task, offers=asked)
+                    self.assertEqual(reply, dict(ok=False, error="Its agent has offered %s. Look at it again before %s"
+                                                 % (said, doing)))
+                    # Nothing is changed: its record and its offers, its
+                    # work, where it would merge, and its agent, which runs on.
+                    self.assertEqual(store.read(task["id"]), record)
+                    self.assertTrue(Path(task["worktree"]).is_dir())
+                    self.assertEqual([self.git("rev-parse", branch) for branch in (task["branch"], "main")], tips)
+                    if action != "forget":
+                        self.assertFalse(roost.pane_inventory(self.socket)[task["paneId"]]["dead"])
+                # Asked again, the question names both, and it goes.
+                reply = self.finish(action, task, offers=[named["id"], since["id"]])
+                self.assertTrue(reply["ok"], reply)
+                self.assertFalse(store.path(task["id"]).exists())
+                # An Emacs from before requests said is asked nothing, as before.
+                older = self.with_a_commit("older") if action == "merge" else self.create(name=action + " older")
+                self.offered(older)
+                if action == "forget":
+                    self.assertTrue(self.request("stop", id=older["id"])["ok"])
+                reply = self.finish(action, older)
+                self.assertTrue(reply["ok"], reply)
+                self.assertFalse(store.path(older["id"]).exists())
+        # One the question named that you took since, as in another Emacs,
+        # is no reason to refuse: nothing goes that it didn't name.
+        task = self.create(name="taken since")
+        named, other = self.offered(task), self.offered(task, title="Test calc")
+        self.assertTrue(self.request("take-offer", id=task["id"], offer=named["id"])["ok"])
+        self.assertTrue(self.finish("retire", task, offers=[named["id"], other["id"]])["ok"])
+
+    def test_an_offer_made_while_git_merges_keeps_its_task(self):
+        # Git merges without the registry lock, for as long as its hooks
+        # take, and the agent's server answers meanwhile.
+        task = self.with_a_commit()
+        named = self.offered(task)
+        with self.stopped_in_a_hook(task, "post-merge", offers=[named["id"]]):
+            self.offered(task, title="Test calc")
+        self.assertEqual(self.replied, dict(ok=False, error=(
+            "task is merged into main, and not retired: Its agent has offered a task since you were asked: "
+            "Test calc. Look at it again before retiring")))
+        # Its work is in main, and the task waits with both offers, its agent running.
+        self.assertTrue((self.repo / ("work-" + task["id"])).exists())
+        record = roost.Store(str(self.state)).read(task["id"])
+        self.assertEqual([offer["title"] for offer in record["offers"]], ["Document calc", "Test calc"])
+        self.assertEqual(record["status"], "ready")
+        self.assertNotIn("integrating", record)
+        self.assertTrue(Path(task["worktree"]).is_dir())
+        self.assertFalse(roost.pane_inventory(self.socket)[task["paneId"]]["dead"])
+        # Asked again, with both named, it retires.
+        reply = self.request("retire", id=task["id"], offers=[offer["id"] for offer in record["offers"]])
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(self.request("list")["result"], [])
 
 
 class WorktreeInclude(unittest.TestCase):
@@ -10477,6 +11756,54 @@ class LastMessage(unittest.TestCase):
                    [message("assistant", "wrong")])
         self.assertEqual(roost.last_message(task), "done")
 
+    def test_codex_asks_about_a_plan_its_rollout_holds_and_its_hook_left_out(self):
+        agent = roost.CodexAgent()
+        message = lambda role, said: {"type": "response_item", "payload": {
+            "type": "message", "role": role,
+            "content": [{"type": "input_text" if role == "user" else "output_text", "text": said}]}}
+        plan = "Here it is.\n<proposed_plan>\n# Plan\n1. Read\n2. Write\n</proposed_plan>\n"
+        rollout = ".codex/sessions/2026/11/11/rollout-2026-11-11T09-00-00-abc-123.jsonl"
+        stop = lambda **fields: agent.observe(dict(fields, hook_event_name="Stop", session_id="abc-123"), "running")
+        self.write(rollout, [message("user", "Plan the change"), message("assistant", plan)])
+        # In Plan mode the reply its hook reports has no plan in it.
+        asked = stop(last_assistant_message="Here it is.")
+        self.assertEqual((asked["status"], asked["lastEvent"], asked["request"]),
+                         ("permission", "Plan", "Asks whether to implement its plan"))
+        self.assertEqual(asked["lastReply"], "Here it is.\n\n# Plan\n1. Read\n2. Write")
+        # A reply that was all plan reports none.
+        self.assertEqual(stop()["lastReply"], "# Plan\n1. Read\n2. Write")
+        # Outside Plan mode Codex opens no menu, and its hook's reply has the tags.
+        plain = stop(last_assistant_message=plan)
+        self.assertEqual((plain["status"], plain["lastEvent"]), ("ready", "Stop"))
+        self.assertNotIn("request", plain)
+        # A plan earlier in the turn counts, as Codex's menu follows any.
+        self.write(rollout, [message("user", "Plan"), message("assistant", plan), message("assistant", "That is all.")])
+        self.assertEqual(stop(last_assistant_message="That is all.")["status"], "permission")
+        # Not one of a turn before, nor one you spoke after.
+        self.write(rollout, [message("user", "Plan"), message("assistant", plan),
+                             message("user", "And now?"), message("assistant", "Nothing more.")])
+        self.assertEqual(stop(last_assistant_message="Nothing more.")["status"], "ready")
+        # Tags within a line are words, not a plan.
+        self.write(rollout, [message("user", "Why?"), message("assistant", "It writes <proposed_plan> lines.")])
+        self.assertEqual(stop(last_assistant_message="It writes lines.")["status"], "ready")
+        # No rollout, one that can't be read, or no session: nothing is asked.
+        for session in ("none-such", "../abc-123", None, 5):
+            self.assertEqual(agent.observe(dict(hook_event_name="Stop", session_id=session), "running")["status"],
+                             "ready")
+        (self.home / rollout).write_text("not json\n")
+        self.assertEqual(stop()["status"], "ready")
+        # What Codex says to its terminal, done and then idle as after any
+        # turn, leaves the task asking; that it works again ends it.
+        task = dict(agent="codex", status="permission", lastEvent="Plan", runId="r",
+                    request="Asks whether to implement its plan")
+        for state in ("done", "idle"):
+            roost.apply_program_status(task, dict(state=state), "r")
+            self.assertEqual((task["status"], task["lastEvent"], task["request"]),
+                             ("permission", "Plan", "Asks whether to implement its plan"))
+        roost.apply_program_status(task, dict(state="working"), "r")
+        self.assertEqual((task["status"], task["lastEvent"]), ("running", "Approved"))
+        self.assertNotIn("request", task)
+
     def test_the_reply_codex_reports_is_the_latest_reply(self):
         # Codex 0.163.0's Stop carries the turn's reply, ahead of its rollout.
         agent = roost.CodexAgent()
@@ -10765,7 +12092,16 @@ class ProgramStatus(unittest.TestCase):
             self.assertNotIn("requestFrom", roost.outgoing(task))
         self.assertEqual(self.apply(dict(status="background"), "done")["status"], "background")
         # Each report replaces the last: a step's description goes with it.
-        self.assertIsNone(self.apply(dict(status="running", activity="Reading notes.py"), "working")["activity"])
+        task = dict(status="running")
+        self.assertEqual(self.apply(task, "working", msg="Reading notes.py")["activity"], "Reading notes.py")
+        self.assertEqual(task["activityFrom"], "report")
+        self.assertIsNone(self.apply(task, "working")["activity"])
+        self.assertNotIn("activityFrom", task)
+        # Not the tool a hook named, which a report with nothing to say
+        # knows no better than, while the agent works on.
+        self.assertEqual(self.apply(dict(status="running", activity="Editing notes.py"), "working")["activity"],
+                         "Editing notes.py")
+        self.assertIsNone(self.apply(dict(status="running", activity="Editing notes.py"), "idle")["activity"])
         self.assertFalse(roost.apply_program_status(dict(status="running", programStatusRun="run"),
                                                     dict(state="blocked", id="subagent"), "run"))
         beside = roost.beside_program_status
