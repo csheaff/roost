@@ -33,9 +33,28 @@
          (or (null roost-test--share)
              (= (mod (/ case roost-test--sample) (cdr roost-test--share)) (car roost-test--share))))))
 
+(defun roost-test--clean-slate (&rest _)
+  "Leave nothing of the test before: its buffers, windows and modes.
+Each share runs its tests after others than the whole suite would, so a
+test that passed only on what another left behind, such as a task's
+panel still open under an older name, would fail in some share."
+  (cl-letf (((symbol-function 'y-or-n-p) #'always)
+            ((symbol-function 'yes-or-no-p) #'always))
+    (ignore-errors (delete-other-windows))
+    (dolist (mode '(roost-task-panel-mode roost-sidebar-mode roost-watch-mode))
+      (when (and (boundp mode) (symbol-value mode))
+        (ignore-errors (funcall mode -1))))
+    (dolist (buffer (buffer-list))
+      (when (and (buffer-live-p buffer)
+                 (or (buffer-local-value 'roost--buffer-task-key buffer)
+                     (string-match-p "\\` ?\\*roost" (buffer-name buffer))))
+        (let ((kill-buffer-query-functions nil))
+          (ignore-errors (kill-buffer buffer)))))))
+
 (defun roost-test-run-share ()
   "Run this Emacs's share of the tests and exit, for test/run.py.
 ROOST_TEST_MATCH, a regexp, keeps to the tests whose names match it."
+  (advice-add 'ert-run-test :before #'roost-test--clean-slate)
   (let* ((match (getenv "ROOST_TEST_MATCH"))
          (tests (seq-filter (lambda (test)
                               (or (null match) (string= match "")

@@ -355,6 +355,7 @@ class Session:
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline and self.record()["status"] == "starting":
             if "trust this folder" in self.pane():
+                time.sleep(1)  # Keys a dialog's first moment brings are lost.
                 self.keys("Down", "Enter")
                 break
             time.sleep(0.5)
