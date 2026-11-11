@@ -4,6 +4,15 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A fork of a task, `C-u c`, goes on with the task's conversation: its
+  agent starts from a copy of it, in a worktree with the task's
+  uncommitted changes as well as its commits, and the task's own
+  conversation goes on as before. Your prompt is the fork's first
+  message, after a sentence Roost puts before it, telling the agent it
+  works in a new worktree. The draft's Context line says so, and `C-c C-f` there starts a
+  new conversation instead, as a fork did before. Claude, Codex, Pi and
+  OpenCode can each fork their own conversations; choosing another agent
+  in the draft starts a new one. Nothing to do when upgrading.
 - A conversation with an agent needs no project. "New conversation" in the
   sidebar, or `C` in the menu, opens an agent's terminal at once, with
   nothing to write first: you say what you want there. It has no branch to

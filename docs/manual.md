@@ -597,7 +597,7 @@ counted once you stop and resume it (`K`, then `s`).
 | --- | --- | --- |
 | `h`, `?` | `roost-dispatch` | A Magit-style menu of every command below, naming the task they act on and what to do next |
 | `RET` | `roost-open-task` | Open the task's agent terminal and workspace; for a stopped or crashed agent, offer to resume it, in the same question as the others that crashed on its host |
-| `c` | `roost-new-task` | Draft a new task, from the region or Org entry if any (`C-u` forks the current task's commits) |
+| `c` | `roost-new-task` | Draft a new task, from the region or Org entry if any (`C-u` forks the current task, its agent's conversation too) |
 | `C` | `roost-new-conversation` | Open an agent's terminal in no project, with nothing to write first (`C-u` asks which host) |
 | `n` | `roost-next-waiting` | Next task waiting for you, permission requests first, saying why it waits; once none does, again goes back to where you started |
 | `t` | `roost-shell` | Shell beside the agent, in the worktree (reused) |
@@ -690,6 +690,23 @@ In the new task draft: `C-c C-c` creates, `C-c C-k` cancels, and `C-c C-p`,
 name. `C-c C-t` starts from a GitHub or GitLab issue (with `gh` or `glab` on
 the project's host) or a Jira work item (with `twg` on this machine). An empty name is derived
 from the prompt; `R` renames the task later.
+
+`C-u c` on a task drafts a fork of it, so you can take the work another way
+and keep whichever goes better. Once the task's agent has a conversation,
+the fork goes on with it: its agent starts from a copy of that
+conversation, as Claude's `--fork-session`, `codex fork`, Pi's `--fork` and
+OpenCode's `--fork` make one, and its worktree has the task's uncommitted
+changes as well as its commits, unstaged as they were, since the
+conversation expects them. Ignored files, and untracked ones too large for
+"since you last looked" to keep, stay behind. The task's own conversation
+and work go on as before. Your prompt is the fork's first message, after a
+sentence Roost puts before it, telling the agent it now works in a new
+worktree and should leave the task's alone: its conversation names the
+task's worktree, which the agent would otherwise look in too. The
+draft's Context line says which conversation the fork has, and `C-c C-f`
+trades it for a new one, a fork of the task's commits alone. Only the
+task's agent can go on with its conversation, so choosing another agent
+starts a new one too.
 
 Emacs waits up to eleven minutes for a new task's worktree, which a
 repository with gigabytes of Git LFS files can take that long to check
