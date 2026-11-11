@@ -1836,9 +1836,9 @@ Invariants:
 - I1. A pull request is the task's only if it is the recorded one, or its head
   is a commit of the task's own, made since it started and still on its branch
   (`task_pull_requests`). Someone else's fork, an earlier task's branch of the
-  same name and commits brought in by an update don't count. `B` moves where it
-  started: one not yet recorded, whose head is no later than where the task's
-  branch and the branch named part, counts no more.
+  same name and commits brought in by an update don't count. `B` moves where its
+  commits count from (`baseCommit`): one not yet recorded, whose head is no later
+  than where the task's branch and the branch named part, counts no more.
 - I2. A merge stays a merge while the tip stands: a later listing that no longer
   has it doesn't undo it (`record["mergedHead"]`, `mergedBases`).
 - I3. A lookup never overwrites a record newer than the one it read
@@ -2037,7 +2037,8 @@ Open: none.
 ### Landed
 
 Kind: derived. Lives in: `landed` from `landed()`, of the record's
-`integrationBranch` and `baseCommit`, which `retarget` changes; `roost--landed`.
+`integrationBranch`, which `retarget` changes, and `startCommit`, which nothing
+does; `roost--landed`.
 
 | State | Meaning | How you can tell |
 | --- | --- | --- |
@@ -2050,21 +2051,34 @@ Invariants:
 - I1. Landed implies retiring loses no commit. Holds: `safe_to_delete` accepts
   every tip `landed` does, and also a task that never committed, whose start some
   other ref has.
-- I2. A task that never committed hasn't landed: its tip is its `baseCommit`.
-  `B` moves `baseCommit` to where the task's branch and the branch named part, but
-  not onto the tip, when what it names has all of the task's commits: a task with
-  commits doesn't come to read as one without. It did, and `x` then retired one
-  whose commits a tag had, or its own pushed branch, and no branch it merges
-  into. Fixed, by the test I3 names. **Broken** where a branch is reset after
-  `B`: see Open, below.
+- I2. A task that never committed hasn't landed, and only such a task reads as
+  one: its tip is where its branch was made, the record's `startCommit`
+  (`started_at`). `make_task` sets that and nothing moves it. An older helper's
+  record has none and goes by its `baseCommit`, which nothing moved then, and
+  `retarget` writes it down from that before moving it
+  (`test_retargeting_a_task_from_an_older_helper_keeps_where_its_branch_was_made`).
+  `baseCommit` is where the task's commits count from, and `B` moves it to where
+  its branch and the branch named part. That can be a commit of the task's own,
+  when what `B` names has some of its commits: a tag at an earlier one, a fork's
+  branch, or a branch its first commits were merged into. `landed` and
+  `safe_to_delete` went by `baseCommit`. Fixed: named what had all of its
+  commits, a task read as one without any, and `x` retired one whose commits a
+  tag had, or its own pushed branch, and no branch it merges into (the test I3
+  names; `retarget` still keeps `baseCommit` off the tip, so that the task's
+  files and its pull request stay its own). Fixed too, FORGE-15: reset to where
+  its branch was made, after `B` made a commit of its own where they count from,
+  a task read as merged, with no commit of its own
+  (`test_a_task_reset_to_where_it_started_after_retargeting_reads_as_never_committed`).
 - I3 (manual, "Work that is merged"). Only commits after the merge keep it from
   saying so. Fixed: FORGE-1, where the branch was behind what merged, and FORGE-2,
   where the merge was never found. A head that can't be fetched still reads as
   commits since. Fixed too: `B` onto a branch that had the task's commits, as after
-  a merge by hand, moved its start onto its tip, and it read as never committed,
-  its pull request as merged but not the commits since
+  a merge by hand, moved where they count from onto its tip, and it read as never
+  committed, its pull request as merged but not the commits since
   (`test_retargeting_onto_a_branch_that_has_the_tasks_commits_leaves_them_merged`).
-  **Broken** where a branch is reset after `B`: see Open, below.
+  And FORGE-15: reset to a commit of its own that `B` counts from, where that
+  commit is merged, it read as never committed
+  (`test_a_task_reset_to_a_merged_commit_of_its_own_after_retargeting_reads_as_merged`).
 - I4. Landed is of the branch the record names now, or of a merge on the forge,
   into whichever base that pull request named ([A task's pull request](#a-tasks-pull-request),
   I8). So after `B`, a merge by hand into the branch before counts no more, and
@@ -2075,8 +2089,14 @@ Invariants:
   into, or in what the forge merged, or the task never committed
   (`safe_to_delete`). It goes by the record as it is when it deletes: `rpc` reads
   the task again under the lock, after `merged_pull_request_head` asked the
-  forge, so a `B` meanwhile counts. **Broken** where a branch is reset after `B`:
-  see Open, below.
+  forge, so a `B` meanwhile counts. Never committed is by `startCommit`, as I2
+  has it. Fixed, FORGE-15: reset to a commit of its own that `B` counts from, a
+  task read as one that never committed, and the host retired it, its commits in
+  that tag or branch, or on its own pushed one, and merged nowhere
+  (`test_a_task_reset_to_a_commit_of_its_own_after_retargeting_still_has_unmerged_commits`).
+  A task that never committed still retires after a `B` that counts its commits
+  from an earlier commit, while another branch has where it started
+  (`test_a_task_that_never_committed_stays_one_wherever_retargeting_counts_its_commits_from`).
 - I6. A reply's `landed` is of the branch that reply names: `list_tasks` reads the
   record once, and the measurement goes by it. One read before a `B` says what
   was so of the branch before; Emacs then measures again, as
@@ -2089,7 +2109,9 @@ Invariants:
 | landed | New commit, tip moves | | not landed | `landed`, at the next measurement |
 | landed | `B` names a branch that lacks the tip | no merge recorded at the tip | not landed | `retarget`, `landed` |
 | landed | `B` names a branch | a merge recorded at the tip | landed | `recorded_merge_at` |
-| not landed | `B` names a branch that has the tip | `committed_on` | landed | `retarget` keeps `baseCommit`; `landed` |
+| not landed | `B` names a branch that has the tip | `committed_on` | landed | `retarget`, `landed` |
+| any | Branch reset to where it was made | | not landed | `started_at`, whatever `B` named |
+| any | Branch reset to an earlier commit of its own | | as that commit reads: landed if it is merged | `landed`, whatever `B` named |
 | any | Reflog gone or empty | | not landed unless recorded | `own_commits` -> True |
 
 `rpc`'s `list` measures a task whole when a merge arrives, so `landed` never comes
@@ -2108,24 +2130,10 @@ A conversation has a branch in Roost's own repository and no forge: it reads as
 not landed, or as a task merged by hand would if its agent committed and you
 merged that there. Emacs offers it no `m`, `P` or `B`, and `retarget` refuses it.
 
-Open: `B` can make a commit of the task's own its start, by naming what has
-some of its commits and not all: a tag at an earlier one, a fork's branch, or a
-branch its first commits were merged into. Then a reset of the task's branch
-goes wrong three ways, each replayed on the helper and a config that fails
-until it is fixed:
-
-- I5 **Broken**. Reset to that commit, the task reads as one that never
-  committed, and the host retires it, with its commits in that tag or branch, or
-  on its own pushed one, and merged nowhere (`LandedRetarget.ResetToStart.cfg`).
-  No commit is lost. Emacs asks to discard such a task, as it is ahead of the
-  branch it merges into; the host is the one that would not refuse.
-- I3 **Broken**. Reset to that commit where it is merged, the task doesn't say
-  so (`LandedRetarget.ResetToStartMerged.cfg`).
-- I2 **Broken**. Reset to where it first started, the task reads as merged, with
-  no commit of its own (`LandedRetarget.ResetBeforeStart.cfg`).
-
-A fix would have `retarget` leave `baseCommit` alone whenever where the two part
-is a commit the task made, or comes after one: `own_commits` knows them.
+Open: none in the models. By reading, and with or without `B`: a branch reset to
+before where it was made, in a task that committed, reads as landed, with no
+commit of its own. Its tip is in the branch it merges into and is not its start,
+and its reflog has the commits. `x` loses nothing.
 
 ### Task measurement
 

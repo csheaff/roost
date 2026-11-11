@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 # The commit at which the models were last confirmed to describe the code.
-SYNC = "089089e"
+SYNC = "8f651f3"
 
 ROOT = Path(__file__).resolve().parents[3]
 COVERED = {
@@ -21,7 +21,7 @@ COVERED = {
         # Landed.tla
         "is_ancestor", "recorded_pull_request", "has_tip", "merged_tip", "recorded_merge_at",
         "head_to_fetch", "fetch_head", "fetch_heads", "pushed", "task_pull_requests",
-        "shown_pull_request", "check_pull_requests", "landed", "merged_pull_request_head",
+        "shown_pull_request", "check_pull_requests", "started_at", "landed", "merged_pull_request_head",
         "safe_to_delete", "push_pull_request", "record_push", "pull_request", "retarget",
         # Both: rpc's `pr`, `list` and `retire` branches, and the measurement.
         "rpc", "add_git_stats",

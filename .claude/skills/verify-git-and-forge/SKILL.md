@@ -5,7 +5,7 @@ description: >
   record and its "landed" (which `x` retires on), and the row word "merged"
   in Emacs as polls and replies come and go, and as `B` changes the branch
   the task merges into. Use when a change touches has_tip,
-  recorded_merge_at, landed, check_pull_requests, task_pull_requests,
+  recorded_merge_at, started_at, landed, check_pull_requests, task_pull_requests,
   fetch_heads, record_push, push_pull_request, pull_request, retarget,
   safe_to_delete, merged_pull_request_head, add_git_stats, git_stamp or
   rpc's `pr`, `list` and `retire` in scripts/roost_remote.py, or
@@ -54,7 +54,8 @@ commit it holds (`SYNC`). Any `changed` or `gone` means: read the diff of
 that function and find its part in the models (below) before you trust a
 pass. A change outside these functions can still matter if it changes what
 they are given, such as the fields of a record or of a reply: `retarget`
-was such a change, to the branch and the start `landed` reads.
+was such a change, to the branch `landed` reads, and `make_task` writes the
+`startCommit` that `started_at` gives it.
 
 ## Run it
 
@@ -62,7 +63,7 @@ was such a change, to the branch and the start `landed` reads.
 python3 test/formal/check.py git_and_forge
 ```
 
-About three minutes. Every line must say `ok`. `Landed.cfg`,
+About four minutes. Every line must say `ok`. `Landed.cfg`,
 `LandedTwoPRs.cfg`, `LandedRetarget.cfg`, `MergedWord.cfg` and
 `MergedWordRetarget.cfg` must pass; each `Name.VARIANT.cfg` must fail as its
 first line says, which proves the rule can still fail, or, for a finding,
@@ -74,17 +75,18 @@ shortest path in plain words, a pass as a chart of the states.
 ## What the models say
 
 `Landed.tla`, one task on its host. Commits are numbers with parents; 0 is
-where the task started. The world moves at any step: the agent commits,
-amends, pushes (forced or not), pulls the forge's branch, opens a pull
-request; the forge takes commits, merges, closes, reopens once; you merge
-the task by hand into a branch, or pull a merge into one, once; and you
-name another branch for it to merge into with `B`. Meanwhile one poll, one
-`P` and one `x` run, in the code's locked steps:
+where the task's branch was made. The world moves at any step: the agent
+commits, amends, pushes (forced or not), pulls the forge's branch, opens a
+pull request, resets its branch; the forge takes commits, merges, closes,
+reopens once; you merge the task by hand into a branch, or pull a merge
+into one, once; and you name another branch for it to merge into with `B`.
+Meanwhile one poll, one `P` and one `x` run, in the code's locked steps:
 
 | Model | Code |
 | --- | --- |
 | `HasTip`, `RecordedMergeAt`, `HostLanded` | `has_tip`, `recorded_merge_at`, `landed` |
 | `target`, `base` | the record's `integrationBranch` and `baseCommit` |
+| `StartedAt` | `started_at`: the record's `startCommit`, which `make_task` sets and `retarget` keeps, or writes down from `baseCommit` in an older helper's record before it moves that. Always commit 0 |
 | `Retarget` | rpc `retarget`: `retarget`, with `integration_for` and `git merge-base`, for a branch, another task's, a tag or a commit |
 | `Reset` | `git reset --hard` in the worktree, where a config has `Resets` |
 | `PollList` | rpc `list`: `list_tasks`, then `branch_tip` and `pushed` in `check_pull_requests` |
@@ -125,11 +127,13 @@ reduced to `landed` and `dirty`.
 | `HostMeasure`'s `said` | `add_git_stats` and `landed()` go by the record `list_tasks` read |
 
 Bounds: `Landed.cfg` three commits and one pull request, `LandedTwoPRs.cfg`
-two and two, both with no `B` or `x`; `LandedRetarget.cfg` two commits, one
-pull request, `B` twice and `x`, with no `P`; `MergedWord.cfg` two commits,
-two merges and two replies lost, with no `B`; `MergedWordRetarget.cfg` one
-commit, one merge, one reply lost and `B` once. No config that passes has a
-reset: see the open findings.
+two and two, both with no `B`, `x` or reset; `LandedRetarget.cfg` two
+commits, one pull request, `B` twice, `x` and resets, with no `P`;
+`MergedWord.cfg` two commits, two merges and two replies lost, with no `B`;
+`MergedWordRetarget.cfg` one commit, one merge, one reply lost and `B` once.
+Resets beside `P` were checked once and are in no config: `Landed.cfg` at
+two commits with `Resets` passes (3.1 million states), and at its own three,
+or with two pull requests, takes several times as long as without.
 
 Other tasks need no steps of their own. Several attempts at one prompt, and
 a fork, are tasks with their own branch, record and reflog, and the forge
@@ -164,22 +168,7 @@ the action and point its comment at the code that rules the step out.
 
 ### Findings
 
-Open: three, of one cause, each a config that fails until it is fixed. `B`
-can make a commit of the task's own its start, by naming what has some of
-its commits and not all: a tag at an earlier one, a fork's branch, or a
-branch its first commits were merged into. A reset of the task's branch
-then goes wrong. Their switch is `Resets`, which `LandedRetarget.cfg` turns
-on once all three are fixed, with `.claude/skills/fix-a-finding`:
-
-- `LandedRetarget.ResetToStart.cfg` (RetireOnlyLanded): reset to that
-  commit, the task reads as one that never committed, and `x` retires it,
-  its commits in that tag or branch, or on its own pushed one, and merged
-  nowhere. Emacs asks to discard such a task; the helper is what lets it go.
-- `LandedRetarget.ResetToStartMerged.cfg` (LandedSaysSo): reset to that
-  commit where it is merged, the task doesn't read as merged.
-- `LandedRetarget.ResetBeforeStart.cfg` (RetireLosesNothing): reset to
-  where it first started, it reads as merged, with no commit of its own.
-  Nothing is lost; the word is wrong.
+Open: none in the models.
 
 Fixed, each with the variant that undoes its fix:
 
@@ -190,7 +179,24 @@ Fixed, each with the variant that undoes its fix:
   `B` naming what had all of the task's commits moved `baseCommit` onto its
   tip. A task merged there read as one that never committed; and `x`
   retired one named a tag at its tip, its commits merged nowhere.
-  `retarget` leaves `baseCommit` where it was then.
+  `retarget` leaves `baseCommit` where it was then. Since `started_at`,
+  that guard alone keeps no rule of these models: it keeps the task's
+  files and its pull request its own, which
+  `test_retargeting_onto_a_branch_that_has_the_tasks_commits_leaves_them_merged`
+  holds. So both configs set `StartedAtBase` too, the code as it was
+  before either fix.
+- `LandedRetarget.StartedAtBase.cfg`, `LandedRetarget.StartedAtBaseMerged.cfg`
+  and `LandedRetarget.StartedAtBaseEmptied.cfg`: `landed` and
+  `safe_to_delete` took a task at its `baseCommit` for one that never
+  committed, and `B` can make that a commit of the task's own, by naming
+  what has some of its commits and not all: a tag at an earlier one, a
+  fork's branch, or a branch its first commits were merged into. Reset
+  there, `x` retired it with its commits merged nowhere
+  (RetireOnlyLanded), or it didn't read as merged where that commit was
+  (LandedSaysSo); reset to where its branch was made, it read as merged,
+  with no commit of its own (RetireLosesNothing). They go by `startCommit`
+  now (`started_at`), which `B` never moves. `LandedRetarget.cfg` has
+  resets since.
 - `MergedWordRetarget.BranchUnwatched.cfg`: `B`'s reply lost, or `B` in
   another Emacs, where the Git stamp didn't move: nothing measured the task
   against the new branch, and its row went on saying "merged".
@@ -211,13 +217,14 @@ would, a `Name.VARIANT.cfg` with `\* expect: Rule`, and keep it.
 Once the models describe the code at a new commit and every line is `ok`,
 move `SYNC` in `covered.py` to that commit. Only then.
 
-Last confirmed at `089089e`, with the changes to `retarget` and
-`roost--task-states` that came with this line. Since `e910487`: `retarget`
-and `B` (the record's branch and start can change, in both models, and `x`
-has its steps), conversations, attempts and forks (no new steps: see
-above), and `roost--cache-task` and `roost--apply-snapshot` noting tasks
-that went, which the models don't read. Merged beside it, from the other
-sections: `safe_to_delete` leaves out branches that are going
-(`branches_going`, and an agent's own worktree's), which only refuses more
-than the models' `SafeToDelete`; and `retarget` stamps `retargetedAt`, which
-nothing here reads.
+Last confirmed at `8f651f3`, with the changes to `landed`, `safe_to_delete`
+and `retarget`, and the new `started_at`, that came with this line. Since
+`e910487`: `retarget` and `B` (the record's branch, and where its commits
+count from, can change, in both models, and `x` has its steps),
+`startCommit` (where its branch was made, which nothing changes),
+conversations, attempts and forks (no new steps: see above), and
+`roost--cache-task` and `roost--apply-snapshot` noting tasks that went,
+which the models don't read. From the other sections: `safe_to_delete`
+leaves out branches that are going (`branches_going`, and an agent's own
+worktree's), which only refuses more than the models' `SafeToDelete`; and
+`retarget` stamps `retargetedAt`, which nothing here reads.

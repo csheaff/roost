@@ -5329,6 +5329,116 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(self.request("retire", id=task["id"])["ok"])
         self.assertEqual(self.git("show", "release:work"), "work")
 
+    def test_a_task_reset_to_a_commit_of_its_own_after_retargeting_still_has_unmerged_commits(self):
+        # B named a tag at the task's first commit, so its commits counted
+        # from there. Reset to it, the task read as one that never
+        # committed, and x retired it, that commit merged nowhere.
+        task = self.create(name="fix parser")
+        first = self.commit_in(task, "one")
+        self.git("tag", "kept", first)
+        self.commit_in(task, "two")
+        self.assertTrue(self.request("retarget", id=task["id"], base="kept")["ok"])
+        self.assertEqual(self.base_fields(task), ("kept", first, "main", "refs/heads/main"))
+        self.git("reset", "-q", "--hard", first, cwd=Path(task["worktree"]))
+        listed = self.listed(full=True)
+        self.assertEqual((listed["landed"], listed["ahead"]), (False, 1))
+        self.assertIn("unmerged commits", self.request("retire", id=task["id"]).get("error", ""))
+        self.assertEqual(self.git("rev-parse", task["branch"]), first)
+        self.assertFalse(roost.is_ancestor(str(self.repo), first, "refs/heads/main"))
+
+    def test_a_task_reset_to_a_merged_commit_of_its_own_after_retargeting_reads_as_merged(self):
+        # Its first commit merged by hand, and another made since, B named
+        # the branch that has the first. Reset to that, all of its work is
+        # merged, and it read as a task that never committed.
+        task = self.create(name="fix parser")
+        first = self.commit_in(task, "one")
+        self.git("merge", "-q", "--no-ff", "--no-edit", task["branch"])
+        self.commit_in(task, "two")
+        self.assertTrue(self.request("retarget", id=task["id"], base="main")["ok"])
+        self.assertEqual(self.base_fields(task), ("main", first, "main", "refs/heads/main"))
+        self.assertIs(self.listed(full=True)["landed"], False)
+        self.git("reset", "-q", "--hard", first, cwd=Path(task["worktree"]))
+        listed = self.listed(full=True)
+        self.assertEqual((listed["landed"], listed["ahead"]), (True, 0))
+        # And x retires it, its commit in main.
+        self.assertTrue(self.request("retire", id=task["id"])["ok"])
+        self.assertEqual(self.git("show", "main:one"), "one")
+
+    def test_a_task_reset_to_where_it_started_after_retargeting_reads_as_never_committed(self):
+        # B named a tag at the task's first commit. Reset to where its
+        # branch was made, before that, it has no commit of its own, and it
+        # read as merged: its tip is in main, and is not where B counts from.
+        task = self.create(name="fix parser")
+        start = self.base_fields(task)[1]
+        first = self.commit_in(task, "one")
+        self.git("tag", "kept", first)
+        self.commit_in(task, "two")
+        self.assertTrue(self.request("retarget", id=task["id"], base="kept")["ok"])
+        self.git("reset", "-q", "--hard", start, cwd=Path(task["worktree"]))
+        listed = self.listed(full=True)
+        self.assertEqual((listed["landed"], listed["ahead"]), (False, 0))
+        # Nothing of its own is left to lose: x retires it, as it would one never retargeted.
+        self.assertTrue(self.request("retire", id=task["id"])["ok"])
+
+    def test_a_task_that_never_committed_stays_one_wherever_retargeting_counts_its_commits_from(self):
+        store = roost.Store(str(self.state))
+        listed = lambda task: next(t for t in self.request("list", full=True)["result"] if t["id"] == task["id"])
+        # A branch main has moved on from.
+        self.git("branch", "old")
+        self.git("commit", "--allow-empty", "-qm", "main moved")
+        old, main = self.git("rev-parse", "old"), self.git("rev-parse", "main")
+        idle = self.create(name="idle")
+        self.assertEqual([store.read(idle["id"])[field] for field in ("baseCommit", "startCommit")], [main, main])
+        self.assertTrue(self.request("retarget", id=idle["id"], base="old")["ok"])
+        # Its commits count from where it and old part. Its branch was made where it was.
+        self.assertEqual([store.read(idle["id"])[field] for field in ("baseCommit", "startCommit")], [old, main])
+        self.assertIs(listed(idle)["landed"], False)
+        # main has where it started, so x loses nothing, though old lacks it.
+        self.assertTrue(self.request("retire", id=idle["id"])["ok"])
+        # A reset in a task never retargeted reads as it did: to a commit
+        # of its own, merged nowhere, and to where it started.
+        task = self.create(name="fix parser")
+        first = self.commit_in(task, "one")
+        self.commit_in(task, "two")
+        wt = Path(task["worktree"])
+        self.git("reset", "-q", "--hard", first, cwd=wt)
+        self.assertEqual([listed(task)[field] for field in ("landed", "ahead")], [False, 1])
+        self.assertIn("unmerged commits", self.request("retire", id=task["id"])["error"])
+        self.git("reset", "-q", "--hard", main, cwd=wt)
+        self.assertEqual([listed(task)[field] for field in ("landed", "ahead")], [False, 0])
+        # An older helper's record says only where its commits count from,
+        # which was where its branch was made: nothing moved it then.
+        record = store.read(task["id"])
+        del record["startCommit"]
+        store.save(record)
+        self.assertEqual(roost.started_at(store.read(task["id"])), main)
+        self.assertIs(listed(task)["landed"], False)
+        self.assertTrue(self.request("retire", id=task["id"])["ok"])
+        # What is there is text, as where its commits count from is.
+        self.assertFalse(roost.listable(dict(record, startCommit=5)))
+        self.assertTrue(roost.listable(record))
+
+    def test_retargeting_a_task_from_an_older_helper_keeps_where_its_branch_was_made(self):
+        # Its record says only where its commits count from. B moves that,
+        # and with nothing else to go by, a reset there read as no commits.
+        store = roost.Store(str(self.state))
+        task = self.create(name="fix parser")
+        record = store.read(task["id"])
+        start = record.pop("startCommit")
+        store.save(record)
+        self.assertNotIn("startCommit", store.read(task["id"]))
+        first = self.commit_in(task, "one")
+        self.git("tag", "kept", first)
+        self.commit_in(task, "two")
+        retarget = lambda base: self.request("retarget", id=task["id"], base=base)["ok"]
+        self.assertTrue(retarget("kept"))
+        self.git("reset", "-q", "--hard", first, cwd=Path(task["worktree"]))
+        self.assertIn("unmerged commits", self.request("retire", id=task["id"]).get("error", ""))
+        self.assertEqual([store.read(task["id"])[field] for field in ("baseCommit", "startCommit")], [first, start])
+        # And it stays, whatever is named next.
+        self.assertTrue(retarget("main"))
+        self.assertEqual([store.read(task["id"])[field] for field in ("baseCommit", "startCommit")], [start, start])
+
     def test_retargeting_is_refused_with_no_branch_to_merge_into(self):
         task = self.create(name="fix parser")
         self.commit_in(task)

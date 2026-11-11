@@ -127,6 +127,10 @@ What each release changes, and what to do when upgrading. Newest first.
   Named a branch that already has its commits, as after you merged it
   there by hand, the task says `merged`. A branch named from another
   Emacs is measured against here too, at the next poll.
+  Whichever branch you name, Roost goes by where the task's branch was
+  made to tell a task that never committed: one reset to an earlier commit
+  of its own still says what is left to merge, and `x` won't retire it
+  with that unmerged.
   The panel's Branch line names the key. Nothing to do when upgrading.
 - A conversation plans work in your projects. Ask the agent in one to plan
   a piece of work, and each task it would split it into waits, dim, under

@@ -3,15 +3,16 @@
 (* What the host helper records of a task's pull request, and when it says *)
 (* the task's work is merged ("landed"), so that retiring it may delete    *)
 (* its branch.  scripts/roost_remote.py: has_tip, recorded_merge_at,       *)
-(* landed, task_pull_requests, shown_pull_request, head_to_fetch,          *)
-(* fetch_heads, check_pull_requests, push_pull_request, record_push,       *)
-(* pull_request, retarget, merged_pull_request_head, safe_to_delete and    *)
-(* rpc's `pr`, `list` and `retire` branches.  One task, one branch.        *)
+(* started_at, landed, task_pull_requests, shown_pull_request,             *)
+(* head_to_fetch, fetch_heads, check_pull_requests, push_pull_request,     *)
+(* record_push, pull_request, retarget, merged_pull_request_head,          *)
+(* safe_to_delete and rpc's `pr`, `list` and `retire` branches.  One task, *)
+(* one branch.                                                             *)
 (*                                                                         *)
-(* Commits are numbers: 0 is where the task started (baseCommit, until B   *)
-(* moves it), each new one has a parent.  Git on the host knows `local`;   *)
-(* the forge knows every commit, as one made there isn't here until        *)
-(* fetched.                                                                *)
+(* Commits are numbers: 0 is where the task's branch was made (startCommit *)
+(* always, and baseCommit until B moves it), each new one has a parent.    *)
+(* Git on the host knows `local`; the forge knows every commit, as one     *)
+(* made there isn't here until fetched.                                    *)
 (*                                                                         *)
 (* The world moves at any time: the agent commits, rewrites its last       *)
 (* commit, pushes (with force, as an agent may), pulls the forge's branch, *)
@@ -50,6 +51,9 @@ CONSTANTS
                     \* check_pull_requests read, not branch_tip again
   BaseOntoTip,      \* broken: retarget moves baseCommit onto the branch's tip
                     \* when what it names has all of the task's commits
+  StartedAtBase,    \* broken: started_at gives baseCommit, which B moves, so
+                    \* landed and safe_to_delete take a task at the commit
+                    \* its commits count from for one that never committed
   RetireReadsOnce   \* broken: retire goes by the record rpc read before
                     \* merged_pull_request_head asked the forge
 
@@ -118,9 +122,17 @@ HasTipIn(h, t, have) == h = t \/ (h # None /\ h \in have /\
 HasTip(h, t) == HasTipIn(h, t, local)
 RecordedMergeAt(r, t) ==
   r.num # 0 /\ (HasTip(r.mergedHead, t) \/ (r.state = "MERGED" /\ HasTip(r.head, t)))
-(* landed(task, tip), of a task whose record names the branch B and the
-   start START; committed_on is taken as so. *)
-HostLanded(r, b, start, t) == t # start /\ (RecordedMergeAt(r, t) \/ t \in integ[b])
+(* started_at: the commit the task's branch was made at, which a task that
+   never committed is still at.  It is the record's startCommit, which
+   make_task sets and nothing moves, B least of all: commit 0, whenever the
+   record is read.  An older helper's record has none, and its baseCommit
+   stands for it, which retarget writes down as startCommit before it moves
+   that.  Broken, it is FROM, the baseCommit a request read, where the
+   task's commits count from. *)
+StartedAt(from) == IF StartedAtBase THEN from ELSE 0
+(* landed(task, tip), of a task whose record names the branch B and counts
+   its commits from FROM; committed_on is taken as so. *)
+HostLanded(r, b, from, t) == t # StartedAt(from) /\ (RecordedMergeAt(r, t) \/ t \in integ[b])
 
 FollowRemote(f, c) == [i \in PRs |-> IF f[i].state = "OPEN" THEN [f[i] EXCEPT !.head = c] ELSE f[i]]
 NoOpen == \A i \in PRs : fpr[i].state # "OPEN"
@@ -221,8 +233,10 @@ PullMain(b) ==
    merges into; or a tag or a commit, which gives the primary checkout's
    branch.  No commit moves, and a pull request stays as it is.
 
-   What has all of the task's commits leaves its start where it was: at the
-   tip, the task would read as one that never committed, not as merged. *)
+   What has all of the task's commits leaves where they count from as it
+   was: counted from the tip, a pull request at them would not be the
+   task's.  Where its branch was made, startCommit, stays whatever B names
+   (StartedAt): a task that committed never reads as one that didn't. *)
 Retarget(b) ==
   /\ retargets < MaxRetargets
   /\ \E start \in Anc(tip) :
@@ -251,10 +265,11 @@ PollList ==
 
 \* task_pull_requests: the forge lists them, and only the task's count:
 \* the recorded one, or one whose head is on the branch here, at the tip,
-\* and made since the task started, as the record this request read has it.
-OursOf(f, t, num, start) ==
+\* and made since where the task's commits count from (baseCommit, FROM), as
+\* the record this request read has it.
+OursOf(f, t, num, from) ==
   {i \in PRs : f[i].state # "none" /\
-     (i = num \/ (f[i].head \in local /\ ~IsAnc(f[i].head, start) /\ IsAnc(f[i].head, t)))}
+     (i = num \/ (f[i].head \in local /\ ~IsAnc(f[i].head, from) /\ IsAnc(f[i].head, t)))}
 PollAsk ==
   /\ poll = "ask"
   /\ \/ /\ ans' = fpr /\ ours' = OursOf(fpr, ptip, snap.num, sbase) /\ poll' = "fetch"
@@ -382,12 +397,12 @@ XAsk ==
 \* its own on the forge as last pushed or fetched.
 Elsewhere(t) == (\E b \in Bs : t \in integ[b]) \/ (remote # None /\ IsAnc(t, remote))
 
-\* safe_to_delete, of a record naming the branch B and the start START: a
-\* task that never committed, whose start is somewhere else too; a tip in
-\* the branch it merges into; or the tip the forge was just said to have
-\* merged.
-SafeToDelete(b, start, t, mh) ==
-  \/ t = start /\ Elsewhere(t)
+\* safe_to_delete, of a record naming the branch B and counting its commits
+\* from FROM: a task that never committed, its branch where it was made
+\* (started_at), which is somewhere else too; a tip in the branch it merges
+\* into; or the tip the forge was just said to have merged.
+SafeToDelete(b, from, t, mh) ==
+  \/ t = StartedAt(from) /\ Elsewhere(t)
   \/ t \in integ[b]
   \/ mh # None /\ mh = t
 
@@ -397,8 +412,8 @@ SafeToDelete(b, start, t, mh) ==
 XRetire ==
   /\ xs = "asked"
   /\ LET b == IF RetireReadsOnce THEN xtarget ELSE target
-         start == IF RetireReadsOnce THEN xbase ELSE base
-         safe == SafeToDelete(b, start, tip, xmh)
+         from == IF RetireReadsOnce THEN xbase ELSE base
+         safe == SafeToDelete(b, from, tip, xmh)
      IN /\ lostByRetire' = (lostByRetire \/ (safe /\ ~(Elsewhere(tip) \/ OnForge(tip))))
         /\ retiredUnlanded' = (retiredUnlanded \/
                                (safe /\ ~(tip \in integ[target] \/ OnForge(tip) \/ tip = 0)))

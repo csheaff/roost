@@ -388,7 +388,7 @@ class History:
 # What every helper wrote in every record, which listing tasks takes for
 # granted, and what is text whenever it is there.
 RECORD_TEXT = ("name", "status", "repo", "worktree", "branch", "baseCommit", "socket")
-RECORD_OPTIONAL_TEXT = ("integrationBranch", "paneId", "windowId")
+RECORD_OPTIONAL_TEXT = ("integrationBranch", "paneId", "windowId", "startCommit")
 
 
 def listable(task):
@@ -2384,6 +2384,9 @@ def make_task(store, request, create_id):
     setup = text(request.get("setup"))
     task = dict(id=task_id, name=name, task=prompt or name, repo=repo,
                 worktree=str(worktree), branch=branch, baseCommit=commit,
+                # Where its branch is made, which stays as it is when
+                # `retarget` moves where its commits count from.
+                startCommit=commit,
                 # Shown by its short name, as a branch asked for in full is,
                 # as from an agent's offer.
                 baseRef=base[len("refs/heads/"):] if base.startswith("refs/heads/") else base,
@@ -3705,12 +3708,24 @@ def check_pull_requests(store, tasks):
     return [task for task in tasks if id(task) in ids]
 
 
+def started_at(task):
+    """The commit TASK's branch was made at, which a task that never
+    committed is still at. Not `baseCommit`, where its commits count from:
+    `retarget` moves that, as onto a commit of the task's own when the
+    branch it names has some of its commits, and a branch reset there has
+    commits all the same. An older helper's record has only `baseCommit`,
+    which nothing moved then, and `retarget` writes this down before it
+    moves that."""
+    return task.get("startCommit") or task.get("baseCommit")
+
+
 def landed(task, tip):
     """Whether the task's commits are all merged, so retiring it loses none,
     as `safe_to_delete` has it: TIP, its branch's, is in its integration
     branch, or is what GitHub merged for one of its pull requests. False
-    for a task that never committed. Takes no optional Git locks, for polls."""
-    if not tip or tip == task.get("baseCommit"):
+    for a task that never committed, its branch where it was made
+    (`started_at`). Takes no optional Git locks, for polls."""
+    if not tip or tip == started_at(task):
         return False
     if recorded_merge_at(task, tip):
         return True
@@ -5544,7 +5559,7 @@ def safe_to_delete(task, commit, merged_head=None, going=()):
     now, as its agent may switch it back."""
     going = {"refs/heads/" + name for name in [*going, *(agent_branch(task, entry["path"])
                                                          for entry in agent_work(task) if entry["made"])] if name}
-    if commit == task.get("baseCommit"):
+    if commit == started_at(task):
         # The task never committed. Its starting point (perhaps a forked
         # task's commits, or a detached HEAD) must survive elsewhere.
         refs = git(task["repo"], "for-each-ref", "--contains", commit, "--format=%(refname)",
@@ -5969,7 +5984,9 @@ def retarget(store, task, base):
     of its name, and another task's branch that task's. What `m` merges
     into, `u` merges in and its commits count from all follow. A branch
     that has all of the task's commits already leaves where they count
-    from as it was, so the task reads as merged there. Only the record
+    from as it was, and the task reads as merged there. Where its branch
+    was made, `startCommit`, stays whatever is named: by that it has
+    committed or never did (`started_at`). Only the record
     changes: no commit moves, and a pull request open against the old
     branch stays as it is, which the reply's `note` says, as it does that
     the local branch is not where its remote one is. Not an event of the
@@ -6012,11 +6029,16 @@ def retarget(store, task, base):
         raise RoostError(own)
     before = task.get("integrationBranch")
     # What has all of the task's commits, as a branch they are merged into
-    # or a tag at them, leaves where it started as it was: started at its
-    # own tip, it would read as a task that never committed, so not as
-    # merged, and as one `x` retires wherever else its start is kept.
+    # or a tag at them, leaves where they count from as it was: counted
+    # from its own tip, none would be its own, so it would show no file
+    # changed, have nothing for `P` to propose, and a pull request at them
+    # would not be its. Where its branch was made stays: where they count
+    # from can be a commit of the task's own, as when a tag at an earlier
+    # one is named, and a branch reset there has not gone back to its
+    # start. An older helper's record gets it from `baseCommit`, before
+    # that moves for the first time.
     task.update(baseRef=base[len("refs/heads/"):] if base.startswith("refs/heads/") else base,
-                baseCommit=task["baseCommit"] if start == tip else start,
+                baseCommit=task["baseCommit"] if start == tip else start, startCommit=started_at(task),
                 integrationBranch=integration, integrationRef="refs/heads/" + integration, retargetedAt=now())
     store.save(task)
     notes = []
