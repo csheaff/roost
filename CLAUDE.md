@@ -121,7 +121,10 @@ they can do themselves.
 - A checkout runs uncompiled, so measure performance uncompiled too.
 - `make qa` does all this with a fake agent: a GUI Emacs of its own, journeys
   through the menu, terminal, panel and merge, each step checked and, on
-  macOS, captured (see the manual's Development section). Use it for changes
+  macOS or under X (Xvfb will do), captured (see the manual's Development
+  section). `make gallery` draws the task panel and dashboard in every task
+  state of the sweep's gallery, with no agent, in seconds: look at it first
+  when you change how a view reads. Use `make qa` for changes
   to what Roost shows. A whole run takes about 25 minutes, so while you work,
   name the journeys your change touches, and run the whole of it once before
   asking for review. After that, rerun the journeys that failed or that a fix
@@ -134,6 +137,8 @@ they can do themselves.
   unfinished (a question, a menu, a buffer), goes in the `walk_away` grid,
   `WALK_INTERRUPTERS` or `WALK_STARTERS`, which tries it against all the
   others. `--popular` and `--remote` find what a plain local run doesn't.
+- An agent you start in a worktree of its own begins at `main`, not at the
+  branch you are on: have it `git merge --ff-only` your branch first.
 - A UX design review, of how Roost reads and feels on real journeys rather
   than its code, follows `.claude/skills/ux-review` (`/ux-review`).
 

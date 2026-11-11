@@ -1473,6 +1473,18 @@ tmux-control and its dependencies:
 
     make qa QA_FLAGS="-L ../tmux-control --package-dir ~/.emacs.d/elpa"
 
+Each step is captured as a screenshot on macOS and under X. On a machine
+with no display, such as a container or CI, Xvfb gives it one:
+
+    Xvfb :99 -screen 0 1760x1000x24 &
+    DISPLAY=:99 make qa QA_FLAGS="-L ../tmux-control -L ../eat answer offer"
+
+`make gallery`, with the same display, needs no agent, tmux or host: it draws
+the task panel and the dashboard for every task state of the sweep's gallery,
+a few to a sheet, in seconds, and captures each sheet in `gallery/`. Use it to
+see what a change to a view looks like in every state at once;
+`GALLERY_THEME=modus-operandi` draws it in that theme.
+
 Package directories are read, never written. `--load FILE` in `QA_FLAGS` loads
 Emacs Lisp after Roost, such as a change to try, and `--keep` leaves the Emacs
 and its tmux server running. A new flow gets a journey in `test/qa/qa.py`.
