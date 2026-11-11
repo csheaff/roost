@@ -1177,6 +1177,7 @@ elsewhere."
 
 (defvar roost-sweep-late--questions
   `((draft-name :origin compose :ask ,#'roost-compose-set-name :keys "x\r")
+    (draft-attempts :origin compose :ask ,#'roost-compose-set-attempts :keys "2\r")
     (draft-project :origin compose :ask ,#'roost-compose-set-project :keys "\r")
     (draft-folder :origin compose :ask ,#'roost-compose-set-project
                   :keys "Other directory…\r/home/user/other/\r")

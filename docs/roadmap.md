@@ -157,9 +157,10 @@ account, with no badge or verdict.
   you approved, and Magit shows what changed after it as unstaged. A count
   on the row, "3 hunks changed since you staged", would say at hunk level
   what "since you looked" says by file.
-- **Attempts compared with Ediff.** With several attempts at one prompt,
-  compare two attempts' worktrees file by file in Ediff and take hunks from
-  each, rather than picking one.
+- **Attempts compared with Ediff** are in Roost now: `=` on an attempt
+  lists every file the attempts changed, and `RET` on one compares two
+  attempts' copies of it in Ediff. Still to try: taking hunks from each
+  into one of them, rather than picking one.
 - **An attach command for other terminals.** Copy the `ssh -t … tmux
   attach` that reaches a task's real terminal, for a phone's SSH app or
   another machine, for every agent rather than Claude only.
@@ -173,11 +174,11 @@ account, with no badge or verdict.
   waits for `s`. Offer to resume them all when a host's tmux server is
   gone. Herdr resumes agents when it restores a session; workmux has
   `resurrect`.
-- **Several attempts at one prompt.** A count, or several agents, in the
-  draft makes sibling tasks; compare them in Magit, merge one, and finish
-  the rest. From Orca ("fan one prompt across 5 agents"), dmux and workmux
-  (`-a`, `-n`). Of the ideas here, it and
-  [agents that start tasks](#exploring) add the most to review without
+- **Several attempts at one prompt** are in Roost now: a count, or several
+  agents, in the draft (`C-c C-x`) makes sibling tasks; you compare them,
+  merge one, and finish the rest yourself. From Orca ("fan one prompt
+  across 5 agents"), dmux and workmux (`-a`, `-n`). Of the ideas here, it
+  and [agents that start tasks](#exploring) add the most to review without
   making any of it quicker to judge, so it fits where attempts are cheap to
   compare, as with Ediff (above).
 - **A fork that goes on with the conversation.** `C-u c` forks a task's

@@ -634,7 +634,19 @@ counted once you stop and resume it (`K`, then `s`).
 | `K` | `roost-stop` | Stop the agent's window; keep all work |
 | `s` | `roost-resume` | Restart a stopped, exited or crashed task in its recorded conversation; when other agents crashed on its host too, as after it restarted, ask whether to resume those as well. Refuses while the agent runs in the task's shell or another window of its tmux session, which Roost didn't start |
 | `w` | `roost-workload` | How long agents worked and waited on you, each day of the past week ([below](#how-many-agents-you-keep-up-with)) |
+| `=` | `roost-compare-attempts` | For a task a draft made with others from one prompt (`C-c C-x` there): list every file any of those attempts changed, with a column for each attempt saying what it did to the file |
 | `g` | `roost-refresh` | Refresh status and Git statistics |
+
+Where attempts are compared (`=`), each attempt has a line with its number,
+status and changes, and each file a line with `+12 −3`, `new` or `binary`
+under the attempts that changed it and `·` under those that left it alone:
+
+| Key | Command | |
+| --- | --- | --- |
+| `RET` | `roost-attempts-visit` | On a file, compare two attempts' copies of it in Ediff, each in its own worktree: the two that changed it, or of more, the two you choose. A file only one attempt changed opens there. On an attempt, open it |
+| `m` | `roost-attempts-merge` | Merge the attempt at point and retire it, as `m` does for any task; elsewhere, ask which. The others stay until you finish them, as with `x` on each: Roost deletes work only when you discard a task |
+| `g` | `roost-attempts-refresh` | Redraw, and ask the host for each attempt's changes as they are now |
+| `h`, `?` | `roost-dispatch` | The menu, for the attempt at point |
 
 On an offer an agent made, listed under its task in the dashboard and
 sidebar: `RET` (`roost-open-offer`) opens it as a new task draft, `e`
@@ -704,6 +716,17 @@ In the new task draft: `C-c C-c` creates, `C-c C-k` cancels, and `C-c C-p`,
 name. `C-c C-t` starts from a GitHub or GitLab issue (with `gh` or `glab` on
 the project's host) or a Jira work item (with `twg` on this machine). An empty name is derived
 from the prompt; `R` renames the task later.
+
+`C-c C-x` sets how many attempts the draft makes at its prompt, which its
+Attempts line shows: a number from 1 to 5, each by the draft's agent, or
+agents' names with spaces between, as `claude codex`, one by each. `C-c C-c`
+then creates a task for each at once, from the same prompt, project and
+starting ref. The first has the draft's name and opens, as one task does;
+the others have that name with 2, 3 and so on after it, and start without
+taking you anywhere. Asked again after no reply, each is made once. One of
+the others that fails says so in the echo area, and the rest go on. They
+are tasks like any other, kept together in the dashboard and sidebar, and
+`=` on one [compares them](#commands).
 
 `C-u c` on a task drafts a fork of it, so you can take the work another way
 and keep whichever goes better. Once the task's agent has a conversation,

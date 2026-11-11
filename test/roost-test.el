@@ -15043,3 +15043,312 @@ it of the same ID's, or nil for the first."
            (roost--create-task "/tmp/repo/" "task" nil "Look" "claude")
            (should (eq (alist-get 'mayOffer asked) (if setting t :false)))
            (should (eq (alist-get 'remoteControl asked) (if setting :false t)))))))))
+
+;;;; Several attempts at one prompt
+
+(defun roost-test--attempts-asked (asked count)
+  "The parameters of the newest COUNT create requests in ASKED, by attempt.
+ASKED is as `roost-test--draft-world' keeps it."
+  (sort (mapcar #'car (seq-take asked count))
+        (lambda (a b) (< (alist-get 'n (alist-get 'attempt a)) (alist-get 'n (alist-get 'attempt b))))))
+
+(ert-deftest roost-a-draft-makes-several-attempts-at-its-prompt ()
+  ;; A count in the draft asks for that many tasks at once, from the same
+  ;; prompt and starting point, each under an ID of its own that stays the
+  ;; same however often the draft asks: a lost reply makes none twice.
+  (roost-test--draft-world
+    (let (opened)
+      (cl-letf (((symbol-function 'roost-open-task) (lambda (task &rest _) (push (roost--field task 'id) opened)))
+                ((symbol-function 'roost--project-value) (lambda (&rest _) nil)))
+        (with-current-buffer roost--compose-buffer
+          ;; One, as it says, until you ask for more.
+          (should (string-match-p "^Attempts 1  C-c C-x$" (buffer-string)))
+          (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "3")))
+            (roost-compose-set-attempts))
+          (should (string-match-p "^Attempts 3  C-c C-x · each a task of its own; = on one compares them$"
+                                  (buffer-string)))
+          (setq roost--compose-fields (plist-put roost--compose-fields :base "release"))
+          (roost-compose-submit)
+          (should (= (length asked) 3))
+          (let* ((first (roost-test--attempts-asked asked 3))
+                 (ids (mapcar (lambda (params) (alist-get 'createId params)) first))
+                 (group (car ids)))
+            (should (equal (mapcar (lambda (params) (alist-get 'name params)) first)
+                           '("fix-parser" "fix-parser 2" "fix-parser 3")))
+            (dolist (params first)
+              (should (equal (alist-get 'prompt params) "Fix the parser"))
+              (should (equal (alist-get 'base params) "release"))
+              (should (equal (alist-get 'agent params) "claude"))
+              (should (equal (alist-get 'directory params) "/repo/")))
+            ;; Each its own, as its host takes one: 16 to 32 hex digits.
+            (should (= (length (delete-dups (copy-sequence ids))) 3))
+            (dolist (id ids)
+              (should (string-match-p "\\`[0-9a-f]\\{16,32\\}\\'" id)))
+            (should (equal (mapcar (lambda (params) (alist-get 'attempt params)) first)
+                           `(((group . ,group) (n . 1) (of . 3))
+                             ((group . ,group) (n . 2) (of . 3))
+                             ((group . ,group) (n . 3) (of . 3)))))
+            ;; The draft's own request is asked for last, as the one that opens.
+            (should (= (alist-get 'n (alist-get 'attempt (car (car asked)))) 1))
+            (should (equal (roost--compose-header) " Creating fix-parser and 2 more…"))
+            ;; No reply to the draft's own, and one of the others refused:
+            ;; that one says so, and the draft is as the first left it.
+            (funcall (nth 2 (car asked)) (propertize "No reply after 660s" 'roost-no-reply t))
+            (let ((note roost--draft-note))
+              (funcall (nth 2 (cadr asked)) "No branch, tag or commit named 'release' to start from")
+              (should (equal roost--draft-note note))
+              (should (string-search "C-c C-c asks again" note)))
+            ;; Asked again, each has the ID it had.
+            (roost-compose-submit)
+            (should (= (length asked) 6))
+            (should (equal (mapcar (lambda (params) (alist-get 'createId params))
+                                   (roost-test--attempts-asked asked 3))
+                           ids))
+            ;; The others are made and open nothing; the draft's own opens,
+            ;; and closes the draft.
+            (pcase-dolist (`(,n . ,id) '((2 . "2222222222222222") (3 . "3333333333333333")))
+              (let ((request (seq-find (lambda (request) (= (alist-get 'n (alist-get 'attempt (car request))) n))
+                                       asked)))
+                (funcall (nth 1 request)
+                         (append `((name . ,(alist-get 'name (car request))) (repo . "/repo")
+                                   (attempt . ,(alist-get 'attempt (car request))))
+                                 (roost-test--task id)))))
+            (should-not opened)
+            (should (get-buffer roost--compose-buffer))
+            (funcall (nth 1 (car asked))
+                     (append `((name . "fix-parser") (repo . "/repo") (createId . ,group)
+                               (attempt (group . ,group) (n . 1) (of . 3)))
+                             (roost-test--task "1111111111111111")))
+            (should (equal opened '("1111111111111111")))
+            (should-not (get-buffer roost--compose-buffer))
+            ;; Each knows the others.
+            (should (equal (mapcar (lambda (task) (roost--field task 'name))
+                                   (roost--attempts (gethash '("dev" "2222222222222222") roost--tasks)))
+                           '("fix-parser" "fix-parser 3")))))))))
+
+(ert-deftest roost-a-draft-makes-an-attempt-by-each-agent-it-names ()
+  ;; Agents' names in place of a count: one task by each, in that order,
+  ;; the first being the draft's own.
+  (roost-test--draft-world
+    (cl-letf (((symbol-function 'roost--project-value) (lambda (&rest _) nil)))
+      (with-current-buffer roost--compose-buffer
+        (let ((answer nil))
+          (cl-letf (((symbol-function 'read-string) (lambda (&rest _) answer)))
+            ;; What it can't make leaves the draft as it was.
+            (dolist (wrong '("0" "6" "claude gemini" "claude codex pi opencode claude codex"))
+              (setq answer wrong)
+              (should-error (roost-compose-set-attempts) :type 'user-error)
+              (should-not (plist-get roost--compose-fields :attempts)))
+            (setq answer "codex claude")
+            (roost-compose-set-attempts)
+            (should (string-match-p "^Agent    codex  C-c C-a$" (buffer-string)))
+            (should (string-match-p "^Attempts codex, claude  C-c C-x · each a task of its own" (buffer-string)))
+            ;; One agent alone is the draft's agent, and one task.
+            (setq answer "pi")
+            (roost-compose-set-attempts)
+            (should (equal (roost--compose-agents) '("pi")))
+            (setq answer "claude codex")
+            (roost-compose-set-attempts)
+            (should (equal (roost--compose-agents) '("claude" "codex")))
+            ;; Empty, or 1, is one task again, by the draft's agent.
+            (dolist (one '("" "1"))
+              (setq answer "2")
+              (roost-compose-set-attempts)
+              (should (equal (roost--compose-agents) '("claude" "claude")))
+              (setq answer one)
+              (roost-compose-set-attempts)
+              (should (equal (roost--compose-agents) '("claude")))
+              (should (string-match-p "^Attempts 1  C-c C-x$" (buffer-string))))
+            (setq answer "claude codex")
+            (roost-compose-set-attempts)))
+        (roost-compose-submit)
+        (should (= (length asked) 2))
+        (let ((both (roost-test--attempts-asked asked 2)))
+          (should (equal (mapcar (lambda (params) (alist-get 'agent params)) both) '("claude" "codex")))
+          (should (equal (mapcar (lambda (params) (alist-get 'command params)) both) '(["claude"] ["codex"])))
+          (should (equal (mapcar (lambda (params) (alist-get 'name params)) both) '("fix-parser" "fix-parser 2")))
+          (should (equal (mapcar (lambda (params) (alist-get 'of (alist-get 'attempt params))) both) '(2 2))))
+        ;; A draft of one task says nothing of attempts, as before.
+        (funcall (nth 2 (car asked)) "No branch named x")
+        (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "1")))
+          (roost-compose-set-attempts))
+        (roost-compose-submit)
+        (should (= (length asked) 3))
+        (should-not (assq 'attempt (car (car asked))))))))
+
+(defun roost-test--attempts ()
+  "Cache three attempts at one prompt on this machine, and return them.
+The first two change ledger.py, the first adds notes.md, all change
+report.py, and the third alone changes src/totals.py."
+  (let ((make (lambda (n id name files &rest more)
+                (roost--cache-task nil (append more
+                                               `((name . ,name) (worktree . ,(format "/tmp/roost-%d" n))
+                                                 (repo . "/srv/ledger") (files . ,files) (live . t)
+                                                 (integrationBranch . "main") (baseRef . "main")
+                                                 (attempt (group . "feedfacefeedface") (n . ,n) (of . 3)))
+                                               (roost-test--task id "ready"))))))
+    (list (funcall make 1 "1111111111111111" "fix-auth"
+                   '(((path . "ledger.py") (added . 4) (deleted . 1) (uncommitted . t))
+                     ((path . "notes.md") (untracked . t))
+                     ((path . "report.py") (added . 2) (deleted . 2)))
+                   '(diff . "2 files changed, 6 insertions(+), 3 deletions(-)") '(dirty . t))
+          (funcall make 2 "2222222222222222" "fix-auth 2"
+                   '(((path . "ledger.py") (added . 12) (deleted . 3))
+                     ((path . "report.py") (added . 1) (deleted . 0)))
+                   '(diff . "2 files changed, 13 insertions(+), 3 deletions(-)") '(ahead . 1) '(dirty))
+          (funcall make 3 "3333333333333333" "fix-auth 3"
+                   '(((path . "report.py") (added . 7) (deleted . 7))
+                     ((path . "src/totals.py") (added . 30) (deleted . 0)))
+                   '(diff . "2 files changed, 37 insertions(+), 7 deletions(-)") '(ahead . 2) '(dirty)))))
+
+(ert-deftest roost-attempts-are-compared-file-by-file ()
+  ;; Every file any attempt changed, with what each attempt did to it; two
+  ;; attempts' copies of a file open in Ediff, and one is merged from there.
+  (roost-test--isolated
+   (pcase-let ((`(,one ,two ,three) (roost-test--attempts))
+               (compared nil) (visited nil) (merged nil) (answers nil) (questions nil))
+     (save-window-excursion
+       (cl-letf (((symbol-function 'ediff-files) (lambda (a b &rest _) (push (list a b) compared)))
+                 ((symbol-function 'find-file) (lambda (file &rest _) (push file visited)))
+                 ((symbol-function 'roost-merge-retire) (lambda (task) (push (roost--field task 'name) merged)))
+                 ((symbol-function 'completing-read)
+                  (lambda (prompt &rest _) (push prompt questions) (pop answers))))
+         (roost-compare-attempts two)
+         (unwind-protect
+             (let ((row (lambda (text)
+                          (goto-char (point-min))
+                          (re-search-forward (concat "^  " (regexp-quote text)))
+                          (forward-line 0))))
+               (should (equal (buffer-name) "*roost attempts: fix-auth*"))
+               (should (derived-mode-p 'roost-attempts-mode))
+               ;; On the attempt you came from, each with its status and changes.
+               (should (equal (get-text-property (point) 'roost-task) (roost--key two)))
+               (dolist (line '("^  1  fix-auth    ready  2 files \\+6 −3 · 1 new · uncommitted$"
+                               "^  2  fix-auth 2  ready  2 files \\+13 −3 · 1 ahead$"
+                               "^  3  fix-auth 3  ready  2 files \\+37 −7 · 2 ahead$"
+                               ;; A column for each attempt, by its number.
+                               "^ +1 +2 +3$"
+                               "^  ledger\\.py +\\+4 −1 +\\+12 −3 +·$"
+                               "^  notes\\.md +new +· +·$"
+                               "^  report\\.py +\\+2 −2 +\\+1 −0 +\\+7 −7$"
+                               "^  src/totals\\.py +· +· +\\+30 −0$"))
+                 (should (string-match-p line (buffer-string))))
+               ;; Two changed it: their worktrees' copies, with no question.
+               (funcall row "ledger.py")
+               (roost-attempts-visit)
+               (should (equal compared '(("/tmp/roost-1/ledger.py" "/tmp/roost-2/ledger.py"))))
+               (should-not questions)
+               ;; As does a click on its name.
+               (setq compared nil)
+               (push-button (+ (point) 2))
+               (should (equal compared '(("/tmp/roost-1/ledger.py" "/tmp/roost-2/ledger.py"))))
+               ;; All three did: the two you choose.
+               (funcall row "report.py")
+               (setq compared nil answers '("3 fix-auth 3" "1 fix-auth"))
+               (roost-attempts-visit)
+               (should (equal compared '(("/tmp/roost-3/report.py" "/tmp/roost-1/report.py"))))
+               (should (= (length questions) 2))
+               ;; Chosen none of, nothing opens.
+               (setq compared nil answers '(""))
+               (roost-attempts-visit)
+               (should-not compared)
+               ;; One did: its copy.
+               (funcall row "src/totals.py")
+               (roost-attempts-visit)
+               (should (equal visited '("/tmp/roost-3/src/totals.py")))
+               ;; An attempt's line is its task's: m merges that one, and
+               ;; the menu's commands act on it.
+               (funcall row "3  fix-auth 3")
+               (should (equal (roost--key (roost--task-at-point)) (roost--key three)))
+               (roost-attempts-merge)
+               (should (equal merged '("fix-auth 3")))
+               ;; Elsewhere, m asks which.
+               (goto-char (point-min))
+               (setq answers '("1 fix-auth"))
+               (roost-attempts-merge)
+               (should (equal merged '("fix-auth" "fix-auth 3")))
+               (should-error (roost-attempts-visit) :type 'user-error)
+               ;; One that went leaves the rest, as Roost redraws.
+               (remhash (roost--key three) roost--tasks)
+               (roost--redraw)
+               (should-not (string-search "fix-auth 3" (buffer-string)))
+               (should-not (string-search "src/totals.py" (buffer-string)))
+               (should (string-match-p "^  report\\.py +\\+2 −2 +\\+1 −0$" (buffer-string)))
+               ;; The same buffer, asked for from another of them.
+               (let ((buffer (current-buffer)))
+                 (roost-compare-attempts one)
+                 (should (eq (current-buffer) buffer))
+                 (should (equal (get-text-property (point) 'roost-task) (roost--key one)))))
+           (kill-buffer "*roost attempts: fix-auth*")))))))
+
+(ert-deftest roost-a-task-says-which-attempt-it-is ()
+  ;; In its panel's details, with the key that compares them while there
+  ;; are others; = applies to no other task.
+  (roost-test--isolated
+   (pcase-let ((`(,one ,two ,_three) (roost-test--attempts))
+               (lone (roost--cache-task nil (append '((name . "alone") (repo . "/srv/ledger"))
+                                                    (roost-test--task "4444444444444444" "ready"))))
+               (details (lambda (task)
+                          (with-temp-buffer
+                            (roost-task-info-mode)
+                            (setq roost--buffer-task-key (roost--key task))
+                            (cl-letf (((symbol-function 'roost--task-info-width) (lambda () 100)))
+                              (roost--render-task-info))
+                            (goto-char (point-min))
+                            (when (re-search-forward "^  Attempt +\\(.*\\)$" nil t)
+                              (list (match-string-no-properties 1)
+                                    (get-text-property (match-beginning 1) 'roost-key-command)
+                                    ;; A click on the key it names.
+                                    (progn (goto-char (match-beginning 1))
+                                           (when (search-forward "=" (line-end-position) t)
+                                             (get-text-property (1- (point)) 'roost-key-command)))))))))
+     (should (equal (funcall details two)
+                    '("2 of 3, beside fix-auth, fix-auth 3 · = compares them" nil roost-compare-attempts)))
+     (should (roost--action-applies-p two 'roost-compare-attempts))
+     (should (eq (keymap-lookup roost-task-info-mode-map "=") 'roost-compare-attempts))
+     (should (eq (keymap-lookup roost-dashboard-mode-map "=") 'roost-compare-attempts))
+     (should (eq (keymap-lookup roost-sidebar-list-mode-map "=") 'roost-compare-attempts))
+     ;; A task that is no attempt says nothing of it, and refuses.
+     (should-not (funcall details lone))
+     (should-not (roost--action-applies-p lone 'roost-compare-attempts))
+     (should (equal (substring-no-properties (cadr (should-error (roost-compare-attempts lone) :type 'user-error)))
+                    "alone is the only attempt at its prompt; C-c C-x in the draft of a new task makes several"))
+     ;; The list keeps the attempts together, in their order, wherever
+     ;; their host started each among the project's tasks.
+     (cl-loop for (id . started) in '(("1111111111111111" . "5") ("2222222222222222" . "2")
+                                      ("3333333333333333" . "4") ("4444444444444444" . "3"))
+              do (roost--cache-task nil (cons (cons 'startedAt started) (gethash (list nil id) roost--tasks))))
+     (should (equal (mapcar (lambda (task) (roost--field task 'name)) (cdar (roost--task-groups (roost-tasks))))
+                    '("fix-auth" "fix-auth 2" "fix-auth 3" "alone")))
+     ;; The last one left is an attempt with nothing to compare with.
+     (remhash (roost--key one) roost--tasks)
+     (remhash '(nil "3333333333333333") roost--tasks)
+     (should (equal (car (funcall details two)) "2 of 3; the others are finished"))
+     (should-not (roost--action-applies-p two 'roost-compare-attempts))
+     (should (equal (cadr (should-error (roost-compare-attempts two) :type 'user-error))
+                    "fix-auth 2 is the only attempt left")))))
+
+(ert-deftest roost-merging-an-attempt-says-which-remain ()
+  ;; The others are not discarded for you: Roost deletes work only when
+  ;; you discard a task.
+  (roost-test--isolated
+   (pcase-let ((`(,_one ,two ,three) (roost-test--attempts))
+               (roost-merge-style 'merge)
+               (said nil))
+     (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
+               ((symbol-function 'roost--request)
+                (lambda (_host _action params success &optional _failure _timeout)
+                  (funcall success (append '((status . "retired"))
+                                           (gethash (list nil (alist-get 'id params)) roost--tasks)))))
+               ((symbol-function 'roost--refresh-host) #'ignore)
+               ((symbol-function 'message)
+                (lambda (format &rest args) (when format (push (apply #'format format args) said)))))
+       (roost-merge-retire two)
+       (should (equal (car said)
+                      (concat "Merged fix-auth 2 into main, and removed its worktree and branch; "
+                              "fix-auth and fix-auth 3 remain: x on each discards it")))
+       (should (= (length (roost-tasks)) 2))
+       (roost-merge-retire three)
+       (should (equal (car said)
+                      (concat "Merged fix-auth 3 into main, and removed its worktree and branch; "
+                              "fix-auth remains: x discards it")))))))

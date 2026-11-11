@@ -234,6 +234,14 @@ KIND is `committed', `uncommitted', `untracked' or `binary'."
     ;; Offered by the agent of the state named, and started by you.
     ("started from another task" (status . "running") (live . t) (parentState . "offers a task"))
     ("started from a task since retired" (status . "ready") (live . t) (parent . "ffffffffffffffff"))
+    ;; Two of the three tasks a draft made from one prompt: both change
+    ;; ledger.py, and each a file the other leaves alone.  The third is finished.
+    ("first attempt" (status . "ready") (live . t) (seen . "2026-10-03T20:00:00+00:00") (ahead . 1)
+     (attempt (group . "a77e3b7a77e3b7a7") (n . 1) (of . 3)) (diff . "2 files +24 −6")
+     (files . ,(roost-sweep--files '("ledger.py" . committed) '("report.py" . committed))))
+    ("second attempt" (status . "ready") (live . t) (dirty . t) (ahead . 0)
+     (attempt (group . "a77e3b7a77e3b7a7") (n . 2) (of . 3)) (diff . "2 files +4 −1 · uncommitted")
+     (files . ,(roost-sweep--files '("ledger.py" . uncommitted) '("notes.md" . untracked))))
     ("unreachable host" (host . "gone") (status . "running") (live . t)))
   "Task states the views are drawn for: (NAME . FIELDS).
 FIELDS go over those of `roost-test--task', on host \"dev\" unless they
@@ -294,7 +302,7 @@ size of its changes, unless its state says otherwise."
       start-file-process call-process roost--notify
       ;; A task's terminal, the menu, other packages and the browser
       roost--display-task transient-setup magit-status magit-diff-working-tree magit-diff-dwim
-      find-file find-file-other-window dired browse-url popup-menu x-popup-menu)
+      find-file find-file-other-window dired browse-url popup-menu x-popup-menu ediff-files)
     "Functions that reach outside the view.
 Called, they are recorded and stop the command.")
 
@@ -465,6 +473,13 @@ among them."
                                       :name "Show each budget's total" :parent (roost-sweep--key state)))
     (insert "Add one per budget.")))
 
+(defun roost-sweep--attempts-setup (state)
+  "Make the current buffer compare the attempts STATE's task is one of.
+For a task that is none, attempts that have all gone since."
+  (let ((task (gethash (roost-sweep--key state) roost--tasks)))
+    (setq roost--attempts-shown
+          (list (roost--field task 'host) (or (alist-get 'group (roost--attempt task)) "gone")))))
+
 (defvar roost-sweep--views
   '((panel :mode roost-task-info-mode :render roost--render-task-info :widths (40 100)
            :layouts (selected none other both) :setup roost-sweep--panel-setup)
@@ -483,7 +498,10 @@ among them."
            :keys (roost-compose-submit roost-compose-cancel roost-compose-set-project))
     (offer-draft :mode roost-compose-mode :render roost--compose-render :buffer "*roost new task*"
                  :layouts (selected none other both) :setup roost-sweep--offer-draft-setup
-                 :keys (roost-compose-submit roost-compose-cancel roost-compose-set-project)))
+                 :keys (roost-compose-submit roost-compose-cancel roost-compose-set-project))
+    (attempts :mode roost-attempts-mode :render roost--render-attempts
+              :layouts (selected none other both) :setup roost-sweep--attempts-setup :point roost-sweep--row
+              :keys (roost-attempts-visit roost-attempts-merge roost-attempts-refresh)))
   "Roost's views, each (NAME . PLIST).
 :mode makes the buffer, :setup gives it what it shows for a state,
 :render draws it, :point finds the state's task in it, and :buffer names
