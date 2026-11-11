@@ -86,6 +86,20 @@ isolated tmux server, as `make contract-live` runs its sessions.
   follows is refused; `main` does the same with this Git, so it is not
   from these changes, and it is not yet in `test/test_crash.py`. The
   whole sweep was not run: beside another run on four cores it timed out.
+- **`make qa` under Xvfb.** Emacs 29.3 with its own transient 0.4.3, on
+  Linux, as root, with no window manager, no `ssh` and no Magit: every
+  journey but the sweep in a GUI frame, which ran out of its twenty
+  minutes on four shared cores, and Magit's, which were left out. 345
+  steps, 334 with no problem. The eleven, none of them from these
+  changes: three journeys with a second frame, which never showed; the
+  setup check of a host it can't reach, which words its error for a
+  missing `ssh`; a key file root can read, where the journey expects a
+  refusal; a terminal that wraps this machine's long shell prompt apart
+  from tmux; a pause of 2.5 s collecting garbage; and, with Roost's menu
+  left open, `t`, `f` and two clicks on another task, which found no row
+  in the sidebar. `main` does the same here for the setup check and the
+  menu. The last is worth a look on Emacs 29 with the transient it ships:
+  a click in the sidebar while the menu is open may not reach it.
 - **Not checked.** A remote host; Codex, Pi and OpenCode, which take no
   tool of Roost's yet; the draft and rows in a GUI Emacs with a real
   agent; the tests of Roost in Magit, Evil and perspective.el, which need
