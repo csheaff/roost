@@ -75,8 +75,21 @@ isolated tmux server, as `make contract-live` runs its sessions.
   Whether the task then shows in the Claude app was not checked: Claude
   named its sign-in here "Claude API", and Remote Control needs a
   subscription.
+- **The helper killed at each step.** On Linux with Git 2.43, the crash
+  scenarios of the actions that changed, each killed at every command
+  (`before`, `after`, `orphan`, `racing`, `fail`, `inside`): creating a
+  task (68 kills), a conversation (80), a task from an offer (64), and
+  sending (25), resuming (45), stopping (15), renaming (10) and the new
+  `Retarget` scenario (40), with no problems. Retiring, discarding and
+  updating each left a problem or two where Git was killed inside a
+  reference transaction and its `.lock` file stayed, so the discard that
+  follows is refused; `main` does the same with this Git, so it is not
+  from these changes, and it is not yet in `test/test_crash.py`. The
+  whole sweep was not run: beside another run on four cores it timed out.
 - **Not checked.** A remote host; Codex, Pi and OpenCode, which take no
-  tool of Roost's yet; the draft and rows in a GUI Emacs with a real agent.
+  tool of Roost's yet; the draft and rows in a GUI Emacs with a real
+  agent; the tests of Roost in Magit, Evil and perspective.el, which need
+  newer packages than this machine's; `make formal`.
 
 ## UX review — 2026-11-09
 
