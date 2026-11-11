@@ -759,7 +759,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
            (funcall press "▸ Now the logout")
            (should (equal roost--panel-open '(prompts)))
            (should (string-match-p (concat keys "\n▾ Prompts\nFix the login\\.\nShow the whole prompt\n\n"
-                                           "Your latest prompt\nNow the logout\\.\nShow the whole prompt\n"
+                                           "Your latest prompt\nNow the logout\\.\nShow the whole prompt\n\n"
                                            "▸ Details\n\\'")
                                    (buffer-string)))
            (should (looking-at-p "▾ Prompts"))

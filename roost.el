@@ -10516,6 +10516,10 @@ scrolled it away."
 
 (defun roost--insert-folded-details (task width)
   "Insert where TASK's work lives as one quiet line, or unfolded, in WIDTH columns."
+  ;; Apart from the prompts above it, when those are unfolded.
+  (when (and (memq 'prompts roost--panel-open)
+             (or (roost--latest-prompt task) (roost--prompt-text task)))
+    (insert roost--gap))
   (if (memq 'details roost--panel-open)
       (progn (roost--insert-unfold "Details" 'details)
              (roost--insert-details task width t))
