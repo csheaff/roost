@@ -12641,7 +12641,9 @@ for any other directory, which asks for a host and a folder first."
                 (roost--insert-offer-row task offer (roost--sidebar-offer-row task offer width))))))))
     ;; A conversation needs no project, so it comes before them.
     (insert roost--gap)
-    (insert-text-button " New conversation" 'face 'roost-dim 'follow-link t 'mouse-face 'highlight
+    ;; Cut where a narrow sidebar would cut it, with a sign that it was.
+    (insert-text-button (truncate-string-to-width " New conversation" (max 4 (1- width)) nil nil "…")
+                        'face 'roost-dim 'follow-link t 'mouse-face 'highlight
                         'roost-new-conversation t
                         'help-echo "Talk to an agent in no project: mouse-1 opens its terminal"
                         'action (lambda (_) (roost-new-conversation)))
