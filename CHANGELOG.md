@@ -34,8 +34,9 @@ What each release changes, and what to do when upgrading. Newest first.
   shows the tool the agent last started, as `Running make test` or
   `Editing ledger.py`, where a waiting agent's reply goes, and the task
   panel says it under the task's name. It comes from the agent's hooks, so
-  an agent that reports no tools says nothing: Claude Code does, and tasks
-  started before this update do once their agent starts its next tool.
+  an agent that reports no tools says nothing: Claude Code and Codex do,
+  Pi and OpenCode don't yet. Tasks started before this update say it once
+  their agent starts its next tool.
   Nothing to do when upgrading.
 - The task panel is quiet until something is wrong. Beside a terminal it
   keeps bold for the task's name and colour for what wants you, which now
