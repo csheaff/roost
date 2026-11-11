@@ -4,6 +4,27 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A conversation plans work in your projects. Ask the agent in one to plan
+  a piece of work, and each task it would split it into waits, dim, under
+  the conversation, naming its project; `RET` or a click opens it as a new
+  task draft there, to start as it is or change first. It reads the
+  projects this host has run tasks in without asking at each file, and
+  changes nothing there without asking. A conversation keeps up to eight
+  offers, a task three. With a real Claude Code 2.1.322, a conversation
+  asked to plan two changes offered both, each brief saying what the other
+  covers, with no permission prompt. Claude asks once whether to trust
+  Roost's conversations folder, with the first conversation on a host.
+- An agent's offers are on unless you turn them off: `roost-agent-offers`
+  is t. Each Claude task starts with Roost's two tools, `propose_task` and
+  `list_projects`, and a few sentences on when to use them, which cost
+  tokens on each of its requests. To go without, set it to nil; tasks you
+  start from then on have none.
+- `make test` runs on every core, in about four minutes on four where it
+  took eighteen, and `make quick` gives an answer while you work: one case
+  in twelve of each sweep, without the suite whose files haven't changed
+  since it passed. `make test-serial` runs it as before. Nothing to do
+  when upgrading.
+
 - A fork of a task, `C-u c`, goes on with the task's conversation: its
   agent starts from a copy of it, in a worktree with the task's
   uncommitted changes as well as its commits, and the task's own
@@ -20,15 +41,13 @@ What each release changes, and what to do when upgrading. Newest first.
   sidebar, in a repository of Roost's own in its state directory. `C-u C`
   asks which host. Nothing to do when upgrading.
 - An agent can offer a task of its own, for work it comes across outside
-  its task, with `roost-agent-offers` on. The offer waits, dim, under its
+  its task. The offer waits, dim, under its
   task in the dashboard and sidebar. A click or `RET` opens it as a new
   task draft, filled in, and the task you create from it shows under the
   one that offered it, while you stay where you were. Right-click it, or
   press `e` or `x` on it, to have that agent do it there or to dismiss it.
   Only Claude Code takes the tool so far, from an MCP server of the
-  helper's. It is off by default, and an experiment: it may change or go.
-  To try it, set `roost-agent-offers` to t; tasks you start from then on
-  can offer.
+  helper's.
 - A narrow sidebar keeps each task's name and still says its status. Where
   the status word would leave the name under a dozen columns, a mark in
   the word's colour stands for it at the row's end: `?` asks you, `!` went

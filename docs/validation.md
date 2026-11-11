@@ -35,6 +35,28 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## Offers and a planning conversation, live — 2026-11-11
+
+Claude Code 2.1.322 with Haiku, on Linux, through the helper and an
+isolated tmux server, as `make contract-live` runs its sessions.
+
+- **A task's agent offers one.** Started with Roost's MCP server
+  (`--mcp-config`, `alwaysLoad`), Claude replied to its first prompt as
+  ever. Told of work outside its task, it called `propose_task` without
+  asking, the offer showed in the listing, and taking it left none. Now a
+  session of the contract, `OfferSession`, with a capture `make test`
+  replays.
+- **A conversation plans.** In a conversation on a host that had run a
+  task in one project, asked for two changes there, Claude read the
+  project's files with no permission prompt and offered two tasks, each
+  naming the project, each brief saying what the other covers. Before the
+  conversation could read without asking, the same turn stopped at
+  "Do you want to proceed?" for a `cd` and `git log` there.
+- **Trust.** Claude asked whether to trust the first conversation's folder
+  and not the second's: once for a host's conversations.
+- **Not checked.** A remote host; Codex, Pi and OpenCode, which take no
+  tool of Roost's yet; the draft and rows in a GUI Emacs with a real agent.
+
 ## UX review — 2026-11-09
 
 - **Scope.** How a task's status reads in the sidebar as it narrows, from

@@ -9457,7 +9457,8 @@ print(json.dumps(dict(data=data)))
         self.assertIs(server["alwaysLoad"], True)
         # An offer only waits in Roost, so it needs no asking.
         settings = json.loads(Path(argv[argv.index("--settings") + 1]).read_text())
-        self.assertEqual(settings["permissions"], {"allow": ["mcp__roost__propose_task"]})
+        self.assertEqual(settings["permissions"],
+                         {"allow": ["mcp__roost__propose_task", "mcp__roost__list_projects"]})
         # The prompt still comes last, after --.
         self.assertEqual(argv[-2:], ["--", "Look"])
 
@@ -9494,14 +9495,99 @@ print(json.dumps(dict(data=data)))
         self.assertEqual(replies["new"]["error"]["code"], -32601)
         self.assertEqual(replies[1]["result"]["protocolVersion"], "2025-11-25")
         self.assertIn("offer it with propose_task", replies[1]["result"]["instructions"])
-        # One tool, which only records an offer: an agent that asks before a
-        # tool unless told it changes nothing, as Codex does, needn't ask.
-        [tool] = replies[2]["result"]["tools"]
-        self.assertEqual(tool["name"], "propose_task")
-        self.assertFalse(tool["annotations"]["destructiveHint"])
-        self.assertFalse(tool["annotations"]["openWorldHint"])
+        # Two tools, one that only records an offer and one that only
+        # reads: an agent that asks before a tool unless told it changes
+        # nothing, as Codex does, needn't ask.
+        tools = {tool["name"]: tool for tool in replies[2]["result"]["tools"]}
+        self.assertEqual(sorted(tools), ["list_projects", "propose_task"])
+        for tool in tools.values():
+            self.assertFalse(tool["annotations"]["destructiveHint"])
+            self.assertFalse(tool["annotations"]["openWorldHint"])
+        self.assertTrue(tools["list_projects"]["annotations"]["readOnlyHint"])
         self.assertEqual(replies[3]["error"]["message"], "Unknown tool: read_task")
         self.assertEqual(replies[4]["result"], {})
+
+    def call(self, task, tool, **arguments):
+        """What TASK's agent is told as it calls TOOL of Roost's with ARGUMENTS."""
+        return self.serve(task, dict(id="call", method="tools/call", params=dict(
+            name=tool, arguments=arguments)))["call"]["result"]
+
+    def test_a_conversation_offers_tasks_in_your_projects(self):
+        # It has no project of its own, so it plans: each task it would
+        # split a piece of work into waits under it, for you to start.
+        self.create(name="earlier")
+        talk = self.create(name="Conversation 09:15", directory="/nowhere", conversation=True, mayOffer=True)
+        replies = self.serve(talk)
+        said = replies["hello"]["result"]["instructions"]
+        self.assertIn("belongs to no project", said)
+        self.assertIn("naming its project", said)
+        # The projects this host has run tasks in, and not Roost's own.
+        self.assertEqual(self.call(talk, "list_projects")["content"][0]["text"], str(self.repo.resolve()))
+        # Which it reads without asking, to plan, and changes only by asking.
+        store = roost.Store(str(self.state))
+        argv = roost.ClaudeAgent().launch(store, store.read(talk["id"]), False)
+        allowed = json.loads(Path(argv[argv.index("--settings") + 1]).read_text())["permissions"]["allow"]
+        self.assertEqual(allowed, ["mcp__roost__propose_task", "mcp__roost__list_projects",
+                                   "Read(/%s/**)" % self.repo.resolve()])
+        # Without one, it is told to name it.
+        refused = self.call(talk, "propose_task", title="Fix add", brief="Fix add in calc.py.")
+        self.assertTrue(refused["isError"])
+        self.assertIn("give the folder of the project", refused["content"][0]["text"])
+        said = self.call(talk, "propose_task", title="Fix add", brief="Fix add in calc.py.", project=str(self.repo))
+        self.assertNotIn("isError", said, said)
+        self.assertIn("under this conversation", said["content"][0]["text"])
+        [offer] = self.request("inspect", id=talk["id"])["result"]["offers"]
+        self.assertEqual((offer["title"], offer["project"]), ("Fix add", str(self.repo)))
+        # Started there as Emacs does from its draft, from that project's
+        # own branch, and shown under the conversation.
+        self.assertTrue(self.request("take-offer", id=talk["id"], offer=offer["id"])["ok"])
+        reply = self.request("create", directory=offer["project"], name=offer["title"], prompt=offer["brief"],
+                             parent=talk["id"], createId=uuid.uuid4().hex[:24], socket=self.socket,
+                             command=[sys.executable, str(FAKE)])
+        self.assertTrue(reply["ok"], reply)
+        made = reply["result"]
+        self.assertEqual((made["repo"], made["parent"], made["integrationBranch"]),
+                         (str(self.repo.resolve()), talk["id"], "main"))
+        self.assertNotIn("conversation", made)
+        # More than a task's three: a plan is several tasks.
+        for n in range(roost.CONVERSATION_OFFER_LIMIT):
+            self.assertNotIn("isError", self.call(talk, "propose_task", title="Part %d" % n, brief="Do part %d." % n,
+                                                  project=str(self.repo)))
+        full = self.call(talk, "propose_task", title="One more", brief="And this.", project=str(self.repo))
+        self.assertIn("%d offers" % roost.CONVERSATION_OFFER_LIMIT, full["content"][0]["text"])
+
+    def test_an_offer_names_only_a_repository_of_yours(self):
+        parent = self.create(name="parent")
+        other = self.root / "other project"
+        other.mkdir()
+        roost.git(other, "init", "-q", "-b", "main")
+
+        def refused(project, why):
+            said = self.call(parent, "propose_task", title="Fix add", brief="Fix add.", project=project)
+            self.assertTrue(said.get("isError"), said)
+            self.assertIn(why, said["content"][0]["text"])
+            self.assertFalse(roost.Store(str(self.state)).read(parent["id"]).get("offers"))
+
+        refused(str(self.root / "nowhere"), "is no Git repository's folder")
+        refused("other project", "by its whole path")
+        refused(str(self.state / "conversations"), "is no Git repository's folder")
+        refused(str(other) + "\x1b[2J", "U+001B")
+        # Roost's own, once it has one.
+        self.create(name="Conversation 09:15", directory="/nowhere", conversation=True)
+        refused(str(self.state / "conversations"), "is Roost's own")
+        # Another project of yours, by its folder, however it is spelled.
+        said = self.call(parent, "propose_task", title="Fix add", brief="Fix add.",
+                         project=str(other / ".." / "other project"))
+        self.assertNotIn("isError", said, said)
+        [offer] = roost.Store(str(self.state)).read(parent["id"])["offers"]
+        self.assertEqual(offer["project"], str(other))
+        # Its own project is said by leaving it out, and offering it again
+        # there takes the other away.
+        self.assertNotIn("isError", self.call(parent, "propose_task", title="Fix add", brief="Fix add here.",
+                                              project=str(self.repo)))
+        [offer] = roost.Store(str(self.state)).read(parent["id"])["offers"]
+        self.assertNotIn("project", offer)
+        self.assertEqual(offer["brief"], "Fix add here.")
 
     def test_the_mcp_server_answers_in_utf_8_whatever_the_locale(self):
         # An agent waits for every answer until you stop it.

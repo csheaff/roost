@@ -245,7 +245,7 @@ until it replies again; one that failed or stopped by itself stops counting
 once you've seen it. What you've seen is kept on the task's host, for your
 other machines and the next session.
 
-**Take the tasks an agent offers.** With `roost-agent-offers` on, an agent
+**Take the tasks an agent offers.** An agent
 that comes across work outside its task, such as a bug in code it read,
 offers it as a task of its own and goes on with its own work. The offer
 waits, dim, under its task in the dashboard and sidebar
@@ -295,7 +295,13 @@ say what you want in its terminal. A conversation is a task like the others,
 in a repository of Roost's own in the host's state directory, listed under
 "Conversations"; it has no branch to merge, so `x` just ends it.
 `roost-new-conversation` (`C` in the menu) does the same, and with `C-u`
-asks which host. Under "Start a task in" are the
+asks which host. A conversation is where to plan: ask its agent to look at
+one of your projects and split a piece of work into tasks, and each waits
+under the conversation, naming its project, for you to open as a draft
+there and start ([Take the tasks an agent offers](#a-day-with-roost)). It
+reads the projects that host has run tasks in without asking, and changes
+nothing in them without asking. Claude asks once whether to trust Roost's
+conversations folder, with the first conversation on a host. Under "Start a task in" are the
 projects with no tasks now that you used last on each host, three
 (`roost-sidebar-recent-projects`), and "Other directory…". A click on one, or
 `RET`, drafts a task there, taking a draft you have written there too, unless
@@ -827,10 +833,11 @@ header line. A failed creation keeps the draft.
   then shows at once, and for Claude Code a declined request and Esc too. A
   Codex task is `ready` once you have answered its startup questions, rather
   than at its first turn.
-- `roost-agent-offers` (nil, experimental): let a task's agent offer tasks
-  of their own, which wait under its task for you to take
-  ([Take the tasks an agent offers](#a-day-with-roost)). Claude Code only,
-  for tasks started after you turn it on.
+- `roost-agent-offers` (t): let a task's agent offer tasks of their own,
+  which wait under its task for you to take
+  ([Take the tasks an agent offers](#a-day-with-roost)), and a
+  conversation's agent offer tasks in your projects. Claude Code only. Nil
+  gives agents no tools of Roost's, for tasks started after you change it.
 - `roost-large-change` (`(:lines 400 :files 10 :directories 3)`): when a
   task's row gets its `±`. Leave one out to mark by the others, as
   `(:lines 400)`; nil marks none.
@@ -1142,10 +1149,14 @@ What runs where:
   `roost-teardown-command`.
 - With `roost-agent-offers` on, Claude Code starts the helper as an MCP
   server of its own (`--mcp-config`), over its standard input and output,
-  and ends it with itself. Its one tool, `propose_task`, writes an offer
-  into the record of the task whose agent called it, and nothing else: it
-  runs no program and reaches no other task. The task's own Claude
-  settings allow that tool without asking. An offer's title and brief can
+  and ends it with itself. Its tool `propose_task` writes an offer
+  into the record of the task whose agent called it, and nothing else, and
+  `list_projects` names the projects that host has run tasks in: neither
+  runs a program or reaches another task. The task's own Claude
+  settings allow both without asking. An offer may name another project,
+  by the folder of a Git repository there, which you read in its draft; a
+  conversation's must, and its Claude settings also let it read, and only
+  read, the files of the projects `list_projects` names without asking. An offer's title and brief can
   hold no control character, nor one that doesn't show as itself, and you
   read both in the draft before anything starts from them; Do it here
   sends only a fixed line with the title.

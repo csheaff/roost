@@ -751,9 +751,17 @@ def claude_hook_settings(store, task):
                 # task's work, not from the default branch.
                 "worktree": {"baseRef": "head"}}
     if task.get("mayOffer") is True:
-        # Roost's own tool, which needs no asking: an offer only waits in
+        # Roost's own tools, which need no asking: an offer only waits in
         # Roost for you to take it or leave it.
-        settings["permissions"] = {"allow": ["mcp__roost__propose_task"]}
+        allow = ["mcp__roost__propose_task", "mcp__roost__list_projects"]
+        if task.get("conversation") is True:
+            # A conversation plans work in your projects, which it has to
+            # read first: those this host has run tasks in, without asking
+            # at each file. Reading only: a change or a command there asks
+            # as ever. Not one whose name a rule can't hold.
+            allow += ["Read(/%s/**)" % repo for repo in known_projects(store)
+                      if repo.startswith("/") and not re.search(r"[()\n*]", repo)]
+        settings["permissions"] = {"allow": allow}
     path = store.tasks_dir / (task["id"] + ".settings")
     atomic_json(path, settings)
     return str(path)
@@ -4301,7 +4309,27 @@ MCP_INSTRUCTIONS = (
     "or a guess, and never work the user turned down. A piece of what you were asked to do stays here, "
     "without an offer. A task you offer starts from the branch this task merges into, without this "
     "task's changes, so offer only work that doesn't need them. Say in your reply what you offered.")
+# What a conversation's agent is told instead: it is in no project, so the
+# work it finds is always for a task of its own, in a project it names.
+MCP_CONVERSATION_INSTRUCTIONS = (
+    "Roost runs you in a conversation that belongs to no project: the folder you are in is Roost's own, "
+    "and nothing here is merged anywhere. The user talks to you to think, look into things and plan. "
+    "When they want work done in one of their projects, don't do it from here: offer each piece that "
+    "stands by itself as a task with propose_task, naming its project. list_projects names the projects "
+    "Roost has run tasks in on this machine, and any Git repository's folder will do. Read those "
+    "projects' files with your Read, Grep and Glob tools, which need no permission there, before you "
+    "plan; run no commands in them. Each offer waits "
+    "under this conversation in Roost until the user starts it, as a task with its own agent, worktree "
+    "and branch, which they review and merge; you can't start one yourself, nor do it here. Split a larger piece of "
+    "work into tasks that can go on at the same time without changing the same files, and say in each "
+    "brief what the others cover. Say in your reply what you offered.")
 MCP_TOOLS = {
+    "list_projects": dict(
+        description=(
+            "The projects Roost has run tasks in on this machine, each by the folder of its primary "
+            "checkout, as propose_task's project takes it."),
+        inputSchema=dict(type="object", properties={}),
+        annotations=dict(readOnlyHint=True, destructiveHint=False, openWorldHint=False)),
     "propose_task": dict(
         description=(
             "Offer the user a task of its own, with its own agent, Git worktree and branch, for work "
@@ -4312,7 +4340,11 @@ MCP_TOOLS = {
             "and what done looks like."),
         inputSchema=dict(type="object", required=["title", "brief"], properties=dict(
             title=dict(type="string", description="A short name for the task, a few words"),
-            brief=dict(type="string", description="Everything the new task's agent needs to start"))),
+            brief=dict(type="string", description="Everything the new task's agent needs to start"),
+            project=dict(type="string", description=(
+                "The folder of the project the task is for, when it isn't this task's own: a Git "
+                "repository on this machine, as list_projects names them. Leave it out for a task in "
+                "this task's project. A conversation, which has no project, must give it.")))),
         # It only records the offer, so an agent that asks before a tool
         # that says nothing of itself, as Codex does, needn't ask.
         annotations=dict(readOnlyHint=False, destructiveHint=False, openWorldHint=False)),
@@ -4321,6 +4353,8 @@ MCP_TOOLS = {
 # title one can have: it names a task, and tmux takes no command as long
 # as one that names thousands of characters.
 OFFER_LIMIT = 3
+# A conversation plans: a piece of work split into tasks is more than three.
+CONVERSATION_OFFER_LIMIT = 8
 TITLE_LIMIT = 1000
 # Format characters that real writing has: the soft hyphen, the joiners,
 # and the signs that draw before a number in Arabic and Syriac.
@@ -4388,22 +4422,35 @@ class McpServer:
         else:
             self.write(dict(id=ident, result=result))
 
+    def instructions(self):
+        """What the agent is told of Roost's tools: as a task's, or as a
+        conversation's, which has no project of its own."""
+        try:
+            conversation = self.store.read(self.task_id).get("conversation") is True
+        except (RoostError, OSError, ValueError):
+            conversation = False
+        return MCP_CONVERSATION_INSTRUCTIONS if conversation else MCP_INSTRUCTIONS
+
     def answer(self, method, params):
         if method == "initialize":
             asked = params.get("protocolVersion")
             return dict(protocolVersion=asked if asked in MCP_VERSIONS else MCP_VERSIONS[0],
                         capabilities=dict(tools={}), serverInfo=dict(name="roost", version="1"),
-                        instructions=MCP_INSTRUCTIONS)
+                        instructions=self.instructions())
         if method == "ping":
             return {}
         if method == "tools/list":
             return dict(tools=[dict(definition, name=name) for name, definition in MCP_TOOLS.items()])
         if method == "tools/call":
             arguments = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
-            if params.get("name") != "propose_task":
+            if params.get("name") not in MCP_TOOLS:
                 raise McpError(-32602, "Unknown tool: %s" % params.get("name"))
             try:
-                said = propose_task(self.store, self.task_id, arguments.get("title"), arguments.get("brief"))
+                if params.get("name") == "list_projects":
+                    said = "\n".join(known_projects(self.store)) or "Roost has run no task in a project here yet."
+                else:
+                    said = propose_task(self.store, self.task_id, arguments.get("title"), arguments.get("brief"),
+                                        arguments.get("project"))
             except (RoostError, OSError, ValueError) as exc:
                 return dict(content=[dict(type="text", text=str(exc))], isError=True)
             return dict(content=[dict(type="text", text=said)])
@@ -4447,9 +4494,53 @@ def hidden_character(value):
                  or UNDRAWN.match(c)), None)
 
 
-def propose_task(store, task_id, title, brief):
+def known_projects(store):
+    """The projects this host has run tasks in, by their primary checkouts,
+    newest first: not the repository Roost keeps for conversations."""
+    own = os.path.realpath(store.root / CONVERSATIONS)
+    found = []
+    for marker in sorted((store.root / "worktrees").glob("*/" + REPOSITORY_MARKER),
+                         key=lambda path: path.stat().st_mtime, reverse=True):
+        with contextlib.suppress(OSError):
+            repo = read_repository(marker)
+            if repo and repo not in found and os.path.realpath(repo) != own and os.path.isdir(repo):
+                found.append(repo)
+    return found
+
+
+def offered_project(store, task, project):
+    """The folder an offer of TASK's agent names as PROJECT, a task's own
+    project being None: a Git repository here, which you read in the
+    draft before anything starts there. Looked at, not asked of Git: the
+    server runs no program."""
+    if not project:
+        if task.get("conversation") is True:
+            raise RoostError("A conversation is in no project: give the folder of the project the task is "
+                             "for, as list_projects names them")
+        return None
+    hidden = hidden_character(project) or ("\n" if "\n" in project else None)
+    if hidden:
+        raise RoostError("The project holds U+%04X, which no folder Roost offers a task in has" % ord(hidden))
+    folder = Path(project).expanduser()
+    if not folder.is_absolute():
+        raise RoostError("Name the project by its whole path, as list_projects does")
+    folder = Path(os.path.normpath(folder))
+    if not (folder / ".git").exists():
+        known = known_projects(store)
+        raise RoostError("%s is no Git repository's folder. %s" % (
+            folder, "Projects Roost knows here: " + ", ".join(known) if known else "Give the folder that holds its .git"))
+    real = os.path.realpath(folder)
+    if real == os.path.realpath(store.root) or real.startswith(os.path.realpath(store.root) + os.sep):
+        raise RoostError("%s is Roost's own, not a project of the user's" % folder)
+    # A task's own project is said by leaving it out.
+    return None if real == os.path.realpath(task.get("repo") or "") else str(folder)
+
+
+def propose_task(store, task_id, title, brief, project=None):
     """Offer the task TITLE, with BRIEF, as TASK_ID's agent asks: it waits
-    under that task in Roost for you, and its agent goes on meanwhile."""
+    under that task in Roost for you, and its agent goes on meanwhile. In
+    PROJECT, a folder, if given, and else in the task's own."""
+    project = (text(project) or "").strip()
     title = (text(title) or "").strip()
     brief = (text(brief) or "").replace("\r\n", "\n").strip()
     if not title or not brief:
@@ -4478,17 +4569,26 @@ def propose_task(store, task_id, title, brief):
         # Its agent may be on its way out, as when you stopped the task.
         if task.get("status") in ("stopped", "retired"):
             raise RoostError("This task is %s, so it offers nothing" % task["status"])
+        where = offered_project(store, task, project)
+        conversation = task.get("conversation") is True
         offers = task_offers(task)
         again = next((offer for offer in offers if offer["title"] == title), None)
         if again:
             again.update(brief=brief, at=now())
-        elif len(offers) >= OFFER_LIMIT:
+            again.pop("project", None)
+        elif len(offers) >= (CONVERSATION_OFFER_LIMIT if conversation else OFFER_LIMIT):
             raise RoostError("%d offers of this task already wait for the user; mention this work in your "
                              "reply instead" % len(offers))
         else:
-            offers.append(dict(id=uuid.uuid4().hex[:8], title=title, brief=brief, at=now()))
+            again = dict(id=uuid.uuid4().hex[:8], title=title, brief=brief, at=now())
+            offers.append(again)
+        if where:
+            again["project"] = where
         set_offers(task, offers)
         store.save(task)
+    if conversation:
+        return ("Offered. It waits in Roost under this conversation, where the user can start it as a task in "
+                "%s, or dismiss it. Say in your reply what you offered." % where)
     return ("Offered. It waits in Roost under this task, where the user can start it as a task of its own, "
             "have you do it here, or dismiss it. Say in your reply what you offered, and don't do the work "
             "unless the user asks.")

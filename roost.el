@@ -353,16 +353,19 @@ for Claude Code when you press Esc or decline one, which hooks don't
 report.  New tasks, and tasks you resume, follow this."
   :type 'boolean)
 
-(defcustom roost-agent-offers nil
+(defcustom roost-agent-offers t
   "Whether a task's agent can offer tasks of their own, for you to start.
 An agent that comes across work outside its task, such as a bug in
 code it read, offers it, and goes on with its own work.  The offer
 waits, dim, under its task in the dashboard and sidebar, until you open
 it as a new task draft, have that agent do it there, or dismiss it.
-Roost gives the agent a tool for this, from an MCP server of its own,
-with a few sentences on when to use it, which cost tokens on each of
-its requests.  Only Claude Code takes it so far.  Tasks you start after
-turning this on have it.  An experiment: it may change or go."
+An agent in a conversation, which has no project, offers tasks in your
+projects: ask it to plan a piece of work, and each task it would split
+it into waits under the conversation for you to start.
+Roost gives the agent tools for this, from an MCP server of its own,
+with a few sentences on when to use them, which cost tokens on each of
+its requests.  Only Claude Code takes them so far.  Tasks you start
+after changing this follow it; nil gives agents no tools of Roost's."
   :type 'boolean)
 
 (defcustom roost-notes-file (locate-user-emacs-file "roost/notes.json")
@@ -10677,6 +10680,15 @@ Refreshes are asynchronous; rendering uses only cached state.
                        (stringp (alist-get 'brief offer))))
                 (if (listp offers) offers (append offers nil)))))
 
+(defun roost--offer-project (task offer)
+  "The project OFFER, of TASK's agent, is for when it isn't TASK's own, or nil.
+As a local or TRAMP directory on TASK's host.  A conversation, which has
+no project, offers tasks in yours."
+  (when-let* ((project (alist-get 'project offer))
+              ((stringp project))
+              ((not (string-empty-p project))))
+    (roost--remote-directory (cons (cons 'worktree project) task))))
+
 (defun roost--offer-row (offer)
   "Where the row of OFFER, a task's key and an offer's ID, starts, if shown."
   (save-excursion
@@ -10690,8 +10702,11 @@ Refreshes are asynchronous; rendering uses only cached state.
                    'keymap roost--offer-row-map)))
     (insert (apply #'propertize line
                    'mouse-face 'highlight
-                   'help-echo (format "%s offers: %s\n\n%s\n\nmouse-1: open it as a task draft · mouse-3: more"
+                   'help-echo (format "%s offers: %s%s\n\n%s\n\nmouse-1: open it as a task draft · mouse-3: more"
                                       (roost--field task 'name) (alist-get 'title offer)
+                                      (if-let* ((project (roost--offer-project task offer)))
+                                          (format ", in %s" (roost--project-label project))
+                                        "")
                                       (truncate-string-to-width (alist-get 'brief offer) 600 nil nil "…"))
                    row)
             ;; Without `mouse-face', so each row lights up alone.
@@ -10797,8 +10812,10 @@ be answered with that one's task."
         (user-error "%s" (substitute-command-keys
                           "Create this draft (\\<roost-compose-mode-map>\\[roost-compose-submit]) or cancel it (\\[roost-compose-cancel]) first; the offer waits"))))
     (kill-buffer buffer))
-  (let ((into (roost--field task 'integrationBranch)))
-    (roost--compose nil (cons (alist-get 'brief offer) t) (roost--project-directory task))
+  (let* ((elsewhere (roost--offer-project task offer))
+         ;; In another project, it starts where that project's checkout is.
+         (into (unless elsewhere (roost--field task 'integrationBranch))))
+    (roost--compose nil (cons (alist-get 'brief offer) t) (or elsewhere (roost--project-directory task)))
     (with-current-buffer roost--compose-buffer
       (setq roost--compose-fields
             (thread-first roost--compose-fields
@@ -10823,6 +10840,11 @@ one, and the offer no longer waits.  The agent wrote the brief, so the
 title is all it needs."
   (interactive (list last-nonmenu-event))
   (pcase-let ((`(,task ,offer) (roost--offer-at event)))
+    (when (roost--offer-project task offer)
+      (user-error "%s is for %s, which %s isn't in; open it as a task there"
+                  (alist-get 'title offer)
+                  (roost--project-label (roost--offer-project task offer))
+                  (roost--field task 'name)))
     (unless (roost--agent-running-p task)
       (user-error "%s's agent isn't running; resume it first" (roost--field task 'name)))
     (roost--send-text task (format "Do this task here: “%s”" (alist-get 'title offer))

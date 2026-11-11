@@ -14471,6 +14471,53 @@ it of the same ID's, or nil for the first."
          (when (get-buffer roost--compose-buffer)
            (kill-buffer roost--compose-buffer)))))))
 
+(ert-deftest roost-a-conversations-offer-opens-in-the-project-it-names ()
+  ;; A conversation is in no project: it plans, and each task it offers
+  ;; says which of yours it is for.  The draft opens there, starts from
+  ;; that project's own branch, and its task shows under the conversation.
+  (roost-test--isolated
+   (let ((default-directory "/tmp/") (xterm-mouse-mode t) created
+         (offer '((id . "0a1b2c3d") (title . "Fix add in calc.py") (brief . "add() subtracts.")
+                  (project . "/srv/ledger"))))
+     (save-window-excursion
+       (delete-other-windows)
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--create-task)
+                      (lambda (directory name base prompt agent &optional _made _failed extra)
+                        (setq created (list directory name base prompt agent extra))))
+                     ((symbol-function 'roost--act) #'ignore)
+                     ((symbol-function 'roost--send-text) (lambda (&rest _) (error "Sent"))))
+             (let ((task (roost--cache-task "dev" (append `((name . "Conversation 09:15") (conversation . t)
+                                                            (repo . "/state/conversations") (agent . "claude")
+                                                            (integrationBranch . "master")
+                                                            (integrationRef . "refs/heads/master")
+                                                            (live . t) (offers ,offer))
+                                                          (roost-test--task "1111111111111111" "ready")))))
+               (should (string-suffix-p ":dev:/srv/ledger/" (roost--offer-project task offer)))
+               ;; Its row says where, under the mouse.
+               (with-temp-buffer
+                 (roost-dashboard-mode)
+                 (roost--render-dashboard)
+                 (goto-char (roost--offer-row (list (roost--key task) "0a1b2c3d")))
+                 (should (string-match-p "offers: Fix add in calc\\.py, in dev · /srv/ledger"
+                                         (get-text-property (point) 'help-echo)))
+                 ;; It can't be done where it was offered, which is nowhere.
+                 (should (string-match-p "open it as a task there"
+                                         (cadr (should-error (roost-offer-here) :type 'user-error)))))
+               (roost--compose-offer task offer)
+               (set-buffer roost--compose-buffer)
+               (should (string-suffix-p ":dev:/srv/ledger/" (plist-get roost--compose-fields :directory)))
+               ;; Not the conversation's branch, which is Roost's own.
+               (should-not (plist-get roost--compose-fields :base))
+               (should-not (plist-get roost--compose-fields :integration))
+               (roost-compose-submit)
+               (pcase-let ((`(,directory ,name ,base . ,rest) created))
+                 (should (string-suffix-p ":dev:/srv/ledger/" directory))
+                 (should (equal (list name base) '("Fix add in calc.py" nil)))
+                 (should (equal (alist-get 'parent (car (last rest))) "1111111111111111")))))
+         (when (get-buffer roost--compose-buffer)
+           (kill-buffer roost--compose-buffer)))))))
+
 (ert-deftest roost-an-offer-waits-while-your-own-draft-holds-a-prompt ()
   ;; Nothing of yours gives way to it, and it isn't taken.
   (roost-test--isolated
