@@ -174,6 +174,13 @@ def scan_codex():
     # Its hooks are given on the command line, as -c hooks.EVENT=[...].
     scan.report(b"session_flags" in data, "hooks set with -c count" if b"session_flags" in data
                 else "no longer finds hooks set on the command line; check CodexAgent.launch")
+    # In Plan mode a reply's plan is between these tags, and once the turn
+    # ends a menu asks whether to implement it, of which no hook says.
+    gone = [name for name, words in (("the <proposed_plan> tag", b"<proposed_plan>"),
+                                     ('the menu "Implement this plan?"', b"Implement this plan?"))
+            if words not in data]
+    scan.report(not gone, "Plan mode's plan and the menu after it"
+                + (": no longer finds " + " or ".join(gone) + "; check CodexAgent.plan_asked_about" if gone else ""))
     return scan.problems
 
 
