@@ -4,6 +4,18 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- `M-x roost-copy-attach-command`, also on a task's right-click menu,
+  copies the shell command that attaches another terminal to a task's
+  agent, as `ssh -t dev 'tmux -L main attach -t =roost-…'`: for a phone's
+  SSH app or another machine, for any agent.
+- The mode line's count has a mark while an agent asks, as `● Roost:2!`,
+  and its help says how many ask. An agent that asks, which holds it up,
+  was told from one that finished by the dot's colour alone, which some
+  can't tell apart. If you match on the count's text, allow for the `!`.
+- Roost's scan of Claude Code reads 2.1.322, which keeps its lists of
+  notification types and session sources elsewhere, and a live session
+  with it passes; its capture replaces none, and `make test` replays it.
+
 - Your phone, through Claude Code's Remote Control. With
   `roost-remote-control` on, each Claude task starts with
   `--remote-control` and `--name`, named for the task, so it shows in the

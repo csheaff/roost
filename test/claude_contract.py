@@ -96,6 +96,11 @@ def notification_kinds(data):
         kinds |= set(re.findall(rb'"([a-z_]+)"', match.group(1)))
     listed = re.search(rb'fieldToMatch:"notification_type",values:\[([^\]]*)\]', data)
     if not listed:
+        # From 2.1.322 the list stands alone, under a name: the one that
+        # holds both a prompt for permission and the reminder that it waits.
+        listed = next((found for found in re.finditer(rb'=\[((?:"[a-z0-9_]+",?)+)\]', data)
+                       if b'"permission_prompt"' in found.group(1) and b'"idle_prompt"' in found.group(1)), None)
+    if not listed:
         return set()
     kinds |= set(re.findall(rb'"([a-z_]+)"', listed.group(1)))
     for name in re.findall(rb'\.\.\.([\w$]+)', listed.group(1)):
@@ -160,6 +165,12 @@ def static_check():
         values = re.findall(rb'"([a-z_]+)"', match.group(1))
         if b"startup" in values:
             sources = set(value.decode() for value in values)
+    # From 2.1.322 they are in the hook's own description of what it sends.
+    for match in re.finditer(rb'hook_event_name:(?:[\w$.]{1,12}\()?"SessionStart"\)?,source:[\w$.]{1,12}\(\[([^\]]*)\]',
+                             data):
+        values = re.findall(rb'"([a-z_]+)"', match.group(1))
+        if b"startup" in values:
+            sources |= set(value.decode() for value in values)
     for source in sorted(sources - set(SESSION_SOURCES)):
         report(None, "SessionStart source %s: is it a fresh start, a compaction or a clear?" % source)
     if not sources:

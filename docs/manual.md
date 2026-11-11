@@ -610,6 +610,7 @@ counted once you stop and resume it (`K`, then `s`).
 | `h`, `?` | `roost-dispatch` | A Magit-style menu of every command below, naming the task they act on and what to do next |
 | `RET` | `roost-open-task` | Open the task's agent terminal and workspace; for a stopped or crashed agent, offer to resume it, in the same question as the others that crashed on its host |
 | `c` | `roost-new-task` | Draft a new task, from the region or Org entry if any (`C-u` forks the current task, its agent's conversation too) |
+| | `roost-copy-attach-command` | Copy the shell command that attaches another terminal, as a phone's SSH app, to the task's agent |
 | `C` | `roost-new-conversation` | Open an agent's terminal in no project, with nothing to write first (`C-u` asks which host) |
 | `n` | `roost-next-waiting` | Next task waiting for you, permission requests first, saying why it waits; once none does, again goes back to where you started |
 | `t` | `roost-shell` | Shell beside the agent, in the worktree (reused) |

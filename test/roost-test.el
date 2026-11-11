@@ -3225,7 +3225,9 @@ terminal's, on a pty.  Skips the test where it can't be made."
      (should-not (get-text-property 3 'face count)))
    (roost--cache-task "dev" (roost-test--task "3333333333333333" "permission"))
    (let ((count (roost--mode-line-count)))
-     (should (equal (substring-no-properties count) " ● Roost:2 "))
+     ;; Marked, as one of them asks: its colour alone would say so only
+     ;; to those who can tell the two apart.
+     (should (equal (substring-no-properties count) " ● Roost:2! "))
      (should (eq (get-text-property 1 'face count) 'roost-status-permission)))
    (let ((global-mode-string '("" display-time-string)) (roost-watch-interval 3600))
      (unwind-protect
@@ -3236,7 +3238,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
            ;; Shown only while `roost-mode-line-count' is on.
            (should (eq (car roost--mode-line-entry) 'roost-mode-line-count))
            (should (equal (substring-no-properties (eval (cadr (cadr roost--mode-line-entry)) t))
-                          " ● Roost:2 ")))
+                          " ● Roost:2! ")))
        (roost-watch-mode -1))
      (should (equal global-mode-string '("" display-time-string))))))
 
@@ -6727,7 +6729,7 @@ stopped."
    (let ((roost-watch-mode nil))
      (should-not (roost-mode-line-waiting)))
    (let ((roost-watch-mode t))
-     (should (equal (substring-no-properties (roost-mode-line-waiting)) " ● Roost:1 ")))))
+     (should (equal (substring-no-properties (roost-mode-line-waiting)) " ● Roost:1! ")))))
 
 ;; Canvases come with Emacs 32, so these tests stand in for them.
 (defmacro roost-test--with-canvases (on &rest body)
@@ -14540,6 +14542,42 @@ it of the same ID's, or nil for the first."
                (should-not (get-buffer roost--compose-buffer))))
          (when (get-buffer roost--compose-buffer)
            (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-copy-attach-command-reaches-the-agents-real-terminal ()
+  ;; For another terminal, as a phone's: tmux's own attach, over SSH for a
+  ;; task on another host, with each part quoted for a shell.
+  (roost-test--isolated
+   (let ((copied nil))
+     (cl-letf (((symbol-function 'kill-new) (lambda (text &rest _) (setq copied text))))
+       (let ((remote (roost--cache-task "me@dev" (append '((session . "roost-12 34") (socket . "main") (live . t))
+                                                         (roost-test--task "1111111111111111" "running"))))
+             (local (roost--cache-task nil (append '((session . "roost-5678") (socket . "work") (live . t))
+                                                   (roost-test--task "2222222222222222" "ready"))))
+             (stopped (roost--cache-task nil (append '((session . "roost-9") (live))
+                                                     (roost-test--task "3333333333333333" "stopped")))))
+         (roost-copy-attach-command local)
+         (should (equal copied "tmux -L work attach -t \\=roost-5678"))
+         (roost-copy-attach-command remote)
+         (should (string-prefix-p "ssh -t me\\@dev tmux\\ -L\\ main\\ attach" copied))
+         (should (string-search "roost-12" copied))
+         ;; With no window, there is nothing to attach to.
+         (setq copied nil)
+         (should-error (roost-copy-attach-command stopped) :type 'user-error)
+         (should-not copied)
+         (should-not (roost--action-applies-p stopped 'roost-copy-attach-command))
+         (should (roost--action-applies-p local 'roost-copy-attach-command)))))))
+
+(ert-deftest roost-the-count-marks-an-agent-that-asks ()
+  ;; A second sign beside its colour: one that asks holds its agent up.
+  (roost-test--isolated
+   (roost--cache-task "dev" (append '((live . t)) (roost-test--task "1111111111111111" "ready")))
+   (should (string-match-p "Roost:1 " (roost--mode-line-count t)))
+   (roost--cache-task "dev" (append '((live . t) (request . "Asks to run make test"))
+                                    (roost-test--task "2222222222222222" "permission")))
+   (let ((count (roost--mode-line-count t)))
+     (should (string-match-p "Roost:2! " count))
+     (should (string-match-p "1 of 2 agents waiting for you asks"
+                             (get-text-property (1- (length (string-trim-right count))) 'help-echo count))))))
 
 (ert-deftest roost-the-sidebar-says-a-worktree-is-on-another-branch ()
   ;; As the panel says first: for every task at once, in the warning's

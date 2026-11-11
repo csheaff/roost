@@ -54,6 +54,21 @@ isolated tmux server, as `make contract-live` runs its sessions.
   "Do you want to proceed?" for a `cd` and `git log` there.
 - **Trust.** Claude asked whether to trust the first conversation's folder
   and not the second's: once for a host's conversations.
+- **The contract.** `make contract` reads 2.1.322 once the scan looks
+  where it now keeps its notification types and session sources: 33 hook
+  events, 19 notification types and five session sources, all known. The
+  manual-mode live session passed each of its twelve checks: a permission
+  request says what it asks, an approved command shows running before it
+  ends, a declined request and a turn stopped with Esc show ready, and
+  `/clear` starts a new conversation. Its capture is
+  `test/captures/claude-2.1.322.jsonl`. With no permission mode set,
+  Claude started in manual mode here, so the auto-mode session was not
+  run, nor the sandbox session.
+- **Remote Control.** Started with `--remote-control=NAME --name=NAME`,
+  Claude 2.1.322 came up as ever, with no question before its prompt.
+  Whether the task then shows in the Claude app was not checked: this
+  machine signs in with an API key, and Remote Control needs a
+  subscription.
 - **Not checked.** A remote host; Codex, Pi and OpenCode, which take no
   tool of Roost's yet; the draft and rows in a GUI Emacs with a real agent.
 

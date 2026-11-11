@@ -7955,6 +7955,29 @@ is headed so, and the task's own, if any, named below it."
                                 'roost-dim)))))
 
 ;;;###autoload
+(defun roost-copy-attach-command (&optional task)
+  "Copy the shell command that attaches a terminal to TASK's agent.
+Run it in another terminal, as a phone's SSH app or another machine,
+to see and answer the agent in its real terminal, whichever agent it
+is.  It attaches to the task's tmux session, over SSH for a task on
+another host, and leaves Emacs's view of it as it is."
+  (interactive)
+  (setq task (roost--choose task))
+  (unless (roost--field task 'live)
+    (user-error "%s's agent isn't running, so there is no terminal to attach to; resume it first"
+                (roost--field task 'name)))
+  (let* ((host (roost--field task 'host))
+         (attach (format "tmux -L %s attach -t %s"
+                         (shell-quote-argument (or (roost--field task 'socket) "main"))
+                         ;; By its whole name, not one that starts as it does.
+                         (shell-quote-argument (concat "=" (roost--field task 'session)))))
+         (command (if host
+                      (format "ssh -t %s %s" (shell-quote-argument host) (shell-quote-argument attach))
+                    attach)))
+    (kill-new command)
+    (message "Copied: %s" command)))
+
+;;;###autoload
 (defun roost-stop (&optional task)
   "Stop TASK's window, retaining its worktree, branch and conversation."
   (interactive)
@@ -9673,7 +9696,9 @@ there are no tasks at all."
     ["Resume" roost-resume :active (roost--menu-applies-p 'roost-resume)]
     ["Details" roost-task-info :active (roost--menu-applies-p 'roost-task-info)]
     ["Rename…" roost-rename :active (roost--menu-applies-p 'roost-rename)]
-    ["Branch to merge into…" roost-retarget :active (roost--menu-applies-p 'roost-retarget)])
+    ["Branch to merge into…" roost-retarget :active (roost--menu-applies-p 'roost-retarget)]
+    ["Copy attach command" roost-copy-attach-command
+     :active (roost--menu-applies-p 'roost-copy-attach-command)])
   "Menu items acting on the task at point.")
 
 (easy-menu-define roost-task-menu nil
@@ -9753,6 +9778,8 @@ Unknown Git statistics count as making sense."
       ('roost-retire (and (not active) (not (roost--agent-work-left task))))
       ('roost-goto-note (and worktree (roost--task-notes task) t))
       ('roost-retarget (not (roost--conversation-p task)))
+      ;; A terminal attaches to an agent's window, while there is one.
+      ('roost-copy-attach-command (and (roost--field task 'live) t))
       (_ t))))
 
 (defun roost--next-step (task &optional menu beside)
@@ -13027,8 +13054,17 @@ leaves out the status light, for a count no mode line shows."
                                              (roost--light 'mode-line 'waiting (and (> blocked 0) 'pulse)
                                                            face 'mode-line-active))
                                (propertize "●" 'face face))
-                             (format " Roost:%d" (+ blocked waiting)))
-                            'help-echo "Agents waiting for you; mouse-1 opens the next"
+                             ;; With a mark while one asks and holds its agent
+                             ;; up: colour alone tells that from one that
+                             ;; finished only to those who see the colours apart.
+                             (format " Roost:%d%s" (+ blocked waiting) (if (> blocked 0) "!" "")))
+                            'help-echo (concat (if (> blocked 0)
+                                                   (format "%d of %d agents waiting for you %s, which holds %s up"
+                                                           blocked (+ blocked waiting)
+                                                           (if (= blocked 1) "asks" "ask")
+                                                           (if (= blocked 1) "it" "them"))
+                                                 "Agents waiting for you")
+                                               "; mouse-1 opens the next")
                             'mouse-face 'mode-line-highlight
                             'local-map (make-mode-line-mouse-map 'mouse-1 #'roost-next-waiting))
                 " ")))))
