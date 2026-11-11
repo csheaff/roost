@@ -161,9 +161,10 @@ account, with no badge or verdict.
   lists every file the attempts changed, and `RET` on one compares two
   attempts' copies of it in Ediff. Still to try: taking hunks from each
   into one of them, rather than picking one.
-- **An attach command for other terminals.** Copy the `ssh -t … tmux
-  attach` that reaches a task's real terminal, for a phone's SSH app or
-  another machine, for every agent rather than Claude only.
+- **An attach command for other terminals** is in Roost now:
+  `M-x roost-copy-attach-command` copies the `ssh -t … tmux attach` that
+  reaches a task's real terminal, for a phone's SSH app or another
+  machine, for every agent.
 - **Attachments when starting a task, and straight from Scrawl.** `C-c C-a`
   attaches a file to a prompt for a running task; the new task draft could
   take one too, copied once the task exists. Scrawl sends a capture of a dev
@@ -181,21 +182,17 @@ account, with no badge or verdict.
   and [agents that start tasks](#exploring) add the most to review without
   making any of it quicker to judge, so it fits where attempts are cheap to
   compare, as with Ediff (above).
-- **A fork that goes on with the conversation.** `C-u c` forks a task's
-  commits, and its agent starts a new conversation. Its agent could go on
-  from a copy of the task's conversation instead, as Claude Code's
+- **A fork that goes on with the conversation** is in Roost now: `C-u c`
+  forks a task's commits and uncommitted changes, and its agent goes on
+  from a copy of the task's conversation, as Claude Code's
   `--resume ID --fork-session`, `codex fork` and Pi's and OpenCode's
-  `--fork` make one, in a worktree with the task's uncommitted changes too.
-  That fits one case: a long investigation that ends at two plausible
-  fixes, each worth trying with all the agent has learned, which a brief
-  for a new task would lose. A separate job is better as a new task with
-  a short brief, and like several attempts at one prompt (above), a fork
-  makes more to review. A prototype is on branch
-  `claude/fork-conversation` (2026-10-31). With Claude Code 2.1.312, a
-  fork finds a conversation recorded in another folder, and its hooks
-  report the fork's own session. Told nothing, the forked agent first
-  looked in the task's worktree too; a sentence before your prompt, saying
-  it now works in a new one, kept it to its own. From agent-shell's
+  `--fork` make one; `C-c C-f` in the draft starts a new conversation
+  instead. It fits one case: a long investigation that ends at two
+  plausible fixes, each worth trying with all the agent has learned. With
+  Claude Code 2.1.312, a fork finds a conversation recorded in another
+  folder, and its hooks report the fork's own session; a sentence Roost
+  puts before your prompt keeps the agent to its new worktree. Tried with
+  the fake agents only since it was merged. From agent-shell's
   `agent-shell-fork` and agent-deck's forking.
 - **Better task names.** Names come from a prompt's first words, and `R`
   renames a task. Claude Code titles its sessions itself, in an `ai-title`
@@ -232,15 +229,11 @@ account, with no badge or verdict.
   text, as after a resize. tmux's main branch takes Kitty graphics from a
   program in a pane (2026-10-16) and draws them on a terminal that shows
   them (2026-10-29), in no release yet: 3.8 is the latest.
-- **A second sign on the count, beside colour.** The mode line's
-  `● Roost:2` and the sidebar's `2 waiting` tell an agent that asks from
-  one that failed or finished by colour alone. For a protanope, ef-dream's
-  `ready` and `error` are 2.2 apart (CIEDE2000), so the same colour; the
-  views beside them have words. A mark while an agent asks, such as
-  `Roost:2!`, or why in the count's help-echo, would add the second
-  channel WCAG's use of colour and Carbon's
-  [status pattern](https://www.carbondesignsystem.com/patterns/status-indicator-pattern)
-  ask for. From the [UX review of 2026-10-23](validation.md).
+- **A second sign on the count, beside colour**, is in Roost now: the
+  mode line's count has a mark while an agent asks, as `● Roost:2!`, and
+  its help says how many ask. The sidebar's `2 waiting` still tells them
+  apart by colour alone. From the
+  [UX review of 2026-10-23](validation.md).
 
 ## Exploring
 
@@ -256,12 +249,14 @@ Larger, or undecided.
   quicker to judge. In ParallelPilot's trial, the developer saw and could
   change the planner's split before any agent started
   ([ParallelPilot](https://arxiv.org/html/2609.33113v1)), so a split here
-  would wait for your yes too. Agents offering tasks you start
-  (`roost-agent-offers`) is the small part of this now in Roost, on trial
-  ([#203](https://github.com/csheaff/roost/issues/203)): what it may grow,
-  if real offers ask for it, is reading the tasks an offer started, setting
-  an offer aside for later, and Codex, Pi and OpenCode, each after a
-  recorded live run. A fuller build is on branch `agent-offered-tasks`.
+  would wait for your yes too. That part is in Roost now, with your yes at
+  each task: an agent offers tasks you start (`roost-agent-offers`,
+  [#203](https://github.com/csheaff/roost/issues/203)), and a conversation,
+  which has no project, plans a piece of work as tasks in your projects,
+  each waiting under it for you to open and start. What it may grow, if
+  real offers ask for it, is reading the tasks an offer started, setting an
+  offer aside for later, and Codex, Pi and OpenCode, each after a recorded
+  live run. A fuller build is on branch `agent-offered-tasks`.
 - **A map of the agent's work** beside its terminal: the files it reads and
   edits over time, drawn with Emacs 32's canvas images. Prototype on branch
   `work-map`.
