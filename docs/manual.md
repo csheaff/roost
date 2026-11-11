@@ -839,6 +839,11 @@ header line. A failed creation keeps the draft.
   then shows at once, and for Claude Code a declined request and Esc too. A
   Codex task is `ready` once you have answered its startup questions, rather
   than at its first turn.
+- `roost-remote-control` (nil): start each Claude Code task with Remote
+  Control (`--remote-control`, `--name`), named for the task, so it shows
+  in the Claude app and at claude.ai/code, which notify your phone when
+  its agent needs a decision. Needs a Claude subscription. For tasks
+  started after you turn it on.
 - `roost-agent-offers` (t): let a task's agent offer tasks of their own,
   which wait under its task for you to take
   ([Take the tasks an agent offers](#a-day-with-roost)), and a

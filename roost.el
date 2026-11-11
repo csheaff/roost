@@ -368,6 +368,18 @@ its requests.  Only Claude Code takes them so far.  Tasks you start
 after changing this follow it; nil gives agents no tools of Roost's."
   :type 'boolean)
 
+(defcustom roost-remote-control nil
+  "Whether each Claude Code task starts with Remote Control, named for the task.
+The task then shows in the Claude app and at claude.ai/code, by its
+name, where you can read it and answer it, and which notify your phone
+when its agent needs a decision.  Its name also shows in Claude's own
+list of sessions.  Roost starts Claude with `--remote-control' and
+`--name' for this; Remote Control needs a Claude subscription, and
+Claude says so in the task's terminal without one.  Other agents have
+no such app, and start as ever.  Tasks you start after changing this
+follow it."
+  :type 'boolean)
+
 (defcustom roost-notes-file (locate-user-emacs-file "roost/notes.json")
   "Local file keeping review notes not yet sent to an agent.
 See `roost-note'."
@@ -3031,6 +3043,7 @@ EXTRA is an alist of further request fields, such as the issue."
            ,(cons 'branchPrefix roost-branch-prefix)
            ,(cons 'programStatus (if roost-program-status t :false))
            ,(cons 'mayOffer (if roost-agent-offers t :false))
+           ,(cons 'remoteControl (if roost-remote-control t :false))
            ,(cons 'size (roost--terminal-size))
            ,(cons 'socket (or roost-socket-name
                               (bound-and-true-p tmux-control-default-socket-name)

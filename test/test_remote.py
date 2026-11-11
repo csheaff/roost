@@ -9502,6 +9502,31 @@ print(json.dumps(dict(data=data)))
         # The prompt still comes last, after --.
         self.assertEqual(argv[-2:], ["--", "Look"])
 
+    def test_a_claude_task_can_start_with_remote_control_named_for_it(self):
+        store = roost.Store(str(self.state))
+        task = dict(id="1234567890abcdef", name="-fix the parser", command=["claude"], prompt="Look", runId="run")
+        plain = roost.ClaudeAgent().launch(store, task, False)
+        self.assertFalse([arg for arg in plain if arg.startswith(("--remote-control", "--name"))])
+        argv = roost.ClaudeAgent().launch(store, dict(task, remoteControl=True), False)
+        # Each joined to its option: a name that starts with - is no option.
+        self.assertIn("--remote-control=-fix the parser", argv)
+        self.assertIn("--name=-fix the parser", argv)
+        # The prompt still comes last, after --.
+        self.assertEqual(argv[-2:], ["--", "Look"])
+        # What your own command names stands.
+        mine = dict(task, remoteControl=True, command=["claude", "--remote-control=mine", "-n", "mine"])
+        argv = roost.ClaudeAgent().launch(store, mine, False)
+        self.assertEqual([arg for arg in argv if arg.startswith(("--remote-control", "--name"))],
+                         ["--remote-control=mine"])
+        # Asked for, a Claude task's record keeps it, for a resume too;
+        # another agent's has no app to show it in.
+        made = self.create(name="phone", remoteControl=True)
+        self.assertIs(store.read(made["id"])["remoteControl"], True)
+        self.assertNotIn("remoteControl", self.create(name="plain"))
+        other = self.create(name="codex", agent="codex", remoteControl=True,
+                            command=[sys.executable, str(FAKE_AGENT), "codex"])
+        self.assertNotIn("remoteControl", store.read(other["id"]))
+
     def test_only_an_agent_that_can_take_the_tool_may_offer(self):
         # Claude Code, asked for: its record says so, and keeps it for a resume.
         task = self.create(name="parent", mayOffer=True)

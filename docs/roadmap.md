@@ -38,14 +38,12 @@ Small, and probably worth the most.
   with [the recipes and their status](melpa.md) current, and send them,
   tmux-control first, once people ask for them there. Features don't wait
   for it.
-- **Your phone, through Claude Code's Remote Control.** An option to start
-  each Claude task with `--remote-control`, named after the task, so it
-  shows in the Claude app and at claude.ai/code. Both send a push
-  notification when an agent needs a decision; until Roost keeps a presence
-  file ([Worth trying](#worth-trying)), they also do it while you're at
-  Emacs. Passing `--name` too would show the task's name in Claude's
-  `/resume` picker; Roost names only the tmux window today. Herdr, Orca,
-  Superset, cmux and agent-deck each built a phone app for this.
+- **Your phone, through Claude Code's Remote Control**, is in Roost now:
+  `roost-remote-control` starts each Claude task with `--remote-control`
+  and `--name`. Until Roost keeps a presence file
+  ([Worth trying](#worth-trying)), the Claude app also notifies you while
+  you're at Emacs. Herdr, Orca, Superset, cmux and agent-deck each built a
+  phone app for this.
 
 ## When a merge is your turn
 

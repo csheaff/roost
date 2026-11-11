@@ -944,6 +944,8 @@ class ClaudeAgent:
     waits_for_hooks = True
     # It can have Roost's MCP server, to offer tasks (`roost-agent-offers').
     offers = True
+    # It can be reached from the Claude app (`roost-remote-control').
+    remote_control = True
     answers = staticmethod(tool_answers)
 
     def validate(self, command):
@@ -966,6 +968,17 @@ class ClaudeAgent:
             # search the agent would make only once it knew of it.
             server = dict(type="stdio", command=sys.executable, args=mcp_arguments(store, task), alwaysLoad=True)
             argv.append("--mcp-config=" + json.dumps({"mcpServers": {"roost": server}}))
+        if task.get("remoteControl") is True:
+            # Named for the task, in the Claude app and at claude.ai/code,
+            # which notify your phone when it needs a decision, and in
+            # Claude's own list of sessions. Joined to their options, a
+            # name that starts with - stays a name. Yours stand, if your
+            # command has them.
+            given = {arg.split("=", 1)[0] for arg in task["command"][1:]}
+            if "--remote-control" not in given:
+                argv.append("--remote-control=" + task["name"])
+            if not given & {"--name", "-n"}:
+                argv.append("--name=" + task["name"])
         session = task.get("agentSession") or task.get("claudeSession")
         if resume_conversation and session and self.has_conversation(task):
             return argv + ["--resume", session]
@@ -2211,6 +2224,9 @@ def make_task(store, request, create_id):
     # Its agent can offer tasks, if it can be given Roost's tool.
     if request.get("mayOffer") is True and getattr(agent, "offers", False):
         task["mayOffer"] = True
+    # It shows in the agent's own app, if the agent has one to show it in.
+    if request.get("remoteControl") is True and getattr(agent, "remote_control", False):
+        task["remoteControl"] = True
     # The task whose agent offered this one, which shows it under that, and
     # the offer it was made from, which waits no more once it is saved.
     parent, offer = request.get("parent"), text(request.get("offer"))

@@ -14765,6 +14765,9 @@ it of the same ID's, or nil for the first."
                ((symbol-function 'roost--directory-host) (lambda (_) nil))
                ((symbol-function 'roost--project-value) (lambda (&rest _) nil)))
        (dolist (setting '(nil t))
-         (let ((roost-agent-offers setting))
+         (let ((roost-agent-offers setting)
+               ;; And for Remote Control, which is off unless you turn it on.
+               (roost-remote-control (not setting)))
            (roost--create-task "/tmp/repo/" "task" nil "Look" "claude")
-           (should (eq (alist-get 'mayOffer asked) (if setting t :false)))))))))
+           (should (eq (alist-get 'mayOffer asked) (if setting t :false)))
+           (should (eq (alist-get 'remoteControl asked) (if setting :false t)))))))))

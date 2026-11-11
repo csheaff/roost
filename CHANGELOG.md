@@ -4,6 +4,15 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Your phone, through Claude Code's Remote Control. With
+  `roost-remote-control` on, each Claude task starts with
+  `--remote-control` and `--name`, named for the task, so it shows in the
+  Claude app and at claude.ai/code, which notify you when its agent needs
+  a decision, and by its name in Claude's own list of sessions. Off by
+  default: Remote Control needs a Claude subscription. Options of the
+  same names in your own `roost-agent-commands` stand. Tasks you start
+  after turning it on have it.
+
 - A working agent says what it is doing. Beside `running`, the dashboard
   shows the tool the agent last started, as `Running make test` or
   `Editing ledger.py`, where a waiting agent's reply goes, and the task
