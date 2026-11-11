@@ -982,7 +982,7 @@ the agent's own report; which tool call will say it's over; what it says it's do
 | Named by a hook | From the tool's payload, or a notification's message | `request`, no `requestFrom` |
 | Watching a command | As above, for the main agent's Bash, as the poll can't tell whose process it sees | `requestCommand`, at most 200 characters |
 | Knowing its tool | Named by a hook that names a tool | `requestCall`: who asked, the tool, a digest of each argument |
-| Overlapping | Another agent asks, by `worker_permission_prompt` or `agent_needs_input`, or anything new asks beside a request, unrelayed | `requestCall` names no agent that reports; no `requestCommand` or `requestQuestion` |
+| Overlapping | Another agent asks, by `worker_permission_prompt` or `agent_needs_input`, or anything new asks beside a request, unrelayed | `requestCall` names no agent that reports; no `requestCommand` or `requestQuestion`. Its `beside` says one of them is not the main agent: a subagent, a teammate, an agent in the background |
 | An MCP question alone | The first thing to ask since the agent last didn't | `requestQuestion` |
 | Named by a report | The agent's words | `requestFrom` = `report` |
 
@@ -1008,6 +1008,13 @@ Invariants:
   the poll's Esc, a new prompt, or the run's end does. A `permission_prompt`
   beside a request is taken for the notification that follows it, as it can't be
   told from one, but for a question's, which has none.
+- I6. For Claude Code, a request that is not the main agent's outlasts the main
+  agent's turn (`claude_answers`): a subagent's own, and overlapping ones with
+  `beside`. Its `Stop` ends them only if it says nothing is left in the
+  background (`background_tasks` is `[]`), and a prompt only if it is yours, as
+  a prompt on screen lets you send none; a subagent's own ends too with that
+  subagent's next event or end. An older Claude Code's `Stop` doesn't say what
+  is left: unsure, they stand. Checked by `SubagentAsks.tla`.
 
 | From | Event | Guard | To | Code |
 | --- | --- | --- | --- | --- |
@@ -1017,8 +1024,10 @@ Invariants:
 | any | hook that doesn't ask | unrelayed, Codex, or a new conversation; not `permission` to `permission` | None | `update_hook` |
 | any | a tool's event that isn't an answer | unrelayed | unchanged | `tool_answers`, `update_hook` |
 | An MCP question alone | `elicitation_response`, `elicitation_complete` | | None | `update_hook` |
-| any but Overlapping | `PermissionRequest`, or a notification of an MCP question, while `permission`; a `permission_prompt` beside a question | unrelayed | Overlapping | `update_hook` |
-| any | notification of another agent's request | unrelayed | Overlapping | `update_hook` |
+| any but Overlapping | `PermissionRequest`, or a notification of an MCP question, while `permission`; a `permission_prompt` beside a question | unrelayed | Overlapping; `beside` if this one or the one before is a subagent's | `update_hook` |
+| Overlapping | the same | unrelayed | Overlapping; `beside` kept, or set by a subagent's | `update_hook` |
+| any | notification of another agent's request | unrelayed | Overlapping, `beside` | `update_hook` |
+| a subagent's, or Overlapping with `beside` | the main agent's `Stop` with work left, or not saying; a prompt Claude sent itself | Claude, unrelayed | unchanged | `claude_answers` |
 | None, report-named | report `blocked` | `permission` now | report-named; words from `msg`, or `kind` | `apply_program_status` |
 | hook-named | report `blocked` | | unchanged | `apply_program_status` |
 | any | report leaves `permission`, or anything but `running` | | None | `apply_program_status` |

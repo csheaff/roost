@@ -1118,12 +1118,29 @@ class Lifecycle(unittest.TestCase):
                                   message="Claude Code needs your input"),
                     link=dict(hook_event_name="Notification", notification_type="elicitation_url_dialog",
                               message="Claude Code needs your input"))
+        # A subagent's, or another agent's, may still be on screen once the
+        # main agent's turn is over.
+        others = {"subagent", "worker", "worker_saying_nothing"}
+        left = [dict(id="a1", type="local_agent", status="running")]
+        nothing_left = dict(background_tasks=[], session_crons=[])
         for first, second in itertools.permutations(asks, 2):
-            for end, status in (("Stop", "ready"), ("UserPromptSubmit", "running")):
-                with self.subTest(first=first, second=second, end=end):
+            ends = [("Stop", nothing_left, "ready"), ("UserPromptSubmit", dict(prompt="go on"), "running")]
+            if not {first, second} & others:
+                # Both the main agent's: its turn's end ends them, whatever
+                # it leaves, and whether or not it says.
+                ends += [("Stop", dict(background_tasks=left), "background"), ("Stop", {}, "ready")]
+            for end, fields, status in ends:
+                with self.subTest(first=first, second=second, end=end, fields=fields):
                     hook(hook_event_name="UserPromptSubmit", prompt="go")
                     hook(**asks[first])
                     hook(**asks[second])
+                    if {first, second} & others:
+                        # A turn that ends with work left, or doesn't say
+                        # what it leaves, or starts on Claude's own notice.
+                        for event in (dict(hook_event_name="Stop", background_tasks=left), dict(hook_event_name="Stop"),
+                                      dict(hook_event_name="UserPromptSubmit", source="system",
+                                           prompt="<task-notification>\n<status>completed</status>\n</task-notification>")):
+                            self.assertEqual(hook(**event)["status"], "permission", event)
                     for event in (dict(hook_event_name="PostToolUse", **bash),
                                   dict(hook_event_name="PostToolUse", agent_id="a1", **bash),
                                   dict(hook_event_name="PreToolUse", tool_name="Read"),
@@ -1135,7 +1152,7 @@ class Lifecycle(unittest.TestCase):
                     with patch.object(roost, "approved_command_running", return_value=True):
                         self.assertEqual(self.request("list")["result"][0]["status"], "permission")
                     self.assertIn("Open the task", self.request("send", id=task["id"], text="hello")["error"])
-                    record = hook(hook_event_name=end, prompt="go on")
+                    record = hook(hook_event_name=end, **fields)
                     self.assertEqual(record["status"], status)
                     self.assertFalse({"request", "requestCommand", "requestCall", "requestQuestion"} & set(record))
         # The notification that follows a request is no second one.
@@ -1237,6 +1254,66 @@ class Lifecycle(unittest.TestCase):
         del record["requestCall"]
         store.save(record)
         over(hook(hook_event_name="Stop", background_tasks=left), "background")
+
+    def test_a_subagents_request_among_several_outlasts_the_main_agents_turn(self):
+        # A subagent asks, then the main agent beside it. You answer the
+        # main agent's, and its turn ends with the subagent still asking:
+        # the task read `background`, the subagent's prompt on screen. From
+        # the model of who asks, test/formal/agent_status/SubagentAsks.tla.
+        store = roost.Store(str(self.state))
+        task = self.create()
+        hook = lambda **payload: roost.update_hook(store, task["id"], payload) or store.read(task["id"])
+        a = dict(agent_id="a3f1c0d2e4b5a697", agent_type="general-purpose")
+        write = dict(tool_name="Write", tool_input=dict(file_path=str(Path(task["worktree"]) / "a.txt"), content="a\n"))
+        make = dict(tool_name="Bash", tool_input=dict(command="make"))
+        left = [dict(id=a["agent_id"], type="local_agent", status="running", agent_type=a["agent_type"])]
+
+        def asks(*order):
+            hook(hook_event_name="UserPromptSubmit", prompt="go", source="user")
+            for who in order:
+                hook(hook_event_name="PermissionRequest", **(dict(write, **a) if who == "subagent" else make))
+            self.assertEqual(store.read(task["id"])["requestCall"], dict(agent="another agent", beside=True))
+            # You answer the main agent's.
+            self.assertEqual(hook(hook_event_name="PostToolUse", **make)["status"], "permission")
+
+        for order in (("subagent", "main"), ("main", "subagent")):
+            with self.subTest(order=order):
+                asks(*order)
+                # The main agent's turn ends, the subagent's prompt on screen.
+                record = hook(hook_event_name="Stop", background_tasks=left, session_crons=[])
+                self.assertEqual(record["status"], "permission")
+                self.assertIn(record["request"], ("Asks to run make", "Asks to write a.txt"))
+                self.assertIn("Open the task", self.request("send", id=task["id"], text="hello")["error"])
+                # Nor does the turn Claude starts on its own notice end it,
+                # nor that turn's end while work is left.
+                self.assertEqual(hook(hook_event_name="UserPromptSubmit", source="system",
+                                      prompt="<task-notification>\n</task-notification>")["status"], "permission")
+                self.assertEqual(hook(hook_event_name="Stop", background_tasks=left)["status"], "permission")
+                # A turn that leaves nothing ends it: nobody is there to ask.
+                record = hook(hook_event_name="Stop", background_tasks=[], session_crons=[])
+                self.assertEqual(record["status"], "ready")
+                self.assertFalse({"request", "requestCall"} & set(record))
+        # A third request beside them keeps that a subagent is among them.
+        asks("subagent", "main")
+        hook(hook_event_name="PermissionRequest", **make)
+        self.assertEqual(store.read(task["id"])["requestCall"], dict(agent="another agent", beside=True))
+        self.assertEqual(hook(hook_event_name="Stop", background_tasks=left)["status"], "permission")
+        # A prompt of yours ends it, as a prompt on screen would not let you send one.
+        self.assertEqual(hook(hook_event_name="UserPromptSubmit", prompt="never mind", source="user")["status"], "running")
+        # Two of the main agent's own, one after the other, end with its
+        # turn whatever it leaves, as before.
+        hook(hook_event_name="UserPromptSubmit", prompt="go", source="user")
+        hook(hook_event_name="PermissionRequest", **make)
+        hook(hook_event_name="PermissionRequest", **write)
+        self.assertEqual(store.read(task["id"])["requestCall"], dict(agent="another agent"))
+        self.assertEqual(hook(hook_event_name="Stop", background_tasks=left)["status"], "background")
+        # A record from an older helper doesn't say who was among them:
+        # the turn's end ends them, as it did.
+        asks("subagent", "main")
+        record = store.read(task["id"])
+        record["requestCall"] = dict(agent="another agent")
+        store.save(record)
+        self.assertEqual(hook(hook_event_name="Stop", background_tasks=left)["status"], "background")
 
     def test_the_main_agents_request_ends_with_its_turn(self):
         store = roost.Store(str(self.state))

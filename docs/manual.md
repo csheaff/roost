@@ -1085,7 +1085,9 @@ Things to know:
   to a task in that state. What a subagent does beside one that asks doesn't
   count as moving on. A Claude Code subagent that asks from the background
   keeps the task at `permission` after the main agent's turn ends, until
-  that subagent goes on or ends, or you send a prompt. With
+  that subagent goes on or ends, or you send a prompt; with several asking
+  at once, one of them a subagent, until a turn ends with nothing left in
+  the background, or you send a prompt. With
   `roost-program-status` on, both say so themselves, at once.
 - In Plan mode, Codex ends its turn with a plan and then asks, in a menu,
   whether to implement it. Text sent to it then would be dropped, and the

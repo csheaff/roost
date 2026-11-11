@@ -174,6 +174,13 @@ What each release changes, and what to do when upgrading. Newest first.
   And a tool that fails once you approve it shows `running` at once, where
   it showed `permission` until the agent's next step. With
   `roost-program-status` on, such a turn's end still reads `background`.
+- Nor does the turn's end hide a subagent's request when the main agent
+  asked something too. With both on screen, and the main agent's answered,
+  its turn's end made the task read `background` or `ready` as before.
+  Several requests at once now stand past the main agent's turn if one of
+  them is a subagent's, a teammate's or a background agent's, until a turn
+  ends with nothing left in the background or you send a prompt. Found by
+  a new model of who asks, `SubagentAsks.tla`.
 - A Codex task shows `permission` at "Implement this plan?", the menu Codex
   opens when a turn in Plan mode ends with a plan. It read `ready`, so a
   prompt sent from Roost, as with a quoted region, was dropped by the menu,

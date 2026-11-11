@@ -13,9 +13,10 @@ description: >
 
 # Verify what an agent is doing
 
-A TLA+ model, `test/formal/agent_status/AgentStatus.tla`, of the helper
+Two TLA+ models. `test/formal/agent_status/AgentStatus.tla` is the helper
 writing a task's `status` from four senders at once, with Claude or Codex,
-relayed or not. It checks one promise, in five rules:
+relayed or not. `SubagentAsks.tla`, below, is who asks when Claude's
+subagents can too. The first checks one promise, in five rules:
 
 **Roost shows which agent needs you.** Once nothing is in flight and the
 poll has looked, an agent asking you something shows `permission`
@@ -31,6 +32,14 @@ final (`EndsAreFinal`).
 working, hides one that asks, or keeps saying an agent works when it waits,
 and it stays that way until the agent's next event.
 
+`SubagentAsks.tla` has the agent you talk to and two subagents, which work
+on and ask after its turn ends, and one sender, an unrelayed Claude's hooks
+in the order it sends them. Its rules hold after every event: a prompt on
+your screen shows `permission` whoever else works or ends beside it
+(`AskingShown`); a turn that ends saying nothing is left ends what was
+asked (`RestShown`); and the agent you talk to never shows `ready` while it
+works (`WorkNotReady`).
+
 ## Does your change touch it?
 
 It does if the diff changes any of these, or what an agent sends:
@@ -45,6 +54,7 @@ It does if the diff changes any of these, or what an agent sends:
 | `runner`, its `finally` | `RunnerEnd` |
 | `list_tasks` (crash, recovery, `was_interrupted`, `approved_command_running`) | `Poll` |
 | `stop`, `resume`, `spawn` | `StopTask`, `Resume` |
+| `tool_answers`, `claude_answers`, `asking_subagent`, `asks_beside`, and `requestCall` in `update_hook` | `SubagentAsks`: `ToolAnswers`, `Answers`, `Outlasts`, `Hook` |
 | The order of hooks and reports in `test/captures/claude-*`, `codex-*` | each step's script (`Prompt`, `Ask`, `End` ...) |
 
 Last confirmed to describe the code at `342ec40`, with the change to
@@ -70,6 +80,10 @@ About a minute; `make formal` runs every model. Each line is one config:
 - `LatePermissionPrompt`, `LateIdlePrompt` and `PlanMenuClosed` are findings:
   the code as it is, under timings or moves of yours `AgentStatus.cfg` leaves
   out. They must fail as they say until the code is fixed.
+- `SubagentAsks.cfg` must pass, in a second or two: every order of twelve
+  asks, answers, tools and ends, with a Claude that says what its turn
+  leaves in the background and one that doesn't. `SubagentAsks.*.cfg` each
+  undo a fix and must fail.
 
 `all models as expected` is a pass. Read every result, pass or fail, with
 the pstack `/statechart` skill: a violation as its shortest path in plain
@@ -107,9 +121,11 @@ constant in `AgentStatus.cfg` (say `LagPastTurnEnd = TRUE`), and keep a
 
 ## What it leaves out
 
-Pi, OpenCode and their report chains; subagents, and so a request of one that
-outlasts the turn of the agent you talk to (`claude_answers`); MCP questions,
-dialogs, `/clear` and compaction; what an agent says it is doing (`activity`),
+Pi, OpenCode and their report chains; MCP questions, dialogs, `/clear` and
+compaction. `AgentStatus` has no subagents. `SubagentAsks` has them, but no
+reports, poll or Esc, no request that only a notification names, and no
+teammates or `agent_needs_input`, of which no capture says when Claude sends
+them; what an agent says it is doing (`activity`),
 which is no status; a hook Codex kills after 3 s (STATUS-3); a false
 `crashed` from tmux not answering; `seen` and the word Emacs shows. Hooks of
 one agent are taken as awaited, so in order, as the captures show. Bounds:
@@ -138,3 +154,11 @@ undo each half.
   its prompt reads `permission` until your next prompt. `send` asks first and
   goes through when you say so, and retiring and merging go ahead
   (`require_finished`). Nothing short of reading its screen would tell.
+
+Fixed: **SeveralEndWithTurn**, found by `SubagentAsks`. A subagent asks, the
+agent you talk to asks beside it, you answer that one, and its turn ends:
+the task read `background`, the subagent's prompt still on screen, as before
+#239 for a subagent alone. Several requests at once now say whether one is
+not the main agent's (`beside`), and those outlast its turn as a subagent's
+own does. `SubagentAsks.SeveralEndWithTurn.cfg` undoes it, and
+`SubEndsWithTurn.cfg` undoes #239's.

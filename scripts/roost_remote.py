@@ -931,6 +931,13 @@ def claude_sent_itself(payload):
     return isinstance(prompt, str) and prompt.lstrip().startswith("<task-notification>")
 
 
+def asks_beside(task):
+    """Whether several ask at once in TASK and one of them is not the agent
+    you talk to: a subagent, a teammate, or an agent in the background."""
+    asked = task.get("requestCall")
+    return isinstance(asked, dict) and asked.get("beside") is True
+
+
 def claude_answers(task, payload):
     """As `tool_answers`, for Claude Code, whose subagents can work on in the
     background after the turn of the agent you talk to ends, and ask from
@@ -939,15 +946,17 @@ def claude_answers(task, payload):
     prompt, which a prompt on screen doesn't let you do. It stands as the
     main agent's turn ends with work left in the background, or starts on
     a prompt Claude Code sent itself, as the notice of another subagent's
-    end: a turn that ends with nothing left has no subagent to ask. An
-    older Claude Code doesn't say what is left: unsure, it stands."""
+    end: a turn that ends with nothing left has no subagent to ask. So do
+    several requests at once, if one of them is not the main agent's:
+    which of them is answered, nothing says. An older Claude Code doesn't
+    say what is left: unsure, it stands."""
     event = payload.get("hook_event_name")
     subagent = asking_subagent(task)
     if event == "SubagentStop":
         return bool(subagent) and payload.get("agent_id") == subagent
-    if subagent and event == "Stop":
+    if (subagent or asks_beside(task)) and event == "Stop":
         return payload.get("background_tasks") == []
-    if subagent and event == "UserPromptSubmit":
+    if (subagent or asks_beside(task)) and event == "UserPromptSubmit":
         return not claude_sent_itself(payload)
     return tool_answers(task, payload)
 
@@ -7079,6 +7088,8 @@ def update_hook(store, task_id, payload, run_id=None):
                 store.save(task)
         concerns = getattr(agent, "concerns", None)
         updates = agent.observe(payload, before) if not concerns or concerns(task, payload) else None
+        # Who asked before this event, which may name another.
+        asked_before, beside_before = asking_subagent(task), asks_beside(task)
         # News that the agent's end overtook, as Pi and OpenCode don't wait
         # for their reports, says no more what it does, though what it replied
         # is its last word.
@@ -7144,6 +7155,11 @@ def update_hook(store, task_id, payload, run_id=None):
                                 or kind == "permission_prompt" and task.get("requestQuestion")):
                 if before == "permission" or kind in ANOTHER_AGENT_ASKS:
                     task["requestCall"] = dict(agent="another agent")
+                    # One of them is not the agent you talk to, and may
+                    # still ask once that agent's turn is over.
+                    if (kind in ANOTHER_AGENT_ASKS or payload.get("agent_id")
+                            or before == "permission" and (asked_before or beside_before)):
+                        task["requestCall"]["beside"] = True
                     task.pop("requestCommand", None)
                     task.pop("requestQuestion", None)
                 elif kind in MCP_QUESTIONS:
