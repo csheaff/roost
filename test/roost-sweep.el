@@ -881,6 +881,41 @@ A buffer named with a leading space goes without Font Lock, so
         (kill-buffer buffer)
         problems))))
 
+(defun roost-sweep--check-decoration (view state width)
+  "Problems with what `roost-decorate' draws on VIEW for STATE at WIDTH.
+It may add colours and say where things show, and no more: the text is
+the same with it and without, so a terminal with few colours, and
+whoever turns it off, reads the same words."
+  (let ((drawn (lambda (decorated)
+                 (let (text tinted)
+                   (roost-sweep--world
+                     (save-window-excursion
+                       (cl-letf (((symbol-function 'roost--decorated-p) (lambda () decorated))
+                                 ;; Batch Emacs has no colours to mix.
+                                 ((symbol-function 'roost--mix)
+                                  (lambda (&rest _) (and decorated "#123456"))))
+                         (let ((roost-decorate decorated)
+                               (buffer (roost-sweep--draw view state width)))
+                           (setq text (roost-sweep--text)
+                                 tinted (text-property-any (point-min) (point-max) 'roost-tint t))
+                           (kill-buffer buffer)))))
+                   (cons text tinted)))))
+    (pcase-let ((`(,plain . ,_) (funcall drawn nil))
+                (`(,decorated . ,marked) (funcall drawn t)))
+      (delq nil
+            (list (unless (equal plain decorated)
+                    (format "decorated, its text differs: %S, not %S"
+                            (roost-sweep--difference decorated plain) (roost-sweep--difference plain decorated)))
+                  ;; The mark that says what to tint is taken off once it has.
+                  (when marked "it keeps a mark of what to tint"))))))
+
+(defun roost-sweep--difference (text other)
+  "The line of TEXT where it first differs from OTHER."
+  (let ((mine (split-string text "\n")) (theirs (split-string other "\n")))
+    (while (and mine theirs (equal (car mine) (car theirs)))
+      (setq mine (cdr mine) theirs (cdr theirs)))
+    (car mine)))
+
 (defun roost-sweep--project-row-failure (label key)
   "The Lisp error from KEY on the sidebar's row LABEL for a new task, or nil.
 KEY is a key sequence, or the name of a mouse event."
@@ -1057,6 +1092,11 @@ Return them as (PROBLEM . PLACES), PLACES naming the view, state and width."
   :tags '(sliced)
   (roost-test--isolated
    (roost-sweep--report (roost-sweep--run #'roost-sweep--check-actions (mapcar #'car roost-sweep--views)))))
+
+(ert-deftest roost-sweep-decoration-changes-no-text ()
+  :tags '(sliced)
+  (roost-test--isolated
+   (roost-sweep--report (roost-sweep--run #'roost-sweep--check-decoration (mapcar #'car roost-sweep--views)))))
 
 (ert-deftest roost-sweep-clicks-never-ask ()
   :tags '(sliced)
