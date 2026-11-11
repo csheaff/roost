@@ -910,9 +910,20 @@ def fold(qa, repo):
     qa.keys("C-c r l")
     qa.type(name + "\r")
     # Once its changes are in: they may still be refreshing when it first shows.
-    qa.wait("its panel", lambda s: "Show the whole prompt" in panel_text(qa, s)
+    qa.wait("its panel", lambda s: "▸ Details" in panel_text(qa, s)
             and "Refreshing" not in panel_text(qa, s))
-    folded = qa.step("Its panel folds the prompt")
+    # Beside its terminal, the prompt is one quiet line, at the foot.
+    line = lambda s: next((line for line in panel_text(qa, s).split("\n")
+                           if line.startswith("▸ ") and line != "▸ Details"), None)
+    folded = qa.step("Its panel folds the prompt to a line", expect=[
+        ("the line starts as the prompt does", lambda s: (line(s) or "").startswith("▸ " + LONG_PROMPT[:20])),
+        ("the prompt is nowhere else", lambda s: "Show the whole prompt" not in panel_text(qa, s))])
+    label = line(folded)
+    qa.click(label)
+    qa.step("Unfolded", expect=[
+        ("its start, with a way to see the rest",
+         lambda s: "▾ Prompts" in panel_text(qa, s) and "Show the whole prompt" in panel_text(qa, s)),
+        ("point on the way back", lambda s: s["at"] == "▾ Prompts")])
     qa.click("Show the whole prompt")
     qa.step("Shown whole", expect=[
         ("the whole prompt, with a way to fold it",
@@ -920,10 +931,11 @@ def fold(qa, repo):
          and "keep the existing ones passing" in panel_text(qa, s)),
         ("point on the way back", lambda s: s["at"] == "Collapse prompt")])
     qa.click("Collapse prompt")
+    qa.click("▾ Prompts")
     qa.step("Folded again", expect=[
         ("the panel as it was",
          lambda s: unclocked(panel_text(qa, s)) == unclocked(panel_text(qa, folded))),
-        ("point on the way back", lambda s: s["at"] == "Show the whole prompt")])
+        ("point on the way back", lambda s: s["at"] == label)])
 
 
 def panel_fits(qa, screen):
@@ -2267,11 +2279,11 @@ def send(qa, repo):
     qa.wait("the agent to get it", lambda s: any("PROMPT How are you?" in w["text"] for w in terminals(s)))
     qa.status(name, "ready", "idle")
     qa.step("Sent", expect=[("the echo area says so", lambda s: "Sent to " + name in (s["echo"] or ""))])
-    latest = lambda s: re.search(r"Your latest prompt\n\s*How are you\?", panel_text(qa, s))
+    # The line that folds the prompts is the latest of them.
+    latest = lambda s: re.search(r"^▸ How are you\?$", panel_text(qa, s), re.M)
     qa.wait("the panel to hear it", latest)
     qa.step("The panel shows what you last said", expect=[
-        ("under the task's prompt", lambda s: latest(s) and panel_text(qa, s).index("Say hi")
-         < panel_text(qa, s).index("Your latest prompt"))])
+        ("in place of the task's prompt", lambda s: latest(s) and "▸ Say hi" not in panel_text(qa, s))])
     # Half a prompt, then another task: the draft waits for its task.
     other = start_task(qa, "Say bye")
     open_task(qa, name)
@@ -2304,11 +2316,10 @@ def send(qa, repo):
         qa.type("And you, %s?\r" % label)
         qa.wait("the agent to get it", lambda s: any("PROMPT And you, %s?" % label in w["text"]
                                                     for w in terminals(s)))
-        latest = lambda s: re.search(r"Your latest prompt\n\s*And you, %s\?" % label, panel_text(qa, s))
+        latest = lambda s: re.search(r"^▸ And you, %s\?$" % label, panel_text(qa, s), re.M)
         qa.wait("the panel to hear it", latest)
         qa.step("%s %s task's panel shows what you last said" % (article, label), expect=[
-            ("under the task's prompt", lambda s: latest(s) and panel_text(qa, s).index("Greet " + label)
-             < panel_text(qa, s).index("Your latest prompt"))])
+            ("in place of the task's prompt", lambda s: latest(s) and "▸ Greet " + label not in panel_text(qa, s))])
 
 
 def attached(text, name):
@@ -3470,13 +3481,20 @@ def offer(qa, repo):
         ("the draft is gone", lambda s: not draft(s)),
         ("the terminal of the task that offered it is still yours",
          lambda s: (s.get("task") or {}).get("name") == parent and selected_terminal(s))])
+    # Where its work lives is a line to unfold, beside a terminal.
     open_task(qa, "Document the notes")
+    qa.click("▸ Details")
     qa.step("Its panel names where it came from", expect=[
         ("it says which task it was started from",
          lambda s: re.search(r"Started from\s+%s" % re.escape(parent), panel_text(qa, s)))])
+    qa.click("▾ Details")
     open_task(qa, parent)
+    qa.click("▸ Details")
     qa.step("The other panel names it", expect=[
         ("it says which task it started", lambda s: re.search(r"Started\s+Document the notes", panel_text(qa, s)))])
+    qa.click("▾ Details")
+    # Back in its terminal, where the next offer is asked for.
+    open_task(qa, parent)
 
     # Done by the agent that offered it, from the offer's menu.
     qa.type("offer Tidy the notes\r")
@@ -3559,13 +3577,15 @@ def switched_branch(qa, repo):
     answer_yes(qa, name)
     qa.wait("the branch", lambda s: "worktree is on " + feat in panel_text(qa, s))
     qa.step("On another branch", expect=[
-        ("the panel says how to finish it",
+        ("the panel says so first, under the task's name",
+         lambda s: re.match(r"[^\n]*\n[^\n]*\n▲ On %s, not the task's branch roost/[^ ]*, so the changes\s+below"
+                            r"\s+are\s+%s's\." % (feat, feat), panel_text(qa, s))),
+        ("then how to finish it",
          lambda s: ("Its worktree is on %s, not the task's branch: x discards the task, keeping %s; to merge its work"
                     " with m or P" % (feat, feat)) in panel_text(qa, s)),
         ("its changes are that branch's, said once",
-         lambda s: re.search(r"These are %s's changes, not roost/[^ ]*'s\.\n\s*Committed\n\s*FEAT\.md" % feat,
-                             panel_text(qa, s))
-         and "The worktree is on" not in panel_text(qa, s)),
+         lambda s: re.search(r"Committed\n\s*FEAT\.md", panel_text(qa, s))
+         and panel_text(qa, s).count("▲") == 1),
         ("its row doesn't say merged", lambda s: not sidebar_row(qa, s, name).endswith("merged"))])
     # GitHub's word counts once asked half a minute after the agent's last
     # event, its push and the end of its turn, which come before this.
